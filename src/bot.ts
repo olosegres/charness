@@ -12382,10 +12382,17 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   }
   repostState.isPostInFlight = true;
 
-  const buttons = question.options.map((opt, optIdx) => {
-    const label = opt.label.length > 40 ? opt.label.slice(0, 37) + '...' : opt.label;
-    return [Markup.button.callback(label, `qa_${qIdx}_${optIdx}`)];
-  });
+  // Ask the connector rather than assuming. The body ALWAYS enumerates the
+  // options as numbered text (`buildQuestionBodyLines`), so a surface with no
+  // tappable controls loses only the tap — the user answers with the index,
+  // which `getOpenCodeReplyRoute` already accepts. Telegram says yes; a tracker
+  // comment stream will not.
+  const buttons = telegramOutbound.capabilities.tappableOptions
+    ? question.options.map((opt, optIdx) => {
+        const label = opt.label.length > 40 ? opt.label.slice(0, 37) + '...' : opt.label;
+        return [Markup.button.callback(label, `qa_${qIdx}_${optIdx}`)];
+      })
+    : [];
   const keyboard = buttons.length > 0 ? Markup.inlineKeyboard(buttons) : undefined;
 
   try {
@@ -12422,7 +12429,9 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
         // Pin the question so the muted topic fires a notification (S2). The
         // "unpin previous if different" step inside also retires the prior pin on
         // a Q1→Q2 advance (Q1 stays as a "✅" message but loses its pin).
-        void pinThreadQuestion(key, messageId);
+        // Capability-gated: a surface with no pin just leaves the question as an
+        // ordinary message, which is all a tracker comment can be anyway.
+        if (telegramOutbound.capabilities.pinMessages) void pinThreadQuestion(key, messageId);
       } else {
         // The question advanced / was answered while our send sat in the
         // queue (a fast digit reply can beat the post — seen live 2026-06-10:

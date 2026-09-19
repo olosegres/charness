@@ -713,10 +713,25 @@ config/variants, not a per-message API field).
 | `sessionKey.ts` | The core's platform-agnostic routing key `SessionKey` (`{platform, space, thread}`) plus the `SessionKeyCodec` registry: `keyToString` dispatches on `key.platform`, `keyFromString`/`tryKeyFromString` dispatch by asking each codec's `matches()`, `keysEqual` compares `platform` too, `keyToSlug` rewrites the `:` for tmux/filesystem names. Serialization itself belongs to the connector — the core never parses the format |
 | `connectors/telegram/sessionKeyCodec.ts` | Telegram's `SessionKeyCodec` — owns the frozen `"<chatId>:<threadId>"` spelling (self-registers on import) — plus `makeTelegramKey` and the native accessors `getTelegramChatId` / `getTelegramThreadId` / `checkIsTelegramKey` |
 | `platform/inbound.ts` | The core-side INBOUND seam: `InboundEvent` (key + author + text + normalized attachments + optional reply/command + a connector-private `raw`), `NormalizedAttachment`, `PlatformMember`, and the `ConnectorInbound` contract (`start` / `stop` / `listMembersWithElevatedRights`). Deliberately carries NO `isAdmin` on the author — `AdminCache` stays the single source of that answer |
+| `platform/capabilityFallback.ts` | How outbound content degrades when the surface can't express it: `getDegradedContent` (no `tappableOptions` → drop `options`, the enumerated list in `text` carries the information; no `pinMessages` → clear `keepVisible`) and `checkNeedsOwnMessage`. Applied by EVERY connector, so degradation is identical everywhere and the core never branches on a platform |
 | `platform/outbound.ts` | The core-side OUTBOUND seam: `OutboundContent` (semantic text + optional tappable `options` + a `keepVisible` request — never pre-rendered markup), `OutboundHints` (the adapters' advisory `output` flags: `isContinuation` / `isFinal` / `isComplete` / `isSubagent` / `isQuestion` / `startsNewParagraph`), `ActivityState`, `ConnectorCapabilities`, and the `ConnectorOutbound` contract (`deliver` / `deliverFile` / `setActivity` / `finalize` / `dispose` / `checkIsDelivering` / `listUnfinalizedKeys` / `capabilities`) |
 | `platform/commandRouter.ts` | The platform-neutral command router: `createCommandRouter` owns the name → handler table (`register` / `checkIsRegistered` / `dispatch`, matched EXACTLY including case — telegraf's own command match is case-sensitive) and `splitCommandArgs` defines what counts as an argument. The connector recognises its own trigger syntax; the core owns dispatch, so a second surface adds a recogniser, not a second command table |
 | `connectors/telegram/inbound.ts` | Telegram's INBOUND translation: `getTelegramCommand` (telegraf's own `bot_command`-at-offset-0 + `/cmd@thisbot` rule), `getInboundEvent`, `getNormalizedAttachments` (six Telegram media kinds → five neutral ones), `getPlatformMembers` + `checkShouldInvalidateAdminCache` (the `creator` / `administrator` vocabulary lives HERE, not in the policy), and `createTelegramConnectorInbound` — the SINGLE membership path (`listMembersWithElevatedRights`) and the single normalization path (`deliver`) |
 | `connectors/telegram/outbound.ts` | Telegram's OUTBOUND rendering: `telegramCapabilities` (every flag `true`; `maxMessageChars` is the splitter's 4000 cap), `buildOptionsKeyboard` (one button per row, labels elided at 40 chars), and `createTelegramConnectorOutbound` — ordinary turn content streams through the chat-mode `OutputTransport`, while `keepVisible` / `options` content finalizes in-flight output FIRST, then posts as its own message, then pins |
+
+### Test-double connector (`src/connectors/test/`)
+
+Telegram declares every capability `true`, so the degraded half of every
+capability branch is unreachable from the real connector. `createTestConnector`
+is an in-repo `ConnectorOutbound` + `ConnectorInbound` with configurable
+capabilities (`minimalCapabilities` ≈ a tracker comment stream,
+`richCapabilities` ≈ Telegram) that records what it was actually asked to
+deliver. Its `sessionKeyCodec` uses a `test|<space>|<thread>` spelling — NOT
+self-registering, and deliberately colon-free so it can never collide with
+Telegram's frozen `"<chatId>:<threadId>"` or break `keyToSlug`'s last-separator
+parsers.
+
+TESTS ONLY — no production module may import it.
 
 ### Platform boundary — what is enforced and what is still owed
 

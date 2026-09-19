@@ -14,6 +14,7 @@ import type { SessionKey } from '../../sessionKey';
 import type { OutputTransport } from '../../types';
 import type { SendFilesToThread } from '../../utils/fileSendService';
 import { MAX_MESSAGE_LEN } from './messageSplit';
+import { checkNeedsOwnMessage, getDegradedContent } from '../../platform/capabilityFallback';
 import type {
   ActivityState,
   ConnectorCapabilities,
@@ -109,29 +110,29 @@ export function createTelegramConnectorOutbound(deps: TelegramOutboundDeps): Con
    */
   async function deliverStandalone(key: SessionKey, content: OutboundContent): Promise<void> {
     await deps.getOutputTransport().finalizeInFlight(key);
-    const keyboard =
-      telegramCapabilities.tappableOptions && content.options
-        ? buildOptionsKeyboard(content.options)
-        : undefined;
+    const keyboard = content.options ? buildOptionsKeyboard(content.options) : undefined;
     const messageId = await deps.sendStandaloneMessage(key, content.text, keyboard);
     if (messageId === null) return;
-    if (content.keepVisible && telegramCapabilities.pinMessages) {
-      await deps.pinMessage(key, messageId);
-    }
+    if (content.keepVisible) await deps.pinMessage(key, messageId);
   }
 
   return {
     capabilities: telegramCapabilities,
 
     async deliver(key: SessionKey, content: OutboundContent, hints?: OutboundHints): Promise<void> {
-      // Anything the core marked prominent (`keepVisible`) or interactive
+      // Degrade FIRST, through the shared rule every connector applies, so the
+      // branches below never have to ask what this surface supports. Telegram
+      // supports everything, so this is the identity case — which is exactly
+      // why the degraded side needs the test double to be reachable at all.
+      const deliverable = getDegradedContent(content, telegramCapabilities);
+      // Anything still marked prominent (`keepVisible`) or interactive
       // (`options`) needs a message of its own; ordinary turn content streams
       // through the chat-mode transport.
-      if (content.keepVisible || (content.options?.length ?? 0) > 0) {
-        await deliverStandalone(key, content);
+      if (checkNeedsOwnMessage(deliverable)) {
+        await deliverStandalone(key, deliverable);
         return;
       }
-      deps.getOutputTransport().deliverOutput(key, content.text, hints);
+      deps.getOutputTransport().deliverOutput(key, deliverable.text, hints);
     },
 
     deliverFile(key: SessionKey, request: OutboundFileRequest): Promise<OutboundFileResult> {

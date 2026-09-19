@@ -53,9 +53,12 @@ explicit, documented exemption still awaiting decomposition.
 - `connectors/telegram/` holds the IMPLEMENTATION: telegraf types, the HTML
   dialect, message limits, inline keyboards, pins, the typing action, and the
   frozen `"<chatId>:<threadId>"` key spelling.
-- A connector DECLARES its capabilities (`ConnectorCapabilities`); the core
-  degrades where a surface lacks one — a tracker has no pinning and no tappable
-  buttons.
+- A connector DECLARES its capabilities (`ConnectorCapabilities`) and content
+  degrades through one shared rule (`platform/capabilityFallback.ts`) that every
+  connector applies — a tracker has no pinning and no tappable buttons, so the
+  options stay as the enumerated text the body already carries and the user
+  answers by index. `src/connectors/test/` is a capability-configurable test
+  double that makes those degraded paths reachable; it is TESTS ONLY.
 - `OutputTransport` (`src/connectors/telegram/output/`) is a Telegram CHAT-MODE seam, one level
   below: picked once at boot by `CHAT_MODE`, group edit-in-place stream vs the
   owner-DM native draft "cursor". It is composed by the Telegram connector, not
