@@ -19,7 +19,7 @@
  * measure is supplied.
  */
 
-import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
+import { splitMessage, MAX_MESSAGE_LEN } from './messageSplit';
 
 /**
  * @description Glue threshold: a topic's pending-send backlog collapses only at

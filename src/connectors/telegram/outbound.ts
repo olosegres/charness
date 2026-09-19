@@ -13,7 +13,7 @@ import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram'
 import type { SessionKey } from '../../sessionKey';
 import type { OutputTransport } from '../../types';
 import type { SendFilesToThread } from '../../utils/fileSendService';
-import { MAX_MESSAGE_LEN } from '../../messageSplit';
+import { MAX_MESSAGE_LEN } from './messageSplit';
 import type {
   ActivityState,
   ConnectorCapabilities,

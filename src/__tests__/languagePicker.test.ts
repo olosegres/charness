@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import {
   buildLanguagePicker,
   languageAutoCallback,
-} from '../utils/languagePicker';
+} from '../connectors/telegram/languagePicker';
 import {
   getLocaleEndonym,
   getLocaleEnglishName,

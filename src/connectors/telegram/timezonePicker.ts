@@ -17,8 +17,8 @@
  */
 import { Markup } from 'telegraf';
 
-import { paginateList } from './paginateList';
-import { getTimezoneRegion, getTimezonesForRegion, listTimezoneRegions } from './timezone';
+import { paginateList } from '../../utils/paginateList';
+import { getTimezoneRegion, getTimezonesForRegion, listTimezoneRegions } from '../../utils/timezone';
 
 /** Zones listed per level-2 page — one per row, matching `/model`'s page size. */
 export const timezonePageSize = 10;

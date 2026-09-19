@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { renderAgentHtml, escapeHtmlText } from '../renderAgentHtml';
+import { renderAgentHtml, escapeHtmlText } from '../connectors/telegram/renderAgentHtml';
 
 test('fenced block with a language tag → <pre><code class="language-...">, no literal backticks', () => {
   const input = '```diff\n- old line\n+ new line\n```';

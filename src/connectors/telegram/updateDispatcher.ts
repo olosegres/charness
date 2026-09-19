@@ -25,7 +25,7 @@
 
 import type { ServerResponse } from 'http';
 import type { Update } from 'telegraf/typings/core/types/typegram';
-import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
+import { createSerialQueue, type SerialQueue } from '../../utils/serialQueue';
 
 /** Key for updates that carry no chat (inline query, poll, etc.) — one queue. */
 const globalQueueKey = 'global';

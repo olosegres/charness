@@ -17,14 +17,14 @@ import type {
   FileDescriptorSnapshot,
   FileSendDocumentMediaGroup,
   FileSendMediaGroup,
-} from './fileSendPlan';
+} from '../../utils/fileSendPlan';
 import {
   FileSendDeliveryUnknownError,
   type FileSendGateway,
   type FileSendGatewayResult,
-} from './fileSendService';
-import { checkIsAbortError, getAbortError } from '../utils';
-import { checkIsApiError } from '../sendErrorClassifier';
+} from '../../utils/fileSendService';
+import { checkIsAbortError, getAbortError } from '../../utils';
+import { checkIsApiError } from '../../sendErrorClassifier';
 
 /** Telegraf input backed by one fresh source bounded to an owned descriptor snapshot. */
 export interface TelegramDescriptorInputFile {

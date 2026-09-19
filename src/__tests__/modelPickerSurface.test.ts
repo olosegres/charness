@@ -34,7 +34,7 @@ import {
   checkIsCallbackDataWithinLimit,
   type ModelCatalog,
 } from '../utils/modelPickerPlan';
-import { TELEGRAM_HARD_LIMIT } from '../messageSplit';
+import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
 import { getAdapter } from '../adapters/createAdapter';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';

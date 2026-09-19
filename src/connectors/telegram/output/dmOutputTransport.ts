@@ -1,30 +1,30 @@
-import type { OutputTransport } from '../types';
-import type { OutboundHints } from '../platform/outbound';
-import type { SessionKey } from '../sessionKey';
-import { keyToString, keyFromString } from '../sessionKey';
+import type { OutputTransport } from '../../../types';
+import type { OutboundHints } from '../../../platform/outbound';
+import type { SessionKey } from '../../../sessionKey';
+import { keyToString, keyFromString } from '../../../sessionKey';
 import {
   getTelegramChatId,
   getTelegramThreadId,
-} from '../connectors/telegram/sessionKeyCodec';
-import { nextDraftId } from '../utils/draftId';
-import { appendPendingOutput } from '../utils/outputFlushPlan';
+} from '../sessionKeyCodec';
+import { nextDraftId } from '../../../utils/draftId';
+import { appendPendingOutput } from '../outputFlushPlan';
 import {
   getDraftPaceAction,
   checkShouldStreamAsDraft,
   DRAFT_MIN_INTERVAL_MS,
   DRAFT_DEFAULT_BACKOFF_MS,
-} from '../utils/draftPacer';
+} from '../../../utils/draftPacer';
 import {
   getDraftFeedAction,
   getDmDraftContinuation,
   checkShouldFinalizeOnIdle,
   FINALIZE_IDLE_MS,
-} from '../utils/draftFinalize';
+} from '../../../utils/draftFinalize';
 import {
   checkIsApiError,
   getErrorCode,
   getErrorRetryAfterSeconds,
-} from '../sendErrorClassifier';
+} from '../../../sendErrorClassifier';
 
 /**
  * @description Per-thread live-draft stream state (DM mode only). See the file

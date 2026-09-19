@@ -1,4 +1,3 @@
-import { splitMessage } from '../messageSplit';
 import { checkIsAbortError } from '../utils';
 import type { SendFilesToThread, SendFilesToThreadResult } from './fileSendService';
 
@@ -87,7 +86,13 @@ export interface SendMessagesToThreadDeps<TTarget> {
    * `sendFilesToThread` closure it already built for the file tool.
    */
   sendFiles: SendFilesToThread;
-  /** Max SOURCE length per message handed to {@link splitMessage} (defensive split). */
+  /**
+   * The connector's own splitter — injected rather than imported so this
+   * service stays platform-neutral (the cap and the split rule are the
+   * surface's, not this service's).
+   */
+  splitMessage(text: string, maxLength: number, measureRendered: (chunk: string) => number): string[];
+  /** Max SOURCE length per message handed to {@link MessageSendServiceDeps.splitMessage} (defensive split). */
   maxMessageLength: number;
   /** Rendered-length measure so an over-cap RENDERED message is split like normal output. */
   measureRendered(chunk: string): number;
@@ -234,7 +239,7 @@ export function createSendMessagesToThread<TTarget>(
         continue;
       }
 
-      const chunks = splitMessage(item.text, deps.maxMessageLength, deps.measureRendered);
+      const chunks = deps.splitMessage(item.text, deps.maxMessageLength, deps.measureRendered);
       for (const chunk of chunks) {
         attempted += 1;
         if (await deps.sendChunk(target, chunk, signal)) landed += 1;

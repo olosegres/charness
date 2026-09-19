@@ -14,7 +14,7 @@
  * Both adapters (Claude + OpenCode) share this single render path.
  */
 
-import { renderMarkdownTables } from './utils/markdownTableRender';
+import { renderMarkdownTables } from '../../utils/markdownTableRender';
 
 /** HTML-escape the three characters Telegram's HTML parse_mode treats as
  *  special. Nothing else needs escaping in HTML text nodes / code spans. */

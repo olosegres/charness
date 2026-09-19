@@ -12,8 +12,8 @@
  * two flushes), spilling into new messages when it outgrows the Telegram cap.
  */
 
-import { splitMessage } from '../messageSplit';
-import { renderAgentHtml } from '../renderAgentHtml';
+import { splitMessage } from './messageSplit';
+import { renderAgentHtml } from './renderAgentHtml';
 
 /** Inject the real render into the splitter so chunks are sized by their
  *  rendered HTML length (escaping + tags inflate the source past Telegram's

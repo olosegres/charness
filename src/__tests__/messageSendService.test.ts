@@ -12,6 +12,7 @@
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
+import { splitMessage } from '../connectors/telegram/messageSplit';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
@@ -59,6 +60,7 @@ function createService(
       return true;
     },
     sendFiles: defaultSendFiles,
+    splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
     ...overrides,
@@ -161,6 +163,7 @@ test('cancellation between messages stops further delivery', async () => {
       recorder.fileCalls.push({ threadKey, options });
       return { ok: true, summary: 'sent' };
     },
+    splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
   });

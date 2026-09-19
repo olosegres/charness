@@ -21,7 +21,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { Update } from 'telegraf/typings/core/types/typegram';
 import type { User } from 'telegraf/typings/core/types/typegram';
-import { createUpdateDispatcher, getUpdateQueueKey } from '../updateDispatcher';
+import { createUpdateDispatcher, getUpdateQueueKey } from '../connectors/telegram/updateDispatcher';
 
 // ── Typed fixture builders (minimal-but-complete Update shapes, no casts) ──
 

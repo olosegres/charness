@@ -14,7 +14,7 @@ import {
   terminalPaneCols,
   terminalPaneRows,
 } from '../utils/terminalEmitPlan';
-import { appendPendingOutput } from '../utils/outputFlushPlan';
+import { appendPendingOutput } from '../connectors/telegram/outputFlushPlan';
 
 test('getTerminalEmitPlan: a fresh output is a new message, not a continuation', () => {
   assert.deepEqual(getTerminalEmitPlan(true), { isContinuation: false });

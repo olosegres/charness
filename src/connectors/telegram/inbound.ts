@@ -25,7 +25,7 @@ import type {
   PlatformMember,
 } from '../../platform/inbound';
 import { getElevatedMemberIds } from '../../accessControl';
-import { getTelegramFileMeta, type TelegramFileKind } from '../../telegramFileIntake';
+import { getTelegramFileMeta, type TelegramFileKind } from './fileIntake';
 import { extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote';
 
 /**

@@ -27,15 +27,25 @@ editing the core.
 
 ```
 Telegram  <->  connectors/telegram/  <->  bot.ts  <->  AgentAdapter <-> { Claude CLI (tmux scrape) |
-                 inbound.ts  ──┐          (core)          │              Claude CLI (stream-json) |
-                 outbound.ts ──┤                          │              OpenCode (HTTP+SSE)      |
-                 sessionKeyCodec.ts       │               │              Terminal ($SHELL in tmux) }
-                               │          │               └── state.ts  (bindings, claudeSessionId,
-      platform/inbound.ts  ────┤          │                             opencodeSessionId, messages,
-      platform/outbound.ts ────┘          │                             MCP per-thread overrides)
-      platform/commandRouter.ts ──────────┘
+                 inbound.ts               (core)          │              Claude CLI (stream-json) |
+                 outbound.ts + output/      │             │              OpenCode (HTTP+SSE)      |
+                 sessionKeyCodec.ts         │             │              Terminal ($SHELL in tmux) }
+                 renderAgentHtml.ts         │             │
+                 messageSplit.ts            │             └── state.ts  (bindings, claudeSessionId,
+                 fileIntake.ts              │                            opencodeSessionId, messages,
+                 fileSendGateway.ts         │                            MCP per-thread overrides)
+                 updateDispatcher.ts        │
+                 language/timezonePicker.ts │
+                                            │
+      platform/inbound.ts  ─────────────────┤
+      platform/outbound.ts ─────────────────┤
+      platform/commandRouter.ts ────────────┘
       (the contracts — no platform library may be imported here)
 ```
+
+A test (`src/__tests__/platformBoundary.test.ts`) fails if any module outside
+`src/connectors/telegram/` imports the Telegram library; `src/bot.ts` is the one
+explicit, documented exemption still awaiting decomposition.
 
 - `platform/` holds the CONTRACTS: `InboundEvent`, `ConnectorInbound`,
   `OutboundContent`, `OutboundHints`, `ConnectorCapabilities`,
@@ -46,7 +56,7 @@ Telegram  <->  connectors/telegram/  <->  bot.ts  <->  AgentAdapter <-> { Claude
 - A connector DECLARES its capabilities (`ConnectorCapabilities`); the core
   degrades where a surface lacks one — a tracker has no pinning and no tappable
   buttons.
-- `OutputTransport` (`src/output/`) is a Telegram CHAT-MODE seam, one level
+- `OutputTransport` (`src/connectors/telegram/output/`) is a Telegram CHAT-MODE seam, one level
   below: picked once at boot by `CHAT_MODE`, group edit-in-place stream vs the
   owner-DM native draft "cursor". It is composed by the Telegram connector, not
   by the core.

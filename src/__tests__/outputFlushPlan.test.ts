@@ -24,8 +24,8 @@ import {
   appendPendingOutput,
   getUnsentRemainder,
   getGroupDeltaContinuation,
-} from '../utils/outputFlushPlan';
-import { MAX_MESSAGE_LEN, splitMessage } from '../messageSplit';
+} from '../connectors/telegram/outputFlushPlan';
+import { MAX_MESSAGE_LEN, splitMessage } from '../connectors/telegram/messageSplit';
 
 describe('getOutputFlushPlan', () => {
   it('fresh output (not a continuation) → no edit, chunks = splitMessage(output)', () => {

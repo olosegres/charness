@@ -24,7 +24,7 @@ import {
   type TelegramDescriptorInputFile,
   type TelegramDescriptorMediaGroup,
   type TelegramMessageId,
-} from '../utils/fileSendTelegram';
+} from '../connectors/telegram/fileSendGateway';
 import {
   createSendFilesToThread,
   FileSendDeliveryUnknownError,

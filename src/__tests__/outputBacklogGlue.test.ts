@@ -6,8 +6,8 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { glueBacklogFrames, backlogGlueThreshold } from '../utils/outputBacklogGlue';
-import { MAX_MESSAGE_LEN } from '../messageSplit';
+import { glueBacklogFrames, backlogGlueThreshold } from '../connectors/telegram/outputBacklogGlue';
+import { MAX_MESSAGE_LEN } from '../connectors/telegram/messageSplit';
 
 test('1–2 frames are returned unchanged (snappy, no glue)', () => {
   assert.deepEqual(glueBacklogFrames([]), []);

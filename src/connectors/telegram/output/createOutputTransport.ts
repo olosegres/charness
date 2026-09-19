@@ -1,8 +1,8 @@
-import type { ChatMode } from '../threadRouting';
-import type { OutputTransport } from '../types';
-import type { SessionKey } from '../sessionKey';
+import type { ChatMode } from '../../../threadRouting';
+import type { OutputTransport } from '../../../types';
+import type { SessionKey } from '../../../sessionKey';
 import { createDmOutputTransport, type DmOutputTransportDeps } from './dmOutputTransport';
-import { getGroupDeltaContinuation } from '../utils/outputFlushPlan';
+import { getGroupDeltaContinuation } from '../outputFlushPlan';
 
 /**
  * @description Bot primitives the output transport routes through. The group

@@ -19,7 +19,7 @@ import {
   renderMarkdownTables,
   tableMaxMonospaceWidth,
 } from '../utils/markdownTableRender';
-import { renderAgentHtml } from '../renderAgentHtml';
+import { renderAgentHtml } from '../connectors/telegram/renderAgentHtml';
 
 /** The plan's example ratchet table (narrow, mixed scripts) used as a fixture. */
 const ratchetTable = [

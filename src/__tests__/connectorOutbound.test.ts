@@ -21,7 +21,7 @@ import { keyToString } from '../sessionKey';
 import type { OutputTransport } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SendFilesToThreadOptions, SendFilesToThreadResult } from '../utils/fileSendService';
-import { MAX_MESSAGE_LEN } from '../messageSplit';
+import { MAX_MESSAGE_LEN } from '../connectors/telegram/messageSplit';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import {
   buildOptionsKeyboard,

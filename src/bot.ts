@@ -34,7 +34,7 @@ import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { SessionKey } from './sessionKey';
-import { createOutputTransport } from './output/createOutputTransport';
+import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
 import {
   getTelegramChatId,
@@ -90,10 +90,10 @@ import {
   createUpdateDispatcher,
   installUpdateDispatcher,
   getUpdateQueueKey,
-} from './updateDispatcher';
+} from './connectors/telegram/updateDispatcher';
 import { classifyBoot } from './bootClassifier';
 import { defaultLocale, formatLanguageDisplay, localeCodes, normalizeLocale, runWithLocale, t, type Locale } from './i18n';
-import { buildLanguagePicker, languageAutoCallback } from './utils/languagePicker';
+import { buildLanguagePicker, languageAutoCallback } from './connectors/telegram/languagePicker';
 import {
   applyProcessTimezone,
   checkIsApplicableTimezone,
@@ -112,7 +112,7 @@ import {
   timezoneAutoCallback,
   timezonePickerBackCallback,
   zonePickCallbackRe,
-} from './utils/timezonePicker';
+} from './connectors/telegram/timezonePicker';
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir, paginateBindList } from './validation';
 import { paginateList } from './utils/paginateList';
@@ -175,10 +175,10 @@ import {
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer } from './startupPromptBuffer';
-import { renderAgentHtml } from './renderAgentHtml';
-import { splitMessage, MAX_MESSAGE_LEN } from './messageSplit';
-import { getOutputFlushPlan, appendPendingOutput, getUnsentRemainder } from './utils/outputFlushPlan';
-import { glueBacklogFrames } from './utils/outputBacklogGlue';
+import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
+import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
+import { getOutputFlushPlan, appendPendingOutput, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
+import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
 import { getOutputFlushTiming } from './utils/outputFlushTiming';
@@ -200,7 +200,7 @@ import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
-import { createTelegramFileSendGateway } from './utils/fileSendTelegram';
+import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
 import { getStatusFlushAction } from './utils/statusFlushDecision';
 import { getThreadStatusModel, getThreadStatusReport } from './utils/threadStatusReport';
 import { createIdenticalOutputGuard } from './utils/identicalOutputGuard';
@@ -257,8 +257,8 @@ import {
   checkIsFileTooBig,
   telegramFileDownloadCapBytes,
   incomingFileMessageFilter,
-} from './telegramFileIntake';
-import type { TelegramFileMeta, AlbumFile } from './telegramFileIntake';
+} from './connectors/telegram/fileIntake';
+import type { TelegramFileMeta, AlbumFile } from './connectors/telegram/fileIntake';
 import { createMediaGroupCollector } from './utils/mediaGroupCollector';
 import { sessionTitleSnippetMaxLength } from './openCodeSessionTitle';
 import {
@@ -13367,6 +13367,7 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
   // Reuse the SAME secure file-send pipeline as `send_file_to_user` for an
   // attachment item — no second pipeline, no duplicated path-safety.
   sendFiles: sendFilesToThread,
+  splitMessage,
   maxMessageLength: MAX_MESSAGE_LEN,
   measureRendered: (chunk) => renderAgentHtml(chunk).length,
 });

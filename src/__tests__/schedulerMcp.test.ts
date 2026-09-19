@@ -24,6 +24,7 @@
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
+import { splitMessage } from '../connectors/telegram/messageSplit';
 import { beforeEach, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
@@ -1021,6 +1022,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       resolveTarget: (threadKey) => ({ ok: true, target: threadKey }),
       sendChunk: async () => true,
       sendFiles: fixture.fileSendHandler.current,
+      splitMessage,
       maxMessageLength: 4_096,
       measureRendered: (message) => message.length,
     });

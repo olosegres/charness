@@ -16,7 +16,7 @@
  */
 import { Markup } from 'telegraf';
 
-import { getLocaleEndonym, getLocaleEnglishName, localeCodes, type Locale } from '../i18n';
+import { getLocaleEndonym, getLocaleEnglishName, localeCodes, type Locale } from '../../i18n';
 
 /** «Reset to auto» button — clears the chat's explicit locale override. */
 export const languageAutoCallback = 'lang_auto';

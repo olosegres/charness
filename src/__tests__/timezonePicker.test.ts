@@ -40,7 +40,7 @@ import {
   timezonePageSize,
   timezonePickerBackCallback,
   zonePickCallbackRe,
-} from '../utils/timezonePicker';
+} from '../connectors/telegram/timezonePicker';
 
 interface RenderedButton {
   text: string;

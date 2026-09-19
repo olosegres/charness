@@ -15,8 +15,8 @@ import {
   RENDERED_CHUNK_CAP,
   TELEGRAM_HARD_LIMIT,
   MAX_MESSAGE_LEN,
-} from '../messageSplit';
-import { renderAgentHtml } from '../renderAgentHtml';
+} from '../connectors/telegram/messageSplit';
+import { renderAgentHtml } from '../connectors/telegram/renderAgentHtml';
 
 const countFences = (text: string): number => (text.match(/^\s*```/gm) ?? []).length;
 

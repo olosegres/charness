@@ -18,7 +18,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { createOutputTransport, type OutputTransportDeps } from '../output/createOutputTransport';
+import { createOutputTransport, type OutputTransportDeps } from '../connectors/telegram/output/createOutputTransport';
 import type { SessionKey } from '../sessionKey';
 import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
