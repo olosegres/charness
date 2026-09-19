@@ -21,10 +21,11 @@ import {
   OpenCodeAdapter,
   mapOpenCodeMessagesToTurns,
 } from '../adapters/openCodeAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const limit = 3;
-const key: ThreadKey = { chatId: -100222333, threadId: 444 };
+const key: SessionKey = makeTelegramKey(-100222333, 444);
 const sessionId = 'ses_recent_turns';
 
 describe('mapOpenCodeMessagesToTurns', () => {

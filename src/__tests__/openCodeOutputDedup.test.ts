@@ -25,11 +25,13 @@
 import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type OutputEventMeta, type ThreadKey } from '../types';
+import { type OutputEventMeta } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const sseOutputBatchMs = 500;
 const ownSessionId = 'ses_own';
-const key: ThreadKey = { chatId: -100123, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-100123, 42);
 /** The injected session's bound folder — tagged on each `/global/event`
  * envelope. The events carry `ownSessionId`, so the owner resolves by direct id
  * match regardless of the directory string itself. */
@@ -72,7 +74,7 @@ function createAdapterWithSession(): {
 
   const outputs: string[] = [];
   const metas: (OutputEventMeta | undefined)[] = [];
-  adapter.on('output', (_key: ThreadKey, text: string, meta?: OutputEventMeta) => {
+  adapter.on('output', (_key: SessionKey, text: string, meta?: OutputEventMeta) => {
     outputs.push(text);
     metas.push(meta);
   });

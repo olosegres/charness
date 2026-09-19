@@ -12,7 +12,7 @@
  *
  * Adapter-agnostic on purpose: the startup race is identical for Claude and
  * OpenCode, so the fix lives in the bot layer instead of being duplicated in
- * each adapter. Keyed by `keyToString(ThreadKey)`.
+ * each adapter. Keyed by `keyToString(SessionKey)`.
  */
 export class StartupPromptBuffer {
   private startingThreads = new Set<string>();

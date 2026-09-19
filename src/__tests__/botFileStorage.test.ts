@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fsp } from 'fs';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
 import {
   resolveThreadFilesDir,
   resolveFilesRoot,
@@ -12,11 +12,12 @@ import {
   sweepExpiredThreadFiles,
   fileRetentionMs,
 } from '../botFileStorage';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // Temp dirs live under the project-local ./agent/tmp (never /tmp — no access).
 const tmpBase = path.join(process.cwd(), 'agent', 'tmp', 'botFileStorage-test');
 
-const key: ThreadKey = { chatId: -100123, threadId: 9085 };
+const key: SessionKey = makeTelegramKey(-100123, 9085);
 
 async function makeDataDir(): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(tmpBase, 'data-'));
@@ -76,12 +77,12 @@ describe('botFileStorage', () => {
     const now = Date.now();
 
     // Thread A: only old files → dir should be removed.
-    const dirA = await ensureThreadFilesDir(dataDir, { chatId: -1, threadId: 1 });
+    const dirA = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 1));
     await writeAgedFile(dirA, 'old1.bin', now, fileRetentionMs + 60_000);
     await writeAgedFile(dirA, 'old2.bin', now, fileRetentionMs * 2);
 
     // Thread B: one old, one fresh → old removed, dir KEPT.
-    const dirB = await ensureThreadFilesDir(dataDir, { chatId: -1, threadId: 2 });
+    const dirB = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 2));
     const oldB = await writeAgedFile(dirB, 'old.bin', now, fileRetentionMs + 1_000);
     const freshB = await writeAgedFile(dirB, 'fresh.bin', now, 60_000);
 
@@ -100,7 +101,7 @@ describe('botFileStorage', () => {
     // Whole-second `now` so `utimes` (second-granularity on some FSes) can't
     // shift the mtime under the cutoff and turn an equal into a `<`.
     const now = Math.floor(Date.now() / 1000) * 1000;
-    const dir = await ensureThreadFilesDir(dataDir, { chatId: -1, threadId: 3 });
+    const dir = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 3));
     // mtime == cutoff → NOT older-than (strict <), so kept.
     const atBoundary = await writeAgedFile(dir, 'edge.bin', now, fileRetentionMs);
 
@@ -117,7 +118,7 @@ describe('botFileStorage', () => {
 
   it('sweep on an empty thread dir removes it', async () => {
     const dataDir = await makeDataDir();
-    const dir = await ensureThreadFilesDir(dataDir, { chatId: -1, threadId: 4 });
+    const dir = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 4));
     const result = await sweepExpiredThreadFiles(resolveFilesRoot(dataDir), fileRetentionMs, Date.now());
     assert.equal(result.removedDirs, 1);
     assert.ok(!fs.existsSync(dir));

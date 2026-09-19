@@ -3,7 +3,7 @@
  * (S1) and the reactive 429 retry (`withRateLimitRetry`).
  *
  * The module keys:
- *  - a per-thread FIFO queue by **ThreadKey** so two threads in the same
+ *  - a per-thread FIFO queue by **SessionKey** so two threads in the same
  *    supergroup don't block each other;
  *  - a single GLOBAL send pacer (≤1 send / {@link globalSendIntervalMs} across
  *    ALL chats, FCFS, clock-based → no head-of-line from a stuck send);
@@ -34,9 +34,10 @@ import {
   drainPendingSends,
   type PacerClock,
 } from '../rateLimiter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const k = (chatId: number, threadId: number): ThreadKey => ({ chatId, threadId });
+const k = (chatId: number, threadId: number): SessionKey => makeTelegramKey(chatId, threadId);
 
 // The enqueueSend integration tests only care about ORDER + per-thread
 // independence, not the real 2 s cadence — pace at 1 ms so they run fast.
@@ -535,7 +536,7 @@ test('sendUnpaced still retries once on a 429 (429 safety preserved)', async () 
 
   assert.equal(calls, 2, 'sendUnpaced must retry exactly once on 429 (withRateLimitRetry still wraps it)');
   assert.equal(result, 'ok');
-  assert.equal(checkIsRateLimited(key.chatId), false, 'not blocked after a successful retry');
+  assert.equal(checkIsRateLimited(getTelegramChatId(key)), false, 'not blocked after a successful retry');
 });
 
 // ── shutdown drain: immediate-release mode + FIFO drain at graceful exit ─────
@@ -610,7 +611,7 @@ test('shutdown drain: a 429 during the drain still retries once (withRateLimitRe
     assert.equal(verdict, 'drained');
     assert.equal(await send, 'ok');
     assert.equal(calls, 2, 'the drained send retried exactly once on the 429');
-    assert.equal(checkIsRateLimited(key.chatId), false, 'not blocked after a successful retry');
+    assert.equal(checkIsRateLimited(getTelegramChatId(key)), false, 'not blocked after a successful retry');
   } finally {
     __setGlobalPacerForTest(new GlobalSendPacer(1));
   }

@@ -15,9 +15,10 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { stopAllAdaptersFor, type AdapterSweepTarget } from '../adapters/createAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -1001234567890, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-1001234567890, 42);
 
 interface FakeAdapter extends AdapterSweepTarget {
   active: boolean;

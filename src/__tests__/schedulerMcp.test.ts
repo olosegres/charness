@@ -33,7 +33,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StateStore } from '../state';
-import { keyToString } from '../types';
+import { keyToString } from '../sessionKey';
 import {
   buildSchedulerMcpToken,
   verifySchedulerMcpToken,
@@ -69,10 +69,11 @@ import {
   createFileSendTestRecorderGateway,
   type RecordedFileSendGatewayCall,
 } from './fileSendTestRecorder';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const secret = 'a'.repeat(64);
-const threadAKey = keyToString({ chatId: -1001234567890, threadId: 11 });
-const threadBKey = keyToString({ chatId: -1001234567890, threadId: 22 });
+const threadAKey = keyToString(makeTelegramKey(-1001234567890, 11));
+const threadBKey = keyToString(makeTelegramKey(-1001234567890, 22));
 const nowMs = new Date(2026, 5, 6, 10, 0, 0).getTime();
 const schedulerMcpStopTimeoutMs = 1_000;
 const incompleteRequestBody = '{"jsonrpc":"2.0"';
@@ -1599,7 +1600,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
 
     // All three armed and persisted to the right thread.
     assert.equal(fixture.armed.length, 3);
-    assert.equal(fixture.store.getThreadSchedules({ chatId: -1001234567890, threadId: 11 }).length, 3);
+    assert.equal(fixture.store.getThreadSchedules(makeTelegramKey(-1001234567890, 11)).length, 3);
 
     const listResult = await client.callTool({ name: 'schedule_list', arguments: {} });
     const listText = firstText(listResult);
@@ -1687,7 +1688,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
   it('thread-scope: cannot cancel a job owned by another thread', async () => {
     // Seed a job on thread B directly in the store.
     const created = await (await import('../scheduler/store')).createScheduleForThread(fixture.store, {
-      threadKey: { chatId: -1001234567890, threadId: 22 },
+      threadKey: makeTelegramKey(-1001234567890, 22),
       name: 'BJob',
       spec: { kind: 'cron', cronExpr: '0 9 * * *' },
       prompt: 'p',
@@ -1781,7 +1782,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     deliveryKind?: 'reminder',
   ): Promise<ScheduleRecord> {
     const created = await (await import('../scheduler/store')).createScheduleForThread(fixture.store, {
-      threadKey: { chatId: -1001234567890, threadId: 11 },
+      threadKey: makeTelegramKey(-1001234567890, 11),
       name,
       spec: { kind: 'cron', cronExpr: '0 9 * * *' },
       prompt: `${name} body`,

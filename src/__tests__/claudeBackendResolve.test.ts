@@ -21,9 +21,10 @@ import {
   getClaudeModeAction,
 } from '../adapters/createAdapter';
 import { claudeJsonStreamAdapterName } from '../adapters/claudeJsonStreamAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key = (threadId: number): ThreadKey => ({ chatId: -100, threadId });
+const key = (threadId: number): SessionKey => makeTelegramKey(-100, threadId);
 
 test('default Claude backend is json-stream', () => {
   assert.equal(getDefaultClaudeBackendName(), claudeJsonStreamAdapterName);

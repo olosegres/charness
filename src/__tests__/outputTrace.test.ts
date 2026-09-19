@@ -19,8 +19,9 @@ import {
   type TraceWriterDeps,
 } from '../outputTrace';
 import { getHourBucketPath, retentionMs } from '../utils/rotatingLogFile';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadKey = { chatId: -100123, threadId: 7 };
+const threadKey = makeTelegramKey(-100123, 7);
 const threadKeyStr = '-100123:7';
 
 let tempDataDir: string;
@@ -138,13 +139,13 @@ describe('trace toggle (setTraceConfig / getTraceConfig)', () => {
   it('per-thread set: only the traced thread records', () => {
     setTraceConfig({ allThreads: false, threadKeys: [threadKeyStr] });
     assert.equal(checkIsThreadTraced(threadKey), true);
-    assert.equal(checkIsThreadTraced({ chatId: -100123, threadId: 8 }), false);
+    assert.equal(checkIsThreadTraced(makeTelegramKey(-100123, 8)), false);
   });
 
   it('all-flag traces every thread', () => {
     setTraceConfig({ allThreads: true, threadKeys: [] });
     assert.equal(checkIsTracingActive(), true);
-    assert.equal(checkIsThreadTraced({ chatId: -999, threadId: 42 }), true);
+    assert.equal(checkIsThreadTraced(makeTelegramKey(-999, 42)), true);
   });
 
   it('getTraceConfig reflects the seeded config', () => {

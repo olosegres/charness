@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import type { Locale } from './i18n';
 import type { OpenCodeAuthMethod } from './utils/openCodeAuthLogin';
 import type { McpHealOutcome } from './utils/claudeMcpHeal';
+import type { SessionKey } from './sessionKey';
 
 export interface AgentSession {
   id: string;
@@ -54,7 +55,7 @@ export interface SeenWatermark {
  * wired in `bot.ts` to `state.setSeenWatermark`. Inert (no-op) until registered,
  * so an embedded / test caller that never wires it simply skips watermarking.
  */
-export type SeenWatermarkWriter = (key: ThreadKey, watermark: SeenWatermark) => void;
+export type SeenWatermarkWriter = (key: SessionKey, watermark: SeenWatermark) => void;
 
 /**
  * @description Per-thread json-stream stdout tail position — how far the bot
@@ -78,7 +79,7 @@ export interface JsonStreamTailOffset {
  * registered semantics as {@link SeenWatermarkWriter}; wired in `bot.ts` to
  * `state.setJsonStreamTail`.
  */
-export type JsonStreamTailWriter = (key: ThreadKey, tail: JsonStreamTailOffset) => void;
+export type JsonStreamTailWriter = (key: SessionKey, tail: JsonStreamTailOffset) => void;
 
 /**
  * @description Result of {@link AgentAdapter.getReattachRecap} — the data the
@@ -121,61 +122,6 @@ export interface ResumeSessionOptions {
    * quiet, otherwise every hot rebuild spams every active topic.
    */
   isWithRecentContext?: boolean;
-}
-
-/**
- * @description Routing key for the multi-thread bot architecture.
- *
- * Replaces the old `userId: number` everywhere a per-conversation state used to live.
- *
- * - `chatId` is the Telegram supergroup id (negative for forums).
- * - `threadId` is the `message_thread_id` of a forum topic; General topic = 1.
- *
- * Until §11 Этап 3 finishes the bot.ts routing migration, `bot.ts` produces keys
- * via a shim `{ chatId: userId, threadId: 0 }` so existing private-chat behaviour
- * keeps working without any adapter-level changes.
- *
- * The pair `(chatId, threadId)` is unique within one bot instance. We keep both
- * fields rather than collapsing to `threadId` alone so that `ALLOWED_GROUP_ID`
- * mismatches stay detectable and so multi-group setups remain possible without
- * a schema change (see plan §5.5, D3).
- */
-export interface ThreadKey {
-  chatId: number;
-  threadId: number;
-}
-
-/**
- * @description Canonical serialization of `ThreadKey` for use as a `Map` key
- * and as a state.json field name (see plan §9). Format: `"<chatId>:<threadId>"`.
- *
- * Round-trips losslessly with `keyFromString`.
- */
-export function keyToString(key: ThreadKey): string {
-  return `${key.chatId}:${key.threadId}`;
-}
-
-/**
- * @description Inverse of `keyToString`. Throws on malformed input —
- * callers should only feed strings that came from `keyToString` or from
- * a trusted state file.
- */
-export function keyFromString(s: string): ThreadKey {
-  const idx = s.indexOf(':');
-  if (idx <= 0 || idx === s.length - 1) {
-    throw new Error(`Invalid ThreadKey string: "${s}"`);
-  }
-  const chatId = Number(s.slice(0, idx));
-  const threadId = Number(s.slice(idx + 1));
-  if (!Number.isFinite(chatId) || !Number.isFinite(threadId)) {
-    throw new Error(`Invalid ThreadKey numbers in: "${s}"`);
-  }
-  return { chatId, threadId };
-}
-
-/** Convenience: structural equality for two keys. */
-export function keysEqual(a: ThreadKey, b: ThreadKey): boolean {
-  return a.chatId === b.chatId && a.threadId === b.threadId;
 }
 
 /**
@@ -346,7 +292,7 @@ export type DisplayVerbosityMode = 'minimal' | 'short' | 'full';
  * bodies — both are adapter-side decisions that cannot be deferred. Until
  * registered, both adapters fall back to all-fields-`minimal`.
  */
-export type DisplayPrefsReader = (key: ThreadKey) => ResolvedThreadDisplayPrefs;
+export type DisplayPrefsReader = (key: SessionKey) => ResolvedThreadDisplayPrefs;
 
 /**
  * @description Reader for a thread's resolved UI locale, injected into BOTH
@@ -358,7 +304,7 @@ export type DisplayPrefsReader = (key: ThreadKey) => ResolvedThreadDisplayPrefs;
  * reader the adapter wraps the `t(...)` call in `runWithLocale(reader(key))`.
  * Until registered, the adapters fall back to {@link defaultLocale} (`en`).
  */
-export type ThreadLocaleReader = (key: ThreadKey) => Locale;
+export type ThreadLocaleReader = (key: SessionKey) => Locale;
 
 /**
  * @description Per-thread bot-rendering preferences for agent output
@@ -463,19 +409,19 @@ export interface OutputEventMeta {
  */
 export interface OutputTransport {
   /** Route one `output` event to its message path (the mode's own logic). */
-  deliverOutput(key: ThreadKey, output: string, meta?: OutputEventMeta): void;
+  deliverOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void;
   /**
    * Finalize any in-flight content for the thread (DM: the live draft → a
    * permanent message; group: noop). The STATUS site awaits this so the status
    * frame lands below content; the two TEARDOWN sites fire-and-forget.
    */
-  finalizeInFlight(key: ThreadKey): Promise<void>;
+  finalizeInFlight(key: SessionKey): Promise<void>;
   /**
    * Drop the thread's per-transport state on a full teardown (`/unbind`, topic
    * deleted) so it doesn't leak across a rebind. DM drops the reset draft entry;
    * group has nothing to drop (noop). Called AFTER `finalizeInFlight`.
    */
-  disposeThread(key: ThreadKey): void;
+  disposeThread(key: SessionKey): void;
   /**
    * True while in-flight content "owns" the live message (DM: a draft turn is
    * active). The Claude liveness loop ORs this into `checkIsOutputStreaming` so a
@@ -483,7 +429,7 @@ export interface OutputTransport {
    * trip a mid-answer `needsNewMessage` and chop the draft. Group: always false
    * (its streaming is already tracked via the output queue).
    */
-  checkIsStreaming(key: ThreadKey): boolean;
+  checkIsStreaming(key: SessionKey): boolean;
   /**
    * Thread keys whose TRANSPORT-OWNED in-flight state holds content to finalize
    * (DM: threads with an active draft turn). The graceful-shutdown flush
@@ -491,7 +437,7 @@ export interface OutputTransport {
    * process exits. Group: always empty — its coalesced-but-unsent state lives in
    * the bot's output queues, which the shutdown flush enumerates directly.
    */
-  getInFlightThreadKeys(): ThreadKey[];
+  getInFlightThreadKeys(): SessionKey[];
 }
 
 /**
@@ -652,21 +598,21 @@ export type CompactionResult =
 
 /**
  * @description Unified interface for AI agent backends (Claude CLI, OpenCode, etc.).
- * Each adapter manages sessions keyed by `ThreadKey` and communicates via EventEmitter.
+ * Each adapter manages sessions keyed by `SessionKey` and communicates via EventEmitter.
  *
- * Events emitted (all carry the `ThreadKey` as the first argument):
- * - 'output'   (key: ThreadKey, text: string, meta?: OutputEventMeta) — permanent text response
- * - 'status'   (key: ThreadKey, text: string)   — transient status (tool calls, thinking); shown as editable message
- * - 'question' (key: ThreadKey, question: { requestId: string, questions: QuestionInfo[] }) — interactive question for user
- * - 'questionGone' (key: ThreadKey) — Claude-only; the scraped TUI selector left the screen (answered / dismissed), so the bot removes its pin. Claude has no `pendingQuestions` entry, so it can't lean on the OpenCode `clearPendingQuestion` unpin path; this event is the normal-answer unpin trigger. Hard-teardown paths (stop / quit / unbind / closed / error) still route through `clearPendingQuestion` for BOTH backends.
- * - 'thinking' (key: ThreadKey, payload: ThinkingEvent) — chain-of-thought lifecycle (OpenCode); the bot applies the per-thread thinking {@link DisplayVerbosityMode}
- * - 'toolResult' (key: ThreadKey, payload: ToolResultEvent) — a completed tool call's output (OpenCode); the bot applies the per-thread tool-results {@link DisplayVerbosityMode}
- * - 'subagentStatus' (key: ThreadKey, payload: SubagentStatusEvent) — OpenCode delegation lifecycle for `minimal`/`short` `/subagent` modes; the bot owns a dedicated self-updating status message with a ticking elapsed timer
- * - 'apiError' (key: ThreadKey, error: AgentApiErrorClass) — provider-side API error at the proxy boundary (auto-retry trigger; only when {@link AgentApiErrorClass} classification matched)
- * - 'started'  (key: ThreadKey)                  — session is up and ready
- * - 'stopped'  (key: ThreadKey)                  — `stopSession` completed (explicit teardown)
- * - 'closed'   (key: ThreadKey)                  — session died on its own (process exit, SSE giveup, server crash)
- * - 'error'    (key: ThreadKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
+ * Events emitted (all carry the `SessionKey` as the first argument):
+ * - 'output'   (key: SessionKey, text: string, meta?: OutputEventMeta) — permanent text response
+ * - 'status'   (key: SessionKey, text: string)   — transient status (tool calls, thinking); shown as editable message
+ * - 'question' (key: SessionKey, question: { requestId: string, questions: QuestionInfo[] }) — interactive question for user
+ * - 'questionGone' (key: SessionKey) — Claude-only; the scraped TUI selector left the screen (answered / dismissed), so the bot removes its pin. Claude has no `pendingQuestions` entry, so it can't lean on the OpenCode `clearPendingQuestion` unpin path; this event is the normal-answer unpin trigger. Hard-teardown paths (stop / quit / unbind / closed / error) still route through `clearPendingQuestion` for BOTH backends.
+ * - 'thinking' (key: SessionKey, payload: ThinkingEvent) — chain-of-thought lifecycle (OpenCode); the bot applies the per-thread thinking {@link DisplayVerbosityMode}
+ * - 'toolResult' (key: SessionKey, payload: ToolResultEvent) — a completed tool call's output (OpenCode); the bot applies the per-thread tool-results {@link DisplayVerbosityMode}
+ * - 'subagentStatus' (key: SessionKey, payload: SubagentStatusEvent) — OpenCode delegation lifecycle for `minimal`/`short` `/subagent` modes; the bot owns a dedicated self-updating status message with a ticking elapsed timer
+ * - 'apiError' (key: SessionKey, error: AgentApiErrorClass) — provider-side API error at the proxy boundary (auto-retry trigger; only when {@link AgentApiErrorClass} classification matched)
+ * - 'started'  (key: SessionKey)                  — session is up and ready
+ * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
+ * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)
+ * - 'error'    (key: SessionKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
  *
  * Audit S10 / #16 contract clarifications (enforced by every adapter):
  *
@@ -703,16 +649,16 @@ export interface AgentAdapter extends EventEmitter {
    * returned promise rejecting means no `started` event will fire and no
    * in-memory state was retained.
    */
-  startSession(key: ThreadKey, workDir: string, args?: string, sessionId?: string): Promise<void>;
-  stopSession(key: ThreadKey): void;
-  checkIsActive(key: ThreadKey): boolean;
+  startSession(key: SessionKey, workDir: string, args?: string, sessionId?: string): Promise<void>;
+  stopSession(key: SessionKey): void;
+  checkIsActive(key: SessionKey): boolean;
 
   /**
    * @description Read runtime metadata for the live session without sending the
    * agent a prompt or command. Backends that cannot expose trustworthy model or
    * context data (such as Terminal) omit this method.
    */
-  getRuntimeInfo?(key: ThreadKey): Promise<AgentRuntimeInfo>;
+  getRuntimeInfo?(key: SessionKey): Promise<AgentRuntimeInfo>;
 
   /**
    * @description Whether the session bound to `key` is mid-turn (an in-progress
@@ -732,7 +678,7 @@ export interface AgentAdapter extends EventEmitter {
    * can't report busy-ness omit it and a caller treats the session as never
    * busy.
    */
-  checkIsBusy?(key: ThreadKey): boolean;
+  checkIsBusy?(key: SessionKey): boolean;
 
   /**
    * Re-register the bot-owned scheduler MCP for active OpenCode directories.
@@ -773,12 +719,12 @@ export interface AgentAdapter extends EventEmitter {
    * Optional (optional-method pattern, like {@link compactContext}): only the
    * json-stream Claude backend has a control channel to ask over.
    */
-  healMcpServer?(key: ThreadKey, serverName: string): Promise<McpHealOutcome>;
+  healMcpServer?(key: SessionKey, serverName: string): Promise<McpHealOutcome>;
 
   // — Input —
 
-  sendInput(key: ThreadKey, input: string, options?: SendInputOptions): void;
-  sendSignal(key: ThreadKey, signal: string): void;
+  sendInput(key: SessionKey, input: string, options?: SendInputOptions): void;
+  sendSignal(key: SessionKey, signal: string): void;
 
   // — Session history —
 
@@ -791,7 +737,7 @@ export interface AgentAdapter extends EventEmitter {
    * `~/.claude/projects/<cwd>/*.jsonl` transcripts filtered to `workDir`;
    * OpenCode ignores `workDir` (its server API exposes no folder field).
    */
-  getSessions(key: ThreadKey, workDir: string): Promise<AgentSession[]>;
+  getSessions(key: SessionKey, workDir: string): Promise<AgentSession[]>;
   /**
    * Rename the CURRENT live session bound to `key` to `title`. Same
    * convention as {@link setModel}: resolves to `null` on success, or a
@@ -805,7 +751,7 @@ export interface AgentAdapter extends EventEmitter {
    * A manual rename is final: it must suppress any later automatic title
    * overwrite (OpenCode's bot-side auto-name fallback).
    */
-  renameSession?(key: ThreadKey, title: string): Promise<string | null>;
+  renameSession?(key: SessionKey, title: string): Promise<string | null>;
 
   /**
    * Compact (summarize) the CURRENT live session's context so the conversation
@@ -830,7 +776,7 @@ export interface AgentAdapter extends EventEmitter {
    * literal slash command to it instead. Adapters with neither (Terminal) get
    * the "not supported" reply.
    */
-  compactContext?(key: ThreadKey, instruction?: string): Promise<CompactionResult>;
+  compactContext?(key: SessionKey, instruction?: string): Promise<CompactionResult>;
 
   /**
    * Whether this backend's own compaction prompt already receives the
@@ -841,7 +787,7 @@ export interface AgentAdapter extends EventEmitter {
    * absent means "no", and the Claude backends leave it unset because their
    * `PreCompact` hook skips a compaction that already carries the guidance.
    */
-  checkHasCompactionSkillsHook?(key: ThreadKey): Promise<boolean>;
+  checkHasCompactionSkillsHook?(key: SessionKey): Promise<boolean>;
 
   /**
    * Whether this backend's OWN compaction summary already reaches the topic as
@@ -866,7 +812,7 @@ export interface AgentAdapter extends EventEmitter {
    * backends whose summary is retrievable implement it; a missing method just
    * means the notice omits the closing prose.
    */
-  getLatestCompactionSummary?(key: ThreadKey): Promise<string | null>;
+  getLatestCompactionSummary?(key: SessionKey): Promise<string | null>;
 
   /**
    * Resume an existing backend session under this `key` and `workDir`.
@@ -882,7 +828,7 @@ export interface AgentAdapter extends EventEmitter {
    * restart (hot reload) and on opencode crash-recovery, and posting the
    * block there spammed every active topic on every rebuild.
    */
-  resumeSession(key: ThreadKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void>;
+  resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void>;
 
   /**
    * @description Fork the thread's CURRENT session into a new one that carries
@@ -893,7 +839,7 @@ export interface AgentAdapter extends EventEmitter {
    * before replaying. Adapters that can't fork omit it (recovery falls back to a
    * blank restart).
    */
-  forkSession?(key: ThreadKey): Promise<string | null>;
+  forkSession?(key: SessionKey): Promise<string | null>;
 
   /**
    * @description Detach any RUNNING sub-agent synchronously blocking the thread's
@@ -903,7 +849,7 @@ export interface AgentAdapter extends EventEmitter {
    * OpenCode implements it via `POST /experimental/session/:id/background`; other
    * adapters omit it. Best-effort — never blocks the prompt that follows.
    */
-  detachRunningSubagents?(key: ThreadKey): Promise<boolean>;
+  detachRunningSubagents?(key: SessionKey): Promise<boolean>;
 
   /**
    * @description Read the last `limit` conversational turns (user/assistant
@@ -915,7 +861,7 @@ export interface AgentAdapter extends EventEmitter {
    * to `limit`; an empty array means no renderable turns (brand-new / pruned
    * session). Used by `resumeSession` to post the short resume context block.
    */
-  getRecentTurns?(key: ThreadKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]>;
+  getRecentTurns?(key: SessionKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]>;
 
   /**
    * @description Assemble the post-restart recap for `sessionId`: how many
@@ -929,7 +875,7 @@ export interface AgentAdapter extends EventEmitter {
    * → the implementation returns `isWatermarkKnown: false` (the fallback path).
    */
   getReattachRecap?(
-    key: ThreadKey,
+    key: SessionKey,
     workDir: string,
     sessionId: string,
     watermark: SeenWatermark | null,
@@ -945,7 +891,7 @@ export interface AgentAdapter extends EventEmitter {
    * Optional (optional-method pattern): OpenCode implements provider auth;
    * Claude/Terminal do not.
    */
-  connectProvider?(key: ThreadKey, providerId: string, apiKey: string): Promise<string | null>;
+  connectProvider?(key: SessionKey, providerId: string, apiKey: string): Promise<string | null>;
 
   /**
    * Disconnect a provider: remove the credentials this backend stores for it.
@@ -958,7 +904,7 @@ export interface AgentAdapter extends EventEmitter {
    * Optional (optional-method pattern): OpenCode implements provider auth;
    * Claude/Terminal do not.
    */
-  disconnectProvider?(key: ThreadKey, providerId: string): Promise<string | null>;
+  disconnectProvider?(key: SessionKey, providerId: string): Promise<string | null>;
 
   /**
    * Fetch a provider's auth methods for the `/connect` method picker. OpenCode
@@ -980,8 +926,8 @@ export interface AgentAdapter extends EventEmitter {
    * success. Audit S10 / #39: unified to `Promise<string | null>` —
    * callers used to branch on `void` vs `Promise<string | null>`.
    */
-  setModel?(key: ThreadKey, modelId: string): Promise<string | null>;
-  getCurrentModel?(key: ThreadKey): string | null;
+  setModel?(key: SessionKey, modelId: string): Promise<string | null>;
+  getCurrentModel?(key: SessionKey): string | null;
   /** Get available models from backend */
   getAvailableModels?(): Promise<string[]>;
 
@@ -1001,14 +947,14 @@ export interface AgentAdapter extends EventEmitter {
    *   adapter's prompt-send path, sent as `body.variant` alongside the model
    *   override (no separate request, no env configuration).
    */
-  setEffort?(key: ThreadKey, level: string): Promise<string | null>;
+  setEffort?(key: SessionKey, level: string): Promise<string | null>;
 
   /**
    * Currently selected reasoning-effort level for this thread, or `null`
    * if none has been chosen (adapter default in effect). Mirrors
    * {@link getCurrentModel}'s sync read pattern.
    */
-  getEffort?(key: ThreadKey): string | null;
+  getEffort?(key: SessionKey): string | null;
 
   /**
    * Levels valid for the thread's current backend + model. Returns an
@@ -1019,12 +965,12 @@ export interface AgentAdapter extends EventEmitter {
    * Async because OpenCode needs to query `/config/providers`; Claude
    * resolves locally and just wraps the canonical list in `Promise.resolve`.
    */
-  getAvailableEffortLevels?(key: ThreadKey): Promise<string[]>;
+  getAvailableEffortLevels?(key: SessionKey): Promise<string[]>;
 
   // — Interactive questions (OpenCode) —
 
   /** Reply to a pending question with selected answers */
-  answerQuestion?(key: ThreadKey, answers: string[][]): void;
+  answerQuestion?(key: SessionKey, answers: string[][]): void;
 
   /**
    * @description Reject (close) a pending question server-side WITHOUT answering
@@ -1036,7 +982,7 @@ export interface AgentAdapter extends EventEmitter {
    * pending. Must run while the session is still active — a stopped session
    * can't accept the reject POST.
    */
-  rejectQuestion?(key: ThreadKey): void;
+  rejectQuestion?(key: SessionKey): void;
 
   /**
    * @description Whether this session's turn is wedged behind an open
@@ -1049,7 +995,7 @@ export interface AgentAdapter extends EventEmitter {
    * normal queue-and-pick-up behaviour is preserved). Async because the
    * authoritative signal is `GET /question` on the owning instance.
    */
-  checkIsWedgedOnQuestion?(key: ThreadKey): Promise<boolean>;
+  checkIsWedgedOnQuestion?(key: SessionKey): Promise<boolean>;
 
   // — Output mode —
 
@@ -1074,10 +1020,10 @@ export interface AgentAdapter extends EventEmitter {
 
   // — Optional TUI controls (Claude CLI specific) —
 
-  sendEnter?(key: ThreadKey): void;
-  sendArrow?(key: ThreadKey, direction: 'Up' | 'Down'): void;
-  sendTab?(key: ThreadKey): void;
-  sendEscape?(key: ThreadKey): void;
+  sendEnter?(key: SessionKey): void;
+  sendArrow?(key: SessionKey, direction: 'Up' | 'Down'): void;
+  sendTab?(key: SessionKey): void;
+  sendEscape?(key: SessionKey): void;
 
   /**
    * @description Interrupt the current turn and resolve only once the agent is
@@ -1089,7 +1035,7 @@ export interface AgentAdapter extends EventEmitter {
    * and the turn picks it up quickly, so aborting live work would only lose it
    * (user decision 2026-06-06). Adapters without the method forward directly.
    */
-  interruptAndWaitIdle?(key: ThreadKey): Promise<void>;
+  interruptAndWaitIdle?(key: SessionKey): Promise<void>;
 
   /**
    * @description Whether an interactive selector/question is currently on the
@@ -1097,7 +1043,7 @@ export interface AgentAdapter extends EventEmitter {
    * number or y/n) should DRIVE the selector, versus a free-form message that
    * should break out of it (Escape + send as a fresh instruction).
    */
-  isQuestionPending?(key: ThreadKey): boolean;
+  isQuestionPending?(key: SessionKey): boolean;
 
   /**
    * @description Whether Claude's `/login` OAuth "Paste code here" box is on
@@ -1106,7 +1052,7 @@ export interface AgentAdapter extends EventEmitter {
    * skipping the prompt path whose Escape would cancel the login and whose
    * preamble would corrupt the code. Only Claude implements it.
    */
-  isLoginPastePending?(key: ThreadKey): boolean;
+  isLoginPastePending?(key: SessionKey): boolean;
 
-  getFullOutput?(key: ThreadKey, lines?: number): string | null;
+  getFullOutput?(key: SessionKey, lines?: number): string | null;
 }

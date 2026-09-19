@@ -17,9 +17,9 @@ import type {
   ResumeSessionOptions,
   SeenWatermark,
   SeenWatermarkWriter,
-  ThreadKey,
 } from '../types';
-import { keyToString } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString } from '../sessionKey';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
@@ -147,7 +147,7 @@ interface PendingStreamQuestion {
 }
 
 interface StreamSession {
-  key: ThreadKey;
+  key: SessionKey;
   workDir: string;
   /** The `--session-id` UUID (== Claude on-disk transcript id, shared with the
    *  tmux backend's `claudeSessionId`). */
@@ -258,7 +258,7 @@ interface StreamSession {
  * @description SECOND Claude backend: drives the `claude` CLI over its
  * documented `--input-format stream-json --output-format stream-json` protocol
  * (typed events, no TUI scrape) as an EXTERNAL tmux-hosted process per
- * {@link ThreadKey} (plan 2026-07-05-jsonstream-restart-isolation): a `#!/bin/sh`
+ * {@link SessionKey} (plan 2026-07-05-jsonstream-restart-isolation): a `#!/bin/sh`
  * wrapper backgrounds claude with stdin on a FIFO the process itself holds
  * `0<>` and stdout appended to a `stdout.jsonl` the adapter TAILS — so a bot
  * restart (every hot reload) neither EOFs claude's stdin nor loses its output;
@@ -319,11 +319,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.jsonStreamTailWriter = writer;
   }
 
-  private getDisplayPrefs(key: ThreadKey): ResolvedThreadDisplayPrefs {
+  private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
     return this.displayPrefsReader?.(key) ?? { thinking: 'minimal', toolResults: 'minimal', subagent: 'minimal' };
   }
 
-  private advanceSeenWatermark(key: ThreadKey, watermark: SeenWatermark): void {
+  private advanceSeenWatermark(key: SessionKey, watermark: SeenWatermark): void {
     this.seenWatermarkWriter?.(key, watermark);
   }
 
@@ -331,14 +331,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   //  Lifecycle (S1)
   // ─────────────────────────────────────────────────────────────────────────
 
-  async startSession(key: ThreadKey, workDir: string, _args?: string, sessionId?: string): Promise<void> {
+  async startSession(key: SessionKey, workDir: string, _args?: string, sessionId?: string): Promise<void> {
     await this.stopSessionInternal(key);
     const id = sessionId && checkIsValidUuid(sessionId) ? sessionId : randomUUID();
     const effort = this.getEffort(key) ?? defaultEffortLevel;
     await this.spawnSession(key, workDir, id, { effort, model: null, resume: false });
   }
 
-  async resumeSession(key: ThreadKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
+  async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
     if (!checkIsValidUuid(sessionId)) throw new Error(`Invalid sessionId: ${sessionId}`);
     const effort = this.getEffort(key) ?? defaultEffortLevel;
@@ -367,7 +367,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * resume / effort-respawn.
    */
   private async spawnSession(
-    key: ThreadKey,
+    key: SessionKey,
     workDir: string,
     sessionId: string,
     opts: { effort: string | null; model: string | null; resume: boolean },
@@ -649,10 +649,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** Scan tmux for `cjson-…` sessions that outlived the bot (mirror of the
    *  scrape backend's scan). The bot decides adopt-vs-orphan per key — this
    *  method only lists. */
-  async listExistingTmuxSessions(): Promise<Array<{ key: ThreadKey; sessionName: string }>> {
+  async listExistingTmuxSessions(): Promise<Array<{ key: SessionKey; sessionName: string }>> {
     const raw = await tmuxAsync('list-sessions', '-F', '#{session_name}');
     if (!raw) return [];
-    const result: Array<{ key: ThreadKey; sessionName: string }> = [];
+    const result: Array<{ key: SessionKey; sessionName: string }> = [];
     for (const name of raw.split('\n').map((s) => s.trim()).filter(Boolean)) {
       const key = parseJsonStreamTmuxSessionName(name);
       if (key) result.push({ key, sessionName: name });
@@ -688,7 +688,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * reopen.
    */
   async adoptExistingTmuxSession(
-    key: ThreadKey,
+    key: SessionKey,
     sessionName: string,
     workDir: string,
     claudeSessionId: string,
@@ -799,11 +799,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     });
   }
 
-  stopSession(key: ThreadKey): void {
+  stopSession(key: SessionKey): void {
     void this.stopSessionInternal(key);
   }
 
-  private async stopSessionInternal(key: ThreadKey): Promise<void> {
+  private async stopSessionInternal(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     const inFlight = this.stopsInFlight.get(k);
     if (inFlight) return inFlight; // join the running stop instead of racing it
@@ -829,16 +829,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.finalizeExternalExit(session, null);
   }
 
-  checkIsActive(key: ThreadKey): boolean {
+  checkIsActive(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive === true;
   }
 
-  checkIsBusy(key: ThreadKey): boolean {
+  checkIsBusy(key: SessionKey): boolean {
     return this.sessions.get(keyToString(key))?.isBusy === true;
   }
 
-  async getRuntimeInfo(key: ThreadKey): Promise<AgentRuntimeInfo> {
+  async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       return { version: null, model: null, contextWindowTokens: null, contextUsedTokens: null };
@@ -851,7 +851,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
   }
 
-  getClaudeSessionId(key: ThreadKey): string | null {
+  getClaudeSessionId(key: SessionKey): string | null {
     return this.sessions.get(keyToString(key))?.sessionId ?? null;
   }
 
@@ -867,7 +867,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * the terminal signal so the caller can post its notice AFTER the context was
    * really compacted.
    */
-  async compactContext(key: ThreadKey, instruction?: string): Promise<CompactionResult> {
+  async compactContext(key: SessionKey, instruction?: string): Promise<CompactionResult> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return { ok: false, error: t('compact.start_agent_first') };
     if (session.pendingCompaction) {
@@ -936,7 +936,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * section into the idle-compaction notice. Returns `null` when the session is
    * inactive, the transcript is unreadable, or no summary is present.
    */
-  async getLatestCompactionSummary(key: ThreadKey): Promise<string | null> {
+  async getLatestCompactionSummary(key: SessionKey): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return null;
     return readLatestCompactSummaryFromTranscript(getClaudeTranscriptPath(session.workDir, session.sessionId));
@@ -946,7 +946,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   //  Input (S3)
   // ─────────────────────────────────────────────────────────────────────────
 
-  sendInput(key: ThreadKey, input: string): void {
+  sendInput(key: SessionKey, input: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       console.warn(`[ClaudeJson] sendInput to inactive session ${keyToString(key)} dropped`);
@@ -965,15 +965,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.writeStdin(session, { type: 'user', message: { role: 'user', content: input } });
   }
 
-  sendSignal(key: ThreadKey, _signal: string): void {
+  sendSignal(key: SessionKey, _signal: string): void {
     this.sendInterrupt(key);
   }
 
-  sendEscape(key: ThreadKey): void {
+  sendEscape(key: SessionKey): void {
     this.sendInterrupt(key);
   }
 
-  private sendInterrupt(key: ThreadKey): void {
+  private sendInterrupt(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     this.writeStdin(session, {
@@ -1106,7 +1106,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * success), and after a successful one an IMMEDIATELY following `mcp_status`
    * already reads `connected`. Do not re-litigate this as a missing verification.
    */
-  async healMcpServer(key: ThreadKey, serverName: string): Promise<McpHealOutcome> {
+  async healMcpServer(key: SessionKey, serverName: string): Promise<McpHealOutcome> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return 'unavailable';
     const statusRequestId = 'mcp_status_' + randomUUID();
@@ -1529,7 +1529,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return result;
   }
 
-  answerQuestion(key: ThreadKey, answers: string[][]): void {
+  answerQuestion(key: SessionKey, answers: string[][]): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive || !session.pendingQuestion) return;
     const pending = session.pendingQuestion;
@@ -1549,7 +1549,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.writeControlResponse(session, pending.requestId, buildCanUseToolAllow({ ...pending.rawInput, answers: answersMap }, pending.toolUseId));
   }
 
-  rejectQuestion(key: ThreadKey): void {
+  rejectQuestion(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.pendingQuestion) return;
     const pending = session.pendingQuestion;
@@ -1566,16 +1566,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   //  Session history / resume (S5) — reuse the shared Claude transcript readers
   // ─────────────────────────────────────────────────────────────────────────
 
-  async getSessions(_key: ThreadKey, workDir: string): Promise<AgentSession[]> {
+  async getSessions(_key: SessionKey, workDir: string): Promise<AgentSession[]> {
     return listClaudeSessionsForWorkDir(getClaudeProjectsRoot(), workDir);
   }
 
-  async getRecentTurns(_key: ThreadKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
+  async getRecentTurns(_key: SessionKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
     const filePath = getClaudeTranscriptPath(workDir, sessionId);
     return readRecentClaudeTurns(filePath, limit);
   }
 
-  async getReattachRecap(key: ThreadKey, workDir: string, sessionId: string, watermark: SeenWatermark | null): Promise<ReattachRecap> {
+  async getReattachRecap(key: SessionKey, workDir: string, sessionId: string, watermark: SeenWatermark | null): Promise<ReattachRecap> {
     const filePath = getClaudeTranscriptPath(workDir, sessionId);
     const offset = watermark?.claudeTranscriptOffset;
     const isWatermarkKnown = typeof offset === 'number' && watermark?.sessionId === sessionId;
@@ -1589,7 +1589,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   //  Model / effort (S6) — spawn flags; a live change re-spawns with --resume
   // ─────────────────────────────────────────────────────────────────────────
 
-  async setModel(key: ThreadKey, modelId: string): Promise<string | null> {
+  async setModel(key: SessionKey, modelId: string): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return t('model.start_agent_first');
     await this.respawnWithChange(session, { model: modelId, effort: session.effort });
@@ -1604,7 +1604,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * `/model` re-spawn and its first `init`, so the label never blanks out
    * mid-switch.
    */
-  getCurrentModel(key: ThreadKey): string | null {
+  getCurrentModel(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     return session?.reportedModel ?? session?.model ?? null;
   }
@@ -1614,7 +1614,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return ['sonnet', 'opus', 'haiku'];
   }
 
-  async setEffort(key: ThreadKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<string | null> {
     if (!checkIsClaudeEffortLevel(level)) {
       return t('effort.invalid_level', { level, valid: getClaudeAvailableLevels().join(', ') });
     }
@@ -1625,11 +1625,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return null;
   }
 
-  getEffort(key: ThreadKey): string | null {
+  getEffort(key: SessionKey): string | null {
     return loadEffortPrefs()[keyToString(key)] ?? null;
   }
 
-  async getAvailableEffortLevels(_key: ThreadKey): Promise<string[]> {
+  async getAvailableEffortLevels(_key: SessionKey): Promise<string[]> {
     return getClaudeAvailableLevels();
   }
 

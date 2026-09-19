@@ -31,18 +31,19 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { savedPrefKeyString, savedPrefLabel } from './openCodeResumeModel.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // Server-default thread: no on-disk `/model` pref (key absent from the prefs
 // file), so resolution falls through to the server default — the B17 case.
-const serverDefaultKey: ThreadKey = { chatId: -100999444, threadId: 222 };
+const serverDefaultKey: SessionKey = makeTelegramKey(-100999444, 222);
 const serverDefaultProviderID = 'anthropic';
 const serverDefaultModelID = 'claude-opus-4-8';
 const serverDefaultLabel = `${serverDefaultProviderID}/${serverDefaultModelID}`;
 
 // Thread that explicitly picked a model via `/model` — pref persisted on disk by
 // the setup module. `keyToString` must produce `savedPrefKeyString`.
-const savedPrefKey: ThreadKey = { chatId: -100999444, threadId: 111 };
+const savedPrefKey: SessionKey = makeTelegramKey(-100999444, 111);
 
 const expectedVariants = ['low', 'medium', 'high', 'max'];
 
@@ -72,14 +73,14 @@ const stubServerEndpoints: ApiRequestStub = async (_method, urlPath) => {
   throw new Error(`unexpected apiRequest: ${urlPath}`);
 };
 
-function createAdapterWithSession(key: ThreadKey): {
+function createAdapterWithSession(key: SessionKey): {
   adapter: OpenCodeAdapter;
   outputs: string[];
 } {
   const adapter = new OpenCodeAdapter();
   const session = {
     key,
-    sessionId: `ses_${key.threadId}`,
+    sessionId: `ses_${key.thread}`,
     workDir: '/tmp/work',
     isActive: true,
     currentResponseText: '',
@@ -105,7 +106,7 @@ function createAdapterWithSession(key: ThreadKey): {
   adapter['apiRequest'] = stubServerEndpoints;
 
   const outputs: string[] = [];
-  adapter.on('output', (_key: ThreadKey, text: string) => {
+  adapter.on('output', (_key: SessionKey, text: string) => {
     outputs.push(text);
   });
   return { adapter, outputs };

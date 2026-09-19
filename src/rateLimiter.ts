@@ -1,6 +1,7 @@
 import { getAbortError, sleep } from './utils';
-import type { ThreadKey } from './types';
-import { keyToString } from './types';
+import type { SessionKey } from './sessionKey';
+import { keyToString } from './sessionKey';
+import { getTelegramChatId } from './connectors/telegram/sessionKeyCodec';
 import { SendRateTracker } from './utils/sendRateTracker';
 import { formatRateLimit429Line, formatRateSummaryLine } from './utils/rateLimitLog';
 import { AbortableFifo } from './utils/abortableFifo';
@@ -10,7 +11,7 @@ import { AbortableFifo } from './utils/abortableFifo';
  *
  * Three layers, with different responsibilities:
  *
- *   1. **Per-thread FIFO queue** (`enqueueSend`). Keyed by **ThreadKey**
+ *   1. **Per-thread FIFO queue** (`enqueueSend`). Keyed by **SessionKey**
  *      (`chatId+threadId`). Its only job is to preserve ordering between
  *      *dependent* operations on the same Telegram thread — e.g. an
  *      `editMessageText` that depends on a preceding `sendMessage`. Two
@@ -220,7 +221,7 @@ export { formatRateSummaryLine };
 
 /**
  * @description Per-thread FIFO of in-flight sends, keyed by serialised
- * `ThreadKey` (`"<chatId>:<threadId>"`).
+ * `SessionKey` (`"<chatId>:<threadId>"`).
  *
  * The global pacer already spaces sends across the whole process; we
  * additionally chain sends within a single Telegram thread so
@@ -458,14 +459,15 @@ export async function withRateLimitRetry<T>(
  * drifting on 429-safety or instrumentation.
  */
 function recordAndRetry<T>(
-  key: ThreadKey,
+  key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
   // Record exactly one outbound send per logical send (best-effort
   // instrumentation — never let it break a send).
-  try { sendRateTracker.recordSend(key.chatId); } catch { /* never throw into the send path */ }
-  return withRateLimitRetry(key.chatId, fn, signal);
+  const chatId = getTelegramChatId(key);
+  try { sendRateTracker.recordSend(chatId); } catch { /* never throw into the send path */ }
+  return withRateLimitRetry(chatId, fn, signal);
 }
 
 /**
@@ -486,7 +488,7 @@ function recordAndRetry<T>(
  * break the FCFS ordering the pacer guarantees.
  */
 export async function sendUnpaced<T>(
-  key: ThreadKey,
+  key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -523,7 +525,7 @@ function waitForQueuedExecution<T>(
  * @description Send a Telegram operation through the per-thread FIFO queue, the
  * global send pacer, and per-chat 429 retry.
  *
- * - **Serialised per thread**: the next send for the same `ThreadKey` only runs
+ * - **Serialised per thread**: the next send for the same `SessionKey` only runs
  *   after this one settles (success or failure). Sends for *different* threads
  *   run concurrently, gated only by the global pacer.
  * - **Paced globally**: {@link GlobalSendPacer} releases ≤1 send /
@@ -540,7 +542,7 @@ function waitForQueuedExecution<T>(
  *     bot.telegram.sendMessage(key.chatId, text, { message_thread_id: key.threadId }));
  */
 export async function enqueueSend<T>(
-  key: ThreadKey,
+  key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {

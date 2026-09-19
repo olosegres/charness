@@ -1,12 +1,7 @@
 import { EventEmitter } from 'events';
-import type {
-  AgentAdapter,
-  AgentSession,
-  ResumeSessionOptions,
-  SendInputOptions,
-  ThreadKey,
-} from '../types';
-import { keyToString } from '../types';
+import type { AgentAdapter, AgentSession, ResumeSessionOptions, SendInputOptions } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString } from '../sessionKey';
 import { createSerialQueue, type SerialQueue } from '../utils/serialQueue';
 import { getNextPollDelay, basePollIntervalMs } from '../utils/pollBackoff';
 import { tmuxAsync, tmuxOrThrowAsync, checkArgsAreSafe, shellSingleQuote } from '../utils/tmuxExec';
@@ -32,7 +27,7 @@ import {
  * agent/tool-result/resume-seeding machinery — it just streams pane output.
  */
 interface TerminalSession {
-  key: ThreadKey;
+  key: SessionKey;
   workDir: string;
   sessionName: string;
   queue: SerialQueue;
@@ -76,14 +71,14 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
   readonly name = 'terminal';
   readonly label = 'Terminal';
 
-  /** Serialised `ThreadKey` (`"<chatId>:<threadId>"`) → live session. */
+  /** Serialised `SessionKey` (`"<chatId>:<threadId>"`) → live session. */
   private sessions = new Map<string, TerminalSession>();
 
-  private buildSessionName(key: ThreadKey): string {
+  private buildSessionName(key: SessionKey): string {
     return buildTmuxSessionName(terminalTmuxPrefix, key);
   }
 
-  private createSession(input: { key: ThreadKey; workDir: string; sessionName: string }): TerminalSession {
+  private createSession(input: { key: SessionKey; workDir: string; sessionName: string }): TerminalSession {
     return {
       key: input.key,
       workDir: input.workDir,
@@ -113,7 +108,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
 
   // — Lifecycle —
 
-  async startSession(key: ThreadKey, workDir: string, args?: string): Promise<void> {
+  async startSession(key: SessionKey, workDir: string, args?: string): Promise<void> {
     await this.stopSessionInternal(key);
 
     if (args && !checkArgsAreSafe(args)) {
@@ -153,13 +148,13 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     this.emit('started', key);
   }
 
-  stopSession(key: ThreadKey): void {
+  stopSession(key: SessionKey): void {
     void this.stopSessionInternal(key).catch((e) => {
       console.warn(`[Terminal] stopSession failed:`, e instanceof Error ? e.message : e);
     });
   }
 
-  private async stopSessionInternal(key: ThreadKey): Promise<void> {
+  private async stopSessionInternal(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     const session = this.sessions.get(k);
     if (!session) return;
@@ -178,14 +173,14 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     await killPromise;
   }
 
-  checkIsActive(key: ThreadKey): boolean {
+  checkIsActive(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive ?? false;
   }
 
   // — Input —
 
-  sendInput(key: ThreadKey, input: string, options?: SendInputOptions): void {
+  sendInput(key: SessionKey, input: string, options?: SendInputOptions): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       console.log(`[Terminal] sendInput: no active session for ${keyToString(key)}`);
@@ -214,7 +209,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  sendSignal(key: ThreadKey, signal: string): void {
+  sendSignal(key: SessionKey, signal: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -230,19 +225,19 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
 
   // — Optional TUI controls (raw keys) —
 
-  sendEnter(key: ThreadKey): void {
+  sendEnter(key: SessionKey): void {
     this.sendRawKey(key, 'Enter', 'sendEnter');
   }
 
-  sendArrow(key: ThreadKey, direction: 'Up' | 'Down'): void {
+  sendArrow(key: SessionKey, direction: 'Up' | 'Down'): void {
     this.sendRawKey(key, direction, `sendArrow: ${direction}`);
   }
 
-  sendTab(key: ThreadKey): void {
+  sendTab(key: SessionKey): void {
     this.sendRawKey(key, 'Tab', 'sendTab');
   }
 
-  private sendRawKey(key: ThreadKey, tmuxKey: string, logLabel: string): void {
+  private sendRawKey(key: SessionKey, tmuxKey: string, logLabel: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     this.resetPollCadence(key, session);
@@ -255,12 +250,12 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
 
   // — Session history (terminals aren't resumable) —
 
-  async getSessions(_key: ThreadKey, _workDir: string): Promise<AgentSession[]> {
+  async getSessions(_key: SessionKey, _workDir: string): Promise<AgentSession[]> {
     return [];
   }
 
   async resumeSession(
-    _key: ThreadKey,
+    _key: SessionKey,
     _workDir: string,
     _sessionId: string,
     _options?: ResumeSessionOptions,
@@ -277,7 +272,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
    * just-submitted command's output isn't delayed by the idle backoff. Mirrors
    * the Claude adapter's `resetPollCadence`.
    */
-  private resetPollCadence(key: ThreadKey, session: TerminalSession): void {
+  private resetPollCadence(key: SessionKey, session: TerminalSession): void {
     session.currentPollDelayMs = basePollIntervalMs;
     session.unchangedPollStreak = 0;
     if (!session.isActive || session.isPolling) return;
@@ -288,7 +283,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  private schedulePoll(key: ThreadKey, session: TerminalSession): void {
+  private schedulePoll(key: SessionKey, session: TerminalSession): void {
     if (!session.isActive) return;
     session.pollTimer = setTimeout(() => {
       void (async () => {
@@ -315,7 +310,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     return sessions.split('\n').includes(session.sessionName);
   }
 
-  private async pollOutput(key: ThreadKey): Promise<void> {
+  private async pollOutput(key: SessionKey): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -381,14 +376,14 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * @description List live tmux sessions that match the terminal `term-` naming
-   * convention, parsed back to their `ThreadKey`. The bot decides which to adopt
+   * convention, parsed back to their `SessionKey`. The bot decides which to adopt
    * (must have a live binding) and which are orphans to kill. Does NOT adopt.
    */
-  async listExistingTmuxSessions(): Promise<Array<{ key: ThreadKey; sessionName: string }>> {
+  async listExistingTmuxSessions(): Promise<Array<{ key: SessionKey; sessionName: string }>> {
     const raw = await tmuxAsync('list-sessions', '-F', '#{session_name}');
     if (!raw) return [];
     const names = raw.split('\n').map(s => s.trim()).filter(Boolean);
-    const result: Array<{ key: ThreadKey; sessionName: string }> = [];
+    const result: Array<{ key: SessionKey; sessionName: string }> = [];
     for (const name of names) {
       const key = parseTmuxSessionName(terminalTmuxPrefix, name);
       if (key) result.push({ key, sessionName: name });
@@ -402,7 +397,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
    * check), then seeds `lastContent` from the CURRENT pane so the first poll
    * doesn't dump the whole scrollback as "new" output. Returns `true` on adopt.
    */
-  async adoptExistingTmuxSession(key: ThreadKey, sessionName: string, workDir: string): Promise<boolean> {
+  async adoptExistingTmuxSession(key: SessionKey, sessionName: string, workDir: string): Promise<boolean> {
     const sessions = await tmuxAsync('list-sessions', '-F', '#{session_name}');
     if (!sessions.split('\n').includes(sessionName)) {
       console.log(`[Terminal] adopt: tmux session ${sessionName} no longer exists`);

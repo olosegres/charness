@@ -35,11 +35,12 @@ import {
   GlobalSendPacer,
   __setGlobalPacerForTest,
 } from '../rateLimiter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import type {
   FileDescriptorSnapshot,
   FileSendMediaGroup,
 } from '../utils/fileSendPlan';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const linuxTest = process.platform === 'linux' ? test : test.skip;
 
@@ -865,7 +866,7 @@ linuxTest('post-upload response timeout becomes delivery-unknown and releases a 
   fs.mkdirSync(workDir);
   fs.writeFileSync(path.join(workDir, 'clip.mp4'), 'timed-out-video');
   const deadline = createFakePostUploadResponseDeadline();
-  const key: ThreadKey = { chatId: 73312, threadId: 1 };
+  const key: SessionKey = makeTelegramKey(73312, 1);
   const pacer = new GlobalSendPacer(1);
   pacer.enterShutdownDrain();
   __setGlobalPacerForTest(pacer);
@@ -894,7 +895,7 @@ linuxTest('post-upload response timeout becomes delivery-unknown and releases a 
       sendMediaGroup: async () => [{ message_id: 1 }],
       startPostUploadResponseDeadline: deadline.start,
     });
-    const sendFilesToThread = createSendFilesToThread<ThreadKey>({
+    const sendFilesToThread = createSendFilesToThread<SessionKey>({
       resolveTargetAndWorkDir: () => ({ ok: true, target: key, workDir }),
       gateway,
       executeDelivery: (target, delivery, signal) => enqueueSend(target, delivery, signal),

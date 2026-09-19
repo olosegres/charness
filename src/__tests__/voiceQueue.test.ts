@@ -15,8 +15,9 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
 import { getVoiceTranscriptionQueue } from '../voiceQueue';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -28,12 +29,12 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
 
 // Distinct keys per test so the module-level registry (shared across this
 // file's tests) never couples one test's queue state into another.
-const keyNonBlock: ThreadKey = { chatId: -100, threadId: 1 };
-const keyOrderA: ThreadKey = { chatId: -100, threadId: 2 };
-const keyParallelA: ThreadKey = { chatId: -100, threadId: 3 };
-const keyParallelB: ThreadKey = { chatId: -100, threadId: 4 };
-const keyIdentityA: ThreadKey = { chatId: -100, threadId: 5 };
-const keyIdentityB: ThreadKey = { chatId: -100, threadId: 6 };
+const keyNonBlock: SessionKey = makeTelegramKey(-100, 1);
+const keyOrderA: SessionKey = makeTelegramKey(-100, 2);
+const keyParallelA: SessionKey = makeTelegramKey(-100, 3);
+const keyParallelB: SessionKey = makeTelegramKey(-100, 4);
+const keyIdentityA: SessionKey = makeTelegramKey(-100, 5);
+const keyIdentityB: SessionKey = makeTelegramKey(-100, 6);
 
 describe('getVoiceTranscriptionQueue', () => {
   it('enqueues without awaiting — the call site returns before the slow job resolves', async () => {

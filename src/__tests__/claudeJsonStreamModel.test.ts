@@ -27,9 +27,10 @@ import assert from 'node:assert/strict';
 
 import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100999222, threadId: 77 };
+const key: SessionKey = makeTelegramKey(-100999222, 77);
 const resolvedModel = 'claude-opus-4-5-20251101';
 
 /** A real `system/init` line as claude emits it at session start (and on resume). */

@@ -37,10 +37,11 @@ import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { createStdoutTailState, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { schedulerMcpServerName } from '../scheduler/injection';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // A key no live thread uses — every path derived from it is a no-op.
-const key: ThreadKey = { chatId: -100999777, threadId: 77 };
+const key: SessionKey = makeTelegramKey(-100999777, 77);
 
 /**
  * A fake LIVE session whose stdin is an ordinary append-mode file, so the frames

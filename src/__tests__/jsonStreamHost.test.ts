@@ -43,9 +43,10 @@ import {
   wrapperCdFailExitCode,
   writeFifoText,
 } from '../utils/jsonStreamHost';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -1001111111111, threadId: 9085 };
+const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
 
 describe('json-stream host layout codecs', () => {
   it('session dir is DATA_DIR/jsonstream/<chatId>_<threadId> and parses back', () => {

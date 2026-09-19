@@ -24,7 +24,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, keysEqual, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const newSessionId = 'ses_start_ready';
 
@@ -35,7 +36,7 @@ const newSessionId = 'ses_start_ready';
  */
 function createStubbedAdapter(configHandler: () => Promise<unknown>): {
   adapter: OpenCodeAdapter;
-  startedKeys: ThreadKey[];
+  startedKeys: SessionKey[];
 } {
   const adapter = new OpenCodeAdapter();
 
@@ -54,8 +55,8 @@ function createStubbedAdapter(configHandler: () => Promise<unknown>): {
   // No real SSE socket in the test.
   adapter['connectSse'] = () => {};
 
-  const startedKeys: ThreadKey[] = [];
-  adapter.on('started', (startedKey: ThreadKey) => {
+  const startedKeys: SessionKey[] = [];
+  adapter.on('started', (startedKey: SessionKey) => {
     startedKeys.push(startedKey);
   });
 
@@ -80,7 +81,7 @@ describe('OpenCode startSession ready reply (B18)', () => {
     // completion (it stays pending on /config by design), just confirm the
     // ready signal arrived.
     const { adapter, startedKeys } = createStubbedAdapter(() => new Promise<unknown>(() => {}));
-    const hangKey: ThreadKey = { chatId: -100999222, threadId: 1 };
+    const hangKey: SessionKey = makeTelegramKey(-100999222, 1);
 
     void adapter.startSession(hangKey, '/tmp/work');
     await waitFor(() => startedKeys.length > 0);
@@ -96,7 +97,7 @@ describe('OpenCode startSession ready reply (B18)', () => {
     });
 
     const { adapter } = createStubbedAdapter(() => configReady);
-    const orderKey: ThreadKey = { chatId: -100999222, threadId: 2 };
+    const orderKey: SessionKey = makeTelegramKey(-100999222, 2);
     adapter.on('started', () => events.push('started'));
 
     const startPromise = adapter.startSession(orderKey, '/tmp/work');
@@ -139,10 +140,10 @@ describe('OpenCode startSession ready reply (B18)', () => {
     const { adapter } = createStubbedAdapter(async () =>
       ({ defaultModel: { providerID: 'anthropic', modelID: 'claude-opus-4-8' } }),
     );
-    const silentKey: ThreadKey = { chatId: -100999222, threadId: 3 };
+    const silentKey: SessionKey = makeTelegramKey(-100999222, 3);
 
     const outputs: string[] = [];
-    adapter.on('output', (_key: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_key: SessionKey, text: string) => outputs.push(text));
 
     await adapter.startSession(silentKey, '/tmp/work');
 
@@ -163,8 +164,8 @@ describe('OpenCode single-owner prevention (B20 root cause)', () => {
     const { adapter } = createStubbedAdapter(async () =>
       ({ defaultModel: { providerID: 'anthropic', modelID: 'claude-opus-4-8' } }),
     );
-    const threadA: ThreadKey = { chatId: -100999333, threadId: 10 };
-    const threadB: ThreadKey = { chatId: -100999333, threadId: 11 };
+    const threadA: SessionKey = makeTelegramKey(-100999333, 10);
+    const threadB: SessionKey = makeTelegramKey(-100999333, 11);
 
     // Inject thread A holding the shared id.
     adapter['sessions'].set(keyToString(threadA), {
@@ -191,14 +192,14 @@ describe('OpenCode single-owner prevention (B20 root cause)', () => {
       sseStallTimer: null,
     });
 
-    const stoppedKeys: ThreadKey[] = [];
-    adapter.on('stopped', (k: ThreadKey) => stoppedKeys.push(k));
+    const stoppedKeys: SessionKey[] = [];
+    adapter.on('stopped', (k: SessionKey) => stoppedKeys.push(k));
 
     await adapter.startSession(threadB, '/tmp/work');
 
     // A is detached (stopped emitted, removed); B owns the session.
     assert.ok(
-      stoppedKeys.some((k) => k.threadId === 10),
+      stoppedKeys.some((k) => keysEqual(k, threadA)),
       'the stale duplicate owner (thread A) must be detached',
     );
     assert.equal(adapter['sessions'].has(keyToString(threadA)), false, 'thread A removed from the session map');

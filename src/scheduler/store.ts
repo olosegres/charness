@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { StateStore } from '../state';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { checkIsReminderSchedule } from './deliveryKind';
 import { getNextRunAt } from './recurrence';
 import type {
@@ -78,7 +78,7 @@ export function generateScheduleId(name: string): string {
  * cannot be added to one and forgotten on the other.
  */
 export interface CreateScheduleArgs {
-  threadKey: ThreadKey;
+  threadKey: SessionKey;
   name: string;
   spec: ScheduleSpec;
   /** Prompt for the agent, or the posted text when `deliveryKind` is `'reminder'`. */

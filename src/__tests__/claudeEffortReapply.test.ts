@@ -41,10 +41,10 @@ import {
 } from './claudeEffortReapply.testSetup';
 import { ClaudeCliAdapter, checkIsClaudePromptReady } from '../adapters/claudeCliAdapter';
 import { defaultEffortLevel } from '../effortLevels';
-import { keyToString, keyFromString, type ThreadKey } from '../types';
+import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
-const seededKey: ThreadKey = keyFromString(seededThreadKeyString);
-const noPrefKey: ThreadKey = keyFromString(noPrefThreadKeyString);
+const seededKey: SessionKey = keyFromString(seededThreadKeyString);
+const noPrefKey: SessionKey = keyFromString(noPrefThreadKeyString);
 
 /** A captured pane that the readiness predicate accepts (input box up, no gate). */
 const readyPane = 'Some prior output\n\n❯ ';
@@ -55,7 +55,7 @@ const readyPane = 'Some prior output\n\n❯ ';
  * that records every typed string instead of touching tmux. Returns the live
  * session too, so a test can read/poke `pendingEffortReapply`.
  */
-function createAdapterWithSession(key: ThreadKey): {
+function createAdapterWithSession(key: SessionKey): {
   adapter: ClaudeCliAdapter;
   typed: string[];
   session: { pendingEffortReapply: string | null };
@@ -73,7 +73,7 @@ function createAdapterWithSession(key: ThreadKey): {
   adapter['sessions'].set(keyToString(key), session);
 
   const typed: string[] = [];
-  adapter['sendInput'] = (_key: ThreadKey, input: string) => {
+  adapter['sendInput'] = (_key: SessionKey, input: string) => {
     typed.push(input);
   };
   return { adapter, typed, session };

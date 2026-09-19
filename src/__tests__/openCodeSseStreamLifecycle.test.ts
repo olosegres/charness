@@ -33,18 +33,19 @@ import {
   schedulerMcpRetryDelaysMs,
 } from '../adapters/openCodeAdapter';
 import { openCodeCompactPluginFileName } from '../utils/openCodeCompactPlugin';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import {
   configureSchedulerMcpInjection,
   resetSchedulerMcpInjection,
   schedulerMcpServerName,
 } from '../scheduler/injection';
 import { verifySchedulerMcpToken } from '../scheduler/mcpSurface';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const sharedDir = '/work/shared';
 const otherDir = '/work/other';
 
-function makeSession(key: ThreadKey, sessionId: string, workDir: string) {
+function makeSession(key: SessionKey, sessionId: string, workDir: string) {
   return {
     key,
     sessionId,
@@ -88,7 +89,7 @@ function globalEnvelope(directory: string, type: string, properties: Record<stri
 describe('single global SSE stream lifecycle', () => {
   it('the FIRST active session ANYWHERE opens THE one stream; further calls are idempotent', () => {
     const adapter = createAdapter();
-    const keyOne: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyOne: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyOne), makeSession(keyOne, 'ses_1', sharedDir));
 
     assert.equal(adapter['globalStream'], null, 'no stream before connect');
@@ -102,8 +103,8 @@ describe('single global SSE stream lifecycle', () => {
 
   it('two threads in DIFFERENT folders SHARE the one stream; it closes only when the LAST leaves', () => {
     const adapter = createAdapter();
-    const keyOne: ThreadKey = { chatId: -100, threadId: 1 };
-    const keyTwo: ThreadKey = { chatId: -100, threadId: 2 };
+    const keyOne: SessionKey = makeTelegramKey(-100, 1);
+    const keyTwo: SessionKey = makeTelegramKey(-100, 2);
     adapter['sessions'].set(keyToString(keyOne), makeSession(keyOne, 'ses_1', sharedDir));
     adapter['sessions'].set(keyToString(keyTwo), makeSession(keyTwo, 'ses_2', otherDir));
 
@@ -124,8 +125,8 @@ describe('single global SSE stream lifecycle', () => {
 
   it('two threads sharing a folder also keep ONE stream; it closes on the last', () => {
     const adapter = createAdapter();
-    const keyOne: ThreadKey = { chatId: -100, threadId: 1 };
-    const keyTwo: ThreadKey = { chatId: -100, threadId: 2 };
+    const keyOne: SessionKey = makeTelegramKey(-100, 1);
+    const keyTwo: SessionKey = makeTelegramKey(-100, 2);
     adapter['sessions'].set(keyToString(keyOne), makeSession(keyOne, 'ses_1', sharedDir));
     adapter['sessions'].set(keyToString(keyTwo), makeSession(keyTwo, 'ses_2', sharedDir));
 
@@ -145,13 +146,13 @@ describe('single global SSE stream lifecycle', () => {
 describe('global-stream routing parses once and delivers to the owner', () => {
   it('an event for session B (envelope tagged with B\'s folder) reaches ONLY B', () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
-    const keyB: ThreadKey = { chatId: -100, threadId: 2 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    const keyB: SessionKey = makeTelegramKey(-100, 2);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     adapter['sessions'].set(keyToString(keyB), makeSession(keyB, 'ses_B', otherDir));
 
     const outputsByThread = new Map<string, string[]>();
-    adapter.on('output', (key: ThreadKey, text: string) => {
+    adapter.on('output', (key: SessionKey, text: string) => {
       const k = keyToString(key);
       const list = outputsByThread.get(k) ?? [];
       list.push(text);
@@ -175,13 +176,13 @@ describe('global-stream routing parses once and delivers to the owner', () => {
 
   it('two topics share a folder: the envelope directory + sessionID still picks ONE owner', () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
-    const keyB: ThreadKey = { chatId: -100, threadId: 2 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    const keyB: SessionKey = makeTelegramKey(-100, 2);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     adapter['sessions'].set(keyToString(keyB), makeSession(keyB, 'ses_B', sharedDir));
 
     const outputsByThread = new Map<string, string[]>();
-    adapter.on('output', (key: ThreadKey, text: string) => {
+    adapter.on('output', (key: SessionKey, text: string) => {
       const k = keyToString(key);
       const list = outputsByThread.get(k) ?? [];
       list.push(text);
@@ -201,7 +202,7 @@ describe('global-stream routing parses once and delivers to the owner', () => {
 
   it('an event for a directory the bot does NOT own (by-hand opencode elsewhere) is dropped', () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
 
     let emitted = false;
@@ -216,7 +217,7 @@ describe('global-stream routing parses once and delivers to the owner', () => {
 
   it('an event whose session no thread owns is dropped (no emit)', () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
 
     let emitted = false;
@@ -241,7 +242,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
   it('inert (injection unconfigured): connecting a session POSTs nothing', async () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     const calls: { method: string; url: string }[] = [];
     adapter['apiRequest'] = (async (method: string, url: string) => {
@@ -257,7 +258,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
   it('configured: connecting a session POSTs the dir-scoped registration once per dir', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     const calls: { method: string; url: string; body: unknown }[] = [];
     adapter['apiRequest'] = (async (method: string, url: string, body: unknown) => {
@@ -292,7 +293,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
   it('registers reattached sessions after scheduler injection becomes available', async () => {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     const calls: string[] = [];
     adapter['apiRequest'] = (async (_method: string, url: string) => {
@@ -314,7 +315,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
   it('clearing the dir Set (what restartServer does) makes the next connect re-register (S4)', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     const calls: string[] = [];
     adapter['apiRequest'] = (async (_method: string, url: string) => {
@@ -337,7 +338,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
   it('registration failure is swallowed (the dir is not latched, so a later connect retries)', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     adapter['apiRequest'] = (async () => {
       throw new Error('opencode 404 / server sick');
@@ -357,7 +358,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
   it('reconcile: force re-registers a directory whose telegramBot is not connected (adopt path)', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     // A stale Set entry from a prior generation makes the dir LOOK registered;
     // the live server says otherwise, so reconcile must override the gate.
@@ -383,8 +384,8 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
     // Two threads bound to the SAME folder — the reconcile must GET/POST it once.
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
-    const keyB: ThreadKey = { chatId: -100, threadId: 2 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    const keyB: SessionKey = makeTelegramKey(-100, 2);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     adapter['sessions'].set(keyToString(keyB), makeSession(keyB, 'ses_B', sharedDir));
     const gets: string[] = [];
@@ -427,7 +428,7 @@ describe('scheduler MCP registration retry after a failure', () => {
 
   function createAdapterWithSession() {
     const adapter = createAdapter();
-    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
     adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
     return { adapter, keyA };
   }
@@ -554,9 +555,9 @@ describe('compaction plugin activation at boot', () => {
     const idleDir = '/work/idle';
     const busyDir = '/work/busy';
     const loadedDir = '/work/loaded';
-    adapter['sessions'].set('-100:1', makeSession({ chatId: -100, threadId: 1 }, 'ses_1', idleDir));
-    adapter['sessions'].set('-100:2', makeSession({ chatId: -100, threadId: 2 }, 'ses_2', busyDir));
-    adapter['sessions'].set('-100:3', makeSession({ chatId: -100, threadId: 3 }, 'ses_3', loadedDir));
+    adapter['sessions'].set('-100:1', makeSession(makeTelegramKey(-100, 1), 'ses_1', idleDir));
+    adapter['sessions'].set('-100:2', makeSession(makeTelegramKey(-100, 2), 'ses_2', busyDir));
+    adapter['sessions'].set('-100:3', makeSession(makeTelegramKey(-100, 3), 'ses_3', loadedDir));
     adapter['registeredSchedulerMcpDirs'].add(idleDir);
     adapter['registeredSchedulerMcpDirs'].add(busyDir);
     const posts = stubServer(adapter, {

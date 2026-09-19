@@ -20,6 +20,12 @@
 import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+// Arms the Telegram SessionKeyCodec for the whole suite: modules that only
+// DECODE key strings (`state.ts`, the DATA_DIR janitors) never import a
+// Telegram module, so a test exercising them in isolation would otherwise have
+// no registered codec. Safe to hoist above the DATA_DIR redirect below — the
+// codec module reads no environment and imports nothing that does.
+import '../connectors/telegram/sessionKeyCodec';
 
 const testDataDir = path.join(os.tmpdir(), `telegramcode-test-${process.pid}`);
 mkdirSync(testDataDir, { recursive: true });

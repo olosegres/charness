@@ -21,11 +21,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type SeenWatermark, type ThreadKey } from '../types';
+import { type SeenWatermark } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const ownSessionId = 'ses_wm_parent';
 const childSessionId = 'ses_wm_child';
-const key: ThreadKey = { chatId: -100999222, threadId: 555 };
+const key: SessionKey = makeTelegramKey(-100999222, 555);
 
 /** A complete-enough live session so `flushOutput` (called on a `finish`) runs
  *  without touching an undefined field. */

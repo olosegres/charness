@@ -11,8 +11,9 @@ import {
   buildThreadContextPreamble,
   prependThreadContextPreamble,
 } from '../threadContextPreamble';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadKey = { chatId: -1001111111111, threadId: 9085 };
+const threadKey = makeTelegramKey(-1001111111111, 9085);
 
 // ── checkIsMeaningfulPrompt ──────────────────────────────────────────────────
 

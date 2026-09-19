@@ -34,10 +34,12 @@ import {
   createStdoutTailState,
   getJsonStreamSessionPaths,
 } from '../utils/jsonStreamHost';
-import { keyToString, type JsonStreamTailOffset, type ThreadKey } from '../types';
+import { type JsonStreamTailOffset } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // A key no live thread uses — cleanup paths derived from it are guaranteed no-ops.
-const key: ThreadKey = { chatId: -100999777, threadId: 55 };
+const key: SessionKey = makeTelegramKey(-100999777, 55);
 
 /** A pid that is certainly dead: a reaped short-lived child of ours. */
 function getDeadPid(): number {
@@ -124,10 +126,10 @@ describe('json-stream external transport — exit detection', () => {
     fs.writeFileSync(session.paths.exitCodeFile, '3\n');
 
     const outputs: string[] = [];
-    const closedKeys: ThreadKey[] = [];
+    const closedKeys: SessionKey[] = [];
     const tailWrites: JsonStreamTailOffset[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
-    adapter.on('closed', (k: ThreadKey) => closedKeys.push(k));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
+    adapter.on('closed', (k: SessionKey) => closedKeys.push(k));
     adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
     const warnings: string[] = [];
     const originalWarn = console.warn;
@@ -277,7 +279,7 @@ describe('json-stream interrupt-aborted turn — no bogus "Claude error" surface
     const adapter = new ClaudeJsonStreamAdapter();
     const session = createSessionInDir(adapter, dir);
     const outputs: string[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
 
     adapter.sendSignal(session.key, 'SIGINT'); // arms swallowNextAbortError
     assert.equal(session.swallowNextAbortError, true, 'the interrupt arms the one-shot');
@@ -292,7 +294,7 @@ describe('json-stream interrupt-aborted turn — no bogus "Claude error" surface
     const adapter = new ClaudeJsonStreamAdapter();
     const session = createSessionInDir(adapter, dir);
     const outputs: string[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
 
     adapter['onStdout'](session, abortErrorResultLine);
 
@@ -304,7 +306,7 @@ describe('json-stream interrupt-aborted turn — no bogus "Claude error" surface
     const adapter = new ClaudeJsonStreamAdapter();
     const session = createSessionInDir(adapter, dir);
     const outputs: string[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
 
     adapter.sendSignal(session.key, 'SIGINT');
     adapter['onStdout'](session, abortErrorResultLine); // swallowed

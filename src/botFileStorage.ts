@@ -17,7 +17,7 @@
 
 import { promises as fsp } from 'fs';
 import * as path from 'path';
-import { keyToString, type ThreadKey } from './types';
+import { keyToSlug, type SessionKey } from './sessionKey';
 
 /** Subdirectory of `DATA_DIR` that holds every thread's intake folder. */
 export const filesRootDirName = 'files';
@@ -32,14 +32,18 @@ export const fileRetentionMs = fileRetentionDays * 24 * 60 * 60 * 1000;
 export const fileSweepIntervalMs = 24 * 60 * 60 * 1000;
 
 /**
- * @description The per-thread intake dir name. `keyToString` yields
- * `<chatId>:<threadId>`; `:` is illegal in some filesystems, so we swap it for
- * `_` to get a portable single segment. The components are internal numbers
- * (not user input), but we still join via `path.join` so the result can never
- * escape `filesRoot`.
+ * @description Separator standing in for the serialized key's `:` inside a
+ * directory name — `:` is illegal on some filesystems.
  */
-function threadDirName(key: ThreadKey): string {
-  return keyToString(key).replace(':', '_');
+const threadDirSeparator = '_';
+
+/**
+ * @description The per-thread intake dir name — `<chatId>_<threadId>`. The
+ * components are internal ids (not user input), but we still join via
+ * `path.join` so the result can never escape `filesRoot`.
+ */
+function threadDirName(key: SessionKey): string {
+  return keyToSlug(key, threadDirSeparator);
 }
 
 /** Absolute path of the `files/` root under a given data dir. */
@@ -48,7 +52,7 @@ export function resolveFilesRoot(dataDir: string): string {
 }
 
 /** Absolute path of one thread's intake dir under a given data dir. */
-export function resolveThreadFilesDir(dataDir: string, key: ThreadKey): string {
+export function resolveThreadFilesDir(dataDir: string, key: SessionKey): string {
   return path.join(resolveFilesRoot(dataDir), threadDirName(key));
 }
 
@@ -57,7 +61,7 @@ export function resolveThreadFilesDir(dataDir: string, key: ThreadKey): string {
  * Created `0700` — these files can carry private user content and the dir is
  * bot-owned, so it should not be world-readable on a shared host.
  */
-export async function ensureThreadFilesDir(dataDir: string, key: ThreadKey): Promise<string> {
+export async function ensureThreadFilesDir(dataDir: string, key: SessionKey): Promise<string> {
   const dir = resolveThreadFilesDir(dataDir, key);
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   return dir;
@@ -68,7 +72,7 @@ export async function ensureThreadFilesDir(dataDir: string, key: ThreadKey): Pro
  * forwarded `/clear` path. No-op (and no throw) when the dir doesn't exist —
  * a thread that never received a file has nothing to purge.
  */
-export async function purgeThreadFiles(dataDir: string, key: ThreadKey): Promise<void> {
+export async function purgeThreadFiles(dataDir: string, key: SessionKey): Promise<void> {
   const dir = resolveThreadFilesDir(dataDir, key);
   await fsp.rm(dir, { recursive: true, force: true });
 }

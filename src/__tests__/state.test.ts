@@ -3,7 +3,7 @@
  *
  *   R4. Legacy migration: `~/.telegram-bot-messages.json` → `.bak`.
  *   R5. Concurrent `setBinding` / `setAgentChoice` from two callers
- *       under the same `ThreadKey` doesn't lose either write
+ *       under the same `SessionKey` doesn't lose either write
  *       (per-key async-lock, plan §13.15).
  *   R6. Corrupted `state.json` is archived to
  *       `state.json.corrupted-<ts>` and the store starts fresh
@@ -23,7 +23,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 let dataDir: string;
 let fakeHome: string;
@@ -46,8 +47,8 @@ afterEach(() => {
   fs.rmSync(fakeHome, { recursive: true, force: true });
 });
 
-const key1: ThreadKey = { chatId: -1001234567890, threadId: 42 };
-const key2: ThreadKey = { chatId: -1001234567890, threadId: 99 };
+const key1: SessionKey = makeTelegramKey(-1001234567890, 42);
+const key2: SessionKey = makeTelegramKey(-1001234567890, 99);
 
 test('R4: legacy ~/.telegram-bot-messages.json is renamed to .bak on init', async () => {
   const legacy = path.join(fakeHome, '.telegram-bot-messages.json');
@@ -83,7 +84,7 @@ test('R5: concurrent setBinding under the same key serialises and both writes la
   // on-disk state — that's the actual invariant.
   await store.flush();
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  const persisted = raw.bindings[`${key1.chatId}:${key1.threadId}`];
+  const persisted = raw.bindings[keyToString(key1)];
   const inMemory = store.getBinding(key1);
   assert.ok(persisted, 'binding must exist on disk');
   assert.equal(persisted.subdir, inMemory?.subdir, 'on-disk and in-memory must agree');
@@ -179,7 +180,7 @@ test('Forward-compat: state.json with an unknown future field still loads cleanl
   await store.init();
   assert.equal(store.wasCorruptedOnLoad(), false, 'unknown field must not trigger corruption');
   assert.equal(store.listBindings().length, 1, 'binding must survive');
-  assert.equal(store.getBinding({ chatId: -1001, threadId: 42 })?.subdir, 'alpha');
+  assert.equal(store.getBinding(makeTelegramKey(-1001, 42))?.subdir, 'alpha');
 });
 
 test('pinnedStatusText: set → get round-trips on the binding row', async () => {
@@ -218,7 +219,7 @@ test('pinnedStatusText: passing null clears it on disk', async () => {
   assert.equal(first.getBinding(key1)?.pinnedStatusText, undefined);
   // …and on disk (so a stale text can never suppress the next real edit).
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal('pinnedStatusText' in raw.bindings[`${key1.chatId}:${key1.threadId}`], false);
+  assert.equal('pinnedStatusText' in raw.bindings[keyToString(key1)], false);
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
@@ -436,7 +437,7 @@ test('clearAgentSessionIds: the wipe is persisted to disk', async () => {
   assert.equal(second.getAgent(key1)?.name, 'opencode');
   assert.equal(second.getOpenCodeSessionId(key1), null);
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  const persistedAgent = raw.agents[`${key1.chatId}:${key1.threadId}`];
+  const persistedAgent = raw.agents[keyToString(key1)];
   assert.ok(persistedAgent, 'agent row must still exist on disk');
   assert.equal('opencodeSessionId' in persistedAgent, false, 'id key must be absent on disk');
 });
@@ -499,7 +500,7 @@ test('traceConfig: defaults all-threads ON (always-on observability) on a fresh 
 });
 
 test('traceConfig: set → get round-trips and survives a reload from disk', async () => {
-  const keyStr = `${key1.chatId}:${key1.threadId}`;
+  const keyStr = keyToString(key1);
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
   await first.setTraceConfig({ allThreads: false, threadKeys: [keyStr] });
@@ -936,16 +937,16 @@ test('getTransientFrames: a captured snapshot survives a later REPLACE clobber',
 test('chatLocaleOverride: set → reload → clear drops the persisted map', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
-  await first.setChatLocaleOverride(key1.chatId, 'de');
+  await first.setChatLocaleOverride(getTelegramChatId(key1), 'de');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.getChatLocaleOverride(key1.chatId), 'de');
+  assert.equal(second.getChatLocaleOverride(getTelegramChatId(key1)), 'de');
 
-  await second.setChatLocaleOverride(key1.chatId, null);
+  await second.setChatLocaleOverride(getTelegramChatId(key1), null);
   await second.flush();
-  assert.equal(second.getChatLocaleOverride(key1.chatId), null);
+  assert.equal(second.getChatLocaleOverride(getTelegramChatId(key1)), null);
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
   assert.equal('chatLocaleOverrides' in raw, false, 'empty override map must be absent on disk');
 });
@@ -953,14 +954,14 @@ test('chatLocaleOverride: set → reload → clear drops the persisted map', asy
 test('chatTelegramLocale: persists separately from an explicit override', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
-  await first.setChatTelegramLocale(key1.chatId, 'pt');
-  await first.setChatLocaleOverride(key1.chatId, 'ru');
+  await first.setChatTelegramLocale(getTelegramChatId(key1), 'pt');
+  await first.setChatLocaleOverride(getTelegramChatId(key1), 'ru');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.getChatTelegramLocale(key1.chatId), 'pt');
-  assert.equal(second.getChatLocaleOverride(key1.chatId), 'ru');
+  assert.equal(second.getChatTelegramLocale(getTelegramChatId(key1)), 'pt');
+  assert.equal(second.getChatLocaleOverride(getTelegramChatId(key1)), 'ru');
 });
 
 test('pushMessageIds and pushMessageId append in response order through the same bounded ring', async () => {

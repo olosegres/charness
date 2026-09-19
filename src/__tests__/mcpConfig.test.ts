@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import {
   configureSchedulerMcpInjection,
@@ -34,10 +34,11 @@ import {
   schedulerMcpClientIdHeader,
   verifySchedulerMcpToken,
 } from '../scheduler/mcpSurface';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const secret = 'a'.repeat(64);
 const port = 4097;
-const key: ThreadKey = { chatId: -1001234567890, threadId: 11 };
+const key: SessionKey = makeTelegramKey(-1001234567890, 11);
 const keyString = keyToString(key);
 
 let dataDir: string;

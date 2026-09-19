@@ -25,9 +25,11 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { postReattachRecap } from '../bot';
-import type { AgentAdapter, ReattachRecap, SeenWatermark, ThreadKey } from '../types';
+import type { AgentAdapter, ReattachRecap, SeenWatermark } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -1001111111111, threadId: 9085 };
+const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
 const workDir = '/work/ws-setup';
 const sessionId = 'sess-1';
 const head: SeenWatermark = { sessionId, claudeTranscriptOffset: 2_603_805 };
@@ -48,11 +50,11 @@ function makeAdapter(
 }
 
 describe('postReattachRecap (S1 idempotency)', () => {
-  let replyCalls: Array<{ key: ThreadKey; text: string }>;
-  let advanceCalls: Array<{ key: ThreadKey; watermark: SeenWatermark }>;
+  let replyCalls: Array<{ key: SessionKey; text: string }>;
+  let advanceCalls: Array<{ key: SessionKey; watermark: SeenWatermark }>;
   let deps: {
-    reply: (key: ThreadKey, text: string) => Promise<unknown>;
-    advanceWatermark: (key: ThreadKey, watermark: SeenWatermark) => void;
+    reply: (key: SessionKey, text: string) => Promise<unknown>;
+    advanceWatermark: (key: SessionKey, watermark: SeenWatermark) => void;
   };
 
   beforeEach(() => {

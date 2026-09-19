@@ -41,7 +41,7 @@ function buildQueueKey(chatId: number, threadId: number | undefined): string {
  * `"<chatId>:<threadId>"`, or `"global"` for updates with no chat. It governs
  * ONLY queue serialization + cross-thread parallelism — routing correctness
  * stays inside the unchanged handler chain, which re-resolves the real
- * `ThreadKey` itself. Narrowed on the `Update` union (no `any`).
+ * `SessionKey` itself. Narrowed on the `Update` union (no `any`).
  */
 export function getUpdateQueueKey(update: Update): string {
   if ('message' in update) {

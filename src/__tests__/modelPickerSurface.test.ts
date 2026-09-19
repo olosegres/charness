@@ -36,9 +36,10 @@ import {
 } from '../utils/modelPickerPlan';
 import { TELEGRAM_HARD_LIMIT } from '../messageSplit';
 import { getAdapter } from '../adapters/createAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -1001111111111, threadId: 111 };
+const key: SessionKey = makeTelegramKey(-1001111111111, 111);
 const openCodeAdapterLabel = 'OpenCode';
 
 /** A two-provider catalog with enough models to paginate (page size is 10). */

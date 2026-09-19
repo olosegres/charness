@@ -43,10 +43,12 @@ import {
   openCodeErrorMessageMaxLength,
 } from '../adapters/openCodeAdapter';
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { keyToString, type AgentApiErrorClass, type ThreadKey } from '../types';
+import { type AgentApiErrorClass } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const own = 'ses_own';
-const key: ThreadKey = { chatId: -100555, threadId: 7 };
+const key: SessionKey = makeTelegramKey(-100555, 7);
 /** The only text an unrecognised payload shape may ever surface. */
 const genericErrorMessage = 'OpenCode request failed';
 
@@ -60,9 +62,9 @@ function createAdapterWithSession(): {
   // enough (runtime-only, tsx strips the type).
   adapter['sessions'].set(keyToString(key), { key, sessionId: own, isActive: true });
   const outputs: string[] = [];
-  adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+  adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
   const apiErrors: AgentApiErrorClass[] = [];
-  adapter.on('apiError', (_k: ThreadKey, apiError: AgentApiErrorClass) => apiErrors.push(apiError));
+  adapter.on('apiError', (_k: SessionKey, apiError: AgentApiErrorClass) => apiErrors.push(apiError));
   return { adapter, outputs, apiErrors };
 }
 

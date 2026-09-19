@@ -15,7 +15,7 @@
  * should-inject decision below.
  */
 
-import { keyToString, type ThreadKey } from './types';
+import { keyToString, type SessionKey } from './sessionKey';
 
 /** First line of every preamble — the agent-recognisable marker. */
 export const threadContextPreambleHeader = '[Telegram thread context]';
@@ -32,7 +32,7 @@ export interface ThreadContextPreambleInput {
   /** Group (supergroup) title, when known. */
   groupTitle?: string;
   /** The thread key — its `chatId:threadId` form is exposed to the agent. */
-  key: ThreadKey;
+  key: SessionKey;
   /** Bound subfolder under `WORK_ROOT`. */
   subdir: string;
   /**

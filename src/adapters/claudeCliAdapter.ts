@@ -20,10 +20,10 @@ import type {
   SeenWatermark,
   SeenWatermarkWriter,
   SendInputOptions,
-  ThreadKey,
   ThreadLocaleReader,
 } from '../types';
-import { keyToString } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString } from '../sessionKey';
 import { classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
@@ -100,12 +100,12 @@ import {
 /**
  * @description Per-thread Claude CLI session state.
  *
- * One tmux session is spawned per `ThreadKey`. The tmux session name embeds
+ * One tmux session is spawned per `SessionKey`. The tmux session name embeds
  * both `chatId` and `threadId` so multiple threads sharing the same `workDir`
  * stay fully isolated (plan §10.2, D8).
  */
 interface ClaudeSession {
-  key: ThreadKey;
+  key: SessionKey;
   workDir: string;
   sessionName: string;
   /** UUID we pass via `--session-id` (or, on resume, via `--resume`). */
@@ -428,7 +428,7 @@ export function loadEffortPrefs(): Record<string, string> {
   }
 }
 
-export function saveEffortPref(key: ThreadKey, level: string): void {
+export function saveEffortPref(key: SessionKey, level: string): void {
   try {
     const data = loadEffortPrefs();
     data[keyToString(key)] = level;
@@ -447,13 +447,13 @@ export function saveEffortPref(key: ThreadKey, level: string): void {
 const claudeTmuxPrefix = 'claude';
 
 /**
- * @description Tmux session name for a `ThreadKey`.
+ * @description Tmux session name for a `SessionKey`.
  *
  * Format: `claude-<chatId>-<threadId>`. Negative chat ids (forum supergroups
  * are negative) keep their minus sign — tmux session names accept it. The
- * format is `parse`-able back to `ThreadKey` via {@link parseTmuxSessionName}.
+ * format is `parse`-able back to `SessionKey` via {@link parseTmuxSessionName}.
  */
-function buildTmuxSessionName(key: ThreadKey): string {
+function buildTmuxSessionName(key: SessionKey): string {
   return buildTmuxSessionNameWithPrefix(claudeTmuxPrefix, key);
 }
 
@@ -464,7 +464,7 @@ function buildTmuxSessionName(key: ThreadKey): string {
  *
  * Carefully handles negative chat ids: `claude--1001234-42` is `chatId=-1001234, threadId=42`.
  */
-function parseTmuxSessionName(name: string): ThreadKey | null {
+function parseTmuxSessionName(name: string): SessionKey | null {
   return parseTmuxSessionNameWithPrefix(claudeTmuxPrefix, name);
 }
 
@@ -2945,8 +2945,8 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   readonly selfGreetsOnStart = true;
 
   /**
-   * Map of serialised `ThreadKey` (`"<chatId>:<threadId>"`) → live session.
-   * Keyed by string rather than `ThreadKey` object so map lookups work — JS
+   * Map of serialised `SessionKey` (`"<chatId>:<threadId>"`) → live session.
+   * Keyed by string rather than `SessionKey` object so map lookups work — JS
    * Map compares object identity, not structural equality.
    */
   private sessions: Map<string, ClaudeSession> = new Map();
@@ -2975,7 +2975,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /** @description Run `fn` inside the thread's locale context so `t(...)` resolves correctly. */
-  private tl<T>(key: ThreadKey, fn: () => T): T {
+  private tl<T>(key: SessionKey, fn: () => T): T {
     return runWithLocale(this.threadLocaleReader?.(key) ?? defaultLocale, fn);
   }
 
@@ -2995,7 +2995,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
 
   /** @description Advance the persisted seen-watermark for `key` (no-op until the
    * writer is wired). */
-  private advanceSeenWatermark(key: ThreadKey, watermark: SeenWatermark): void {
+  private advanceSeenWatermark(key: SessionKey, watermark: SeenWatermark): void {
     this.seenWatermarkWriter?.(key, watermark);
   }
 
@@ -3017,7 +3017,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * the same way {@link getRecentTurns} / {@link getReattachRecap} do.
    */
   private advanceClaudeWatermarkIfGrown(
-    key: ThreadKey,
+    key: SessionKey,
     session: ClaudeSession,
     isBusy: boolean,
     isReady: boolean,
@@ -3043,7 +3043,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
 
   /** @description Resolve the thread's full display prefs, defaulting every
    * field to `minimal` for any read before the bot wires the reader at boot. */
-  private getDisplayPrefs(key: ThreadKey): ResolvedThreadDisplayPrefs {
+  private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
     return (
       this.displayPrefsReader?.(key) ?? {
         thinking: defaultDisplayVerbosityMode,
@@ -3055,7 +3055,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
 
   /** @description Resolve the thread's `/subagent` mode (consulted by the
    * transcript-tail scan), via the full prefs reader. */
-  private getSubagentMode(key: ThreadKey): DisplayVerbosityMode {
+  private getSubagentMode(key: SessionKey): DisplayVerbosityMode {
     return this.getDisplayPrefs(key).subagent;
   }
 
@@ -3167,7 +3167,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  private async stopSessionInternal(key: ThreadKey): Promise<void> {
+  private async stopSessionInternal(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     const session = this.sessions.get(k);
     if (!session) return;
@@ -3212,7 +3212,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * cause overlapping invocations. The handle is stored back on
    * `session.pollTimer` so `stopSession` can cancel the next tick.
    */
-  private schedulePoll(key: ThreadKey, session: ClaudeSession): void {
+  private schedulePoll(key: SessionKey, session: ClaudeSession): void {
     if (!session.isActive) return;
     session.pollTimer = setTimeout(() => {
       void (async () => {
@@ -3255,7 +3255,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * error is logged and swallowed here — this method must never reject, or
    * the rejection would escape `schedulePoll`'s void'd poll chain.
    */
-  private async scanSubagentTranscripts(key: ThreadKey, session: ClaudeSession): Promise<void> {
+  private async scanSubagentTranscripts(key: SessionKey, session: ClaudeSession): Promise<void> {
     try {
       const subagentsDir = path.join(
         getClaudeProjectsRoot(),
@@ -3318,7 +3318,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * in flight will reschedule itself from the (now reset) delay, so we never
    * double-poll.
    */
-  private resetPollCadence(key: ThreadKey, session: ClaudeSession): void {
+  private resetPollCadence(key: SessionKey, session: ClaudeSession): void {
     session.currentPollDelayMs = basePollIntervalMs;
     session.unchangedPollStreak = 0;
     if (!session.isActive || session.isPolling) return;
@@ -3330,7 +3330,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async startSession(
-    key: ThreadKey,
+    key: SessionKey,
     workDir: string,
     args?: string,
     sessionId?: string,
@@ -3439,24 +3439,24 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     this.emit('started', key);
   }
 
-  stopSession(key: ThreadKey): void {
+  stopSession(key: SessionKey): void {
     void this.stopSessionInternal(key).catch((e) => {
       console.warn(`[Claude] stopSession failed:`, e instanceof Error ? e.message : e);
     });
   }
 
-  checkIsActive(key: ThreadKey): boolean {
+  checkIsActive(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive ?? false;
   }
 
-  checkIsBusy(key: ThreadKey): boolean {
+  checkIsBusy(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session) return false;
     return checkIsClaudeSessionBusy({ isActive: session.isActive, lastContent: session.lastContent });
   }
 
-  async getRuntimeInfo(key: ThreadKey): Promise<AgentRuntimeInfo> {
+  async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       return { version: null, model: null, contextWindowTokens: null, contextUsedTokens: null };
@@ -3476,13 +3476,13 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * pane every second, so a large value means the agent is idle even if the
    * footer busy signal is stuck. `null` is never treated as idle.
    */
-  getMsSincePaneChange(key: ThreadKey): number | null {
+  getMsSincePaneChange(key: SessionKey): number | null {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return null;
     return Date.now() - session.lastContentChangeAt;
   }
 
-  sendInput(key: ThreadKey, input: string, options?: SendInputOptions): void {
+  sendInput(key: SessionKey, input: string, options?: SendInputOptions): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       console.log(`[Claude] sendInput: no active session for ${keyToString(key)}`);
@@ -3567,7 +3567,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * a harmless no-op, but an unbounded retry loop on a genuinely-stuck pane would
    * spam keystrokes. Same staleness guards as the deferred Enter.
    */
-  private scheduleEnterVerification(key: ThreadKey, sessionName: string, typedText: string): void {
+  private scheduleEnterVerification(key: SessionKey, sessionName: string, typedText: string): void {
     setTimeout(() => {
       const current = this.sessions.get(keyToString(key));
       if (!current?.isActive || current.sessionName !== sessionName) return;
@@ -3590,7 +3590,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     }, CLAUDE_ENTER_VERIFY_DELAY_MS);
   }
 
-  sendSignal(key: ThreadKey, signal: string): void {
+  sendSignal(key: SessionKey, signal: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3604,7 +3604,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  sendEnter(key: ThreadKey): void {
+  sendEnter(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3616,7 +3616,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  sendArrow(key: ThreadKey, direction: 'Up' | 'Down'): void {
+  sendArrow(key: SessionKey, direction: 'Up' | 'Down'): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3628,7 +3628,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  sendTab(key: ThreadKey): void {
+  sendTab(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3659,7 +3659,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   // Fire-and-forget single Escape keystroke (interrupt the current turn /
   // dismiss a selector). Deliberately distinct from `interruptAndWaitIdle`:
   // this is a raw one-shot key, NOT a wait-for-idle interrupt.
-  sendEscape(key: ThreadKey): void {
+  sendEscape(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3689,7 +3689,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * return without Escape so the caller's prompt queues behind the current
    * turn and runs once that work finishes.
    */
-  async interruptAndWaitIdle(key: ThreadKey): Promise<void> {
+  async interruptAndWaitIdle(key: SessionKey): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -3726,7 +3726,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * block (see the `extractClaudeQuestion` call in the poll loop) — non-empty
    * means a question is being shown and awaiting an answer.
    */
-  isQuestionPending(key: ThreadKey): boolean {
+  isQuestionPending(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return Boolean(session?.isActive && session.lastQuestionSignature);
   }
@@ -3739,7 +3739,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * message arrives, so the bot skips the prompt path (Escape + preamble) that
    * would otherwise cancel the login and corrupt the code.
    */
-  isLoginPastePending(key: ThreadKey): boolean {
+  isLoginPastePending(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return Boolean(session?.isActive && checkIsClaudeLoginPaste(session.lastContent));
   }
@@ -3756,7 +3756,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * silently no-ops and the caller would report a false "model set" success
    * (reachable today via the ungated numeric-pick path).
    */
-  async setModel(key: ThreadKey, modelId: string): Promise<string | null> {
+  async setModel(key: SessionKey, modelId: string): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return t('model.start_agent_first');
     this.sendInput(key, `/model ${modelId}`);
@@ -3767,7 +3767,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     return null;
   }
 
-  getCurrentModel(_key: ThreadKey): string | null {
+  getCurrentModel(_key: SessionKey): string | null {
     return null;
   }
 
@@ -3793,7 +3793,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * (we still persist the choice so the next /claude picks it up in the
    * banner; live apply happens once the agent actually exists).
    */
-  async setEffort(key: ThreadKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<string | null> {
     if (!checkIsClaudeEffortLevel(level)) {
       return t('effort.invalid_level', {
         level,
@@ -3823,7 +3823,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * cache would just be drift surface. Whatever claude itself stores in
    * its global `settings.json` is invisible to us by design (D2).
    */
-  getEffort(key: ThreadKey): string | null {
+  getEffort(key: SessionKey): string | null {
     const prefs = loadEffortPrefs();
     return prefs[keyToString(key)] ?? null;
   }
@@ -3856,7 +3856,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * (claude clamps per model — same as a manual `/effort` or an explicit pref).
    * An explicit per-thread pref still wins and is armed verbatim.
    */
-  private applyStoredEffortOnSpawn(key: ThreadKey): void {
+  private applyStoredEffortOnSpawn(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session) return;
     const level = this.getEffort(key) ?? defaultEffortLevel;
@@ -3888,11 +3888,11 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * is accepted for interface symmetry with OpenCode (whose set depends on
    * the per-thread current model) but is intentionally unused here.
    */
-  async getAvailableEffortLevels(_key: ThreadKey): Promise<string[]> {
+  async getAvailableEffortLevels(_key: SessionKey): Promise<string[]> {
     return getClaudeAvailableLevels();
   }
 
-  getFullOutput(key: ThreadKey, lines: number = 500): string | null {
+  getFullOutput(key: SessionKey, lines: number = 500): string | null {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return null;
 
@@ -3904,7 +3904,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * The bot calls this right after `startSession()` so the UUID can be
    * persisted in state.json and reused on later resumes (plan §13.1, D14).
    */
-  getClaudeSessionId(key: ThreadKey): string | null {
+  getClaudeSessionId(key: SessionKey): string | null {
     return this.sessions.get(keyToString(key))?.claudeSessionId ?? null;
   }
 
@@ -3912,7 +3912,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   // not a bot-private registry. This makes a conversation started by hand
   // on the laptop in `workDir` resumable from the bound Telegram thread.
   // `key` is unused: Claude scopes transcripts by folder, not by thread.
-  async getSessions(_key: ThreadKey, workDir: string): Promise<AgentSession[]> {
+  async getSessions(_key: SessionKey, workDir: string): Promise<AgentSession[]> {
     return listClaudeSessionsForWorkDir(getClaudeProjectsRoot(), workDir);
   }
 
@@ -3924,7 +3924,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * delegates to the pure {@link readRecentClaudeTurns}. A missing transcript
    * (unknown / pruned UUID) yields `[]`, so the caller posts no context block.
    */
-  async getRecentTurns(_key: ThreadKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
+  async getRecentTurns(_key: SessionKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
     const filePath = getClaudeTranscriptPath(workDir, sessionId);
     return readRecentClaudeTurns(filePath, limit);
   }
@@ -3944,7 +3944,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * the body still shows the last turns.
    */
   async getReattachRecap(
-    key: ThreadKey,
+    key: SessionKey,
     workDir: string,
     sessionId: string,
     watermark: SeenWatermark | null,
@@ -3980,7 +3980,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    *    (history pruned, different machine), it just starts a new session;
    *    we surface that to the user (T8 in plan §16.3).
    */
-  async resumeSession(key: ThreadKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
+  async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
 
     if (!checkIsInstalled('claude')) {
@@ -4088,11 +4088,11 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    *
    * Returns an empty array if tmux isn't installed or no matching sessions exist.
    */
-  async listExistingTmuxSessions(): Promise<Array<{ key: ThreadKey; sessionName: string }>> {
+  async listExistingTmuxSessions(): Promise<Array<{ key: SessionKey; sessionName: string }>> {
     const raw = await tmuxAsync('list-sessions', '-F', '#{session_name}');
     if (!raw) return [];
     const names = raw.split('\n').map(s => s.trim()).filter(Boolean);
-    const result: Array<{ key: ThreadKey; sessionName: string }> = [];
+    const result: Array<{ key: SessionKey; sessionName: string }> = [];
     for (const name of names) {
       const key = parseTmuxSessionName(name);
       if (key) result.push({ key, sessionName: name });
@@ -4141,7 +4141,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * the `list` call and now (race with manual `tmux kill-session`).
    */
   async adoptExistingTmuxSession(
-    key: ThreadKey,
+    key: SessionKey,
     sessionName: string,
     workDir: string,
     claudeSessionId: string,
@@ -4248,7 +4248,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     return sessions.split('\n').includes(session.sessionName);
   }
 
-  private async pollOutput(key: ThreadKey): Promise<void> {
+  private async pollOutput(key: SessionKey): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -4686,7 +4686,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * Emitted with `startsNewParagraph: true` — a table is its own visual block,
    * so it must not glue onto preceding prose in the append/draft join.
    */
-  private emitStabilizedTable(key: ThreadKey, session: ClaudeSession, block: string): void {
+  private emitStabilizedTable(key: SessionKey, session: ClaudeSession, block: string): void {
     // Root-cause dedup (flood 2026-06-16): the table block was RECORDED into the
     // relay window but never CHECKED before emit, and table lines are masked out
     // of the prose delta before `getRelayDedupedChunk` runs — so the long-horizon

@@ -25,10 +25,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { reconcileTransientFrames, type ReconcileTransientFramesDeps } from '../bot';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const keyA: ThreadKey = { chatId: -1001111111111, threadId: 9085 };
-const keyB: ThreadKey = { chatId: -1001111111111, threadId: 434 };
+const keyA: SessionKey = makeTelegramKey(-1001111111111, 9085);
+const keyB: SessionKey = makeTelegramKey(-1001111111111, 434);
 
 function makeDeps(): {
   deps: ReconcileTransientFramesDeps;
@@ -60,9 +61,9 @@ describe('reconcileTransientFrames', () => {
 
     assert.equal(deleted, 3, 'returns the number of stale ids deleted');
     assert.deepEqual(deletes, [
-      [keyA.chatId, 101],
-      [keyA.chatId, 202],
-      [keyB.chatId, 303],
+      [getTelegramChatId(keyA), 101],
+      [getTelegramChatId(keyA), 202],
+      [getTelegramChatId(keyB), 303],
     ]);
     assert.deepEqual(
       persisted,
@@ -81,7 +82,7 @@ describe('reconcileTransientFrames', () => {
     const deleted = reconcileTransientFrames(orphaned, deps);
 
     assert.equal(deleted, 1);
-    assert.deepEqual(deletes, [[keyA.chatId, 41197]]);
+    assert.deepEqual(deletes, [[getTelegramChatId(keyA), 41197]]);
   });
 
   it('skips a corrupt key but still deletes valid threads', () => {
@@ -91,7 +92,7 @@ describe('reconcileTransientFrames', () => {
     const deleted = reconcileTransientFrames(orphaned, deps);
 
     assert.equal(deleted, 1, 'corrupt key contributes nothing');
-    assert.deepEqual(deletes, [[keyA.chatId, 202]]);
+    assert.deepEqual(deletes, [[getTelegramChatId(keyA), 202]]);
     assert.deepEqual(persisted, [keyToString(keyA)], 'no persist for the skipped key');
   });
 

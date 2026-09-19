@@ -4,7 +4,8 @@
  *
  * The `claude -p … stream-json` process is NOT a bot child any more: a `#!/bin/sh`
  * wrapper hosts it inside a detached tmux session, with stdio rerouted to files
- * under `DATA_DIR/jsonstream/<chatId>_<threadId>/`:
+ * under `DATA_DIR/jsonstream/<serialized key with ":" → "_">/` (Telegram:
+ * `<chatId>_<threadId>`):
  *
  *   stdin.fifo    ← the bot's control/user-turn writes (claude holds it `0<>`,
  *                   i.e. open read-write on fd 0, so a bot restart — the writer
@@ -28,7 +29,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { setTimeout as sleep } from 'timers/promises';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToSlug, tryKeyFromString, type SessionKey } from '../sessionKey';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
 import { shellSingleQuote } from './tmuxExec';
 
@@ -84,27 +85,33 @@ export function resolveJsonStreamRoot(dataDir: string): string {
   return path.join(dataDir, jsonStreamRootDirName);
 }
 
-/** The per-thread host dir name — `<chatId>_<threadId>` (same convention as
- *  `botFileStorage`'s intake dirs: `:` is illegal on some filesystems). */
-function threadDirName(key: ThreadKey): string {
-  return keyToString(key).replace(':', '_');
+/**
+ * @description Separator standing in for the serialized key's `:` inside a
+ * directory name — `:` is illegal on some filesystems. Same convention as
+ * `botFileStorage`'s intake dirs.
+ */
+const threadDirSeparator = '_';
+
+/** The per-thread host dir name — `<chatId>_<threadId>`. */
+function threadDirName(key: SessionKey): string {
+  return keyToSlug(key, threadDirSeparator);
 }
 
 /** Absolute path of one thread's json-stream host dir. */
-export function resolveJsonStreamSessionDir(dataDir: string, key: ThreadKey): string {
+export function resolveJsonStreamSessionDir(dataDir: string, key: SessionKey): string {
   return path.join(resolveJsonStreamRoot(dataDir), threadDirName(key));
 }
 
 /**
  * @description Inverse of the host-dir naming for the orphan-dir janitor.
- * Strict per-half regexes (mirrors `parseTmuxSessionName`) so a foreign dir
- * that happens to sit under `jsonstream/` is skipped, never swept by a
- * mis-parse.
+ * Strictness lives in the connector's codec (mirrors `parseTmuxSessionName`),
+ * so a foreign dir that happens to sit under `jsonstream/` is skipped, never
+ * swept by a mis-parse.
  */
-export function parseJsonStreamDirName(name: string): ThreadKey | null {
-  const match = /^(-?\d+)_(\d+)$/.exec(name);
-  if (!match) return null;
-  return { chatId: Number(match[1]), threadId: Number(match[2]) };
+export function parseJsonStreamDirName(name: string): SessionKey | null {
+  const lastSeparator = name.lastIndexOf(threadDirSeparator);
+  if (lastSeparator <= 0) return null;
+  return tryKeyFromString(`${name.slice(0, lastSeparator)}:${name.slice(lastSeparator + 1)}`);
 }
 
 export function getJsonStreamSessionPaths(dir: string): JsonStreamSessionPaths {
@@ -121,12 +128,12 @@ export function getJsonStreamSessionPaths(dir: string): JsonStreamSessionPaths {
 }
 
 /** tmux session name for a json-stream thread (`cjson-<chatId>-<threadId>`). */
-export function buildJsonStreamTmuxSessionName(key: ThreadKey): string {
+export function buildJsonStreamTmuxSessionName(key: SessionKey): string {
   return buildTmuxSessionName(jsonStreamTmuxPrefix, key);
 }
 
 /** Inverse of {@link buildJsonStreamTmuxSessionName}; `null` for foreign names. */
-export function parseJsonStreamTmuxSessionName(name: string): ThreadKey | null {
+export function parseJsonStreamTmuxSessionName(name: string): SessionKey | null {
   return parseTmuxSessionName(jsonStreamTmuxPrefix, name);
 }
 
@@ -377,7 +384,7 @@ export function getStdoutLineBoundaryOffset(state: StdoutTailState, pendingLineT
  */
 export async function sweepOrphanJsonStreamDirs(
   jsonStreamRoot: string,
-  checkIsThreadOwned: (key: ThreadKey) => boolean,
+  checkIsThreadOwned: (key: SessionKey) => boolean,
 ): Promise<number> {
   let entries: fs.Dirent[];
   try {

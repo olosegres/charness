@@ -32,9 +32,15 @@ import {
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters/claudeJsonStreamAdapter';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { ThreadKey, AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputEventMeta, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputEventMeta, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { SessionKey } from './sessionKey';
 import { createOutputTransport } from './output/createOutputTransport';
-import { keyToString, keyFromString } from './types';
+import { keyToString, keyFromString } from './sessionKey';
+import {
+  getTelegramChatId,
+  getTelegramThreadId,
+  makeTelegramKey,
+} from './connectors/telegram/sessionKeyCodec';
 // Pure parser lives in `./agentTrigger` so it can be unit-tested without
 // booting Telegraf (audit S19 / #25).
 import { parseAgentTrigger as checkIsStartAgentPhrase } from './agentTrigger';
@@ -519,7 +525,7 @@ function getAllowedGroupId(): number | null {
 //
 //  Selected at boot by CHAT_MODE; `both` (the default) serves the group AND the
 //  owner DM at once, decided PER CHAT. The surface a given update belongs to is
-//  read off its resolved ThreadKey: a DM key carries the owner's chat id
+//  read off its resolved SessionKey: a DM key carries the owner's chat id
 //  (`resolveDmThreadKey` enforces `chat.id === ownerUserId`), so
 //  `checkIsDmKey(key)` is the per-chat discriminator that replaces the old
 //  global `checkIsDmMode()`. Access authority stays per surface: the owner id
@@ -554,7 +560,7 @@ function checkIsDmSurfaceActive(): boolean {
  * surface and re-asserts the owner. False when the DM surface is inert — so a
  * group-only `both` is always group.
  */
-function checkIsDmKey(key: ThreadKey): boolean {
+function checkIsDmKey(key: SessionKey): boolean {
   return checkIsDmThreadKey(key, getOwnerUserId(), checkIsDmSurfaceActive());
 }
 
@@ -890,7 +896,7 @@ function getDataDir(): string {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * @description UI state per `ThreadKey` — tracks the editable message id,
+ * @description UI state per `SessionKey` — tracks the editable message id,
  * status indicator, and loader message used for the typing UX. Lives in
  * memory only (re-derived on bot restart from the next outgoing message).
  *
@@ -1195,7 +1201,7 @@ const identicalOutputGuard = createIdenticalOutputGuard();
  * two copies never drift. The store write is debounced + fire-and-forget; the
  * in-memory set is what the live button handlers read, so it must be synchronous.
  */
-function setPendingQuestion(key: ThreadKey, value: PendingQuestionState): void {
+function setPendingQuestion(key: SessionKey, value: PendingQuestionState): void {
   pendingQuestions.set(keyToString(key), value);
   state.setPendingQuestion(key, value).catch(e =>
     console.error('[pendingQuestion] persist failed:', e),
@@ -1207,7 +1213,7 @@ function setPendingQuestion(key: ThreadKey, value: PendingQuestionState): void {
  * in-memory map and the persisted store. Single choke point for every
  * `pendingQuestions.delete(...)` so memory and disk stay in lockstep.
  */
-function clearPendingQuestion(key: ThreadKey): void {
+function clearPendingQuestion(key: SessionKey): void {
   const kStr = keyToString(key);
   // Post-restart OpenCode: the in-memory pin map was lost on restart but the
   // question message is still pinned on Telegram (its id lives on the persisted
@@ -1264,7 +1270,7 @@ const questionRepostStates = new Map<string, QuestionRepostState>();
  */
 const questionLifecycleQueues = new Map<string, SerialQueue>();
 
-function runQuestionLifecycleOp<T>(key: ThreadKey, op: () => Promise<T>): Promise<T> {
+function runQuestionLifecycleOp<T>(key: SessionKey, op: () => Promise<T>): Promise<T> {
   const kStr = keyToString(key);
   let queue = questionLifecycleQueues.get(kStr);
   if (!queue) {
@@ -1281,7 +1287,7 @@ function runQuestionLifecycleOp<T>(key: ThreadKey, op: () => Promise<T>): Promis
  */
 const questionRepostDebounceMs = 1_200;
 
-function getQuestionRepostState(key: ThreadKey): QuestionRepostState {
+function getQuestionRepostState(key: SessionKey): QuestionRepostState {
   const kStr = keyToString(key);
   let s = questionRepostStates.get(kStr);
   if (!s) {
@@ -1291,7 +1297,7 @@ function getQuestionRepostState(key: ThreadKey): QuestionRepostState {
   return s;
 }
 
-function clearQuestionRepostState(key: ThreadKey): void {
+function clearQuestionRepostState(key: SessionKey): void {
   const s = questionRepostStates.get(keyToString(key));
   if (s?.repostTimer) clearTimeout(s.repostTimer);
   questionRepostStates.delete(keyToString(key));
@@ -1303,7 +1309,7 @@ function clearQuestionRepostState(key: ThreadKey): void {
  * currently at the bottom and must NOT re-post in reaction to its own send (the
  * loop guard). Called by {@link postPendingQuestionAt} after a successful send.
  */
-function markQuestionMessageSent(key: ThreadKey, _messageId: number): void {
+function markQuestionMessageSent(key: SessionKey, _messageId: number): void {
   const s = getQuestionRepostState(key);
   s.wasLastSendTheQuestion = true;
 }
@@ -1315,7 +1321,7 @@ function markQuestionMessageSent(key: ThreadKey, _messageId: number): void {
  * debounced re-post so the question returns to the bottom (S3). Cheap no-op when
  * no question is pending — safe to call from every emit handler.
  */
-function onThreadActivityWhileQuestionPending(key: ThreadKey): void {
+function onThreadActivityWhileQuestionPending(key: SessionKey): void {
   if (!pendingQuestions.has(keyToString(key))) return;
   const s = getQuestionRepostState(key);
   // Something other than the question just landed below it.
@@ -1343,7 +1349,7 @@ function onThreadActivityWhileQuestionPending(key: ThreadKey): void {
  * meanwhile, or if it is already the last message (the loop guard re-checked at
  * fire time, since the debounce window may have closed the gap).
  */
-async function repostPendingQuestionToBottom(key: ThreadKey): Promise<void> {
+async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
   // Serialized with the other lifecycle transitions; all guards re-read state
   // INSIDE the critical section, since the world may have moved on between
   // the debounce arming and this op's turn in the queue.
@@ -1409,7 +1415,7 @@ const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
  * user-controllable at all. A record whose timer already fired (`timer === null`)
  * is history, not something to skip.
  */
-function getArmedLimitRetryFireAt(key: ThreadKey): number | null {
+function getArmedLimitRetryFireAt(key: SessionKey): number | null {
   const entry = apiRetryTimers.get(keyToString(key));
   if (!entry || entry.timer === null || entry.kind !== 'usageLimit') return null;
   return entry.fireAt;
@@ -1445,7 +1451,7 @@ const wedgeRecoveryTier = new Map<string, number>();
  * 5/10/20-min retries) and `auth` (surfaced, never retried) are untouched by the
  * toggle — a rate-limit hiccup always wants the automatic retry.
  */
-function handleApiError(key: ThreadKey, cls: AgentApiErrorClass): void {
+function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   const k = keyToString(key);
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     if (!autoContinueOffNoticedThreads.has(k)) {
@@ -1552,11 +1558,11 @@ function handleApiError(key: ThreadKey, cls: AgentApiErrorClass): void {
  * fire every few minutes and stay a plain line — pinning those would notify
  * relentlessly.
  */
-async function fireApiRetry(key: ThreadKey): Promise<void> {
+async function fireApiRetry(key: SessionKey): Promise<void> {
   return withThreadLocale(key, () => fireApiRetryWithLocale(key));
 }
 
-async function fireApiRetryWithLocale(key: ThreadKey): Promise<void> {
+async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (!entry) return;
@@ -1580,7 +1586,7 @@ async function fireApiRetryWithLocale(key: ThreadKey): Promise<void> {
  * persisted record. Wired at the session-end sites (`handleAgentClosed` /
  * `handleAgentStopped`); the remaining user-takeover call-sites are S6.
  */
-function cancelApiRetry(key: ThreadKey): void {
+function cancelApiRetry(key: SessionKey): void {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (entry?.timer) clearTimeout(entry.timer);
@@ -1622,11 +1628,11 @@ function cancelApiRetry(key: ThreadKey): void {
  * A wedge only fires on a genuinely stuck session (a healthy turn always produces
  * assistant activity), so this never disturbs a working thread.
  */
-function handleNoResponse(key: ThreadKey): void {
+function handleNoResponse(key: SessionKey): void {
   void withThreadLocale(key, () => handleNoResponseWithLocale(key));
 }
 
-async function handleNoResponseWithLocale(key: ThreadKey): Promise<void> {
+async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   const replayPrompt = lastForwardedPrompt.get(k);
   const adapter = getThreadAdapter(key);
@@ -1692,7 +1698,7 @@ async function handleNoResponseWithLocale(key: ThreadKey): Promise<void> {
  * {@link handleAgentOutput}) — and at the session-end / teardown sites (NOT the
  * user-takeover {@link cancelApiRetry} sites; see its NOTE).
  */
-async function surfaceLoggedOutNotice(key: ThreadKey): Promise<void> {
+async function surfaceLoggedOutNotice(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   if (authNoticePinnedMessageId.has(k)) return; // already surfaced this episode
   authNoticePinnedMessageId.set(k, pinnedNoticePendingSentinel);
@@ -1720,7 +1726,7 @@ async function surfaceLoggedOutNotice(key: ThreadKey): Promise<void> {
  * real output) and at the session-end / teardown sites (NOT folded into
  * {@link cancelApiRetry} — see its NOTE). No-op when none is active.
  */
-function clearAuthNotice(key: ThreadKey): void {
+function clearAuthNotice(key: SessionKey): void {
   const k = keyToString(key);
   const pinnedId = authNoticePinnedMessageId.get(k);
   if (pinnedId === undefined) return;
@@ -1737,7 +1743,7 @@ function clearAuthNotice(key: ThreadKey): void {
  * {@link surfaceLoggedOutNotice}) so a burst can't pin twice, and refuses to
  * resurrect a reservation a concurrent teardown dropped mid-send.
  */
-async function surfaceLimitResumedNotice(key: ThreadKey): Promise<void> {
+async function surfaceLimitResumedNotice(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   if (limitResumeNoticePinnedMessageId.has(k)) return; // already pinned this episode
   limitResumeNoticePinnedMessageId.set(k, pinnedNoticePendingSentinel);
@@ -1763,7 +1769,7 @@ async function surfaceLimitResumedNotice(key: ThreadKey): Promise<void> {
  * session-end / teardown site, so pins never accumulate one per episode. No-op when
  * none is active.
  */
-function clearLimitResumeNotice(key: ThreadKey): void {
+function clearLimitResumeNotice(key: SessionKey): void {
   const k = keyToString(key);
   const pinnedId = limitResumeNoticePinnedMessageId.get(k);
   if (pinnedId === undefined) return;
@@ -1823,12 +1829,12 @@ const authStatusProbeTimeoutMs = 5_000;
  * prompt is live), so a message typed in the pre-URL boot window is NOT
  * swallowed/deleted as a code. Teardown still keys off the map itself, not this.
  */
-function checkIsAuthLoginAwaitingCode(key: ThreadKey): boolean {
+function checkIsAuthLoginAwaitingCode(key: SessionKey): boolean {
   return pendingAuthLogins.get(keyToString(key))?.urlRelayed === true;
 }
 
 /** Kill + forget a thread's in-flight login (idempotent). Reports nothing. */
-function cancelClaudeAuthLogin(key: ThreadKey): void {
+function cancelClaudeAuthLogin(key: SessionKey): void {
   const k = keyToString(key);
   const pending = pendingAuthLogins.get(k);
   if (!pending) return;
@@ -1861,7 +1867,7 @@ async function readAuthLoginStatus(): Promise<boolean | null> {
  * and arm the pending-code state (the thread's next plain text is written into the
  * pty as the code). Re-running `/login` while a flow is pending restarts it.
  */
-async function startClaudeAuthLogin(key: ThreadKey): Promise<void> {
+async function startClaudeAuthLogin(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   cancelClaudeAuthLogin(key); // clean restart on a repeated /login
 
@@ -1922,7 +1928,7 @@ async function startClaudeAuthLogin(key: ThreadKey): Promise<void> {
  * the 🔐 ack. The final success/failure notice comes from {@link onAuthLoginExit}.
  */
 async function submitClaudeAuthLoginCode(
-  key: ThreadKey,
+  key: SessionKey,
   code: string,
   messageId: number,
 ): Promise<void> {
@@ -1934,7 +1940,7 @@ async function submitClaudeAuthLoginCode(
 }
 
 /** No sign-in URL within the window → the OAuth-init call was likely blocked. */
-async function onAuthLoginUrlTimeout(key: ThreadKey, child: IPty): Promise<void> {
+async function onAuthLoginUrlTimeout(key: SessionKey, child: IPty): Promise<void> {
   const k = keyToString(key);
   const pending = pendingAuthLogins.get(k);
   if (!pending || pending.pty !== child || pending.urlRelayed) return;
@@ -1950,7 +1956,7 @@ async function onAuthLoginUrlTimeout(key: ThreadKey, child: IPty): Promise<void>
  * this no-ops for it (never reports a false "success" on a teardown kill).
  */
 async function onAuthLoginExit(
-  key: ThreadKey,
+  key: SessionKey,
   child: IPty,
   exitCode: number,
 ): Promise<void> {
@@ -2013,12 +2019,12 @@ const pendingOpenCodeOAuth = new Map<string, PendingOpenCodeOAuth>();
  * plain text is the OAuth reply (a paste-style code OR a loopback callback URL).
  * A device flow never sets this (nothing is pasted back — it self-completes).
  */
-function checkIsOpenCodeOAuthAwaitingReply(key: ThreadKey): boolean {
+function checkIsOpenCodeOAuthAwaitingReply(key: SessionKey): boolean {
   return pendingOpenCodeOAuth.get(keyToString(key))?.awaitingReply === true;
 }
 
 /** Kill + forget a thread's in-flight OAuth login (idempotent). Reports nothing. */
-function cancelOpenCodeOAuthLogin(key: ThreadKey): void {
+function cancelOpenCodeOAuthLogin(key: SessionKey): void {
   const k = keyToString(key);
   const pending = pendingOpenCodeOAuth.get(k);
   if (!pending) return;
@@ -2058,7 +2064,7 @@ async function readOpenCodeProviderAuthed(providerId: string): Promise<boolean |
  * flow — arm the pending-code state. Re-running restarts a pending flow.
  */
 async function startOpenCodeOAuthLogin(
-  key: ThreadKey,
+  key: SessionKey,
   providerId: string,
   methodLabel: string,
 ): Promise<void> {
@@ -2168,7 +2174,7 @@ async function startOpenCodeOAuthLogin(
  *   was not recognised (caller keeps the flow armed and hints).
  */
 async function submitOpenCodeOAuthReply(
-  key: ThreadKey,
+  key: SessionKey,
   text: string,
   messageId: number,
 ): Promise<boolean> {
@@ -2218,7 +2224,7 @@ async function submitOpenCodeOAuthReply(
 }
 
 /** No sign-in URL within the window → the OAuth-init call was likely blocked. */
-async function onOpenCodeOAuthUrlTimeout(key: ThreadKey, child: IPty): Promise<void> {
+async function onOpenCodeOAuthUrlTimeout(key: SessionKey, child: IPty): Promise<void> {
   const k = keyToString(key);
   const pending = pendingOpenCodeOAuth.get(k);
   if (!pending || pending.pty !== child || pending.infoRelayed) return;
@@ -2233,7 +2239,7 @@ async function onOpenCodeOAuthUrlTimeout(key: ThreadKey, child: IPty): Promise<v
  * dropped its entry, so this no-ops for it.
  */
 async function onOpenCodeOAuthExit(
-  key: ThreadKey,
+  key: SessionKey,
   child: IPty,
   exitCode: number,
 ): Promise<void> {
@@ -2378,11 +2384,11 @@ const threadContextMarkers = new Map<string, string>();
  * prompt re-carries it. Called on every session lifecycle boundary (start,
  * stop, closed) and on forwarding a bare `/clear`.
  */
-function clearThreadContextMarker(key: ThreadKey): void {
+function clearThreadContextMarker(key: SessionKey): void {
   threadContextMarkers.delete(keyToString(key));
 }
 
-function getThreadMessageState(key: ThreadKey): ThreadMessageState {
+function getThreadMessageState(key: SessionKey): ThreadMessageState {
   const k = keyToString(key);
   let s = threadMessageStates.get(k);
   if (!s) {
@@ -2401,7 +2407,7 @@ function getThreadMessageState(key: ThreadKey): ThreadMessageState {
  * Debounced + fire-and-forget. Single collection point shared by the three
  * frame-id setters below so memory and disk never drift.
  */
-function persistTransientFrames(key: ThreadKey): void {
+function persistTransientFrames(key: SessionKey): void {
   const ids = getTransientFrameIds(getThreadMessageState(key));
   state.setTransientFrames(key, ids).catch(e =>
     console.error('[transientFrames] persist failed:', e),
@@ -2415,20 +2421,20 @@ function persistTransientFrames(key: ThreadKey): void {
  * when the id still equals the one they created); the setter just routes the
  * same write through one place.
  */
-function setStatusFrameId(key: ThreadKey, id: number | null): void {
+function setStatusFrameId(key: SessionKey, id: number | null): void {
   getThreadMessageState(key).statusMessageId = id;
   persistTransientFrames(key);
 }
-function setThinkingFrameId(key: ThreadKey, id: number | null): void {
+function setThinkingFrameId(key: SessionKey, id: number | null): void {
   getThreadMessageState(key).thinkingMessageId = id;
   persistTransientFrames(key);
 }
-function setSubagentFrameId(key: ThreadKey, id: number | null): void {
+function setSubagentFrameId(key: SessionKey, id: number | null): void {
   getThreadMessageState(key).subagentStatusMessageId = id;
   persistTransientFrames(key);
 }
 
-function getOutputQueueState(key: ThreadKey): OutputQueueState {
+function getOutputQueueState(key: SessionKey): OutputQueueState {
   const k = keyToString(key);
   let s = outputQueues.get(k);
   if (!s) {
@@ -2445,7 +2451,7 @@ function getOutputQueueState(key: ThreadKey): OutputQueueState {
  * activity frame must not be created/ticked/deleted (anti-thrash). Reads with
  * `.get()` so a thread that never streamed output is trivially "not streaming".
  */
-function checkIsOutputStreaming(key: ThreadKey): boolean {
+function checkIsOutputStreaming(key: SessionKey): boolean {
   // The DM draft transport streams via drafts, not the output queue, so ask it
   // too — otherwise the Claude liveness loop, blind to an active draft, inserts a
   // heartbeat status frame between prose deltas and chops the draft mid-answer.
@@ -2455,7 +2461,7 @@ function checkIsOutputStreaming(key: ThreadKey): boolean {
   return q.pendingOutput !== null || q.isProcessing || q.debounceTimer !== null;
 }
 
-function getStatusCoalesceState(key: ThreadKey): StatusCoalesceState {
+function getStatusCoalesceState(key: SessionKey): StatusCoalesceState {
   const k = keyToString(key);
   let s = statusCoalescers.get(k);
   if (!s) {
@@ -2465,7 +2471,7 @@ function getStatusCoalesceState(key: ThreadKey): StatusCoalesceState {
   return s;
 }
 
-function getThinkingCoalesceState(key: ThreadKey): ThinkingCoalesceState {
+function getThinkingCoalesceState(key: SessionKey): ThinkingCoalesceState {
   const k = keyToString(key);
   let s = thinkingCoalescers.get(k);
   if (!s) {
@@ -2483,7 +2489,7 @@ function getThinkingCoalesceState(key: ThreadKey): ThinkingCoalesceState {
  * the delete is fire-and-forget; the in-memory id/coalescer are cleared
  * synchronously so a racing emit can't resurrect a stale frame.
  */
-function clearThinkingMessage(key: ThreadKey): void {
+function clearThinkingMessage(key: SessionKey): void {
   const s = getThreadMessageState(key);
   const coalescer = thinkingCoalescers.get(keyToString(key));
   if (coalescer) {
@@ -2509,7 +2515,7 @@ function clearThinkingMessage(key: ThreadKey): void {
  * clearing a thread that never queued anything is a no-op. The pure clear
  * logic lives in `utils/clearThreadOutputQueues` for unit testing.
  */
-function clearThreadQueues(key: ThreadKey): void {
+function clearThreadQueues(key: SessionKey): void {
   const k = keyToString(key);
   // A teardown that clears queued output must FIRST finalize any in-flight
   // content so the agent's final answer lands instead of being discarded (DM:
@@ -2530,7 +2536,7 @@ function clearThreadQueues(key: ThreadKey): void {
   identicalOutputGuard.reset(k);
 }
 
-function markNeedsNewMessage(key: ThreadKey): void {
+function markNeedsNewMessage(key: SessionKey): void {
   getThreadMessageState(key).needsNewMessage = true;
 }
 
@@ -2544,7 +2550,7 @@ function markNeedsNewMessage(key: ThreadKey): void {
  * unit-tested). The bot only translates `ctx` shapes into the routing module's
  * plain inputs and supplies the runtime surface config.
  */
-function getThreadKey(ctx: Context): ThreadKey | null {
+function getThreadKey(ctx: Context): SessionKey | null {
   const msg = ctx.message as Message | undefined;
   const cbMsg = ctx.callbackQuery?.message as Message | undefined;
   const routeInput = {
@@ -2575,9 +2581,9 @@ function getThreadKey(ctx: Context): ThreadKey | null {
  * surface — `1` in the supergroup, `0` (no `message_thread_id`) in the DM — so
  * the check is per-chat (the key's surface), not a global mode.
  */
-function checkIsGeneral(key: ThreadKey): boolean {
+function checkIsGeneral(key: SessionKey): boolean {
   const generalThreadId = checkIsDmKey(key) ? DM_GENERAL_THREAD_ID : GENERAL_THREAD_ID;
-  return key.threadId === generalThreadId;
+  return getTelegramThreadId(key) === generalThreadId;
 }
 
 type LocaleSource = 'override' | 'telegram' | 'storedTelegram' | 'fallback';
@@ -2612,12 +2618,12 @@ function getLocaleForContext(ctx: Context): Locale {
   return getResolvedChatLocale(chatId, telegramLocale).locale;
 }
 
-function getLocaleForKey(key: ThreadKey): Locale {
+function getLocaleForKey(key: SessionKey): Locale {
   if (!state) return defaultLocale;
-  return state.getChatLocaleOverride(key.chatId) ?? state.getChatTelegramLocale(key.chatId) ?? defaultLocale;
+  return state.getChatLocaleOverride(getTelegramChatId(key)) ?? state.getChatTelegramLocale(getTelegramChatId(key)) ?? defaultLocale;
 }
 
-function withThreadLocale<T>(key: ThreadKey, fn: () => T): T {
+function withThreadLocale<T>(key: SessionKey, fn: () => T): T {
   return runWithLocale(getLocaleForKey(key), fn);
 }
 
@@ -2680,18 +2686,18 @@ async function tryAutoPair(ctx: Context): Promise<void> {
   adminCache.invalidate();
   console.log(`[pair] auto-paired forum supergroup ${candidate} (persisted to state.json)`);
 
-  const key = getThreadKey(ctx) ?? { chatId: candidate, threadId: GENERAL_THREAD_ID };
+  const key = getThreadKey(ctx) ?? makeTelegramKey(candidate, GENERAL_THREAD_ID);
   await replyToThread(key, t('pair.success', { groupId: candidate })).catch(() => {});
 }
 
 /**
- * @description Combined access check. Returns the `ThreadKey` if the
+ * @description Combined access check. Returns the `SessionKey` if the
  * context is from an authorised user (a creator/admin of the served forum
  * group) in the configured forum supergroup, else `null`. Logs (but does not
  * reply to) chats / users we don't accept so foreign chats / spam stay silent
  * (plan §13.13, D21).
  */
-async function authoriseContext(ctx: Context): Promise<ThreadKey | null> {
+async function authoriseContext(ctx: Context): Promise<SessionKey | null> {
   const userId = ctx.from?.id;
   if (!userId || !(await checkIsAllowedUser(ctx))) {
     if (ctx.chat) {
@@ -2737,7 +2743,7 @@ async function authoriseContext(ctx: Context): Promise<ThreadKey | null> {
  *     mark `closed: true`, notify in General.
  *   - **other** → log; no state mutation.
  */
-async function handleSendError(key: ThreadKey, err: unknown): Promise<void> {
+async function handleSendError(key: SessionKey, err: unknown): Promise<void> {
   const kind = classifySendError(err);
 
   if (kind === 'thread-deleted') {
@@ -2762,7 +2768,7 @@ async function handleSendError(key: ThreadKey, err: unknown): Promise<void> {
     // `buildSendExtra` rationale for why `1` on outbound is now a 400.
     enqueueSend(key, () =>
       bot.telegram.sendMessage(
-        key.chatId,
+        getTelegramChatId(key),
         t('error.tg.thread.closed', { key: keyToString(key) }),
       ),
     ).catch(e2 => console.error('[send] failed to notify General about TOPIC_CLOSED:', e2));
@@ -2790,7 +2796,7 @@ async function handleSendError(key: ThreadKey, err: unknown): Promise<void> {
  * gone would orphan an unreachable entry that boot-restore would just drop
  * anyway, so we release it eagerly to keep `state.json` clean.
  */
-function clearInMemoryThreadState(key: ThreadKey): void {
+function clearInMemoryThreadState(key: SessionKey): void {
   const k = keyToString(key);
   // Drop queued output AND status frame (incl. cancelling the output
   // debounce timer) BEFORE deleting the map entries — otherwise an armed
@@ -2843,7 +2849,7 @@ function clearInMemoryThreadState(key: ThreadKey): void {
  * `/unbind` deletes the pinned banner and stops the agent in one logical
  * step; the adapter's synchronous `stopped` event would otherwise race the
  * teardown and re-pin a stale "idle" banner inside the dying thread. Guard
- * is keyed by serialised `ThreadKey` and held only while the handler runs.
+ * is keyed by serialised `SessionKey` and held only while the handler runs.
  */
 const unbindingKeys = new Set<string>();
 
@@ -2902,10 +2908,10 @@ function describeSendError(e: unknown): string {
  * `true` on success so the caller can keep its bookkeeping in sync with what is
  * actually pinned. Bot-owned plumbing primitive for the question pin helpers.
  */
-async function pinMessageQuiet(key: ThreadKey, messageId: number, options: { disableNotification: boolean }): Promise<boolean> {
+async function pinMessageQuiet(key: SessionKey, messageId: number, options: { disableNotification: boolean }): Promise<boolean> {
   try {
     await enqueueSend(key, () =>
-      bot.telegram.pinChatMessage(key.chatId, messageId, { disable_notification: options.disableNotification }),
+      bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, { disable_notification: options.disableNotification }),
     );
     return true;
   } catch (e) {
@@ -2919,10 +2925,10 @@ async function pinMessageQuiet(key: ThreadKey, messageId: number, options: { dis
  * swallowing + logging failures (already-unpinned / deleted / lost permission).
  * Fire-and-forget sibling of {@link pinMessageQuiet}.
  */
-async function unpinMessageQuiet(key: ThreadKey, messageId: number): Promise<void> {
+async function unpinMessageQuiet(key: SessionKey, messageId: number): Promise<void> {
   try {
     await enqueueSend(key, () =>
-      bot.telegram.unpinChatMessage(key.chatId, messageId),
+      bot.telegram.unpinChatMessage(getTelegramChatId(key), messageId),
     );
   } catch (e) {
     console.warn(`[question-pin] unpin ${keyToString(key)} msg ${messageId} failed: ${describeSendError(e)}`);
@@ -2934,7 +2940,7 @@ async function unpinMessageQuiet(key: ThreadKey, messageId: number): Promise<voi
  * banner. General has no per-thread state to mirror; closed topics get
  * the banner left as-is (Telegram refuses edits in closed topics).
  */
-function shouldHavePinnedStatus(key: ThreadKey): boolean {
+function shouldHavePinnedStatus(key: SessionKey): boolean {
   if (checkIsGeneral(key)) return false;
   return state.getBinding(key) !== null;
 }
@@ -2944,7 +2950,7 @@ function shouldHavePinnedStatus(key: ThreadKey): boolean {
  * adapter + state. Returns `null` if the thread shouldn't have a banner
  * (no binding, or in the General topic).
  */
-function computePinnedStatusText(key: ThreadKey): string | null {
+function computePinnedStatusText(key: SessionKey): string | null {
   const binding = state.getBinding(key);
   if (!binding) return null;
 
@@ -2983,7 +2989,7 @@ function computePinnedStatusText(key: ThreadKey): string | null {
  * otherwise `/clear` would delete the banner. We call `bot.telegram.*`
  * directly through `enqueueSend` to skip `replyToThread`'s tracking step.
  */
-async function updatePinnedStatus(key: ThreadKey): Promise<void> {
+async function updatePinnedStatus(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   if (unbindingKeys.has(k)) return;
   if (!shouldHavePinnedStatus(key)) return;
@@ -3025,7 +3031,7 @@ async function updatePinnedStatus(key: ThreadKey): Promise<void> {
     if (existingId !== undefined) {
       try {
         await enqueueSend(key, () =>
-          bot.telegram.editMessageText(key.chatId, existingId, undefined, text),
+          bot.telegram.editMessageText(getTelegramChatId(key), existingId, undefined, text),
         );
         pinnedStatusTextCache.set(k, text);
         persistPinnedStatusText(key, text);
@@ -3058,8 +3064,8 @@ async function updatePinnedStatus(key: ThreadKey): Promise<void> {
     let messageId: number;
     try {
       const sent = await enqueueSend(key, () =>
-        bot.telegram.sendMessage(key.chatId, text, {
-          message_thread_id: key.threadId,
+        bot.telegram.sendMessage(getTelegramChatId(key), text, {
+          message_thread_id: getTelegramThreadId(key),
           disable_notification: true,
         }),
       );
@@ -3071,7 +3077,7 @@ async function updatePinnedStatus(key: ThreadKey): Promise<void> {
 
     try {
       await enqueueSend(key, () =>
-        bot.telegram.pinChatMessage(key.chatId, messageId, {
+        bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, {
           disable_notification: true,
         }),
       );
@@ -3098,7 +3104,7 @@ async function updatePinnedStatus(key: ThreadKey): Promise<void> {
  * pattern used for the id — the banner is convenience UI, so a failed persist
  * is logged, not surfaced.
  */
-function persistPinnedStatusText(key: ThreadKey, text: string): void {
+function persistPinnedStatusText(key: SessionKey, text: string): void {
   state.setBindingPinnedStatusText(key, text).catch(err =>
     console.warn(`[pinned] persist text for ${keyToString(key)} failed:`, err),
   );
@@ -3112,7 +3118,7 @@ function persistPinnedStatusText(key: ThreadKey, text: string): void {
  * the bot lost pin permissions mid-flight, the user-facing /unbind ack
  * shouldn't fail because of it.
  */
-async function clearPinnedStatus(key: ThreadKey): Promise<void> {
+async function clearPinnedStatus(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   // Same lock as `updatePinnedStatus` so an `/unbind` mid-flight doesn't
   // race a concurrent banner refresh and leak a freshly-pinned message.
@@ -3125,14 +3131,14 @@ async function clearPinnedStatus(key: ThreadKey): Promise<void> {
 
     try {
       await enqueueSend(key, () =>
-        bot.telegram.unpinChatMessage(key.chatId, existingId),
+        bot.telegram.unpinChatMessage(getTelegramChatId(key), existingId),
       );
     } catch (e) {
       console.warn(`[pinned] unpin ${k} failed: ${describeSendError(e)}`);
     }
     try {
       await enqueueSend(key, () =>
-        bot.telegram.deleteMessage(key.chatId, existingId),
+        bot.telegram.deleteMessage(getTelegramChatId(key), existingId),
       );
     } catch {
       // Older than 48h or already deleted — silently ignored.
@@ -3162,7 +3168,7 @@ async function clearPinnedStatus(key: ThreadKey): Promise<void> {
  * {@link unpinThreadQuestion}, so it survives reposts). Unpinning is per-message-id,
  * so the banner's own (silent) pin is never disturbed.
  */
-async function pinThreadQuestion(key: ThreadKey, messageId: number): Promise<void> {
+async function pinThreadQuestion(key: SessionKey, messageId: number): Promise<void> {
   const kStr = keyToString(key);
   // Hold the lock across the whole read-modify-write (F2): re-read the map INSIDE
   // the critical section so a concurrent pin/unpin for this key can't make us
@@ -3196,7 +3202,7 @@ async function pinThreadQuestion(key: ThreadKey, messageId: number): Promise<voi
  * `pendingQuestions` entry BEFORE calling this, so there is no cross-map timing
  * dependency.
  */
-async function unpinThreadQuestion(key: ThreadKey): Promise<void> {
+async function unpinThreadQuestion(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   await questionPinLock.withLock(kStr, async () => {
     const pinnedId = questionPinnedMessageId.get(kStr);
@@ -3239,14 +3245,14 @@ type SendExtra = Record<string, unknown> | object;
  * updates may still carry `message_thread_id: 1`. Translation happens
  * only at the API boundary.
  */
-function buildSendExtra(key: ThreadKey, extra: SendExtra): Record<string, unknown> {
+function buildSendExtra(key: SessionKey, extra: SendExtra): Record<string, unknown> {
   const base = extra as Record<string, unknown>;
   if (checkIsGeneral(key)) return { ...base };
   // Audit S20 / #36: spread `base` BEFORE `message_thread_id` so a
   // caller passing `message_thread_id: undefined` in `extra` can't
   // accidentally suppress our routing. With this order, our explicit
   // value wins regardless of what the caller passed.
-  return { ...base, message_thread_id: key.threadId };
+  return { ...base, message_thread_id: getTelegramThreadId(key) };
 }
 
 /**
@@ -3264,7 +3270,7 @@ interface ReplyToThreadOptions {
 }
 
 async function replyToThread(
-  key: ThreadKey,
+  key: SessionKey,
   text: string,
   extra: SendExtra = {},
   options: ReplyToThreadOptions = {},
@@ -3272,7 +3278,7 @@ async function replyToThread(
   const sendOnce = (sendExtra: Record<string, unknown>) => {
     const send = () =>
       bot.telegram.sendMessage(
-        key.chatId,
+        getTelegramChatId(key),
         text,
         sendExtra as Parameters<typeof bot.telegram.sendMessage>[2],
       );
@@ -3331,7 +3337,7 @@ async function replyToThread(
  * track edits as new ids (the original was already tracked).
  */
 async function editThreadMessage(
-  key: ThreadKey,
+  key: SessionKey,
   messageId: number,
   text: string,
   extra: SendExtra = {},
@@ -3339,7 +3345,7 @@ async function editThreadMessage(
   const editOnce = (editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
       bot.telegram.editMessageText(
-        key.chatId, messageId, undefined, text,
+        getTelegramChatId(key), messageId, undefined, text,
         editExtra as Parameters<typeof bot.telegram.editMessageText>[4],
       ),
     );
@@ -3383,11 +3389,11 @@ async function editThreadMessage(
 }
 
 async function deleteThreadMessage(
-  key: ThreadKey,
+  key: SessionKey,
   messageId: number,
 ): Promise<void> {
   try {
-    await enqueueSend(key, () => bot.telegram.deleteMessage(key.chatId, messageId));
+    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
   } catch {
     /* messages older than 48h or already deleted — silently ignore */
   }
@@ -3405,14 +3411,14 @@ async function deleteThreadMessage(
  * stays 429-safe and traced (both live at the `callApi` chokepoint), it just no
  * longer takes a pacer permit or queues behind the thread's other sends.
  */
-async function sendThreadTypingIndicator(key: ThreadKey): Promise<void> {
+async function sendThreadTypingIndicator(key: SessionKey): Promise<void> {
   try {
     await sendUnpaced(key, () =>
       bot.telegram.sendChatAction(
-        key.chatId,
+        getTelegramChatId(key),
         'typing',
         // Omit thread_id for General; see buildSendExtra docs.
-        checkIsGeneral(key) ? undefined : { message_thread_id: key.threadId },
+        checkIsGeneral(key) ? undefined : { message_thread_id: getTelegramThreadId(key) },
       ),
     );
   } catch (e) {
@@ -3421,7 +3427,7 @@ async function sendThreadTypingIndicator(key: ThreadKey): Promise<void> {
 }
 
 /** Whether the thread's adapter is still working (its optional `checkIsBusy`). */
-function checkIsAdapterBusy(key: ThreadKey): boolean {
+function checkIsAdapterBusy(key: SessionKey): boolean {
   return getThreadAdapter(key).checkIsBusy?.(key) === true;
 }
 
@@ -3431,7 +3437,7 @@ function checkIsAdapterBusy(key: ThreadKey): boolean {
  * compaction is running. The pure rule lives in `utils/typingActive`; this wraps
  * it with the three live readings.
  */
-function checkShouldKeepTyping(key: ThreadKey): boolean {
+function checkShouldKeepTyping(key: SessionKey): boolean {
   return checkShouldKeepTypingDecision({
     isOutputStreaming: checkIsOutputStreaming(key),
     isAdapterBusy: checkIsAdapterBusy(key),
@@ -3454,7 +3460,7 @@ function checkShouldKeepTyping(key: ThreadKey): boolean {
  * teardown paths (session end / question UI / unbind) still call
  * {@link stopTypingLoader} directly.
  */
-function startTypingLoader(key: ThreadKey): void {
+function startTypingLoader(key: SessionKey): void {
   const s = getThreadMessageState(key);
   if (s.typingLoaderTimer) clearInterval(s.typingLoaderTimer);
   sendThreadTypingIndicator(key).catch(() => {});
@@ -3497,7 +3503,7 @@ function startTypingLoader(key: ThreadKey): void {
  * {@link checkIsTypingStuckByLeak} with the live queue + adapter readings. Only
  * fires on a provable inconsistency, so it never truncates a legit long turn.
  */
-function checkIsTypingLoopStuck(key: ThreadKey): boolean {
+function checkIsTypingLoopStuck(key: SessionKey): boolean {
   const q = outputQueues.get(keyToString(key));
   return checkIsTypingStuckByLeak({
     isAdapterBusy: checkIsAdapterBusy(key),
@@ -3514,7 +3520,7 @@ function checkIsTypingLoopStuck(key: ThreadKey): boolean {
  * typing indicator itself self-expires within a few seconds, so there is nothing
  * to delete — just stop refreshing it. Idempotent (no-op when no loader runs).
  */
-function stopTypingLoader(key: ThreadKey): void {
+function stopTypingLoader(key: SessionKey): void {
   const s = getThreadMessageState(key);
   if (s.typingLoaderTimer) {
     clearInterval(s.typingLoaderTimer);
@@ -3613,7 +3619,7 @@ function getOutputDelay(chatId: number): number {
  *   cooldown.
  */
 function queueOutput(
-  key: ThreadKey,
+  key: SessionKey,
   output: string,
   isContinuation = false,
   isFinal = false,
@@ -3642,10 +3648,10 @@ function queueOutput(
     // A complete one-shot flushes immediately like a final frame — ready content
     // must not wait out the (dm-stretched) debounce.
     isFinal: isFinal || isComplete,
-    isRateLimited: checkIsRateLimited(key.chatId),
+    isRateLimited: checkIsRateLimited(getTelegramChatId(key)),
     normalDebounceMs: getOutputDebounceMs(),
     // S3: scale the in-cooldown debounce to the live remaining cooldown.
-    remainingCooldownMs: getRateLimitRemainingMs(key.chatId),
+    remainingCooldownMs: getRateLimitRemainingMs(getTelegramChatId(key)),
   });
   if (timing === 'now') {
     // Final frame: flush immediately. `processOutputQueue` already guards
@@ -3660,7 +3666,7 @@ function queueOutput(
   }, timing);
 }
 
-async function processOutputQueue(key: ThreadKey): Promise<void> {
+async function processOutputQueue(key: SessionKey): Promise<void> {
   const q = getOutputQueueState(key);
   if (q.isProcessing || !q.pendingOutput) return;
   q.isProcessing = true;
@@ -3696,7 +3702,7 @@ async function processOutputQueue(key: ThreadKey): Promise<void> {
       q.debounceTimer = setTimeout(() => {
         q.debounceTimer = null;
         processOutputQueue(key);
-      }, getOutputDelay(key.chatId));
+      }, getOutputDelay(getTelegramChatId(key)));
     }
   }
 }
@@ -3721,7 +3727,7 @@ async function processOutputQueue(key: ThreadKey): Promise<void> {
  * so no duplicate post. The drain just sends the remainder once; the global 1/2s
  * send pacer (S1) makes a 429 at this point essentially impossible.
  */
-async function finalizeGroupOutput(key: ThreadKey): Promise<void> {
+async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   const q = outputQueues.get(keyToString(key));
   if (!q) return;
   const plan = getGroupFinalizePlan(q);
@@ -3763,7 +3769,7 @@ async function finalizeGroupOutput(key: ThreadKey): Promise<void> {
  * still reaches the user.
  */
 async function sendOutputImmediate(
-  key: ThreadKey,
+  key: SessionKey,
   output: string,
   isContinuation = false,
 ): Promise<{ unsentRemainder: string | null }> {
@@ -3831,7 +3837,7 @@ async function sendOutputImmediate(
  * fall back to plain text so the message reaches the user either way.
  */
 async function replyChunkWithFallback(
-  key: ThreadKey,
+  key: SessionKey,
   renderedHtml: string,
   plainFallback: string,
 ): Promise<number | null> {
@@ -3874,7 +3880,7 @@ const callSendMessageDraft = bot.telegram.callApi.bind(
  * continuation can append onto it. The shared send loop behind the DM finalize /
  * overflow-spill / one-shot paths.
  */
-async function sendAgentChunks(key: ThreadKey, chunks: string[]): Promise<void> {
+async function sendAgentChunks(key: SessionKey, chunks: string[]): Promise<void> {
   const msgState = getThreadMessageState(key);
   // S2b: collapse a ≥3-message backlog into the fewest \n\n-joined messages so a
   // burst (DM finalize / overflow-spill) lands in one send, not a trickle.
@@ -3889,7 +3895,7 @@ async function sendAgentChunks(key: ThreadKey, chunks: string[]): Promise<void> 
   }
 }
 
-async function deleteStatusMessage(key: ThreadKey): Promise<void> {
+async function deleteStatusMessage(key: SessionKey): Promise<void> {
   const s = getThreadMessageState(key);
   // The next status frame will create a *new* message, so the dedup baseline
   // is stale — clear it, otherwise an identical-text frame after a delete
@@ -3943,7 +3949,7 @@ const shutdownFrameSweepMs = 1500;
 async function sweepTransientFramesOnShutdown(): Promise<void> {
   const deletes: Promise<unknown>[] = [];
   for (const [keyStr, msgState] of threadMessageStates) {
-    let key: ThreadKey;
+    let key: SessionKey;
     try {
       key = keyFromString(keyStr);
     } catch {
@@ -3955,7 +3961,7 @@ async function sweepTransientFramesOnShutdown(): Promise<void> {
     const ids = clearTransientFramesForShutdown(msgState);
     if (ids.length === 0) continue;
     for (const id of ids) {
-      deletes.push(bot.telegram.deleteMessage(key.chatId, id).catch(() => {}));
+      deletes.push(bot.telegram.deleteMessage(getTelegramChatId(key), id).catch(() => {}));
     }
     // Clear the S2 persisted set too, so the next boot's reconciliation finds
     // nothing to redo after a graceful exit.
@@ -4014,7 +4020,7 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
     const transport = getOutputTransport();
     // [A] union of threads with pending coalesced output: the bot-owned output
     // queues + the transport-owned DM drafts (deduped by serialised key).
-    const pendingKeys = new Map<string, ThreadKey>();
+    const pendingKeys = new Map<string, SessionKey>();
     for (const [keyStr, q] of outputQueues) {
       if (q.pendingOutput === null) continue;
       try {
@@ -4092,7 +4098,7 @@ const ALBUM_DEBOUNCE_MS = 2_000;
  * isn't lost. The notice is UNPACED like the transcript echo it precedes:
  * queued behind agent output it could land after the retry already succeeded.
  */
-async function transcribeVoiceFile(key: ThreadKey, filePath: string): Promise<TranscribeResult> {
+async function transcribeVoiceFile(key: SessionKey, filePath: string): Promise<TranscribeResult> {
   const endpoint = getTranscriptionEndpoint({ groqApiKey: ENV.groqApiKey, openaiApiKey: ENV.openaiApiKey });
   if (!endpoint) return { ok: false, error: 'no api key configured' };
   const result = await transcribeAudio(filePath, endpoint, {
@@ -4131,7 +4137,7 @@ function formatBindErrorMessage(error: BindError, rawSubdir: string): string {
   }
 }
 
-function getWorkDirStartDecision(key: ThreadKey): { ok: true; workDir: string } | { ok: false; message: string } {
+function getWorkDirStartDecision(key: SessionKey): { ok: true; workDir: string } | { ok: false; message: string } {
   const binding = state.getBinding(key);
   const decision = resolveBoundWorkDir(ENV.workRoot, binding);
   if (decision.kind === 'proceed') return { ok: true, workDir: decision.workDir };
@@ -4286,7 +4292,7 @@ export function buildBindKeyboard(
  * don't have to thread it through; tests in `stopAllAdapters.test.ts`
  * cover the sweep logic directly with fakes.
  */
-function stopAllAdaptersFor(key: ThreadKey, adapterNames?: string[]) {
+function stopAllAdaptersFor(key: SessionKey, adapterNames?: string[]) {
   return sweepAdapters(key, getAdapter, adapterNames);
 }
 
@@ -4298,7 +4304,7 @@ function stopAllAdaptersFor(key: ThreadKey, adapterNames?: string[]) {
  * on disk → still reachable via `/sessions`. Returns the sweep result so callers
  * can decide what to reply.
  */
-async function releaseThreadSession(key: ThreadKey): Promise<ReturnType<typeof stopAllAdaptersFor>> {
+async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof stopAllAdaptersFor>> {
   // User took over (/new) → cancel any pending API-error retry silently
   // before the session is released, so the kick never lands in a torn-down
   // session.
@@ -4333,7 +4339,7 @@ async function releaseThreadSession(key: ThreadKey): Promise<ReturnType<typeof s
  * desync caused mixed output, silent `/stop`, and the "I keep getting
  * 'Login successful' on every message" bug reported 2026-05-15.
  */
-async function switchThreadAdapter(key: ThreadKey, newName: string): Promise<void> {
+async function switchThreadAdapter(key: SessionKey, newName: string): Promise<void> {
   const prevName = getThreadAdapterNameRaw(key);
   if (prevName && prevName !== newName) {
     try {
@@ -4440,7 +4446,7 @@ export function getStartReadyMessage(
   return t('agent.ready', { ...vars, infoBlock: getStartReadyInfoBlock(model, effort) });
 }
 
-async function startAgentSession(key: ThreadKey, args?: string): Promise<string> {
+async function startAgentSession(key: SessionKey, args?: string): Promise<string> {
   const kStr = keyToString(key);
   // The bound folder IS the agent's cwd — refuse to start without one. The
   // command/natural-language callers gate on the binding too, but a binding
@@ -4584,7 +4590,7 @@ export interface EnsureAgentSessionOptions {
  *    + `startAgentSession`, then report `ok` from whether the session came up.
  */
 async function ensureAgentSession(
-  key: ThreadKey,
+  key: SessionKey,
   options: EnsureAgentSessionOptions = {},
 ): Promise<EnsureAgentSessionResult> {
   const adapter = getThreadAdapter(key);
@@ -4623,7 +4629,7 @@ async function ensureAgentSession(
  * agent, preserving arrival order. Each prompt goes through the same forward
  * routine as a live message (new-message marker + loader + `sendInput`).
  */
-async function replayBufferedPrompts(key: ThreadKey): Promise<void> {
+async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   const adapter = getThreadAdapter(key);
   const prompts = startupPromptBuffer.drainPrompts(keyToString(key));
   if (prompts.length === 0 || !adapter.checkIsActive(key)) return;
@@ -4658,7 +4664,7 @@ async function replayBufferedPrompts(key: ThreadKey): Promise<void> {
  * An adapter without the method forwards directly.
  */
 async function forwardPromptToAgent(
-  key: ThreadKey,
+  key: SessionKey,
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
@@ -4758,14 +4764,14 @@ async function forwardPromptToAgent(
  * title, so it falls back to the bot's own display name — a stable, non-fatal
  * label so the agent still gets a "where" even though there is no group.
  */
-function getPreambleGroupTitle(key: ThreadKey): string | undefined {
-  const cached = groupTitleCache.get(key.chatId);
+function getPreambleGroupTitle(key: SessionKey): string | undefined {
+  const cached = groupTitleCache.get(getTelegramChatId(key));
   if (cached) return cached;
   if (checkIsDmKey(key)) return bot.botInfo?.username ?? bot.botInfo?.first_name;
   return undefined;
 }
 
-function getPromptWithThreadContext(key: ThreadKey, text: string): string {
+function getPromptWithThreadContext(key: SessionKey, text: string): string {
   if (checkShouldSkipPreambleForText(text)) return text;
 
   const binding = state.getBinding(key);
@@ -4848,7 +4854,7 @@ function formatTimeAgo(date: Date): string {
  */
 async function applyModelSelection(
   adapter: AgentAdapter,
-  key: ThreadKey,
+  key: SessionKey,
   modelId: string,
 ): Promise<{ isOk: boolean; message: string; setModelError: string | null; displayLabel: string }> {
   const setModelError = adapter.setModel ? await adapter.setModel(key, modelId) : null;
@@ -4885,7 +4891,7 @@ async function applyModelSelection(
  */
 function command(
   name: string | string[],
-  handler: (ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>, key: ThreadKey) => Promise<void> | void,
+  handler: (ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>, key: SessionKey) => Promise<void> | void,
 ): void {
   bot.command(name, async (ctx) => {
     const key = await authoriseContext(ctx);
@@ -5011,7 +5017,7 @@ function getLanguageCommandArg(text: string): string {
 }
 
 command(['language', 'lang'], async (ctx, key) => {
-  const chatId = key.chatId;
+  const chatId = getTelegramChatId(key);
   const locales = localeCodes.join(', ');
   const arg = getLanguageCommandArg(ctx.message.text);
 
@@ -5164,7 +5170,7 @@ type ApplyBindingResult =
   | { ok: false; message: string };
 
 async function applyBinding(
-  key: ThreadKey,
+  key: SessionKey,
   rawSubdir: string,
   options: { topicName?: string } = {},
 ): Promise<ApplyBindingResult> {
@@ -5217,7 +5223,7 @@ async function applyBinding(
  * could still have fired. A thread holding only reminders pauses nothing and posts
  * no notice.
  */
-async function pauseThreadSchedulesOnUnbind(key: ThreadKey): Promise<number> {
+async function pauseThreadSchedulesOnUnbind(key: SessionKey): Promise<number> {
   const records = getUnboundPausableSchedules(state.getThreadSchedules(key));
   if (records.length === 0) return 0;
   for (const record of records) {
@@ -5237,7 +5243,7 @@ async function pauseThreadSchedulesOnUnbind(key: ThreadKey): Promise<number> {
  * count (only when > 0). Jobs paused for other reasons (none exist in v1) are
  * left alone.
  */
-async function resumeThreadSchedulesOnRebind(key: ThreadKey): Promise<void> {
+async function resumeThreadSchedulesOnRebind(key: SessionKey): Promise<void> {
   const paused = state
     .getThreadSchedules(key)
     .filter((record) => record.isPaused && record.pauseReason === 'unbound');
@@ -5274,7 +5280,7 @@ async function resumeThreadSchedulesOnRebind(key: ThreadKey): Promise<void> {
  * armed-mode branches in the text handler never overlap (only one armed
  * mode is active per thread at a time).
  */
-function armFolderCreation(key: ThreadKey): void {
+function armFolderCreation(key: SessionKey): void {
   const kStr = keyToString(key);
   awaitingModelSelection.delete(kStr);
   awaitingSessionSelection.delete(kStr);
@@ -5307,7 +5313,7 @@ function mapNewFolderError(reason: NewFolderNameError): string {
  * an invalid name keeps the thread armed for a retry; success or a real
  * filesystem failure disarms it.
  */
-async function createAndBindFolder(key: ThreadKey, rawName: string): Promise<{ ok: boolean }> {
+async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ ok: boolean }> {
   const validated = validateNewFolderName(rawName);
   if (!validated.ok) {
     await replyToThread(key, mapNewFolderError(validated.reason));
@@ -5376,7 +5382,7 @@ command('bind', async (ctx, key) => {
  * button (the old `/unbind` command was folded into it). Safe to call only on a
  * BOUND, non-General topic — the leave button only renders there.
  */
-async function unbindThread(key: ThreadKey): Promise<void> {
+async function unbindThread(key: SessionKey): Promise<void> {
   // Mark this thread as in-flight unbinding so the adapter's synchronous
   // `stopped` event doesn't race us and re-pin a stale "idle" banner over
   // the message we're about to delete.
@@ -5452,7 +5458,7 @@ command('ls', async (_ctx, key) => {
  * whole report (review CRITICAL #1).
  */
 interface BindingRow {
-  key: ThreadKey;
+  key: SessionKey;
   subdir: string;
   closed: boolean;
   agentLabel: string;
@@ -5461,7 +5467,7 @@ interface BindingRow {
 
 function collectBindingRows(): BindingRow[] {
   const bindings = [...state.listBindings()];
-  bindings.sort((a, b) => a.key.threadId - b.key.threadId);
+  bindings.sort((a, b) => getTelegramThreadId(a.key) - getTelegramThreadId(b.key));
   return bindings.map(({ key: k, data }) => {
     const agent = state.getAgent(k);
     let agentLabel = '—';
@@ -5498,11 +5504,11 @@ command('list', async (_ctx, key) => {
   const body = rows.map(r => {
     if (r.closed) {
       return t('list.row_closed', {
-        threadId: r.key.threadId, subdir: r.subdir, agent: r.agentLabel,
+        threadId: getTelegramThreadId(r.key), subdir: r.subdir, agent: r.agentLabel,
       });
     }
     return t('list.row', {
-      threadId: r.key.threadId,
+      threadId: getTelegramThreadId(r.key),
       subdir: r.subdir,
       agent: r.agentLabel,
       status: formatBindingStatus(r),
@@ -5608,8 +5614,8 @@ command('whoami', async (ctx, key) => {
     key,
     t('whoami.report', {
       userId,
-      chatId: key.chatId,
-      threadId: key.threadId,
+      chatId: getTelegramChatId(key),
+      threadId: getTelegramThreadId(key),
       allowed: allowed ? 'yes' : 'no',
       binding: binding ? `\`${binding.subdir}\`` : t('whoami.binding_unbound'),
     }),
@@ -5641,10 +5647,9 @@ bot.command('pair', async (ctx) => {
   const routeChat = getRouteChat(ctx);
   const fallbackThreadId =
     ctx.message && 'message_thread_id' in ctx.message ? ctx.message.message_thread_id : undefined;
-  const replyKey: ThreadKey = getThreadKey(ctx) ?? {
-    chatId: ctx.chat?.id ?? routeChat?.id ?? 0,
-    threadId: fallbackThreadId ?? GENERAL_THREAD_ID,
-  };
+  const replyKey: SessionKey =
+    getThreadKey(ctx) ??
+    makeTelegramKey(ctx.chat?.id ?? routeChat?.id ?? 0, fallbackThreadId ?? GENERAL_THREAD_ID);
 
   if (isGroupLockedByEnv) {
     await replyToThread(replyKey, t('pair.locked')).catch(() => {});
@@ -5663,7 +5668,7 @@ bot.command('pair', async (ctx) => {
   await state.setPairedGroupId(routeChat.id);
   adminCache.invalidate();
   console.log(`[pair] re-paired to forum supergroup ${routeChat.id} via /pair`);
-  const key = getThreadKey(ctx) ?? { chatId: routeChat.id, threadId: GENERAL_THREAD_ID };
+  const key = getThreadKey(ctx) ?? makeTelegramKey(routeChat.id, GENERAL_THREAD_ID);
   await replyToThread(key, t('pair.success', { groupId: routeChat.id }));
 });
 
@@ -5781,7 +5786,7 @@ function buildStartAgentKeyboard() {
  * (CLAUDE.md / .mcp.json / git), and an inline keyboard to start an agent.
  * Falls back gracefully when stats can't be probed.
  */
-async function sendBindingWelcome(key: ThreadKey, subdir: string): Promise<void> {
+async function sendBindingWelcome(key: SessionKey, subdir: string): Promise<void> {
   // Pin the status banner first so the user sees it land near the top of
   // the thread before the slower stats probe finishes. Fire-and-forget —
   // a failed pin (missing permissions, closed topic) just logs a warning
@@ -5989,7 +5994,7 @@ function loadMcpFile(filePath: string): string[] {
   return [];
 }
 
-function collectMcpEntries(workDir: string | null, key: ThreadKey | null): McpEntry[] {
+function collectMcpEntries(workDir: string | null, key: SessionKey | null): McpEntry[] {
   const entries: McpEntry[] = [];
   const dataDir = path.dirname(state.stateFilePath);
 
@@ -6052,7 +6057,7 @@ command('mcp', async (_ctx, key) => {
  * (the `agent_*` action) turns into a "unknown agent" answer.
  */
 async function handleAgentStart(
-  key: ThreadKey,
+  key: SessionKey,
   adapterName: string,
   args?: string,
 ): Promise<void> {
@@ -6088,7 +6093,7 @@ async function handleAgentStart(
  */
 function handleStartCommand(
   ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>,
-  key: ThreadKey,
+  key: SessionKey,
   adapterName: 'claude' | 'opencode' | 'terminal',
 ): Promise<void> {
   const args = ctx.message.text.split(' ').slice(1).join(' ').trim();
@@ -6126,7 +6131,7 @@ function getConnectCommandArgs(rawText: string): ConnectCommandArgs {
   };
 }
 
-function armProviderConnect(key: ThreadKey, providerId: string): void {
+function armProviderConnect(key: SessionKey, providerId: string): void {
   const keyString = keyToString(key);
   awaitingModelSelection.delete(keyString);
   awaitingSessionSelection.delete(keyString);
@@ -6135,7 +6140,7 @@ function armProviderConnect(key: ThreadKey, providerId: string): void {
 }
 
 async function handleProviderConnectKey(
-  key: ThreadKey,
+  key: SessionKey,
   providerId: string,
   apiKey: string,
   secretMessageId: number | null,
@@ -6180,7 +6185,7 @@ async function handleProviderConnectKey(
  * out-of-band via `opencode auth login` in a pty) and the API-key method (the
  * existing key-paste flow). Tapping a button fires the `connm_<idx>` callback.
  */
-async function showConnectMethodPicker(key: ThreadKey, providerId: string): Promise<void> {
+async function showConnectMethodPicker(key: SessionKey, providerId: string): Promise<void> {
   const adapter = getAdapter('opencode');
   if (!adapter.fetchProviderAuthMethods) {
     await replyToThread(key, t('connect.unsupported_backend'));
@@ -6248,7 +6253,7 @@ export function getProviderAuthAdapter(): AgentAdapter {
  * (the `openrouter` / `OPENROUTER_API_KEY` case that `DELETE /auth/:id` cannot
  * touch, and the reason `/model` also has a bot-side hide toggle).
  */
-async function applyProviderDisconnect(key: ThreadKey, providerId: string): Promise<void> {
+async function applyProviderDisconnect(key: SessionKey, providerId: string): Promise<void> {
   const adapter = getProviderAuthAdapter();
   if (!adapter.disconnectProvider) {
     await replyToThread(key, t('disconnect.unsupported_backend'));
@@ -6267,7 +6272,7 @@ async function applyProviderDisconnect(key: ThreadKey, providerId: string): Prom
  * The snapshot is stored under the SENT MESSAGE's id, so this keyboard can only
  * ever resolve against the list it actually shows.
  */
-async function showDisconnectProviderPicker(key: ThreadKey): Promise<void> {
+async function showDisconnectProviderPicker(key: SessionKey): Promise<void> {
   const adapter = getProviderAuthAdapter();
   if (!adapter.disconnectProvider) {
     await replyToThread(key, t('disconnect.unsupported_backend'));
@@ -6334,7 +6339,7 @@ function buildClaudeModeKeyboard(current: string) {
  * an idle thread just records the pick for its next start. Returns the localized
  * notice to show. Assumes the thread is already on a Claude backend (callers gate).
  */
-async function applyClaudeBackendSwitch(key: ThreadKey, target: string): Promise<string> {
+async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
   const label = getClaudeBackendLabel(target);
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
@@ -6432,7 +6437,7 @@ async function getModelCatalog(adapter: AgentAdapter): Promise<ModelCatalog> {
 }
 
 /** Model label the thread currently runs, or the localized "default" stand-in. */
-function getCurrentModelLabel(adapter: AgentAdapter, key: ThreadKey): string {
+function getCurrentModelLabel(adapter: AgentAdapter, key: SessionKey): string {
   return adapter.getCurrentModel?.(key) || t('model.current_default');
 }
 
@@ -6441,7 +6446,7 @@ function getCurrentModelLabel(adapter: AgentAdapter, key: ThreadKey): string {
  * Scoped to the CURRENT PAGE: `threadModelLists` holds that page's ids in
  * button order, so a bare digit picks what the user is looking at.
  */
-function armModelPagePick(key: ThreadKey, pageModels: string[]): void {
+function armModelPagePick(key: SessionKey, pageModels: string[]): void {
   const kStr = keyToString(key);
   threadModelLists.set(kStr, pageModels);
   awaitingModelSelection.add(kStr);
@@ -6453,12 +6458,12 @@ function armModelPagePick(key: ThreadKey, pageModels: string[]): void {
  * disarm the numbered affordance" rule is directly assertable in tests — an
  * armed thread silently swallows a later ordinary "3" prompt.
  */
-export function checkIsNumberedModelPickArmed(key: ThreadKey): boolean {
+export function checkIsNumberedModelPickArmed(key: SessionKey): boolean {
   return awaitingModelSelection.has(keyToString(key));
 }
 
 /** Disarm the numbered-reply affordance — the provider level shows no numbers. */
-function clearModelPagePick(key: ThreadKey): void {
+function clearModelPagePick(key: SessionKey): void {
   const kStr = keyToString(key);
   threadModelLists.delete(kStr);
   awaitingModelSelection.delete(kStr);
@@ -6478,7 +6483,7 @@ function clearModelPagePick(key: ThreadKey): void {
  *
  * Exported so that rule is directly assertable without a Telegram surface.
  */
-export function getNumberedModelPick(key: ThreadKey, num: number): string | null {
+export function getNumberedModelPick(key: SessionKey, num: number): string | null {
   const kStr = keyToString(key);
   const pageModels = threadModelLists.get(kStr);
   awaitingModelSelection.delete(kStr);
@@ -6493,7 +6498,7 @@ export function getNumberedModelPick(key: ThreadKey, num: number): string | null
  */
 async function applyNumberedModelPick(
   adapter: AgentAdapter,
-  key: ThreadKey,
+  key: SessionKey,
   num: number,
 ): Promise<void> {
   const selected = getNumberedModelPick(key, num);
@@ -6586,7 +6591,7 @@ export function buildModelProviderRender(catalog: ModelCatalog, current: string)
  * later ordinary "3" prompt get swallowed as a model pick instead of reaching
  * the agent.
  */
-export function applyModelPagePickArming(key: ThreadKey, render: ModelPickerRender): void {
+export function applyModelPagePickArming(key: SessionKey, render: ModelPickerRender): void {
   if (render.isNumberedPickArmed && render.pageModels.length > 0) {
     armModelPagePick(key, render.pageModels);
     return;
@@ -6685,7 +6690,7 @@ export function buildModelPageRender(
  * level when the catalog has a single offered provider (the Claude aliases),
  * otherwise at the provider level.
  */
-async function showModelPicker(key: ThreadKey, adapter: AgentAdapter): Promise<void> {
+async function showModelPicker(key: SessionKey, adapter: AgentAdapter): Promise<void> {
   const current = getCurrentModelLabel(adapter, key);
   const catalog = await getModelCatalog(adapter);
   if (catalog.providers.length === 0) {
@@ -6739,7 +6744,7 @@ async function editModelPickerMessage(
 }
 
 /** Re-render the provider level in place (after a hide/show toggle or «back»). */
-async function refreshModelProviderLevel(ctx: Context, key: ThreadKey): Promise<void> {
+async function refreshModelProviderLevel(ctx: Context, key: SessionKey): Promise<void> {
   const adapter = getThreadAdapter(key);
   const catalog = await getModelCatalog(adapter);
   const render = buildModelProviderRender(catalog, getCurrentModelLabel(adapter, key));
@@ -6868,7 +6873,7 @@ function buildDisplayModeKeyboard(
  * `/thinking <mode>` direct form and the `think_<mode>` callback so the two
  * paths can never diverge.
  */
-async function applyThinkingMode(key: ThreadKey, mode: DisplayVerbosityMode): Promise<void> {
+async function applyThinkingMode(key: SessionKey, mode: DisplayVerbosityMode): Promise<void> {
   await state.setDisplayPref(key, 'thinking', mode);
 }
 
@@ -6912,7 +6917,7 @@ command('thinking', async (ctx, key) => {
  * turn picks it up immediately). Shared by the `/tool_results <mode>` direct
  * form and the `toolres_<mode>` callback so the two paths can never diverge.
  */
-async function applyToolResultMode(key: ThreadKey, mode: DisplayVerbosityMode): Promise<void> {
+async function applyToolResultMode(key: SessionKey, mode: DisplayVerbosityMode): Promise<void> {
   await state.setDisplayPref(key, 'toolResults', mode);
 }
 
@@ -6960,7 +6965,7 @@ command('tool_results', async (ctx, key) => {
  * picks the change up immediately. Shared by the `/subagent <mode>` direct
  * form and the `subag_<mode>` callback so the two paths can never diverge.
  */
-async function applySubagentMode(key: ThreadKey, mode: DisplayVerbosityMode): Promise<void> {
+async function applySubagentMode(key: SessionKey, mode: DisplayVerbosityMode): Promise<void> {
   await state.setDisplayPref(key, 'subagent', mode);
 }
 
@@ -7019,7 +7024,7 @@ function formatVerbosityCurrent(prefs: ResolvedThreadDisplayPrefs): string {
  * macro). Reuses the per-command apply helpers so the macro and the point
  * commands can never write through different paths.
  */
-async function applyVerbosityLevel(key: ThreadKey, mode: DisplayVerbosityMode): Promise<void> {
+async function applyVerbosityLevel(key: SessionKey, mode: DisplayVerbosityMode): Promise<void> {
   await applyThinkingMode(key, mode);
   await applyToolResultMode(key, mode);
   await applySubagentMode(key, mode);
@@ -7110,7 +7115,7 @@ const openCodeAdapterName = 'opencode';
  */
 async function getCompactionInstruction(
   adapter: AgentAdapter,
-  key: ThreadKey,
+  key: SessionKey,
   opts: { withClosingSection: boolean },
 ): Promise<string | undefined> {
   return buildCompactionInstruction({
@@ -7168,7 +7173,7 @@ interface ThreadCompactionResult {
  * `/compact_on_idle` gate) asks the same question, so the three-line lookup lives
  * in ONE place rather than being spelled out at each of them.
  */
-function getThreadCompactRoute(key: ThreadKey): CompactCommandRoute {
+function getThreadCompactRoute(key: SessionKey): CompactCommandRoute {
   const adapter = getThreadAdapter(key);
   return getCompactCommandRoute({
     hasCompactContext: Boolean(adapter.compactContext),
@@ -7194,7 +7199,7 @@ const threadsCompacting = new Set<string>();
  * minutes. Reuses the EXISTING {@link threadsCompacting} set (already maintained
  * as the idle-watchdog loop guard) — no second piece of state to keep in step.
  */
-function checkIsThreadCompacting(key: ThreadKey): boolean {
+function checkIsThreadCompacting(key: SessionKey): boolean {
   return threadsCompacting.has(keyToString(key));
 }
 
@@ -7213,7 +7218,7 @@ function checkIsThreadCompacting(key: ThreadKey): boolean {
  * stop here could kill a loader a CONCURRENT prompt had armed.
  */
 async function runThreadCompaction(
-  key: ThreadKey,
+  key: SessionKey,
   opts: { withClosingSection: boolean },
 ): Promise<ThreadCompactionResult> {
   const adapter = getThreadAdapter(key);
@@ -7295,7 +7300,7 @@ async function runThreadCompaction(
  * bot has no completion signal to await there — announcing "compacted" the instant
  * the text was typed in would be a claim the bot cannot back.
  */
-async function runNarratedCompaction(key: ThreadKey, route: CompactCommandRoute, logTag: string): Promise<void> {
+async function runNarratedCompaction(key: SessionKey, route: CompactCommandRoute, logTag: string): Promise<void> {
   const isNarrated = route === 'adapterCompact';
   // The START notice also needs the session to be live (pure rule): the seam refuses
   // a dead session as its first act, and a "compacting…" ahead of that refusal is a
@@ -7350,7 +7355,7 @@ async function runNarratedCompaction(key: ThreadKey, route: CompactCommandRoute,
  * activity and would re-arm the idle watchdog off the bot's own message — the loop
  * the `threadsCompacting` guard exists to prevent.
  */
-async function postCompactionSummary(key: ThreadKey, summary: string): Promise<void> {
+async function postCompactionSummary(key: SessionKey, summary: string): Promise<void> {
   const chunks = splitMessage(`${t('compact.summaryHeader')}\n\n${summary}`, MAX_MESSAGE_LEN);
   for (const chunk of chunks) await replyToThread(key, chunk);
 }
@@ -7398,7 +7403,7 @@ const idleArmKindLabels: Record<IdleCompactionArmKind, string> = {
  * feature's OWN notice is sent via `replyToThread`, which does NOT call this, so
  * the notice cannot re-arm the watchdog into a loop.
  */
-function noteThreadActivity(key: ThreadKey): void {
+function noteThreadActivity(key: SessionKey): void {
   armThreadIdleTimer(key, { isRealActivity: true });
 }
 
@@ -7412,7 +7417,7 @@ function noteThreadActivity(key: ThreadKey): void {
  * more often than every 55 minutes (normal in hot-reload development) never let
  * any topic reach the threshold.
  */
-function rearmThreadIdleTimer(key: ThreadKey): void {
+function rearmThreadIdleTimer(key: SessionKey): void {
   armThreadIdleTimer(key, { isRealActivity: false });
 }
 
@@ -7426,7 +7431,7 @@ function rearmThreadIdleTimer(key: ThreadKey): void {
  * genuine USER message (via {@link noteThreadUserActivity}) clears the latch. That
  * latch, being persisted, is also what stops a restart from re-firing.
  */
-function armThreadIdleTimer(key: ThreadKey, opts: { isRealActivity: boolean }): void {
+function armThreadIdleTimer(key: SessionKey, opts: { isRealActivity: boolean }): void {
   const kStr = keyToString(key);
   // A compaction in flight is NOT user/turn activity — skip so the compaction's
   // own streamed summary (some backends) can't re-arm the watchdog into a loop.
@@ -7471,7 +7476,7 @@ function armThreadIdleTimer(key: ThreadKey, opts: { isRealActivity: boolean }): 
  * {@link noteThreadActivity} — which agent output and bot-initiated forwards also
  * call — because those must NEVER re-arm the latch, only a real user does.
  */
-function noteThreadUserActivity(key: ThreadKey): void {
+function noteThreadUserActivity(key: SessionKey): void {
   if (state.checkIsCompactIdleLatched(key)) {
     void state.setCompactIdleLatched(key, false);
   }
@@ -7484,14 +7489,14 @@ function noteThreadUserActivity(key: ThreadKey): void {
  * restart an in-memory-only stamp read back as 0, which read as "nothing to
  * compress" and silently disabled the feature in every quiet topic.
  */
-function markThreadTurnProducedOutput(key: ThreadKey): void {
+function markThreadTurnProducedOutput(key: SessionKey): void {
   const kStr = keyToString(key);
   if (threadsCompacting.has(kStr)) return; // the compaction's own output isn't a turn
   state.noteCompactIdleTurnEnd(key);
 }
 
 /** Clear all compaction timers/arms for a thread (session teardown / unbind). */
-function clearThreadCompaction(key: ThreadKey): void {
+function clearThreadCompaction(key: SessionKey): void {
   const kStr = keyToString(key);
   const compactionState = threadCompactionStates.get(kStr);
   if (compactionState?.idleTimer) clearTimeout(compactionState.idleTimer);
@@ -7508,7 +7513,7 @@ function clearThreadCompaction(key: ThreadKey): void {
 }
 
 /** The F2 idle timer fired: re-check the guard, then compact once (D1/D2). */
-async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
+async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const adapter = getThreadAdapter(key);
   const isEnabled = state.checkIsCompactOnIdleEnabled(key);
@@ -7592,7 +7597,7 @@ async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
 
 /**
  * @description Per-thread option labels of an idle-compaction RE-ASKED question
- * (D1), keyed by {@link ThreadKey} string. A `reask_<idx>` tap forwards the
+ * (D1), keyed by {@link SessionKey} string. A `reask_<idx>` tap forwards the
  * matching label to the (now compacted) session as a FRESH prompt — the original
  * question request was rejected server-side, so it cannot be answered any more.
  * In-memory only: after a restart the buttons are simply inert ("no pending
@@ -7606,7 +7611,7 @@ const reAskedQuestionOptions = new Map<string, string[]>();
  * the chosen label as a fresh prompt. Label-only buttons (40-char cap, like the
  * `qa_` buttons).
  */
-function buildReAskKeyboard(key: ThreadKey, question: OpenCodeQuestion) {
+function buildReAskKeyboard(key: SessionKey, question: OpenCodeQuestion) {
   reAskedQuestionOptions.set(keyToString(key), question.options.map((opt) => opt.label));
   const buttons = question.options.map((opt, idx) => {
     const label = opt.label.length > 40 ? opt.label.slice(0, 37) + '...' : opt.label;
@@ -7630,7 +7635,7 @@ function buildReAskKeyboard(key: ThreadKey, question: OpenCodeQuestion) {
  * No-op when there is nothing at all to say.
  */
 async function postIdleCompactionResult(
-  key: ThreadKey,
+  key: SessionKey,
   parts: { noticeText: string | null; closingSection: string | null; summary: string | null },
   savedQuestion: PendingQuestionState | null,
 ): Promise<void> {
@@ -7657,7 +7662,7 @@ async function postIdleCompactionResult(
  * relays to the agent. Refuses when there is no active agent session (nothing to
  * compact). The drain (below) runs the plain compaction once the session idles.
  */
-function armDeferredCompaction(key: ThreadKey): { ok: boolean; message: string } {
+function armDeferredCompaction(key: SessionKey): { ok: boolean; message: string } {
   const adapter = getThreadAdapter(key);
   if (!adapter.checkIsActive(key)) {
     return { ok: false, message: 'No active agent session in this topic — nothing to compact.' };
@@ -7670,7 +7675,7 @@ function armDeferredCompaction(key: ThreadKey): { ok: boolean; message: string }
   return { ok: true, message: 'Compaction is armed — it will run automatically when this turn finishes.' };
 }
 
-function scheduleDeferredCompactionPoll(key: ThreadKey): void {
+function scheduleDeferredCompactionPoll(key: SessionKey): void {
   const kStr = keyToString(key);
   if (!deferredCompactionArmed.has(kStr)) return;
   if (deferredCompactionPollTimers.has(kStr)) return; // already polling
@@ -7682,7 +7687,7 @@ function scheduleDeferredCompactionPoll(key: ThreadKey): void {
   deferredCompactionPollTimers.set(kStr, timer);
 }
 
-async function tickDeferredCompaction(key: ThreadKey): Promise<void> {
+async function tickDeferredCompaction(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   if (!deferredCompactionArmed.has(kStr)) return;
   const adapter = getThreadAdapter(key);
@@ -7709,7 +7714,7 @@ async function tickDeferredCompaction(key: ThreadKey): Promise<void> {
  * instance-wide default. Applies the toggle, confirms, and re-arms/disarms the
  * idle watchdog for a regular topic.
  */
-async function applyCompactOnIdle(key: ThreadKey, isGeneral: boolean, enabled: boolean): Promise<void> {
+async function applyCompactOnIdle(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<void> {
   const stateWord = enabled ? t('compactOnIdle.on') : t('compactOnIdle.off');
   if (isGeneral) {
     await state.setCompactOnIdleGlobalDefault(enabled);
@@ -7745,7 +7750,7 @@ function buildCompactOnIdleKeyboard(isEnabled: boolean) {
  * Nothing to arm or cancel afterwards (unlike `/compact_on_idle`, which owns a
  * timer): the toggle is read at the moment a compaction finishes.
  */
-async function applyCompactSummary(key: ThreadKey, isGeneral: boolean, enabled: boolean): Promise<string> {
+async function applyCompactSummary(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
   const stateWord = enabled ? t('compactSummary.on') : t('compactSummary.off');
   if (isGeneral) {
     await state.setCompactSummaryGlobalDefault(enabled);
@@ -7786,7 +7791,7 @@ function appendAutoContinueLimitsHint(noticeText: string): string {
  * `/compact_on_idle` there is no timer to re-arm — the toggle is read at the
  * moment a limit error arrives.
  */
-async function applyAutoContinueLimits(key: ThreadKey, isGeneral: boolean, enabled: boolean): Promise<string> {
+async function applyAutoContinueLimits(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
   const stateWord = enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
   if (isGeneral) {
     await state.setAutoContinueOnLimitGlobalDefault(enabled);
@@ -7960,7 +7965,7 @@ const sessionButtonTitleMaxLength = 40;
  * and `/resume` commands and the `open_sessions` inline button so the picker
  * source stays single-sourced.
  */
-async function handleSessionsList(key: ThreadKey): Promise<void> {
+async function handleSessionsList(key: SessionKey): Promise<void> {
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('cb.resume_only_topical'));
     return;
@@ -8026,7 +8031,7 @@ async function handleSessionsList(key: ThreadKey): Promise<void> {
  * `null` when `onExpired` already handled the stale-cache case.
  */
 async function resumeSessionByIndex(
-  key: ThreadKey,
+  key: SessionKey,
   idx: number,
   onExpired: () => Promise<void>,
 ): Promise<string | null> {
@@ -8536,7 +8541,7 @@ function buildReminderCloseButton() {
 }
 
 /** The thread's reminders — its agent-prompt schedules filtered out. */
-function getThreadReminders(key: ThreadKey): ScheduleRecord[] {
+function getThreadReminders(key: SessionKey): ScheduleRecord[] {
   return state.getThreadSchedules(key).filter(checkIsReminderSchedule);
 }
 
@@ -8550,7 +8555,7 @@ function toReminderListRows(records: readonly ScheduleRecord[]): ReminderListRow
 }
 
 /** Screen 0: the count (or why «add» is missing) plus the add/list/close rows. */
-function buildReminderHubScreen(key: ThreadKey): ReminderScreen {
+function buildReminderHubScreen(key: SessionKey): ReminderScreen {
   const records = getThreadReminders(key);
   const plan = getReminderHubPlan({
     // The reminder cap is the comparison `createScheduleForThread` makes for a
@@ -8580,7 +8585,7 @@ function buildReminderHubScreen(key: ThreadKey): ReminderScreen {
  * only a header — printing the same rows in the body as well would show the list
  * twice.
  */
-function buildReminderListScreen(key: ThreadKey, page: number): ReminderScreen | null {
+function buildReminderListScreen(key: SessionKey, page: number): ReminderScreen | null {
   const rows = toReminderListRows(getThreadReminders(key));
   if (rows.length === 0) return null;
   const plan = buildReminderListPlan(rows, page);
@@ -8608,7 +8613,7 @@ function buildReminderDetailLines(
 }
 
 /** One reminder's card, or `null` for a stale row index / a record already gone. */
-function buildReminderCardScreen(key: ThreadKey, reminderIndex: number): ReminderScreen | null {
+function buildReminderCardScreen(key: SessionKey, reminderIndex: number): ReminderScreen | null {
   const records = getThreadReminders(key);
   const plan = buildReminderCardPlan(toReminderListRows(records), reminderIndex);
   if (plan === null) return null;
@@ -8720,7 +8725,7 @@ function buildReminderWizardScreen(
 
 /** Replace a reminder screen in place (the flow never creates a second message). */
 async function renderReminderScreen(
-  key: ThreadKey,
+  key: SessionKey,
   messageId: number,
   screen: ReminderScreen,
 ): Promise<void> {
@@ -8731,7 +8736,7 @@ async function renderReminderScreen(
  * Relabel a reminder screen into a final notice and DROP its keyboard (an edit
  * with no `reply_markup` removes it), so a finished screen can't be acted on.
  */
-async function retireReminderScreen(key: ThreadKey, messageId: number, text: string): Promise<void> {
+async function retireReminderScreen(key: SessionKey, messageId: number, text: string): Promise<void> {
   await editThreadMessage(key, messageId, text);
 }
 
@@ -8755,7 +8760,7 @@ async function stripReminderKeyboard(ctx: Context): Promise<void> {
  * which is also what makes a repeat `/reminders` retire the previous wizard
  * before opening a new one — exactly one wizard is live per topic.
  */
-async function cancelReminderWizard(key: ThreadKey): Promise<void> {
+async function cancelReminderWizard(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const session = reminderWizards.get(kStr);
   if (!session) return;
@@ -8768,7 +8773,7 @@ async function cancelReminderWizard(key: ThreadKey): Promise<void> {
  * message is NOT consumed by the caller — it falls through to normal handling,
  * because swallowing it would lose a prompt the operator meant for the agent.
  */
-async function expireReminderWizard(key: ThreadKey): Promise<void> {
+async function expireReminderWizard(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const session = reminderWizards.get(kStr);
   if (!session) return;
@@ -8788,7 +8793,7 @@ async function expireReminderWizard(key: ThreadKey): Promise<void> {
  * run as the decision, which is why claiming and routing are one function. Both the
  * typed and the voice path call it, so they cannot claim differently.
  */
-function claimReminderTextCapture(key: ThreadKey): ReminderTextCaptureRoute {
+function claimReminderTextCapture(key: SessionKey): ReminderTextCaptureRoute {
   const textWait = reminderWizards.get(keyToString(key))?.textWait;
   const route = getReminderTextCaptureRoute({
     armedAtMs: textWait?.armedAtMs ?? null,
@@ -8806,7 +8811,7 @@ function claimReminderTextCapture(key: ThreadKey): ReminderTextCaptureRoute {
  * create reminders differently.
  */
 async function createReminderFromWizard(input: {
-  key: ThreadKey;
+  key: SessionKey;
   session: ReminderWizardSession;
   spec: ScheduleSpec;
   text: string;
@@ -8848,7 +8853,7 @@ async function createReminderFromWizard(input: {
  * it again. Re-typing the reminder is the one thing this all-buttons flow exists to
  * avoid.
  */
-async function finishReminderWizard(key: ThreadKey, text: string): Promise<void> {
+async function finishReminderWizard(key: SessionKey, text: string): Promise<void> {
   const session = reminderWizards.get(keyToString(key));
   const textWait = session?.textWait;
   if (!session || !textWait) return;
@@ -8924,7 +8929,7 @@ command('clear_messages', async (ctx, key) => {
     try {
       await enqueueSend(key, () =>
         bot.telegram.callApi('deleteMessages', {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           message_ids: batch,
         }),
       );
@@ -8940,7 +8945,7 @@ command('clear_messages', async (ctx, key) => {
       // to per-id deletes so we recover what we can. (Review HIGH #1.)
       for (const id of batch) {
         try {
-          await enqueueSend(key, () => bot.telegram.deleteMessage(key.chatId, id));
+          await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), id));
           deleted += 1;
         } catch {
           // Expired / already deleted — drop silently.
@@ -9354,7 +9359,7 @@ bot.on(message('voice'), async (ctx) => {
  * the voice note), plumbed here since the job no longer has `ctx`.
  */
 async function processVoiceJob(
-  key: ThreadKey,
+  key: SessionKey,
   fileId: string,
   sentAtMs?: number,
   replyContext?: string,
@@ -9369,7 +9374,7 @@ async function processVoiceJob(
     const fileUrl = fileUrlObj.toString();
 
     const tempDir = '/tmp';
-    const tempFile = path.join(tempDir, `voice_${key.chatId}_${key.threadId}_${Date.now()}.ogg`);
+    const tempFile = path.join(tempDir, `voice_${getTelegramChatId(key)}_${getTelegramThreadId(key)}_${Date.now()}.ogg`);
     try {
       // Ride the same warm, IPv4-pinned keep-alive agent as the Telegram API
       // calls (avoids the cold-handshake stall that used to trip the timeout),
@@ -9508,7 +9513,7 @@ function checkIsFileTooBigApiError(err: unknown): boolean {
  * `replyToThread` verbatim.
  */
 async function checkFileIntakeGatePassed(
-  key: ThreadKey,
+  key: SessionKey,
   isStarting: boolean,
   sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
 ): Promise<boolean> {
@@ -9541,7 +9546,7 @@ async function checkFileIntakeGatePassed(
  */
 async function downloadIncomingFile(
   ctx: NarrowedContext<Context, Update.MessageUpdate>,
-  key: ThreadKey,
+  key: SessionKey,
   meta: TelegramFileMeta,
   onError: (text: string) => Promise<unknown>,
 ): Promise<string | null> {
@@ -9598,7 +9603,7 @@ async function downloadIncomingFile(
  * forward, not buffer.
  */
 async function deliverPromptOrBuffer(
-  key: ThreadKey,
+  key: SessionKey,
   promptText: string,
   isStarting: boolean,
 ): Promise<void> {
@@ -9668,12 +9673,12 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
 });
 
 /** Join a thread key and a media_group_id into the collector's group key. */
-function buildAlbumGroupKey(key: ThreadKey, mediaGroupId: string): string {
+function buildAlbumGroupKey(key: SessionKey, mediaGroupId: string): string {
   return `${keyToString(key)}|${mediaGroupId}`;
 }
 
 /** Inverse of {@link buildAlbumGroupKey} — recover the owning thread key. */
-function parseAlbumGroupKey(groupKey: string): { key: ThreadKey } {
+function parseAlbumGroupKey(groupKey: string): { key: SessionKey } {
   const separatorIndex = groupKey.indexOf('|');
   const threadKeyString = separatorIndex === -1 ? groupKey : groupKey.slice(0, separatorIndex);
   return { key: keyFromString(threadKeyString) };
@@ -9689,7 +9694,7 @@ function parseAlbumGroupKey(groupKey: string): { key: ThreadKey } {
  */
 async function handleAlbumFile(
   ctx: NarrowedContext<Context, Update.MessageUpdate>,
-  key: ThreadKey,
+  key: SessionKey,
   meta: TelegramFileMeta,
   mediaGroupId: string,
 ): Promise<void> {
@@ -9721,7 +9726,7 @@ async function handleAlbumFile(
 
 async function handleIncomingFile(
   ctx: NarrowedContext<Context, Update.MessageUpdate>,
-  key: ThreadKey,
+  key: SessionKey,
 ): Promise<void> {
   const meta = getTelegramFileMeta(ctx.message);
   if (!meta) return; // Not one of the six kinds (e.g. sticker) — ignore.
@@ -9814,7 +9819,7 @@ bot.on('my_chat_member', async (ctx) => {
   // We don't know which message_thread_id General actually has on this
   // group (it can be 1, or undefined for non-forum chats). For a forum
   // supergroup it's always the constant `GENERAL_THREAD_ID = 1`.
-  const generalKey: ThreadKey = { chatId: chat.id, threadId: GENERAL_THREAD_ID };
+  const generalKey: SessionKey = makeTelegramKey(chat.id, GENERAL_THREAD_ID);
   await replyToThread(
     generalKey,
     t('onboarding.welcome', { workRoot: ENV.workRoot }),
@@ -10111,7 +10116,7 @@ async function confirmLanguageSelection(ctx: Context): Promise<void> {
 bot.action(languageAutoCallback, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
-  await state.setChatLocaleOverride(key.chatId, null);
+  await state.setChatLocaleOverride(getTelegramChatId(key), null);
   await ctx.answerCbQuery();
   await confirmLanguageSelection(ctx);
 });
@@ -10123,7 +10128,7 @@ bot.action(/^lang_(.+)$/, async (ctx) => {
   // ignore silently rather than persist an invalid override.
   const locale = normalizeLocale(ctx.match[1]);
   if (!locale) { await ctx.answerCbQuery(); return; }
-  await state.setChatLocaleOverride(key.chatId, locale);
+  await state.setChatLocaleOverride(getTelegramChatId(key), locale);
   await ctx.answerCbQuery();
   await confirmLanguageSelection(ctx);
 });
@@ -10408,7 +10413,7 @@ bot.action(/^effort_(.+)$/, async (ctx) => {
         await enqueueSend(
           key,
           () => bot.telegram.editMessageReplyMarkup(
-            key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup,
+            getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
           ),
         );
       } catch (e) {
@@ -10434,7 +10439,7 @@ async function handleCompactOnIdleCallback(ctx: Context, enabled: boolean): Prom
     try {
       await enqueueSend(
         key,
-        () => bot.telegram.editMessageReplyMarkup(key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup),
+        () => bot.telegram.editMessageReplyMarkup(getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup),
       );
     } catch (e) {
       const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
@@ -10465,7 +10470,7 @@ async function handleCompactSummaryCallback(ctx: Context, enabled: boolean): Pro
     try {
       await enqueueSend(
         key,
-        () => bot.telegram.editMessageReplyMarkup(key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup),
+        () => bot.telegram.editMessageReplyMarkup(getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup),
       );
     } catch (e) {
       const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
@@ -10483,10 +10488,10 @@ bot.action('csum_off', (ctx) => handleCompactSummaryCallback(ctx, false));
  * button can't be acted on twice and the topic reads truthfully. Best-effort — a
  * failed edit only costs the relabel, never the state change that preceded it.
  */
-async function consumeAutoContinueLimitsPicker(key: ThreadKey, cbMsg: Message | undefined, text: string): Promise<void> {
+async function consumeAutoContinueLimitsPicker(key: SessionKey, cbMsg: Message | undefined, text: string): Promise<void> {
   if (!cbMsg) return;
   try {
-    await enqueueSend(key, () => bot.telegram.editMessageText(key.chatId, cbMsg.message_id, undefined, text));
+    await enqueueSend(key, () => bot.telegram.editMessageText(getTelegramChatId(key), cbMsg.message_id, undefined, text));
   } catch (e) {
     const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
     if (!/message is not modified/i.test(desc)) console.warn('[acl_cb] picker relabel failed:', desc || e);
@@ -10796,7 +10801,7 @@ bot.action(/^ccmode_(.+)$/, async (ctx) => {
   if (cbMsg) {
     try {
       await enqueueSend(key, () => bot.telegram.editMessageReplyMarkup(
-        key.chatId, cbMsg.message_id, undefined,
+        getTelegramChatId(key), cbMsg.message_id, undefined,
         buildClaudeModeKeyboard(resolveClaudeBackendName(key)).reply_markup,
       ));
     } catch (e) {
@@ -10822,7 +10827,7 @@ interface DisplayModeCallbackConfig {
    * every config — kept as a field for the rare future per-backend display pref. */
   isOpenCodeOnly: boolean;
   /** Persist the picked mode (the per-command apply helper). */
-  apply: (key: ThreadKey, mode: DisplayVerbosityMode) => Promise<void>;
+  apply: (key: SessionKey, mode: DisplayVerbosityMode) => Promise<void>;
   /** cb-query i18n key for the bad-mode answer. */
   errorCbKey: string;
   /** cb-query i18n key for the success answer. */
@@ -10874,7 +10879,7 @@ async function handleDisplayModeCallback(
       await enqueueSend(
         key,
         () => bot.telegram.editMessageReplyMarkup(
-          key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup,
+          getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
         ),
       );
     } catch (e) {
@@ -10937,7 +10942,7 @@ bot.action(/^agent_(.+)$/, async (ctx) => {
         await enqueueSend(
           key,
           () => bot.telegram.editMessageReplyMarkup(
-            key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup,
+            getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
           ),
         );
       } catch (e) {
@@ -11026,7 +11031,7 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
  * `forwardPromptToAgent` interrupts the TUI selector itself.
  */
 async function deliverActivePrompt(
-  key: ThreadKey,
+  key: SessionKey,
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
@@ -11091,7 +11096,7 @@ async function deliverActivePrompt(
  * drops the state.
  */
 async function cancelPendingQuestionAndForward(
-  key: ThreadKey,
+  key: SessionKey,
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
@@ -11138,7 +11143,7 @@ async function cancelPendingQuestionAndForward(
  * inline-button (`qa_`) and custom-text answer paths so both collect answers
  * locally instead of closing the request on the first answer with empties.
  */
-async function applyQuestionAnswer(key: ThreadKey, answerForCurrent: string[]): Promise<void> {
+async function applyQuestionAnswer(key: SessionKey, answerForCurrent: string[]): Promise<void> {
   // Serialized: an in-flight re-post (delete+re-send) must fully finish before
   // the answer reads `messageId` for its ✅-edit — otherwise the edit targets
   // a message the re-post just deleted (live 2026-06-10: "message to edit not
@@ -11146,7 +11151,7 @@ async function applyQuestionAnswer(key: ThreadKey, answerForCurrent: string[]): 
   await runQuestionLifecycleOp(key, () => applyQuestionAnswerInner(key, answerForCurrent));
 }
 
-async function applyQuestionAnswerInner(key: ThreadKey, answerForCurrent: string[]): Promise<void> {
+async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: string[]): Promise<void> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
   if (!pending) return;
@@ -11195,7 +11200,7 @@ async function applyQuestionAnswerInner(key: ThreadKey, answerForCurrent: string
  * full-snapshot draft instead of finalizing per poll. Group mode never reaches
  * here (the group transport is the thin `queueOutput` path).
  */
-function checkAdapterSupportsDraftStreaming(key: ThreadKey): boolean {
+function checkAdapterSupportsDraftStreaming(key: SessionKey): boolean {
   const name = getThreadAdapterNameRaw(key);
   return name === 'opencode' || name === 'claude' || name === claudeJsonStreamAdapterName;
 }
@@ -11206,11 +11211,11 @@ function checkAdapterSupportsDraftStreaming(key: ThreadKey): boolean {
  * synthesise the continuation flag so Claude's per-poll prose deltas accumulate
  * into ONE draft rather than each finalizing as its own message.
  */
-function checkAdapterOutputsDeltas(key: ThreadKey): boolean {
+function checkAdapterOutputsDeltas(key: SessionKey): boolean {
   return getThreadAdapter(key).outputsDeltas === true;
 }
 
-function handleAgentOutput(key: ThreadKey, output: string, meta?: OutputEventMeta): void {
+function handleAgentOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void {
   console.log(`[Bot] output ${keyToString(key)} (${output.length}): ${output.slice(0, 100)}...`);
   if (!output.trim()) return;
   traceAgentEmit('output', key, output);
@@ -11355,7 +11360,7 @@ function handleAgentOutput(key: ThreadKey, output: string, meta?: OutputEventMet
  * the loop's preferred frame text, and arm the busy-state-driven loop (bug #11)
  * so the frame survives the gaps between scrape emits.
  */
-function handleAdapterStatus(key: ThreadKey, status: string): void {
+function handleAdapterStatus(key: SessionKey, status: string): void {
   if (status.trim()) {
     const adapter = getThreadAdapter(key);
     if (adapter instanceof ClaudeCliAdapter) {
@@ -11376,7 +11381,7 @@ function handleAdapterStatus(key: ThreadKey, status: string): void {
  * `editMessageText` operations on the rate-limiter FIFO, pushing real
  * `output` sends behind a wall of stale thinking frames.
  */
-async function handleAgentStatus(key: ThreadKey, status: string): Promise<void> {
+async function handleAgentStatus(key: SessionKey, status: string): Promise<void> {
   if (!status.trim()) return;
   // While an OpenCode question is pending the agent is BLOCKED waiting for the
   // user, so a status frame ("🔧 question…", tool spinner) shows no forward
@@ -11441,7 +11446,7 @@ async function handleAgentStatus(key: ThreadKey, status: string): Promise<void> 
  *    replies and real output need) and re-arms once after the cooldown so the
  *    newest frame still shows.
  */
-async function flushStatusCoalescer(key: ThreadKey): Promise<void> {
+async function flushStatusCoalescer(key: SessionKey): Promise<void> {
   const c = getStatusCoalesceState(key);
   if (c.inFlight) return;
   c.inFlight = true;
@@ -11451,7 +11456,7 @@ async function flushStatusCoalescer(key: ThreadKey): Promise<void> {
       const action = getStatusFlushAction({
         nextText: text,
         lastSentText: c.lastSentText,
-        isRateLimited: checkIsRateLimited(key.chatId),
+        isRateLimited: checkIsRateLimited(getTelegramChatId(key)),
       });
 
       if (action === 'defer') {
@@ -11479,9 +11484,9 @@ async function flushStatusCoalescer(key: ThreadKey): Promise<void> {
  * a 429 cooldown. Idempotent: if a retry is already armed, does nothing (the
  * newest `pendingText` will be picked up when it fires).
  */
-function armStatusDeferRetry(key: ThreadKey, c: StatusCoalesceState): void {
+function armStatusDeferRetry(key: SessionKey, c: StatusCoalesceState): void {
   if (c.deferRetryTimer) return;
-  const waitMs = getRateLimitRemainingMs(key.chatId) + COOLDOWN_RETRY_SLACK_MS;
+  const waitMs = getRateLimitRemainingMs(getTelegramChatId(key)) + COOLDOWN_RETRY_SLACK_MS;
   c.deferRetryTimer = setTimeout(() => {
     c.deferRetryTimer = null;
     void flushStatusCoalescer(key);
@@ -11497,7 +11502,7 @@ function armStatusDeferRetry(key: ThreadKey, c: StatusCoalesceState): void {
  * Returns `true` if the (first chunk of the) frame reached Telegram, so the
  * coalescer can record it as `lastSentText` and skip a redundant re-send.
  */
-async function sendStatusFrame(key: ThreadKey, status: string): Promise<boolean> {
+async function sendStatusFrame(key: SessionKey, status: string): Promise<boolean> {
   const msgState = getThreadMessageState(key);
   // Render-aware split: status frames are sent through `renderAgentHtml` below,
   // which inflates the source past Telegram's cap, so size chunks by their
@@ -11608,7 +11613,7 @@ function buildThinkingFrameText(mode: DisplayVerbosityMode, payload: ThinkingEve
  * "Persist" means clear `thinkingMessageId` so the NEXT response starts a fresh
  * thinking message — the existing one stays in the chat untouched.
  */
-function handleAgentThinking(key: ThreadKey, payload: ThinkingEvent): void {
+function handleAgentThinking(key: SessionKey, payload: ThinkingEvent): void {
   traceAgentEmit('thinking', key, payload.text);
   const mode = state.getDisplayPrefs(key).thinking;
   const action = getThinkingEventAction(mode, payload.phase);
@@ -11640,7 +11645,7 @@ function handleAgentThinking(key: ThreadKey, payload: ThinkingEvent): void {
  * in-flight coalescer keeps the id it captured, so a frame still being sent
  * finishes against the right message.
  */
-function finishThinkingMessage(key: ThreadKey): void {
+function finishThinkingMessage(key: SessionKey): void {
   setThinkingFrameId(key, null);
   const coalescer = thinkingCoalescers.get(keyToString(key));
   // Drop the dedup baseline so the NEXT response's first frame is never skipped
@@ -11654,7 +11659,7 @@ function finishThinkingMessage(key: ThreadKey): void {
  * flight per thread. `isTerminal` marks the short-mode collapse frame — after it
  * drains, the flush detaches the tracked id so the next response is fresh.
  */
-function queueThinkingFrame(key: ThreadKey, frameText: string, isTerminal: boolean): void {
+function queueThinkingFrame(key: SessionKey, frameText: string, isTerminal: boolean): void {
   const c = getThinkingCoalesceState(key);
   c.pendingHtml = renderAgentHtml(frameText);
   if (isTerminal) c.detachAfterDrain = true;
@@ -11669,7 +11674,7 @@ function queueThinkingFrame(key: ThreadKey, frameText: string, isTerminal: boole
  * When `detachAfterDrain` is armed (short-mode collapse), the tracked id is
  * detached only AFTER the final frame is edited onto the same message.
  */
-async function flushThinkingCoalescer(key: ThreadKey): Promise<void> {
+async function flushThinkingCoalescer(key: SessionKey): Promise<void> {
   const c = getThinkingCoalesceState(key);
   if (c.inFlight) return;
   c.inFlight = true;
@@ -11695,7 +11700,7 @@ async function flushThinkingCoalescer(key: ThreadKey): Promise<void> {
  * first frame. The frame is pre-rendered HTML (one message — `full`-mode bodies
  * are tail-trimmed to fit). Returns `true` when the frame reached Telegram.
  */
-async function sendThinkingFrame(key: ThreadKey, renderedHtml: string): Promise<boolean> {
+async function sendThinkingFrame(key: SessionKey, renderedHtml: string): Promise<boolean> {
   const msgState = getThreadMessageState(key);
   try {
     if (msgState.thinkingMessageId !== null) {
@@ -11743,7 +11748,7 @@ async function sendThinkingFrame(key: ThreadKey, renderedHtml: string): Promise<
  * (+ the tool's title when present, matching the transient status) over a
  * fenced code block.
  */
-function handleAgentToolResult(key: ThreadKey, payload: ToolResultEvent): void {
+function handleAgentToolResult(key: SessionKey, payload: ToolResultEvent): void {
   traceAgentEmit('toolResult', key, payload.output);
   const action = getToolResultRenderAction(state.getDisplayPrefs(key).toolResults);
   if (action === 'drop') return;
@@ -11768,7 +11773,7 @@ function handleAgentToolResult(key: ThreadKey, payload: ToolResultEvent): void {
  * continuation chain (the in-flight reply keeps growing in its own message
  * above it).
  */
-async function sendStandaloneAgentMessage(key: ThreadKey, text: string): Promise<void> {
+async function sendStandaloneAgentMessage(key: SessionKey, text: string): Promise<void> {
   const chunks = splitMessage(text, undefined, chunk => renderAgentHtml(chunk).length);
   for (const chunk of chunks) {
     await replyChunkWithFallback(key, renderAgentHtml(chunk), chunk);
@@ -11816,7 +11821,7 @@ function getClaudeLivenessFrameText(state: ThreadMessageState, nowMs: number): s
  * need to call {@link stopClaudeLiveness} for the hard teardown paths (stop /
  * close / quit / error), not for the normal busy→idle return.
  */
-function runClaudeLivenessTick(key: ThreadKey): void {
+function runClaudeLivenessTick(key: SessionKey): void {
   const state = getThreadMessageState(key);
   const adapter = getThreadAdapter(key);
   // Gate to Claude: only its tmux-scrape path has the #11 gap (OpenCode liveness
@@ -11882,7 +11887,7 @@ function runClaudeLivenessTick(key: ThreadKey): void {
           isCreate: action === 'create',
           msSinceLastSent: now - state.lastLivenessSentAt,
           refreshMs: claudeWorkingStatusRefreshMs,
-          remainingCooldownMs: getRateLimitRemainingMs(key.chatId),
+          remainingCooldownMs: getRateLimitRemainingMs(getTelegramChatId(key)),
         })
       ) {
         state.livenessGlyphIndex = (state.livenessGlyphIndex + 1) % CLAUDE_LIVENESS_GLYPHS.length;
@@ -11927,7 +11932,7 @@ function runClaudeLivenessTick(key: ThreadKey): void {
  * @description (Re)arm the single per-thread liveness timer. Idempotent on the
  * timer handle: clears any existing one first so two callers can't stack timers.
  */
-function armClaudeLivenessTimer(key: ThreadKey, state: ThreadMessageState): void {
+function armClaudeLivenessTimer(key: SessionKey, state: ThreadMessageState): void {
   if (state.livenessTimer) clearTimeout(state.livenessTimer);
   state.livenessTimer = setTimeout(() => {
     state.livenessTimer = null;
@@ -11963,7 +11968,7 @@ function armClaudeLivenessTimer(key: ThreadKey, state: ThreadMessageState): void
  */
 type ClaudeLivenessArmReason = 'activity' | 'busyOnset';
 
-function startClaudeLiveness(key: ThreadKey, reason: ClaudeLivenessArmReason = 'activity'): void {
+function startClaudeLiveness(key: SessionKey, reason: ClaudeLivenessArmReason = 'activity'): void {
   const adapter = getThreadAdapter(key);
   if (!(adapter instanceof ClaudeCliAdapter) || !adapter.checkIsBusy) return;
   const state = getThreadMessageState(key);
@@ -11986,7 +11991,7 @@ function startClaudeLiveness(key: ThreadKey, reason: ClaudeLivenessArmReason = '
  * after the session is gone. Leaves `statusMessageId` alone — the caller's own
  * `deleteStatusMessage` owns removing the visible frame.
  */
-function stopClaudeLiveness(key: ThreadKey): void {
+function stopClaudeLiveness(key: SessionKey): void {
   const state = threadMessageStates.get(keyToString(key));
   if (!state?.livenessTimer) return;
   clearTimeout(state.livenessTimer);
@@ -12015,7 +12020,7 @@ function stopClaudeLiveness(key: ThreadKey): void {
  * stops the timer) once the message is gone, so a racing teardown can't leave a
  * self-re-arming timer running.
  */
-async function refreshSubagentStatus(key: ThreadKey): Promise<void> {
+async function refreshSubagentStatus(key: SessionKey): Promise<void> {
   const state = getThreadMessageState(key);
   const messageId = state.subagentStatusMessageId;
   if (messageId === null) return;
@@ -12067,7 +12072,7 @@ async function refreshSubagentStatus(key: ThreadKey): Promise<void> {
  * timer), unref'd so it never holds the event loop open, and self-stops once
  * the message is gone (the next tick sees a null id and returns).
  */
-function armSubagentTimer(key: ThreadKey, state: ThreadMessageState): void {
+function armSubagentTimer(key: SessionKey, state: ThreadMessageState): void {
   if (state.subagentTimer) clearTimeout(state.subagentTimer);
   state.subagentTimer = setTimeout(() => {
     state.subagentTimer = null;
@@ -12105,7 +12110,7 @@ function armSubagentTimer(key: ThreadKey, state: ThreadMessageState): void {
  * Best-effort delete; the in-memory fields are nulled synchronously so a racing
  * emit can't resurrect a stale frame.
  */
-function clearSubagentStatus(key: ThreadKey): void {
+function clearSubagentStatus(key: SessionKey): void {
   const state = getThreadMessageState(key);
   if (state.subagentTimer) {
     clearTimeout(state.subagentTimer);
@@ -12137,7 +12142,7 @@ function clearSubagentStatus(key: ThreadKey): void {
  * Wrapped so async sends never throw back into the EventEmitter (mirrors
  * `handleAgentQuestion`).
  */
-function handleSubagentStatus(key: ThreadKey, payload: SubagentStatusEvent): void {
+function handleSubagentStatus(key: SessionKey, payload: SubagentStatusEvent): void {
   const state = getThreadMessageState(key);
   // `subagentStartedAt` is set synchronously when an `open` begins (before its
   // `await`), so a second `active:true` arriving while the first create is still
@@ -12187,7 +12192,7 @@ function handleSubagentStatus(key: ThreadKey, payload: SubagentStatusEvent): voi
   })();
 }
 
-function handleAgentQuestion(key: ThreadKey, questionData: OpenCodePendingQuestion): void {
+function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuestion): void {
   console.log(`[Bot] question ${keyToString(key)} (${questionData.requestId}): ${questionData.questions.length}`);
   // Idempotent across restart: this handler ALSO fires from the adapter's
   // `restoreOpenQuestion` on reattach (the server still has the question open).
@@ -12260,7 +12265,7 @@ function handleAgentQuestion(key: ThreadKey, questionData: OpenCodePendingQuesti
  * (40-char cap). Callback ids stay `qa_<qIdx>_<optIdx>` against the absolute
  * question index so a restored old button still resolves.
  */
-async function postPendingQuestionAt(key: ThreadKey): Promise<void> {
+async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
   if (!pending) return;
@@ -12346,11 +12351,11 @@ async function postPendingQuestionAt(key: ThreadKey): Promise<void> {
  * (stop / quit / unbind / closed / error) still route through
  * `clearPendingQuestion` and unpin there for BOTH backends.
  */
-function handleQuestionGone(key: ThreadKey): void {
+function handleQuestionGone(key: SessionKey): void {
   void unpinThreadQuestion(key);
 }
 
-function handleAgentClosed(key: ThreadKey): void {
+function handleAgentClosed(key: SessionKey): void {
   // Session is gone — drop any not-yet-sent output AND status frame so they
   // don't surface after the "session ended" notice (the trailing-output bug:
   // a 429 backlog could let queued deltas land seconds after the close).
@@ -12377,7 +12382,7 @@ function handleAgentClosed(key: ThreadKey): void {
   updatePinnedStatus(key).catch(() => {});
 }
 
-function handleAgentError(key: ThreadKey, error: Error): void {
+function handleAgentError(key: SessionKey, error: Error): void {
   console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
   stopClaudeLiveness(key);
   getStatusCoalesceState(key).pendingText = null;
@@ -12393,7 +12398,7 @@ function handleAgentError(key: ThreadKey, error: Error): void {
  * `running` and refresh its model row. Fired by both `claudeCliAdapter`
  * and `openCodeAdapter` (`emit('started', key)`).
  */
-function handleAgentStarted(key: ThreadKey): void {
+function handleAgentStarted(key: SessionKey): void {
   updatePinnedStatus(key).catch(() => {});
   // A fresh/adopted session arms the compact-on-idle watchdog (F2); it won't fire
   // until a turn produces output AND the topic then sits idle (no catch-up burst).
@@ -12409,7 +12414,7 @@ function handleAgentStarted(key: ThreadKey): void {
  * Skipped via the in-flight unbind guard inside `updatePinnedStatus` so the
  * stop-then-unbind sequence doesn't re-pin a stale banner.
  */
-function handleAgentStopped(key: ThreadKey): void {
+function handleAgentStopped(key: SessionKey): void {
   // Single convergence point for every `stopSession`-driven stop path —
   // `/quit` (OpenCode/terminal), `/quit-all`, `/new`, `/unbind`, and adapter
   // switch all emit `stopped`. Drop the thread's queued-but-unsent output here so
@@ -12528,8 +12533,8 @@ export const COMMANDS_MENU = [
  * real {@link replyToThread} / {@link StateStore.setSeenWatermark}.
  */
 interface PostReattachRecapDeps {
-  reply: (key: ThreadKey, text: string) => Promise<unknown>;
-  advanceWatermark: (key: ThreadKey, watermark: SeenWatermark) => void;
+  reply: (key: SessionKey, text: string) => Promise<unknown>;
+  advanceWatermark: (key: SessionKey, watermark: SeenWatermark) => void;
 }
 
 const defaultPostReattachRecapDeps: PostReattachRecapDeps = {
@@ -12540,7 +12545,7 @@ const defaultPostReattachRecapDeps: PostReattachRecapDeps = {
 };
 
 export async function postReattachRecap(
-  key: ThreadKey,
+  key: SessionKey,
   adapter: Pick<AgentAdapter, 'getReattachRecap'>,
   workDir: string,
   sessionId: string,
@@ -12835,7 +12840,7 @@ async function reattachExistingSessions(
   // 3. Terminal — tmux shells (`term-…`). Like the Claude scan but simpler:
   //    a terminal has no session-id to recover, so adoption keys purely on a
   //    live binding whose agent is `terminal`. The tmux name is derived from
-  //    the `ThreadKey`. `adoptExistingTmuxSession` itself liveness/zombie-checks
+  //    the `SessionKey`. `adoptExistingTmuxSession` itself liveness/zombie-checks
   //    the specific session; a dead/missing one is garbage-collected, never
   //    re-spawned (an explicitly-stopped shell stays gone).
   const terminalAdapter = getAdapter('terminal');
@@ -12915,7 +12920,7 @@ function restorePendingQuestions(): void {
   let restored = 0;
   let dropped = 0;
   for (const [keyStr, value] of Object.entries(state.getPendingQuestions())) {
-    let key: ThreadKey;
+    let key: SessionKey;
     try {
       key = keyFromString(keyStr);
     } catch {
@@ -12956,7 +12961,7 @@ function restorePendingQuestions(): void {
 function restoreApiRetries(): void {
   let restored = 0;
   for (const [keyStr, record] of Object.entries(state.getApiRetries())) {
-    let key: ThreadKey;
+    let key: SessionKey;
     try {
       key = keyFromString(keyStr);
     } catch {
@@ -13116,7 +13121,7 @@ export interface ReconcileTransientFramesDeps {
   /** Best-effort delete of one Telegram message (Telegraf resolves `true`). */
   deleteMessage: (chatId: number, messageId: number) => Promise<boolean>;
   /** Re-sync disk to the thread's LIVE in-memory frame ids after the stale deletes. */
-  persistFrames: (key: ThreadKey) => void;
+  persistFrames: (key: SessionKey) => void;
 }
 
 const defaultReconcileTransientFramesDeps: ReconcileTransientFramesDeps = {
@@ -13146,7 +13151,7 @@ export function reconcileTransientFrames(
 ): number {
   let deleted = 0;
   for (const [keyStr, ids] of Object.entries(orphaned)) {
-    let key: ThreadKey;
+    let key: SessionKey;
     try {
       key = keyFromString(keyStr);
     } catch {
@@ -13155,7 +13160,7 @@ export function reconcileTransientFrames(
       continue;
     }
     for (const id of ids) {
-      void deps.deleteMessage(key.chatId, id).catch(() => {});
+      void deps.deleteMessage(getTelegramChatId(key), id).catch(() => {});
       deleted += 1;
     }
     // Sync disk to the LIVE in-memory frames (post-reattach): a still-busy
@@ -13171,9 +13176,9 @@ export function reconcileTransientFrames(
  * stays on the existing per-thread FIFO + global pacer + 429 retry/output-trace
  * path through `enqueueSend`; `buildSendExtra` preserves topic routing.
  */
-const sendFilesToThread = createSendFilesToThread<ThreadKey>({
+const sendFilesToThread = createSendFilesToThread<SessionKey>({
   resolveTargetAndWorkDir: (threadKeyStr) => {
-    let key: ThreadKey;
+    let key: SessionKey;
     try {
       key = keyFromString(threadKeyStr);
     } catch {
@@ -13191,7 +13196,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
       bot.telegram.callApi(
         'sendPhoto',
         {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           photo: input,
           ...buildSendExtra(key, caption !== undefined ? { caption } : {}),
         },
@@ -13201,7 +13206,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
       bot.telegram.callApi(
         'sendAnimation',
         {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           animation: input,
           ...buildSendExtra(key, caption !== undefined ? { caption } : {}),
         },
@@ -13211,7 +13216,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
       bot.telegram.callApi(
         'sendVideo',
         {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           video: input,
           ...buildSendExtra(key, caption !== undefined ? { caption } : {}),
         },
@@ -13221,7 +13226,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
       bot.telegram.callApi(
         'sendDocument',
         {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           document: input,
           ...buildSendExtra(key, caption !== undefined ? { caption } : {}),
         },
@@ -13233,7 +13238,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
       return bot.telegram.callApi(
         'sendMediaGroup',
         {
-          chat_id: key.chatId,
+          chat_id: getTelegramChatId(key),
           media: mediaGroup,
           ...buildSendExtra(key, {}),
         },
@@ -13252,7 +13257,7 @@ const sendFilesToThread = createSendFilesToThread<ThreadKey>({
  * later agent reply is unaffected. Ordering holds because each chunk is awaited
  * before the next is enqueued.
  */
-const sendMessagesToThread = createSendMessagesToThread<ThreadKey>({
+const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
   resolveTarget: (threadKeyStr) => {
     try {
       return { ok: true, target: keyFromString(threadKeyStr) };
@@ -13289,7 +13294,7 @@ function wireScheduler(): SchedulerMcpHandle {
       await enqueueSend(
         key,
         () =>
-          bot.telegram.pinChatMessage(key.chatId, messageId, {
+          bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, {
             disable_notification: isSilent,
           }),
       );
@@ -13411,7 +13416,7 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
   const botRights =
     groupId !== null ? await resolveBotAdminRights(groupId, botUserId) : null;
   const hasBinding =
-    groupId !== null && state.listBindings().some(({ key }) => key.chatId === groupId);
+    groupId !== null && state.listBindings().some(({ key }) => getTelegramChatId(key) === groupId);
   const availableAgents = (['claude', 'opencode'] as const).filter((name) =>
     checkIsInstalled(name),
   );
@@ -13436,18 +13441,18 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
     return;
   }
 
-  const ownerKey: ThreadKey | null = ownerSet
-    ? { chatId: ownerUserId, threadId: DM_GENERAL_THREAD_ID }
+  const ownerKey: SessionKey | null = ownerSet
+    ? makeTelegramKey(ownerUserId, DM_GENERAL_THREAD_ID)
     : null;
-  const generalKey: ThreadKey | null =
-    groupId !== null ? { chatId: groupId, threadId: GENERAL_THREAD_ID } : null;
+  const generalKey: SessionKey | null =
+    groupId !== null ? makeTelegramKey(groupId, GENERAL_THREAD_ID) : null;
 
-  const trySend = async (key: ThreadKey): Promise<boolean> => {
+  const trySend = async (key: SessionKey): Promise<boolean> => {
     const text = withThreadLocale(key, () =>
       buildStartupStatusText(report, (code, opts) => t(code, opts)),
     );
     try {
-      await bot.telegram.sendMessage(key.chatId, text);
+      await bot.telegram.sendMessage(getTelegramChatId(key), text);
       return true;
     } catch (e) {
       console.warn(
@@ -13471,7 +13476,7 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
     return;
   }
 
-  const keyByTarget: Record<StartupTarget, ThreadKey | null> = {
+  const keyByTarget: Record<StartupTarget, SessionKey | null> = {
     owner: ownerKey,
     general: generalKey,
   };
@@ -13565,7 +13570,7 @@ export async function startBot(): Promise<void> {
     const groupId = getAllowedGroupId();
     if (groupId !== null) {
       setImmediate(() => {
-        const generalKey: ThreadKey = { chatId: groupId, threadId: GENERAL_THREAD_ID };
+        const generalKey: SessionKey = makeTelegramKey(groupId, GENERAL_THREAD_ID);
         withThreadLocale(generalKey, () => replyToThread(generalKey, t('error.state.corrupted'))).catch(() => {});
       });
     }

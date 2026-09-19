@@ -14,9 +14,10 @@ import {
   persistAdapterSessionIds,
   type SessionIdPersistenceStore,
 } from '../utils/persistAdapterSessionIds';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100123, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-100123, 42);
 
 interface RecordedWrites {
   claudeSessionId: string | null;

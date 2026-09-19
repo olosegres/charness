@@ -15,10 +15,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const ownSessionId = 'ses_own';
-const key: ThreadKey = { chatId: -100123, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-100123, 42);
 const workDir = '/tmp/work';
 
 /**
@@ -27,7 +28,7 @@ const workDir = '/tmp/work';
  */
 function createAdapterWithSession(overrides: Record<string, unknown>): {
   adapter: OpenCodeAdapter;
-  noResponseKeys: ThreadKey[];
+  noResponseKeys: SessionKey[];
 } {
   const adapter = new OpenCodeAdapter();
   const session = {
@@ -62,8 +63,8 @@ function createAdapterWithSession(overrides: Record<string, unknown>): {
   };
   adapter['sessions'].set(keyToString(key), session);
 
-  const noResponseKeys: ThreadKey[] = [];
-  adapter.on('noResponse', (k: ThreadKey) => {
+  const noResponseKeys: SessionKey[] = [];
+  adapter.on('noResponse', (k: SessionKey) => {
     noResponseKeys.push(k);
   });
   return { adapter, noResponseKeys };

@@ -16,7 +16,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 interface ApiCall {
   method: string;
@@ -53,7 +54,7 @@ function createDisconnectAdapter(activeProvidersAfterDelete: string[]): {
 }
 
 describe('OpenCodeAdapter.disconnectProvider', () => {
-  const key: ThreadKey = { chatId: -100, threadId: 9085 };
+  const key: SessionKey = makeTelegramKey(-100, 9085);
 
   it('DELETEs the provider auth route and reports a clean disconnect', async () => {
     const { adapter, calls } = createDisconnectAdapter(['anthropic']);

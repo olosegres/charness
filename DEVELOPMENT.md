@@ -34,7 +34,7 @@ Each adapter implements `AgentAdapter` from `src/types.ts`:
 - `sendInput(key, text)` / `sendSignal(key, signal)`
 - events: `output`, `status`, `question`, `questionGone`, `thinking`,
   `toolResult`, `subagentStatus`, `apiError`, `started`, `stopped`, `closed`,
-  `error` (all emit `ThreadKey` first)
+  `error` (all emit `SessionKey` first)
 
 ## Local development
 

@@ -21,13 +21,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { createScheduleForThread } from '../scheduler/store';
 import { createSchedulerEngine, maxTimeoutMs } from '../scheduler/engine';
 import type { DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from '../scheduler/types';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadA: ThreadKey = { chatId: -1001234567890, threadId: 11 };
+const threadA: SessionKey = makeTelegramKey(-1001234567890, 11);
 const everyFiveMinutes: ScheduleSpec = { kind: 'cron', cronExpr: '*/5 * * * *' };
 
 /** A controllable fake timer queue + clock, mirroring how the engine consumes them. */

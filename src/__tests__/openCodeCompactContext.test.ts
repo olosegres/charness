@@ -28,7 +28,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type CompactionResult, type ThreadKey } from '../types';
+import type { CompactionResult } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 interface ApiCall {
   method: string;
@@ -78,7 +80,7 @@ function createCompactAdapter(options: {
 
 function injectSession(
   adapter: OpenCodeAdapter,
-  key: ThreadKey,
+  key: SessionKey,
   modelOverride: { providerID: string; modelID: string } | null,
 ): void {
   adapter['sessions'].set(keyToString(key), {
@@ -121,7 +123,7 @@ function getError(result: CompactionResult): string {
 describe('OpenCode context compaction', () => {
   it('POSTs summarize scoped to the session instance with the session model and reports success with no counts', async () => {
     const { adapter, calls } = createCompactAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100, 1);
     injectSession(adapter, key, sessionOverrideModel);
 
     const result = await adapter.compactContext(key);
@@ -155,7 +157,7 @@ describe('OpenCode context compaction', () => {
 
   it('falls back to the server default model when the session carries no override', async () => {
     const { adapter, calls } = createCompactAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100, 2);
     injectSession(adapter, key, null);
 
     const result = await adapter.compactContext(key);
@@ -170,7 +172,7 @@ describe('OpenCode context compaction', () => {
 
   it('with NO resolvable model resolves to a notice and issues no POST', async () => {
     const { adapter, calls } = createCompactAdapter({ configDefaultModel: null });
-    const key: ThreadKey = { chatId: -100, threadId: 3 };
+    const key: SessionKey = makeTelegramKey(-100, 3);
     injectSession(adapter, key, null);
 
     const result = await adapter.compactContext(key);
@@ -184,7 +186,7 @@ describe('OpenCode context compaction', () => {
 
   it('with NO active session resolves to a notice and issues no request at all', async () => {
     const { adapter, calls } = createCompactAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 4 }; // no session injected
+    const key: SessionKey = makeTelegramKey(-100, 4); // no session injected
 
     const result = await adapter.compactContext(key);
 
@@ -197,7 +199,7 @@ describe('OpenCode context compaction', () => {
 
   it('a POST failure resolves to a notice (no throw) and names the reason', async () => {
     const { adapter, calls } = createCompactAdapter({ shouldPostFail: true });
-    const key: ThreadKey = { chatId: -100, threadId: 5 };
+    const key: SessionKey = makeTelegramKey(-100, 5);
     injectSession(adapter, key, sessionOverrideModel);
 
     const result = await adapter.compactContext(key);

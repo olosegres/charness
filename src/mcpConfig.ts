@@ -19,7 +19,7 @@
  *     them itself against `process.env` and writes the expanded copy to a
  *     short-lived tmp file (mode 0600) before passing the tmp path to
  *     Claude.
- *   - **Lifecycle**. Tmp files are stable per ThreadKey (one for group
+ *   - **Lifecycle**. Tmp files are stable per SessionKey (one for group
  *     scope, one for thread scope), so multiple `startSession` calls don't
  *     pile up junk. `cleanupMcpTempFiles` is called from
  *     `claudeCliAdapter.stopSession` to remove them once the session ends.
@@ -27,12 +27,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ThreadKey } from './types';
-import { keyToString } from './types';
+import type { SessionKey } from './sessionKey';
+import { keyToString } from './sessionKey';
 import { buildClaudeSchedulerMcpConfig } from './scheduler/injection';
 
 export interface PrepareMcpOptions {
-  key: ThreadKey;
+  key: SessionKey;
   dataDir: string;
 }
 
@@ -120,15 +120,15 @@ function groupMcpSource(dataDir: string): string {
   return path.join(dataDir, 'mcp.json');
 }
 
-function threadMcpSource(dataDir: string, key: ThreadKey): string {
+function threadMcpSource(dataDir: string, key: SessionKey): string {
   return path.join(dataDir, 'threads', `${keyToString(key)}.json`);
 }
 
-function groupMcpTmp(dataDir: string, key: ThreadKey): string {
+function groupMcpTmp(dataDir: string, key: SessionKey): string {
   return path.join(dataDir, 'tmp', `mcp-${keyToString(key)}-group.json`);
 }
 
-function threadMcpTmp(dataDir: string, key: ThreadKey): string {
+function threadMcpTmp(dataDir: string, key: SessionKey): string {
   return path.join(dataDir, 'tmp', `mcp-${keyToString(key)}-thread.json`);
 }
 
@@ -139,7 +139,7 @@ function threadMcpTmp(dataDir: string, key: ThreadKey): string {
  * second startSession overwrites rather than piling up, matching the group/
  * thread tmp convention.
  */
-function schedulerMcpTmp(dataDir: string, key: ThreadKey): string {
+function schedulerMcpTmp(dataDir: string, key: SessionKey): string {
   return path.join(dataDir, 'tmp', `mcp-${keyToString(key)}-scheduler.json`);
 }
 

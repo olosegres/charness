@@ -42,7 +42,7 @@ export const openCodeSessionIdPrefix = 'ses_';
 
 /** A bound (active) thread session, reduced to the two fields routing needs. */
 export interface BoundSessionRef {
-  /** Serialised `ThreadKey` (`"<chatId>:<threadId>"`). */
+  /** Serialised `SessionKey` (`"<chatId>:<threadId>"`). */
   keyStr: string;
   /** Server-assigned OpenCode session id (`ses_…`) this thread owns. */
   sessionId: string;

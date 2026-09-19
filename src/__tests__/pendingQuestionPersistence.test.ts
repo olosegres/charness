@@ -22,10 +22,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import { keyToString, type PendingQuestionState, type ThreadKey } from '../types';
+import { type PendingQuestionState } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadA: ThreadKey = { chatId: -1001234567890, threadId: 11 };
-const threadB: ThreadKey = { chatId: -1001234567890, threadId: 22 };
+const threadA: SessionKey = makeTelegramKey(-1001234567890, 11);
+const threadB: SessionKey = makeTelegramKey(-1001234567890, 22);
 
 /** A representative pending question with nested questions / options / directory. */
 const sampleQuestion = (messageId: number | null): PendingQuestionState => ({

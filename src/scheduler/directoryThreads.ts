@@ -1,6 +1,6 @@
 import { resolveBoundWorkDir } from '../validation';
 import type { BindingData } from '../state';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 
 /**
  * @description Invert a directory (an OpenCode instance's absolute working
@@ -15,7 +15,7 @@ import { keyToString, type ThreadKey } from '../types';
  * relative `subdir`, or an unresolved `WORK_ROOT`, would miss symlinked roots.
  */
 export function getThreadKeysForDirectory(
-  bindings: Array<{ key: ThreadKey; data: BindingData }>,
+  bindings: Array<{ key: SessionKey; data: BindingData }>,
   workRoot: string,
   directory: string,
 ): string[] {

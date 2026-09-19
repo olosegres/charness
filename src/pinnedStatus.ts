@@ -3,7 +3,7 @@ import type { BindingData } from './state';
 /**
  * @description Inputs for {@link formatPinnedStatus}.
  *
- * Kept as a plain data record (no `ThreadKey`, no adapter references) so the
+ * Kept as a plain data record (no `SessionKey`, no adapter references) so the
  * formatter is a pure function and can be unit-tested without booting any
  * Telegraf / tmux machinery. The bot's `updatePinnedStatus` helper does the
  * impure plumbing (probing the adapter, reading state, calling Telegram).

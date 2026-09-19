@@ -30,11 +30,13 @@ import {
   readClaudeReattachTranscript,
 } from '../adapters/claudeCliAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
-import { keyToString, type SeenWatermark, type ThreadKey } from '../types';
+import { type SeenWatermark } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const workDir = '/tmp/jsonstream-work';
 const sessionId = 'sess-json-wm';
-const key: ThreadKey = { chatId: -100999333, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-100999333, 42);
 
 function serialize(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join('\n') + '\n';

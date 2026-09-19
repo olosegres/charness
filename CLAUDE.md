@@ -110,7 +110,10 @@ config/variants, not a per-message API field).
   `WORK_ROOT` as an advanced override for services or containers where the
   process cwd cannot be controlled.
 - **Per-thread isolation.** Routing, sessions, MCP config, model/effort prefs,
-  and history are keyed per topic (`ThreadKey` = `"<chatId>:<threadId>"`).
+  and history are keyed per topic by a platform-agnostic `SessionKey`
+  (`{platform, space, thread}`); the Telegram connector serializes it to the
+  historical `"<chatId>:<threadId>"` form that names state fields, tmux
+  sessions and `DATA_DIR` directories.
 - **Terminal sessions (`/terminal`).** A topic can bind to a raw interactive
   `$SHELL` (in tmux) instead of an AI agent — a third `AgentAdapter`
   (`terminalAdapter.ts`). The bot proxies the user's text in as keystrokes and
@@ -284,9 +287,9 @@ config/variants, not a per-message API field).
 - **CHAT_MODE — one surface or both (default `both`).** `CHAT_MODE` selects which
   Telegram surface(s) the instance serves: `group` (forum supergroup only), `dm`
   (the owner's private chat only), or `both` (DEFAULT) — ONE instance serves the
-  owner DM AND the group at once, decided PER CHAT off the resolved `ThreadKey`
-  (`checkIsDmKey(key) = key.chatId === ownerUserId`, since a DM key carries the
-  owner's chat id). `OWNER_USER_ID` is REQUIRED for `dm`; for `both` it is
+  owner DM AND the group at once, decided PER CHAT off the resolved `SessionKey`
+  (`checkIsDmKey(key) = getTelegramChatId(key) === ownerUserId`, since a DM key
+  carries the owner's chat id). `OWNER_USER_ID` is REQUIRED for `dm`; for `both` it is
   OPTIONAL — unset → the DM surface is INERT (group-only, boot logs a notice), so
   a bare `telegramcode` stays backward-compatible with a group-only deploy and
   lights up DM the moment `OWNER_USER_ID` is set. Access stays per surface: the
@@ -706,7 +709,9 @@ config/variants, not a per-message API field).
 | `utils/threadStatusReport.ts` | The per-topic `/status` render + model resolution, kept out of `bot.ts` so both are unit-testable (importing `bot.ts` runs its module-scope `parseEnv()`, which exits the process without a bot token): `getThreadStatusReport` (session-only rows are dropped once the session stopped; unknown runtime data degrades to the localised unknown marker) and `getThreadStatusModel` (live adapter value → the runtime's self-reported model → the persisted pick; the middle step is the Claude tmux backend's ONLY model source) |
 | `utils/jsonStreamHost.ts` | Host layout + IO primitives for the json-stream EXTERNAL transport (tmux `cjson-…` prefix binding): per-thread dir under `DATA_DIR/jsonstream/`, the probe-proven `#!/bin/sh` wrapper builder (`0<>` FIFO hold, `env -u ANTHROPIC_API_KEY`, pid/exitcode capture), the `O_NONBLOCK` FIFO write-open guard (`ENXIO`→null, never a blocking open) + bounded `EAGAIN` write retry, byte-exact stdout tail state (stateful utf8 decode across split chars, line-boundary offset for restart persistence, truncation reseed), and the orphan-dir janitor sweep |
 | `utils/jsonStreamBusyWatchdog.ts` | The json-stream adapter's two SILENCE-bounded decisions (elapsed time is never the bound — a working CLI always writes stdout, a dead one stops): `checkShouldClearBusyOnIdle` (+ `busyIdleWatchdogMs`) force-clears an `isBusy` stuck by a missed terminal `result`, vetoed by any in-flight signal (tool / sub-agent / question / batched answer) so a long turn is never truncated; `getCompactionWaitVerdict` (+ `compactionSilenceTimeoutMs`, `compactionWaitPollMs`, `compactionAbsoluteTimeoutMs` as the never-finishes backstop) bounds the wait for a bot-issued `/compact` confirmation, and `getCompactionTimeoutOutcome` reports a wait that timed out AFTER a `compact_status success` as SUCCESS (only the token counts are missing) |
-| `types.ts` | Shared types incl. the `AgentAdapter` contract and `ThreadKey` |
+| `types.ts` | Shared types incl. the `AgentAdapter` contract |
+| `sessionKey.ts` | The core's platform-agnostic routing key `SessionKey` (`{platform, space, thread}`) plus the `SessionKeyCodec` registry: `keyToString` dispatches on `key.platform`, `keyFromString`/`tryKeyFromString` dispatch by asking each codec's `matches()`, `keysEqual` compares `platform` too, `keyToSlug` rewrites the `:` for tmux/filesystem names. Serialization itself belongs to the connector — the core never parses the format |
+| `connectors/telegram/sessionKeyCodec.ts` | Telegram's `SessionKeyCodec` — owns the frozen `"<chatId>:<threadId>"` spelling (self-registers on import) — plus `makeTelegramKey` and the native accessors `getTelegramChatId` / `getTelegramThreadId` / `checkIsTelegramKey` |
 
 ### Adapters (`src/adapters/`) — the proxy boundary
 
@@ -1681,7 +1686,7 @@ its `origin` pointing at this checkout and pulls on a timer via
   the `message_id` → `get_message_context(chat_id, message_id, context_size=N)`.
   Three segments `t.me/c/<id>/<topicId>/<msgId>`: middle is the topic (thread)
   root id, last is the `message_id` inside it. A topic's `threadId` (for
-  `ThreadKey`/trace lookups) IS that topic root id. (User instruction, 2026-06-30.)
+  `SessionKey`/trace lookups) IS that topic root id. (User instruction, 2026-06-30.)
 
 - **For send-path / responsiveness / ordering verification, use the output
   trace** — it is ON for all threads BY DEFAULT now (no `/trace on` needed),

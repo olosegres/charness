@@ -1,4 +1,4 @@
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
 
 /**
  * @description Minimal slice of a concrete adapter that session-id persistence
@@ -11,8 +11,8 @@ import type { ThreadKey } from '../types';
 export interface SessionIdSourceAdapter {
   /** Unique adapter identifier, e.g. 'claude', 'opencode' (persisted as agent name). */
   readonly name: string;
-  getClaudeSessionId?: (key: ThreadKey) => string | null;
-  getOpenCodeSessionId?: (key: ThreadKey) => string | null;
+  getClaudeSessionId?: (key: SessionKey) => string | null;
+  getOpenCodeSessionId?: (key: SessionKey) => string | null;
 }
 
 /**
@@ -20,9 +20,9 @@ export interface SessionIdSourceAdapter {
  * writes, so the helper is unit-testable with a recording stub.
  */
 export interface SessionIdPersistenceStore {
-  setClaudeSessionId(key: ThreadKey, uuid: string): Promise<void>;
-  setOpenCodeSessionId(key: ThreadKey, id: string): Promise<void>;
-  setAgent(key: ThreadKey, data: { name: string }): Promise<void>;
+  setClaudeSessionId(key: SessionKey, uuid: string): Promise<void>;
+  setOpenCodeSessionId(key: SessionKey, id: string): Promise<void>;
+  setAgent(key: SessionKey, data: { name: string }): Promise<void>;
 }
 
 /**
@@ -37,7 +37,7 @@ export interface SessionIdPersistenceStore {
  * persisted id untouched; the agent name is recorded unconditionally.
  */
 export async function persistAdapterSessionIds(
-  key: ThreadKey,
+  key: SessionKey,
   adapter: SessionIdSourceAdapter,
   store: SessionIdPersistenceStore,
 ): Promise<void> {

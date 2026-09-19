@@ -1,5 +1,6 @@
 import type { ChatMode } from '../threadRouting';
-import type { OutputTransport, ThreadKey } from '../types';
+import type { OutputTransport } from '../types';
+import type { SessionKey } from '../sessionKey';
 import { createDmOutputTransport, type DmOutputTransportDeps } from './dmOutputTransport';
 import { getGroupDeltaContinuation } from '../utils/outputFlushPlan';
 
@@ -13,7 +14,7 @@ import { getGroupDeltaContinuation } from '../utils/outputFlushPlan';
  */
 export type OutputTransportDeps = DmOutputTransportDeps & {
   /** True iff the key belongs to the DM surface (its chat is the owner's). */
-  checkIsDmKey(key: ThreadKey): boolean;
+  checkIsDmKey(key: SessionKey): boolean;
   /**
    * Group-path finalize: drain the thread's coalesced-but-unsent output buffer
    * to a permanent message so the agent's final answer is never discarded on
@@ -21,7 +22,7 @@ export type OutputTransportDeps = DmOutputTransportDeps & {
    * `sendOutputImmediate`); the group transport just delegates `finalizeInFlight`
    * to it. Idempotent — a fully-delivered turn is a no-op.
    */
-  finalizeGroupOutput(key: ThreadKey): Promise<void>;
+  finalizeGroupOutput(key: SessionKey): Promise<void>;
 };
 
 /**
@@ -85,7 +86,7 @@ export function createOutputTransport(
   // `both` — route each per-thread call to the impl owning that key's surface.
   const dmTransport = createDmOutputTransport(deps);
   const groupTransport = createGroupOutputTransport(deps);
-  const pickTransport = (key: ThreadKey): OutputTransport =>
+  const pickTransport = (key: SessionKey): OutputTransport =>
     deps.checkIsDmKey(key) ? dmTransport : groupTransport;
   return {
     deliverOutput(key, output, meta) {

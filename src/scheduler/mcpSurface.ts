@@ -11,7 +11,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { StateStore } from '../state';
-import { keyFromString, type ThreadKey } from '../types';
+import { keyFromString, type SessionKey } from '../sessionKey';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import {
@@ -695,7 +695,7 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
       const built = buildSpecFromCreateArgs(args, nowMs);
       if (!built.ok) return errorResult(built.error);
 
-      let threadKey: ThreadKey;
+      let threadKey: SessionKey;
       try {
         threadKey = keyFromString(resolved.threadKey);
       } catch {
@@ -748,7 +748,7 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
       if (!resolved.ok) return errorResult(resolved.error);
 
-      let threadKey: ThreadKey;
+      let threadKey: SessionKey;
       try {
         threadKey = keyFromString(resolved.threadKey);
       } catch {

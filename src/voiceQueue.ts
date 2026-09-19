@@ -1,5 +1,5 @@
-import type { ThreadKey } from './types';
-import { keyToString } from './types';
+import type { SessionKey } from './sessionKey';
+import { keyToString } from './sessionKey';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 
 /**
@@ -21,7 +21,7 @@ const voiceTranscriptionQueues = new Map<string, SerialQueue>();
 /**
  * @description Get (create-on-miss) the voice transcription queue for a thread.
  */
-export function getVoiceTranscriptionQueue(key: ThreadKey): SerialQueue {
+export function getVoiceTranscriptionQueue(key: SessionKey): SerialQueue {
   const kStr = keyToString(key);
   let queue = voiceTranscriptionQueues.get(kStr);
   if (!queue) {

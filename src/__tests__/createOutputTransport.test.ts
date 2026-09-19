@@ -19,9 +19,10 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { createOutputTransport, type OutputTransportDeps } from '../output/createOutputTransport';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const KEY: ThreadKey = { chatId: 1, threadId: 2 };
+const KEY: SessionKey = makeTelegramKey(1, 2);
 const MAX = 4096;
 
 interface RecordedCalls {
@@ -30,7 +31,7 @@ interface RecordedCalls {
   feedDraft: Array<{ output: string; isContinuation: boolean; isFinal: boolean }>;
   finalizeDraft: number;
   /** Keys passed to the group-path `finalizeGroupOutput` (S2 delegation). */
-  finalizeGroupOutput: ThreadKey[];
+  finalizeGroupOutput: SessionKey[];
 }
 
 /**
@@ -42,7 +43,7 @@ interface RecordedCalls {
 function createStubDeps(
   supportsDraft: boolean,
   outputsDeltas = false,
-  isDmKey: (key: ThreadKey) => boolean = () => false,
+  isDmKey: (key: SessionKey) => boolean = () => false,
 ): { deps: OutputTransportDeps; calls: RecordedCalls } {
   const calls: RecordedCalls = {
     queueOutput: [],
@@ -235,9 +236,9 @@ test('dm: a streaming meta on a NON-draft-capable thread (gate off) routes to qu
 // drives queueOutput (NOT the draft channel) — concurrently, from one transport.
 
 const OWNER_ID = 7000001;
-const DM_KEY: ThreadKey = { chatId: OWNER_ID, threadId: 0 };
-const GROUP_KEY: ThreadKey = { chatId: -1001234567890, threadId: 5 };
-const isDmKeyByChatId = (key: ThreadKey): boolean => key.chatId === OWNER_ID;
+const DM_KEY: SessionKey = makeTelegramKey(OWNER_ID, 0);
+const GROUP_KEY: SessionKey = makeTelegramKey(-1001234567890, 5);
+const isDmKeyByChatId = (key: SessionKey): boolean => getTelegramChatId(key) === OWNER_ID;
 
 test('both: a DM key routes deliverOutput to the draft path, not queueOutput', () => {
   const { deps, calls } = createStubDeps(/* supportsDraft */ true, false, isDmKeyByChatId);

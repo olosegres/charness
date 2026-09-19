@@ -12,8 +12,9 @@ import * as path from 'path';
 import { getThreadKeysForDirectory } from '../scheduler/directoryThreads';
 import { getRebindResumeAction } from '../scheduler/rebindResume';
 import { createScheduleRecord } from '../scheduler/store';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
 import type { BindingData } from '../state';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 let workRoot = '';
 
@@ -27,8 +28,8 @@ after(() => {
   fs.rmSync(workRoot, { recursive: true, force: true });
 });
 
-function buildBinding(chatId: number, threadId: number, subdir: string): { key: ThreadKey; data: BindingData } {
-  return { key: { chatId, threadId }, data: { subdir, createdAt: '2026-06-06T00:00:00.000Z' } };
+function buildBinding(chatId: number, threadId: number, subdir: string): { key: SessionKey; data: BindingData } {
+  return { key: makeTelegramKey(chatId, threadId), data: { subdir, createdAt: '2026-06-06T00:00:00.000Z' } };
 }
 
 describe('getThreadKeysForDirectory', () => {
@@ -86,7 +87,7 @@ describe('getRebindResumeAction', () => {
 
   it('a recurring job resumes at its next occurrence FROM NOW (no catch-up)', () => {
     const record = createScheduleRecord({
-      threadKey: { chatId: -100, threadId: 11 },
+      threadKey: makeTelegramKey(-100, 11),
       name: 'daily',
       spec: { kind: 'cron', cronExpr: '0 9 * * *' },
       prompt: 'p',
@@ -103,7 +104,7 @@ describe('getRebindResumeAction', () => {
 
   it('a one-shot whose instant passed while unbound is removed (cannot resume the past)', () => {
     const record = createScheduleRecord({
-      threadKey: { chatId: -100, threadId: 11 },
+      threadKey: makeTelegramKey(-100, 11),
       name: 'once',
       spec: { kind: 'once', onceAtIso: new Date(nowMs - 60_000).toISOString() },
       prompt: 'p',
@@ -116,7 +117,7 @@ describe('getRebindResumeAction', () => {
   it('a one-shot still ahead resumes at its own instant', () => {
     const onceAtMs = nowMs + 3_600_000;
     const record = createScheduleRecord({
-      threadKey: { chatId: -100, threadId: 11 },
+      threadKey: makeTelegramKey(-100, 11),
       name: 'later',
       spec: { kind: 'once', onceAtIso: new Date(onceAtMs).toISOString() },
       prompt: 'p',

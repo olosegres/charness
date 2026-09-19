@@ -18,7 +18,13 @@
  * Plan §11 Этап 7 / R2.
  */
 
-import type { ThreadKey } from './types';
+import type { SessionKey } from './sessionKey';
+import {
+  checkIsTelegramKey,
+  getTelegramChatId,
+  getTelegramThreadId,
+  makeTelegramKey,
+} from './connectors/telegram/sessionKeyCodec';
 
 /** Telegram's stable id for the General forum topic. */
 export const GENERAL_THREAD_ID = 1;
@@ -27,7 +33,7 @@ export const GENERAL_THREAD_ID = 1;
  * @description "General" thread id in the owner-DM surface. A message posted to
  * the DM's main thread carries NO `message_thread_id`; we normalise that to `0`
  * (distinct from the supergroup's `1`) so the two surfaces never collide in a
- * persisted `ThreadKey` and `checkIsGeneral` can stay mode-aware.
+ * persisted `SessionKey` and `checkIsGeneral` can stay mode-aware.
  */
 export const DM_GENERAL_THREAD_ID = 0;
 
@@ -81,7 +87,7 @@ export interface RouteInput {
 }
 
 /**
- * @description Compute the `ThreadKey` for an incoming Telegram update,
+ * @description Compute the `SessionKey` for an incoming Telegram update,
  * or return `null` if the bot should silently ignore it.
  *
  * Gating rules (plan §8):
@@ -93,7 +99,7 @@ export interface RouteInput {
  *      topics (plan §4.3 point 2, T7).
  *   4. Missing `message_thread_id` → General topic (id 1).
  */
-export function resolveThreadKey(input: RouteInput, allowedGroupId: number): ThreadKey | null {
+export function resolveThreadKey(input: RouteInput, allowedGroupId: number): SessionKey | null {
   const chat = input.chat;
   if (!chat || chat.type !== 'supergroup') return null;
   if (!chat.is_forum) return null;
@@ -114,11 +120,11 @@ export function resolveThreadKey(input: RouteInput, allowedGroupId: number): Thr
   if (rawThreadId && !isTopicMessage) return null;
 
   const threadId = rawThreadId ?? GENERAL_THREAD_ID;
-  return { chatId: chat.id, threadId };
+  return makeTelegramKey(chat.id, threadId);
 }
 
 /**
- * @description Compute the `ThreadKey` for an incoming update in DM mode, or
+ * @description Compute the `SessionKey` for an incoming update in DM mode, or
  * `null` if the bot should ignore it.
  *
  * The DM surface accepts updates ONLY from the OWNER'S private chat — and the
@@ -132,14 +138,14 @@ export function resolveThreadKey(input: RouteInput, allowedGroupId: number): Thr
  * the supergroup path there is no `is_topic_message` gate: a private chat has no
  * reply-thread/topic ambiguity to disambiguate.
  */
-export function resolveDmThreadKey(input: RouteInput, ownerUserId: number): ThreadKey | null {
+export function resolveDmThreadKey(input: RouteInput, ownerUserId: number): SessionKey | null {
   const chat = input.chat;
   if (!chat || chat.type !== 'private') return null;
   if (chat.id !== ownerUserId) return null;
 
   const msg = input.message ?? input.callbackQueryMessage;
   const threadId = msg?.message_thread_id ?? DM_GENERAL_THREAD_ID;
-  return { chatId: chat.id, threadId };
+  return makeTelegramKey(chat.id, threadId);
 }
 
 /** Runtime surface config for {@link resolveThreadKeyForMode} / {@link checkIsDmThreadKey}. */
@@ -163,16 +169,19 @@ export interface SurfaceRouting {
  * makes a group-only `both` unambiguously group.
  */
 export function checkIsDmThreadKey(
-  key: ThreadKey,
+  key: SessionKey,
   ownerUserId: number,
   isDmSurfaceActive: boolean,
 ): boolean {
   if (!isDmSurfaceActive) return false;
-  return key.chatId === ownerUserId;
+  // A predicate must answer, not throw: a key from another platform simply
+  // isn't this Telegram surface's DM.
+  if (!checkIsTelegramKey(key)) return false;
+  return getTelegramChatId(key) === ownerUserId;
 }
 
 /**
- * @description Resolve the `ThreadKey` for an update across BOTH surfaces, per
+ * @description Resolve the `SessionKey` for an update across BOTH surfaces, per
  * {@link ChatMode}. The two resolvers are disjoint (a private chat vs. a forum
  * supergroup), so trying both in `both` is unambiguous — an update matches at
  * most one. The owner-DM resolver runs first when the DM surface is live
@@ -183,7 +192,7 @@ export function checkIsDmThreadKey(
 export function resolveThreadKeyForMode(
   input: RouteInput,
   routing: SurfaceRouting,
-): ThreadKey | null {
+): SessionKey | null {
   if (routing.isDmSurfaceActive) {
     const dmKey = resolveDmThreadKey(input, routing.ownerUserId);
     if (dmKey) return dmKey;
@@ -201,9 +210,10 @@ export function resolveThreadKeyForMode(
  * with `0` (no `message_thread_id`). Pass the active {@link ChatMode} so the
  * right marker is checked.
  */
-export function checkIsGeneralTopic(key: ThreadKey, mode: ChatMode = 'group'): boolean {
+export function checkIsGeneralTopic(key: SessionKey, mode: ChatMode = 'group'): boolean {
+  if (!checkIsTelegramKey(key)) return false;
   const generalThreadId = mode === 'dm' ? DM_GENERAL_THREAD_ID : GENERAL_THREAD_ID;
-  return key.threadId === generalThreadId;
+  return getTelegramThreadId(key) === generalThreadId;
 }
 
 /** Inputs for the auto-pairing decision (side-effect free). */

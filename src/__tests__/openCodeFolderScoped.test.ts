@@ -20,7 +20,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, buildDirectoryScopedPath } from '../adapters/openCodeAdapter';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 interface ApiCall {
   method: string;
@@ -58,7 +59,7 @@ function createRecordingAdapter(): { adapter: OpenCodeAdapter; calls: ApiCall[] 
 describe('OpenCode folder-scoped create + list (S1)', () => {
   it('startSession POSTs /session with the bound folder as ?directory=', async () => {
     const { adapter, calls } = createRecordingAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100, 1);
 
     await adapter.startSession(key, workDir);
 
@@ -69,7 +70,7 @@ describe('OpenCode folder-scoped create + list (S1)', () => {
 
   it('getSessions GETs /session scoped to the bound folder', async () => {
     const { adapter, calls } = createRecordingAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100, 2);
 
     const sessions = await adapter.getSessions(key, workDir);
 

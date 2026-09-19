@@ -30,9 +30,10 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100777, threadId: 7 };
+const key: SessionKey = makeTelegramKey(-100777, 7);
 const sessionId = 'ses_persisted_7';
 const workDir = '/tmp/work-crash';
 const healthPath = '/global/health';
@@ -100,7 +101,7 @@ function createActiveSession() {
 function createAdapter(sessionExists: boolean): {
   adapter: OpenCodeAdapter;
   outputs: string[];
-  closedKeys: ThreadKey[];
+  closedKeys: SessionKey[];
   getSessionRequests: string[];
 } {
   const adapter = new OpenCodeAdapter();
@@ -130,11 +131,11 @@ function createAdapter(sessionExists: boolean): {
   adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 
   const outputs: string[] = [];
-  adapter.on('output', (_key: ThreadKey, text: string) => {
+  adapter.on('output', (_key: SessionKey, text: string) => {
     outputs.push(text);
   });
-  const closedKeys: ThreadKey[] = [];
-  adapter.on('closed', (closedKey: ThreadKey) => {
+  const closedKeys: SessionKey[] = [];
+  adapter.on('closed', (closedKey: SessionKey) => {
     closedKeys.push(closedKey);
   });
 

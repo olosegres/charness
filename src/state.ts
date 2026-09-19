@@ -4,7 +4,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { randomBytes } from 'node:crypto';
 import {
-  keyToString,
   type ApiRetryState,
   type DisplayVerbosityMode,
   type JsonStreamTailOffset,
@@ -13,8 +12,8 @@ import {
   type ResolvedThreadDisplayPrefs,
   type SeenWatermark,
   type ThreadDisplayPrefs,
-  type ThreadKey,
 } from './types';
+import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
@@ -25,7 +24,7 @@ import type { Locale } from './i18n';
  * @description On-disk state for the multi-thread telegram bot.
  *
  * Replaces the legacy `~/.telegram-bot-messages.json` (which only persisted
- * `messageIds` per user) with a richer per-`ThreadKey` schema:
+ * `messageIds` per user) with a richer per-`SessionKey` schema:
  *
  *   - `bindings[key]`  → thread is attached to a subdir under `WORK_ROOT`
  *   - `agents[key]`    → which adapter the thread is using, model, session ids
@@ -36,7 +35,7 @@ import type { Locale } from './i18n';
  *
  * The file is rewritten atomically (`writeFile(tmp) → fsync(fd) → rename →
  * fsync(parentDir)`, plan §13.14, T4). Concurrent mutations to the same
- * `ThreadKey` are serialised by a per-key async lock (plan §13.15, E3).
+ * `SessionKey` are serialised by a per-key async lock (plan §13.15, E3).
  *
  * **This module is intentionally NOT yet imported from `bot.ts`.** Plan §11
  * Этап 2 wires state in only on the following commit (Этап 3) — keeping the
@@ -229,7 +228,7 @@ export interface StateV1 {
    */
   lastHeartbeatAt?: number;
   /**
-   * Output-trace toggle (`/trace`). `tracedThreads` holds the {@link ThreadKey}
+   * Output-trace toggle (`/trace`). `tracedThreads` holds the {@link SessionKey}
    * strings explicitly opted into tracing; `traceAllThreads` traces every
    * thread (cross-thread forensics). Persisted so the toggle survives a hot
    * rebuild mid-debug — the writer state in `outputTrace.ts` is re-seeded from
@@ -257,7 +256,7 @@ export interface StateV1 {
    * absent list means no thread injects). When ON, every forwarded prompt gets
    * the send-time prepended as a local-offset ISO top line (agent-facing only,
    * never posted to the topic). Same persistence shape as `tracedThreads`
-   * (deduped/sorted {@link ThreadKey} strings, dropped when empty) and equally
+   * (deduped/sorted {@link SessionKey} strings, dropped when empty) and equally
    * lifecycle-independent: only `/timestamps` mutates it, never session
    * teardown. Optional so older state files stay valid.
    */
@@ -290,7 +289,7 @@ export interface StateV1 {
    * feature ships enabled, mirroring `traceAllThreads`), stored EXPLICITLY (incl.
    * `false`) so a General «Disable» is durable and not re-enabled by the default
    * on the next boot. `compactOnIdleOverrides` holds per-thread explicit
-   * overrides keyed by {@link ThreadKey} string — a present entry (true OR false)
+   * overrides keyed by {@link SessionKey} string — a present entry (true OR false)
    * wins over the global default; absent ⇒ follow the default. Both optional so
    * older state files stay valid; lifecycle-independent (only `/compact_on_idle`
    * mutates them, never session teardown).
@@ -303,7 +302,7 @@ export interface StateV1 {
    * INSTANCE-WIDE default driven from General (absent ⇒ ON — the operator's stated
    * preference is to see the summary; stored EXPLICITLY incl. `false` so a General
    * «Disable» is durable), and `compactSummaryOverrides` holds per-thread explicit
-   * overrides keyed by {@link ThreadKey} string, a present entry winning over the
+   * overrides keyed by {@link SessionKey} string, a present entry winning over the
    * default. Both optional so older state files stay valid; lifecycle-independent
    * (only `/compact_summary` mutates them, never session teardown).
    */
@@ -315,14 +314,14 @@ export interface StateV1 {
    * USER message — so idle compaction runs at most once per user-active period,
    * and (crucially) a bot restart cannot re-enable a second fire: the reattach
    * re-arms the idle timer ONLY for threads absent from this set. Same
-   * deduped/sorted {@link ThreadKey}-string shape as `timestampThreads` (dropped
+   * deduped/sorted {@link SessionKey}-string shape as `timestampThreads` (dropped
    * when empty), and equally lifecycle-independent — only a fire and a user
    * message mutate it, never session teardown. Optional so older state files stay
    * valid (a missing value = no thread latched).
    */
   compactIdleLatchedThreads?: string[];
   /**
-   * Per-thread compact-on-idle bookkeeping keyed by {@link ThreadKey} string —
+   * Per-thread compact-on-idle bookkeeping keyed by {@link SessionKey} string —
    * the idle COUNTDOWN's restart guard (see {@link CompactIdleTrackingEntry} for
    * the three instants and why losing them disabled the feature after every
    * restart). Entries are dropped on session teardown (a fresh session must get
@@ -336,7 +335,7 @@ export interface StateV1 {
    * behaviour was unconditional before the toggle existed), stored EXPLICITLY
    * (incl. `false`) so a General «Disable» is durable and not re-enabled by the
    * default on the next boot. `autoContinueOnLimitOverrides` holds per-thread
-   * explicit overrides keyed by {@link ThreadKey} string — a present entry (true
+   * explicit overrides keyed by {@link SessionKey} string — a present entry (true
    * OR false) wins over the global default. Both optional so older state files
    * stay valid; lifecycle-independent (only `/auto_continue_limits` mutates them, never
    * session teardown). Same shape discipline as the `compactOnIdle*` pair.
@@ -372,7 +371,7 @@ export interface StateV1 {
    */
   schedulerMcpPort?: number;
   /**
-   * In-flight interactive agent questions, keyed by {@link ThreadKey} string.
+   * In-flight interactive agent questions, keyed by {@link SessionKey} string.
    * Persisted so a pending question survives a bot restart / hot reload: the
    * in-memory `pendingQuestions` map (see `bot.ts`) is otherwise lost, leaving
    * the agent's question tool blocked forever and the posted Telegram option
@@ -385,7 +384,7 @@ export interface StateV1 {
   pendingQuestions?: Record<string, PendingQuestionState>;
   /**
    * Armed auto-retries after a provider-side API error, keyed by
-   * {@link ThreadKey} string. Persisted so a pending retry survives a bot
+   * {@link SessionKey} string. Persisted so a pending retry survives a bot
    * restart / hot reload: the in-memory `apiRetries` map (see `bot.ts`) is
    * otherwise lost, so an agent that died on a rate-limit / usage-limit error
    * would never get its scheduled nudge — especially a multi-hour usage-limit
@@ -396,7 +395,7 @@ export interface StateV1 {
    */
   apiRetries?: Record<string, ApiRetryState>;
   /**
-   * Boot-recovery markers: per {@link ThreadKey} string, the `stdout.jsonl`
+   * Boot-recovery markers: per {@link SessionKey} string, the `stdout.jsonl`
    * identity the recovery last armed a limit wait from (see
    * {@link LimitEpisodeMarker}). It is what stops a hot reload from resurrecting a
    * wait that was already settled — «⏭ Skip once», a user takeover, or a give-up
@@ -407,7 +406,7 @@ export interface StateV1 {
   limitEpisodesRecovered?: Record<string, LimitEpisodeMarker>;
   /**
    * Per-thread OpenCode output-verbosity rendering preferences (thinking /
-   * tool-results / sub-agent display), keyed by {@link ThreadKey} string. Each
+   * tool-results / sub-agent display), keyed by {@link SessionKey} string. Each
    * record only stores NON-default overrides — an absent field (or absent
    * record) means "use the locked default" (see {@link StateStore.getDisplayPrefs}),
    * which keeps `state.json` clean (same delete-when-default idiom as `/trace`).
@@ -420,7 +419,7 @@ export interface StateV1 {
   /**
    * Per-thread TRANSIENT status-frame message ids currently on screen (the
    * "✽ working…" liveness frame, the live thinking indicator, the dedicated
-   * sub-agent status), keyed by {@link ThreadKey} string. Persisted ONLY so an
+   * sub-agent status), keyed by {@link SessionKey} string. Persisted ONLY so an
    * UNGRACEFUL exit (crash / SIGKILL — the graceful shutdown sweep in `bot.ts`
    * never ran) can delete whatever frame was on screen on the NEXT boot, after
    * reattach (the reattached session is idle, so a leftover frame is stale by
@@ -642,7 +641,7 @@ async function archiveCorruptedFile(filePath: string): Promise<string | null> {
  *
  * Old layout: `~/.telegram-bot-messages.json` keyed by raw user id.
  * The 2.0 release intentionally doesn't try to merge those ids into the
- * new `ThreadKey`-keyed schema — the routing model changed too much for
+ * new `SessionKey`-keyed schema — the routing model changed too much for
  * a clean mapping (plan §9). We just rename the file so it's preserved
  * for the user's records and so it stops being read on every boot.
  *
@@ -784,18 +783,18 @@ export class StateStore {
    * parallel. Failure in one holder does NOT propagate to followers (the lock
    * is for serialisation only; error handling is each caller's job).
    */
-  withLock<T>(key: ThreadKey, fn: () => Promise<T>): Promise<T> {
+  withLock<T>(key: SessionKey, fn: () => Promise<T>): Promise<T> {
     return this.keyLock.withLock(keyToString(key), fn);
   }
 
   // ── bindings ──
 
-  getBinding(key: ThreadKey): BindingData | null {
+  getBinding(key: SessionKey): BindingData | null {
     return this.state.bindings[keyToString(key)] ?? null;
   }
 
   async setBinding(
-    key: ThreadKey,
+    key: SessionKey,
     subdir: string,
     options: { closed?: boolean; topicName?: string } = {},
   ): Promise<void> {
@@ -837,7 +836,7 @@ export class StateStore {
    * save) when the binding is absent or the name is unchanged — symmetric to
    * {@link setBindingPinnedStatusText}.
    */
-  async setBindingTopicName(key: ThreadKey, topicName: string): Promise<void> {
+  async setBindingTopicName(key: SessionKey, topicName: string): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.bindings[k];
@@ -848,7 +847,7 @@ export class StateStore {
     });
   }
 
-  async setBindingClosed(key: ThreadKey, closed: boolean): Promise<void> {
+  async setBindingClosed(key: SessionKey, closed: boolean): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.bindings[k];
@@ -867,7 +866,7 @@ export class StateStore {
    * call; this method only updates the on-disk pointer. Plan §20.5.
    */
   async setBindingPinnedStatusMessageId(
-    key: ThreadKey,
+    key: SessionKey,
     messageId: number | null,
   ): Promise<void> {
     const k = keyToString(key);
@@ -894,7 +893,7 @@ export class StateStore {
    * startup refresh wave skips identical-banner edits (B8).
    */
   async setBindingPinnedStatusText(
-    key: ThreadKey,
+    key: SessionKey,
     text: string | null,
   ): Promise<void> {
     const k = keyToString(key);
@@ -913,7 +912,7 @@ export class StateStore {
     });
   }
 
-  async removeBinding(key: ThreadKey): Promise<void> {
+  async removeBinding(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       delete this.state.bindings[k];
@@ -926,10 +925,10 @@ export class StateStore {
     });
   }
 
-  listBindings(): Array<{ key: ThreadKey; data: BindingData }> {
-    const out: Array<{ key: ThreadKey; data: BindingData }> = [];
+  listBindings(): Array<{ key: SessionKey; data: BindingData }> {
+    const out: Array<{ key: SessionKey; data: BindingData }> = [];
     for (const [keyStr, data] of Object.entries(this.state.bindings)) {
-      const key = parseKeyString(keyStr);
+      const key = tryKeyFromString(keyStr);
       if (key) out.push({ key, data });
     }
     return out;
@@ -940,11 +939,11 @@ export class StateStore {
    * Plan §10.6 names this for `/bind` UX warning «📁 уже работают треды: ...»
    * — one folder may be reached from several threads (D7).
    */
-  listKeysForSubdir(subdir: string): ThreadKey[] {
-    const out: ThreadKey[] = [];
+  listKeysForSubdir(subdir: string): SessionKey[] {
+    const out: SessionKey[] = [];
     for (const [keyStr, data] of Object.entries(this.state.bindings)) {
       if (data.subdir === subdir) {
-        const key = parseKeyString(keyStr);
+        const key = tryKeyFromString(keyStr);
         if (key) out.push(key);
       }
     }
@@ -953,7 +952,7 @@ export class StateStore {
 
   // ── agents ──
 
-  getAgent(key: ThreadKey): AgentData | null {
+  getAgent(key: SessionKey): AgentData | null {
     return this.state.agents[keyToString(key)] ?? null;
   }
 
@@ -963,7 +962,7 @@ export class StateStore {
    * fields are patched onto whatever exists.
    */
   async setAgent(
-    key: ThreadKey,
+    key: SessionKey,
     data: { name: string } & Partial<Omit<AgentData, 'name'>>,
   ): Promise<void> {
     const k = keyToString(key);
@@ -974,7 +973,7 @@ export class StateStore {
     });
   }
 
-  async removeAgent(key: ThreadKey): Promise<void> {
+  async removeAgent(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       delete this.state.agents[k];
@@ -982,7 +981,7 @@ export class StateStore {
     });
   }
 
-  getClaudeSessionId(key: ThreadKey): string | null {
+  getClaudeSessionId(key: SessionKey): string | null {
     return this.state.agents[keyToString(key)]?.claudeSessionId ?? null;
   }
 
@@ -996,7 +995,7 @@ export class StateStore {
    * via {@link setAgent} or `setThreadAdapter` — those are the right
    * places to change `name`.
    */
-  async setClaudeSessionId(key: ThreadKey, uuid: string): Promise<void> {
+  async setClaudeSessionId(key: SessionKey, uuid: string): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.agents[k];
@@ -1007,12 +1006,12 @@ export class StateStore {
     });
   }
 
-  getOpenCodeSessionId(key: ThreadKey): string | null {
+  getOpenCodeSessionId(key: SessionKey): string | null {
     return this.state.agents[keyToString(key)]?.opencodeSessionId ?? null;
   }
 
   /** Symmetric to {@link setClaudeSessionId} — does not flip `agent.name`. */
-  async setOpenCodeSessionId(key: ThreadKey, id: string): Promise<void> {
+  async setOpenCodeSessionId(key: SessionKey, id: string): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.agents[k];
@@ -1032,7 +1031,7 @@ export class StateStore {
    * (which always recorded its row first), so a write for an unknown thread is a
    * no-op, not a dangling agent row.
    */
-  async setSeenWatermark(key: ThreadKey, watermark: SeenWatermark): Promise<void> {
+  async setSeenWatermark(key: SessionKey, watermark: SeenWatermark): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.agents[k];
@@ -1049,7 +1048,7 @@ export class StateStore {
    * `agent.name` and never creates a row — an offset is meaningless without
    * the agent row its session recorded first.
    */
-  async setJsonStreamTail(key: ThreadKey, tail: JsonStreamTailOffset): Promise<void> {
+  async setJsonStreamTail(key: SessionKey, tail: JsonStreamTailOffset): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.agents[k];
@@ -1066,7 +1065,7 @@ export class StateStore {
    * agent row (via `setAgent` / `persistAdapterSessionIds`) first, so a write
    * for an unknown thread is a no-op rather than a dangling agent row.
    */
-  async setAgentStartedAt(key: ThreadKey, startedAt: string): Promise<void> {
+  async setAgentStartedAt(key: SessionKey, startedAt: string): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.agents[k];
@@ -1084,7 +1083,7 @@ export class StateStore {
    * `/new`, `/unbind`) so a later bot restart won't auto-reattach a session
    * the user deliberately ended. No-op when the thread has no agent record.
    */
-  async clearAgentSessionIds(key: ThreadKey): Promise<void> {
+  async clearAgentSessionIds(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       // A released session can never be the one a boot recovery resumes (it checks
@@ -1105,7 +1104,7 @@ export class StateStore {
 
   // ── messages (`/clear` support) ──
 
-  getMessageIds(key: ThreadKey): number[] {
+  getMessageIds(key: SessionKey): number[] {
     return this.state.messages[keyToString(key)]?.slice() ?? [];
   }
 
@@ -1124,7 +1123,7 @@ export class StateStore {
    * the end — Telegram won't let `deleteMessages` touch messages older than
    * 48h anyway (plan §11 Этап 3, U2).
    */
-  async pushMessageId(key: ThreadKey, msgId: number): Promise<void> {
+  async pushMessageId(key: SessionKey, msgId: number): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       this.appendMessageIds(k, [msgId]);
@@ -1133,7 +1132,7 @@ export class StateStore {
   }
 
   /** Atomically append and durably persist one Telegram response's message IDs. */
-  async pushMessageIds(key: ThreadKey, messageIds: number[]): Promise<void> {
+  async pushMessageIds(key: SessionKey, messageIds: number[]): Promise<void> {
     if (messageIds.length === 0) return;
     const k = keyToString(key);
     await this.withLock(key, async () => {
@@ -1143,7 +1142,7 @@ export class StateStore {
   }
 
   /** Atomically hand tracked IDs to `/clear_messages` while later pushes remain tracked. */
-  async takeMessageIds(key: ThreadKey, additionalIds: number[] = []): Promise<number[]> {
+  async takeMessageIds(key: SessionKey, additionalIds: number[] = []): Promise<number[]> {
     const k = keyToString(key);
     return this.withLock(key, async () => {
       const messageIds = [...(this.state.messages[k] ?? []), ...additionalIds];
@@ -1212,7 +1211,7 @@ export class StateStore {
 
   /**
    * @description Current persisted trace toggle. `threadKeys` are the
-   * {@link ThreadKey} strings opted into tracing; `allThreads` traces
+   * {@link SessionKey} strings opted into tracing; `allThreads` traces
    * everything. `allThreads` defaults to TRUE on a fresh or pre-feature state
    * file (always-on observability — only an explicit `/trace off all` turns it
    * off, stored as a durable `false`); `threadKeys` defaults empty. Read at boot
@@ -1285,7 +1284,7 @@ export class StateStore {
    * `forwardPromptToAgent` prepends the send-time as a local-offset ISO top
    * line to every forwarded prompt.
    */
-  checkIsTimestampsEnabled(key: ThreadKey): boolean {
+  checkIsTimestampsEnabled(key: SessionKey): boolean {
     return this.state.timestampThreads?.includes(keyToString(key)) ?? false;
   }
 
@@ -1296,7 +1295,7 @@ export class StateStore {
    * install leaves no trace in `state.json`). Not crash-critical, so it rides
    * the debounced save loop.
    */
-  async setTimestampsEnabled(key: ThreadKey, isEnabled: boolean): Promise<void> {
+  async setTimestampsEnabled(key: SessionKey, isEnabled: boolean): Promise<void> {
     const keyStr = keyToString(key);
     const current = new Set(this.state.timestampThreads ?? []);
     if (isEnabled) current.add(keyStr);
@@ -1349,7 +1348,7 @@ export class StateStore {
    * @description The per-thread compact-on-idle override, or `undefined` when the
    * thread follows the instance default. A present value (true OR false) wins.
    */
-  getCompactOnIdleOverride(key: ThreadKey): boolean | undefined {
+  getCompactOnIdleOverride(key: SessionKey): boolean | undefined {
     return this.state.compactOnIdleOverrides?.[keyToString(key)];
   }
 
@@ -1357,7 +1356,7 @@ export class StateStore {
    * @description Whether compact-on-idle is effectively enabled for `key`: the
    * per-thread override if set, else the instance default (ON when unset).
    */
-  checkIsCompactOnIdleEnabled(key: ThreadKey): boolean {
+  checkIsCompactOnIdleEnabled(key: SessionKey): boolean {
     return resolveCompactOnIdleEnabled(
       this.state.compactOnIdleEnabled,
       this.getCompactOnIdleOverride(key),
@@ -1383,7 +1382,7 @@ export class StateStore {
    * default); the whole map is dropped once empty so an all-default instance
    * leaves a clean `state.json`. Debounced.
    */
-  async setCompactOnIdleOverride(key: ThreadKey, enabled: boolean): Promise<void> {
+  async setCompactOnIdleOverride(key: SessionKey, enabled: boolean): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (this.state.compactOnIdleOverrides?.[k] === enabled) return;
@@ -1406,7 +1405,7 @@ export class StateStore {
    * @description The per-thread full-summary override, or `undefined` when the
    * thread follows the instance default. A present value (true OR false) wins.
    */
-  getCompactSummaryOverride(key: ThreadKey): boolean | undefined {
+  getCompactSummaryOverride(key: SessionKey): boolean | undefined {
     return this.state.compactSummaryOverrides?.[keyToString(key)];
   }
 
@@ -1414,7 +1413,7 @@ export class StateStore {
    * @description Whether the full compaction summary is posted for `key`: the
    * per-thread override if set, else the instance default (ON when unset).
    */
-  checkIsCompactSummaryEnabled(key: ThreadKey): boolean {
+  checkIsCompactSummaryEnabled(key: SessionKey): boolean {
     return resolveCompactSummaryEnabled(
       this.state.compactSummaryEnabled,
       this.getCompactSummaryOverride(key),
@@ -1439,7 +1438,7 @@ export class StateStore {
    * Stored explicitly (a present true/false wins over the global default).
    * Debounced — mirrors {@link setCompactOnIdleOverride}.
    */
-  async setCompactSummaryOverride(key: ThreadKey, enabled: boolean): Promise<void> {
+  async setCompactSummaryOverride(key: SessionKey, enabled: boolean): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (this.state.compactSummaryOverrides?.[k] === enabled) return;
@@ -1455,7 +1454,7 @@ export class StateStore {
    * the timer-arming path (a latched thread never re-arms — so a restart can't
    * re-fire). Default `false` (never latched).
    */
-  checkIsCompactIdleLatched(key: ThreadKey): boolean {
+  checkIsCompactIdleLatched(key: SessionKey): boolean {
     return this.state.compactIdleLatchedThreads?.includes(keyToString(key)) ?? false;
   }
 
@@ -1466,7 +1465,7 @@ export class StateStore {
    * when empty) and rides the debounced save loop — the persistence is only a
    * restart guard, so losing the last <=500ms is at worst one extra fire.
    */
-  async setCompactIdleLatched(key: ThreadKey, isLatched: boolean): Promise<void> {
+  async setCompactIdleLatched(key: SessionKey, isLatched: boolean): Promise<void> {
     const keyStr = keyToString(key);
     const current = new Set(this.state.compactIdleLatchedThreads ?? []);
     if (isLatched) current.add(keyStr);
@@ -1494,7 +1493,7 @@ export class StateStore {
    * Unknown-means-zero is conservative in the right direction: at worst the topic
    * waits one more full idle window.
    */
-  getCompactIdleTracking(key: ThreadKey): {
+  getCompactIdleTracking(key: SessionKey): {
     lastActivityAt: number;
     lastTurnEndAt: number;
     lastCompactionAt: number;
@@ -1523,7 +1522,7 @@ export class StateStore {
    * correctness — at worst the persisted stamp trails the live one by under a
    * minute, against a 55-minute threshold.
    */
-  noteCompactIdleActivity(key: ThreadKey, now: number = Date.now()): void {
+  noteCompactIdleActivity(key: SessionKey, now: number = Date.now()): void {
     this.stampCompactIdleTracking(key, 'lastActivityAt', now);
   }
 
@@ -1533,7 +1532,7 @@ export class StateStore {
    * `lastCompactionAt`). Same per-chunk call frequency and therefore the same
    * coarse-save rule as {@link noteCompactIdleActivity}.
    */
-  noteCompactIdleTurnEnd(key: ThreadKey, now: number = Date.now()): void {
+  noteCompactIdleTurnEnd(key: SessionKey, now: number = Date.now()): void {
     this.stampCompactIdleTracking(key, 'lastTurnEndAt', now);
   }
 
@@ -1544,7 +1543,7 @@ export class StateStore {
    * is what stops a restart from re-compacting a session nothing has touched
    * since.
    */
-  async setCompactIdleCompactedAt(key: ThreadKey, now: number = Date.now()): Promise<void> {
+  async setCompactIdleCompactedAt(key: SessionKey, now: number = Date.now()): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const sessionId = this.getAgentSessionId(k);
@@ -1567,7 +1566,7 @@ export class StateStore {
    * session, so no special case is needed on the start path. The whole map is
    * dropped once empty so an idle bot leaves a clean `state.json`.
    */
-  async clearCompactIdleTracking(key: ThreadKey): Promise<void> {
+  async clearCompactIdleTracking(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     this.compactIdleTrackingSavedAt.delete(k);
     await this.withLock(key, async () => {
@@ -1588,7 +1587,7 @@ export class StateStore {
    * of a whole record can.
    */
   private stampCompactIdleTracking(
-    key: ThreadKey,
+    key: SessionKey,
     field: 'lastActivityAt' | 'lastTurnEndAt',
     now: number,
   ): void {
@@ -1638,7 +1637,7 @@ export class StateStore {
    * @description The per-thread limit-auto-continue override, or `undefined` when
    * the thread follows the instance default. A present value (true OR false) wins.
    */
-  getAutoContinueOnLimitOverride(key: ThreadKey): boolean | undefined {
+  getAutoContinueOnLimitOverride(key: SessionKey): boolean | undefined {
     return this.state.autoContinueOnLimitOverrides?.[keyToString(key)];
   }
 
@@ -1646,7 +1645,7 @@ export class StateStore {
    * @description Whether limit auto-continue is effectively enabled for `key`: the
    * per-thread override if set, else the instance default (ON when unset).
    */
-  checkIsAutoContinueOnLimitEnabled(key: ThreadKey): boolean {
+  checkIsAutoContinueOnLimitEnabled(key: SessionKey): boolean {
     return resolveAutoContinueOnLimitEnabled(
       this.state.autoContinueOnLimitEnabled,
       this.getAutoContinueOnLimitOverride(key),
@@ -1672,7 +1671,7 @@ export class StateStore {
    * default); the map is created lazily on the first override, so an all-default
    * instance leaves a clean `state.json`. Debounced.
    */
-  async setAutoContinueOnLimitOverride(key: ThreadKey, enabled: boolean): Promise<void> {
+  async setAutoContinueOnLimitOverride(key: SessionKey, enabled: boolean): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (this.state.autoContinueOnLimitOverrides?.[k] === enabled) {
@@ -1724,7 +1723,7 @@ export class StateStore {
    * — those map onto the new vocabulary here, and an unrecognized value falls
    * back to the default, so old files keep working without a migration pass.
    */
-  getDisplayPrefs(key: ThreadKey): ResolvedThreadDisplayPrefs {
+  getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
     const stored = this.state.displayPrefs?.[keyToString(key)];
     return {
       thinking: normalizeDisplayVerbosityMode(stored?.thinking) ?? defaultDisplayVerbosityMode,
@@ -1744,7 +1743,7 @@ export class StateStore {
    * the store on the write path.
    */
   async setDisplayPref(
-    key: ThreadKey,
+    key: SessionKey,
     field: keyof ThreadDisplayPrefs,
     value: DisplayVerbosityMode,
   ): Promise<void> {
@@ -1789,7 +1788,7 @@ export class StateStore {
   }
 
   /** Schedules owned by `key`, in insertion order. Empty array when none. */
-  getThreadSchedules(key: ThreadKey): ScheduleRecord[] {
+  getThreadSchedules(key: SessionKey): ScheduleRecord[] {
     const target = keyToString(key);
     const all = this.state.schedules ?? {};
     return Object.values(all).filter(record => record.threadKey === target);
@@ -1804,7 +1803,7 @@ export class StateStore {
    * before the process can die.
    */
   async upsertSchedule(record: ScheduleRecord): Promise<void> {
-    const target = parseKeyString(record.threadKey);
+    const target = tryKeyFromString(record.threadKey);
     if (!target) return;
     await this.withLock(target, async () => {
       (this.state.schedules ??= {})[record.id] = record;
@@ -1816,7 +1815,7 @@ export class StateStore {
   async removeSchedule(id: string): Promise<void> {
     const existing = this.state.schedules?.[id];
     if (!existing) return;
-    const owner = parseKeyString(existing.threadKey);
+    const owner = tryKeyFromString(existing.threadKey);
     const run = async () => {
       if (this.state.schedules) {
         delete this.state.schedules[id];
@@ -1840,7 +1839,7 @@ export class StateStore {
   ): Promise<void> {
     const existing = this.state.schedules?.[id];
     if (!existing) return;
-    const owner = parseKeyString(existing.threadKey);
+    const owner = tryKeyFromString(existing.threadKey);
     const run = async () => {
       const current = this.state.schedules?.[id];
       if (!current) return;
@@ -1904,7 +1903,7 @@ export class StateStore {
 
   /**
    * @description Every persisted pending question across all threads, keyed by
-   * {@link ThreadKey} string. Read at boot to re-arm the in-memory map for
+   * {@link SessionKey} string. Read at boot to re-arm the in-memory map for
    * threads whose session reattached. Returns a shallow copy so callers can't
    * mutate the live state object.
    */
@@ -1920,7 +1919,7 @@ export class StateStore {
    * pre-fix behaviour for that one question. The `messageId` patch goes through
    * here too, so the persisted record always carries the live button message.
    */
-  async setPendingQuestion(key: ThreadKey, value: PendingQuestionState): Promise<void> {
+  async setPendingQuestion(key: SessionKey, value: PendingQuestionState): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       (this.state.pendingQuestions ??= {})[k] = value;
@@ -1933,7 +1932,7 @@ export class StateStore {
    * `pendingQuestions.delete(...)` in `bot.ts`. No-op (no save) when absent. The
    * whole map is dropped once empty so an idle bot leaves a clean `state.json`.
    */
-  async clearPendingQuestion(key: ThreadKey): Promise<void> {
+  async clearPendingQuestion(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (!this.state.pendingQuestions?.[k]) return;
@@ -1949,7 +1948,7 @@ export class StateStore {
 
   /**
    * @description Every persisted armed auto-retry across all threads, keyed by
-   * {@link ThreadKey} string. Read at boot to re-arm the in-memory map after
+   * {@link SessionKey} string. Read at boot to re-arm the in-memory map after
    * sessions reattach. Returns a shallow copy so callers can't mutate the live
    * state object.
    */
@@ -1966,7 +1965,7 @@ export class StateStore {
    * attempt) goes through here too, so the persisted record always carries the
    * latest attempt and `fireAt`.
    */
-  async setApiRetry(key: ThreadKey, value: ApiRetryState): Promise<void> {
+  async setApiRetry(key: SessionKey, value: ApiRetryState): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       (this.state.apiRetries ??= {})[k] = value;
@@ -1979,7 +1978,7 @@ export class StateStore {
    * `apiRetries.delete(...)` in `bot.ts`. No-op (no save) when absent. The whole
    * map is dropped once empty so an idle bot leaves a clean `state.json`.
    */
-  async clearApiRetry(key: ThreadKey): Promise<void> {
+  async clearApiRetry(key: SessionKey): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (!this.state.apiRetries?.[k]) return;
@@ -1999,7 +1998,7 @@ export class StateStore {
    * against the live stat so an UNCHANGED log is not recovered twice — see
    * {@link LimitEpisodeMarker}.
    */
-  getLimitEpisodeRecovered(key: ThreadKey): LimitEpisodeMarker | undefined {
+  getLimitEpisodeRecovered(key: SessionKey): LimitEpisodeMarker | undefined {
     return this.state.limitEpisodesRecovered?.[keyToString(key)];
   }
 
@@ -2010,7 +2009,7 @@ export class StateStore {
    * that fires on «⏭ Skip once» and on every inbound message, which is exactly the
    * settled-episode case the marker has to outlive.
    */
-  async setLimitEpisodeRecovered(key: ThreadKey, value: LimitEpisodeMarker): Promise<void> {
+  async setLimitEpisodeRecovered(key: SessionKey, value: LimitEpisodeMarker): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       (this.state.limitEpisodesRecovered ??= {})[k] = value;
@@ -2035,7 +2034,7 @@ export class StateStore {
 
   /**
    * @description Every persisted transient status-frame id list across all
-   * threads, keyed by {@link ThreadKey} string. Read at boot (after reattach) to
+   * threads, keyed by {@link SessionKey} string. Read at boot (after reattach) to
    * delete any frame left on screen by an UNGRACEFUL exit. Returns a shallow copy
    * so callers can't mutate the live state object.
    */
@@ -2054,7 +2053,7 @@ export class StateStore {
    * unchanged, so the per-turn create/delete churn doesn't reset the save timer
    * on every identical re-persist.
    */
-  async setTransientFrames(key: ThreadKey, ids: number[]): Promise<void> {
+  async setTransientFrames(key: SessionKey, ids: number[]): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.transientFrames?.[k];
@@ -2109,20 +2108,6 @@ export class StateStore {
     this.writeChain = next.catch(() => {});
     await next;
   }
-}
-
-/**
- * @description Inverse of `keyToString` that doesn't throw on malformed
- * input — returns `null` so callers can skip rogue keys (e.g. a state file
- * hand-edited by the user).
- */
-function parseKeyString(s: string): ThreadKey | null {
-  const idx = s.indexOf(':');
-  if (idx <= 0 || idx === s.length - 1) return null;
-  const chatId = Number(s.slice(0, idx));
-  const threadId = Number(s.slice(idx + 1));
-  if (!Number.isFinite(chatId) || !Number.isFinite(threadId)) return null;
-  return { chatId, threadId };
 }
 
 // ─── singleton wiring ────────────────────────────────────────────────

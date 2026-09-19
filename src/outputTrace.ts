@@ -4,8 +4,9 @@ import path from 'node:path';
 import { resolveDataDir } from './state';
 import { getHourBucketPath, pruneExpiredBuckets, retentionMs } from './utils/rotatingLogFile';
 import { GENERAL_THREAD_ID } from './threadRouting';
-import type { ThreadKey } from './types';
-import { keyToString } from './types';
+import type { SessionKey } from './sessionKey';
+import { keyToString } from './sessionKey';
+import { makeTelegramKey } from './connectors/telegram/sessionKeyCodec';
 
 /**
  * @description Output-trace special mode: a JSONL record of what the bot
@@ -62,7 +63,7 @@ const highSurrogateMax = 0xdbff;
 
 /** When true every thread is traced (cross-thread forensics). */
 let traceAllThreads = false;
-/** ThreadKey strings (`"<chatId>:<threadId>"`) explicitly opted into tracing. */
+/** SessionKey strings (`"<chatId>:<threadId>"`) explicitly opted into tracing. */
 const tracedThreadKeys = new Set<string>();
 
 /**
@@ -105,7 +106,7 @@ export function checkIsTracingActive(): boolean {
  * @description Whether a specific thread's events should be recorded:
  * the all-flag covers everything, otherwise the thread must be opted in.
  */
-export function checkIsThreadTraced(key: ThreadKey): boolean {
+export function checkIsThreadTraced(key: SessionKey): boolean {
   return traceAllThreads || tracedThreadKeys.has(keyToString(key));
 }
 
@@ -346,11 +347,11 @@ export function traceRecvUpdate(fields: RecvTraceFields): void {
 function checkIsRecvThreadTraced(chatId: number | undefined, threadId: number | undefined): boolean {
   if (traceAllThreads) return true;
   if (chatId === undefined) return false;
-  return tracedThreadKeys.has(keyToString({ chatId, threadId: threadId ?? GENERAL_THREAD_ID }));
+  return tracedThreadKeys.has(keyToString(makeTelegramKey(chatId, threadId ?? GENERAL_THREAD_ID)));
 }
 
 /** Record an adapter `output`/`status`/`thinking`/`toolResult` event entering the bot's send path. */
-export function traceAgentEmit(event: 'output' | 'status' | 'thinking' | 'toolResult', key: ThreadKey, text: string): void {
+export function traceAgentEmit(event: 'output' | 'status' | 'thinking' | 'toolResult', key: SessionKey, text: string): void {
   if (!checkIsThreadTraced(key)) return;
   appendTraceEntry('emit', {
     event,
@@ -428,7 +429,7 @@ function checkIsApiCallTraced(fields: Record<string, TraceFieldValue>): boolean 
   const chatId = typeof fields.chatId === 'number' ? fields.chatId : undefined;
   if (chatId === undefined) return true;
   const threadId = typeof fields.threadId === 'number' ? fields.threadId : GENERAL_THREAD_ID;
-  return tracedThreadKeys.has(keyToString({ chatId, threadId }));
+  return tracedThreadKeys.has(keyToString(makeTelegramKey(chatId, threadId)));
 }
 
 /**

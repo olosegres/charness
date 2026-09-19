@@ -26,9 +26,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, buildDirectoryScopedPath } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100779, threadId: 9 };
+const key: SessionKey = makeTelegramKey(-100779, 9);
 const sessionId = 'ses_question_owner_9';
 const requestId = 'que_abc123';
 const owningDirectory = '/home/user/src/otherProject';

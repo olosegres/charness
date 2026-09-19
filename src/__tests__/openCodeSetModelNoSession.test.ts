@@ -23,7 +23,8 @@ import {
   seededEffortLevel,
 } from './openCodeSetModelNoSession.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const availableModels = [
   'anthropic/claude-opus-4-8',
@@ -68,7 +69,7 @@ function readEffortPref(keyStr: string): string | undefined {
 
 describe('OpenCode setModel with NO active session (S1/S2)', () => {
   it('resolves, persists the pref, returns null (was: "No active session")', async () => {
-    const key: ThreadKey = { chatId: -100888777, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100888777, 1);
     const adapter = createAdapterNoSession();
 
     const result = await adapter.setModel(key, 'anthropic/claude-opus-4-8');
@@ -82,7 +83,7 @@ describe('OpenCode setModel with NO active session (S1/S2)', () => {
   });
 
   it('unknown model → "not found" error, pref NOT saved', async () => {
-    const key: ThreadKey = { chatId: -100888777, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100888777, 2);
     const adapter = createAdapterNoSession();
 
     // No slash → `resolveModelId` searches `findModelByQuery`; a name matching
@@ -95,13 +96,13 @@ describe('OpenCode setModel with NO active session (S1/S2)', () => {
   });
 
   it('saved effort INVALID for the new model → cleared + cleared_on_model_switch emitted', async () => {
-    const key: ThreadKey = { chatId: -100888777, threadId: 42 };
+    const key: SessionKey = makeTelegramKey(-100888777, 42);
     assert.equal(keyToString(key), effortThreadKeyString, 'key must match the on-disk seeded effort');
     assert.equal(readEffortPref(effortThreadKeyString), seededEffortLevel, 'precondition: effort seeded');
 
     const adapter = createAdapterNoSession();
     const outputs: string[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
 
     // sonnet declares NO variants, so the seeded `high` becomes invalid.
     const result = await adapter.setModel(key, 'anthropic/claude-sonnet-4-6');
@@ -113,12 +114,12 @@ describe('OpenCode setModel with NO active session (S1/S2)', () => {
 
   it('saved effort VALID for the new model → kept, no notice', async () => {
     // Seed a fresh thread whose effort IS a variant of the target model.
-    const key: ThreadKey = { chatId: -100888777, threadId: 43 };
+    const key: SessionKey = makeTelegramKey(-100888777, 43);
     fs.writeFileSync(effortPrefsFile, JSON.stringify({ [keyToString(key)]: 'high' }));
 
     const adapter = createAdapterNoSession();
     const outputs: string[] = [];
-    adapter.on('output', (_k: ThreadKey, text: string) => outputs.push(text));
+    adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
 
     // opus declares low..max, so `high` stays valid.
     const result = await adapter.setModel(key, 'anthropic/claude-opus-4-8');
@@ -130,7 +131,7 @@ describe('OpenCode setModel with NO active session (S1/S2)', () => {
 
 describe('OpenCode getCurrentModel falls back to the saved pref (S2)', () => {
   it('no session → returns the saved pref label', async () => {
-    const key: ThreadKey = { chatId: -100888777, threadId: 7 };
+    const key: SessionKey = makeTelegramKey(-100888777, 7);
     const adapter = createAdapterNoSession();
     await adapter.setModel(key, 'openai/gpt-5');
 
@@ -139,7 +140,7 @@ describe('OpenCode getCurrentModel falls back to the saved pref (S2)', () => {
   });
 
   it('live session label wins over the saved pref', async () => {
-    const key: ThreadKey = { chatId: -100888777, threadId: 8 };
+    const key: SessionKey = makeTelegramKey(-100888777, 8);
     const adapter = createAdapterNoSession();
     await adapter.setModel(key, 'openai/gpt-5'); // saved pref on disk
 

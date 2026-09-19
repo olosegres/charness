@@ -20,7 +20,8 @@ import {
   seededModelLabel,
 } from './openCodeSetEffortNoSession.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 /** opus declares low..max; sonnet declares NO variants. */
 const providersConfig = {
@@ -58,7 +59,7 @@ function readEffortPref(keyStr: string): string | undefined {
 
 describe('OpenCode getAvailableEffortLevels with NO active session', () => {
   it('saved /model pref → returns that prospective model variants', async () => {
-    const key: ThreadKey = { chatId: -100555444, threadId: 11 };
+    const key: SessionKey = makeTelegramKey(-100555444, 11);
     assert.equal(keyToString(key), savedModelThreadKeyString, 'key must match the seeded model pref');
     const adapter = createAdapterNoSession();
 
@@ -68,7 +69,7 @@ describe('OpenCode getAvailableEffortLevels with NO active session', () => {
   });
 
   it('no saved pref → falls back to the server default model variants', async () => {
-    const key: ThreadKey = { chatId: -100555444, threadId: 99 };
+    const key: SessionKey = makeTelegramKey(-100555444, 99);
     const adapter = createAdapterNoSession();
 
     // No /model pref for this thread → `getProspectiveModelRef` hits `/config`
@@ -80,7 +81,7 @@ describe('OpenCode getAvailableEffortLevels with NO active session', () => {
 
 describe('OpenCode setEffort with NO active session (symmetry with setModel)', () => {
   it('valid variant → persists the pref and returns null (was: "No active session")', async () => {
-    const key: ThreadKey = { chatId: -100555444, threadId: 12 };
+    const key: SessionKey = makeTelegramKey(-100555444, 12);
     // Seed a saved /model pref so the prospective model is opus (low..max).
     const modelPrefsFile = effortPrefsFile.replace('.opencode-effort-prefs.json', '.opencode-model-prefs.json');
     const existing = JSON.parse(fs.readFileSync(modelPrefsFile, 'utf-8'));
@@ -101,7 +102,7 @@ describe('OpenCode setEffort with NO active session (symmetry with setModel)', (
   });
 
   it('invalid variant → invalid-level notice, pref NOT persisted', async () => {
-    const key: ThreadKey = { chatId: -100555444, threadId: 13 };
+    const key: SessionKey = makeTelegramKey(-100555444, 13);
     // Saved /model pref = opus (low..max), so `nonsense` is not a variant.
     const modelPrefsFile = effortPrefsFile.replace('.opencode-effort-prefs.json', '.opencode-model-prefs.json');
     const existing = JSON.parse(fs.readFileSync(modelPrefsFile, 'utf-8'));
@@ -119,7 +120,7 @@ describe('OpenCode setEffort with NO active session (symmetry with setModel)', (
   });
 
   it('prospective model has NO variants → not-supported notice naming that model', async () => {
-    const key: ThreadKey = { chatId: -100555444, threadId: 14 };
+    const key: SessionKey = makeTelegramKey(-100555444, 14);
     // Saved /model pref = sonnet, which declares NO variants.
     const sonnetLabel = 'anthropic/claude-sonnet-4-6';
     const modelPrefsFile = effortPrefsFile.replace('.opencode-effort-prefs.json', '.opencode-model-prefs.json');

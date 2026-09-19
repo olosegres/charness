@@ -25,7 +25,7 @@ import {
 } from './openCodeEffortSeed.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { defaultEffortLevel } from '../effortLevels';
-import { keyToString, keyFromString, type ThreadKey } from '../types';
+import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
 const newSessionId = 'ses_effort_seed';
 
@@ -81,7 +81,7 @@ async function waitForSession(adapter: OpenCodeAdapter, keyStr: string): Promise
 
 describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () => {
   it('a fresh startSession carries effortLevel from the on-disk per-thread pref', async () => {
-    const key: ThreadKey = keyFromString(seededThreadKeyString);
+    const key: SessionKey = keyFromString(seededThreadKeyString);
     const adapter = createStubbedAdapter();
 
     void adapter.startSession(key, '/tmp/work');
@@ -98,7 +98,7 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
   });
 
   it('a fresh startSession with NO pref seeds the clamped default (xhigh)', async () => {
-    const key: ThreadKey = keyFromString(noPrefThreadKeyString);
+    const key: SessionKey = keyFromString(noPrefThreadKeyString);
     const adapter = createStubbedAdapter();
 
     void adapter.startSession(key, '/tmp/work');

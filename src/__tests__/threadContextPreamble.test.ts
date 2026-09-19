@@ -20,9 +20,10 @@ import {
   checkShouldSkipPreambleForText,
   threadContextPreambleHeader,
 } from '../threadContextPreamble';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -1001111111111, threadId: 9085 };
+const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
 
 test('buildThreadContextPreamble: renders all four fields when known', () => {
   const preamble = buildThreadContextPreamble({

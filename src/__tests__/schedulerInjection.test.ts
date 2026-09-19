@@ -19,7 +19,7 @@
 
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import {
   configureSchedulerMcpInjection,
   resetSchedulerMcpInjection,
@@ -31,10 +31,11 @@ import {
   schedulerMcpClientIdHeader,
   verifySchedulerMcpToken,
 } from '../scheduler/mcpSurface';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const secret = 'a'.repeat(64);
 const port = 4097;
-const threadKey: ThreadKey = { chatId: -1001234567890, threadId: 11 };
+const threadKey: SessionKey = makeTelegramKey(-1001234567890, 11);
 const threadKeyString = keyToString(threadKey);
 const directory = '/work/project-x';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

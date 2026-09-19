@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import {
   slugify,
   generateScheduleId,
@@ -33,9 +33,10 @@ import {
 } from '../scheduler/store';
 import { RunLedger, maxLedgerBytes, type ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleSpec } from '../scheduler/types';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadA: ThreadKey = { chatId: -1001234567890, threadId: 11 };
-const threadB: ThreadKey = { chatId: -1001234567890, threadId: 22 };
+const threadA: SessionKey = makeTelegramKey(-1001234567890, 11);
+const threadB: SessionKey = makeTelegramKey(-1001234567890, 22);
 const dailySpec: ScheduleSpec = { kind: 'cron', cronExpr: '0 9 * * *' };
 const nowMs = new Date(2026, 5, 6, 10, 0, 0).getTime();
 
@@ -183,7 +184,7 @@ describe('StateStore schedule collection', () => {
   /** Fill a thread with `count` schedules of one delivery kind, asserting each create. */
   async function fillThread(
     store: StateStore,
-    threadKey: ThreadKey,
+    threadKey: SessionKey,
     count: number,
     deliveryKind?: 'reminder',
   ): Promise<void> {

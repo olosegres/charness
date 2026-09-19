@@ -21,9 +21,10 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, openCodeRuntimeContextHydrationConcurrency } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100778, threadId: 8 };
+const key: SessionKey = makeTelegramKey(-100778, 8);
 const sessionId = 'ses_resume_ctx_8';
 const workDir = '/tmp/work-resume-ctx';
 const healthPath = '/global/health';
@@ -92,7 +93,7 @@ function createAdapter(): {
   adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 
   const outputs: string[] = [];
-  adapter.on('output', (_key: ThreadKey, text: string) => {
+  adapter.on('output', (_key: SessionKey, text: string) => {
     outputs.push(text);
   });
   return { adapter, outputs, messageHistoryRequests };
@@ -151,8 +152,8 @@ describe('OpenCode resume context block gating', () => {
       throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
     };
 
-    const startedKeys: ThreadKey[] = [];
-    adapter.on('started', (startedKey: ThreadKey) => startedKeys.push(startedKey));
+    const startedKeys: SessionKey[] = [];
+    adapter.on('started', (startedKey: SessionKey) => startedKeys.push(startedKey));
     await adapter['resumeSessionInner'](key, workDir, sessionId);
 
     assert.deepEqual(startedKeys, [key], 'resume must become ready while the read-only hydration request is pending');
@@ -406,7 +407,7 @@ describe('OpenCode resume context block gating', () => {
     adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 
     await Promise.all(sessionIds.map((sessionId, index) => adapter['resumeSessionInner'](
-      { chatId: -100778, threadId: 100 + index },
+      makeTelegramKey(-100778, 100 + index),
       workDir,
       sessionId,
     )));
@@ -448,13 +449,13 @@ describe('OpenCode resume context block gating', () => {
     adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 
     await Promise.all(sessionIds.map((currentSessionId, index) => adapter['resumeSessionInner'](
-      { chatId: -100778, threadId: 200 + index },
+      makeTelegramKey(-100778, 200 + index),
       workDir,
       currentSessionId,
     )));
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    const queuedKey = { chatId: -100778, threadId: 200 + openCodeRuntimeContextHydrationConcurrency };
+    const queuedKey = makeTelegramKey(-100778, 200 + openCodeRuntimeContextHydrationConcurrency);
     const queuedSessionId = sessionIds[openCodeRuntimeContextHydrationConcurrency];
     const queuedSession = adapter['sessions'].get(keyToString(queuedKey));
     assert.ok(queuedSession, 'the queued session must already be active');

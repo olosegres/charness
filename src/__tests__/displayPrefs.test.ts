@@ -23,7 +23,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import type { ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 let dataDir: string;
 let fakeHome: string;
@@ -43,8 +44,8 @@ afterEach(() => {
   fs.rmSync(fakeHome, { recursive: true, force: true });
 });
 
-const key1: ThreadKey = { chatId: -1001234567890, threadId: 42 };
-const key2: ThreadKey = { chatId: -1001234567890, threadId: 99 };
+const key1: SessionKey = makeTelegramKey(-1001234567890, 42);
+const key2: SessionKey = makeTelegramKey(-1001234567890, 99);
 
 function readRawState(): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
@@ -130,12 +131,12 @@ test('displayPrefs: legacy persisted names normalize at read time, unknown falls
 
   const raw = readRawState();
   const prefs = raw.displayPrefs as Record<string, Record<string, string>>;
-  prefs[`${key1.chatId}:${key1.threadId}`] = {
+  prefs[keyToString(key1)] = {
     thinking: 'detailed', // legacy: keep streamed reasoning
     toolResults: 'hide', //  legacy: nothing permanent
     subagent: 'compact', //  legacy: status-only
   };
-  prefs[`${key2.chatId}:${key2.threadId}`] = {
+  prefs[keyToString(key2)] = {
     thinking: 'brief', //    legacy: collapse to "thought for {N}s"
     toolResults: 'verbose', // unknown → default
   };
@@ -166,7 +167,7 @@ test('displayPrefs: setting a field back to its default clears the override on d
   // real change, not a vacuous pass on an empty record).
   let raw = readRawState();
   assert.equal(
-    (raw.displayPrefs as Record<string, { thinking?: string }>)[`${key1.chatId}:${key1.threadId}`]
+    (raw.displayPrefs as Record<string, { thinking?: string }>)[keyToString(key1)]
       ?.thinking,
     'full',
   );
@@ -176,7 +177,7 @@ test('displayPrefs: setting a field back to its default clears the override on d
   await store.flush();
   raw = readRawState();
   const record = (raw.displayPrefs as Record<string, Record<string, unknown>>)[
-    `${key1.chatId}:${key1.threadId}`
+    keyToString(key1)
   ];
   assert.ok(record, 'record must survive while toolResults is still non-default');
   assert.equal('thinking' in record, false, 'defaulted field must be absent on disk');

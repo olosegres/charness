@@ -18,7 +18,7 @@ export const terminalPaneRows = 50;
 /**
  * @description Tmux session-name prefix that namespaces terminal shells on the
  * tmux server, distinct from Claude's `claude-` prefix. Parsed back to a
- * `ThreadKey` via `utils/tmuxSessionName` with this prefix.
+ * `SessionKey` via `utils/tmuxSessionName` with this prefix.
  */
 export const terminalTmuxPrefix = 'term';
 

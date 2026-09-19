@@ -17,6 +17,7 @@ import {
   type OpenCodeBusyTracking,
 } from '../adapters/openCodeAdapter';
 import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const own = 'ses_own';
 const child = 'ses_child';
@@ -34,7 +35,7 @@ function createRetryingAdapter(): {
   outputs: string[];
   requests: { method: string; path: string; body: Record<string, unknown> | undefined }[];
 } {
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   const adapter = new OpenCodeAdapter();
   adapter['sessions'].set('-100123:42', {
     key,
@@ -204,7 +205,7 @@ test('applied transitions (own / verified descendant) report not-ignored', () =>
 
 test('provider retry stays busy and is surfaced once instead of looking silently idle', () => {
   const { adapter, outputs } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   assert.equal(adapter.checkIsBusy(key), true, 'a provider-managed retry is still an in-flight turn');
   assert.equal(outputs.length, 1, 'duplicate retry status frames must not repeat the user notice');
@@ -213,7 +214,7 @@ test('provider retry stays busy and is surfaced once instead of looking silently
 
 test('a prompt during provider retry aborts the old turn before using the current model', async () => {
   const { adapter, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   adapter.sendInput(key, 'continue on the selected model');
   await new Promise(resolve => setImmediate(resolve));
@@ -235,7 +236,7 @@ test('a prompt during provider retry aborts the old turn before using the curren
 
 test('concurrent prompts share one provider-retry abort before both are posted', async () => {
   const { adapter, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   adapter.sendInput(key, 'first');
   adapter.sendInput(key, 'second');
@@ -261,7 +262,7 @@ test('concurrent prompts share one provider-retry abort before both are posted',
 
 test('a failed provider-retry abort posts no prompt and keeps the session busy for another attempt', async () => {
   const { adapter, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   const errors: Error[] = [];
   adapter.on('error', (_key, error: Error) => errors.push(error));
   adapter['apiRequest'] = (async (method: string, path: string, body?: Record<string, unknown>) => {
@@ -279,7 +280,7 @@ test('a failed provider-retry abort posts no prompt and keeps the session busy f
 
 test('the aborted retry cannot overwrite the selected model after the abort request has resolved', async () => {
   const { adapter, outputs, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let resolveAbort: (() => void) | null = null;
   const abortResult = new Promise<void>(resolve => {
     resolveAbort = resolve;
@@ -307,7 +308,7 @@ test('the aborted retry cannot overwrite the selected model after the abort requ
 
 test('an aborted retry completion cannot mask a newly submitted prompt as active', async () => {
   const { adapter } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
@@ -323,7 +324,7 @@ test('an aborted retry completion cannot mask a newly submitted prompt as active
 
 test('a partial current model reference is not mistaken for an aborted retry', async () => {
   const { adapter, outputs } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
@@ -334,7 +335,7 @@ test('a partial current model reference is not mistaken for an aborted retry', a
 
 test('the idle from an aborted provider retry cannot recover the replacement prompt', async () => {
   const { adapter } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let noResponseCount = 0;
   adapter.on('noResponse', () => {
     noResponseCount += 1;
@@ -357,7 +358,7 @@ test('the idle from an aborted provider retry cannot recover the replacement pro
 
 test('an early abort idle is consumed before the abort response and never re-armed', async () => {
   const { adapter, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let resolveAbort: (() => void) | null = null;
   const abortResult = new Promise<void>(resolve => {
     resolveAbort = resolve;
@@ -385,7 +386,7 @@ test('an early abort idle is consumed before the abort response and never re-arm
 
 test('replacement busy arms its wedge detector before prompt_async resolves', async () => {
   const { adapter, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let resolvePrompt: (() => void) | null = null;
   const promptResult = new Promise<void>((resolve) => {
     resolvePrompt = resolve;
@@ -411,7 +412,7 @@ test('replacement busy arms its wedge detector before prompt_async resolves', as
 
 test('a replacement retry after busy remains interruptible', async () => {
   const { adapter, outputs, requests } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
@@ -435,7 +436,7 @@ test('a replacement retry after busy remains interruptible', async () => {
 
 test('an abort error followed by its idle cannot settle the replacement before busy', async () => {
   const { adapter } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let noResponseCount = 0;
   adapter.on('noResponse', () => {
     noResponseCount += 1;
@@ -457,7 +458,7 @@ test('an abort error followed by its idle cannot settle the replacement before b
 
 test('a late retry status from the aborted turn cannot restore provider-retry state', async () => {
   const { adapter, outputs } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
   const session = adapter['sessions'].get('-100123:42');
@@ -472,7 +473,7 @@ test('a late retry status from the aborted turn cannot restore provider-retry st
 
 test('a stale retry after the old idle cannot suppress wedge recovery for the replacement turn', async () => {
   const { adapter, outputs } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let noResponseCount = 0;
   adapter.on('noResponse', () => {
     noResponseCount += 1;
@@ -532,7 +533,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
   it('a replacement turn that never reports busy stops pinning the topic busy and recovers exactly once', async () => {
     const { adapter } = createRetryingAdapter();
-    const key = { chatId: -100123, threadId: 42 };
+    const key = makeTelegramKey(-100123, 42);
     let noResponseCount = 0;
     adapter.on('noResponse', () => {
       noResponseCount += 1;
@@ -561,7 +562,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
   it('the recovery prompt that follows the bound keeps its own idle', async () => {
     const { adapter } = createRetryingAdapter();
-    const key = { chatId: -100123, threadId: 42 };
+    const key = makeTelegramKey(-100123, 42);
     let noResponseCount = 0;
     adapter.on('noResponse', () => {
       noResponseCount += 1;
@@ -590,7 +591,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
   it('a replacement turn that does report busy cancels the bound and keeps its own wedge detection', async () => {
     const { adapter } = createRetryingAdapter();
-    const key = { chatId: -100123, threadId: 42 };
+    const key = makeTelegramKey(-100123, 42);
     let noResponseCount = 0;
     adapter.on('noResponse', () => {
       noResponseCount += 1;
@@ -617,7 +618,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
   it('releases the boundary even when the bound decides the turn did start', async () => {
     const { adapter } = createRetryingAdapter();
-    const key = { chatId: -100123, threadId: 42 };
+    const key = makeTelegramKey(-100123, 42);
     let noResponseCount = 0;
     adapter.on('noResponse', () => {
       noResponseCount += 1;
@@ -643,7 +644,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
   it('tearing the session down before the bound elapses fires nothing', async () => {
     const { adapter } = createRetryingAdapter();
-    const key = { chatId: -100123, threadId: 42 };
+    const key = makeTelegramKey(-100123, 42);
     let noResponseCount = 0;
     adapter.on('noResponse', () => {
       noResponseCount += 1;
@@ -666,7 +667,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
 test('a replacement idle still recovers when the aborted retry never emits idle', async () => {
   const { adapter } = createRetryingAdapter();
-  const key = { chatId: -100123, threadId: 42 };
+  const key = makeTelegramKey(-100123, 42);
   let noResponseCount = 0;
   adapter.on('noResponse', () => {
     noResponseCount += 1;

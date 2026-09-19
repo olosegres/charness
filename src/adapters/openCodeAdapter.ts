@@ -3,8 +3,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, OutputEventMeta, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent, ThreadKey } from '../types';
-import { keyToString } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, OutputEventMeta, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString } from '../sessionKey';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
@@ -57,7 +58,7 @@ const execAsync = promisify(exec);
  * Persist per-thread model selection so it survives bot restarts.
  * Stored in `DATA_DIR` (resolved via `resolveDataDir()` for parity with
  * `state.json` and the Claude adapter) as a JSON map keyed by serialised
- * `ThreadKey`: `{ "<chatId>:<threadId>": "provider/model" }` (plan §10.3, D22).
+ * `SessionKey`: `{ "<chatId>:<threadId>": "provider/model" }` (plan §10.3, D22).
  *
  * Audit S3 / #9: previous fallback chain `DATA_DIR || HOME || /tmp` drifted
  * from `state.ts:resolveDataDir`, which uses `~/.telegramCode` when
@@ -71,7 +72,7 @@ const execAsync = promisify(exec);
  */
 const modelStateFile = path.join(resolveDataDir(), '.opencode-model-prefs.json');
 
-function loadSavedModel(key: ThreadKey): { providerID: string; modelID: string } | null {
+function loadSavedModel(key: SessionKey): { providerID: string; modelID: string } | null {
   try {
     if (!fs.existsSync(modelStateFile)) return null;
     const data = JSON.parse(fs.readFileSync(modelStateFile, 'utf-8'));
@@ -94,7 +95,7 @@ function loadSavedModel(key: ThreadKey): { providerID: string; modelID: string }
   }
 }
 
-function saveModelPref(key: ThreadKey, label: string): void {
+function saveModelPref(key: SessionKey, label: string): void {
   try {
     let data: Record<string, string> = {};
     if (fs.existsSync(modelStateFile)) {
@@ -138,12 +139,12 @@ function loadEffortPrefs(): Record<string, string> {
   }
 }
 
-function loadSavedEffort(key: ThreadKey): string | null {
+function loadSavedEffort(key: SessionKey): string | null {
   const prefs = loadEffortPrefs();
   return prefs[keyToString(key)] ?? null;
 }
 
-function saveEffortPref(key: ThreadKey, level: string): void {
+function saveEffortPref(key: SessionKey, level: string): void {
   try {
     const data = loadEffortPrefs();
     data[keyToString(key)] = level;
@@ -153,7 +154,7 @@ function saveEffortPref(key: ThreadKey, level: string): void {
   }
 }
 
-function clearEffortPref(key: ThreadKey): void {
+function clearEffortPref(key: SessionKey): void {
   try {
     const data = loadEffortPrefs();
     if (!(keyToString(key) in data)) return;
@@ -177,7 +178,7 @@ interface OpenCodeSessionStatus {
 }
 
 interface OpenCodeSession {
-  key: ThreadKey;
+  key: SessionKey;
   sessionId: string;
   workDir: string;
   isActive: boolean;
@@ -1426,8 +1427,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   readonly streamsCompactionSummary = true;
 
   /**
-   * Map of serialised `ThreadKey` (`"<chatId>:<threadId>"`) → live session.
-   * Keyed by string rather than `ThreadKey` object so map lookups work — JS
+   * Map of serialised `SessionKey` (`"<chatId>:<threadId>"`) → live session.
+   * Keyed by string rather than `SessionKey` object so map lookups work — JS
    * `Map` compares object identity, not structural equality.
    */
   private sessions: Map<string, OpenCodeSession> = new Map();
@@ -1528,7 +1529,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /** @description Run `fn` inside the thread's locale context so `t(...)` resolves correctly. */
-  private tl<T>(key: ThreadKey, fn: () => T): T {
+  private tl<T>(key: SessionKey, fn: () => T): T {
     return runWithLocale(this.threadLocaleReader?.(key) ?? defaultLocale, fn);
   }
 
@@ -1548,14 +1549,14 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /** @description Advance the persisted seen-watermark for `key` (no-op until the
    * writer is wired). Skips a watermark with no anchor id so the bot's recap
    * cleanly falls back to its no-count path. */
-  private advanceSeenWatermark(key: ThreadKey, watermark: SeenWatermark): void {
+  private advanceSeenWatermark(key: SessionKey, watermark: SeenWatermark): void {
     if (watermark.opencodeMessageId === undefined) return;
     this.seenWatermarkWriter?.(key, watermark);
   }
 
   /** @description Resolve the thread's full display prefs, defaulting every
    * field to `minimal` for any read before the bot wires the reader at boot. */
-  private getDisplayPrefs(key: ThreadKey): ResolvedThreadDisplayPrefs {
+  private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
     return (
       this.displayPrefsReader?.(key) ?? {
         thinking: defaultDisplayVerbosityMode,
@@ -1567,7 +1568,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /** @description Resolve the thread's `/subagent` mode (the only pref the
    * OpenCode adapter consults today), via the full prefs reader. */
-  private getSubagentMode(key: ThreadKey): DisplayVerbosityMode {
+  private getSubagentMode(key: SessionKey): DisplayVerbosityMode {
     return this.getDisplayPrefs(key).subagent;
   }
 
@@ -1591,7 +1592,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  private restoreSavedModel(key: ThreadKey, session: OpenCodeSession, emitOutput: boolean): boolean {
+  private restoreSavedModel(key: SessionKey, session: OpenCodeSession, emitOutput: boolean): boolean {
     const saved = loadSavedModel(key);
     if (!saved) return false;
 
@@ -1823,10 +1824,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  async startSession(key: ThreadKey, workDir: string, args?: string, _sessionId?: string): Promise<void> {
+  async startSession(key: SessionKey, workDir: string, args?: string, _sessionId?: string): Promise<void> {
     // OpenCode's session id is server-assigned via POST /session, so an
     // externally-supplied sessionId is not honoured here. The bot keeps the
-    // mapping `ThreadKey → opencodeSessionId` in state.json (plan §13.19) so
+    // mapping `SessionKey → opencodeSessionId` in state.json (plan §13.19) so
     // resumes after a restart go through `resumeSession()`, not startSession.
     const k = keyToString(key);
     return this.withLifecycleLock(k, async () => {
@@ -1947,7 +1948,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  stopSession(key: ThreadKey): void {
+  stopSession(key: SessionKey): void {
     // Public API contract: stop is fire-and-forget. We still queue it on
     // the lifecycle chain so an in-flight start finishes first.
     const k = keyToString(key);
@@ -1956,7 +1957,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /** Lock-free body of `stopSession`; safe to call from start/resume paths
    * that already hold the lifecycle lock. */
-  private stopSessionInner(key: ThreadKey): void {
+  private stopSessionInner(key: SessionKey): void {
     const k = keyToString(key);
     const session = this.sessions.get(k);
     if (!session) return;
@@ -2007,12 +2008,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.emit('stopped', key);
   }
 
-  checkIsActive(key: ThreadKey): boolean {
+  checkIsActive(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive ?? false;
   }
 
-  checkIsBusy(key: ThreadKey): boolean {
+  checkIsBusy(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
     return checkIsOpenCodeSessionBusy({
@@ -2022,7 +2023,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  sendInput(key: ThreadKey, input: string): void {
+  sendInput(key: SessionKey, input: string): void {
     this.sendPromptAsync(key, input);
   }
 
@@ -2040,7 +2041,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * — the same per-prompt override the prompt endpoint already uses for the
    * model selector. No separate request, no env configuration.
    */
-  private sendPromptAsync(key: ThreadKey, input: string): void {
+  private sendPromptAsync(key: SessionKey, input: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       console.log(`[OpenCode] sendInput: no active session for ${keyToString(key)}`);
@@ -2224,7 +2225,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * disarmed here before emitting, and one prompt can never reach the bot's
    * recovery escalation twice.
    */
-  private reportNoTurnResponse(key: ThreadKey, session: OpenCodeSession, cause: NoTurnResponseCause): void {
+  private reportNoTurnResponse(key: SessionKey, session: OpenCodeSession, cause: NoTurnResponseCause): void {
     session.awaitingTurnResponse = false;
     this.clearProviderRetryReplacementBoundary(session);
     const labels = noTurnResponseCauseLabels[cause];
@@ -2274,7 +2275,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     })();
   }
 
-  sendSignal(key: ThreadKey, signal: string): void {
+  sendSignal(key: SessionKey, signal: string): void {
     if (signal === 'SIGINT') {
       const session = this.sessions.get(keyToString(key));
       if (!session?.isActive) return;
@@ -2293,7 +2294,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * (including OpenRouter) use the generic API-key method synthesized from the
    * full `/provider` catalog.
    */
-  async connectProvider(_key: ThreadKey, providerId: string, apiKey: string): Promise<string | null> {
+  async connectProvider(_key: SessionKey, providerId: string, apiKey: string): Promise<string | null> {
     const normalizedProviderId = providerId.trim().toLowerCase();
     if (!checkIsValidProviderId(normalizedProviderId)) {
       return t('connect.invalid_provider', { provider: providerId });
@@ -2336,7 +2337,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * disconnect there would be a lie — that case is what the bot-side "hide
    * provider" toggle in `/model` exists for.
    */
-  async disconnectProvider(_key: ThreadKey, providerId: string): Promise<string | null> {
+  async disconnectProvider(_key: SessionKey, providerId: string): Promise<string | null> {
     const normalizedProviderId = providerId.trim().toLowerCase();
     if (!checkIsValidProviderId(normalizedProviderId)) {
       return t('disconnect.invalid_provider', { provider: providerId });
@@ -2390,7 +2391,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * Accepts either "provider/modelId" format or partial name to search.
    * @returns Error message if model not found, null on success
    */
-  async setModel(key: ThreadKey, modelId: string): Promise<string | null> {
+  async setModel(key: SessionKey, modelId: string): Promise<string | null> {
     // Resolve first — both calls hit the server/CLI, not session state, so a
     // model can be picked BEFORE a session exists. `getAvailableModels` is the
     // stubbable wrapper around `fetchAvailableModels`.
@@ -2460,7 +2461,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return fetchAvailableModels();
   }
 
-  getCurrentModel(key: ThreadKey): string | null {
+  getCurrentModel(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     if (session?.currentModelLabel) return session.currentModelLabel;
     // No live label (no session, or session not yet resolved) → fall back to
@@ -2470,7 +2471,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return saved ? `${saved.providerID}/${saved.modelID}` : null;
   }
 
-  async getRuntimeInfo(key: ThreadKey): Promise<AgentRuntimeInfo> {
+  async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       return { version: null, model: null, contextWindowTokens: null, contextUsedTokens: null };
@@ -2574,7 +2575,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * Never persisted: the default stays a derived fallback, the prefs file
    * remains "explicit choices only".
    */
-  private async applyDefaultEffortIfUnset(key: ThreadKey): Promise<void> {
+  private async applyDefaultEffortIfUnset(key: SessionKey): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     if (loadSavedEffort(key) !== null) return; // explicit pref wins
@@ -2596,7 +2597,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * modelID}` ref, so `/effort` pre-session validates against the same model
    * `/model` would persist.
    */
-  private async getProspectiveModelRef(key: ThreadKey): Promise<OpenCodeModelOverride | null> {
+  private async getProspectiveModelRef(key: SessionKey): Promise<OpenCodeModelOverride | null> {
     const session = this.sessions.get(keyToString(key));
     if (session?.isActive) {
       const liveRef = this.getSessionModelRef(session);
@@ -2641,7 +2642,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * mirroring how `/model` works pre-session. Empty when the (live or
    * prospective) model declares no variants or can't be resolved.
    */
-  async getAvailableEffortLevels(key: ThreadKey): Promise<string[]> {
+  async getAvailableEffortLevels(key: SessionKey): Promise<string[]> {
     const session = this.sessions.get(keyToString(key));
     if (session?.isActive) {
       return this.getModelVariants(this.getSessionModelRef(session));
@@ -2649,7 +2650,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return this.getModelVariants(await this.getProspectiveModelRef(key));
   }
 
-  getEffort(key: ThreadKey): string | null {
+  getEffort(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     if (session) return session.effortLevel;
     return loadSavedEffort(key);
@@ -2667,7 +2668,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * hard-fail): a level picked BEFORE `/opencode` is saved and replayed by the
    * next session, instead of being lost — same intent as the model pref.
    */
-  async setEffort(key: ThreadKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<string | null> {
     // Session-free capable: resolves variants from the live model if active,
     // else the prospective model the next session will use.
     const available = await this.getAvailableEffortLevels(key);
@@ -2700,7 +2701,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * model's `provider/model` — for the `effort.not_supported` notice. `'?'`
    * only when no model can be resolved at all.
    */
-  private async getEffortModelLabel(key: ThreadKey): Promise<string> {
+  private async getEffortModelLabel(key: SessionKey): Promise<string> {
     const session = this.sessions.get(keyToString(key));
     if (session?.isActive && session.currentModelLabel) return session.currentModelLabel;
     const prospective = await this.getProspectiveModelRef(key);
@@ -2718,7 +2719,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * fallback only fires while that flag is set — see
    * {@link maybeScheduleFallbackRename}).
    */
-  async renameSession(key: ThreadKey, title: string): Promise<string | null> {
+  async renameSession(key: SessionKey, title: string): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return t('rename_session.start_agent_first');
 
@@ -2763,7 +2764,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * defaults the flag to false (the automatic, overflow-triggered compaction is
    * server-side and untouched by this).
    */
-  async compactContext(key: ThreadKey, instruction?: string): Promise<CompactionResult> {
+  async compactContext(key: SessionKey, instruction?: string): Promise<CompactionResult> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return { ok: false, error: t('compact.start_agent_first') };
 
@@ -2805,7 +2806,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * itself. A read failure answers `false`: the guidance then appears twice,
    * which beats not at all.
    */
-  async checkHasCompactionSkillsHook(key: ThreadKey): Promise<boolean> {
+  async checkHasCompactionSkillsHook(key: SessionKey): Promise<boolean> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
     try {
@@ -2827,7 +2828,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * appended "Where we stopped" closing section in the idle-compaction notice. A
    * read failure / no summary yields `null` (the notice then omits the block).
    */
-  async getLatestCompactionSummary(key: ThreadKey): Promise<string | null> {
+  async getLatestCompactionSummary(key: SessionKey): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return null;
     try {
@@ -2842,7 +2843,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  getOpenCodeSessionId(key: ThreadKey): string | null {
+  getOpenCodeSessionId(key: SessionKey): string | null {
     return this.sessions.get(keyToString(key))?.sessionId ?? null;
   }
 
@@ -2851,7 +2852,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   // before this is reached (the bot gates `/sessions` on a binding), so workDir
   // is the real working folder, never a serve-cwd fallback. Sessions created in
   // other instances (e.g. by-hand serve-cwd scatter) are intentionally absent.
-  async getSessions(_key: ThreadKey, workDir: string): Promise<AgentSession[]> {
+  async getSessions(_key: SessionKey, workDir: string): Promise<AgentSession[]> {
     try {
       const apiSessions = await this.apiRequest<OpenCodeApiSession[]>(
         'GET',
@@ -2883,7 +2884,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * records with the pure {@link mapOpenCodeMessagesToTurns}; a request failure
    * yields `[]`, so the caller posts no context block.
    */
-  async getRecentTurns(_key: ThreadKey, _workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
+  async getRecentTurns(_key: SessionKey, _workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
     try {
       const records = await this.apiRequest<unknown>('GET', `/session/${sessionId}/message`);
       return mapOpenCodeMessagesToTurns(records, limit);
@@ -2905,7 +2906,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * turn), never a blocking server probe.
    */
   async getReattachRecap(
-    _key: ThreadKey,
+    _key: SessionKey,
     _workDir: string,
     sessionId: string,
     watermark: SeenWatermark | null,
@@ -2930,7 +2931,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return { missedCount, turns, isWatermarkKnown, isActive, headWatermark };
   }
 
-  async resumeSession(key: ThreadKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
+  async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     // `workDir` is now an explicit argument from the bot, sourced from the
     // thread's binding in state.json. The old code defaulted to
     // `process.env.WORK_DIR || '/workspace'`, which silently mis-routed
@@ -2949,7 +2950,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * persists it with the shared `persistAdapterSessionIds`. Returns the new
    * session id, or null when there is no active session or the fork failed.
    */
-  async forkSession(key: ThreadKey): Promise<string | null> {
+  async forkSession(key: SessionKey): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return null;
     const { workDir, sessionId } = session;
@@ -2977,7 +2978,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * (the bot always sets it); if not enabled the endpoint 400s and we swallow it.
    * Best-effort — a failure must never block the prompt that follows it.
    */
-  async detachRunningSubagents(key: ThreadKey): Promise<boolean> {
+  async detachRunningSubagents(key: SessionKey): Promise<boolean> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive || session.busyChildSessionIds.size === 0) return false;
     try {
@@ -2994,7 +2995,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  private async resumeSessionInner(key: ThreadKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
+  private async resumeSessionInner(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     this.stopSessionInner(key);
 
     const k = keyToString(key);
@@ -3122,7 +3123,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * usage. A live SSE observation wins over this historical read even when the
    * history request resolves later.
    */
-  private async hydrateLatestParentAssistantContext(key: ThreadKey, session: OpenCodeSession): Promise<void> {
+  private async hydrateLatestParentAssistantContext(key: SessionKey, session: OpenCodeSession): Promise<void> {
     // Snapshot before waiting: a queued read must never overwrite an SSE tuple
     // that arrives while the semaphore is occupied by other resumed sessions.
     const observationVersion = session.parentAssistantObservationVersion;
@@ -3188,7 +3189,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * generation. Keeps the `(key)` signature so the lifecycle paths and tests
    * (which stub `connectSse` / `pollSseStream`) are unchanged.
    */
-  private connectSse(key: ThreadKey): void {
+  private connectSse(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session) return;
     this.ensureGlobalStream();
@@ -3379,7 +3380,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * active sessions and treats this one as departing. `before = other + 1`,
    * `after = other` → `close` exactly when no sibling keeps the stream alive.
    */
-  private disconnectSse(key: ThreadKey): void {
+  private disconnectSse(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session) return;
     session.isActive = false;
@@ -3397,7 +3398,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * one key (the departing session in a teardown decision) — the reference count
    * the single global stream's lifecycle keys on.
    */
-  private countActiveSessions(excludeKey?: ThreadKey): number {
+  private countActiveSessions(excludeKey?: SessionKey): number {
     const excludeKeyStr = excludeKey ? keyToString(excludeKey) : null;
     let count = 0;
     for (const [keyStr, session] of this.sessions) {
@@ -3522,7 +3523,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * re-emitting on every hot-restart is noise (B17). Resolution must still run
    * to repopulate `modelOverride`/`currentModelLabel` so `/effort` can read them.
    */
-  private async fetchModelInfo(key: ThreadKey, emitOutput = true): Promise<void> {
+  private async fetchModelInfo(key: SessionKey, emitOutput = true): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive || session.isModelInfoShown) return;
 
@@ -3922,7 +3923,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * owning project instance (the event envelope's `directory`), used for
    * instance-scoped question / permission replies.
    */
-  private dispatchSseEvent(key: ThreadKey, event: OpenCodeSseEvent, directory: string | undefined): void {
+  private dispatchSseEvent(key: SessionKey, event: OpenCodeSseEvent, directory: string | undefined): void {
     const eventType = event.type;
     const eventSessionId = this.getSessionIdFromEvent(event);
 
@@ -4069,7 +4070,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * server session (B20 prevention) — a normal `stopSessionInner` would abort
    * the shared generation. Mirrors `stopSessionInner` minus the abort POST.
    */
-  private softDetachSession(key: ThreadKey): void {
+  private softDetachSession(key: SessionKey): void {
     const k = keyToString(key);
     const session = this.sessions.get(k);
     if (!session) return;
@@ -4188,7 +4189,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * {@link getSubagentPartAction} matrix instead of the parent's handlers, so
    * a child transcript can never merge unmarked into the parent's reply (S4).
    */
-  private handlePartUpdate(key: ThreadKey, properties: Record<string, unknown>, isSubagent: boolean): void {
+  private handlePartUpdate(key: SessionKey, properties: Record<string, unknown>, isSubagent: boolean): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -4249,7 +4250,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Handle text delta — accumulate and emit as 'output'.
    */
   private handleTextDelta(
-    key: ThreadKey,
+    key: SessionKey,
     session: OpenCodeSession,
     delta: string | undefined,
     field: string | undefined,
@@ -4288,7 +4289,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * resets `lastEmittedLength` to 0 after the final tail, so the next response
    * again starts with a non-continuation first tail.
    */
-  private emitResponseTail(key: ThreadKey, session: OpenCodeSession, isFinal = false): void {
+  private emitResponseTail(key: SessionKey, session: OpenCodeSession, isFinal = false): void {
     const tail = session.currentResponseText.slice(session.lastEmittedLength);
     if (!tail.trim()) return;
     const isContinuation = session.lastEmittedLength > 0;
@@ -4314,7 +4315,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    *   would corrupt the parent reply's continuation accounting).
    */
   private handleSubagentTextPart(
-    key: ThreadKey,
+    key: SessionKey,
     session: OpenCodeSession,
     delta: string | undefined,
     field: string | undefined,
@@ -4351,7 +4352,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * is opt-in). The empty-string guard doubles as runtime tolerance for test
    * fixtures that inject minimal session shapes.
    */
-  private emitChildResponseTail(key: ThreadKey, session: OpenCodeSession): void {
+  private emitChildResponseTail(key: SessionKey, session: OpenCodeSession): void {
     if (!session.childResponseText) return;
     const tail = session.childResponseText.slice(session.childLastEmittedLength);
     if (!tail.trim()) return;
@@ -4410,7 +4411,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Handle tool part — format and emit as 'status'.
    */
   private handleToolPart(
-    key: ThreadKey,
+    key: SessionKey,
     session: OpenCodeSession,
     part: OpenCodePart | undefined,
     isSubagent = false,
@@ -4500,7 +4501,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * shapes. The output is kept strictly OUT of `currentResponseText` so it can
    * never pollute the answer or its continuation accounting.
    */
-  private maybeEmitToolResult(key: ThreadKey, session: OpenCodeSession, part: OpenCodePart): void {
+  private maybeEmitToolResult(key: SessionKey, session: OpenCodeSession, part: OpenCodePart): void {
     const toolState = part.state;
     if (toolState?.status !== 'completed') return;
     if (typeof toolState.output !== 'string' || !toolState.output.trim()) return;
@@ -4534,7 +4535,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * emits are debounced.
    */
   private handleReasoningPart(
-    key: ThreadKey,
+    key: SessionKey,
     session: OpenCodeSession,
     part: OpenCodePart | undefined,
     delta: string | undefined,
@@ -4563,7 +4564,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Emit the `thinking` event for the current phase. `live` carries
    * the accumulated reasoning text so far; `done` adds the elapsed `durationMs`.
    */
-  private emitThinking(key: ThreadKey, session: OpenCodeSession, phase: ThinkingEvent['phase']): void {
+  private emitThinking(key: SessionKey, session: OpenCodeSession, phase: ThinkingEvent['phase']): void {
     const payload: ThinkingEvent = { phase, text: session.reasoningText };
     if (phase === 'done' && session.reasoningStartedAt !== null) {
       payload.durationMs = Date.now() - session.reasoningStartedAt;
@@ -4579,7 +4580,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * be called from every "reasoning end" signal (first non-reasoning part,
    * `message.updated` finish, `session.idle`) without double-emitting.
    */
-  private endReasoning(key: ThreadKey, session: OpenCodeSession): void {
+  private endReasoning(key: SessionKey, session: OpenCodeSession): void {
     if (session.reasoningStartedAt === null) return;
     if (session.reasoningTimer) {
       clearTimeout(session.reasoningTimer);
@@ -4598,7 +4599,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * Rapid status updates (e.g. multiple tool state changes) are batched —
    * only the latest status text is emitted after a quiet period.
    */
-  private emitStatus(key: ThreadKey, session: OpenCodeSession, text: string): void {
+  private emitStatus(key: SessionKey, session: OpenCodeSession, text: string): void {
     session.pendingStatus = text;
 
     if (session.statusDebounceTimer) {
@@ -4618,7 +4619,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Handle message completion.
    * Event properties: { info: OpenCodeMessageInfo }
    */
-  private handleMessageUpdate(key: ThreadKey, properties: Record<string, unknown>): void {
+  private handleMessageUpdate(key: SessionKey, properties: Record<string, unknown>): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -4735,7 +4736,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Handle session becoming idle (AI done processing).
    * Flush any remaining accumulated output.
    */
-  private handleSessionIdle(key: ThreadKey, properties: Record<string, unknown>): void {
+  private handleSessionIdle(key: SessionKey, properties: Record<string, unknown>): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -4843,7 +4844,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * see {@link applyOpenCodeStatusEvent}.
    */
   private handleSessionStatus(
-    key: ThreadKey,
+    key: SessionKey,
     eventSessionId: string | null,
     properties: Record<string, unknown>,
   ): void {
@@ -4952,14 +4953,14 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * `session.compacted` events. While set, a new prompt queues instead of
    * aborting (an abort would discard the in-progress summary).
    */
-  private setCompacting(key: ThreadKey, value: boolean): void {
+  private setCompacting(key: SessionKey, value: boolean): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     if (session.isCompacting !== value) console.log(`[OpenCode] compacting=${value}`);
     session.isCompacting = value;
   }
 
-  private handleSessionError(key: ThreadKey, eventSessionId: string | null, properties: Record<string, unknown>): void {
+  private handleSessionError(key: SessionKey, eventSessionId: string | null, properties: Record<string, unknown>): void {
     const errorMsg = getOpenCodeErrorMessage(properties.error);
     const session = this.sessions.get(keyToString(key));
     const isOwnSession = !eventSessionId || (session !== undefined && eventSessionId === session.sessionId);
@@ -5011,7 +5012,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  private handlePermissionAsked(_key: ThreadKey, properties: Record<string, unknown>, directory?: string): void {
+  private handlePermissionAsked(_key: SessionKey, properties: Record<string, unknown>, directory?: string): void {
     console.log(`[OpenCode] Permission requested:`, JSON.stringify(properties));
     // Auto-approve all permissions (headless mode). Symmetry with the
     // claude adapter, which always passes `--dangerously-skip-permissions`
@@ -5037,7 +5038,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    *
    * Event properties: { id, sessionID, questions: QuestionInfo[], tool? }
    */
-  private handleQuestionAsked(key: ThreadKey, properties: Record<string, unknown>, directory?: string): void {
+  private handleQuestionAsked(key: SessionKey, properties: Record<string, unknown>, directory?: string): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
 
@@ -5086,7 +5087,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * brand-new session (startSession) has no history and thus no open question,
    * so it is deliberately NOT called there.
    */
-  private async restoreOpenQuestion(key: ThreadKey, sessionId: string, workDir: string): Promise<void> {
+  private async restoreOpenQuestion(key: SessionKey, sessionId: string, workDir: string): Promise<void> {
     try {
       const response = await this.apiRequest<unknown>(
         'GET',
@@ -5120,7 +5121,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    *
    * Best-effort: a read/parse failure returns `false` (don't abort on doubt).
    */
-  async checkIsWedgedOnQuestion(key: ThreadKey): Promise<boolean> {
+  async checkIsWedgedOnQuestion(key: SessionKey): Promise<boolean> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
 
@@ -5140,7 +5141,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Reply to a pending question with user-selected answers.
    * Called by the bot when the user clicks an inline button or types a custom answer.
    */
-  answerQuestion(key: ThreadKey, answers: string[][]): void {
+  answerQuestion(key: SessionKey, answers: string[][]): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive || !session.pendingQuestion) return;
 
@@ -5166,7 +5167,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * registry and {@link restoreOpenQuestion} re-surfaces it on every reattach.
    * No-op if no active session / no pending question.
    */
-  rejectQuestion(key: ThreadKey): void {
+  rejectQuestion(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive || !session.pendingQuestion) return;
 
@@ -5181,7 +5182,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     });
   }
 
-  private flushOutput(key: ThreadKey, isFinal = false): void {
+  private flushOutput(key: SessionKey, isFinal = false): void {
     const session = this.sessions.get(keyToString(key));
     if (!session) return;
 
@@ -5233,7 +5234,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * in flight (its child events route here via lineage). The bot no-ops the
    * close when nothing is open.
    */
-  private closeSubagentStatusOnParentTurnEnd(key: ThreadKey): void {
+  private closeSubagentStatusOnParentTurnEnd(key: SessionKey): void {
     this.emit('subagentStatus', key, { active: false, title: null });
   }
 }

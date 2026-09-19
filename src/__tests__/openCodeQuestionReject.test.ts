@@ -35,9 +35,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: ThreadKey = { chatId: -100779, threadId: 42 };
+const key: SessionKey = makeTelegramKey(-100779, 42);
 const sessionId = 'ses_reject_owner_42';
 const requestId = 'que_reject_1';
 const owningDirectory = '/home/user/src/overview';

@@ -42,10 +42,12 @@ import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { createStdoutTailState, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { compactionSilenceTimeoutMs, compactionWaitPollMs } from '../utils/jsonStreamBusyWatchdog';
-import { keyToString, type CompactionResult, type ThreadKey } from '../types';
+import type { CompactionResult } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // A key no live thread uses — every path derived from it is a no-op.
-const key: ThreadKey = { chatId: -100999778, threadId: 78 };
+const key: SessionKey = makeTelegramKey(-100999778, 78);
 
 /** A fake LIVE session whose stdin is an ordinary append-mode file. */
 function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {

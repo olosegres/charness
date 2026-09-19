@@ -87,7 +87,7 @@ export type EnsureSessionResult =
  * @description Everything the delivery callback needs from bot.ts, injected so
  * the module stays free of bot.ts imports and the poll loop is testable.
  * `threadKey` is the serialized `"<chatId>:<threadId>"` string carried on the
- * record; the bot's lambdas parse it back into a `ThreadKey` where needed.
+ * record; the bot's lambdas parse it back into a `SessionKey` where needed.
  */
 export interface ScheduleDeliveryDeps {
   /**

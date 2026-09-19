@@ -9,23 +9,24 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { buildTmuxSessionName, parseTmuxSessionName } from '../utils/tmuxSessionName';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 test('tmuxSessionName: build/parse round-trips a positive key', () => {
-  const key = { chatId: 12345, threadId: 67 };
+  const key = makeTelegramKey(12345, 67);
   const name = buildTmuxSessionName('term', key);
   assert.equal(name, 'term-12345-67');
   assert.deepEqual(parseTmuxSessionName('term', name), key);
 });
 
 test('tmuxSessionName: round-trips a negative (forum supergroup) chatId', () => {
-  const key = { chatId: -1001111111111, threadId: 434 };
+  const key = makeTelegramKey(-1001111111111, 434);
   const name = buildTmuxSessionName('term', key);
   assert.equal(name, 'term--1001111111111-434');
   assert.deepEqual(parseTmuxSessionName('term', name), key);
 });
 
 test('tmuxSessionName: round-trips the claude prefix too (parity with the wrappers)', () => {
-  const key = { chatId: -1001234, threadId: 42 };
+  const key = makeTelegramKey(-1001234, 42);
   assert.equal(buildTmuxSessionName('claude', key), 'claude--1001234-42');
   assert.deepEqual(parseTmuxSessionName('claude', 'claude--1001234-42'), key);
 });

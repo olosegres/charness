@@ -29,15 +29,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import type { ThreadKey } from '../types';
+import type { SessionKey } from '../sessionKey';
 import { createSchedulerEngine } from '../scheduler/engine';
 import { createScheduleForThread } from '../scheduler/store';
 import { recomputeSchedulesForTimezoneChange } from '../scheduler/timezoneRecompute';
 import type { DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from '../scheduler/types';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import { applyProcessTimezone } from '../utils/timezone';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const thread: ThreadKey = { chatId: -1001111111111, threadId: 11 };
+const thread: SessionKey = makeTelegramKey(-1001111111111, 11);
 const everyMorningAtNine: ScheduleSpec = { kind: 'cron', cronExpr: '0 9 * * *' };
 
 /** How far in the past a stored `nextRunAt` is put to make it catch-up eligible. */

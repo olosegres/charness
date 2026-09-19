@@ -43,12 +43,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const ownSessionId = 'ses_model_info';
 // Unique key so no on-disk `/model` preference exists for it — `restoreSavedModel`
 // returns false and `fetchModelInfo` reaches the `/config` branch under test.
-const key: ThreadKey = { chatId: -100999111, threadId: 777 };
+const key: SessionKey = makeTelegramKey(-100999111, 777);
 
 type ApiRequestStub = (method: string, urlPath: string) => Promise<unknown>;
 
@@ -95,7 +96,7 @@ function createAdapterWithSession(): {
   };
 
   const outputs: string[] = [];
-  adapter.on('output', (_key: ThreadKey, text: string) => {
+  adapter.on('output', (_key: SessionKey, text: string) => {
     outputs.push(text);
   });
   return { adapter, outputs, setConfigResponse };

@@ -1,5 +1,6 @@
-import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, OutputEventMeta, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent, ThreadKey } from '../types';
-import { keyToString } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, OutputEventMeta, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString } from '../sessionKey';
 import { ClaudeCliAdapter } from './claudeCliAdapter';
 import { OpenCodeAdapter } from './openCodeAdapter';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
@@ -42,7 +43,7 @@ function checkAdapterTakesJsonStreamTailWriter(adapter: AgentAdapter): adapter i
 const adapterInstances = new Map<string, AgentAdapter>();
 
 /**
- * Which adapter each thread is currently using. Keyed by serialised `ThreadKey`
+ * Which adapter each thread is currently using. Keyed by serialised `SessionKey`
  * (`"<chatId>:<threadId>"`) so the choice is per-thread, not per-user
  * (plan §10.4). One physical Telegram user may drive multiple threads on
  * different agents simultaneously.
@@ -50,15 +51,15 @@ const adapterInstances = new Map<string, AgentAdapter>();
 const threadAdapterNames = new Map<string, string>();
 
 /** Event listener forwarder — wired up per adapter instance. */
-type OutputHandler = (key: ThreadKey, output: string, meta?: OutputEventMeta) => void;
-type StatusHandler = (key: ThreadKey, status: string) => void;
-type QuestionHandler = (key: ThreadKey, question: OpenCodePendingQuestion) => void;
-type ThinkingHandler = (key: ThreadKey, payload: ThinkingEvent) => void;
-type ToolResultHandler = (key: ThreadKey, payload: ToolResultEvent) => void;
-type SubagentStatusHandler = (key: ThreadKey, payload: SubagentStatusEvent) => void;
-type ApiErrorHandler = (key: ThreadKey, error: AgentApiErrorClass) => void;
-type ThreadKeyHandler = (key: ThreadKey) => void;
-type ErrorHandler = (key: ThreadKey, error: Error) => void;
+type OutputHandler = (key: SessionKey, output: string, meta?: OutputEventMeta) => void;
+type StatusHandler = (key: SessionKey, status: string) => void;
+type QuestionHandler = (key: SessionKey, question: OpenCodePendingQuestion) => void;
+type ThinkingHandler = (key: SessionKey, payload: ThinkingEvent) => void;
+type ToolResultHandler = (key: SessionKey, payload: ToolResultEvent) => void;
+type SubagentStatusHandler = (key: SessionKey, payload: SubagentStatusEvent) => void;
+type ApiErrorHandler = (key: SessionKey, error: AgentApiErrorClass) => void;
+type SessionKeyHandler = (key: SessionKey) => void;
+type ErrorHandler = (key: SessionKey, error: Error) => void;
 
 let onOutput: OutputHandler | null = null;
 let onStatus: StatusHandler | null = null;
@@ -67,11 +68,11 @@ let onThinking: ThinkingHandler | null = null;
 let onToolResult: ToolResultHandler | null = null;
 let onSubagentStatus: SubagentStatusHandler | null = null;
 let onApiError: ApiErrorHandler | null = null;
-let onNoResponse: ThreadKeyHandler | null = null;
-let onQuestionGone: ThreadKeyHandler | null = null;
-let onClosed: ThreadKeyHandler | null = null;
-let onStarted: ThreadKeyHandler | null = null;
-let onStopped: ThreadKeyHandler | null = null;
+let onNoResponse: SessionKeyHandler | null = null;
+let onQuestionGone: SessionKeyHandler | null = null;
+let onClosed: SessionKeyHandler | null = null;
+let onStarted: SessionKeyHandler | null = null;
+let onStopped: SessionKeyHandler | null = null;
 let onError: ErrorHandler | null = null;
 
 /** Per-thread display-prefs reader for BOTH adapters — same late-wiring idiom
@@ -163,7 +164,7 @@ function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onStarted) adapter.on('started', onStarted);
   if (onStopped) adapter.on('stopped', onStopped);
   // Always register error handler to prevent ERR_UNHANDLED_ERROR crash.
-  adapter.on('error', (key: ThreadKey, error: Error) => {
+  adapter.on('error', (key: SessionKey, error: Error) => {
     if (onError) {
       onError(key, error);
     } else {
@@ -184,11 +185,11 @@ export function registerAdapterEventHandlers(handlers: {
   onToolResult?: ToolResultHandler;
   onSubagentStatus?: SubagentStatusHandler;
   onApiError?: ApiErrorHandler;
-  onNoResponse?: ThreadKeyHandler;
-  onQuestionGone?: ThreadKeyHandler;
-  onClosed: ThreadKeyHandler;
-  onStarted?: ThreadKeyHandler;
-  onStopped?: ThreadKeyHandler;
+  onNoResponse?: SessionKeyHandler;
+  onQuestionGone?: SessionKeyHandler;
+  onClosed: SessionKeyHandler;
+  onStarted?: SessionKeyHandler;
+  onStopped?: SessionKeyHandler;
   onError?: ErrorHandler;
 }): void {
   onOutput = handlers.onOutput;
@@ -306,7 +307,7 @@ export function checkIsClaudeBackend(name: string): boolean {
  * {@link getDefaultClaudeBackendName} — every other "no pick" site must treat an
  * absent pick as "no agent", not silently default.
  */
-export function resolveClaudeBackendName(key: ThreadKey): string {
+export function resolveClaudeBackendName(key: SessionKey): string {
   const raw = getThreadAdapterNameRaw(key);
   return raw && checkIsClaudeBackend(raw) ? raw : getDefaultClaudeBackendName();
 }
@@ -380,7 +381,7 @@ export function getClaudeModeAction(input: {
  * an agent, so it is not a silent "default agent": launching goes through
  * `ensureAgentSession`, which refuses when no adapter is picked.
  */
-export function getThreadAdapter(key: ThreadKey): AgentAdapter {
+export function getThreadAdapter(key: SessionKey): AgentAdapter {
   return getAdapter(getThreadAdapterNameRaw(key) ?? resolveClaudeBackendName(key));
 }
 
@@ -391,12 +392,12 @@ export function getThreadAdapter(key: ThreadKey): AgentAdapter {
  * snapshot) can tell "no pick yet" apart from "picked a concrete adapter", and
  * a no-agent thread stays distinguishable rather than masquerading as Claude.
  */
-export function getThreadAdapterNameRaw(key: ThreadKey): string | undefined {
+export function getThreadAdapterNameRaw(key: SessionKey): string | undefined {
   return threadAdapterNames.get(keyToString(key));
 }
 
 /** Record that a given thread is now using a specific adapter. */
-export function setThreadAdapter(key: ThreadKey, adapterName: string): void {
+export function setThreadAdapter(key: SessionKey, adapterName: string): void {
   if (!adapterFactories[adapterName]) {
     throw new Error(`Unknown adapter: ${adapterName}`);
   }
@@ -422,8 +423,8 @@ export function getKnownAdapterNames(): string[] {
 export interface AdapterSweepTarget {
   readonly name: string;
   readonly label: string;
-  checkIsActive(key: ThreadKey): boolean;
-  stopSession(key: ThreadKey): void;
+  checkIsActive(key: SessionKey): boolean;
+  stopSession(key: SessionKey): void;
 }
 
 /**
@@ -457,7 +458,7 @@ export interface StopAllAdaptersResult {
  * can't have an active session if they don't exist.
  */
 export function stopAllAdaptersFor(
-  key: ThreadKey,
+  key: SessionKey,
   resolveAdapter: (name: string) => AdapterSweepTarget,
   adapterNames: string[] = getKnownAdapterNames(),
 ): StopAllAdaptersResult {

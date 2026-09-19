@@ -21,7 +21,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 interface ApiCall {
   method: string;
@@ -56,7 +57,7 @@ function createRenameAdapter(shouldPatchFail = false): {
   return { adapter, calls };
 }
 
-function injectSession(adapter: OpenCodeAdapter, key: ThreadKey, isAutoNamePending: boolean): void {
+function injectSession(adapter: OpenCodeAdapter, key: SessionKey, isAutoNamePending: boolean): void {
   adapter['sessions'].set(keyToString(key), {
     key,
     sessionId,
@@ -89,7 +90,7 @@ const getPatches = (calls: ApiCall[]): ApiCall[] =>
 describe('OpenCode manual session rename', () => {
   it('PATCHes the new title scoped to the session instance and resolves null', async () => {
     const { adapter, calls } = createRenameAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100, 1);
     injectSession(adapter, key, true);
 
     const result = await adapter.renameSession(key, 'Refactor the auth layer');
@@ -106,7 +107,7 @@ describe('OpenCode manual session rename', () => {
 
   it('a manual rename retires the auto-name fallback (isAutoNamePending → false)', async () => {
     const { adapter } = createRenameAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100, 2);
     injectSession(adapter, key, true);
 
     await adapter.renameSession(key, 'Investigate the flaky CI run');
@@ -120,7 +121,7 @@ describe('OpenCode manual session rename', () => {
 
   it('with NO active session resolves to a notice and issues no PATCH', async () => {
     const { adapter, calls } = createRenameAdapter();
-    const key: ThreadKey = { chatId: -100, threadId: 3 }; // no session injected
+    const key: SessionKey = makeTelegramKey(-100, 3); // no session injected
 
     const result = await adapter.renameSession(key, 'Anything');
 
@@ -131,7 +132,7 @@ describe('OpenCode manual session rename', () => {
 
   it('a PATCH failure resolves to a notice (no throw) and still suppresses the fallback', async () => {
     const { adapter, calls } = createRenameAdapter(true);
-    const key: ThreadKey = { chatId: -100, threadId: 4 };
+    const key: SessionKey = makeTelegramKey(-100, 4);
     injectSession(adapter, key, true);
 
     const result = await adapter.renameSession(key, 'Title that fails to save');

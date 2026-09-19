@@ -23,11 +23,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import {
   buildThreadContextPreamble,
   prependThreadContextPreamble,
 } from '../threadContextPreamble';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 interface ApiCall {
   method: string;
@@ -63,7 +64,7 @@ function createNamingAdapter(getTitle: string | undefined): {
   return { adapter, calls };
 }
 
-function injectSession(adapter: OpenCodeAdapter, key: ThreadKey, isAutoNamePending: boolean): void {
+function injectSession(adapter: OpenCodeAdapter, key: SessionKey, isAutoNamePending: boolean): void {
   adapter['sessions'].set(keyToString(key), {
     key,
     sessionId,
@@ -104,7 +105,7 @@ const getCalls = (calls: ApiCall[], method: string, prefix: string): ApiCall[] =
 describe('OpenCode fallback session naming', () => {
   it('first meaningful prompt PATCHes the raw snippet when the title is still the placeholder', async () => {
     const { adapter, calls } = createNamingAdapter('New session - 2026-06-04T19:07:28.705Z');
-    const key: ThreadKey = { chatId: -100, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100, 1);
     injectSession(adapter, key, true);
 
     adapter.sendInput(key, 'Investigate the broken OAuth redirect on staging');
@@ -121,7 +122,7 @@ describe('OpenCode fallback session naming', () => {
 
   it('renames from the RAW user text — the glued thread-context preamble never leaks into the title', async () => {
     const { adapter, calls } = createNamingAdapter('New session - 2026-06-04T19:07:28.705Z');
-    const key: ThreadKey = { chatId: -100, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100, 2);
     injectSession(adapter, key, true);
 
     const preamble = buildThreadContextPreamble({ key, subdir: 'telegramCode' });
@@ -136,7 +137,7 @@ describe('OpenCode fallback session naming', () => {
 
   it('a trivial prompt does NOT rename and leaves the session eligible for a later meaningful one', async () => {
     const { adapter, calls } = createNamingAdapter('New session - 2026-06-04T19:07:28.705Z');
-    const key: ThreadKey = { chatId: -100, threadId: 3 };
+    const key: SessionKey = makeTelegramKey(-100, 3);
     injectSession(adapter, key, true);
 
     adapter.sendInput(key, 'да');
@@ -159,7 +160,7 @@ describe('OpenCode fallback session naming', () => {
   it('leaves a session that opencode already auto-titled alone (no PATCH)', async () => {
     // GET returns a real LLM name — the fallback must NOT overwrite it.
     const { adapter, calls } = createNamingAdapter('Debug broken Node login flow');
-    const key: ThreadKey = { chatId: -100, threadId: 4 };
+    const key: SessionKey = makeTelegramKey(-100, 4);
     injectSession(adapter, key, true);
 
     adapter.sendInput(key, 'Investigate the broken OAuth redirect on staging');
@@ -171,7 +172,7 @@ describe('OpenCode fallback session naming', () => {
 
   it('never renames an explicit `/opencode args` session (not eligible)', async () => {
     const { adapter, calls } = createNamingAdapter('New session - 2026-06-04T19:07:28.705Z');
-    const key: ThreadKey = { chatId: -100, threadId: 5 };
+    const key: SessionKey = makeTelegramKey(-100, 5);
     injectSession(adapter, key, false); // args session: isAutoNamePending = false
 
     adapter.sendInput(key, 'Investigate the broken OAuth redirect on staging');

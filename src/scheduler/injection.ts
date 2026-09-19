@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type SessionKey } from '../sessionKey';
 import {
   buildSchedulerMcpToken,
   schedulerMcpClientIdHeader,
@@ -110,7 +110,7 @@ export interface ClaudeSchedulerMcpConfig {
  * signs — so the token the server later verifies resolves to this exact thread.
  */
 export async function buildClaudeSchedulerMcpConfig(
-  threadKey: ThreadKey,
+  threadKey: SessionKey,
 ): Promise<ClaudeSchedulerMcpConfig | null> {
   if (!injectionConfig) return null;
   const scope: SchedulerScope = { kind: 'thread', threadKey: keyToString(threadKey) };

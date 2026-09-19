@@ -19,18 +19,19 @@ import {
 import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
 import { defaultEffortLevel } from '../effortLevels';
 import { t } from '../i18n';
-import { keyToString, keyFromString, type ThreadKey } from '../types';
+import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 function createAdapter(): { adapter: ClaudeCliAdapter; sent: string[] } {
   const adapter = new ClaudeCliAdapter();
   const sent: string[] = [];
-  adapter['sendInput'] = (_key: ThreadKey, input: string) => { sent.push(input); };
+  adapter['sendInput'] = (_key: SessionKey, input: string) => { sent.push(input); };
   return { adapter, sent };
 }
 
 describe('Claude setModel session guard (S3)', () => {
   it('no active session → returns the notice, does NOT type into tmux', async () => {
-    const key: ThreadKey = { chatId: -100555, threadId: 1 };
+    const key: SessionKey = makeTelegramKey(-100555, 1);
     const { adapter, sent } = createAdapter();
 
     const result = await adapter.setModel(key, 'opus');
@@ -41,7 +42,7 @@ describe('Claude setModel session guard (S3)', () => {
   it('active session with NO effort pref → sends "/model <id>" then the default "/effort xhigh"', async () => {
     // Thread absent from the seeded prefs file → getEffort returns null → the
     // bot re-applies its default effort for the newly picked model.
-    const key: ThreadKey = { chatId: -100555, threadId: 2 };
+    const key: SessionKey = makeTelegramKey(-100555, 2);
     const { adapter, sent } = createAdapter();
     adapter['sessions'].set(keyToString(key), { isActive: true });
 
@@ -57,7 +58,7 @@ describe('Claude setModel session guard (S3)', () => {
   it('active session WITH an explicit effort pref → sends only "/model <id>" (no default re-apply)', async () => {
     // Seeded thread (claudeSetModel.testSetup) → getEffort returns the explicit
     // level → the default is NOT re-applied; claude carries the pref across.
-    const key: ThreadKey = keyFromString(seededThreadKeyString);
+    const key: SessionKey = keyFromString(seededThreadKeyString);
     const { adapter, sent } = createAdapter();
     adapter['sessions'].set(keyToString(key), { isActive: true });
 

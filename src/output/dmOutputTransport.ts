@@ -1,5 +1,10 @@
-import type { OutputTransport, OutputEventMeta, ThreadKey } from '../types';
-import { keyToString, keyFromString } from '../types';
+import type { OutputTransport, OutputEventMeta } from '../types';
+import type { SessionKey } from '../sessionKey';
+import { keyToString, keyFromString } from '../sessionKey';
+import {
+  getTelegramChatId,
+  getTelegramThreadId,
+} from '../connectors/telegram/sessionKeyCodec';
 import { nextDraftId } from '../utils/draftId';
 import { appendPendingOutput } from '../utils/outputFlushPlan';
 import {
@@ -65,23 +70,23 @@ interface DraftMessageState {
  */
 export interface DmOutputTransportDeps {
   queueOutput(
-    key: ThreadKey,
+    key: SessionKey,
     output: string,
     isContinuation: boolean,
     isFinal: boolean,
     isComplete: boolean,
     startsNewParagraph: boolean,
   ): void;
-  sendAgentChunks(key: ThreadKey, chunks: string[]): Promise<void>;
-  getThreadMessageState(key: ThreadKey): DraftMessageState;
+  sendAgentChunks(key: SessionKey, chunks: string[]): Promise<void>;
+  getThreadMessageState(key: SessionKey): DraftMessageState;
   /** Per-thread draft-streaming gate — true for any backend whose streaming output
    * the DM cursor can accumulate (OpenCode + the Claude scrape adapter). */
-  checkSupportsDraft(key: ThreadKey): boolean;
+  checkSupportsDraft(key: SessionKey): boolean;
   /** Whether the thread's adapter emits incremental deltas WITHOUT continuation
    * meta (Claude). The cursor synthesises the continuation flag for those so the
    * answer accumulates into one draft instead of finalizing per poll. */
-  checkOutputsDeltas(key: ThreadKey): boolean;
-  checkIsGeneral(key: ThreadKey): boolean;
+  checkOutputsDeltas(key: SessionKey): boolean;
+  checkIsGeneral(key: SessionKey): boolean;
   callSendMessageDraft(method: 'sendMessageDraft', payload: Record<string, unknown>): Promise<unknown>;
   splitMessage(text: string, max: number, measure: (text: string) => number): string[];
   renderAgentHtml(text: string): string;
@@ -104,7 +109,7 @@ export interface DmOutputTransportDeps {
 export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTransport {
   const draftStreams = new Map<string, DraftStreamState>();
 
-  function getDraftStreamState(key: ThreadKey): DraftStreamState {
+  function getDraftStreamState(key: SessionKey): DraftStreamState {
     const k = keyToString(key);
     let s = draftStreams.get(k);
     if (!s) {
@@ -163,7 +168,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * DRAFT_DEFAULT_BACKOFF_MS}) and re-arms the pacer; any other failure is logged
    * and dropped. Never throws, never touches the message rate-limiter.
    */
-  async function sendDraftNow(key: ThreadKey, draft: DraftStreamState): Promise<void> {
+  async function sendDraftNow(key: SessionKey, draft: DraftStreamState): Promise<void> {
     const text = renderDraftBody(draft.accumulatedText);
     // The cursor invariant keeps `accumulatedText` under the cap; an over-cap
     // render is the TRANSIENT pre-spill state at an overflow feed (the overflow
@@ -171,14 +176,14 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
     // would only earn `MESSAGE_TOO_LONG`, so skip — the spill carries the content.
     if (text.length > deps.maxMessageLength) return;
     const payload: Record<string, unknown> = {
-      chat_id: key.chatId,
+      chat_id: getTelegramChatId(key),
       draft_id: draft.draftId,
       text,
       parse_mode: 'HTML',
     };
     // Mirror `buildSendExtra`'s General handling: omit `message_thread_id` for the
     // DM General thread (`DM_GENERAL_THREAD_ID = 0`).
-    if (!deps.checkIsGeneral(key)) payload.message_thread_id = key.threadId;
+    if (!deps.checkIsGeneral(key)) payload.message_thread_id = getTelegramThreadId(key);
 
     // Record what we are ABOUT to show + when, before the await, so a concurrent
     // feed paces against this attempt (and a failure below only adjusts backoff).
@@ -211,7 +216,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * either updated within the idle window or FINALIZED at the idle boundary, so it
    * never needs to survive the ~30s native ephemerality.
    */
-  function armDraftPacerTimer(key: ThreadKey, draft: DraftStreamState): void {
+  function armDraftPacerTimer(key: SessionKey, draft: DraftStreamState): void {
     if (draft.pacerTimer) clearTimeout(draft.pacerTimer);
     const now = Date.now();
     const backoffRemainder = Math.max(0, draft.backoffUntilMs - now);
@@ -233,7 +238,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * and act: `send` fires a draft now; `skip`/`defer` re-arm the timer. No-op once
    * the turn is inactive (a teardown / finalize cleared it).
    */
-  async function runDraftPacer(key: ThreadKey): Promise<void> {
+  async function runDraftPacer(key: SessionKey): Promise<void> {
     const draft = draftStreams.get(keyToString(key));
     if (!draft || !draft.active) return;
     const now = Date.now();
@@ -265,7 +270,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * mis-read as another new response (in DM the draft path replaces the persist
    * path that used to clear this flag on send).
    */
-  function startDraftTurn(key: ThreadKey): void {
+  function startDraftTurn(key: SessionKey): void {
     const draft = getDraftStreamState(key);
     clearDraftTimers(draft);
     draft.draftId = nextDraftId(draft.draftId);
@@ -300,7 +305,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * a natural message boundary). Re-armed on every feed, so a steadily streaming
    * reply never trips it.
    */
-  function armIdleFinalizeTimer(key: ThreadKey, draft: DraftStreamState): void {
+  function armIdleFinalizeTimer(key: SessionKey, draft: DraftStreamState): void {
     if (draft.idleFinalizeTimer) clearTimeout(draft.idleFinalizeTimer);
     draft.idleFinalizeTimer = setTimeout(() => {
       draft.idleFinalizeTimer = null;
@@ -323,7 +328,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * blank line so the live preview keeps the pane's paragraph structure.
    */
   function appendToDraft(
-    key: ThreadKey,
+    key: SessionKey,
     output: string,
     isContinuation: boolean,
     startsNewParagraph = false,
@@ -350,7 +355,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * draft → a new message. Best-effort + idempotent: nothing accumulated, or no
    * draft at all, is a no-op.
    */
-  async function finalizeDraft(key: ThreadKey): Promise<void> {
+  async function finalizeDraft(key: SessionKey): Promise<void> {
     const draft = draftStreams.get(keyToString(key));
     if (!draft) return;
     const text = draft.accumulatedText;
@@ -370,7 +375,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * remainder still under the cap) into a fresh draft so the live cursor continues
    * below the finalized content. Called by `feedDraft` on the `overflow` boundary.
    */
-  async function spillDraftOverflow(key: ThreadKey): Promise<void> {
+  async function spillDraftOverflow(key: SessionKey): Promise<void> {
     const draft = getDraftStreamState(key);
     const chunks = deps.splitMessage(
       draft.accumulatedText,
@@ -415,7 +420,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    * fire-and-forget. Lazily opens a turn if none is active.
    */
   async function feedDraft(
-    key: ThreadKey,
+    key: SessionKey,
     output: string,
     isContinuation: boolean,
     isFinal: boolean,
@@ -469,7 +474,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    *    order), then post it straight as a permanent message (no draft animation);
    *  • otherwise (e.g. Claude DM baseline) → the original `queueOutput` path.
    */
-  function deliverOutput(key: ThreadKey, output: string, meta?: OutputEventMeta): void {
+  function deliverOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void {
     const isFinal = meta?.isFinal === true;
     const isComplete = meta?.isComplete === true;
     // Claude reports out-of-band that the pane had a paragraph break before this
@@ -518,7 +523,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
     // Threads with an active draft turn — the shutdown flush finalizes each so
     // the live draft's accumulated text lands as a permanent message before exit.
     getInFlightThreadKeys() {
-      const keys: ThreadKey[] = [];
+      const keys: SessionKey[] = [];
       for (const [keyStr, draft] of draftStreams) {
         if (draft.active) keys.push(keyFromString(keyStr));
       }

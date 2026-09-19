@@ -33,6 +33,7 @@ import {
   DM_GENERAL_THREAD_ID,
   type SurfaceRouting,
 } from '../threadRouting';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const ALLOWED = -1001234567890;
 const ALLOWED_USER = 555;
@@ -53,7 +54,7 @@ test('R2: forum supergroup with matching id resolves a key', () => {
     },
     ALLOWED,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 42 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 42));
 });
 
 test('R2: forum supergroup with mismatched id is rejected', () => {
@@ -121,7 +122,7 @@ test('R2: General topic with NO message_thread_id resolves to threadId=1', () =>
     },
     ALLOWED,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 1 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 1));
   assert.equal(checkIsGeneralTopic(key!), true);
 });
 
@@ -133,7 +134,7 @@ test('R2: General topic with explicit message_thread_id=1 also resolves to threa
     },
     ALLOWED,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 1 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 1));
 });
 
 test('R2: reply-thread with is_topic_message=false is rejected', () => {
@@ -162,13 +163,13 @@ test('R2: callback-query routes via callbackQueryMessage when ctx.message is abs
     },
     ALLOWED,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 42 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 42));
 });
 
 test('R2: checkIsGeneralTopic returns true only for threadId=1', () => {
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 1 }), true);
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 2 }), false);
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 42 }), false);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 1)), true);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 2)), false);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 42)), false);
 });
 
 // ─── auto-pairing decision (STRUCTURAL only) ────────────────────────────
@@ -250,12 +251,12 @@ test('DM: owner private chat with a topic thread → key (chatId=ownerId)', () =
     { chat: ownerDmChat, message: { message_thread_id: 500001 } },
     OWNER_USER_ID,
   );
-  assert.deepEqual(key, { chatId: OWNER_USER_ID, threadId: 500001 });
+  assert.deepEqual(key, makeTelegramKey(OWNER_USER_ID, 500001));
 });
 
 test('DM: owner private chat with NO message_thread_id → General (threadId=0)', () => {
   const key = resolveDmThreadKey({ chat: ownerDmChat, message: {} }, OWNER_USER_ID);
-  assert.deepEqual(key, { chatId: OWNER_USER_ID, threadId: DM_GENERAL_THREAD_ID });
+  assert.deepEqual(key, makeTelegramKey(OWNER_USER_ID, DM_GENERAL_THREAD_ID));
   assert.equal(DM_GENERAL_THREAD_ID, 0);
   assert.equal(checkIsGeneralTopic(key!, 'dm'), true);
 });
@@ -295,20 +296,20 @@ test('DM: callback-query routes via callbackQueryMessage when ctx.message is abs
     },
     OWNER_USER_ID,
   );
-  assert.deepEqual(key, { chatId: OWNER_USER_ID, threadId: 500001 });
+  assert.deepEqual(key, makeTelegramKey(OWNER_USER_ID, 500001));
 });
 
 // ─── mode-aware checkIsGeneralTopic ─────────────────────────────────────
 
 test('checkIsGeneralTopic: General marker is 1 in group mode, 0 in DM mode', () => {
   // Group surface: threadId 1 is General, 0 is not.
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 1 }, 'group'), true);
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 0 }, 'group'), false);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 1), 'group'), true);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 0), 'group'), false);
   // DM surface: threadId 0 is General, 1 is not.
-  assert.equal(checkIsGeneralTopic({ chatId: OWNER_USER_ID, threadId: 0 }, 'dm'), true);
-  assert.equal(checkIsGeneralTopic({ chatId: OWNER_USER_ID, threadId: 1 }, 'dm'), false);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(OWNER_USER_ID, 0), 'dm'), true);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(OWNER_USER_ID, 1), 'dm'), false);
   // Default mode is group → unchanged for existing callers/tests.
-  assert.equal(checkIsGeneralTopic({ chatId: ALLOWED, threadId: 1 }), true);
+  assert.equal(checkIsGeneralTopic(makeTelegramKey(ALLOWED, 1)), true);
 });
 
 // ─── CHAT_MODE validation guard ─────────────────────────────────────────
@@ -349,16 +350,16 @@ const bothInertRouting: SurfaceRouting = {
 };
 
 test('checkIsDmThreadKey: owner chat id → true, group/foreign chat id → false', () => {
-  assert.equal(checkIsDmThreadKey({ chatId: OWNER_USER_ID, threadId: 0 }, OWNER_USER_ID, true), true);
-  assert.equal(checkIsDmThreadKey({ chatId: ALLOWED, threadId: 1 }, OWNER_USER_ID, true), false);
-  assert.equal(checkIsDmThreadKey({ chatId: 999, threadId: 0 }, OWNER_USER_ID, true), false);
+  assert.equal(checkIsDmThreadKey(makeTelegramKey(OWNER_USER_ID, 0), OWNER_USER_ID, true), true);
+  assert.equal(checkIsDmThreadKey(makeTelegramKey(ALLOWED, 1), OWNER_USER_ID, true), false);
+  assert.equal(checkIsDmThreadKey(makeTelegramKey(999, 0), OWNER_USER_ID, true), false);
 });
 
 test('checkIsDmThreadKey: inert DM surface → always false (group-only both)', () => {
   // Even the owner's own chat id is NOT a DM key when the surface is inert —
   // and with no owner configured the id is NaN, which never matches anyway.
-  assert.equal(checkIsDmThreadKey({ chatId: OWNER_USER_ID, threadId: 0 }, OWNER_USER_ID, false), false);
-  assert.equal(checkIsDmThreadKey({ chatId: OWNER_USER_ID, threadId: 0 }, NaN, false), false);
+  assert.equal(checkIsDmThreadKey(makeTelegramKey(OWNER_USER_ID, 0), OWNER_USER_ID, false), false);
+  assert.equal(checkIsDmThreadKey(makeTelegramKey(OWNER_USER_ID, 0), NaN, false), false);
 });
 
 test('both: owner private chat resolves to a DM key (chatId = owner id)', () => {
@@ -366,7 +367,7 @@ test('both: owner private chat resolves to a DM key (chatId = owner id)', () => 
     { chat: ownerDmPrivateChat, message: { message_thread_id: 500001 } },
     bothRouting,
   );
-  assert.deepEqual(key, { chatId: OWNER_USER_ID, threadId: 500001 });
+  assert.deepEqual(key, makeTelegramKey(OWNER_USER_ID, 500001));
   // The resolved key reads back as a DM key via the discriminator.
   assert.equal(checkIsDmThreadKey(key!, OWNER_USER_ID, true), true);
 });
@@ -376,7 +377,7 @@ test('both: the served group resolves to a group key (chatId = group id)', () =>
     { chat: servedGroupChat, message: { message_thread_id: 42, is_topic_message: true } },
     bothRouting,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 42 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 42));
   assert.equal(checkIsDmThreadKey(key!, OWNER_USER_ID, true), false);
 });
 
@@ -405,7 +406,7 @@ test('both: DM-inert still serves the group', () => {
     { chat: servedGroupChat, message: { message_thread_id: 7, is_topic_message: true } },
     bothInertRouting,
   );
-  assert.deepEqual(key, { chatId: ALLOWED, threadId: 7 });
+  assert.deepEqual(key, makeTelegramKey(ALLOWED, 7));
 });
 
 test('regression — dm mode: only the owner-DM resolver runs (group update dropped)', () => {
@@ -418,7 +419,7 @@ test('regression — dm mode: only the owner-DM resolver runs (group update drop
   // Owner DM → key.
   assert.deepEqual(
     resolveThreadKeyForMode({ chat: ownerDmPrivateChat, message: {} }, dmRouting),
-    { chatId: OWNER_USER_ID, threadId: DM_GENERAL_THREAD_ID },
+    makeTelegramKey(OWNER_USER_ID, DM_GENERAL_THREAD_ID),
   );
   // A group update in dm mode → null (no group surface).
   assert.equal(
@@ -443,7 +444,7 @@ test('regression — group mode: only the group resolver runs (owner DM dropped)
       { chat: servedGroupChat, message: { message_thread_id: 42, is_topic_message: true } },
       groupRouting,
     ),
-    { chatId: ALLOWED, threadId: 42 },
+    makeTelegramKey(ALLOWED, 42),
   );
   // The owner's private chat in group mode → null (no DM surface).
   assert.equal(
