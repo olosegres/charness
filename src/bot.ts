@@ -150,7 +150,16 @@ import {
   DM_GENERAL_THREAD_ID,
   type ChatMode,
 } from './threadRouting';
-import { AdminCache, checkShouldInvalidateAdminCache, extractAdminIds, ADMIN_CACHE_TTL_MS } from './accessControl';
+import { AdminCache, ADMIN_CACHE_TTL_MS } from './accessControl';
+import {
+  checkShouldInvalidateAdminCache,
+  createTelegramConnectorInbound,
+  getInboundEvent,
+  getPlatformMembers,
+  getTelegramCommand,
+} from './connectors/telegram/inbound';
+import { createCommandRouter } from './connector/commandRouter';
+import type { InboundCommand, InboundEvent } from './connector/inbound';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import { downloadFile } from './utils/download';
 import { getTranscriptionEndpoint, transcribeAudio, type TranscribeResult } from './utils/transcribeAudio';
@@ -647,10 +656,21 @@ installLinkPreviewSuppression(bot.telegram);
 //  fallback. There is no static allow-list env and no /grant command.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * @description The Telegram connector's inbound side: the membership lookup the
+ * access policy needs, and the normalization step that hands the core
+ * platform-neutral events.
+ */
+const telegramInbound = createTelegramConnectorInbound({
+  listAdministrators: (chatId) => bot.telegram.getChatAdministrators(chatId),
+  getBotUsername: () => bot.botInfo?.username,
+});
+
 const adminCache = new AdminCache({
-  fetchAdmins: () => {
+  fetchAdmins: async () => {
     const groupId = getAllowedGroupId();
-    return groupId === null ? Promise.resolve([]) : bot.telegram.getChatAdministrators(groupId);
+    if (groupId === null) return [];
+    return getPlatformMembers(await bot.telegram.getChatAdministrators(groupId));
   },
   ttlMs: ADMIN_CACHE_TTL_MS,
 });
@@ -672,7 +692,7 @@ async function checkIsAllowedUser(ctx: Context): Promise<boolean> {
     return userId === getOwnerUserId();
   }
   const adminIds = await adminCache.getAdminIds();
-  return adminIds.has(userId);
+  return adminIds.has(userId.toString());
 }
 
 /**
@@ -683,8 +703,8 @@ async function checkIsAllowedUser(ctx: Context): Promise<boolean> {
  */
 async function checkIsForumAdmin(chatId: number, userId: number): Promise<boolean> {
   try {
-    const members = await bot.telegram.getChatAdministrators(chatId);
-    return extractAdminIds(members).includes(userId);
+    const elevated = await telegramInbound.listMembersWithElevatedRights(chatId.toString());
+    return elevated.includes(userId.toString());
   } catch (e) {
     console.warn(`[pair] getChatAdministrators(${chatId}) failed:`, e instanceof Error ? e.message : e);
     return false;
@@ -4884,39 +4904,73 @@ async function applyModelSelection(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * @description Wrap a command handler with the gating check.
+ * @description The core's name → handler table for commands. Platform-neutral:
+ * it knows `/status` as the name `status`, never as Telegram syntax. The
+ * Telegram trigger below is what recognises `/status@thisbot` and hands this
+ * router an already-normalized {@link InboundEvent}.
+ */
+const commandRouter = createCommandRouter();
+
+/** The Telegram context a command handler receives — a text message, always. */
+type CommandContext = NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>;
+
+/**
+ * @description Register a command handler on the neutral router.
  *
- * Each handler gets a guaranteed-non-null `key` if it runs at all. Foreign
- * chats / unauthorized users are silently ignored (logged inside `authoriseContext`).
+ * Each handler gets the resolved `key` (gating already applied by the trigger
+ * below, so it can never be null here) plus the already-parsed
+ * {@link InboundCommand}, so no handler re-splits the raw text itself.
  */
 function command(
   name: string | string[],
-  handler: (ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>, key: SessionKey) => Promise<void> | void,
+  handler: (ctx: CommandContext, key: SessionKey, parsed: InboundCommand) => Promise<void> | void,
 ): void {
-  bot.command(name, async (ctx) => {
-    const key = await authoriseContext(ctx);
-    if (!key) return;
-    // Running ANY command exits the /bind create-folder await-name mode — the
-    // create flow only expects a plain folder-name message, never a command.
-    // (The picker's create button re-arms it afterwards via its own callback.)
-    const keyString = keyToString(key);
-    awaitingFolderName.delete(keyString);
-    const hadPendingProviderConnect = pendingProviderConnects.delete(keyString);
-    if (hadPendingProviderConnect && !checkIsConnectCommandText(ctx.message.text)) {
-      await replyToThread(key, t('connect.cancelled'));
-    }
-    // ANY command cancels an in-flight `/reminders` wizard, at whatever step, and
-    // then runs normally. Unconditional rather than only during the step-4 text
-    // wait: that is what makes a repeat `/reminders` retire the previous wizard
-    // (relabelling its message) instead of leaving a second live-looking keyboard
-    // in the topic. Cheap — it returns at once when no wizard exists, and only
-    // then does it spend a send on the relabel.
-    await cancelReminderWizard(key);
-    // Any command is thread activity — reset the compact-on-idle watchdog (F2).
-    noteThreadActivity(key);
-    await handler(ctx, key);
-  });
+  commandRouter.register(name, (event, parsed) =>
+    // `raw` is the connector-private escape hatch: until S4 relocates them, the
+    // handlers still read Telegram-specific fields off the telegraf context.
+    handler(event.raw as CommandContext, event.key, parsed),
+  );
 }
+
+/**
+ * @description The single Telegram trigger for every routed command, replacing
+ * the per-command `bot.command(...)` registrations.
+ *
+ * Recognition is telegraf's own rule, re-implemented in
+ * {@link getTelegramCommand}, so WHICH messages count as commands is unchanged
+ * — including `/name@otherbot` falling through. An unrouted name calls `next()`
+ * and reaches the generic text handler exactly as an unregistered
+ * `bot.command` always did; an unauthorised sender is dropped without
+ * fall-through, as before.
+ *
+ * Registered at the position the first command used to occupy, so middleware
+ * order relative to `bot.command('pair')` and the text handler is preserved.
+ */
+bot.on(message('text'), async (ctx, next) => {
+  const parsed = getTelegramCommand(ctx.message, ctx.me);
+  if (!parsed || !commandRouter.checkIsRegistered(parsed.name)) return next();
+  const key = await authoriseContext(ctx);
+  if (!key) return;
+  // Running ANY command exits the /bind create-folder await-name mode — the
+  // create flow only expects a plain folder-name message, never a command.
+  // (The picker's create button re-arms it afterwards via its own callback.)
+  const keyString = keyToString(key);
+  awaitingFolderName.delete(keyString);
+  const hadPendingProviderConnect = pendingProviderConnects.delete(keyString);
+  if (hadPendingProviderConnect && !checkIsConnectCommandText(ctx.message.text)) {
+    await replyToThread(key, t('connect.cancelled'));
+  }
+  // ANY command cancels an in-flight `/reminders` wizard, at whatever step, and
+  // then runs normally. Unconditional rather than only during the step-4 text
+  // wait: that is what makes a repeat `/reminders` retire the previous wizard
+  // (relabelling its message) instead of leaving a second live-looking keyboard
+  // in the topic. Cheap — it returns at once when no wizard exists, and only
+  // then does it spend a send on the relabel.
+  await cancelReminderWizard(key);
+  // Any command is thread activity — reset the compact-on-idle watchdog (F2).
+  noteThreadActivity(key);
+  await commandRouter.dispatch(getInboundEvent(ctx.message, key, ctx.me));
+});
 
 command('start', async (_ctx, key) => {
   const adapters = getAvailableAdapters();
@@ -5011,15 +5065,15 @@ command('status', async (_ctx, key) => {
   }));
 });
 
-function getLanguageCommandArg(text: string): string {
-  const [_command, arg = ''] = stripCommandBotMention(text.trim()).split(/\s+/, 2);
-  return arg.trim().toLowerCase();
+/** The `/language` argument: the first token, lower-cased (locale codes are case-insensitive). */
+function getLanguageCommandArg(parsed: InboundCommand): string {
+  return (parsed.args[0] ?? '').toLowerCase();
 }
 
-command(['language', 'lang'], async (ctx, key) => {
+command(['language', 'lang'], async (ctx, key, parsed) => {
   const chatId = getTelegramChatId(key);
   const locales = localeCodes.join(', ');
-  const arg = getLanguageCommandArg(ctx.message.text);
+  const arg = getLanguageCommandArg(parsed);
 
   if (arg === 'auto' || arg === 'reset') {
     await state.setChatLocaleOverride(chatId, null);
@@ -5115,13 +5169,12 @@ function buildTimezoneRegionView(): { text: string; keyboard: TimezonePickerKeyb
  * unlike `/language`'s locale codes): zone names are canonicalized by `Intl`
  * downstream, and a fixed offset like `+04:00` has no case to normalize.
  */
-function getTimezoneCommandArg(text: string): string {
-  const [_command, arg = ''] = stripCommandBotMention(text.trim()).split(/\s+/, 2);
-  return arg.trim();
+function getTimezoneCommandArg(parsed: InboundCommand): string {
+  return parsed.args[0] ?? '';
 }
 
-command('timezone', async (ctx, key) => {
-  const arg = getTimezoneCommandArg(ctx.message.text);
+command('timezone', async (_ctx, key, parsed) => {
+  const arg = getTimezoneCommandArg(parsed);
 
   if (arg.toLowerCase() === 'auto' || arg.toLowerCase() === 'reset') {
     await replyToThread(key, await applyTimezoneSelection(null));
@@ -5344,7 +5397,7 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
   return { ok: true };
 }
 
-command('bind', async (ctx, key) => {
+command('bind', async (_ctx, key, parsed) => {
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('bind.in_general'));
     return;
@@ -5352,7 +5405,7 @@ command('bind', async (ctx, key) => {
   // Collapse internal whitespace runs so `/bind   foo` works the same as
   // `/bind foo` and we don't end up looking for a literal "foo  bar"
   // directory because the user double-tapped space.
-  const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+  const parts = parsed.args;
   const arg = parts.join(' ');
   if (!arg) {
     // Show where the topic points now, so the picker message itself answers
@@ -6092,17 +6145,16 @@ async function handleAgentStart(
  * (e.g. `/claude refactor src/bot.ts` → `refactor src/bot.ts`).
  */
 function handleStartCommand(
-  ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>,
+  parsed: InboundCommand,
   key: SessionKey,
   adapterName: 'claude' | 'opencode' | 'terminal',
 ): Promise<void> {
-  const args = ctx.message.text.split(' ').slice(1).join(' ').trim();
-  return handleAgentStart(key, adapterName, args || undefined);
+  return handleAgentStart(key, adapterName, parsed.argsText || undefined);
 }
 
-command('claude', (ctx, key) => handleStartCommand(ctx, key, 'claude'));
-command(['opencode', 'oc'], (ctx, key) => handleStartCommand(ctx, key, 'opencode'));
-command('terminal', (ctx, key) => handleStartCommand(ctx, key, 'terminal'));
+command('claude', (_ctx, key, parsed) => handleStartCommand(parsed, key, 'claude'));
+command(['opencode', 'oc'], (_ctx, key, parsed) => handleStartCommand(parsed, key, 'opencode'));
+command('terminal', (_ctx, key, parsed) => handleStartCommand(parsed, key, 'terminal'));
 
 const defaultConnectProviderId = 'openai';
 
@@ -6115,8 +6167,8 @@ function checkLooksLikeProviderApiKey(value: string): boolean {
   return value.startsWith('sk-');
 }
 
-function getConnectCommandArgs(rawText: string): ConnectCommandArgs {
-  const [, ...args] = stripCommandBotMention(rawText.trim()).split(/\s+/);
+function getConnectCommandArgs(parsed: InboundCommand): ConnectCommandArgs {
+  const args = parsed.args;
   if (args.length === 0) return { providerId: defaultConnectProviderId, apiKey: null };
   if (args.length === 1) {
     const onlyArg = args[0].trim();
@@ -6214,8 +6266,8 @@ async function showConnectMethodPicker(key: SessionKey, providerId: string): Pro
   );
 }
 
-command('connect', async (ctx, key) => {
-  const { providerId, apiKey } = getConnectCommandArgs(ctx.message.text);
+command('connect', async (ctx, key, parsed) => {
+  const { providerId, apiKey } = getConnectCommandArgs(parsed);
   if (!checkIsValidProviderId(providerId)) {
     if (apiKey !== null) await deleteThreadMessage(key, ctx.message.message_id);
     await replyToThread(key, t('connect.invalid_provider', { provider: providerId }));
@@ -6303,10 +6355,10 @@ async function showDisconnectProviderPicker(key: SessionKey): Promise<void> {
   }
 }
 
-command('disconnect', async (ctx, key) => {
+command('disconnect', async (_ctx, key, parsed) => {
   // No thread-adapter gate — `/connect` has none either; the unsupported-build
   // guard lives where the provider-auth adapter is resolved.
-  const providerId = ctx.message.text.split(' ').slice(1).join(' ').trim();
+  const providerId = parsed.argsText;
   if (!providerId) {
     await showDisconnectProviderPicker(key);
     return;
@@ -6368,7 +6420,7 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
   return msg || t('claudeMode.switched_fresh', { label });
 }
 
-command('claude_mode', async (ctx, key) => {
+command('claude_mode', async (_ctx, key, parsed) => {
   if (checkIsGeneral(key)) { await replyToThread(key, t('error.start_in_general')); return; }
 
   // Gate on the thread adapter name — the raw pick, else the Claude default via
@@ -6377,7 +6429,7 @@ command('claude_mode', async (ctx, key) => {
   // resolution the start path uses. See `getClaudeModeAction` for the live bug
   // this split resolution fixes (a fresh thread under a legacy env-forced
   // 'claude' default no-oped the first `/claude_mode tmux`).
-  const arg = ctx.message.text.split(' ').slice(1).join(' ').trim().toLowerCase();
+  const arg = parsed.argsText.toLowerCase();
   const action = getClaudeModeAction({
     threadAdapterName: getThreadAdapterNameRaw(key) ?? resolveClaudeBackendName(key),
     effectiveBackendName: resolveClaudeBackendName(key),
@@ -6752,9 +6804,9 @@ async function refreshModelProviderLevel(ctx: Context, key: SessionKey): Promise
   await editModelPickerMessage(ctx, render);
 }
 
-command('model', async (ctx, key) => {
+command('model', async (_ctx, key, parsed) => {
   const adapter = getThreadAdapter(key);
-  const args = ctx.message.text.split(' ').slice(1).join(' ').trim();
+  const args = parsed.argsText;
 
   // numeric selection from the last rendered page
   if (/^\d+$/.test(args)) {
@@ -6789,9 +6841,9 @@ function buildEffortKeyboard(levels: readonly string[], current: string | null) 
   return Markup.inlineKeyboard(buttons, { columns: 3 });
 }
 
-command('effort', async (ctx, key) => {
+command('effort', async (_ctx, key, parsed) => {
   const adapter = getThreadAdapter(key);
-  const args = ctx.message.text.split(' ').slice(1).join(' ').trim();
+  const args = parsed.argsText;
 
   // Backend must support the effort contract (both methods are optional).
   if (!adapter.setEffort || !adapter.getAvailableEffortLevels) {
@@ -6877,10 +6929,10 @@ async function applyThinkingMode(key: SessionKey, mode: DisplayVerbosityMode): P
   await state.setDisplayPref(key, 'thinking', mode);
 }
 
-command('thinking', async (ctx, key) => {
+command('thinking', async (_ctx, key, parsed) => {
   // No backend gate (un-gated in S5): the pref drives both backends now —
   // OpenCode's thinking SSE render and Claude's scrape-chunk relay routing.
-  const arg = ctx.message.text.split(' ').slice(1).join(' ').trim().toLowerCase();
+  const arg = parsed.argsText.toLowerCase();
   const current = state.getDisplayPrefs(key).thinking;
 
   if (arg) {
@@ -6921,10 +6973,10 @@ async function applyToolResultMode(key: SessionKey, mode: DisplayVerbosityMode):
   await state.setDisplayPref(key, 'toolResults', mode);
 }
 
-command('tool_results', async (ctx, key) => {
+command('tool_results', async (_ctx, key, parsed) => {
   // No backend gate (un-gated in S4): the pref drives both backends now —
   // OpenCode's `toolResult` SSE render and Claude's scrape-chunk relay routing.
-  const arg = ctx.message.text.split(' ').slice(1).join(' ').trim().toLowerCase();
+  const arg = parsed.argsText.toLowerCase();
   const current = state.getDisplayPrefs(key).toolResults;
 
   if (arg) {
@@ -6969,8 +7021,8 @@ async function applySubagentMode(key: SessionKey, mode: DisplayVerbosityMode): P
   await state.setDisplayPref(key, 'subagent', mode);
 }
 
-command('subagent', async (ctx, key) => {
-  const arg = ctx.message.text.split(' ').slice(1).join(' ').trim().toLowerCase();
+command('subagent', async (_ctx, key, parsed) => {
+  const arg = parsed.argsText.toLowerCase();
   const current = state.getDisplayPrefs(key).subagent;
 
   if (arg) {
@@ -7030,8 +7082,8 @@ async function applyVerbosityLevel(key: SessionKey, mode: DisplayVerbosityMode):
   await applySubagentMode(key, mode);
 }
 
-command('verbosity', async (ctx, key) => {
-  const arg = ctx.message.text.split(' ').slice(1).join(' ').trim().toLowerCase();
+command('verbosity', async (_ctx, key, parsed) => {
+  const arg = parsed.argsText.toLowerCase();
 
   if (arg) {
     // Normalization keeps the retired names (`detailed`/`brief`/`hide`/
@@ -7063,7 +7115,7 @@ command('verbosity', async (ctx, key) => {
 // (optional method, like /model): OpenCode renames via `PATCH /session/:id`;
 // Claude has no title concept and is told "not supported". Requires a live
 // session — without one the user is told to start an agent first.
-command('rename_session', async (ctx, key) => {
+command('rename_session', async (_ctx, key, parsed) => {
   const adapter = getThreadAdapter(key);
 
   if (!adapter.renameSession) {
@@ -7073,7 +7125,7 @@ command('rename_session', async (ctx, key) => {
 
   // Title is the whole text after the command, trimmed and capped to the same
   // length the auto-name snippet uses (single source of truth).
-  const title = ctx.message.text.split(' ').slice(1).join(' ').trim().slice(0, sessionTitleSnippetMaxLength);
+  const title = parsed.argsText.slice(0, sessionTitleSnippetMaxLength);
   if (!title) {
     await replyToThread(key, t('rename_session.usage'));
     return;
@@ -7877,8 +7929,8 @@ command('compact', async (_ctx, key) => {
 // → per-thread override; General → the instance-wide default. Bare → an
 // Enable/Disable picker (✓ on current). Only meaningful for an agent topic with
 // an active session (terminal / unbound → the "nothing to compact" reply).
-command('compact_on_idle', async (ctx, key) => {
-  const arg = ctx.message.text.split(/\s+/).slice(1).join(' ').trim().toLowerCase();
+command('compact_on_idle', async (_ctx, key, parsed) => {
+  const arg = parsed.args.join(' ').toLowerCase();
   const isGeneral = checkIsGeneral(key);
 
   if (!isGeneral) {
@@ -8302,8 +8354,8 @@ command('output', async (_ctx, key) => {
  * setting survives a hot rebuild mid-debug. Lifecycle-independent: nothing in
  * the session lifecycle (stop, /new, /quit, resume, /unbind) touches it.
  */
-command('trace', async (ctx, key) => {
-  const args = ctx.message.text.split(' ').slice(1).map(a => a.toLowerCase()).filter(Boolean);
+command('trace', async (_ctx, key, parsed) => {
+  const args = parsed.args.map((arg) => arg.toLowerCase());
   const config = state.getTraceConfig();
   const keyStr = keyToString(key);
 
@@ -8367,8 +8419,8 @@ command('trace', async (ctx, key) => {
  * lifecycle touches it. Default OFF. Use case: long multi-day sessions where
  * the agent needs absolute time to interpret "yesterday" / "2-3 days ago".
  */
-command('timestamps', async (ctx, key) => {
-  const args = ctx.message.text.split(' ').slice(1).map(a => a.toLowerCase()).filter(Boolean);
+command('timestamps', async (_ctx, key, parsed) => {
+  const args = parsed.args.map((arg) => arg.toLowerCase());
 
   // Bare `/timestamps` — status only.
   if (args.length === 0) {
@@ -8408,8 +8460,8 @@ command('timestamps', async (ctx, key) => {
  * `deliverPromptOrBuffer` forwards (active) or buffers (mid-startup), reading
  * the startup window AFTER the ensure so a freshly-started session forwards.
  */
-command('schedule', async (ctx, key) => {
-  const text = ctx.message.text.split(' ').slice(1).join(' ').trim();
+command('schedule', async (_ctx, key, parsed) => {
+  const text = parsed.argsText;
   // The agent has no clock of its own, so the wrapper carries the CURRENT
   // instant + zone: without it "tomorrow at 9" resolves against whatever the
   // model assumes rather than the zone the schedule will actually fire in.

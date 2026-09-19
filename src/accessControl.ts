@@ -1,14 +1,19 @@
-import type { ChatMember } from 'telegraf/typings/core/types/typegram';
+import type { PlatformMember } from './connector/inbound';
 
 /**
  * @description Access control for the bot: who may talk to the agent.
  *
- * The authority is fully runtime — the creator and administrators of the served
- * forum group, read live from Telegram via `getChatAdministrators`. There is no
- * static allow-list env and no `/grant` command: promoting/demoting someone in
- * the Telegram group is the only knob. To avoid an API round-trip on every
- * message the admin set is cached ({@link AdminCache}) with a long TTL and
- * refreshed lazily once it goes stale.
+ * The authority is fully runtime — the members of the served space who hold
+ * elevated rights there, read live from the platform. There is no static
+ * allow-list env and no `/grant` command: promoting/demoting someone on the
+ * platform is the only knob. To avoid an API round-trip on every message the
+ * admin set is cached ({@link AdminCache}) with a long TTL and refreshed lazily
+ * once it goes stale.
+ *
+ * Platform-neutral on purpose: the policy speaks {@link PlatformMember}, and
+ * the connector decides which of ITS membership statuses count as elevated.
+ * Ids are strings for the same reason `SessionKey` fields are — only Telegram's
+ * happen to be numeric.
  */
 
 /** Admin set cache lifetime. A demotion/promotion takes effect within this window. */
@@ -22,43 +27,23 @@ export const ADMIN_CACHE_TTL_MS = 3_600_000; // 1 hour
 export const ADMIN_CACHE_FAILURE_RETRY_MS = 60_000;
 
 /**
- * @description Reduce a `getChatAdministrators` response to the human admin user
- * ids. Keeps only `creator` / `administrator` statuses and drops bots (Telegram
- * already excludes bots, but the guard makes the intent explicit and the helper
- * total over any `ChatMember[]`).
+ * @description Reduce a membership listing to the ids of the humans who hold
+ * elevated rights. Bots are dropped — an automation holding admin rights is
+ * never an authorised human operator.
  */
-export function extractAdminIds(members: ChatMember[]): number[] {
-  const ids: number[] = [];
+export function getElevatedMemberIds(members: PlatformMember[]): string[] {
+  const ids: string[] = [];
   for (const member of members) {
-    if (member.status !== 'creator' && member.status !== 'administrator') continue;
-    if (member.user.is_bot) continue;
-    ids.push(member.user.id);
+    if (!member.hasElevatedRights) continue;
+    if (member.isBot) continue;
+    ids.push(member.id);
   }
   return ids;
 }
 
-/**
- * @description Should a `chat_member` status transition invalidate the cached
- * admin set? Only transitions that TOUCH admin status matter — someone was or
- * becomes creator/administrator (promotion, demotion, an admin leaving).
- * Joins/leaves of regular members can't change the admin set, so they must not
- * trigger a `getChatAdministrators` refetch.
- */
-export function checkShouldInvalidateAdminCache(
-  oldStatus: ChatMember['status'],
-  newStatus: ChatMember['status'],
-): boolean {
-  return (
-    oldStatus === 'creator' ||
-    oldStatus === 'administrator' ||
-    newStatus === 'creator' ||
-    newStatus === 'administrator'
-  );
-}
-
 export interface AdminCacheDeps {
-  /** Fetches the current admin list (e.g. `bot.telegram.getChatAdministrators(groupId)`). */
-  fetchAdmins: () => Promise<ChatMember[]>;
+  /** Fetches the current membership listing for the served space. */
+  fetchAdmins: () => Promise<PlatformMember[]>;
   /** Cache lifetime; defaults to {@link ADMIN_CACHE_TTL_MS}. */
   ttlMs?: number;
   /** Backoff after a failed fetch; defaults to {@link ADMIN_CACHE_FAILURE_RETRY_MS}. */
@@ -76,17 +61,17 @@ export interface AdminCacheDeps {
  * keeps the last-known set (never locks everyone out) and starts a short backoff.
  */
 export class AdminCache {
-  private readonly fetchAdmins: () => Promise<ChatMember[]>;
+  private readonly fetchAdmins: () => Promise<PlatformMember[]>;
   private readonly ttlMs: number;
   private readonly failureRetryMs: number;
   private readonly now: () => number;
 
-  private ids = new Set<number>();
+  private ids = new Set<string>();
   /** Timestamp of the last SUCCESSFUL fetch, or `null` if never fetched. */
   private fetchedAt: number | null = null;
   /** Timestamp of the last FAILED fetch, or `null`. */
   private lastFailAt: number | null = null;
-  private inFlight: Promise<Set<number>> | null = null;
+  private inFlight: Promise<Set<string>> | null = null;
 
   constructor(deps: AdminCacheDeps) {
     this.fetchAdmins = deps.fetchAdmins;
@@ -95,7 +80,7 @@ export class AdminCache {
     this.now = deps.now ?? Date.now;
   }
 
-  async getAdminIds(): Promise<Set<number>> {
+  async getAdminIds(): Promise<Set<string>> {
     const now = this.now();
     if (this.fetchedAt !== null && now - this.fetchedAt < this.ttlMs) {
       return this.ids;
@@ -119,17 +104,17 @@ export class AdminCache {
     this.lastFailAt = null;
   }
 
-  private async refresh(): Promise<Set<number>> {
+  private async refresh(): Promise<Set<string>> {
     try {
       const members = await this.fetchAdmins();
-      this.ids = new Set(extractAdminIds(members));
+      this.ids = new Set(getElevatedMemberIds(members));
       this.fetchedAt = this.now();
       this.lastFailAt = null;
       return this.ids;
     } catch (e) {
       this.lastFailAt = this.now();
       console.warn(
-        '[access] getChatAdministrators failed; keeping last-known admin set:',
+        '[access] membership lookup failed; keeping last-known admin set:',
         e instanceof Error ? e.message : e,
       );
       return this.ids;
