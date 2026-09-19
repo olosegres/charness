@@ -3,6 +3,7 @@ import type { Locale } from './i18n';
 import type { OpenCodeAuthMethod } from './utils/openCodeAuthLogin';
 import type { McpHealOutcome } from './utils/claudeMcpHeal';
 import type { SessionKey } from './sessionKey';
+import type { OutboundHints } from './platform/outbound';
 
 export interface AgentSession {
   id: string;
@@ -341,66 +342,6 @@ export interface ResolvedThreadDisplayPrefs {
 }
 
 /**
- * @description Metadata riding an `output` event alongside the text.
- */
-export interface OutputEventMeta {
-  /**
-   * True when this text directly continues the previous `output` emit of the
-   * same in-flight response (a streaming tail cut mid-sentence, possibly
-   * mid-word). The bot appends it to the message it is already rendering —
-   * concatenated as-is, no separator — instead of starting a new message.
-   * Absent/false = a standalone output (new logical message).
-   */
-  isContinuation?: boolean;
-  /**
-   * True when this `output` is the LAST frame of a turn (emitted as the session
-   * goes idle). The bot flushes it promptly instead of waiting out the
-   * possibly-429-stretched debounce, so the final message never lingers behind
-   * a cooldown. Only affects flush TIMING — append/continuation semantics are
-   * unchanged.
-   */
-  isFinal?: boolean;
-  /**
-   * True when this `output` is a COMPLETE one-shot block, whole at emit time
-   * (e.g. the "↩️ Resumed — last N messages" context block) rather than a live
-   * streaming tail. The bot posts it instantly as a single message: in DM mode
-   * it SKIPS the native draft channel (whose typing animation would otherwise
-   * "draw" already-ready text progressively), and flushes the persist
-   * immediately (like {@link OutputEventMeta.isFinal}) instead of waiting out
-   * the debounce.
-   */
-  isComplete?: boolean;
-  /**
-   * True when this text comes from a SUB-AGENT (OpenCode: child session SSE;
-   * Claude: on-disk transcript tail), only emitted in `/subagent full` mode.
-   * The bot renders the chunk visibly marked ("🤖 ⤷ …") and OUTSIDE the parent
-   * reply's edit-in-place continuation chain — a child transcript must never
-   * become the base the parent's next continuation is appended to (it would
-   * corrupt the answer's accounting).
-   */
-  isSubagent?: boolean;
-  /**
-   * Claude-only. True when this `output` is a scraped interactive question
-   * (the TUI selector prompt + hint). The bot sends it as its OWN pinnable
-   * message (instead of the coalescing output cursor) and PINS it, so the muted
-   * topic fires a notification. OpenCode questions never use this — they have a
-   * discrete `question` event with their own post + pin path.
-   */
-  isQuestion?: boolean;
-  /**
-   * Claude-only. True when the pane had a paragraph break immediately before
-   * this chunk's first new line (carried out-of-band because the relay
-   * pipeline's `.trim()`s would strip a leading blank). The bot inserts a
-   * blank-line (`\n\n`) separator when APPENDING this chunk to the pending
-   * buffer / live draft, so multi-paragraph answers keep their structure;
-   * IGNORED when the chunk starts a fresh message (a message must never start
-   * blank). OpenCode never sets it — it re-renders the full accumulated text,
-   * so blanks already survive.
-   */
-  startsNewParagraph?: boolean;
-}
-
-/**
  * @description The per-surface output path, selected ONCE at boot from
  * `CHAT_MODE` (mirroring the {@link AgentAdapter} pattern) instead of a per-call
  * surface branch at every output site. The group impl is thin (`queueOutput`
@@ -409,7 +350,7 @@ export interface OutputEventMeta {
  */
 export interface OutputTransport {
   /** Route one `output` event to its message path (the mode's own logic). */
-  deliverOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void;
+  deliverOutput(key: SessionKey, output: string, meta?: OutboundHints): void;
   /**
    * Finalize any in-flight content for the thread (DM: the live draft → a
    * permanent message; group: noop). The STATUS site awaits this so the status
@@ -601,7 +542,7 @@ export type CompactionResult =
  * Each adapter manages sessions keyed by `SessionKey` and communicates via EventEmitter.
  *
  * Events emitted (all carry the `SessionKey` as the first argument):
- * - 'output'   (key: SessionKey, text: string, meta?: OutputEventMeta) — permanent text response
+ * - 'output'   (key: SessionKey, text: string, meta?: OutboundHints) — permanent text response
  * - 'status'   (key: SessionKey, text: string)   — transient status (tool calls, thinking); shown as editable message
  * - 'question' (key: SessionKey, question: { requestId: string, questions: QuestionInfo[] }) — interactive question for user
  * - 'questionGone' (key: SessionKey) — Claude-only; the scraped TUI selector left the screen (answered / dismissed), so the bot removes its pin. Claude has no `pendingQuestions` entry, so it can't lean on the OpenCode `clearPendingQuestion` unpin path; this event is the normal-answer unpin trigger. Hard-teardown paths (stop / quit / unbind / closed / error) still route through `clearPendingQuestion` for BOTH backends.

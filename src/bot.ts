@@ -32,10 +32,10 @@ import {
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters/claudeJsonStreamAdapter';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputEventMeta, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { SessionKey } from './sessionKey';
 import { createOutputTransport } from './output/createOutputTransport';
-import { keyToString, keyFromString } from './sessionKey';
+import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
 import {
   getTelegramChatId,
   getTelegramThreadId,
@@ -156,9 +156,12 @@ import {
   createTelegramConnectorInbound,
   getTelegramCommand,
 } from './connectors/telegram/inbound';
+import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
 import type { InboundCommand, InboundEvent } from './platform/inbound';
+import type { OutboundHints } from './platform/outbound';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
+import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
 import { getTranscriptionEndpoint, transcribeAudio, type TranscribeResult } from './utils/transcribeAudio';
 import { stripCommandBotMention } from './utils';
@@ -662,6 +665,28 @@ installLinkPreviewSuppression(bot.telegram);
 const telegramInbound = createTelegramConnectorInbound({
   listAdministrators: (chatId) => bot.telegram.getChatAdministrators(chatId),
   getIdentity: () => ({ username: bot.botInfo?.username, userId: bot.botInfo?.id }),
+});
+
+/**
+ * @description The Telegram connector's outbound side: the core delivers
+ * semantic content, files and an activity state through this, and the connector
+ * decides how Telegram renders, splits, pins and paces them.
+ *
+ * Every dependency is read lazily (through a closure) because the primitives it
+ * routes to — the chat-mode transport, the file-send service — are wired later
+ * in the boot sequence than this composition.
+ */
+const telegramOutbound = createTelegramConnectorOutbound({
+  getOutputTransport,
+  sendStandaloneMessage: (key, text, replyMarkup) =>
+    replyChunkWithFallback(key, renderAgentHtml(text), text, replyMarkup),
+  pinMessage: (key, messageId) => pinThreadQuestion(key, messageId),
+  setTypingLoader: (key, isActive) => {
+    if (isActive) startTypingLoader(key);
+    else stopTypingLoader(key);
+  },
+  sendFiles: (threadKeyString, request) => sendFilesToThread(threadKeyString, request),
+  encodeKey: keyToString,
 });
 
 const adminCache = new AdminCache({
@@ -2476,7 +2501,7 @@ function checkIsOutputStreaming(key: SessionKey): boolean {
   // The DM draft transport streams via drafts, not the output queue, so ask it
   // too — otherwise the Claude liveness loop, blind to an active draft, inserts a
   // heartbeat status frame between prose deltas and chops the draft mid-answer.
-  if (getOutputTransport().checkIsStreaming(key)) return true;
+  if (telegramOutbound.checkIsDelivering(key)) return true;
   const q = outputQueues.get(keyToString(key));
   if (!q) return false;
   return q.pendingOutput !== null || q.isProcessing || q.debounceTimer !== null;
@@ -2548,7 +2573,7 @@ function clearThreadQueues(key: SessionKey): void {
   // `q.pendingOutput` and the clear would otherwise null it first (S2). Both
   // transports capture + reset their in-flight state SYNCHRONOUSLY before any
   // await, so the clear below can't race the drain. Fire-and-forget.
-  void getOutputTransport().finalizeInFlight(key);
+  void telegramOutbound.finalize(key);
   clearThreadOutputQueues(outputQueues.get(k), statusCoalescers.get(k));
   // A new session starts with empty context — forget the last-sent outputs so
   // the identical-output backstop can't suppress a legitimate repeat across a
@@ -2830,7 +2855,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
   stopClaudeLiveness(key);
   // Same orphan-prevention for the typing-loader timer (it lives in the
   // message-state entry too) — covers /unbind and a deleted topic.
-  stopTypingLoader(key);
+  telegramOutbound.setActivity(key, 'idle');
   threadMessageStates.delete(k);
   outputQueues.delete(k);
   clearPendingQuestion(key);
@@ -2857,7 +2882,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
   // draft text (synchronously capturing it + clearing the timers); drop the now-
   // reset per-transport state so it doesn't leak across a rebind (DM: the draft map
   // entry; group: noop).
-  getOutputTransport().disposeThread(key);
+  telegramOutbound.dispose(key);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3529,7 +3554,7 @@ function checkIsTypingLoopStuck(key: SessionKey): boolean {
   return checkIsTypingStuckByLeak({
     isAdapterBusy: checkIsAdapterBusy(key),
     isCompacting: checkIsThreadCompacting(key),
-    isTransportStreaming: getOutputTransport().checkIsStreaming(key),
+    isTransportStreaming: telegramOutbound.checkIsDelivering(key),
     hasPendingOutput: q?.pendingOutput != null,
     isProcessing: q?.isProcessing === true,
     hasDebounceTimer: q?.debounceTimer != null,
@@ -3861,10 +3886,12 @@ async function replyChunkWithFallback(
   key: SessionKey,
   renderedHtml: string,
   plainFallback: string,
+  replyMarkup?: InlineKeyboardMarkup,
 ): Promise<number | null> {
-  const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML' });
+  const markupExtra = replyMarkup ? { reply_markup: replyMarkup } : {};
+  const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra });
   if (id) return id;
-  return replyToThread(key, plainFallback, {});
+  return replyToThread(key, plainFallback, markupExtra);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4038,9 +4065,8 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
   let flushedCount = 0;
   const flushWork = (async (): Promise<ShutdownDrainVerdict> => {
     enterShutdownDrain();
-    const transport = getOutputTransport();
     // [A] union of threads with pending coalesced output: the bot-owned output
-    // queues + the transport-owned DM drafts (deduped by serialised key).
+    // queues + the connector's own unfinalized content (deduped by serialised key).
     const pendingKeys = new Map<string, SessionKey>();
     for (const [keyStr, q] of outputQueues) {
       if (q.pendingOutput === null) continue;
@@ -4050,12 +4076,12 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
         /* malformed key — nothing to flush for it */
       }
     }
-    for (const key of transport.getInFlightThreadKeys()) {
+    for (const key of telegramOutbound.listUnfinalizedKeys()) {
       pendingKeys.set(keyToString(key), key);
     }
     flushedCount = pendingKeys.size;
     await Promise.allSettled(
-      [...pendingKeys.values()].map((key) => transport.finalizeInFlight(key)),
+      [...pendingKeys.values()].map((key) => telegramOutbound.finalize(key)),
     );
     // A DM-surface thread on a non-draft adapter (e.g. terminal) coalesces via
     // the group `queueOutput` path, but its transport finalize handled only the
@@ -4335,7 +4361,7 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
   clearAuthNotice(key); // session released → retire any pinned logged-out notice
   // Session is going away → no output is coming, so stop the "working" loader
   // (covers the release half of /new before its fresh start re-arms it).
-  stopTypingLoader(key);
+  telegramOutbound.setActivity(key, 'idle');
   // Close any still-pending OpenCode question on the server BEFORE stopping the
   // session — a stopped session can't accept the reject, and an unrejected
   // question re-surfaces on the next reattach (`restoreOpenQuestion`). No-op for
@@ -4498,7 +4524,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // prompts, so a one-shot typing ping is enough — its `ready` notice (below)
   // tells the user the session is up; a sustained loader would dangle forever.
   if (adapter.selfGreetsOnStart) {
-    startTypingLoader(key);
+    telegramOutbound.setActivity(key, 'working');
   } else {
     sendThreadTypingIndicator(key).catch(() => {});
   }
@@ -4543,7 +4569,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
     // rather than replaying into a dead session. Stop the boot loader too: a
     // self-greeting start armed the sustained loader, and no output is coming.
     startupPromptBuffer.discardPrompts(kStr);
-    stopTypingLoader(key);
+    telegramOutbound.setActivity(key, 'idle');
     return t('agent.start_failed', {
       label: adapter.label,
       error: e instanceof Error ? e.message : String(e),
@@ -4742,7 +4768,7 @@ async function forwardPromptToAgent(
   // delayed behind a chat-wide 429 cooldown (unlike a sent message), and (S3)
   // persists while output is streaming OR the agent is busy — self-stopping only
   // when the topic drains + idles.
-  startTypingLoader(key);
+  telegramOutbound.setActivity(key, 'working');
   if (adapter.interruptAndWaitIdle) {
     await adapter.interruptAndWaitIdle(key);
   }
@@ -11285,7 +11311,7 @@ function checkAdapterOutputsDeltas(key: SessionKey): boolean {
   return getThreadAdapter(key).outputsDeltas === true;
 }
 
-function handleAgentOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void {
+function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints): void {
   console.log(`[Bot] output ${keyToString(key)} (${output.length}): ${output.slice(0, 100)}...`);
   if (!output.trim()) return;
   traceAgentEmit('output', key, output);
@@ -11317,14 +11343,11 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutputEventMe
   // `clearPendingQuestion` (hard teardown). OpenCode questions never reach here
   // (they use the discrete `question` event + `postPendingQuestionAt`).
   if (meta?.isQuestion) {
-    stopTypingLoader(key);
-    void (async () => {
-      // Land any in-flight content (DM draft / coalesced group output) ABOVE the
-      // question first, mirroring the OpenCode question path's finalize.
-      await getOutputTransport().finalizeInFlight(key);
-      const id = await replyChunkWithFallback(key, renderAgentHtml(output), output);
-      if (id !== null) void pinThreadQuestion(key, id);
-    })();
+    telegramOutbound.setActivity(key, 'idle');
+    // The connector owns the whole sequence: land in-flight content ABOVE the
+    // question, send it as its OWN pinnable message (`keepVisible`), and pin it
+    // so the muted topic fires a notification.
+    void telegramOutbound.deliver(key, { text: output, keepVisible: true }, meta);
     markNeedsNewMessage(key);
     return;
   }
@@ -11407,12 +11430,14 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutputEventMe
     return;
   }
 
-  // Output routing is selected once at boot by CHAT_MODE (the OutputTransport
-  // seam). Group routes to the unchanged `queueOutput` edit-in-place persist
-  // path; DM owns the draft-cursor manager (streaming tail → draft, complete
-  // one-shot → finalize-then-post, Claude baseline → queueOutput). The 3-way
-  // DM split + the group thin path live in `createOutputTransport`.
-  getOutputTransport().deliverOutput(key, output, meta);
+  // Hand the turn's content to the connector as SEMANTIC text plus advisory
+  // hints — it decides rendering, splitting and pacing. Inside the Telegram
+  // connector the routing is still selected once at boot by CHAT_MODE (the
+  // OutputTransport chat-mode seam): group routes to the unchanged `queueOutput`
+  // edit-in-place persist path; DM owns the draft-cursor manager (streaming tail
+  // → draft, complete one-shot → finalize-then-post, Claude baseline →
+  // queueOutput).
+  void telegramOutbound.deliver(key, { text: output }, meta);
 
   // Bug #11: the agent may KEEP working after this chunk (which just deleted the
   // status frame). Arm the liveness loop so that once output streaming pauses
@@ -11484,7 +11509,7 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // Group mode now drains any coalesced-but-unsent output here too (S2), so the
   // status likewise lands below content rather than above a still-buffered chunk;
   // a fully-delivered turn is a no-op.
-  await getOutputTransport().finalizeInFlight(key);
+  await telegramOutbound.finalize(key);
 
   const c = getStatusCoalesceState(key);
   c.pendingText = status;
@@ -12294,9 +12319,9 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   // queueOutput in DM. Group: drain any coalesced-but-unsent output so the answer
   // lands above the prompt rather than behind it, S2). Fire-and-forget; a
   // fully-delivered turn is a no-op for both.
-  void getOutputTransport().finalizeInFlight(key);
+  void telegramOutbound.finalize(key);
   // The question UI replaces the "working" cue — stop the typing loader.
-  stopTypingLoader(key);
+  telegramOutbound.setActivity(key, 'idle');
 
   // Audit S13 / #31: register the pending question BEFORE the async
   // network round-trip. A user hammering an inline button right after
@@ -13430,7 +13455,17 @@ function wireScheduler(): SchedulerMcpHandle {
       const key = keyFromString(threadKeyStr);
       return getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
     },
-    sendFilesToThread,
+    // Routed through the outbound seam: the agent-facing file tool is a
+    // connector delivery, not a direct call into the Telegram send pipeline.
+    // The MCP surface is string-keyed (its `threadKey` arrives as text), so the
+    // decode happens here; an unrecognised string never named a conversation
+    // and falls through to the file service, which owns that error's wording.
+    sendFilesToThread: (threadKeyString, request) => {
+      const key = tryKeyFromString(threadKeyString);
+      return key === null
+        ? sendFilesToThread(threadKeyString, request)
+        : telegramOutbound.deliverFile(key, request);
+    },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
     getSecret: () => state.getSchedulerMcpSecret(),

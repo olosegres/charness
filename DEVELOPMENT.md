@@ -17,17 +17,41 @@ json-stream host process), `term-…` (terminal) — see
 `src/utils/tmuxSessionName.ts`; opencode sessions are keyed by the same
 `<chatId>:<threadId>` string. Two topics on the same folder stay independent.
 
-### Adapter pattern
+### Connector pattern (the platform seam)
+
+The core never speaks to a chat platform directly. It consumes normalized
+`InboundEvent`s and emits semantic `OutboundContent`, both addressed by a
+platform-agnostic `SessionKey`. Telegram is the first connector; adding a
+tracker or Teams surface means adding a directory under `src/connectors/`, not
+editing the core.
 
 ```
-Telegram <-> bot.ts <-> AgentAdapter <-> { Claude CLI (tmux scrape) | Claude CLI (stream-json) |
-                 │           │             OpenCode (HTTP+SSE)      | Terminal ($SHELL in tmux) }
-                 │           └── state.ts  (bindings, claudeSessionId, opencodeSessionId,
-                 │                          messages, MCP per-thread overrides)
-                 └── OutputTransport (src/output/) — how output reaches each surface,
-                     picked once at boot by CHAT_MODE: group edit-in-place stream
-                     vs the owner-DM native draft "cursor"
+Telegram  <->  connectors/telegram/  <->  bot.ts  <->  AgentAdapter <-> { Claude CLI (tmux scrape) |
+                 inbound.ts  ──┐          (core)          │              Claude CLI (stream-json) |
+                 outbound.ts ──┤                          │              OpenCode (HTTP+SSE)      |
+                 sessionKeyCodec.ts       │               │              Terminal ($SHELL in tmux) }
+                               │          │               └── state.ts  (bindings, claudeSessionId,
+      platform/inbound.ts  ────┤          │                             opencodeSessionId, messages,
+      platform/outbound.ts ────┘          │                             MCP per-thread overrides)
+      platform/commandRouter.ts ──────────┘
+      (the contracts — no platform library may be imported here)
 ```
+
+- `platform/` holds the CONTRACTS: `InboundEvent`, `ConnectorInbound`,
+  `OutboundContent`, `OutboundHints`, `ConnectorCapabilities`,
+  `ConnectorOutbound`, and the neutral command router.
+- `connectors/telegram/` holds the IMPLEMENTATION: telegraf types, the HTML
+  dialect, message limits, inline keyboards, pins, the typing action, and the
+  frozen `"<chatId>:<threadId>"` key spelling.
+- A connector DECLARES its capabilities (`ConnectorCapabilities`); the core
+  degrades where a surface lacks one — a tracker has no pinning and no tappable
+  buttons.
+- `OutputTransport` (`src/output/`) is a Telegram CHAT-MODE seam, one level
+  below: picked once at boot by `CHAT_MODE`, group edit-in-place stream vs the
+  owner-DM native draft "cursor". It is composed by the Telegram connector, not
+  by the core.
+
+### Adapter pattern
 
 Each adapter implements `AgentAdapter` from `src/types.ts`:
 - `startSession(key, workDir, args?, sessionId?)` / `stopSession(key)` / `resumeSession(key, workDir, sessionId, options?)`

@@ -10,7 +10,6 @@ import type {
   JsonStreamTailOffset,
   JsonStreamTailWriter,
   OpenCodeQuestion,
-  OutputEventMeta,
   RecentTurn,
   ReattachRecap,
   ResolvedThreadDisplayPrefs,
@@ -18,6 +17,7 @@ import type {
   SeenWatermark,
   SeenWatermarkWriter,
 } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
@@ -350,7 +350,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       try {
         const turns = await this.getRecentTurns(key, workDir, sessionId, resumeContextTurnLimit);
         const rendered = formatResumeContext(turns);
-        if (rendered) this.emit('output', key, rendered, { isComplete: true } satisfies OutputEventMeta);
+        if (rendered) this.emit('output', key, rendered, { isComplete: true } satisfies OutboundHints);
       } catch (e) {
         console.warn(`[ClaudeJson] resume context block failed:`, e instanceof Error ? e.message : e);
       }
@@ -1252,7 +1252,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const tail = session.currentResponseText.slice(session.emittedLength);
     if (tail) {
       session.emittedLength = session.currentResponseText.length;
-      const meta: OutputEventMeta = isFinal ? { isFinal: true } : {};
+      const meta: OutboundHints = isFinal ? { isFinal: true } : {};
       // NO isContinuation: `outputsDeltas` adapters let the transports synthesise it.
       this.emit('output', session.key, tail, meta);
     }
@@ -1326,7 +1326,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         const tail = session.childResponseText.slice(session.childEmittedLength);
         if (!tail.trim()) return;
         session.childEmittedLength = session.childResponseText.length;
-        this.emit('output', session.key, tail, { isSubagent: true } satisfies OutputEventMeta);
+        this.emit('output', session.key, tail, { isSubagent: true } satisfies OutboundHints);
         // Child batcher drained — release the held-back tail offset (see
         // `drainStdoutTail`).
         if (checkIsEmitCaughtUp(session)) this.persistTailOffset(session);

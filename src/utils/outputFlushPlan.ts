@@ -106,7 +106,7 @@ export function getGroupDeltaContinuation(
  * `\n` would split the word across lines. DISTINCT standalone outputs join with
  * a single `\n` by default, UPGRADED to a BLANK LINE (`\n\n`) only when
  * `startsNewParagraph` is set — the Claude scrape adapter reports out-of-band
- * (`OutputEventMeta.startsNewParagraph`) when the pane had a real paragraph
+ * (`OutboundHints.startsNewParagraph`) when the pane had a real paragraph
  * break before the chunk, so multi-paragraph answers keep their structure while
  * a single wrapped paragraph spanning two polls is NOT split by a blank.
  */

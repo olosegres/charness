@@ -25,7 +25,7 @@
 import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { type OutputEventMeta } from '../types';
+import { type OutboundHints } from '../platform/outbound';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -41,7 +41,7 @@ const workDir = '/tmp/work';
 function createAdapterWithSession(): {
   adapter: OpenCodeAdapter;
   outputs: string[];
-  metas: (OutputEventMeta | undefined)[];
+  metas: (OutboundHints | undefined)[];
 } {
   const adapter = new OpenCodeAdapter();
   const session = {
@@ -73,8 +73,8 @@ function createAdapterWithSession(): {
   adapter['sessions'].set(keyToString(key), session);
 
   const outputs: string[] = [];
-  const metas: (OutputEventMeta | undefined)[] = [];
-  adapter.on('output', (_key: SessionKey, text: string, meta?: OutputEventMeta) => {
+  const metas: (OutboundHints | undefined)[] = [];
+  adapter.on('output', (_key: SessionKey, text: string, meta?: OutboundHints) => {
     outputs.push(text);
     metas.push(meta);
   });

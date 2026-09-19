@@ -12,7 +12,6 @@ import type {
   ClaudeSurveyOption,
   DisplayPrefsReader,
   DisplayVerbosityMode,
-  OutputEventMeta,
   ReattachRecap,
   RecentTurn,
   ResolvedThreadDisplayPrefs,
@@ -22,6 +21,7 @@ import type {
   SendInputOptions,
   ThreadLocaleReader,
 } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry';
@@ -3291,7 +3291,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
             read.endOffset,
           );
           for (const text of extractAppendedSubagentTexts(session.subagentTail, read.fileName, appendedText)) {
-            const meta: OutputEventMeta = { isSubagent: true };
+            const meta: OutboundHints = { isSubagent: true };
             this.emit('output', key, text, meta);
           }
         } catch (e) {

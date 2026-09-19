@@ -15,7 +15,7 @@ export interface NewPaneContent {
    * True IFF a blank line immediately preceded the chunk's first new line AND
    * there was content above that blank (so it is a real inter-paragraph break,
    * not pane-top padding). Consumed only at the append JOIN, never at a message
-   * start. See {@link OutputEventMeta.startsNewParagraph}.
+   * start. See {@link OutboundHints.startsNewParagraph}.
    */
   startsNewParagraph: boolean;
 }

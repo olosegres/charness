@@ -1,4 +1,5 @@
-import type { OutputTransport, OutputEventMeta } from '../types';
+import type { OutputTransport } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString, keyFromString } from '../sessionKey';
 import {
@@ -474,7 +475,7 @@ export function createDmOutputTransport(deps: DmOutputTransportDeps): OutputTran
    *    order), then post it straight as a permanent message (no draft animation);
    *  • otherwise (e.g. Claude DM baseline) → the original `queueOutput` path.
    */
-  function deliverOutput(key: SessionKey, output: string, meta?: OutputEventMeta): void {
+  function deliverOutput(key: SessionKey, output: string, meta?: OutboundHints): void {
     const isFinal = meta?.isFinal === true;
     const isComplete = meta?.isComplete === true;
     // Claude reports out-of-band that the pane had a paragraph break before this

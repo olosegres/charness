@@ -3,7 +3,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, OutputEventMeta, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { classifyAgentApiError } from '../apiErrorRetry';
@@ -4281,7 +4282,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * raw tail of the in-flight response — possibly cut mid-word.
    *
    * Every tail except the FIRST of a response carries `isContinuation: true`
-   * (a {@link OutputEventMeta}). The bot appends a continuation tail to the
+   * (a {@link OutboundHints}). The bot appends a continuation tail to the
    * same growing Telegram message instead of starting a new one, so the long
    * reply reads as one message rather than each edit replacing the previous
    * text. `lastEmittedLength === 0` means this is the first tail of a fresh
@@ -4295,7 +4296,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const isContinuation = session.lastEmittedLength > 0;
     // `isFinal` rides only the idle-triggered flush so the bot can skip the
     // possibly-429-stretched debounce for the turn's last frame.
-    const meta: OutputEventMeta = { isContinuation, isFinal };
+    const meta: OutboundHints = { isContinuation, isFinal };
     this.emit('output', key, tail, meta);
     session.lastEmittedLength = session.currentResponseText.length;
   }
@@ -4356,7 +4357,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     if (!session.childResponseText) return;
     const tail = session.childResponseText.slice(session.childLastEmittedLength);
     if (!tail.trim()) return;
-    const meta: OutputEventMeta = { isSubagent: true };
+    const meta: OutboundHints = { isSubagent: true };
     this.emit('output', key, tail, meta);
     session.childLastEmittedLength = session.childResponseText.length;
   }
@@ -4911,7 +4912,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       'output',
       key,
       this.tl(key, () => t('apiRetry.transientNotice', { minutes: retryMinutes, attempt: retryAttempt })),
-      { isComplete: true } satisfies OutputEventMeta,
+      { isComplete: true } satisfies OutboundHints,
     );
   }
 

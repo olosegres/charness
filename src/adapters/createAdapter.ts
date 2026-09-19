@@ -1,4 +1,5 @@
-import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, OutputEventMeta, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { ClaudeCliAdapter } from './claudeCliAdapter';
@@ -51,7 +52,7 @@ const adapterInstances = new Map<string, AgentAdapter>();
 const threadAdapterNames = new Map<string, string>();
 
 /** Event listener forwarder — wired up per adapter instance. */
-type OutputHandler = (key: SessionKey, output: string, meta?: OutputEventMeta) => void;
+type OutputHandler = (key: SessionKey, output: string, meta?: OutboundHints) => void;
 type StatusHandler = (key: SessionKey, status: string) => void;
 type QuestionHandler = (key: SessionKey, question: OpenCodePendingQuestion) => void;
 type ThinkingHandler = (key: SessionKey, payload: ThinkingEvent) => void;

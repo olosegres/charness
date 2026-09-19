@@ -53,7 +53,7 @@ export interface DraftFeedInput {
   isContinuation: boolean;
   /** Thread flag: the next output must start a new message (user prompt, etc.). */
   needsNewMessage: boolean;
-  /** Is this the turn's last frame (`OutputEventMeta.isFinal`)? */
+  /** Is this the turn's last frame (`OutboundHints.isFinal`)? */
   isFinal: boolean;
   /**
    * Rendered length of the PROSPECTIVE accumulated text once this output is

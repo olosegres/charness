@@ -91,7 +91,7 @@ config/variants, not a per-message API field).
   pinned STATUS banner is never disturbed). **OpenCode** pins its discrete
   question message (`postPendingQuestionAt`), unpins via the single resolve
   choke point `clearPendingQuestion`. **Claude** has no discrete message — the
-  scraped selector emit is tagged `isQuestion` (`OutputEventMeta`) so the bot
+  scraped selector emit is tagged `isQuestion` (`OutboundHints`) so the bot
   sends it as its OWN standalone pinnable message; a `questionGone` adapter
   event (fired when `extractClaudeQuestion` goes pending→none) drives the unpin.
 - **One topic ↔ one project folder ↔ one agent session — the bind is mandatory.**
@@ -218,7 +218,7 @@ config/variants, not a per-message API field).
   model actually took effect server-side.
 - **Streaming output appends, never overwrites.** OpenCode streams a reply as
   incremental tails; every `output` emit after the first of a response carries
-  `isContinuation: true` (`OutputEventMeta` in `types.ts`). The bot appends a
+  `isContinuation: true` (`OutboundHints` in `platform/outbound.ts`). The bot appends a
   continuation to the message it is already rendering — re-rendering the FULL
   accumulated text (so `**`/`` ` `` pairs split across flushes re-pair) and
   editing in place; when the combined text outgrows the Telegram cap it spills
@@ -713,8 +713,10 @@ config/variants, not a per-message API field).
 | `sessionKey.ts` | The core's platform-agnostic routing key `SessionKey` (`{platform, space, thread}`) plus the `SessionKeyCodec` registry: `keyToString` dispatches on `key.platform`, `keyFromString`/`tryKeyFromString` dispatch by asking each codec's `matches()`, `keysEqual` compares `platform` too, `keyToSlug` rewrites the `:` for tmux/filesystem names. Serialization itself belongs to the connector — the core never parses the format |
 | `connectors/telegram/sessionKeyCodec.ts` | Telegram's `SessionKeyCodec` — owns the frozen `"<chatId>:<threadId>"` spelling (self-registers on import) — plus `makeTelegramKey` and the native accessors `getTelegramChatId` / `getTelegramThreadId` / `checkIsTelegramKey` |
 | `platform/inbound.ts` | The core-side INBOUND seam: `InboundEvent` (key + author + text + normalized attachments + optional reply/command + a connector-private `raw`), `NormalizedAttachment`, `PlatformMember`, and the `ConnectorInbound` contract (`start` / `stop` / `listMembersWithElevatedRights`). Deliberately carries NO `isAdmin` on the author — `AdminCache` stays the single source of that answer |
+| `platform/outbound.ts` | The core-side OUTBOUND seam: `OutboundContent` (semantic text + optional tappable `options` + a `keepVisible` request — never pre-rendered markup), `OutboundHints` (the adapters' advisory `output` flags: `isContinuation` / `isFinal` / `isComplete` / `isSubagent` / `isQuestion` / `startsNewParagraph`), `ActivityState`, `ConnectorCapabilities`, and the `ConnectorOutbound` contract (`deliver` / `deliverFile` / `setActivity` / `finalize` / `dispose` / `checkIsDelivering` / `listUnfinalizedKeys` / `capabilities`) |
 | `platform/commandRouter.ts` | The platform-neutral command router: `createCommandRouter` owns the name → handler table (`register` / `checkIsRegistered` / `dispatch`, matched EXACTLY including case — telegraf's own command match is case-sensitive) and `splitCommandArgs` defines what counts as an argument. The connector recognises its own trigger syntax; the core owns dispatch, so a second surface adds a recogniser, not a second command table |
 | `connectors/telegram/inbound.ts` | Telegram's INBOUND translation: `getTelegramCommand` (telegraf's own `bot_command`-at-offset-0 + `/cmd@thisbot` rule), `getInboundEvent`, `getNormalizedAttachments` (six Telegram media kinds → five neutral ones), `getPlatformMembers` + `checkShouldInvalidateAdminCache` (the `creator` / `administrator` vocabulary lives HERE, not in the policy), and `createTelegramConnectorInbound` — the SINGLE membership path (`listMembersWithElevatedRights`) and the single normalization path (`deliver`) |
+| `connectors/telegram/outbound.ts` | Telegram's OUTBOUND rendering: `telegramCapabilities` (every flag `true`; `maxMessageChars` is the splitter's 4000 cap), `buildOptionsKeyboard` (one button per row, labels elided at 40 chars), and `createTelegramConnectorOutbound` — ordinary turn content streams through the chat-mode `OutputTransport`, while `keepVisible` / `options` content finalizes in-flight output FIRST, then posts as its own message, then pins |
 
 ### Adapters (`src/adapters/`) — the proxy boundary
 
@@ -751,8 +753,13 @@ will not post a second copy (OpenCode sets it; the Claude backends do not).
 | `createOutputTransport.ts` | Factory: pick the output transport by `CHAT_MODE` (the single mode decision); thin group impl (`queueOutput` + `finalizeInFlight` reconcile — drains the coalesced-but-unsent buffer to a permanent message on teardown so the final answer is never discarded under 429, S2), DM delegates to `createDmOutputTransport`, `both` returns a per-key dispatcher (`checkIsDmKey`) over both impls |
 | `dmOutputTransport.ts` | The DM draft-cursor manager (relocated out of `bot.ts`): `deliverOutput` 3-way route (draft / `isComplete` one-shot / `queueOutput` baseline), `finalizeInFlight`, `disposeThread`, and the whole draft state + send/pace/idle machinery — built from injected `bot.ts` primitives |
 
-The `OutputTransport` interface (in `types.ts`) is the seam, selected once at boot
-(`registerOutputTransport`, mirroring `registerDisplayPrefsReader`). `queueOutput`
+`OutputTransport` is a TELEGRAM CHAT-MODE seam, not the platform seam: it splits
+group edit-in-place from the DM draft cursor *within* Telegram. Since the
+platform seam landed it is an INTERNAL detail of the Telegram connector —
+`connectors/telegram/outbound.ts` composes it, and the core reaches it only
+through `ConnectorOutbound`. The interface itself (in `types.ts`) is still
+selected once at boot (`registerOutputTransport`, mirroring
+`registerDisplayPrefsReader`). `queueOutput`
 and `sendAgentChunks` stay shared primitives in `bot.ts` (group + the DM Claude
 baseline / one-shot use them too). Thinking frames, sub-agent status, and pinned
 status are NOT part of this seam — they are mode-orthogonal (`displayPrefs` /
@@ -1346,7 +1353,7 @@ OpenCode events / bindings).
     child tool calls/results are never streamed (the parent's task result
     carries the final outcome); in `full` mode child TEXT streams as chunks
     marked "🤖 ⤷" OUTSIDE the parent's continuation chain
-    (`OutputEventMeta.isSubagent`). **OpenCode** (child-session SSE events):
+    (`OutboundHints.isSubagent`). **OpenCode** (child-session SSE events):
     non-`full` = the child transcript is NOT streamed; a DEDICATED
     self-updating message "🤖 sub-agent: <title> · m:ss" (its own
     `subagentStatusMessageId`, independent of the shared transient
