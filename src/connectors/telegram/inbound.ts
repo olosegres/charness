@@ -12,7 +12,7 @@
 
 import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import type { SessionKey } from '../../sessionKey';
-import { splitCommandArgs } from '../../connector/commandRouter';
+import { splitCommandArgs } from '../../platform/commandRouter';
 import type {
   AttachmentKind,
   ConnectorInbound,
@@ -23,9 +23,10 @@ import type {
   InboundReplyTo,
   NormalizedAttachment,
   PlatformMember,
-} from '../../connector/inbound';
+} from '../../platform/inbound';
 import { getElevatedMemberIds } from '../../accessControl';
 import { getTelegramFileMeta, type TelegramFileKind } from '../../telegramFileIntake';
+import { extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote';
 
 /**
  * @description The two Telegram membership statuses that grant elevated rights
@@ -36,6 +37,17 @@ const elevatedTelegramStatuses: ReadonlyArray<ChatMember['status']> = ['creator'
 
 function checkHasElevatedRights(status: ChatMember['status']): boolean {
   return elevatedTelegramStatuses.includes(status);
+}
+
+/**
+ * @description The two facts about THIS bot that inbound normalization needs:
+ * the username, to tell `/cmd@thisbot` from a command aimed at another bot in
+ * the same group, and the user id, to attribute a quoted reply to the assistant
+ * rather than to a person.
+ */
+export interface TelegramBotIdentity {
+  username?: string;
+  userId?: number;
 }
 
 /** A Telegram user's best available human-readable name. */
@@ -140,13 +152,13 @@ export function getNormalizedAttachments(message: Message): NormalizedAttachment
  */
 export function getTelegramCommand(
   message: Message.TextMessage,
-  botUsername: string | undefined,
+  identity: TelegramBotIdentity,
 ): InboundCommand | null {
   const commandEntity = message.entities?.[0];
   if (commandEntity?.type !== 'bot_command' || commandEntity.offset > 0) return null;
   const [commandPart, addressee] = message.text.slice(0, commandEntity.length).split('@');
   if (!commandPart) return null;
-  if (addressee && addressee.toLowerCase() !== botUsername?.toLowerCase()) return null;
+  if (addressee && addressee.toLowerCase() !== identity.username?.toLowerCase()) return null;
   const name = commandPart.slice(1);
   if (!name) return null;
   return { name, ...splitCommandArgs(message.text.slice(commandEntity.length)) };
@@ -159,17 +171,38 @@ function getInboundAuthor(user: User | undefined): InboundAuthor {
 
 /**
  * @description The replied-to message reduced to what the core renders into the
- * agent prompt. Non-text replies contribute their caption; a reply with neither
- * is dropped, since there is nothing to fold in.
+ * agent prompt.
+ *
+ * The candidate order and the exclusions (service message, forum topic-root
+ * "post in this topic" reply, nothing quotable) are NOT restated here — they are
+ * {@link extractReplyQuote}, the same pure helper the reply-quote prompt block
+ * already uses. A second, subtly weaker copy is exactly how the highlighted
+ * partial quote (`message.quote`) would silently stop winning.
  */
-function getInboundReplyTo(message: Message): InboundReplyTo | undefined {
+function getInboundReplyTo(
+  message: Message,
+  identity: TelegramBotIdentity,
+): InboundReplyTo | undefined {
   const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
   if (!replied) return undefined;
-  const text =
-    ('text' in replied ? replied.text : undefined) ??
-    ('caption' in replied ? replied.caption : undefined);
-  if (!text) return undefined;
-  return { text, author: 'from' in replied ? getInboundAuthor(replied.from) : null };
+
+  const isFromAssistant = identity.userId !== undefined && replied.from?.id === identity.userId;
+  const source: ReplyQuoteSource = {
+    manualQuoteText: 'quote' in message ? message.quote?.text : undefined,
+    replyText: 'text' in replied ? replied.text : undefined,
+    replyCaption: 'caption' in replied ? replied.caption : undefined,
+    replyMessageId: replied.message_id,
+    topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
+    isServiceMessage: 'forum_topic_created' in replied,
+    fromBot: isFromAssistant,
+  };
+  const quote = extractReplyQuote(source);
+  if (!quote) return undefined;
+  return {
+    text: quote.quotedText,
+    author: 'from' in replied ? getInboundAuthor(replied.from) : null,
+    isFromAssistant: quote.fromBot,
+  };
 }
 
 /**
@@ -187,21 +220,21 @@ function getInboundReplyTo(message: Message): InboundReplyTo | undefined {
 export function getInboundEvent(
   message: Message,
   key: SessionKey,
-  botUsername: string | undefined,
+  identity: TelegramBotIdentity,
   raw: unknown = message,
 ): InboundEvent {
   const text = ('text' in message ? message.text : undefined) ?? '';
   const caption = ('caption' in message ? message.caption : undefined) ?? '';
   const command =
     'text' in message
-      ? (getTelegramCommand(message as Message.TextMessage, botUsername) ?? undefined)
+      ? (getTelegramCommand(message as Message.TextMessage, identity) ?? undefined)
       : undefined;
   return {
     key,
     author: getInboundAuthor('from' in message ? message.from : undefined),
     text: text || caption,
     attachments: getNormalizedAttachments(message),
-    replyTo: getInboundReplyTo(message),
+    replyTo: getInboundReplyTo(message, identity),
     command,
     raw,
   };
@@ -215,8 +248,12 @@ export function getInboundEvent(
 export interface TelegramInboundDeps {
   /** `bot.telegram.getChatAdministrators` for one chat id. */
   listAdministrators: (chatId: number) => Promise<ChatMember[]>;
-  /** `bot.botInfo?.username` — needed to recognise `/cmd@thisbot`. */
-  getBotUsername: () => string | undefined;
+  /**
+   * `bot.botInfo` reduced to the two facts normalization needs. Read lazily:
+   * `botInfo` is only populated once telegraf has called `getMe` at launch,
+   * which happens after this connector is constructed.
+   */
+  getIdentity: () => TelegramBotIdentity;
 }
 
 /**
@@ -265,7 +302,7 @@ export function createTelegramConnectorInbound(
       // arrives before `start` (or after `stop`) has no core to route to, and
       // buffering it would replay stale work at an arbitrary later moment.
       if (!onEvent) return;
-      await onEvent(getInboundEvent(message, key, deps.getBotUsername(), raw ?? message));
+      await onEvent(getInboundEvent(message, key, deps.getIdentity(), raw ?? message));
     },
   };
 }

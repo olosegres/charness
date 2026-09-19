@@ -21,14 +21,16 @@ import * as assert from 'node:assert/strict';
 import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import {
   checkShouldInvalidateAdminCache,
+  createTelegramConnectorInbound,
   getInboundEvent,
   getNormalizedAttachments,
   getPlatformMembers,
   getTelegramCommand,
 } from '../connectors/telegram/inbound';
+import type { InboundEvent } from '../platform/inbound';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const botUsername = 'myCodeBot';
+const identity = { username: 'myCodeBot', userId: 1000 };
 
 function makeUser(id: number, overrides: Partial<User> = {}): User {
   return { id, is_bot: false, first_name: `u${id}`, ...overrides };
@@ -60,50 +62,50 @@ function makePlainMessage(text: string): Message.TextMessage {
 // ─── command recognition ────────────────────────────────────────────────
 
 test('getTelegramCommand: a plain command yields its name and empty args', () => {
-  const parsed = getTelegramCommand(makeCommandMessage('/status'), botUsername);
+  const parsed = getTelegramCommand(makeCommandMessage('/status'), identity);
   assert.deepEqual(parsed, { name: 'status', args: [], argsText: '' });
 });
 
 test('getTelegramCommand: arguments split on whitespace, empties dropped', () => {
-  const parsed = getTelegramCommand(makeCommandMessage('/trace  on   verbose'), botUsername);
+  const parsed = getTelegramCommand(makeCommandMessage('/trace  on   verbose'), identity);
   assert.deepEqual(parsed?.args, ['on', 'verbose']);
 });
 
 test('getTelegramCommand: argsText preserves the user inner spacing verbatim', () => {
   // `/rename_session` caps and stores this text as-is — collapsing the double
   // space would silently rewrite the user's title.
-  const parsed = getTelegramCommand(makeCommandMessage('/rename_session my  long  title'), botUsername);
+  const parsed = getTelegramCommand(makeCommandMessage('/rename_session my  long  title'), identity);
   assert.equal(parsed?.argsText, 'my  long  title');
   // The pre-seam expression this replaced, for comparison.
   assert.equal(parsed?.argsText, '/rename_session my  long  title'.split(' ').slice(1).join(' ').trim());
 });
 
 test('getTelegramCommand: a command addressed to THIS bot is accepted, case-insensitively', () => {
-  const parsed = getTelegramCommand(makeCommandMessage('/status@MYCODEBOT now'), botUsername);
+  const parsed = getTelegramCommand(makeCommandMessage('/status@MYCODEBOT now'), identity);
   assert.equal(parsed?.name, 'status');
   assert.equal(parsed?.argsText, 'now');
 });
 
 test('getTelegramCommand: a command addressed to ANOTHER bot is not ours', () => {
   // The group-with-several-bots case: answering here would hijack the other bot.
-  assert.equal(getTelegramCommand(makeCommandMessage('/status@someOtherBot'), botUsername), null);
+  assert.equal(getTelegramCommand(makeCommandMessage('/status@someOtherBot'), identity), null);
 });
 
 test('getTelegramCommand: text that only LOOKS like a command is not one', () => {
   // No `bot_command` entity → telegraf never treated it as a command either.
-  assert.equal(getTelegramCommand(makePlainMessage('/status'), botUsername), null);
+  assert.equal(getTelegramCommand(makePlainMessage('/status'), identity), null);
 });
 
 test('getTelegramCommand: a command not at offset 0 is not a command', () => {
   const message = makeCommandMessage('see /status', 7);
   message.entities = [{ type: 'bot_command', offset: 4, length: 7 }];
-  assert.equal(getTelegramCommand(message, botUsername), null);
+  assert.equal(getTelegramCommand(message, identity), null);
 });
 
 test('getTelegramCommand: a non-command first entity means no command', () => {
   const message = makeCommandMessage('/status');
   message.entities = [{ type: 'bold', offset: 0, length: 7 }];
-  assert.equal(getTelegramCommand(message, botUsername), null);
+  assert.equal(getTelegramCommand(message, identity), null);
 });
 
 // ─── event normalization ────────────────────────────────────────────────
@@ -113,7 +115,7 @@ const key = makeTelegramKey(-1001234567890, 42);
 test('getInboundEvent: carries the author, the text and the parsed command', () => {
   const message = makeCommandMessage('/model sonnet');
   message.from = makeUser(7, { first_name: 'Ada', last_name: 'Lovelace' });
-  const event = getInboundEvent(message, key, botUsername);
+  const event = getInboundEvent(message, key, identity);
 
   assert.deepEqual(event.key, key);
   assert.deepEqual(event.author, { id: '7', displayName: 'Ada Lovelace' });
@@ -126,7 +128,7 @@ test('getInboundEvent: carries the author, the text and the parsed command', () 
 test('getInboundEvent: the author carries no admin flag', () => {
   // One source of admin truth: AdminCache. A per-event snapshot would disagree
   // with the cache after a demotion and give the policy two answers.
-  const event = getInboundEvent(makePlainMessage('hi'), key, botUsername);
+  const event = getInboundEvent(makePlainMessage('hi'), key, identity);
   assert.deepEqual(Object.keys(event.author).sort(), ['displayName', 'id']);
 });
 
@@ -139,11 +141,68 @@ test('getInboundEvent: a reply folds the quoted text and its author in', () => {
     from: makeUser(8, { first_name: 'Grace' }),
     text: 'the earlier line',
   } as Message.TextMessage;
-  const event = getInboundEvent(message, key, botUsername);
+  const event = getInboundEvent(message, key, identity);
   assert.deepEqual(event.replyTo, {
     text: 'the earlier line',
     author: { id: '8', displayName: 'Grace' },
+    isFromAssistant: false,
   });
+});
+
+test('getInboundEvent: a highlighted partial quote wins over the full replied-to text', () => {
+  // The operator pointed at a specific span; folding the whole message in
+  // instead would bury what they actually asked about. Shared with the prompt
+  // block via `extractReplyQuote` — a private copy here is how that regresses.
+  const message = makePlainMessage('and this?');
+  message.reply_to_message = {
+    message_id: 9,
+    date: 0,
+    chat: message.chat,
+    from: makeUser(8),
+    text: 'a very long earlier answer',
+  } as Message.TextMessage;
+  message.quote = { text: 'long earlier', position: 2, is_manual: true };
+  assert.equal(getInboundEvent(message, key, identity).replyTo?.text, 'long earlier');
+});
+
+test('getInboundEvent: a reply authored by this bot is attributed to the assistant', () => {
+  const message = makePlainMessage('why?');
+  message.reply_to_message = {
+    message_id: 9,
+    date: 0,
+    chat: message.chat,
+    from: makeUser(identity.userId, { is_bot: true }),
+    text: 'the agent answer',
+  } as Message.TextMessage;
+  assert.equal(getInboundEvent(message, key, identity).replyTo?.isFromAssistant, true);
+});
+
+test('getInboundEvent: replying to the topic root is not a quote', () => {
+  // Telegram models "post in this topic" as a reply to the topic-root message;
+  // folding the topic title into every prompt would be noise.
+  const message = makePlainMessage('start here');
+  message.message_thread_id = 42;
+  message.reply_to_message = {
+    message_id: 42,
+    date: 0,
+    chat: message.chat,
+    from: makeUser(8),
+    text: 'Topic title',
+  } as Message.TextMessage;
+  assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
+});
+
+test('getInboundEvent: a reply to a service message is not a quote', () => {
+  const message = makePlainMessage('hm');
+  message.reply_to_message = {
+    message_id: 9,
+    date: 0,
+    chat: message.chat,
+    from: makeUser(8),
+    text: 'Topic created',
+    forum_topic_created: { name: 'Topic', icon_color: 0 },
+  } as unknown as Message.TextMessage;
+  assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 
 test('getInboundEvent: a reply to a message with neither text nor caption is dropped', () => {
@@ -154,7 +213,7 @@ test('getInboundEvent: a reply to a message with neither text nor caption is dro
     chat: message.chat,
     from: makeUser(8),
   } as Message.TextMessage;
-  assert.equal(getInboundEvent(message, key, botUsername).replyTo, undefined);
+  assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 
 test('getInboundEvent: a captioned photo surfaces as text plus an attachment', () => {
@@ -166,7 +225,7 @@ test('getInboundEvent: a captioned photo surfaces as text plus an attachment', (
     caption: 'look at this',
     photo: [{ file_id: 'small', file_unique_id: 'su', width: 1, height: 1, file_size: 10 }],
   } as unknown as Message;
-  const event = getInboundEvent(message, key, botUsername);
+  const event = getInboundEvent(message, key, identity);
   assert.equal(event.text, 'look at this');
   assert.equal(event.command, undefined);
   assert.deepEqual(event.attachments, [
@@ -272,4 +331,88 @@ test('chat_member transitions of regular members do not invalidate the cache', (
   assert.equal(checkShouldInvalidateAdminCache('left', 'member'), false);
   assert.equal(checkShouldInvalidateAdminCache('member', 'left'), false);
   assert.equal(checkShouldInvalidateAdminCache('member', 'restricted'), false);
+});
+
+// ─── the connector's inbound side ───────────────────────────────────────
+
+function makeConnector(administrators: ChatMember[] = []) {
+  const chatIdsAsked: number[] = [];
+  const connector = createTelegramConnectorInbound({
+    listAdministrators: async (chatId) => {
+      chatIdsAsked.push(chatId);
+      return administrators;
+    },
+    getIdentity: () => identity,
+  });
+  return { connector, chatIdsAsked };
+}
+
+test('deliver normalizes the message and forwards `raw` verbatim', async () => {
+  const { connector } = makeConnector();
+  const received: InboundEvent[] = [];
+  await connector.start((event) => {
+    received.push(event);
+  });
+
+  // `raw` is the escape hatch the not-yet-relocated command handlers read their
+  // telegraf context off — it must arrive as given, NOT replaced by the message.
+  const context = { message: makeCommandMessage('/status'), marker: 'the telegraf context' };
+  await connector.deliver(context.message, key, context);
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].command?.name, 'status');
+  assert.equal(received[0].raw, context);
+});
+
+test('deliver falls back to the message when no `raw` is supplied', async () => {
+  const { connector } = makeConnector();
+  const received: InboundEvent[] = [];
+  await connector.start((event) => {
+    received.push(event);
+  });
+
+  const message = makePlainMessage('hello');
+  await connector.deliver(message, key);
+  assert.equal(received[0].raw, message);
+});
+
+test('deliver before start (or after stop) drops the event instead of buffering it', async () => {
+  const { connector } = makeConnector();
+  const received: InboundEvent[] = [];
+
+  // Unarmed: there is no core to route to, and replaying it later would run
+  // stale work at an arbitrary moment.
+  await connector.deliver(makePlainMessage('too early'), key);
+  assert.equal(received.length, 0);
+
+  await connector.start((event) => {
+    received.push(event);
+  });
+  await connector.deliver(makePlainMessage('armed'), key);
+  assert.equal(received.length, 1);
+
+  await connector.stop();
+  await connector.deliver(makePlainMessage('too late'), key);
+  assert.equal(received.length, 1);
+});
+
+test('listMembersWithElevatedRights reduces the roster to elevated humans', async () => {
+  const { connector, chatIdsAsked } = makeConnector([
+    makeChatMember('creator', 1),
+    makeChatMember('administrator', 2),
+    makeChatMember('administrator', 3, true), // a bot admin is never an operator
+    makeChatMember('member', 4),
+  ]);
+
+  assert.deepEqual(await connector.listMembersWithElevatedRights('-1001234567890'), ['1', '2']);
+  assert.deepEqual(chatIdsAsked, [-1001234567890]);
+});
+
+test('listMembersWithElevatedRights answers empty for a space that is not a chat id', async () => {
+  // A foreign key reaching the Telegram connector is a wiring bug, not a
+  // membership question — answering "nobody" fails closed instead of calling
+  // the API with NaN.
+  const { connector, chatIdsAsked } = makeConnector([makeChatMember('creator', 1)]);
+  assert.deepEqual(await connector.listMembersWithElevatedRights('ABC-123'), []);
+  assert.deepEqual(chatIdsAsked, []);
 });

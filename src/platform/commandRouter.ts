@@ -15,16 +15,20 @@
 import type { InboundCommand, InboundEvent } from './inbound';
 
 /**
- * @description A registered command handler. Returning `false` declines the
- * command so the caller can fall through to its generic text path, matching
- * what an unregistered name already does.
+ * @description A registered command handler. Runs for its own side effects; the
+ * router does not interpret a return value, so declining is not a handler's
+ * choice — a name is either bound or it is not.
  */
 export type CommandHandler = (event: InboundEvent, command: InboundCommand) => Promise<void> | void;
 
 export interface CommandRouter {
   /**
-   * Bind one or more names to `handler`. Names are matched case-insensitively
-   * (Telegram lower-cases commands in practice, a tracker need not).
+   * Bind one or more names to `handler`. Matching is EXACT, including case:
+   * Telegram's own command matching is case-sensitive (`/STATUS` is not
+   * `/status`), so folding case here would start answering commands that used
+   * to fall through to the plain-text path. A surface whose commands really are
+   * case-insensitive normalises the name in its own recogniser, where that fact
+   * belongs.
    */
   register(names: string | string[], handler: CommandHandler): void;
   /** Is any handler bound to this name? Used to decide fall-through. */
@@ -35,8 +39,6 @@ export interface CommandRouter {
    * message as plain text, exactly as before.
    */
   dispatch(event: InboundEvent): Promise<boolean>;
-  /** Every registered name, in registration order — for `/help` and tests. */
-  listNames(): string[];
 }
 
 export function createCommandRouter(): CommandRouter {
@@ -44,28 +46,24 @@ export function createCommandRouter(): CommandRouter {
 
   function register(names: string | string[], handler: CommandHandler): void {
     for (const name of Array.isArray(names) ? names : [names]) {
-      handlers.set(name.toLowerCase(), handler);
+      handlers.set(name, handler);
     }
   }
 
   function checkIsRegistered(name: string): boolean {
-    return handlers.has(name.toLowerCase());
+    return handlers.has(name);
   }
 
   async function dispatch(event: InboundEvent): Promise<boolean> {
     const command = event.command;
     if (!command) return false;
-    const handler = handlers.get(command.name.toLowerCase());
+    const handler = handlers.get(command.name);
     if (!handler) return false;
     await handler(event, command);
     return true;
   }
 
-  function listNames(): string[] {
-    return [...handlers.keys()];
-  }
-
-  return { register, checkIsRegistered, dispatch, listNames };
+  return { register, checkIsRegistered, dispatch };
 }
 
 /**

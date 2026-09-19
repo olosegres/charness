@@ -14,33 +14,21 @@
  */
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import type { PlatformMember } from '../connector/inbound';
+import type { PlatformMember } from '../platform/inbound';
 import { getElevatedMemberIds, AdminCache } from '../accessControl';
 
 function elevated(id: number, isBot = false): PlatformMember {
   return { id: id.toString(), displayName: `u${id}`, isBot, hasElevatedRights: true };
 }
 
-function owner(id: number, isBot = false): PlatformMember {
-  return elevated(id, isBot);
-}
-
-function admin(id: number, isBot = false): PlatformMember {
-  return elevated(id, isBot);
-}
-
 function member(id: number): PlatformMember {
   return { id: id.toString(), displayName: `u${id}`, isBot: false, hasElevatedRights: false };
-}
-
-function left(id: number): PlatformMember {
-  return member(id);
 }
 
 // ─── getElevatedMemberIds ───────────────────────────────────────────────
 
 test('getElevatedMemberIds: keeps elevated humans, drops plain members and bots', () => {
-  const members: PlatformMember[] = [owner(1), admin(2), admin(3, true), member(4), left(5)];
+  const members: PlatformMember[] = [elevated(1), elevated(2), elevated(3, true), member(4), member(5)];
   assert.deepEqual(getElevatedMemberIds(members).sort(), ['1', '2']);
 });
 
@@ -54,7 +42,7 @@ test('AdminCache: no re-fetch within the TTL', async () => {
   let calls = 0;
   let clock = 1000;
   const cache = new AdminCache({
-    fetchAdmins: async () => { calls += 1; return [owner(1), admin(2)]; },
+    fetchElevatedMemberIds: async () => { calls += 1; return ['1', '2']; },
     ttlMs: 1000,
     now: () => clock,
   });
@@ -71,9 +59,9 @@ test('AdminCache: no re-fetch within the TTL', async () => {
 test('AdminCache: re-fetch after TTL reflects promotion/demotion (load-bearing)', async () => {
   let calls = 0;
   let clock = 0;
-  let roster: PlatformMember[] = [owner(1), admin(2)];
+  let roster = ['1', '2'];
   const cache = new AdminCache({
-    fetchAdmins: async () => { calls += 1; return roster; },
+    fetchElevatedMemberIds: async () => { calls += 1; return roster; },
     ttlMs: 1000,
     now: () => clock,
   });
@@ -82,7 +70,7 @@ test('AdminCache: re-fetch after TTL reflects promotion/demotion (load-bearing)'
   assert.equal(before.has('2'), true);  // 2 is an admin initially
   assert.equal(before.has('3'), false); // 3 isn't
 
-  roster = [owner(1), admin(3)]; // demote 2, promote 3
+  roster = ['1', '3']; // demote 2, promote 3
   clock += 1001;                 // expire the cache
 
   const after = await cache.getAdminIds();
@@ -93,11 +81,11 @@ test('AdminCache: re-fetch after TTL reflects promotion/demotion (load-bearing)'
 
 test('AdminCache: concurrent stale reads share one in-flight fetch', async () => {
   let calls = 0;
-  let resolveFetch!: (members: PlatformMember[]) => void;
+  let resolveFetch!: (ids: string[]) => void;
   const cache = new AdminCache({
-    fetchAdmins: () => {
+    fetchElevatedMemberIds: () => {
       calls += 1;
-      return new Promise<PlatformMember[]>((resolve) => { resolveFetch = resolve; });
+      return new Promise<string[]>((resolve) => { resolveFetch = resolve; });
     },
     ttlMs: 1000,
     now: () => 0,
@@ -105,7 +93,7 @@ test('AdminCache: concurrent stale reads share one in-flight fetch', async () =>
 
   const p1 = cache.getAdminIds();
   const p2 = cache.getAdminIds();
-  resolveFetch([owner(1)]);
+  resolveFetch(['1']);
   const [s1, s2] = await Promise.all([p1, p2]);
 
   assert.equal(calls, 1);
@@ -118,10 +106,10 @@ test('AdminCache: a failed fetch keeps the last-known set and backs off', async 
   let clock = 0;
   let shouldFail = false;
   const cache = new AdminCache({
-    fetchAdmins: async () => {
+    fetchElevatedMemberIds: async () => {
       calls += 1;
       if (shouldFail) throw new Error('boom');
-      return [owner(1)];
+      return ['1'];
     },
     ttlMs: 1000,
     failureRetryMs: 500,
@@ -150,7 +138,7 @@ test('AdminCache: a failed fetch keeps the last-known set and backs off', async 
 test('AdminCache: invalidate() forces the next read to re-fetch', async () => {
   let calls = 0;
   const cache = new AdminCache({
-    fetchAdmins: async () => { calls += 1; return [owner(1)]; },
+    fetchElevatedMemberIds: async () => { calls += 1; return ['1']; },
     ttlMs: 1_000_000,
     now: () => 0,
   });

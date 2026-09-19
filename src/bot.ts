@@ -154,12 +154,10 @@ import { AdminCache, ADMIN_CACHE_TTL_MS } from './accessControl';
 import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
-  getInboundEvent,
-  getPlatformMembers,
   getTelegramCommand,
 } from './connectors/telegram/inbound';
-import { createCommandRouter } from './connector/commandRouter';
-import type { InboundCommand, InboundEvent } from './connector/inbound';
+import { createCommandRouter } from './platform/commandRouter';
+import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import { downloadFile } from './utils/download';
 import { getTranscriptionEndpoint, transcribeAudio, type TranscribeResult } from './utils/transcribeAudio';
@@ -663,14 +661,17 @@ installLinkPreviewSuppression(bot.telegram);
  */
 const telegramInbound = createTelegramConnectorInbound({
   listAdministrators: (chatId) => bot.telegram.getChatAdministrators(chatId),
-  getBotUsername: () => bot.botInfo?.username,
+  getIdentity: () => ({ username: bot.botInfo?.username, userId: bot.botInfo?.id }),
 });
 
 const adminCache = new AdminCache({
-  fetchAdmins: async () => {
+  // Routed through the connector's membership lookup rather than calling
+  // `getChatAdministrators` again here: two paths to the same API would let the
+  // policy and the pairing check disagree about who counts as elevated.
+  fetchElevatedMemberIds: () => {
     const groupId = getAllowedGroupId();
-    if (groupId === null) return [];
-    return getPlatformMembers(await bot.telegram.getChatAdministrators(groupId));
+    if (groupId === null) return Promise.resolve([]);
+    return telegramInbound.listMembersWithElevatedRights(groupId.toString());
   },
   ttlMs: ADMIN_CACHE_TTL_MS,
 });
@@ -4911,6 +4912,18 @@ async function applyModelSelection(
  */
 const commandRouter = createCommandRouter();
 
+// Arm the connector's inbound side. Synchronous in practice (it only stores the
+// handler), and done at module scope so no update can arrive before it: the
+// telegraf trigger below is registered here too, and `bot.launch` is much later.
+void telegramInbound.start(async (event) => {
+  // `checkIsRegistered` already gated the name, so a `false` here means the
+  // table changed under us — surface it instead of silently eating the message.
+  const wasDispatched = await commandRouter.dispatch(event);
+  if (!wasDispatched) {
+    console.warn(`[command] ${keyToString(event.key)} no handler for "${event.command?.name}"`);
+  }
+});
+
 /** The Telegram context a command handler receives — a text message, always. */
 type CommandContext = NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>;
 
@@ -4947,7 +4960,7 @@ function command(
  * order relative to `bot.command('pair')` and the text handler is preserved.
  */
 bot.on(message('text'), async (ctx, next) => {
-  const parsed = getTelegramCommand(ctx.message, ctx.me);
+  const parsed = getTelegramCommand(ctx.message, { username: bot.botInfo?.username });
   if (!parsed || !commandRouter.checkIsRegistered(parsed.name)) return next();
   const key = await authoriseContext(ctx);
   if (!key) return;
@@ -4969,7 +4982,12 @@ bot.on(message('text'), async (ctx, next) => {
   await cancelReminderWizard(key);
   // Any command is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
-  await commandRouter.dispatch(getInboundEvent(ctx.message, key, ctx.me));
+  // Normalization goes through the connector (not a second inline call to
+  // `getInboundEvent`) so there is exactly ONE place that decides what lands on
+  // the event — including `raw`, which the not-yet-relocated handlers still read
+  // Telegram fields off. `ctx`, not `ctx.message`: a handler reading
+  // `ctx.message.message_id` would otherwise find `undefined`.
+  await telegramInbound.deliver(ctx.message, key, ctx);
 });
 
 command('start', async (_ctx, key) => {

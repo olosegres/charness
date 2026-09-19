@@ -10,8 +10,8 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { createCommandRouter, splitCommandArgs } from '../connector/commandRouter';
-import type { InboundCommand, InboundEvent } from '../connector/inbound';
+import { createCommandRouter, splitCommandArgs } from '../platform/commandRouter';
+import type { InboundCommand, InboundEvent } from '../platform/inbound';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 function makeEvent(command: InboundCommand | undefined): InboundEvent {
@@ -66,18 +66,25 @@ test('an alias list binds every name to the same handler', async () => {
   await router.dispatch(makeEvent(makeCommand('opencode')));
   await router.dispatch(makeEvent(makeCommand('oc')));
   assert.equal(runs, 2);
-  assert.deepEqual(router.listNames(), ['opencode', 'oc']);
 });
 
-test('names match case-insensitively in both directions', async () => {
+test('names match EXACTLY, case included', async () => {
+  // Load-bearing: telegraf's own command matcher is a case-sensitive
+  // `^name$` regex, so `/STATUS` used to fall through to the plain-text path
+  // and reach the agent as a prompt. Folding case here would silently start
+  // executing it as a command.
   const router = createCommandRouter();
   let runs = 0;
-  router.register('ToolResults', () => {
+  router.register('status', () => {
     runs += 1;
   });
 
-  assert.equal(router.checkIsRegistered('toolresults'), true);
-  assert.equal(await router.dispatch(makeEvent(makeCommand('TOOLRESULTS'))), true);
+  assert.equal(router.checkIsRegistered('STATUS'), false);
+  assert.equal(await router.dispatch(makeEvent(makeCommand('STATUS'))), false);
+  assert.equal(await router.dispatch(makeEvent(makeCommand('Status'))), false);
+  assert.equal(runs, 0);
+
+  assert.equal(await router.dispatch(makeEvent(makeCommand('status'))), true);
   assert.equal(runs, 1);
 });
 

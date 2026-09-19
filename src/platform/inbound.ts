@@ -64,8 +64,10 @@ export interface NormalizedAttachment {
  * @description A command parsed out of the inbound text by the connector, in a
  * form the neutral router can dispatch.
  *
- * - `name` — lower-cased, without the platform's trigger syntax (`/` on
- *   Telegram, an `@mention` on a tracker).
+ * - `name` — verbatim, without the platform's trigger syntax (`/` on Telegram,
+ *   an `@mention` on a tracker). Case is NOT folded here: the router matches
+ *   exactly, and a surface whose commands are case-insensitive normalises in
+ *   its own recogniser.
  * - `args` — whitespace-split remainder, empties dropped.
  * - `argsText` — the remainder verbatim (trimmed at the ends only). Kept
  *   alongside `args` because commands that take free-form prose (a session
@@ -78,10 +80,18 @@ export interface InboundCommand {
   argsText: string;
 }
 
-/** The message an inbound event replies to, reduced to what the core renders. */
+/**
+ * @description The message an inbound event replies to, reduced to what the
+ * core renders into the agent prompt.
+ *
+ * `isFromAssistant` is carried explicitly rather than left for the core to
+ * derive: only the connector knows which account is the integration's own, and
+ * the rendered quote attributes the text to `assistant` or `user` from it.
+ */
 export interface InboundReplyTo {
   text: string;
   author: InboundAuthor | null;
+  isFromAssistant: boolean;
 }
 
 /**

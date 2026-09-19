@@ -1,4 +1,4 @@
-import type { PlatformMember } from './connector/inbound';
+import type { PlatformMember } from './platform/inbound';
 
 /**
  * @description Access control for the bot: who may talk to the agent.
@@ -42,8 +42,13 @@ export function getElevatedMemberIds(members: PlatformMember[]): string[] {
 }
 
 export interface AdminCacheDeps {
-  /** Fetches the current membership listing for the served space. */
-  fetchAdmins: () => Promise<PlatformMember[]>;
+  /**
+   * Fetches the ids currently holding elevated rights in the served space —
+   * the connector's `listMembersWithElevatedRights`, which is the SINGLE
+   * membership path. Passing already-reduced ids (rather than members) keeps
+   * the platform's status vocabulary out of the policy entirely.
+   */
+  fetchElevatedMemberIds: () => Promise<string[]>;
   /** Cache lifetime; defaults to {@link ADMIN_CACHE_TTL_MS}. */
   ttlMs?: number;
   /** Backoff after a failed fetch; defaults to {@link ADMIN_CACHE_FAILURE_RETRY_MS}. */
@@ -61,7 +66,7 @@ export interface AdminCacheDeps {
  * keeps the last-known set (never locks everyone out) and starts a short backoff.
  */
 export class AdminCache {
-  private readonly fetchAdmins: () => Promise<PlatformMember[]>;
+  private readonly fetchElevatedMemberIds: () => Promise<string[]>;
   private readonly ttlMs: number;
   private readonly failureRetryMs: number;
   private readonly now: () => number;
@@ -74,7 +79,7 @@ export class AdminCache {
   private inFlight: Promise<Set<string>> | null = null;
 
   constructor(deps: AdminCacheDeps) {
-    this.fetchAdmins = deps.fetchAdmins;
+    this.fetchElevatedMemberIds = deps.fetchElevatedMemberIds;
     this.ttlMs = deps.ttlMs ?? ADMIN_CACHE_TTL_MS;
     this.failureRetryMs = deps.failureRetryMs ?? ADMIN_CACHE_FAILURE_RETRY_MS;
     this.now = deps.now ?? Date.now;
@@ -106,8 +111,7 @@ export class AdminCache {
 
   private async refresh(): Promise<Set<string>> {
     try {
-      const members = await this.fetchAdmins();
-      this.ids = new Set(getElevatedMemberIds(members));
+      this.ids = new Set(await this.fetchElevatedMemberIds());
       this.fetchedAt = this.now();
       this.lastFailAt = null;
       return this.ids;
