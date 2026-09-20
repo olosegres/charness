@@ -35,6 +35,14 @@ import { extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote
  */
 const elevatedTelegramStatuses: ReadonlyArray<ChatMember['status']> = ['creator', 'administrator'];
 
+/**
+ * @description A Telegram chat id as it appears in a {@link SessionKey}'s
+ * `space`: an integer, negative for supergroups. Deliberately the same shape the
+ * key codec recognises, so a `space` minted by another platform is refused here
+ * rather than silently coerced.
+ */
+const telegramChatIdPattern = /^-?\d+$/;
+
 function checkHasElevatedRights(status: ChatMember['status']): boolean {
   return elevatedTelegramStatuses.includes(status);
 }
@@ -226,9 +234,7 @@ export function getInboundEvent(
   const text = ('text' in message ? message.text : undefined) ?? '';
   const caption = ('caption' in message ? message.caption : undefined) ?? '';
   const command =
-    'text' in message
-      ? (getTelegramCommand(message as Message.TextMessage, identity) ?? undefined)
-      : undefined;
+    'text' in message ? (getTelegramCommand(message, identity) ?? undefined) : undefined;
   return {
     key,
     author: getInboundAuthor('from' in message ? message.from : undefined),
@@ -291,9 +297,16 @@ export function createTelegramConnectorInbound(
     },
 
     async listMembersWithElevatedRights(space: string): Promise<string[]> {
-      const chatId = Number(space);
-      if (!Number.isFinite(chatId)) return [];
-      const members = getPlatformMembers(await deps.listAdministrators(chatId));
+      // REJECT rather than resolve `[]`: an empty resolve is a SUCCESSFUL fetch
+      // to `AdminCache`, which would stamp it fresh and lock every admin out for
+      // the whole TTL with no retry and nothing logged. A rejection is the only
+      // answer that keeps the last-known set and re-tries on the failure backoff.
+      // Matched syntactically, not via `Number`, which turns `""` into a
+      // perfectly finite `0` and would hand `getChatAdministrators` a bogus id.
+      if (!telegramChatIdPattern.test(space)) {
+        throw new Error(`telegram: "${space}" is not a chat id, cannot list its members`);
+      }
+      const members = getPlatformMembers(await deps.listAdministrators(Number(space)));
       return getElevatedMemberIds(members);
     },
 

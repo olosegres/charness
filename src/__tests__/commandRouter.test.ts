@@ -69,10 +69,10 @@ test('an alias list binds every name to the same handler', async () => {
 });
 
 test('names match EXACTLY, case included', async () => {
-  // Load-bearing: telegraf's own command matcher is a case-sensitive
-  // `^name$` regex, so `/STATUS` used to fall through to the plain-text path
-  // and reach the agent as a prompt. Folding case here would silently start
-  // executing it as a command.
+  // Load-bearing: telegraf's own command matcher is a case-sensitive `^name$`
+  // regex, so `/STATUS` was never a bot command — the text handler lower-cases
+  // the token, finds it in `botCommands` and swallows the message. Folding case
+  // here would silently start EXECUTING `/STATUS` as `/status`.
   const router = createCommandRouter();
   let runs = 0;
   router.register('status', () => {

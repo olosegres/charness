@@ -92,7 +92,7 @@ export interface SendMessagesToThreadDeps<TTarget> {
    * surface's, not this service's).
    */
   splitMessage(text: string, maxLength: number, measureRendered: (chunk: string) => number): string[];
-  /** Max SOURCE length per message handed to {@link MessageSendServiceDeps.splitMessage} (defensive split). */
+  /** Max SOURCE length per message handed to {@link SendMessagesToThreadDeps.splitMessage} (defensive split). */
   maxMessageLength: number;
   /** Rendered-length measure so an over-cap RENDERED message is split like normal output. */
   measureRendered(chunk: string): number;

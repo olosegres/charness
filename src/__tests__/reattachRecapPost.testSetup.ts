@@ -1,13 +1,16 @@
 /**
- * Side-effect-only setup for `reattachRecapPost.test.ts`.
+ * Shared, side-effect-only boot-env shim for the suites that import `../bot`:
+ * `reattachRecapPost`, `reconcileTransientFrames`, `routedCommandTrigger`,
+ * `routedCommandDelivery`, `questionOptionsKeyboard`. (Named after its first
+ * consumer; kept rather than renamed so the import paths stay stable.)
  *
  * `bot.ts` validates the boot environment at MODULE-IMPORT time (`parseEnv()`
  * runs as a top-level `const`, `process.exit(1)` on a missing `BOT_TOKEN`).
  * ESM import hoisting means a `process.env` assignment in the test body runs
  * AFTER `bot.ts` has already evaluated. Importing this module BEFORE the `bot`
  * import guarantees the env is set first (import order is preserved among
- * hoisted imports), so `parseEnv()` succeeds and the exported
- * `postReattachRecap` helper can be exercised in isolation.
+ * hoisted imports), so `parseEnv()` succeeds and the module's exported helpers
+ * can be exercised in isolation.
  *
  * Matches neither the `*.test.ts` nor `*.e2e.ts` runner globs, so it is never
  * executed as a test itself.

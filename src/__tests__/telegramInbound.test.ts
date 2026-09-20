@@ -28,6 +28,7 @@ import {
   getTelegramCommand,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
+import { AdminCache } from '../accessControl';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const identity = { username: 'myCodeBot', userId: 1000 };
@@ -408,11 +409,56 @@ test('listMembersWithElevatedRights reduces the roster to elevated humans', asyn
   assert.deepEqual(chatIdsAsked, [-1001234567890]);
 });
 
-test('listMembersWithElevatedRights answers empty for a space that is not a chat id', async () => {
+test('listMembersWithElevatedRights REJECTS a space that is not a chat id', async () => {
   // A foreign key reaching the Telegram connector is a wiring bug, not a
-  // membership question — answering "nobody" fails closed instead of calling
-  // the API with NaN.
+  // membership question. It must not call the API with NaN — and it must not
+  // resolve `[]` either: to `AdminCache` that is a successful "this group has no
+  // admins" fetch, which it caches. See the composition test below.
   const { connector, chatIdsAsked } = makeConnector([makeChatMember('creator', 1)]);
-  assert.deepEqual(await connector.listMembersWithElevatedRights('ABC-123'), []);
+  await assert.rejects(() => connector.listMembersWithElevatedRights('ABC-123'), /not a chat id/);
   assert.deepEqual(chatIdsAsked, []);
+});
+
+test('a rejected membership lookup keeps the cached admins instead of locking everyone out', async () => {
+  // The composition the two halves only break in TOGETHER: a lookup that fails
+  // CLOSED (resolving `[]`) reaches `AdminCache.refresh` as a SUCCESS, which
+  // stamps it fresh, clears the failure timestamp and denies every admin for the
+  // whole TTL with no retry and nothing logged. Proven end to end against the
+  // real connector and the real cache.
+  const ttlMs = 60_000;
+  const failureRetryMs = 5_000;
+  const servedSpace = '-1001234567890';
+  let space = servedSpace;
+  let now = 0;
+  let roster: ChatMember[] = [makeChatMember('creator', 1)];
+  const connector = createTelegramConnectorInbound({
+    listAdministrators: async () => roster,
+    getIdentity: () => identity,
+  });
+  const cache = new AdminCache({
+    fetchElevatedMemberIds: () => connector.listMembersWithElevatedRights(space),
+    ttlMs,
+    failureRetryMs,
+    now: () => now,
+  });
+
+  assert.deepEqual([...(await cache.getAdminIds())], ['1']);
+
+  // The lookup breaks while the cached set is stale → last-known survives.
+  space = 'ABC-123';
+  now += ttlMs + 1;
+  assert.deepEqual(
+    [...(await cache.getAdminIds())],
+    ['1'],
+    'a failed lookup must not empty the admin set',
+  );
+
+  // …and the failure was recorded as a FAILURE: the next read after the SHORT
+  // backoff re-fetches and sees the promotion. Had the empty result been cached
+  // as a success, `fetchedAt` would be fresh here and this would still be the
+  // stale (empty) set.
+  space = servedSpace;
+  roster = [makeChatMember('creator', 1), makeChatMember('administrator', 2)];
+  now += failureRetryMs + 1;
+  assert.deepEqual([...(await cache.getAdminIds())].sort(), ['1', '2']);
 });

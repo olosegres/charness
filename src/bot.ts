@@ -156,7 +156,7 @@ import {
   createTelegramConnectorInbound,
   getTelegramCommand,
 } from './connectors/telegram/inbound';
-import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
+import { buildOptionsKeyboard, createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
 import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { OutboundHints } from './platform/outbound';
@@ -695,6 +695,10 @@ const adminCache = new AdminCache({
   // policy and the pairing check disagree about who counts as elevated.
   fetchElevatedMemberIds: () => {
     const groupId = getAllowedGroupId();
+    // `[]` and not a rejection: with no served group there genuinely are no
+    // elevated members, so this is an ANSWER, not a failed lookup (which must
+    // reject — see `ConnectorInbound.listMembersWithElevatedRights`). Caching it
+    // is safe because pairing calls `adminCache.invalidate()`.
     if (groupId === null) return Promise.resolve([]);
     return telegramInbound.listMembersWithElevatedRights(groupId.toString());
   },
@@ -4959,16 +4963,80 @@ type CommandContext = NarrowedContext<Context, Update.MessageUpdate<Message.Text
  * Each handler gets the resolved `key` (gating already applied by the trigger
  * below, so it can never be null here) plus the already-parsed
  * {@link InboundCommand}, so no handler re-splits the raw text itself.
+ *
+ * The `raw` assertion below is a KNOWN, deliberate exception to the repo's
+ * no-casts rule, and the only typing the seam permits: `InboundEvent.raw` is
+ * `unknown` BY DESIGN (a connector-private payload the core must not interpret),
+ * so no core-side type can describe it. Parameterising `InboundEvent` on it
+ * would type the neutral router against a Telegram type and undo the seam; a
+ * structural type guard for a ~100-member telegraf `Context` would be an
+ * unsound assertion wearing a guard's signature. It disappears only when the
+ * command handlers stop reading the telegraf context and move into
+ * `connectors/telegram/` — the follow-up decomposition, not a typing change.
  */
 function command(
   name: string | string[],
   handler: (ctx: CommandContext, key: SessionKey, parsed: InboundCommand) => Promise<void> | void,
 ): void {
   commandRouter.register(name, (event, parsed) =>
-    // `raw` is the connector-private escape hatch: until S4 relocates them, the
-    // handlers still read Telegram-specific fields off the telegraf context.
     handler(event.raw as CommandContext, event.key, parsed),
   );
+}
+
+/**
+ * @description True iff the neutral router owns `name`, i.e. a `/name` message
+ * is claimed by the routed-command trigger instead of falling through.
+ *
+ * Exported so the fall-through contract can be asserted against the REAL
+ * registration table: `pair` must stay OFF it (it is a raw `bot.command` that
+ * has to run in a not-yet-paired group, which authorisation would reject).
+ */
+export function checkIsRoutedCommand(name: string): boolean {
+  return commandRouter.checkIsRegistered(name);
+}
+
+/**
+ * @description Running ANY command exits the single-purpose input modes an
+ * earlier command armed:
+ *  - `/bind`'s create-folder await-name mode — that flow only expects a plain
+ *    folder-name message, never a command (the picker's create button re-arms
+ *    it afterwards via its own callback);
+ *  - `/connect`'s pending provider connect — cancelled out loud, unless the
+ *    command IS another `/connect` (which continues the flow);
+ *  - an in-flight `/reminders` wizard, at whatever step. Unconditional rather
+ *    than only during the step-4 text wait: that is what makes a repeat
+ *    `/reminders` retire the previous wizard (relabelling its message) instead
+ *    of leaving a second live-looking keyboard in the topic. Cheap — it returns
+ *    at once when no wizard exists, and only then spends a send on the relabel.
+ */
+async function exitPendingInputModes(key: SessionKey, messageText: string): Promise<void> {
+  const keyString = keyToString(key);
+  awaitingFolderName.delete(keyString);
+  const hadPendingProviderConnect = pendingProviderConnects.delete(keyString);
+  if (hadPendingProviderConnect && !checkIsConnectCommandText(messageText)) {
+    await replyToThread(key, t('connect.cancelled'));
+  }
+  await cancelReminderWizard(key);
+}
+
+/**
+ * @description Collaborators of {@link handleRoutedCommandMessage}, injected so
+ * the trigger's guard ORDER is provable without a live Telegraf instance, a
+ * paired group or an admin-cache round trip.
+ */
+export interface RoutedCommandTriggerDeps<TContext> {
+  /** Telegraf's own command recognition, re-implemented in `getTelegramCommand`. */
+  getCommand: (message: Message.TextMessage) => InboundCommand | null;
+  /** Is the name on the neutral router's table? `false` ⇒ fall through. */
+  checkIsRegistered: (name: string) => boolean;
+  /** Resolve + gate the sender. `null` ⇒ not allowed here: drop, no fall-through. */
+  authorise: (ctx: TContext) => Promise<SessionKey | null>;
+  /** Clear the single-purpose input modes an earlier command armed. */
+  exitPendingInputModes: (key: SessionKey, messageText: string) => Promise<void>;
+  /** Reset the compact-on-idle watchdog (F2) — any command is thread activity. */
+  noteActivity: (key: SessionKey) => void;
+  /** Normalize through the connector and hand the event to the core's router. */
+  deliverInbound: (ctx: TContext, key: SessionKey) => Promise<void>;
 }
 
 /**
@@ -4977,44 +5045,72 @@ function command(
  *
  * Recognition is telegraf's own rule, re-implemented in
  * {@link getTelegramCommand}, so WHICH messages count as commands is unchanged
- * — including `/name@otherbot` falling through. An unrouted name calls `next()`
- * and reaches the generic text handler exactly as an unregistered
- * `bot.command` always did; an unauthorised sender is dropped without
- * fall-through, as before.
+ * — including `/name@otherbot` falling through.
  *
+ * The guard ORDER is load-bearing in both directions and is what this function
+ * exists (separately from its `bot.on` registration) to make testable:
+ *  - an unrouted name calls `next()` BEFORE authorisation, so a raw
+ *    `bot.command` further down the middleware chain — `/pair`, which must work
+ *    in a group the bot is not paired with yet — still receives it;
+ *  - a rejected sender returns WITHOUT `next()`, so the update stops at the
+ *    first gate that refused it. The generic text handler below re-authorises,
+ *    so a stray `next()` would not actually leak the command; it would spend a
+ *    second admin-cache round trip and log the same refusal twice, which is how
+ *    a real leak would be missed in the noise.
+ */
+export async function handleRoutedCommandMessage<TContext extends { message: Message.TextMessage }>(
+  ctx: TContext,
+  next: () => Promise<void>,
+  deps: RoutedCommandTriggerDeps<TContext>,
+): Promise<void> {
+  const parsed = deps.getCommand(ctx.message);
+  if (!parsed || !deps.checkIsRegistered(parsed.name)) return next();
+  const key = await deps.authorise(ctx);
+  if (!key) return;
+  await deps.exitPendingInputModes(key, ctx.message.text);
+  deps.noteActivity(key);
+  await deps.deliverInbound(ctx, key);
+}
+
+/**
+ * @description Hand a routed command to the connector for normalization.
+ *
+ * Normalization goes through the connector rather than a second inline
+ * `getInboundEvent` call so exactly one place decides what lands on the event.
+ *
+ * The event's `raw` is the telegraf CONTEXT, not `ctx.message` — load-bearing,
+ * and it shipped wrong once (fixed in `c9b1da4`): the not-yet-relocated command
+ * handlers read Telegram fields off the context, so one reading
+ * `ctx.message.message_id` finds `undefined` when `raw` is the bare message.
+ * `ConnectorInbound.deliver` types `raw` as `unknown`, so only a test can hold
+ * this line honest.
+ */
+export function deliverRoutedCommand<TContext extends { message: Message.TextMessage }>(
+  ctx: TContext,
+  key: SessionKey,
+): Promise<void> {
+  return telegramInbound.deliver(ctx.message, key, ctx);
+}
+
+/**
  * Registered at the position the first command used to occupy, so middleware
  * order relative to `bot.command('pair')` and the text handler is preserved.
  */
-bot.on(message('text'), async (ctx, next) => {
-  const parsed = getTelegramCommand(ctx.message, { username: bot.botInfo?.username });
-  if (!parsed || !commandRouter.checkIsRegistered(parsed.name)) return next();
-  const key = await authoriseContext(ctx);
-  if (!key) return;
-  // Running ANY command exits the /bind create-folder await-name mode — the
-  // create flow only expects a plain folder-name message, never a command.
-  // (The picker's create button re-arms it afterwards via its own callback.)
-  const keyString = keyToString(key);
-  awaitingFolderName.delete(keyString);
-  const hadPendingProviderConnect = pendingProviderConnects.delete(keyString);
-  if (hadPendingProviderConnect && !checkIsConnectCommandText(ctx.message.text)) {
-    await replyToThread(key, t('connect.cancelled'));
-  }
-  // ANY command cancels an in-flight `/reminders` wizard, at whatever step, and
-  // then runs normally. Unconditional rather than only during the step-4 text
-  // wait: that is what makes a repeat `/reminders` retire the previous wizard
-  // (relabelling its message) instead of leaving a second live-looking keyboard
-  // in the topic. Cheap — it returns at once when no wizard exists, and only
-  // then does it spend a send on the relabel.
-  await cancelReminderWizard(key);
-  // Any command is thread activity — reset the compact-on-idle watchdog (F2).
-  noteThreadActivity(key);
-  // Normalization goes through the connector (not a second inline call to
-  // `getInboundEvent`) so there is exactly ONE place that decides what lands on
-  // the event — including `raw`, which the not-yet-relocated handlers still read
-  // Telegram fields off. `ctx`, not `ctx.message`: a handler reading
-  // `ctx.message.message_id` would otherwise find `undefined`.
-  await telegramInbound.deliver(ctx.message, key, ctx);
-});
+export const routedCommandTriggerDeps: RoutedCommandTriggerDeps<CommandContext> = {
+  getCommand: (message) => getTelegramCommand(message, { username: bot.botInfo?.username }),
+  checkIsRegistered: checkIsRoutedCommand,
+  authorise: authoriseContext,
+  exitPendingInputModes,
+  noteActivity: noteThreadActivity,
+  deliverInbound: deliverRoutedCommand,
+};
+
+bot.on(message('text'), (ctx, next) =>
+  handleRoutedCommandMessage(ctx, next, routedCommandTriggerDeps),
+);
+
+/** The connector the routed-command trigger and the core's dispatcher share. */
+export { telegramInbound };
 
 command('start', async (_ctx, key) => {
   const adapters = getAvailableAdapters();
@@ -7702,18 +7798,57 @@ async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
 const reAskedQuestionOptions = new Map<string, string[]>();
 
 /**
+ * @description Build the tappable keyboard for an OpenCode question's options.
+ *
+ * The bot offers a question's options twice with different callback wiring —
+ * the live answer buttons (`qa_<qIdx>_<optIdx>`) and the idle-compaction re-ask
+ * buttons (`reask_<optIdx>`) — so `buildCallbackId` is the only thing that
+ * varies. Labels are passed through untouched: the button width cap and its
+ * elision are Telegram's, and belong to the connector's
+ * {@link buildOptionsKeyboard}, not here.
+ *
+ * `buildCallbackId` must produce an id the matching `bot.action` regex accepts.
+ * The index it receives is the 0-based position in `question.options`; the body
+ * shows that option as `index + 1`.
+ */
+export function buildQuestionOptionsKeyboard(
+  question: OpenCodeQuestion,
+  buildCallbackId: (optionIndex: number) => string,
+): InlineKeyboardMarkup | undefined {
+  return buildOptionsKeyboard(
+    question.options.map((option, optionIndex) => ({
+      id: buildCallbackId(optionIndex),
+      label: option.label,
+    })),
+  );
+}
+
+/**
+ * @description Attach an optional inline keyboard to a {@link replyToThread}
+ * `extra`.
+ *
+ * One place owns the `reply_markup` spelling, because getting it wrong fails
+ * SILENTLY: the message still sends, just with no buttons, and Telegram reports
+ * nothing. `base` carries whatever else the send needs (a `parse_mode`).
+ */
+export function buildKeyboardExtra(
+  keyboard: InlineKeyboardMarkup | undefined,
+  base: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return keyboard ? { ...base, reply_markup: keyboard } : { ...base };
+}
+
+/**
  * @description Build the RE-ASK inline keyboard for an idle-compaction pending
  * question (D1) and record its option labels so a `reask_<idx>` tap can forward
- * the chosen label as a fresh prompt. Label-only buttons (40-char cap, like the
- * `qa_` buttons).
+ * the chosen label as a fresh prompt.
  */
-function buildReAskKeyboard(key: SessionKey, question: OpenCodeQuestion) {
+function buildReAskKeyboard(
+  key: SessionKey,
+  question: OpenCodeQuestion,
+): InlineKeyboardMarkup | undefined {
   reAskedQuestionOptions.set(keyToString(key), question.options.map((opt) => opt.label));
-  const buttons = question.options.map((opt, idx) => {
-    const label = opt.label.length > 40 ? opt.label.slice(0, 37) + '...' : opt.label;
-    return [Markup.button.callback(label, `reask_${idx}`)];
-  });
-  return Markup.inlineKeyboard(buttons);
+  return buildQuestionOptionsKeyboard(question, (optionIndex) => `reask_${optionIndex}`);
 }
 
 /**
@@ -7749,7 +7884,7 @@ async function postIdleCompactionResult(
   // The keyboard is built HERE (not while planning): it also records the option
   // labels a `reask_<idx>` tap resolves against, which must not happen for a
   // question that is never posted.
-  if (plan.question && question) await replyToThread(key, plan.question, buildReAskKeyboard(key, question));
+  if (plan.question && question) await replyToThread(key, plan.question, buildKeyboardExtra(buildReAskKeyboard(key, question)));
 }
 
 /**
@@ -12356,9 +12491,24 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
  * they never double-set or orphan the id.
  *
  * S1: option descriptions are rendered under each numbered label in the body
- * via {@link buildQuestionBodyLines}; the inline buttons stay label-only
- * (40-char cap). Callback ids stay `qa_<qIdx>_<optIdx>` against the absolute
- * question index so a restored old button still resolves.
+ * via {@link buildQuestionBodyLines}; the inline buttons stay label-only.
+ * Callback ids stay `qa_<qIdx>_<optIdx>` against the absolute question index so
+ * a restored old button still resolves.
+ *
+ * **Why the send does NOT go through `ConnectorOutbound.deliver`** (unlike the
+ * sibling Claude question path, which does):
+ *  - `deliver` renders through `renderAgentHtml` and sends as HTML. This body is
+ *    classic Markdown escaped by `escapeMarkdown`, so the backslashes it adds
+ *    would reach the user literally (`get\_user\_id`, a broken
+ *    `\<code>…\</code>`). Re-escaping it for HTML instead is a different render,
+ *    which cannot be proven without a live Telegram smoke.
+ *  - `deliver` resolves `void`, and this path is the single owner of the pending
+ *    `messageId`: it persists it (so buttons still resolve after a restart),
+ *    registers it, deletes the message when the question advanced mid-send, and
+ *    pins ONLY after that staleness re-check — `deliverStandalone` pins as soon
+ *    as the send returns, with no such check.
+ * Closing this properly means moving bot-authored Markdown templates onto the
+ * connector's dialect, which is a follow-up plan, not a question-path change.
  */
 async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
@@ -12386,32 +12536,24 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   // options as numbered text (`buildQuestionBodyLines`), so a surface with no
   // tappable controls loses only the tap — the user answers with the index,
   // which `getOpenCodeReplyRoute` already accepts. Telegram says yes; a tracker
-  // comment stream will not.
-  const buttons = telegramOutbound.capabilities.tappableOptions
-    ? question.options.map((opt, optIdx) => {
-        const label = opt.label.length > 40 ? opt.label.slice(0, 37) + '...' : opt.label;
-        return [Markup.button.callback(label, `qa_${qIdx}_${optIdx}`)];
-      })
-    : [];
-  const keyboard = buttons.length > 0 ? Markup.inlineKeyboard(buttons) : undefined;
+  // comment stream will not. The keyboard itself is the connector's to build:
+  // the button width cap and its elision rule are Telegram's, not the core's.
+  const keyboard = telegramOutbound.capabilities.tappableOptions
+    ? buildQuestionOptionsKeyboard(question, (optionIndex) => `qa_${qIdx}_${optionIndex}`)
+    : undefined;
 
   try {
-    const extra: Record<string, unknown> = { parse_mode: 'Markdown' };
-    if (keyboard) Object.assign(extra, keyboard);
-
     let messageId = await replyToThread(
       key,
       buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
-      extra,
+      buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
     );
     if (!messageId) {
       // Markdown rejected — retry plain.
-      const plainExtra: Record<string, unknown> = {};
-      if (keyboard) Object.assign(plainExtra, keyboard);
       messageId = await replyToThread(
         key,
         buildQuestionBodyLinesPlain(question).join('\n'),
-        plainExtra,
+        buildKeyboardExtra(keyboard),
       );
     }
 

@@ -143,6 +143,14 @@ export interface ConnectorInbound {
   start(onEvent: InboundEventHandler): Promise<void>;
   /** Stop delivering events and release the transport. Idempotent. */
   stop(): Promise<void>;
-  /** Ids of the members of `space` who hold elevated rights there. */
+  /**
+   * Ids of the members of `space` who hold elevated rights there.
+   *
+   * A lookup that cannot be answered must REJECT. Resolving `[]` is a valid
+   * answer meaning "this space has no elevated members", and `AdminCache` caches
+   * it as a successful fetch — so a failure disguised as `[]` locks every
+   * operator out for the full TTL, with no retry and nothing logged. Only a
+   * rejection keeps the last-known set and re-tries on the failure backoff.
+   */
   listMembersWithElevatedRights(space: string): Promise<string[]>;
 }
