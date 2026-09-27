@@ -1136,6 +1136,31 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
       writeJsonRpcError(res, 401, -32001, 'Unauthorized: missing or invalid scheduler token');
       return;
     }
+    if (req.method === 'GET') {
+      // This server NEVER initiates a message: it is stateless, has no event
+      // store, and every transport is built and closed around ONE request. The
+      // spec's answer for exactly that case is 405, and the SDK client treats it
+      // as expected and simply does not open a stream.
+      //
+      // Answering the SDK's way instead (200 + `text/event-stream`) hands the
+      // client a standalone SSE stream that carries nothing and only ever ends
+      // one way: the bot restarts, the socket dies, and the client burns its
+      // reconnect budget against a port that is not listening yet. Hot mode
+      // rebuilds on every code change, so that is a frequent event — and a
+      // client that gives up latches the whole server `failed`, stranding the
+      // bot's own tools in a session that was deliberately built to survive the
+      // restart. Refusing the GET removes the thing that breaks.
+      res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Method Not Allowed: this endpoint does not offer an SSE stream' },
+          id: null,
+        }),
+      );
+      return;
+    }
+
     const clientIdentity = getClientIdentity(req, token);
 
     const bodyText = await readRequestBody(req);

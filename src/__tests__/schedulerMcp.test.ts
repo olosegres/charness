@@ -695,6 +695,32 @@ function startRawFileSendCall(
   return { request: fileSendRequest, response };
 }
 
+/**
+ * Issue a bare `GET /mcp` and resolve once the response has ENDED. A response
+ * that never ends (the standalone SSE stream this server must not open) leaves
+ * the promise pending, so the test times out instead of passing vacuously.
+ */
+function getMcpEndpoint(port: number, token: string | null): Promise<RawHttpResponse & { contentType: string }> {
+  const headers: Record<string, string> = { Accept: 'text/event-stream' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return new Promise((resolve, reject) => {
+    const getRequest = request({ host: '127.0.0.1', port, path: '/mcp', method: 'GET', headers }, (response) => {
+      const chunks: string[] = [];
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => chunks.push(chunk));
+      response.once('end', () => {
+        resolve({
+          statusCode: response.statusCode ?? 500,
+          body: chunks.join(''),
+          contentType: response.headers['content-type'] ?? '',
+        });
+      });
+    });
+    getRequest.once('error', reject);
+    getRequest.end();
+  });
+}
+
 /** First text content block of a tool result. */
 function firstText(result: Awaited<ReturnType<Client['callTool']>>): string {
   const parsedResult = CallToolResultSchema.parse(result);
@@ -801,6 +827,46 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
 
   it('binds an ephemeral port', () => {
     assert.ok(fixture.handle.port > 0);
+  });
+
+  it('refuses GET with 405 instead of opening a standalone SSE stream', async () => {
+    // THE restart regression. Answering a GET the SDK's way parks an SSE stream
+    // that carries nothing (this server never initiates a message) and dies with
+    // the bot's next hot reload; a client that exhausts its reconnect budget
+    // latches the whole server `failed`, so an agent session that deliberately
+    // survived the restart loses the bot's tools. 405 is the spec's answer for a
+    // server with no server-initiated stream, and the SDK client expects it.
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const response = await getMcpEndpoint(fixture.handle.port, token);
+    assert.equal(response.statusCode, 405);
+    assert.ok(
+      !response.contentType.includes('text/event-stream'),
+      `no stream was opened (content-type: ${response.contentType})`,
+    );
+  });
+
+  it('answers an unauthenticated GET with 401, not 405', async () => {
+    // The refusal above sits BEHIND the token check, so an unauthenticated
+    // prober still learns exactly what it learned before: nothing but 401.
+    const response = await getMcpEndpoint(fixture.handle.port, null);
+    assert.equal(response.statusCode, 401);
+  });
+
+  it('still serves tool calls over POST after refusing GET', async () => {
+    // The refusal must scope to GET only — a client that gets 405 on the stream
+    // goes on to POST every request, which is the whole transport that matters.
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    await getMcpEndpoint(fixture.handle.port, token);
+    const client = await buildClient(fixture.handle.port, token);
+    try {
+      const tools = await client.listTools();
+      assert.ok(
+        tools.tools.some((tool) => tool.name === 'schedule_list'),
+        'the scheduler tools are reachable over POST',
+      );
+    } finally {
+      await client.close();
+    }
   });
 
   it('destroys active sockets while an initialized client remains connected', async () => {
