@@ -209,6 +209,60 @@ describe('classifyClaudeStreamMessage — AskUserQuestion control_request (rever
   });
 });
 
+describe('classifyClaudeStreamMessage — control_response (the CLI answering OUR request)', () => {
+  // Fixtures captured verbatim from a live `claude` process answering the MCP
+  // heal's control requests: the outer `response` carries the verdict + the id
+  // to match, the INNER one the returned record — present for `mcp_status`,
+  // absent for a plain `mcp_reconnect` ack.
+  it('success WITH an inner payload → controlResponse carrying that record', () => {
+    const out = classify({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: 'mcp_status_720b9e6d',
+        response: { mcpServers: [{ name: 'telegramBot', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }] },
+      },
+    });
+    assert.equal(out.length, 1);
+    const cr = out[0] as Extract<ClaudeStreamAction, { kind: 'controlResponse' }>;
+    assert.equal(cr.kind, 'controlResponse');
+    assert.equal(cr.requestId, 'mcp_status_720b9e6d');
+    assert.equal(cr.isSuccess, true);
+    assert.deepEqual(cr.payload, {
+      mcpServers: [{ name: 'telegramBot', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }],
+    });
+  });
+
+  it('success WITHOUT an inner payload (mcp_reconnect ack) → payload null, still a success', () => {
+    const out = classify({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'mcp_reconnect_59e1646e' },
+    });
+    assert.deepEqual(out, [{
+      kind: 'controlResponse',
+      requestId: 'mcp_reconnect_59e1646e',
+      isSuccess: true,
+      payload: null,
+    }]);
+  });
+
+  it('an `error` subtype is reported as NOT successful (never mistaken for an ack)', () => {
+    const out = classify({
+      type: 'control_response',
+      response: { subtype: 'error', request_id: 'mcp_reconnect_bad', error: 'No such server' },
+    });
+    const cr = out[0] as Extract<ClaudeStreamAction, { kind: 'controlResponse' }>;
+    assert.equal(cr.kind, 'controlResponse');
+    assert.equal(cr.isSuccess, false);
+    assert.equal(cr.requestId, 'mcp_reconnect_bad');
+  });
+
+  it('no request_id (or no response envelope) → no action: it matches no awaiter', () => {
+    assert.deepEqual(classify({ type: 'control_response', response: { subtype: 'success' } }), []);
+    assert.deepEqual(classify({ type: 'control_response' }), []);
+  });
+});
+
 describe('buildCanUseToolAllow / buildCanUseToolDeny — control_response bodies', () => {
   // Regression: the CLI rejects an allow WITHOUT `updatedInput`
   // ("Tool permission request failed: ZodError"), silently blocking the tool.

@@ -269,7 +269,7 @@ import {
   resolveSchedulerMcpPort,
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
-import { configureSchedulerMcpInjection } from './scheduler/injection';
+import { configureSchedulerMcpInjection, schedulerMcpServerName } from './scheduler/injection';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { checkIsReminderSchedule, getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -12836,6 +12836,42 @@ function recoverLimitEpisodesFromDisk(): void {
 }
 
 /**
+ * @description Boot self-heal of the bot's OWN injected MCP server on the Claude
+ * side — the mirror of OpenCode's `reconcileSchedulerMcpForActiveSessions`. A
+ * json-stream session survives every bot restart, but its MCP client never
+ * retries a server it once failed to reach, so a session that was alive across
+ * the restart can hold a permanently-`failed` `telegramBot` entry and lose
+ * `schedule_*` / `compact_conversation` / `send_file_to_user` /
+ * `send_messages_to_user` for the rest of its life. Ask every live session whose
+ * backend exposes `healMcpServer` and reconnect the ones that report `failed`.
+ *
+ * Fire-and-forget per thread (boot must not wait on control round-trips), and
+ * QUIET unless something was actually healed or the session did not answer — a
+ * line per healthy thread would print the whole list on every hot reload.
+ */
+function healSchedulerMcpForActiveSessions(): void {
+  for (const { key } of state.listBindings()) {
+    const agent = state.getAgent(key);
+    if (!agent?.name) continue;
+    let adapter: AgentAdapter;
+    try { adapter = getThreadAdapter(key); }
+    catch { continue; } // unknown adapter in state — already reported by reattach
+    if (!adapter.healMcpServer || !adapter.checkIsActive(key)) continue;
+    const keyStr = keyToString(key);
+    void adapter.healMcpServer(key, schedulerMcpServerName).then(
+      (outcome) => {
+        if (outcome === 'healed') {
+          console.log(`[scheduler] MCP heal: reconnected ${schedulerMcpServerName} in ${keyStr}`);
+        } else if (outcome === 'unavailable') {
+          console.warn(`[scheduler] MCP heal: ${keyStr} left unhealed — its status ask went unanswered, or the reconnect was refused`);
+        }
+      },
+      (e) => console.warn(`[scheduler] MCP heal failed for ${keyStr}:`, e instanceof Error ? e.message : e),
+    );
+  }
+}
+
+/**
  * @description Injected collaborators for {@link reconcileTransientFrames}, so the
  * boot reconciliation is unit-testable without a live Telegram client or
  * StateStore (mirrors the `deps` seam {@link postReattachRecap} uses). Defaults
@@ -13439,6 +13475,12 @@ export async function startBot(): Promise<void> {
     getAdapter('opencode').reconcileSchedulerMcpForActiveSessions?.()?.catch((e) =>
       console.warn('[scheduler] MCP reconcile failed:', e instanceof Error ? e.message : e),
     );
+    // Same class of self-heal on the Claude side: a json-stream session that
+    // SURVIVED this restart can hold a `telegramBot` entry latched `failed`, and
+    // the CLI never retries a failed MCP server — so the bot's own tools stay
+    // gone for the rest of that session. Runs inside this `try` because it heals
+    // toward the port that was just bound; fire-and-forget, same as above.
+    healSchedulerMcpForActiveSessions();
     console.log(`[scheduler] MCP server listening on 127.0.0.1:${boundPort}`);
   } catch (e) {
     // Port busy / bind failure: keep booting WITHOUT the scheduler MCP server.

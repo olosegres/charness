@@ -95,6 +95,14 @@ export type ClaudeStreamAction =
       toolUseId?: string;
       dialogKind?: string;
     }
+  /**
+   * A control_response off stdout — the CLI's reply to a control_request the BOT
+   * wrote (the `initialize` handshake, the MCP `mcp_status` / `mcp_reconnect`
+   * round-trips). `payload` is the INNER `response` record, present only for a
+   * data-returning subtype. (The adapter also WRITES frames of this type to
+   * stdin when answering a `can_use_tool`; that is an unrelated write path.)
+   */
+  | { kind: 'controlResponse'; requestId: string; isSuccess: boolean; payload: Record<string, unknown> | null }
   /** `system/status` carrying a `/compact` outcome (`compact_result` /
    *  `compact_error`) — how the json-stream backend confirms a compaction ran. */
   | { kind: 'compactStatus'; result: string | null; error: string | null }
@@ -249,6 +257,24 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
     const dialogKind = readString(request, 'dialog_kind');
     if (dialogKind) action.dialogKind = dialogKind;
     return [action];
+  }
+
+  if (type === 'control_response') {
+    // Measured shape: `{response:{subtype:'success'|'error', request_id,
+    // response?:{…}}}` — the OUTER `response` carries the verdict + the id to
+    // match, the INNER one the returned record (present for `mcp_status`,
+    // ABSENT for a plain `mcp_reconnect` ack). Without a `request_id` the frame
+    // cannot be matched to the request it answers, so it is not actionable —
+    // same defensive rule as the `control_request` branch above.
+    const response = checkIsStreamRecord(msg.response) ? msg.response : null;
+    const requestId = response ? readString(response, 'request_id') : null;
+    if (!response || !requestId) return [];
+    return [{
+      kind: 'controlResponse',
+      requestId,
+      isSuccess: readString(response, 'subtype') === 'success',
+      payload: checkIsStreamRecord(response.response) ? response.response : null,
+    }];
   }
 
   return [];

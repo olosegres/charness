@@ -85,6 +85,9 @@ function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string) {
     childOutputTimer: null,
     pendingInitResolve: null,
     initRequestId: null,
+    // Bot-issued control requests awaiting their `control_response`; the teardown
+    // path settles every entry, so the fixture must carry the real (empty) map.
+    pendingControlRequests: new Map(),
     pendingQuestion: null,
     apiErrorFired: false,
     swallowNextAbortError: false,

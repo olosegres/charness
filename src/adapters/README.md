@@ -134,6 +134,13 @@ code is the exact bytes.
      (optionally modified) tool input.
    - deny/reject → `response.behavior:"deny"` with a `message`.
 
+The same channel carries the bot's OWN requests, answered by a `control_response`
+matched on `request_id`: the `initialize` handshake above, and the MCP heal's
+`{subtype:"mcp_status"}` (returns `response.mcpServers[]` with a `status` per
+server) / `{subtype:"mcp_reconnect", serverName}` (a bare success ack) — shapes in
+`../utils/claudeMcpHeal.ts`, used to un-latch a `failed` `telegramBot` in a
+session that outlived a bot restart.
+
 The adapter maps a `can_use_tool` request onto the bot's existing `question`
 event (identical shape to OpenCode's), so the pin + one-at-a-time + inline-button
 flow is reused verbatim; `answerQuestion` / `rejectQuestion` emit the matching

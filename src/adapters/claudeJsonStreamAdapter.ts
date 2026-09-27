@@ -47,6 +47,16 @@ import {
   buildCanUseToolDeny,
   type ClaudeStreamAction,
 } from '../utils/claudeStreamJson';
+import {
+  buildMcpReconnectControlRequest,
+  buildMcpStatusControlRequest,
+  decideMcpHeal,
+  getMcpServerStatus,
+  mcpControlRequestTimeoutMs,
+  type McpHealOutcome,
+  type McpReconnectControlRequest,
+  type McpStatusControlRequest,
+} from '../utils/claudeMcpHeal';
 import { execFilePromise, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
@@ -105,6 +115,22 @@ interface PendingStreamCompaction {
 /** How long to wait for a `/compact` turn to report its outcome before giving up
  *  (a compaction summarisation turn is slow — ~50s observed — so this is generous). */
 const compactionTimeoutMs = 3 * 60 * 1000;
+
+/** The settled reply to a bot-issued control request (see
+ *  {@link ClaudeJsonStreamAdapter.requestControl}). */
+interface ControlResponseOutcome {
+  /** The response envelope's `subtype` was `success` (vs `error`). */
+  isSuccess: boolean;
+  /** The INNER `response` record, `null` for a plain ack that returns no data. */
+  payload: Record<string, unknown> | null;
+}
+
+/** Awaiter bookkeeping for ONE bot-issued control request, keyed by its
+ *  `request_id` in {@link StreamSession.pendingControlRequests}. */
+interface PendingControlRequest {
+  resolve: (outcome: ControlResponseOutcome | null) => void;
+  timer: NodeJS.Timeout;
+}
 
 /** The pending answer to a live AskUserQuestion control_request. */
 interface PendingStreamQuestion {
@@ -194,6 +220,11 @@ interface StreamSession {
   // — control channel —
   pendingInitResolve: (() => void) | null;
   initRequestId: string | null;
+  /** Control requests the BOT wrote that are awaiting their `control_response`,
+   *  keyed by `request_id` (the `initialize` handshake keeps its own resolver
+   *  above, since it predates this map and settles a plain `void`). Per session
+   *  object, so nothing can be read against a replaced session. */
+  pendingControlRequests: Map<string, PendingControlRequest>;
   // — compaction (F3: `/compact` over a stream-json turn) —
   /** True from a bot-issued `/compact` turn until its terminal signal — suppresses
    *  the compaction turn's own output so only the bot's confirmation shows. */
@@ -419,7 +450,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
-      pendingInitResolve: null, initRequestId: null,
+      pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
@@ -706,7 +737,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
-      pendingInitResolve: null, initRequestId: null,
+      pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: this.readQuestionSidecar(paths),
       apiErrorFired: false, swallowNextAbortError: false,
@@ -946,8 +977,6 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     for (const line of session.reader.push(chunk)) {
       const msg = parseStreamJsonLine(line);
       if (!msg) continue;
-      // control_response for our own outbound requests (initialize handshake).
-      if (msg.type === 'control_response') { this.handleControlResponse(session, msg); continue; }
       for (const action of classifyClaudeStreamMessage(msg)) {
         this.applyAction(session, action);
       }
@@ -967,12 +996,93 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
   }
 
-  private handleControlResponse(session: StreamSession, msg: Record<string, unknown>): void {
-    const response = typeof msg.response === 'object' && msg.response !== null ? (msg.response as Record<string, unknown>) : null;
-    const requestId = response ? response.request_id : undefined;
-    if (session.pendingInitResolve && requestId === session.initRequestId) {
+  /**
+   * @description Settle the CLI's reply to a control_request the BOT wrote,
+   * matched by `request_id`: the spawn-time `initialize` handshake, plus the MCP
+   * heal's `mcp_status` / `mcp_reconnect` round-trips. A response for an id we
+   * are not waiting on belongs to nothing of ours — ignore it rather than guess
+   * which awaiter it might settle.
+   */
+  private handleControlResponse(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'controlResponse' }>): void {
+    if (session.pendingInitResolve && action.requestId === session.initRequestId) {
       session.pendingInitResolve();
+      return;
     }
+    const pending = session.pendingControlRequests.get(action.requestId);
+    if (!pending) return;
+    session.pendingControlRequests.delete(action.requestId);
+    clearTimeout(pending.timer);
+    pending.resolve({ isSuccess: action.isSuccess, payload: action.payload });
+  }
+
+  /**
+   * @description Write ONE bot-issued control_request and resolve with its
+   * `control_response`, or `null` when none arrives within
+   * {@link mcpControlRequestTimeoutMs}. The reply comes back through the normal
+   * stdout-tail → classifier path (the CLI answers on the same stdio control
+   * channel `can_use_tool` uses), so the bounded timer is what keeps a silent
+   * CLI from hanging the caller. Never rejects: an unanswered request is an
+   * unknown, not an error.
+   *
+   * A session that is no longer the live one for its key gets NOTHING written:
+   * its fd is closed (and its number reusable), so a write after teardown could
+   * land in an unrelated file — and no reply could ever settle the awaiter
+   * anyway. Same identity guard as the poll tick and the exit finalizer.
+   */
+  private requestControl(
+    session: StreamSession,
+    requestId: string,
+    frame: McpStatusControlRequest | McpReconnectControlRequest,
+  ): Promise<ControlResponseOutcome | null> {
+    if (!session.isActive || this.sessions.get(keyToString(session.key)) !== session) return Promise.resolve(null);
+    return new Promise<ControlResponseOutcome | null>((resolve) => {
+      const timer = setTimeout(() => {
+        // Only the entry still parked here is ours to time out — a response that
+        // landed first already removed it (and resolved).
+        if (!session.pendingControlRequests.delete(requestId)) return;
+        resolve(null);
+      }, mcpControlRequestTimeoutMs);
+      timer.unref?.();
+      session.pendingControlRequests.set(requestId, { resolve, timer });
+      this.writeStdin(session, frame);
+    });
+  }
+
+  /**
+   * @description Heal the bot's own injected MCP server inside this LIVE session:
+   * ask `mcp_status`, and reconnect the server ONLY when it reports `failed`
+   * (the latched state a bot restart leaves behind — the CLI never retries it,
+   * so the bot's tools stay gone for the rest of the session). `connected` is
+   * left strictly alone, and any other status (`needs-auth`, an unknown future
+   * one) is skipped rather than guessed at — see `decideMcpHeal`.
+   *
+   * Control frames only: nothing written here can be read as a user turn, the
+   * session is never marked busy, and the pending-request map is keyed by
+   * `request_id` so the `can_use_tool` / `interrupt` paths are untouched.
+   *
+   * `healed` is reported off the reconnect's own ack, and that ack is MEASURED to
+   * be both synchronous and honest — so no confirming third round-trip is needed
+   * and adding one would only be ceremony. Against a still-dead endpoint the
+   * reconnect answers `{subtype:'error', error:'ECONNREFUSED…'}` (never a hollow
+   * success), and after a successful one an IMMEDIATELY following `mcp_status`
+   * already reads `connected`. Do not re-litigate this as a missing verification.
+   */
+  async healMcpServer(key: ThreadKey, serverName: string): Promise<McpHealOutcome> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return 'unavailable';
+    const statusRequestId = 'mcp_status_' + randomUUID();
+    const status = await this.requestControl(session, statusRequestId, buildMcpStatusControlRequest(statusRequestId));
+    // No answer (timeout) or an `error` verdict: nothing is known about the
+    // server, so nothing may be done to it.
+    if (!status?.isSuccess) return 'unavailable';
+    const decision = decideMcpHeal(getMcpServerStatus(status.payload, serverName));
+    if (decision === 'healthy') return 'healthy';
+    if (decision === 'skip') return 'skipped';
+    const reconnectRequestId = 'mcp_reconnect_' + randomUUID();
+    const reconnect = await this.requestControl(session, reconnectRequestId, buildMcpReconnectControlRequest(reconnectRequestId, serverName));
+    // `mcp_reconnect` answers a bare success ack (no inner record); anything
+    // else means the reconnect did not land, so the server is still broken.
+    return reconnect?.isSuccess === true ? 'healed' : 'unavailable';
   }
 
   private applyAction(session: StreamSession, action: ClaudeStreamAction): void {
@@ -989,6 +1099,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         case 'compactBoundary': this.handleCompactBoundary(session, action); return;
         case 'init': if (action.model) session.reportedModel = action.model; return;
         case 'apiRetry': this.maybeEmitApiError(session, action.text); return;
+        // A reply to one of OUR control requests is never the compaction turn's
+        // output — its awaiter must settle whatever else is running.
+        case 'controlResponse': this.handleControlResponse(session, action); return;
         default: return; // swallow text / thinking / tool / toolResult / control / echo
       }
     }
@@ -1026,6 +1139,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         return;
       case 'controlRequest':
         this.handleControlRequest(session, action);
+        return;
+      case 'controlResponse':
+        this.handleControlResponse(session, action);
         return;
       case 'apiRetry':
         this.maybeEmitApiError(session, action.text);
@@ -1504,6 +1620,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (session.outputTimer) { clearTimeout(session.outputTimer); session.outputTimer = null; }
     if (session.reasoningTimer) { clearTimeout(session.reasoningTimer); session.reasoningTimer = null; }
     if (session.childOutputTimer) { clearTimeout(session.childOutputTimer); session.childOutputTimer = null; }
+    // Bot-issued control requests die with the session: the process it was
+    // talking to is going away (stop / exit / model-effort respawn), so their
+    // replies can never arrive. Settle each as an unknown (`null`) and drop the
+    // map, rather than leaving a caller parked on the round-trip timeout and a
+    // timer armed against a dead session.
+    const pendingControls = [...session.pendingControlRequests.values()];
+    session.pendingControlRequests.clear();
+    for (const pending of pendingControls) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
   }
 }
 

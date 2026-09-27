@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import type { Locale } from './i18n';
 import type { OpenCodeAuthMethod } from './utils/openCodeAuthLogin';
+import type { McpHealOutcome } from './utils/claudeMcpHeal';
 
 export interface AgentSession {
   id: string;
@@ -724,6 +725,21 @@ export interface AgentAdapter extends EventEmitter {
    * a stale registration (dead port) from a previous bot generation.
    */
   reconcileSchedulerMcpForActiveSessions?(): Promise<void>;
+
+  /**
+   * Heal the bot-owned MCP server `serverName` INSIDE one live session: read the
+   * status the backend holds for it and reconnect it when it reports `failed`.
+   * The Claude-side counterpart of {@link reconcileSchedulerMcpForActiveSessions}
+   * — a json-stream session outlives every bot restart, and its MCP client never
+   * retries a server it once failed to reach, so without this the bot's own
+   * tools stay gone for the rest of that session. The resolved
+   * {@link McpHealOutcome} says what actually happened, so a caller can log only
+   * the sessions it really repaired.
+   *
+   * Optional (optional-method pattern, like {@link compactContext}): only the
+   * json-stream Claude backend has a control channel to ask over.
+   */
+  healMcpServer?(key: ThreadKey, serverName: string): Promise<McpHealOutcome>;
 
   // — Input —
 
