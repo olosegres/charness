@@ -38,6 +38,7 @@ import {
   buildSchedulerMcpToken,
   verifySchedulerMcpToken,
   buildSpecFromCreateArgs,
+  getScheduleCapError,
   resolveTargetThreadKey,
   createSchedulerMcpServer,
   serializeSchedulerScope,
@@ -501,6 +502,34 @@ describe('buildSpecFromCreateArgs', () => {
     const result = buildSpecFromCreateArgs({ onceAt: past }, nowMs);
     assert.equal(result.ok, false);
     if (!result.ok) assert.match(result.error, /past/i);
+  });
+});
+
+// ─── cap rejection message ───────────────────────────────────────────
+
+describe('getScheduleCapError', () => {
+  const limit = 30;
+
+  it('stays the plain sentence when no reminder occupies a slot', () => {
+    const message = getScheduleCapError({ limit, reminderCount: 0 });
+    assert.match(message, /maximum of 30 schedules/);
+    assert.ok(!/reminder/i.test(message), 'nothing to mention, so nothing is mentioned');
+  });
+
+  it('names the operator-owned reminders and the command that removes them', () => {
+    // Without this the agent reads "maximum of 30" beside a `schedule_list` of 5,
+    // cancels all 5, still cannot create, and loops — it has no correct next call,
+    // because the remaining slots are reminders it can neither see nor cancel.
+    const message = getScheduleCapError({ limit, reminderCount: 25 });
+    assert.match(message, /maximum of 30 schedules/, 'the cap is still stated');
+    assert.match(message, /25/, 'and how many slots it cannot reach');
+    assert.match(message, /reminders/i);
+    assert.match(message, /\/reminders/, 'the user-facing command is named literally');
+    assert.match(message, /cancel/i, 'and that cancelling is not the way out');
+  });
+
+  it('mentions reminders as soon as a single one occupies a slot', () => {
+    assert.match(getScheduleCapError({ limit, reminderCount: 1 }), /\/reminders/);
   });
 });
 
@@ -1651,6 +1680,91 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(record.spec.kind, 'once');
     // No N-times remainingRuns leaked onto the one-shot.
     assert.equal((record.spec as { remainingRuns?: number }).remainingRuns, undefined);
+    await client.close();
+  });
+
+  // ── reminders are invisible to the agent (bot-local delivery kind) ──
+  //
+  // The whole point of `/reminders` is "no agent involvement": a reminder is
+  // posted + pinned by the bot and never reaches a session. So the agent must not
+  // see one described as a "scheduled prompt" it could act on, and must not be
+  // able to delete something the operator created with buttons. Both are asserted
+  // over the REAL HTTP tool surface, and each check is paired with a prompt job in
+  // the SAME thread so a blanket filter (which would also hide the agent's own
+  // jobs) cannot pass.
+
+  async function seedThreadSchedule(
+    name: string,
+    deliveryKind?: 'reminder',
+  ): Promise<ScheduleRecord> {
+    const created = await (await import('../scheduler/store')).createScheduleForThread(fixture.store, {
+      threadKey: { chatId: -1001234567890, threadId: 11 },
+      name,
+      spec: { kind: 'cron', cronExpr: '0 9 * * *' },
+      prompt: `${name} body`,
+      createdBy: deliveryKind === 'reminder' ? 'user' : 'agent',
+      nowMs: Date.now(),
+      ...(deliveryKind !== undefined ? { deliveryKind } : {}),
+    });
+    assert.ok(created.ok);
+    return created.record;
+  }
+
+  it('schedule_list hides reminders but still lists the agent-prompt jobs', async () => {
+    const reminder = await seedThreadSchedule('Take the pills', 'reminder');
+    const promptJob = await seedThreadSchedule('Check the deploy');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const listed = firstText(await client.callTool({ name: 'schedule_list', arguments: {} }));
+
+    assert.ok(listed.includes(promptJob.id), `the prompt job must still be listed: "${listed}"`);
+    assert.ok(!listed.includes(reminder.id), `the reminder id leaked into the list: "${listed}"`);
+    assert.ok(!listed.includes('Take the pills'), `the reminder name leaked into the list: "${listed}"`);
+    await client.close();
+  });
+
+  it('schedule_list reports an empty topic when its ONLY schedules are reminders', async () => {
+    await seedThreadSchedule('Take the pills', 'reminder');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({ name: 'schedule_list', arguments: {} });
+    assert.notEqual(result.isError, true, firstText(result));
+    assert.match(firstText(result), /No schedules for this topic/);
+    await client.close();
+  });
+
+  it('schedule_cancel treats a reminder id as not found and leaves it armed', async () => {
+    const reminder = await seedThreadSchedule('Take the pills', 'reminder');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({ name: 'schedule_cancel', arguments: { id: reminder.id } });
+
+    // The SAME not-found wording a missing id gets — from the agent's side the
+    // reminder genuinely does not exist, and a distinct refusal would only tell it
+    // there is an id here worth retrying.
+    assert.equal(result.isError, true);
+    assert.match(firstText(result), /no schedule with id/);
+    // Untouched: still persisted, and never disarmed.
+    assert.ok(fixture.store.getSchedules()[reminder.id], 'the reminder must survive the cancel attempt');
+    assert.ok(!fixture.disarmed.includes(reminder.id), 'the reminder must not be disarmed');
+    await client.close();
+  });
+
+  it('schedule_cancel still cancels a real prompt job in a thread that also holds reminders', async () => {
+    const reminder = await seedThreadSchedule('Take the pills', 'reminder');
+    const promptJob = await seedThreadSchedule('Check the deploy');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({ name: 'schedule_cancel', arguments: { id: promptJob.id } });
+
+    assert.notEqual(result.isError, true, firstText(result));
+    assert.equal(fixture.store.getSchedules()[promptJob.id], undefined, 'the prompt job is gone');
+    assert.ok(fixture.disarmed.includes(promptJob.id));
+    assert.ok(fixture.store.getSchedules()[reminder.id], 'the reminder is untouched');
     await client.close();
   });
 

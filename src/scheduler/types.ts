@@ -25,6 +25,17 @@ export type ScheduleSpec =
 export type ScheduleCreatedBy = 'user' | 'agent';
 
 /**
+ * @name ScheduleDeliveryKind
+ * @description WHAT a fire does, for the kinds that are not the original
+ * agent-prompt delivery. Only `'reminder'` exists: a bot-LOCAL job whose whole
+ * delivery is the announcement + its pin (no session started, none touched).
+ *
+ * A one-member union rather than a boolean because a third kind is plausible and
+ * a `deliveryKind` reads at the call site as the discriminator it is.
+ */
+export type ScheduleDeliveryKind = 'reminder';
+
+/**
  * Outcome of the most recent fire, persisted for `/schedule list` display.
  *  - `delivered`      — prompt reached the agent.
  *  - `skipped-overlap`— the previous fire was still in its delivery pipeline.
@@ -52,7 +63,12 @@ export interface ScheduleRecord {
   /** Human-facing job name (free text supplied by user/agent). */
   name: string;
   spec: ScheduleSpec;
-  /** The prompt forwarded to the agent at fire time. */
+  /**
+   * The text the fire delivers: forwarded to the agent as the prompt for an
+   * agent-prompt job, POSTED into the topic as the message for a reminder. One
+   * field for both kinds on purpose — a second text field would need a state
+   * migration and could disagree with this one.
+   */
   prompt: string;
   createdBy: ScheduleCreatedBy;
   /** ISO 8601 creation timestamp. */
@@ -75,6 +91,13 @@ export interface ScheduleRecord {
   isPinSilent?: boolean;
   /** Adapter name to start when delivering with no live session after a rebind. */
   lastAdapterName?: string;
+  /**
+   * The delivery kind, ABSENT for the original agent-prompt behaviour. Optional
+   * rather than required precisely so no persisted job needs migrating: every
+   * record written before reminders existed keeps firing exactly as it did, and
+   * "no kind recorded" can only ever mean the prompt path.
+   */
+  deliveryKind?: ScheduleDeliveryKind;
 }
 
 /**

@@ -23,6 +23,13 @@ import {
   type ScheduleDeliveryDeps,
   type EnsureSessionResult,
 } from '../scheduler/delivery';
+import {
+  checkIsReminderSchedule,
+  getUnboundPausableSchedules,
+} from '../scheduler/deliveryKind';
+import { describeSchedule } from '../scheduler/recurrence';
+import { getReminderScheduleText } from '../utils/reminderScheduleText';
+import { runWithLocale } from '../i18n';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
 
 const threadKey = '-1001234567890:11';
@@ -40,6 +47,21 @@ function makeJob(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
     nextRunAt: Date.parse('2026-06-07T09:00:00.000Z'),
     ...overrides,
   };
+}
+
+/**
+ * A bot-LOCAL reminder: same record shape, `deliveryKind: 'reminder'`. Its
+ * `prompt` is the text POSTED into the topic, never forwarded anywhere.
+ */
+function makeReminder(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
+  return makeJob({
+    id: 'take-the-pills-abc123',
+    name: 'Take the pills',
+    prompt: 'Take the evening pills',
+    createdBy: 'user',
+    deliveryKind: 'reminder',
+    ...overrides,
+  });
 }
 
 const onTime: FireContext = { kind: 'on-time' };
@@ -252,4 +274,183 @@ test('forwarded prompt is prefixed with the scheduled-run marker carrying the jo
   assert.equal(text, prependScheduledRunMarker('Nightly build', 'run the build'));
   assert.ok(text.startsWith('[Scheduled run "Nightly build"]'), 'marker leads the prompt');
   assert.ok(text.includes('run the build'), 'original prompt is preserved after the marker');
+});
+
+// ─── reminders (bot-local delivery kind) ─────────────────────────────
+//
+// A reminder's whole delivery is announce + pin: no session is started, none is
+// touched. The load-bearing assertions below are the ZERO call counts on
+// `ensureSession` / `forwardPrompt` — an outcome of `delivered` alone would also
+// pass if the agent path still ran and happened to succeed.
+
+test('reminder: announces + pins and NEVER touches the agent; delivered', async () => {
+  const { deps, callLog } = createHarness();
+  const deliver = createScheduleDelivery(deps);
+  const outcome = await deliver(makeReminder(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(
+    callLog.map((entry) => entry.step),
+    ['announce', 'pin'],
+    'a reminder stops after the pin',
+  );
+  assert.equal(callLog.filter((entry) => entry.step === 'ensureSession').length, 0);
+  assert.equal(callLog.filter((entry) => entry.step === 'forward').length, 0);
+});
+
+test('reminder: delivers even when ensureSession WOULD fail (unbound topic / General)', async () => {
+  // A reminder needs no folder and no agent, so the dep that fails every
+  // agent-prompt fire must not be reachable at all.
+  const { deps, callLog } = createHarness({ ensureResult: { ok: false, reason: 'unbound' } });
+  const deliver = createScheduleDelivery(deps);
+  const outcome = await deliver(makeReminder(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.equal(
+    callLog.filter((entry) => entry.step === 'ensureSession').length,
+    0,
+    'the failing dep is never invoked',
+  );
+  assert.equal(callLog.filter((entry) => entry.step === 'forward').length, 0);
+});
+
+test('reminder: announcement leads with the reminder text and names the schedule', async () => {
+  const { deps, callLog } = createHarness();
+  const deliver = createScheduleDelivery(deps);
+  const reminder = makeReminder();
+  await deliver(reminder, onTime);
+
+  const announcement = (callLog[0].detail as { text: string }).text;
+  assert.ok(announcement.startsWith('🔔'), `reminder announcement must be belled: "${announcement}"`);
+  assert.ok(announcement.includes('Take the evening pills'), 'the reminder text is the content');
+  assert.ok(
+    !announcement.includes('Schedule "'),
+    `a reminder must not be framed as an agent prompt: "${announcement}"`,
+  );
+});
+
+test('reminder: the announced schedule is the LOCALIZED text, not English describeSchedule', async () => {
+  // The whole point of routing the reminder branch through
+  // `getReminderScheduleText`: the fire announcement must read EXACTLY as the
+  // `/reminders` list row and card do. Asserting against the shared renderer (not
+  // a literal) is what makes the two impossible to drift apart; the negative
+  // assertion pins that `describeSchedule`'s English-only wording is NOT used
+  // here, which is the defect this replaced.
+  const reminder = makeReminder();
+  const announcement = buildFireAnnouncement(reminder, onTime);
+  const localized = getReminderScheduleText(reminder.spec);
+
+  assert.equal(localized, 'every day at 09:00', 'the en wording of this fixture spec');
+  assert.ok(announcement.includes(localized), `expected "${localized}" in "${announcement}"`);
+  assert.notEqual(describeSchedule(reminder.spec), localized, 'the two renderers differ, as designed');
+  assert.ok(
+    !announcement.includes(describeSchedule(reminder.spec)),
+    `the English-only describeSchedule text must not reach a reminder: "${announcement}"`,
+  );
+});
+
+test('reminder: a non-English locale announces the schedule through the same renderer', async () => {
+  // Proves the announcement resolves through `t` rather than a hardcoded string:
+  // once the translation scope lands, this locale's wording changes with it and
+  // the announcement follows automatically.
+  const reminder = makeReminder();
+  runWithLocale('ru', () => {
+    const announcement = buildFireAnnouncement(reminder, onTime);
+    assert.ok(
+      announcement.includes(getReminderScheduleText(reminder.spec)),
+      `the ru announcement must carry the ru schedule text: "${announcement}"`,
+    );
+  });
+});
+
+test('agent-prompt fire KEEPS English describeSchedule (only the reminder branch changed)', async () => {
+  const job = makeJob();
+  const announcement = buildFireAnnouncement(job, onTime);
+  assert.ok(
+    announcement.includes(describeSchedule(job.spec)),
+    `a prompt job still names its schedule the old way: "${announcement}"`,
+  );
+});
+
+test('reminder: announce send failed (null id) → pin skipped, still delivered', async () => {
+  const { deps, callLog } = createHarness({ announceId: null });
+  const deliver = createScheduleDelivery(deps);
+  const outcome = await deliver(makeReminder(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(
+    callLog.map((entry) => entry.step),
+    ['announce'],
+    'nothing to pin, and nothing else to do',
+  );
+});
+
+test('reminder: pin failure degrades to a warning; outcome still delivered', async () => {
+  const { deps, callLog } = createHarness({ pinThrows: true });
+  const deliver = createScheduleDelivery(deps);
+  const outcome = await deliver(makeReminder(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.ok(callLog.some((entry) => entry.step === 'pin'), 'the pin was attempted');
+});
+
+test('reminder: catch-up fire carries the missed-at note', async () => {
+  const missedAtMs = Date.parse('2026-06-07T09:00:00.000Z');
+  const at = new Date(missedAtMs);
+  const expectedTime = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`;
+
+  const text = buildFireAnnouncement(makeReminder(), { kind: 'catch-up', missedAtMs });
+  assert.ok(text.includes(expectedTime), `expected missed-at time ${expectedTime} in "${text}"`);
+  assert.ok(text.includes('Take the evening pills'), 'the reminder text is still the content');
+});
+
+test('reminder: on-time fire has NO missed note', async () => {
+  const text = buildFireAnnouncement(makeReminder(), onTime);
+  assert.ok(!/missed|пропущено/i.test(text), `on-time reminder must not annotate a miss: "${text}"`);
+});
+
+test('regression: a record with NO deliveryKind still ensures a session and forwards', async () => {
+  // Absent means the original agent-prompt behaviour — the whole reason the
+  // discriminator is optional (no state migration for persisted jobs).
+  const job = makeJob();
+  assert.equal(job.deliveryKind, undefined, 'the fixture carries no delivery kind');
+
+  const { deps, callLog } = createHarness();
+  const deliver = createScheduleDelivery(deps);
+  const outcome = await deliver(job, onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.equal(callLog.filter((entry) => entry.step === 'ensureSession').length, 1);
+  assert.equal(callLog.filter((entry) => entry.step === 'forward').length, 1);
+  const forwarded = (callLog.find((entry) => entry.step === 'forward')?.detail as { text: string }).text;
+  assert.ok(forwarded.startsWith('[Scheduled run "Daily reminder"]'), 'prompt path keeps its marker');
+});
+
+// ─── delivery-kind helpers (the unbound-pause policy) ────────────────
+
+test('checkIsReminderSchedule: true only for the reminder kind', () => {
+  assert.equal(checkIsReminderSchedule({ deliveryKind: 'reminder' }), true);
+  assert.equal(checkIsReminderSchedule({}), false, 'absent means the agent-prompt kind');
+});
+
+test('getUnboundPausableSchedules: a mixed thread pauses only the agent prompts', () => {
+  const promptJob = makeJob({ id: 'nightly-build-1' });
+  const reminder = makeReminder({ id: 'pills-2' });
+  const otherPrompt = makeJob({ id: 'standup-3' });
+
+  const pausable = getUnboundPausableSchedules([promptJob, reminder, otherPrompt]);
+  assert.deepEqual(
+    pausable.map((record) => record.id),
+    ['nightly-build-1', 'standup-3'],
+    'the reminder stays armed while the prompt jobs park',
+  );
+});
+
+test('getUnboundPausableSchedules: a reminder-only thread pauses nothing (no notice)', () => {
+  const pausable = getUnboundPausableSchedules([makeReminder({ id: 'a' }), makeReminder({ id: 'b' })]);
+  assert.deepEqual(pausable, [], 'count 0 ⇒ the caller posts no paused-notice');
+});
+
+test('getUnboundPausableSchedules: an empty thread yields an empty list', () => {
+  assert.deepEqual(getUnboundPausableSchedules([]), []);
 });

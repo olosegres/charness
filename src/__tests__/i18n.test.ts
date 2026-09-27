@@ -23,6 +23,7 @@ import {
 } from '../i18n';
 import type { Locale } from '../i18n';
 import { enDict } from '../i18n/en';
+import { reminderTextMaxLength } from '../utils/reminderWizard';
 
 test('default active locale is English', () => {
   assert.equal(defaultLocale, 'en');
@@ -587,6 +588,185 @@ test('schedule.forwardPromptTemplate substitutes {text} verbatim (markdown + quo
   const out = t('schedule.forwardPromptTemplate', { text: request });
   assert.ok(out.includes(request), `expected the verbatim request in "${out}"`);
   assert.ok(!out.includes('{text}'), `placeholder not substituted: "${out}"`);
+});
+
+test('the reminder fire key moved into the plural namespace (the old one is retired)', () => {
+  // `reminder.fired` → `reminders.fired`, so the fire announcement shares the
+  // namespace with every other `/reminders` string. A lingering orphan would be
+  // dead weight that the next reader mistakes for the live key.
+  assert.ok(checkKeyInAllLangs('reminders.fired'), 'reminders.fired missing in some locale');
+  assert.ok(!checkKeyInAllLangs('reminder.fired'), 'the retired reminder.fired key is still present');
+});
+
+test('reminders.fired substitutes text/schedule and an empty missedNote on-time', () => {
+  const out = t('reminders.fired', {
+    text: 'Take the pills',
+    schedule: 'every day at 09:00',
+    missedNote: '',
+  });
+  assert.ok(out.includes('Take the pills'), `expected the reminder text in "${out}"`);
+  assert.ok(out.includes('every day at 09:00'), `expected the schedule text in "${out}"`);
+  assert.ok(!out.includes('{'), `placeholders not substituted: "${out}"`);
+});
+
+test('every /reminders key exists in every locale', () => {
+  // The `/reminders` screens are ALL buttons, and `getKeyInLang` has no per-key en
+  // fallback — a locale missing one of these renders a dead caption (or the bare
+  // last code segment) on a button the operator has to tap.
+  for (const code of [
+    // fire announcement
+    'reminders.fired',
+    // localized schedule wording (one per descriptor kind)
+    'reminders.scheduleDaily',
+    'reminders.scheduleWeekdays',
+    'reminders.scheduleWeekly',
+    'reminders.scheduleMonthly',
+    'reminders.scheduleOnce',
+    'reminders.scheduleRaw',
+    // next run
+    'reminders.nextRunToday',
+    'reminders.nextRunTomorrow',
+    'reminders.nextRunOnDate',
+    'reminders.nextRunNone',
+    // hub
+    'reminders.hubTitle',
+    'reminders.hubEmptyLine',
+    'reminders.hubActiveLine',
+    'reminders.hubLimitLine',
+    'reminders.addButton',
+    'reminders.listButton',
+    'reminders.closeButton',
+    'reminders.closedNotice',
+    // list
+    'reminders.listTitle',
+    'reminders.listPageLine',
+    'reminders.listRow',
+    'reminders.listPrevButton',
+    'reminders.listNextButton',
+    'reminders.listBackToHubButton',
+    // card + created
+    'reminders.cardTitle',
+    'reminders.cardWhen',
+    'reminders.cardText',
+    'reminders.cardNext',
+    'reminders.cardDeleteButton',
+    'reminders.cardBackToListButton',
+    'reminders.createdTitle',
+    'reminders.doneListButton',
+    // wizard chrome + running summary
+    'reminders.wizardTitle',
+    'reminders.pickRepeat',
+    'reminders.pickDate',
+    'reminders.pickWeekday',
+    'reminders.pickDayOfMonth',
+    'reminders.pickTime',
+    'reminders.pickText',
+    // wizard steps
+    'reminders.stepRepeatQuestion',
+    'reminders.stepDateQuestion',
+    'reminders.stepDateGridQuestion',
+    'reminders.stepWeekdayQuestion',
+    'reminders.stepDayOfMonthQuestion',
+    'reminders.stepDayOfMonthGridQuestion',
+    'reminders.stepTimeQuestion',
+    'reminders.stepHourQuestion',
+    'reminders.stepMinuteQuestion',
+    'reminders.stepTextQuestion',
+    // wizard buttons
+    'reminders.repeatOnceButton',
+    'reminders.repeatDailyButton',
+    'reminders.repeatWeekdaysButton',
+    'reminders.repeatWeeklyButton',
+    'reminders.repeatMonthlyButton',
+    'reminders.dateTodayButton',
+    'reminders.dateTomorrowButton',
+    'reminders.dateOtherButton',
+    'reminders.dayOfMonthOtherButton',
+    'reminders.timeOtherButton',
+    'reminders.backButton',
+    'reminders.cancelButton',
+    'reminders.weekdayMondayButton',
+    'reminders.weekdayTuesdayButton',
+    'reminders.weekdayWednesdayButton',
+    'reminders.weekdayThursdayButton',
+    'reminders.weekdayFridayButton',
+    'reminders.weekdaySaturdayButton',
+    'reminders.weekdaySundayButton',
+    // outcomes
+    'reminders.errorPastTime',
+    'reminders.errorInvalidDate',
+    'reminders.errorInvalidTime',
+    'reminders.errorTextTooLong',
+    'reminders.cancelledNotice',
+    'reminders.expiredNotice',
+    'reminders.capReachedNotice',
+    // callback answers
+    'reminders.wizardExpiredCbAnswer',
+    'reminders.deletedCbAnswer',
+    'reminders.deleteGoneCbAnswer',
+    'reminders.cardExpiredCbAnswer',
+  ]) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+});
+
+test('the reminders.* keys that carry a value substitute it in every locale', () => {
+  // Each of these is read by an operator deciding something ("is this the day I
+  // meant?"), so a locale that dropped its placeholder would render a line that
+  // states nothing.
+  const substitutions: Record<string, Record<string, string | number>> = {
+    'reminders.scheduleDaily': { time: '09:00' },
+    'reminders.scheduleWeekdays': { time: '09:00' },
+    'reminders.scheduleWeekly': { weekday: 'Sun', time: '18:00' },
+    'reminders.scheduleMonthly': { dayOfMonth: 5, time: '12:00' },
+    'reminders.scheduleOnce': { date: '2026-06-07', time: '21:00' },
+    'reminders.scheduleRaw': { text: '*/7 * * * *' },
+    'reminders.nextRunToday': { time: '21:00' },
+    'reminders.nextRunTomorrow': { time: '09:00' },
+    'reminders.nextRunOnDate': { date: '2026-06-20', time: '12:30' },
+    'reminders.hubActiveLine': { count: 3 },
+    'reminders.hubLimitLine': { count: 30, limit: 30 },
+    'reminders.listButton': { count: 3 },
+    'reminders.listTitle': { count: 3 },
+    'reminders.listPageLine': { page: 2, total: 4 },
+    'reminders.listRow': { name: 'Pills', schedule: 'every day at 09:00' },
+    'reminders.cardTitle': { name: 'Pills' },
+    'reminders.cardWhen': { schedule: 'every day at 09:00' },
+    'reminders.cardText': { text: 'Take the pills' },
+    'reminders.cardNext': { next: 'today at 09:00' },
+    'reminders.pickRepeat': { value: 'Every day' },
+    'reminders.pickDate': { value: '2026-06-07' },
+    'reminders.pickWeekday': { value: 'Sun' },
+    'reminders.pickDayOfMonth': { value: 5 },
+    'reminders.pickTime': { value: '21:00' },
+    'reminders.pickText': { value: 'Take the pills' },
+    'reminders.stepMinuteQuestion': { hour: '21' },
+    'reminders.capReachedNotice': { limit: 30 },
+    // The rejection has to NAME the bound it refused, or the operator retries blind.
+    'reminders.errorTextTooLong': { limit: reminderTextMaxLength },
+  };
+  for (const locale of localeCodes) {
+    for (const [code, vars] of Object.entries(substitutions)) {
+      const out = runWithLocale(locale, () => t(code, vars));
+      assert.ok(out.length > 0, `${code} empty in ${locale}`);
+      assert.ok(!/\{[a-zA-Z]+\}/.test(out), `${code} in ${locale} left a placeholder: "${out}"`);
+      for (const value of Object.values(vars)) {
+        assert.ok(
+          out.includes(value.toString()),
+          `${code} in ${locale} dropped "${value}": "${out}"`,
+        );
+      }
+    }
+  }
+});
+
+test('reminders.wizardExpiredCbAnswer names /reminders literally in every locale', () => {
+  // The answer is the ONLY thing a stale tap produces, so it has to say how to get
+  // a fresh wizard. The command name is typed, not translated.
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('reminders.wizardExpiredCbAnswer'));
+    assert.ok(out.includes('/reminders'), `expected "/reminders" in ${locale}: "${out}"`);
+  }
 });
 
 test('startup readiness status keys exist in every locale', () => {

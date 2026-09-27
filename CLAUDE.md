@@ -392,9 +392,26 @@ config/variants, not a per-message API field).
   cron — cron has no year and would re-fire every year.
   Restart-safe: timers re-arm from `state.json` at boot and missed runs fire
   ONE catch-up annotated with the missed time. Leaving a folder (the `/bind`
-  «leave current dir» button) pauses the thread's jobs (one notice); `/bind`
-  resumes them from now (an expired one-shot is dropped). Run history:
-  `DATA_DIR/scheduler-runs.jsonl`.
+  «leave current dir» button) pauses the thread's AGENT-PROMPT jobs (one notice;
+  reminders are exempt — see below); `/bind` resumes them from now (an expired
+  one-shot is dropped). Run history: `DATA_DIR/scheduler-runs.jsonl`.
+  **Two delivery kinds.** `ScheduleRecord.deliveryKind` is ABSENT for the
+  agent-prompt job described above; `'reminder'` marks a bot-local `/reminders`
+  job, and the fire path BRANCHES on it (`checkIsReminderSchedule`) right after
+  the pin: announce → pin → `delivered`, so `ensureSession` / wait-for-idle /
+  `forwardPrompt` are never reached — which is exactly what lets a reminder fire
+  in an unbound topic and in General. The unbound pause reads the same
+  discriminator (`getUnboundPausableSchedules`): pausing a reminder would stop
+  the one kind that needs neither folder nor agent, so a thread holding only
+  reminders pauses nothing and posts no notice. Reminders are also FILTERED OUT
+  of the agent-facing `schedule_list`, and `schedule_cancel` answers the plain
+  "no schedule with this id" for a reminder id — the agent must not be told a
+  bot-local reminder is a scheduled prompt it can act on, nor be able to delete
+  something the operator created with buttons and never handed to any agent. The
+  per-thread cap still counts BOTH kinds (the storage is shared), so
+  `schedule_create`'s rejection names how many slots are reminders and points at
+  the operator's `/reminders` command (`getScheduleCapError`) — the bare "maximum
+  of 30" left the agent cancelling everything it could see and looping.
 - **One instance-wide timezone (`/timezone`).** The operator declares their zone
   ONCE and every clock the bot touches speaks it. The mechanism is
   `process.env.TZ` — process-global by nature, which is exactly why the setting
@@ -607,10 +624,14 @@ config/variants, not a per-message API field).
 | `utils/fileSendService.ts` | Reusable impure orchestration for `send_file_to_user`: `createSendFilesToThread(deps)` resolves target+workdir, pins one canonical root for the whole operation, and on Linux traverses each canonical path from a root descriptor with per-component `O_NOFOLLOW`; macOS fails closed until a native descriptor-relative bridge exists. It verifies the opened regular file's bigint device/inode identity and ≤50 MB size, then retains every file descriptor while classifying/planning/building and exhaustively invoking an injected typed `sendPhoto`/`sendAnimation`/`sendVideo`/`sendDocument`/`sendMediaGroup` gateway. Snapshot admission is bounded/FIFO and abortable; a directory-scoped call requires the same canonical authorised workdir both before opening and inside `executeDelivery` immediately before dispatch. Optional `executeDelivery` wraps gateway dispatch plus durable message-id recording in one queue/retry transaction; the default invokes directly. It closes every collected descriptor in `finally` after gateway success/failure. A gateway return is the delivery boundary: later recording/cleanup failures append warnings to an `ok:true` result to prevent duplicate retries, while `FileSendDeliveryUnknownError` becomes a distinct no-auto-retry result. `SchedulerMcpDeps` imports its `SendFilesToThread` type directly; real-HTTP tests compose a recording gateway |
 | `utils/messageSendService.ts` | Reusable impure sender behind `send_messages_to_user` (`createSendMessagesToThread<TTarget>`): resolves the target, then delivers each item (`DiscreteMessageItem` = a plain string OR `{text?, path?, asFile?}`) as its OWN message, preserving order. A text item splits over-cap via `splitMessage` (blank string skipped); an item with a non-blank `path` is an ATTACHMENT delivered through the injected `sendFiles: SendFilesToThread` (the SAME closure behind `send_file_to_user` — no second pipeline) with `text`→caption, `asFile`, and the dir-scoped `authorizedWorkDir` threaded from options. Items are validated up front (an all-empty object → error, nothing sent — mirrors the MCP schema's all-or-nothing reject). `bot.ts` composes it over the paced `replyChunkWithFallback` + `renderAgentHtml` (text) and the `sendFilesToThread` closure (attachments); a total send failure returns an error (not a false "delivered 0"), a partial one stays `ok` but names the landed/attempted split + any attachment errors, and a file `deliveryUnknown` terminates the batch as a non-retryable `deliveryUnknown` result. Cancellation is graceful from BOTH directions: the between-items `signal.aborted` check and a catch around the attachment send (`sendFiles` REJECTS on abort rather than returning — letting that escape hid how many messages had already landed, so the agent re-sent the whole batch and the user saw them twice); both return `cancelled after delivering N message(s)`, detection is the shared `checkIsAbortError` identity check in `utils.ts` (never a message-string match), and a genuine throw still propagates while `deliveryUnknown` — which `sendFiles` decides BEFORE its abort rethrow — is never downgraded. `maxDiscreteMessages` (50) is the per-call cap (enforced at the MCP schema) |
 | `utils/fileSendTelegram.ts` | Telegraf adapter for project-owned file-send descriptors: each gateway invocation creates a fresh bounded input — non-empty snapshots use `fs.createReadStream('', { fd, start: 0, end: sizeBytes - 1, autoClose: false })`, while zero-byte snapshots use an in-memory empty `Readable` — converts discriminated document vs photo/video groups into correctly homogeneous Bot API media arrays, and extracts every returned message id for `/clear` tracking. It registers `finished()` before invoking each attempt; cancellation aborts Telegraf and destroys streams only while any request body remains unconsumed. After every stream ends normally, caller cancellation stays suppressed and an unref'ed 30-second response deadline starts; expiry aborts Telegraf, awaits sender cleanup, and becomes `FileSendDeliveryUnknownError`, while message IDs returned at the boundary still win. Telegram API errors propagate to the outer retry executor; other non-API post-initiation failures also become delivery-unknown. `bot.ts` passes an abort-controller shim signal to Telegraf `callApi`; descriptor closure remains the service's responsibility |
+| `utils/reminderWizard.ts` | Pure core of the `/reminders` wizard (the bot-LOCAL reminder feature — buttons only, zero agent involvement): the repeat → day → time → text step machine (`getReminderStepAfterRepeat` skips step 2 for every-day/weekdays, `getReminderPreviousStep`, `getReminderStateForStep` — re-entering a step CLEARS its own pick and every later one, so stepping back never silently keeps the value the operator came to change), the `rw_<wizardId>_<token>[_<arg>]` codec with the wizard id BAKED IN (an inline keyboard stays tappable forever, so a tap on a wizard abandoned hours ago must be inert rather than feed picks into the one that is live now — same class of guard as `/disconnect`'s per-message snapshot) validating range + real-calendar-date at DECODE time so an impossible value can never reach the assembler, the per-step keyboards, `buildReminderSpec` (the four recurring kinds emit exactly the cron shapes `describeCron` renders as words — any other shape would surface to the operator as a raw cron; `once` is assembled host-local and a PAST instant is an ERROR, never rolled forward a day; `createReminderInstant` separates an impossible DATE from a wall clock a DST spring-forward SKIPS, which is a TIME error and returns to the time step), `reminderTextMaxLength` (1000 — the bound the captured text is refused past, sized to leave the card / announcement templates room under Telegram's 4096-char cap in any locale), the hub/list/card plans + their `rm*` codec (delete carries the reminder's OWN id, never an index), the localizable `ReminderScheduleDescriptor` (with a `raw` fallback for an agent-made shape the wizard cannot create, incl. an N-times budget it has no field for), and `getReminderNameFromText` (the wizard never ASKS for a name). Emits i18n KEY plans, not prose: user text lives behind the async `t()` in 12 locales, and `bot.ts` cannot be imported by a test (its module-scope `parseEnv()` exits the process) |
+| `utils/reminderScheduleText.ts` | THE localized rendering of a reminder's schedule and next run — shared by the list rows, the card, the done screen AND the fire announcement `scheduler/delivery.ts` posts, so one reminder can never be described two different ways. `describeSchedule` (`scheduler/recurrence.ts`) cannot serve these screens: it is English-ONLY by design (it is interpolated INTO i18n templates as a value) and still renders the agent-prompt announcement, while the reminder UI exists in 12 locales. The `weekly` case reuses the weekday BUTTON label the operator picked, not a second set of names. `getReminderNextRunText` compares local CALENDAR DATES rather than an hours-apart delta (an instant 20h away is "tomorrow" only when it falls on the next day) and renders `null` as the explicit none-marker so a row never looks like a failed substitution |
+| `utils/reminderFlow.ts` | The `/reminders` rules that depend on the bot's surroundings rather than on the wizard's step machine, kept out of `bot.ts` because each one fails SILENTLY: `getReminderHubPlan` (at/over the per-thread schedule cap «add» is NOT drawn and the body line says why — a button that could only be rejected is a dead end; the cap is measured against the thread's WHOLE schedule list, the same comparison `createScheduleForThread` makes, so a topic full of `/schedule` jobs withholds «add» too, while the body line still counts the REMINDERS), `getReminderTextCaptureRoute` + `reminderTextWaitMs` (15 min: the step-4 wait intercepts every plain message in the topic, so it must expire AND let the triggering message fall through to normal handling instead of swallowing a prompt meant for the agent; its `isClaimed` input is what makes the wait single-use — telegraf handles updates concurrently, so the loser routes `claimed` and falls through instead of creating a second reminder from the one wizard, and a claim is checked BEFORE the window so the winner is never retired mid-create), `getReminderTextAcceptance` (the shared length gate both text sources pass — over `reminderTextMaxLength` the text is refused, never truncated), `checkIsReminderTextWaitKept` (the ONE choke point that disarms that wait: only `awaitText`/`createNow` END on the text step, so «‹ Back» out of step 4 must drop it — otherwise the next ordinary message is captured and creates the reminder from the picks the operator went back to change), and `getReminderWizardTapRoute` (a tap from a DEAD screen gets that message's keyboard stripped; a stale tap on the LIVE wizard must NOT, or the operator is left staring at a keyboard-less, unfinishable wizard) |
 | `scheduler/recurrence.ts` | Pure schedule math on `croner`: `ScheduleSpec` (cron / once / N-times), validation (min fire interval 5 min), next-occurrence, human description, catch-up decision |
-| `scheduler/store.ts` | Schedule records: create path (slug ids, ≤30/thread cap, `isPinSilent`), persisted in `state.json` `schedules` (lifecycle-independent) |
+| `scheduler/store.ts` | Schedule records: create path (slug ids, ≤30/thread cap, `isPinSilent`, optional `deliveryKind` — written only when set, so an agent-prompt job stays byte-identical to what it always was), persisted in `state.json` `schedules` (lifecycle-independent). `CreateScheduleArgs` is declared ONCE and shared by `createScheduleRecord` + `createScheduleForThread` so a new field cannot be added to one and forgotten on the other |
 | `scheduler/engine.ts` | Timer engine: one unref'd timer per job, boot replay with one-catch-up-per-missed-run, no-overlap guard, N-times/once bookkeeping, `whenIdle` drain |
-| `scheduler/delivery.ts` | Fire pipeline: announce → pin (notify by default) → wait-for-idle (5s polls, 10 min cap) → forward with the `[Scheduled run]` marker; unbound topic → distinct error |
+| `scheduler/delivery.ts` | Fire pipeline: announce → pin (notify by default) → wait-for-idle (5s polls, 10 min cap) → forward with the `[Scheduled run]` marker; unbound topic → distinct error. A REMINDER record STOPS after the pin (`delivered`) — steps 3–4 are never reached, which is what lets it fire in an unbound topic and in General; its announcement also leads with its own text (the pin's notification previews it) and uses the LOCALIZED `getReminderScheduleText` instead of the English-only `describeSchedule` |
+| `scheduler/deliveryKind.ts` | Pure decisions keyed on `ScheduleRecord.deliveryKind`: `checkIsReminderSchedule` (the discriminator the fire path, the `/reminders` screens and the MCP filter all read) and `getUnboundPausableSchedules` — the AGENT-PROMPT jobs an unbound topic must pause, reminders EXEMPT because they post + pin with no folder and no agent, so pausing them would stop the one kind that could still have fired (a thread holding only reminders yields an empty array ⇒ nothing paused, no notice posted) |
 | `scheduler/mcpSurface.ts` | Bot-owned MCP server (stateless streamable HTTP on an OS-chosen loopback port unless `SCHEDULER_MCP_PORT` pins one): `schedule_create/list/cancel` + `compact_conversation` (F1 agent-triggered self-compaction, `registerCompactConversationTool` → `deps.compactConversation` → the bot's `armDeferredCompaction`; thread-scoped, drains on turn-idle) + `send_file_to_user` (agent→Telegram file/image, separate `registerFileSendTool`; an ambiguous post-invocation outcome is non-error structured content `{ kind: 'deliveryUnknown', retryable: false }`) + `send_messages_to_user` (agent→Telegram per-message delivery: each `messages[]` item its OWN message, never merged, separate `registerMessageSendTool` → `deps.sendMessagesToThread`; an item is a plain string OR `{text?, path?, as_file?}` — a `path` item routes through `deps.sendFilesToThread` as a single-file attachment with `text`→caption, `dir`-scope passes `authorizedWorkDir`, and a `deliveryUnknown` relays as the same non-error structured content; capped at `maxDiscreteMessages`, total-failure → error), HMAC bearer tokens scoped `thread:`/`dir:`. Because MCP cancellation is a separate HTTP notification while each transport is fresh, the HTTP server correlates by verified token + validated bounded client id + typed request id (verified-token fallback for legacy registrations), retains a bounded 30-second cancellation-before-registration tombstone set, and combines that controller with the SDK handler signal. Reports a short connect-time `instructions` (`mcpServerInstructions`, returned in the MCP `initialize` handshake) — a use-case pointer (when to reach for the server, what it can do); per-tool argument recipes stay in each tool's own `description`. NOTE: connect-time `instructions` + tool descriptions are cached by the client at connect — an already-running agent won't see edits until it reconnects; only tool RESULTS reflect live server code |
 | `scheduler/injection.ts` | Builders for injecting the bot's MCP entry into sessions: Claude `--mcp-config` object, OpenCode `POST /mcp` registration, each with a fresh UUID client header for cancellation isolation; inert until configured |
 | `scheduler/runLedger.ts` | Append-only JSONL run history (`DATA_DIR/scheduler-runs.jsonl`, 10MB→.1 rotation) |
@@ -1149,6 +1170,96 @@ OpenCode events / bindings).
     `utils/displayVerbosity.ts`, `utils/thinkingRender.ts`,
     `utils/toolResultRender.ts`, `utils/subagentRender.ts`,
     `utils/subagentStatusRender.ts`, `utils/claudeSubagentTail.ts`.
+- **Bot-local notifications (NO agent):** `/reminders`
+  - `/reminders` is the whole feature — there is deliberately no second
+    `/remind` command. A reminder is the mirror image of `/schedule`:
+    `/schedule` hands FREE TEXT to the agent, which parses the time and calls
+    the `schedule_*` MCP tools, so a fire runs a prompt in a session;
+    `/reminders` is configured entirely with INLINE BUTTONS and fires with ZERO
+    agent involvement — at fire time the bot posts the reminder text into the
+    topic and PINS it, and the pin IS the notification (the operator runs every
+    topic muted — same mechanism as the pinned pending question). Because
+    nothing is proxied it is NOT gated on a binding or a session: it works in
+    ANY topic, unbound ones and General included.
+  - Storage is the EXISTING scheduler: same `state.json` `schedules` map, same
+    ≤30-per-thread cap, discriminated by the optional
+    `ScheduleRecord.deliveryKind: 'reminder'` (absent = the original
+    agent-prompt job, so no persisted record needed migrating) and carrying its
+    visible text in the existing `prompt` field. Timers, boot re-arm and the one
+    annotated catch-up for a run missed while the bot was down are the engine's,
+    unchanged.
+  - **Hub:** «➕ Add» + «📋 List (N)» on one row, «✕ Close» below. At 0 active
+    the list button is not drawn and at the cap the add button is withdrawn (a
+    button whose only outcome is a rejection is worse than none) — the body line
+    then says the limit is reached.
+  - **Add wizard — 4 steps, ONE message.** The hub message becomes the wizard,
+    every tap re-renders it, and it finally becomes the created card; the flow
+    never posts a second message. (1) repeat — once / every day / weekdays /
+    weekly / monthly, which are exactly the four cron shapes `describeCron`
+    renders as words, so a wizard-made job can never surface as a raw cron;
+    (2) the pick that repeat implies — `once` → today / tomorrow / a date grid,
+    `weekly` → weekday, `monthly` → day of month (presets + a 1–31 grid); every
+    day and weekdays SKIP this step; (3) time — four quick presets or «🕐 Other
+    time» → an hour grid (00–23) then a 5-minute minute grid; (4) the text —
+    typed OR a voice note (the existing transcription path, same single creation
+    path). Custom times are picked with BUTTONS: the reminder text is the only
+    thing the operator ever types. Done screen = When / Text / Next +
+    «🗑 Delete» / «📋 List» / «✕ Close».
+  - The `name` is never asked for — it is derived from the first words of the
+    text (`getReminderNameFromText`, capped at `slugify`'s 40-char budget so the
+    derived name and the id minted from it stay in step).
+  - `‹ Back` steps back AND resets that step's pick (on step 1 it leaves the
+    wizard and shows the hub); `✕ Cancel` relabels the message and drops its
+    keyboard; ANY slash command cancels an in-flight wizard, which is also what
+    makes a repeat `/reminders` retire the previous one — exactly one wizard per
+    topic.
+  - **Stale taps.** The wizard id is baked into every wizard `callback_data`
+    (`rw_<wizardId>_<token>[_<arg>]`) because an inline keyboard stays tappable
+    forever: a tap belonging to no live wizard answers "out of date" and strips
+    THAT message's keyboard, while a tap on a stale VIEW of the LIVE wizard
+    re-renders its current step instead — stripping there would leave the
+    operator an unfinishable wizard.
+  - **The step-4 text wait EXPIRES** (`reminderTextWaitMs`, 15 min) and the
+    triggering message falls THROUGH to normal handling: the wait intercepts
+    every plain message in the topic, so an abandoned wizard must not swallow a
+    prompt meant for the agent hours later. The capture sits AFTER the
+    secret-capture flows (`/login` OAuth code, `/connect` provider key) and
+    BEFORE the startup buffer.
+  - **The text is BOUNDED and the wait is single-use.** Over
+    `reminderTextMaxLength` (1000) the text is REJECTED (`getReminderTextAcceptance`)
+    and step 4 re-renders with the reason — never truncated (the words are the
+    operator's) and never accepted: an unbounded voice transcript pushes the
+    created-card edit, the card and the fire announcement past Telegram's
+    4096-char cap, which left a reminder that looked uncreated, could not be
+    opened to be deleted, and was still recorded as delivered. The wait is also
+    CLAIMED synchronously by the message that consumes it
+    (`getReminderTextCaptureRoute`'s `isClaimed` → route `claimed`), because
+    telegraf handles updates concurrently: two messages arriving together would
+    otherwise create two reminders from the one wizard. The claim is released only
+    on the too-long retry — the one path that stays on step 4.
+  - A `once` pick whose wall clock a DST spring-forward SKIPS (02:30 on a
+    transition day) is a TIME error, never a date one: `createReminderInstant`
+    probes the calendar date on its own midnight instant, so the wizard lands the
+    operator on the TIME step with the skipped hour cleared (the whole transition
+    hour would fail again) instead of telling them to re-pick a date that was fine.
+  - The spec is rebuilt at CREATION time, not reused from the time step —
+    minutes pass while the operator types, so «today» plus a time that has since
+    gone by is reported back on the time screen (with the captured text kept, so
+    it is never typed twice) rather than silently rolled to tomorrow, which
+    would remind them 24h off what they asked for.
+  - **List / card.** Rows page at `reminderListPageSize` (8), each button
+    reading `🔔 <name> · <schedule>`; tapping one opens a card (When / Text /
+    Next) with «🗑 Delete» / «‹ To list». There is NO extra delete
+    confirmation — the card shows exactly what is about to go. Delete carries
+    the reminder's OWN id (`rmdel_<id>`), never a positional index: an old card
+    stays tappable and must not delete whatever now occupies that row; an id
+    already gone answers "already deleted" and reopens the list.
+  - Every reminder surface renders its schedule through the SHARED localized
+    renderer (`utils/reminderScheduleText.ts`) — list row, card, done screen AND
+    the fire announcement — so one reminder is never described two ways. The
+    wizard state itself is in MEMORY only (a few taps, not data worth
+    persisting, and hot mode restarts on every code change); the reminder it
+    produces goes straight to disk through the normal schedule store.
 - **Info / ops:** `/start`, `/status`, `/whoami`, `/version`, `/help`,
   `/doctor`, `/mcp`, `/trace`, `/timestamps`, `/timezone`, `/language` (`/lang`)
   - `/language [locale|auto]` shows or changes the bot UI language for the

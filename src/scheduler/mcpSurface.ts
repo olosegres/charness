@@ -20,6 +20,7 @@ import {
   type SendMessagesToThread,
 } from '../utils/messageSendService';
 import { getAbortError } from '../utils';
+import { checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
@@ -613,6 +614,24 @@ function deliveryUnknownResult(message: string): CallToolResult {
   };
 }
 
+/**
+ * @description The agent-facing message for a rejected create. The cap counts ALL
+ * of a thread's schedules — the storage really is shared — but `schedule_list` hides
+ * reminders and `schedule_cancel` refuses their ids, so whenever reminders occupy
+ * slots the message has to say so: otherwise the agent reads "maximum of 30" beside
+ * a list of 5, cancels all 5, still cannot create, and loops with no correct next
+ * call. A topic with no reminders keeps the plain sentence, which is then the whole
+ * truth.
+ */
+export function getScheduleCapError(input: { limit: number; reminderCount: number }): string {
+  const capped = `cannot create: thread already has the maximum of ${input.limit} schedules`;
+  if (input.reminderCount === 0) return capped;
+  return (
+    `${capped}; ${input.reminderCount} of them are the user's reminders, which you can neither ` +
+    "list nor cancel — ask the user to delete one with the bot's /reminders command"
+  );
+}
+
 /** One-line human summary of a record for `schedule_list` / create confirmations. */
 function summarizeRecord(record: ScheduleRecord): string {
   // Local-offset ISO, never `toISOString()`'s UTC `Z`: the operator declared a
@@ -679,7 +698,10 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         isPinSilent: args.isPinSilent,
       });
       if (!created.ok) {
-        return errorResult(`cannot create: thread already has the maximum of ${created.limit} schedules`);
+        const reminderCount = deps.store
+          .getThreadSchedules(threadKey)
+          .filter((record) => checkIsReminderSchedule(record)).length;
+        return errorResult(getScheduleCapError({ limit: created.limit, reminderCount }));
       }
 
       const record = created.record;
@@ -707,7 +729,14 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         return errorResult(`invalid threadKey "${resolved.threadKey}"`);
       }
 
-      const records = deps.store.getThreadSchedules(threadKey);
+      // Reminders are invisible to the agent BY DESIGN: a `/reminders` job is
+      // bot-local (posted + pinned, no session touched), so listing one here
+      // would describe it to the agent as a "scheduled prompt" it could act on —
+      // and `schedule_cancel` below would let it delete something the operator
+      // created with buttons and never handed to any agent.
+      const records = deps.store
+        .getThreadSchedules(threadKey)
+        .filter((record) => !checkIsReminderSchedule(record));
       if (records.length === 0) {
         return textResult('No schedules for this topic.');
       }
@@ -729,7 +758,11 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
 
       const record = deps.store.getSchedules()[args.id];
       // Scope isolation: the record must exist AND belong to the resolved thread.
-      if (!record || record.threadKey !== resolved.threadKey) {
+      // A reminder answers the SAME "not found" as a missing id rather than a new
+      // error kind: `schedule_list` never showed it, so from the agent's side it
+      // genuinely does not exist, and a distinct refusal would only tell it there
+      // is an id here worth retrying.
+      if (!record || record.threadKey !== resolved.threadKey || checkIsReminderSchedule(record)) {
         return errorResult(`no schedule with id "${args.id}" in this topic`);
       }
 

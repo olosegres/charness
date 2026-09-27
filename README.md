@@ -21,6 +21,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Raw terminal** — `/terminal` binds a topic to a real `$SHELL` in the project folder
 - **Notifications** — when the agent asks a question, the bot pins that message so even a muted topic notifies you: the pin pierces mute, giving exactly one notification per question (unpinned once you answer)
 - **Scheduled & self-driving runs** — `/schedule` arms cron / one-shot / N-times jobs per topic, and the agent can schedule *itself* via injected MCP tools: nightly reviews, recurring reports, a "finish this tomorrow at 9" hand-off. Each job fires as a fresh session with your prompt; restart-safe, with one catch-up for a run missed while the bot was down
+- **Reminders** — `/reminders` sets a plain reminder with inline buttons (how often, which day, what time, then the text by typing or voice); at the due time the bot posts and pins it itself, so even a muted topic notifies you. No agent, no bound folder, no date parsing — works in any topic, General included
 - **Inbound files** — photos / documents / video / audio sent to a topic are saved and announced to the agent; albums arrive as one prompt
 - **Outbound files** — the agent sends files back to you — a generated chart, a screenshot, a log, a rendered PDF — single files or albums, straight into the topic
 - **Voice input** — Whisper transcription via Groq (preferred) or OpenAI
@@ -294,6 +295,7 @@ actually start an agent or terminal in the folder.
 | `/enter`, `/up`, `/down`, `/tab` | tmux key passthrough |
 | `/esc`, `/escape` | Send a raw Escape — interrupt the current turn / dismiss a selector |
 | `/schedule` | Schedule a prompt in free text — the agent parses the time and owns the job; see [Scheduler](#scheduler-schedule) |
+| `/reminders` | Reminders set with buttons only — the bot posts and pins them itself, with no agent involved; works in any topic, bound or not. See [Reminders](#reminders-reminders) |
 | `/clear_messages` | Delete bot messages in this topic (up to 48h, Telegram limit) |
 | `/clear` | Forwarded to the agent (Claude wipes context; OpenCode plain text) — not a bot command anymore. Also purges the topic's file-intake dir |
 | `/compact` | Compact the agent's context — a real, confirmed compaction on OpenCode and on the default (stream) Claude backend; the tmux Claude backend has the literal command forwarded (its TUI compacts); terminal: not supported |
@@ -380,9 +382,43 @@ with the thread's last-used backend.
   N-times; min interval 5 min; up to 30 jobs per topic).
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
-- Leaving a folder pauses the topic's jobs; `/bind` resumes them (an
-  expired one-shot is dropped). Run history:
-  `DATA_DIR/scheduler-runs.jsonl`.
+- Leaving a folder pauses the topic's scheduled prompts; `/bind` resumes
+  them (an expired one-shot is dropped). Reminders keep running — see
+  below. Run history: `DATA_DIR/scheduler-runs.jsonl`.
+
+## Reminders (`/reminders`)
+
+A reminder is the bot's own notification, not a job for an agent: at the due
+time the bot posts your text into the topic and pins it — and the pin is what
+notifies you through a muted topic. Nothing is started and nothing is
+interrupted, so reminders work in **any** topic, with or without a bound
+folder and with or without a running agent.
+
+`/reminders` opens a hub with «➕ Add», «📋 List (N)» and «✕ Close». Add walks
+four steps, all in the same message:
+
+1. **How often** — once, every day, weekdays, weekly, monthly.
+2. **Which day** — a date (today / tomorrow / a date grid), a weekday, or a
+   day of the month. Skipped for "every day" and "weekdays".
+3. **What time** — four quick presets, or «🕐 Other time» → the hour, then
+   the minutes in 5-minute steps.
+4. **The text** — type it or send a voice note, up to 1000 characters.
+
+Steps 1–3 are buttons only: the reminder text is the one thing you type.
+`‹ Back` changes a pick, `✕ Cancel` drops the wizard, and any command cancels
+it. Picking a time that has already passed says so instead of quietly moving
+the reminder to tomorrow, and a text over the limit is refused with nothing
+saved — send a shorter one and the reminder is created from that.
+
+The finished reminder shows when it fires, its text and its next run. «📋
+List» pages through the topic's reminders (8 per page); tapping one opens it
+with a «🗑 Delete» button — the card shows exactly what you are deleting, so
+there is no extra confirmation step. Reminders share the scheduler's limit of
+30 jobs per topic, survive a restart, and one missed while the bot was down
+fires a single catch-up.
+
+Reminders are yours, not the agent's: the scheduling tools an agent can call
+do not see them, so it can neither list nor delete them.
 
 ## Raw terminal (`/terminal`)
 

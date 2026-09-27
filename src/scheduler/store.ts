@@ -2,7 +2,12 @@ import { randomBytes } from 'node:crypto';
 import type { StateStore } from '../state';
 import { keyToString, type ThreadKey } from '../types';
 import { getNextRunAt } from './recurrence';
-import type { ScheduleCreatedBy, ScheduleRecord, ScheduleSpec } from './types';
+import type {
+  ScheduleCreatedBy,
+  ScheduleDeliveryKind,
+  ScheduleRecord,
+  ScheduleSpec,
+} from './types';
 
 /**
  * @description Scheduler store helpers — id generation and the cap-enforcing
@@ -51,22 +56,33 @@ export function generateScheduleId(name: string): string {
 }
 
 /**
+ * @name CreateScheduleArgs
+ * @description Inputs of the create path. Defined ONCE and shared by
+ * {@link createScheduleRecord} and {@link createScheduleForThread} so a new field
+ * cannot be added to one and forgotten on the other.
+ */
+export interface CreateScheduleArgs {
+  threadKey: ThreadKey;
+  name: string;
+  spec: ScheduleSpec;
+  /** Prompt for the agent, or the posted text when `deliveryKind` is `'reminder'`. */
+  prompt: string;
+  createdBy: ScheduleCreatedBy;
+  nowMs: number;
+  lastAdapterName?: string;
+  isPinSilent?: boolean;
+  /** Omit for the agent-prompt default; `'reminder'` for a bot-local reminder. */
+  deliveryKind?: ScheduleDeliveryKind;
+}
+
+/**
  * @description Build a fresh {@link ScheduleRecord} from its inputs, computing
  * the initial `nextRunAt` for the spec. Pure (besides id randomness): callers
  * pass `nowMs` so creation time and the first `nextRunAt` are deterministic in
  * tests. Does NOT persist — the caller (or {@link createScheduleForThread})
  * writes it to the store.
  */
-export function createScheduleRecord(args: {
-  threadKey: ThreadKey;
-  name: string;
-  spec: ScheduleSpec;
-  prompt: string;
-  createdBy: ScheduleCreatedBy;
-  nowMs: number;
-  lastAdapterName?: string;
-  isPinSilent?: boolean;
-}): ScheduleRecord {
+export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
   const { threadKey, name, spec, prompt, createdBy, nowMs, lastAdapterName, isPinSilent } = args;
   const nowIso = new Date(nowMs).toISOString();
   const record: ScheduleRecord = {
@@ -82,6 +98,8 @@ export function createScheduleRecord(args: {
   };
   if (lastAdapterName !== undefined) record.lastAdapterName = lastAdapterName;
   if (isPinSilent) record.isPinSilent = true;
+  // Absent means the agent-prompt kind, so the field is written only when set.
+  if (args.deliveryKind !== undefined) record.deliveryKind = args.deliveryKind;
   return record;
 }
 
@@ -103,16 +121,7 @@ export type CreateScheduleResult =
  */
 export async function createScheduleForThread(
   store: StateStore,
-  args: {
-    threadKey: ThreadKey;
-    name: string;
-    spec: ScheduleSpec;
-    prompt: string;
-    createdBy: ScheduleCreatedBy;
-    nowMs: number;
-    lastAdapterName?: string;
-    isPinSilent?: boolean;
-  },
+  args: CreateScheduleArgs,
 ): Promise<CreateScheduleResult> {
   const existing = store.getThreadSchedules(args.threadKey);
   if (existing.length >= maxSchedulesPerThread) {

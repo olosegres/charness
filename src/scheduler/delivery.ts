@@ -1,4 +1,6 @@
 import { t } from '../i18n';
+import { getReminderScheduleText } from '../utils/reminderScheduleText';
+import { checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
 
@@ -21,6 +23,12 @@ import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
  *      `failed` with a distinct error string the engine records (S8 turns that
  *      into a pause).
  *   4. forward — hand the prefixed prompt to the agent.
+ *
+ * A REMINDER record (`deliveryKind: 'reminder'`) stops after step 2: its whole
+ * delivery IS the announcement plus its pin, which is what pierces a muted topic.
+ * Steps 3–4 are skipped entirely, so a reminder fires in an unbound topic and in
+ * General — there is no session to ensure, nothing to interrupt, and no agent to
+ * tell about the run.
  *
  * It owns NO bot.ts import: every side effect is injected via
  * {@link ScheduleDeliveryDeps} (announce / pin / busy probe / ensure-session /
@@ -98,15 +106,32 @@ export function prependScheduledRunMarker(jobName: string, prompt: string): stri
 }
 
 /**
- * @description Build the visible fire-announcement text via i18n. `{missedNote}`
- * is the catch-up annotation (host-local HH:MM of the missed instant) for a
- * `catch-up` fire, or empty for an `on-time` run.
+ * @description Build the visible fire-announcement text via i18n, per delivery
+ * kind: a prompt job frames the run as a scheduled prompt for the agent, a
+ * reminder leads with its own text (the pin notification previews it, so the
+ * operator reads the reminder without opening the topic). Both interpolate the
+ * SAME `{missedNote}` — the catch-up annotation (host-local HH:MM of the missed
+ * instant) for a `catch-up` fire, empty for an `on-time` run — so a replayed run
+ * is annotated identically whichever kind it is.
+ *
+ * The `{schedule}` text differs per kind ON PURPOSE. A prompt job keeps
+ * English-only {@link describeSchedule} (its announcement is read alongside the
+ * agent-facing prompt). A reminder uses the LOCALIZED
+ * {@link getReminderScheduleText} — the very same words its `/reminders` list row
+ * and card show, because describing one reminder two different ways is a defect.
  */
 export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireContext): string {
   const missedNote =
     fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined
       ? t('schedule.missedNote', { time: formatLocalTime(fireContext.missedAtMs) })
       : '';
+  if (checkIsReminderSchedule(job)) {
+    return t('reminders.fired', {
+      text: job.prompt,
+      schedule: getReminderScheduleText(job.spec),
+      missedNote,
+    });
+  }
   return t('schedule.fired', {
     name: job.name,
     schedule: describeSchedule(job.spec),
@@ -163,6 +188,11 @@ export function createScheduleDelivery(
         );
       }
     }
+
+    // A reminder is done here: announced and pinned, with no agent involved at
+    // all. Returning before `ensureSession` is also what lets it fire in an
+    // unbound topic and in General — there is no session to fail to ensure.
+    if (checkIsReminderSchedule(job)) return { status: 'delivered' };
 
     // 3. ensure a session and (if busy) wait for idle
     const session = await deps.ensureSession(threadKey, job.lastAdapterName);

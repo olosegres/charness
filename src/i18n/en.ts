@@ -498,6 +498,124 @@ export const enDict: Record<string, string> = {
   'schedule.interviewPromptTemplate':
     'The user invoked /schedule with no details. Ask them IN ENGLISH what prompt they want scheduled and WHEN (one-time or repeating). Once you have both, create it with the schedule_create MCP tool and confirm IN ENGLISH what you scheduled.\n\n{timeNote}',
 
+  // ── /reminders (bot-local reminders: buttons only, no agent involved) ──
+  // A fired reminder LEADS with its own text: this message gets pinned, and the
+  // pin's notification previews its first line — the operator must read the
+  // reminder itself there, not a header. {schedule} is the LOCALIZED schedule
+  // text (`utils/reminderScheduleText`), the same words the list and the card
+  // show; {missedNote} is the shared catch-up annotation.
+  'reminders.fired': '🔔 {text}\n\n📅 {schedule}{missedNote}',
+
+  // Schedule wording — one per descriptor kind. `scheduleRaw` renders a cron
+  // shape the wizard cannot create (an agent-made job) verbatim.
+  'reminders.scheduleDaily': 'every day at {time}',
+  'reminders.scheduleWeekdays': 'weekdays at {time}',
+  'reminders.scheduleWeekly': '{weekday} at {time}',
+  'reminders.scheduleMonthly': 'day {dayOfMonth} at {time}',
+  'reminders.scheduleOnce': '{date} at {time}',
+  'reminders.scheduleRaw': 'cron {text}',
+
+  // Next fire instant.
+  'reminders.nextRunToday': 'today at {time}',
+  'reminders.nextRunTomorrow': 'tomorrow at {time}',
+  'reminders.nextRunOnDate': '{date} at {time}',
+  'reminders.nextRunNone': '—',
+
+  // Hub screen.
+  'reminders.hubTitle': '🔔 Reminders',
+  'reminders.hubEmptyLine': 'No reminders yet.',
+  'reminders.hubActiveLine': 'Active: {count}',
+  'reminders.hubLimitLine':
+    'Active: {count} — the limit of {limit} is reached. Delete one to add another.',
+  'reminders.addButton': '➕ Add',
+  'reminders.listButton': '📋 List ({count})',
+  'reminders.closeButton': '✕ Close',
+  'reminders.closedNotice': '🔔 Reminders closed.',
+
+  // List screen.
+  'reminders.listTitle': '📋 Reminders ({count})',
+  'reminders.listPageLine': 'Page {page} of {total}',
+  'reminders.listRow': '🔔 {name} · {schedule}',
+  'reminders.listPrevButton': '‹ Prev',
+  'reminders.listNextButton': 'Next ›',
+  'reminders.listBackToHubButton': '‹ Back',
+
+  // Card + created screen.
+  'reminders.cardTitle': '🔔 {name}',
+  'reminders.cardWhen': 'When: {schedule}',
+  'reminders.cardText': 'Text: "{text}"',
+  'reminders.cardNext': 'Next: {next}',
+  'reminders.cardDeleteButton': '🗑 Delete',
+  'reminders.cardBackToListButton': '‹ To list',
+  'reminders.createdTitle': '✅ Reminder created',
+  'reminders.doneListButton': '📋 List',
+
+  // Add wizard — title, the running summary of what is already picked, and the
+  // per-step question.
+  'reminders.wizardTitle': '🔔 New reminder',
+  'reminders.pickRepeat': 'Repeat: {value}',
+  'reminders.pickDate': 'Date: {value}',
+  'reminders.pickWeekday': 'Weekday: {value}',
+  'reminders.pickDayOfMonth': 'Day of month: {value}',
+  'reminders.pickTime': 'Time: {value}',
+  // Shown only when a `once` instant went by while the operator was typing: it
+  // proves the text they sent was KEPT, so they pick a new time instead of
+  // retyping it (a retyped message is no longer captured and reaches the agent).
+  'reminders.pickText': 'Text: "{value}"',
+  'reminders.stepRepeatQuestion': 'STEP 1/4 · How often?',
+  'reminders.stepDateQuestion': 'STEP 2/4 · Which day?',
+  'reminders.stepDateGridQuestion': 'STEP 2/4 · Pick a date:',
+  'reminders.stepWeekdayQuestion': 'STEP 2/4 · Which weekday?',
+  'reminders.stepDayOfMonthQuestion': 'STEP 2/4 · Which day of the month?',
+  'reminders.stepDayOfMonthGridQuestion': 'STEP 2/4 · Pick a day of the month:',
+  'reminders.stepTimeQuestion': 'STEP 3/4 · At what time?',
+  'reminders.stepHourQuestion': 'STEP 3/4 · Pick the hour:',
+  'reminders.stepMinuteQuestion': 'STEP 3/4 · {hour}:__ — pick the minutes:',
+  'reminders.stepTextQuestion':
+    'STEP 4/4 · Send the reminder text — type it or record a voice note.',
+  'reminders.repeatOnceButton': 'Once',
+  'reminders.repeatDailyButton': 'Every day',
+  'reminders.repeatWeekdaysButton': 'Weekdays',
+  'reminders.repeatWeeklyButton': 'Weekly',
+  'reminders.repeatMonthlyButton': 'Monthly',
+  'reminders.dateTodayButton': 'Today',
+  'reminders.dateTomorrowButton': 'Tomorrow',
+  'reminders.dateOtherButton': '✏️ Other…',
+  'reminders.dayOfMonthOtherButton': '✏️ Other…',
+  'reminders.timeOtherButton': '🕐 Other time',
+  'reminders.backButton': '‹ Back',
+  'reminders.cancelButton': '✕ Cancel',
+  'reminders.weekdayMondayButton': 'Mon',
+  'reminders.weekdayTuesdayButton': 'Tue',
+  'reminders.weekdayWednesdayButton': 'Wed',
+  'reminders.weekdayThursdayButton': 'Thu',
+  'reminders.weekdayFridayButton': 'Fri',
+  'reminders.weekdaySaturdayButton': 'Sat',
+  'reminders.weekdaySundayButton': 'Sun',
+
+  // Wizard outcomes. A past instant is REPORTED on the time screen, never rolled
+  // forward a day — a silent roll reminds the operator 24h off what they asked.
+  'reminders.errorPastTime':
+    '⚠️ That time has already passed. Pick a later time, or go back and change the day.',
+  'reminders.errorInvalidDate': '⚠️ That date does not exist. Pick another one.',
+  // A valid date whose wall clock is skipped by a daylight-saving jump — the DATE is
+  // fine, so the operator is sent back to the time, never to the day.
+  'reminders.errorInvalidTime': '⚠️ That time does not exist on that day — the clocks change. Pick another time.',
+  // The text is REJECTED, never shortened: it is the operator's own wording, so the
+  // limit is stated and they send a shorter one.
+  'reminders.errorTextTooLong':
+    '⚠️ That text is too long ({limit} characters max) and was NOT saved. Send a shorter one.',
+  'reminders.cancelledNotice': '✕ Cancelled',
+  'reminders.expiredNotice': '✕ Expired — the reminder text never arrived.',
+  'reminders.capReachedNotice':
+    '⚠️ This topic already has {limit} reminders — delete one before adding another.',
+
+  // Callback-query answers (the little toast on a tap).
+  'reminders.wizardExpiredCbAnswer': 'This wizard is out of date — run /reminders again.',
+  'reminders.deletedCbAnswer': '🗑 Deleted',
+  'reminders.deleteGoneCbAnswer': 'Already deleted.',
+  'reminders.cardExpiredCbAnswer': 'That reminder is gone.',
+
   'apiRetry.transientNotice':
     '⏳ API rate-limited — auto-retrying in {minutes} min (attempt {attempt}).',
   'apiRetry.usageLimitDelayNotice':
