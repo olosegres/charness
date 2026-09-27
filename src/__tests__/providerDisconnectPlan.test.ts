@@ -75,7 +75,7 @@ test('disconnect callback codec: does not collide with the /model picker ids', (
 
 // ─── message-scoped picker snapshots ─────────────────────────────────────────
 
-const threadKeyString = '-1003985914253:9085';
+const threadKeyString = '-1001111111111:111';
 
 test('picker snapshot: an OLD picker resolves against its OWN list, not the newest', () => {
   // THE destructive regression. Thread-keyed snapshots meant the second
@@ -127,7 +127,7 @@ test('picker snapshot: a missing message id or an out-of-range index resolves to
 
 test('picker snapshot: another THREAD\'s snapshot is never resolved', () => {
   const snapshots = new Map<string, string[]>([
-    [buildDisconnectPickerKey('-1003985914253:42', 202), ['openrouter']],
+    [buildDisconnectPickerKey('-1001111111111:42', 202), ['openrouter']],
   ]);
   assert.equal(getDisconnectPickerProviderAt(snapshots, threadKeyString, 202, 0), null);
 });
@@ -136,7 +136,7 @@ test('thread sweep: collects every picker key of that thread and nothing else', 
   const keys = [
     buildDisconnectPickerKey(threadKeyString, 101),
     buildDisconnectPickerKey(threadKeyString, 202),
-    buildDisconnectPickerKey('-1003985914253:42', 303),
+    buildDisconnectPickerKey('-1001111111111:42', 303),
   ];
   assert.deepEqual(getDisconnectPickerKeysForThread(keys, threadKeyString), [
     keys[0],

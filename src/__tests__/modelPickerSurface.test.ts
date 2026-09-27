@@ -38,7 +38,7 @@ import { TELEGRAM_HARD_LIMIT } from '../messageSplit';
 import { getAdapter } from '../adapters/createAdapter';
 import type { ThreadKey } from '../types';
 
-const key: ThreadKey = { chatId: -1003985914253, threadId: 9085 };
+const key: ThreadKey = { chatId: -1001111111111, threadId: 111 };
 const openCodeAdapterLabel = 'OpenCode';
 
 /** A two-provider catalog with enough models to paginate (page size is 10). */
