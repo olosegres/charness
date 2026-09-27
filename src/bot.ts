@@ -344,7 +344,8 @@ import {
 } from './utils/claudeAuthLogin';
 import { getCompactCommandRoute } from './utils/compactCommandRoute';
 import {
-  idleCompactMs,
+  getIdleCompactionArmDecision,
+  type IdleCompactionArmKind,
   checkShouldFireIdleCompaction,
   checkIsBusyForRealTurn,
   buildCompactionInstruction,
@@ -7190,20 +7191,22 @@ async function runThreadCompaction(
   }
 }
 
-/** Per-thread bookkeeping for the idle watchdog (F2). */
+/**
+ * Per-thread bookkeeping for the idle watchdog (F2) — the live TIMER only. The
+ * three instants the watchdog reasons about (last activity / last turn end / last
+ * compaction) live in the state store, which is their single source of truth: they
+ * must survive a restart (the bot hot-reloads on every code change), and keeping
+ * an in-memory duplicate would only let the two copies drift.
+ */
 interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
-  /** ms of the last agent turn that produced output (something to compress). */
-  lastTurnEndAt: number;
-  /** ms of the last compaction run this process (0 = none yet). */
-  lastCompactionAt: number;
 }
 const threadCompactionStates = new Map<string, ThreadCompactionState>();
 
 function getThreadCompactionState(kStr: string): ThreadCompactionState {
   let existing = threadCompactionStates.get(kStr);
   if (!existing) {
-    existing = { idleTimer: null, lastTurnEndAt: 0, lastCompactionAt: 0 };
+    existing = { idleTimer: null };
     threadCompactionStates.set(kStr, existing);
   }
   return existing;
@@ -7214,18 +7217,52 @@ const deferredCompactionArmed = new Set<string>();
 const deferredCompactionPollTimers = new Map<string, NodeJS.Timeout>();
 
 /**
- * @description Re-arm the F2 idle timer for a thread on any activity (a user
- * message / command, or agent output). The TIMER (55-min countdown) is reset by
- * ANY activity; the feature's OWN notice is sent via `replyToThread`, which does
- * NOT call this, so the notice cannot re-arm the watchdog into a loop. Only arms
- * when the feature is enabled, an agent session is active, AND the user-latch is
- * NOT spent (D2): once an idle-compaction has fired this user-active period the
- * thread stays latched — agent output resets nothing, and only a genuine USER
- * message (via {@link noteThreadUserActivity}) clears the latch and lets the
- * timer re-arm. This is also what stops a bot restart from re-firing: a reattach
- * calls this, but a latched thread never re-arms.
+ * Human wording for the arm-kind the idle decision reports, for the diagnostic log
+ * only (log text, so it stays out of `i18n.ts` — never user-facing).
+ */
+const idleArmKindLabels: Record<IdleCompactionArmKind, string> = {
+  fullWindow: 'full window',
+  remainder: 'remainder',
+  overdue: 'overdue (staggered)',
+};
+
+/**
+ * @description Re-arm the F2 idle timer for a thread on REAL activity (a user
+ * message / command, a forwarded prompt, or agent output). Stamps the persisted
+ * activity instant, so the countdown restarts from NOW — that is what makes this
+ * different from {@link rearmThreadIdleTimer}, which must not move the stamp. The
+ * feature's OWN notice is sent via `replyToThread`, which does NOT call this, so
+ * the notice cannot re-arm the watchdog into a loop.
  */
 function noteThreadActivity(key: ThreadKey): void {
+  armThreadIdleTimer(key, { isRealActivity: true });
+}
+
+/**
+ * @description Re-arm the F2 idle timer for a session the bot just RE-ADOPTED
+ * after a restart. A restart is not activity in the topic, so this deliberately
+ * does NOT stamp the activity instant: the timer is armed from the PERSISTED one,
+ * i.e. on the REMAINDER of the 55-minute window (or a staggered short delay when
+ * the thread is already overdue). Arming the full window here — what the reattach
+ * used to do by calling {@link noteThreadActivity} — meant that a bot restarting
+ * more often than every 55 minutes (normal in hot-reload development) never let
+ * any topic reach the threshold.
+ */
+function rearmThreadIdleTimer(key: ThreadKey): void {
+  armThreadIdleTimer(key, { isRealActivity: false });
+}
+
+/**
+ * Shared arming core behind {@link noteThreadActivity} and
+ * {@link rearmThreadIdleTimer} — one body so the two entry points can only differ
+ * in whether they count as activity. Arms only when the feature is enabled for the
+ * thread, an agent session is active, no compaction is in flight, AND the
+ * user-latch is NOT spent (D2): once an idle-compaction has fired this user-active
+ * period the thread stays latched — agent output resets nothing, and only a
+ * genuine USER message (via {@link noteThreadUserActivity}) clears the latch. That
+ * latch, being persisted, is also what stops a restart from re-firing.
+ */
+function armThreadIdleTimer(key: ThreadKey, opts: { isRealActivity: boolean }): void {
   const kStr = keyToString(key);
   // A compaction in flight is NOT user/turn activity — skip so the compaction's
   // own streamed summary (some backends) can't re-arm the watchdog into a loop.
@@ -7237,13 +7274,28 @@ function noteThreadActivity(key: ThreadKey): void {
   }
   if (!state.checkIsCompactOnIdleEnabled(key)) return;
   if (!getThreadAdapter(key).checkIsActive(key)) return;
+  const now = Date.now();
+  // Stamp AFTER the enabled/active guards (a disabled or session-less topic has no
+  // countdown to measure) but BEFORE the latch guard: a latched thread still has
+  // activity worth recording — the latch only suppresses the TIMER.
+  if (opts.isRealActivity) state.noteCompactIdleActivity(key, now);
   // D2: a spent latch means idle-compaction already fired this user-active period
   // — do NOT re-arm until a genuine USER message clears the latch.
   if (state.checkIsCompactIdleLatched(key)) return;
+  const { lastActivityAt } = state.getCompactIdleTracking(key);
+  const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now });
+  if (!opts.isRealActivity) {
+    // Session-start / re-adopt only (once per thread per boot, or per manual start) —
+    // was the other blind spot: nothing showed whether an adopted thread got re-armed
+    // and for how long. Deliberately NOT logged for real activity, which runs on
+    // every output chunk and would flood. The kind is the one the decision REPORTED —
+    // re-deriving it here would let the log name a case the timer is not in.
+    console.log(`[compact-on-idle] ${kStr} armed on session start: ${idleArmKindLabels[kind]}, ${(delayMs / 60_000).toFixed(1)} min`);
+  }
   const timer = setTimeout(() => {
     compactionState.idleTimer = null;
     void withThreadLocale(key, () => onIdleCompactionTimerFired(key));
-  }, idleCompactMs);
+  }, delayMs);
   timer.unref?.();
   compactionState.idleTimer = timer;
 }
@@ -7262,11 +7314,16 @@ function noteThreadUserActivity(key: ThreadKey): void {
   noteThreadActivity(key);
 }
 
-/** Mark that an agent turn produced output — there is now something to compress. */
+/**
+ * Mark that an agent turn produced output — there is now something to compress.
+ * PERSISTED: the fire guard compares this against the last compaction, and after a
+ * restart an in-memory-only stamp read back as 0, which read as "nothing to
+ * compress" and silently disabled the feature in every quiet topic.
+ */
 function markThreadTurnProducedOutput(key: ThreadKey): void {
   const kStr = keyToString(key);
   if (threadsCompacting.has(kStr)) return; // the compaction's own output isn't a turn
-  getThreadCompactionState(kStr).lastTurnEndAt = Date.now();
+  state.noteCompactIdleTurnEnd(key);
 }
 
 /** Clear all compaction timers/arms for a thread (session teardown / unbind). */
@@ -7275,6 +7332,10 @@ function clearThreadCompaction(key: ThreadKey): void {
   const compactionState = threadCompactionStates.get(kStr);
   if (compactionState?.idleTimer) clearTimeout(compactionState.idleTimer);
   threadCompactionStates.delete(kStr);
+  // Drop the persisted instants too, so the NEXT session in this topic starts with
+  // no history and therefore gets the FULL idle window — which is why the fresh-start
+  // path needs no special case (do not "fix" it by adding one).
+  void state.clearCompactIdleTracking(key);
   deferredCompactionArmed.delete(kStr);
   const pollTimer = deferredCompactionPollTimers.get(kStr);
   if (pollTimer) clearTimeout(pollTimer);
@@ -7285,7 +7346,6 @@ function clearThreadCompaction(key: ThreadKey): void {
 /** The F2 idle timer fired: re-check the guard, then compact once (D1/D2). */
 async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
   const kStr = keyToString(key);
-  const compactionState = getThreadCompactionState(kStr);
   const adapter = getThreadAdapter(key);
   const isEnabled = state.checkIsCompactOnIdleEnabled(key);
   const isSessionActive = adapter.checkIsActive(key);
@@ -7297,9 +7357,24 @@ async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
   const isBusy = adapter.checkIsBusy?.(key) ?? false;
   const isBusyForRealTurn = checkIsBusyForRealTurn({ isBusy, hasPendingQuestion });
   const isLatched = state.checkIsCompactIdleLatched(key);
-  const hasCompletedTurnSinceCompaction = compactionState.lastTurnEndAt > compactionState.lastCompactionAt;
+  // Both instants come from the store, so a restart no longer erases the evidence
+  // that this session has an un-compacted turn (the bug: two in-memory zeros made
+  // `0 > 0` false, and D2's no-reschedule rule then left the feature dead).
+  const { lastTurnEndAt, lastCompactionAt } = state.getCompactIdleTracking(key);
+  const hasCompletedTurnSinceCompaction = lastTurnEndAt > lastCompactionAt;
 
   if (!checkShouldFireIdleCompaction({ isEnabled, isSessionActive, isBusyForRealTurn, isLatched, hasCompletedTurnSinceCompaction })) {
+    // Log WHICH condition blocked it: this branch is the feature's blind spot —
+    // it returned silently, which is why nothing in any log showed the watchdog
+    // was even trying. At most once per armed timer, so it cannot flood.
+    const blockers = [
+      !isEnabled && 'disabled',
+      !isSessionActive && 'no active session',
+      isBusyForRealTurn && 'busy with a real turn',
+      isLatched && 'latched (D2)',
+      !hasCompletedTurnSinceCompaction && 'nothing to compress',
+    ].filter((blocker): blocker is string => typeof blocker === 'string');
+    console.log(`[compact-on-idle] ${kStr} timer fired but skipped: ${blockers.join(', ')}`);
     // D2: no reschedule. A real running turn will emit output that resets the
     // timer via `noteThreadActivity`; every other miss re-arms only on the next
     // genuine USER message (which clears the latch).
@@ -7311,7 +7386,9 @@ async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
   // user-active period. Stamp `lastCompactionAt` too so the re-fire guard holds
   // even if the compaction itself runs long.
   void state.setCompactIdleLatched(key, true);
-  compactionState.lastCompactionAt = Date.now();
+  // Awaited (unlike the latch): the stamp must be in place BEFORE the compaction
+  // starts, since it is what closes the "has an un-compacted turn" guard.
+  await state.setCompactIdleCompactedAt(key);
 
   // D1: a pending question at idle → reject it server-side to UNBLOCK the turn
   // (reusing each backend's abort-error swallow via rejectQuestion + SIGINT),
@@ -7442,9 +7519,15 @@ async function tickDeferredCompaction(key: ThreadKey): Promise<void> {
   }
   deferredCompactionArmed.delete(kStr);
   const result = await runThreadCompaction(key, { withClosingSection: false });
-  // Stamp the compaction so the F2 watchdog won't immediately re-fire.
-  getThreadCompactionState(kStr).lastCompactionAt = Date.now();
-  if (!result.ok) console.warn(`[compact-tool] ${kStr} deferred compaction failed: ${result.error ?? 'unknown'}`);
+  if (!result.ok) {
+    console.warn(`[compact-tool] ${kStr} deferred compaction failed: ${result.error ?? 'unknown'}`);
+    return;
+  }
+  // Stamp the compaction (persisted) so the F2 watchdog won't immediately re-fire,
+  // in this process or after a restart. Only on SUCCESS: stamping a compaction that
+  // never ran would durably close the "has an un-compacted turn" guard, so the next
+  // idle fire would skip with "nothing to compress" while the context is still huge.
+  await state.setCompactIdleCompactedAt(key);
 }
 
 /**
@@ -7572,37 +7655,38 @@ command('compact', async (_ctx, key) => {
   });
 
   // A raw shell has no context to compact — and typing `/compact` into it would
-  // just run a meaningless command.
+  // just run a meaningless command. Answered from the route HERE rather than from
+  // the seam's own `notSupported` result, because the seam checks session liveness
+  // first: a terminal topic with no live shell would otherwise be told to start an
+  // agent instead of that the backend cannot be compacted.
   if (route === 'notSupported') {
     await replyToThread(key, t('compact.unsupported_backend', { label: adapter.label }));
     return;
   }
 
-  // D3: a manual `/compact` also carries the maximally-complete-summary guidance
-  // (no closing section — the user is present) so the summary quality is uniform
-  // across every trigger. For OpenCode it resolves to `undefined` (baked in fork).
-  const instruction = getCompactionInstruction(adapter, { withClosingSection: false });
-
-  // Both Claude backends: their CLI/TUI owns `/compact`, so keep the verbatim
-  // forward through the normal choke point (slash commands skip the
-  // thread-context preamble and the timestamp line).
-  if (route === 'forwardToAgent') {
-    if (!adapter.checkIsActive(key)) {
-      await replyToThread(key, t('compact.start_agent_first'));
-      return;
-    }
-    await forwardPromptToAgent(key, adapter, instruction ? `${compactCommandText} ${instruction}` : compactCommandText);
+  // EXECUTION goes through the shared seam (which also carries the D3 summary
+  // guidance; no closing section — the user is present). Dispatching inline here
+  // instead was a real defect: only `runThreadCompaction` adds the thread to
+  // `threadsCompacting`, so the summary the manual compaction produced counted as a
+  // TURN, pushing `lastTurnEndAt` back ahead of the compaction stamp — and one idle
+  // window later the watchdog compacted an already-compacted context. The route is
+  // still resolved above, but now only to word the REPLY.
+  const result = await runThreadCompaction(key, { withClosingSection: false });
+  if (!result.ok) {
+    await replyToThread(key, result.error ?? t('compact.failed', { reason: 'unknown' }));
     return;
   }
-
-  // Real server-side compaction. `compactContext` is what selected this route;
-  // the guard only narrows the optional method for TypeScript.
-  const err = adapter.compactContext ? await adapter.compactContext(key, instruction) : null;
-  if (err) {
-    await replyToThread(key, err);
-    return;
-  }
-  await replyToThread(key, t('compact.started'));
+  // A manual compaction closes the F2 fire guard too. Not against an IMMEDIATE
+  // re-fire — the `command()` wrapper already re-armed a fresh idle window for this
+  // thread — but against the END of that window: without the stamp `lastTurnEndAt`
+  // would still be ahead of `lastCompactionAt` there, so the watchdog would compact
+  // again with nothing new to compress. Only on SUCCESS: stamping a compaction that
+  // never ran would durably close the guard over a still-huge context.
+  await state.setCompactIdleCompactedAt(key);
+  // Only the awaited route confirms. The forward route is the tmux Claude backend,
+  // whose TUI parses `/compact` and renders the compaction itself — a bot-side
+  // "started" there would duplicate what the user already sees.
+  if (route === 'adapterCompact') await replyToThread(key, t('compact.started'));
 });
 
 // `/compact_on_idle` — toggle auto-compaction after ~55 min idle. Regular topic
@@ -12079,7 +12163,11 @@ function handleAgentStarted(key: ThreadKey): void {
   updatePinnedStatus(key).catch(() => {});
   // A fresh/adopted session arms the compact-on-idle watchdog (F2); it won't fire
   // until a turn produces output AND the topic then sits idle (no catch-up burst).
-  noteThreadActivity(key);
+  // NOT `noteThreadActivity`: a session start (including a restart's reattach) is
+  // not activity in the topic, so the countdown must continue from the PERSISTED
+  // activity instant rather than restart at the full 55 minutes. A genuinely fresh
+  // session has no persisted instant and so gets the full window anyway.
+  rearmThreadIdleTimer(key);
 }
 
 /**

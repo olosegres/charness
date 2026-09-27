@@ -626,6 +626,164 @@ test('compactIdleLatch: clearing (user message) drops an empty list on disk', as
   assert.equal('compactIdleLatchedThreads' in raw, false, 'empty list must be absent on disk');
 });
 
+// ── compactIdleTracking (the idle COUNTDOWN's restart guard) ──
+
+/** Placeholder session ids — the repo is public, never a real one. */
+const sessionIdA = '11111111-1111-4111-8111-111111111111';
+const sessionIdB = '22222222-2222-4222-8222-222222222222';
+const activityAt = 1_800_000_000_000;
+
+test('compactIdleTracking: an untracked thread reads back as three zeros', async () => {
+  // `0` is the explicit "no history" value: the arming path takes it as "use the
+  // full idle window", the fire guard as "nothing to compress". A pre-feature
+  // state file must therefore behave exactly like an untracked thread.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  assert.deepEqual(store.getCompactIdleTracking(key1), {
+    lastActivityAt: 0,
+    lastTurnEndAt: 0,
+    lastCompactionAt: 0,
+  });
+});
+
+test('compactIdleTracking: all three instants survive a reload (THE restart guard)', async () => {
+  // The reported bug: these lived in a process-local map, so after a restart the
+  // fire guard compared `0 > 0`, decided there was nothing to compress, and — D2
+  // forbidding a reschedule — the feature stayed dead in every quiet topic.
+  const turnEndAt = activityAt + 1_000;
+  const compactedAt = activityAt - 60_000;
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  first.noteCompactIdleActivity(key1, activityAt);
+  first.noteCompactIdleTurnEnd(key1, turnEndAt);
+  await first.setCompactIdleCompactedAt(key1, compactedAt);
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.deepEqual(second.getCompactIdleTracking(key1), {
+    lastActivityAt: activityAt,
+    lastTurnEndAt: turnEndAt,
+    lastCompactionAt: compactedAt,
+  });
+  assert.ok(
+    second.getCompactIdleTracking(key1).lastTurnEndAt >
+      second.getCompactIdleTracking(key1).lastCompactionAt,
+    'after a restart the "something to compress" evidence still holds',
+  );
+  assert.deepEqual(
+    second.getCompactIdleTracking(key2),
+    { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0 },
+    'tracking is per-thread',
+  );
+});
+
+test('compactIdleTracking: a sub-step bump still updates what a reader sees', async () => {
+  // The coarse persist step only throttles the SAVE (the stamps are written on
+  // every output chunk and `state.json` is rewritten whole). The in-memory value
+  // must stay exact, or the countdown would be measured from a stale instant.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'opencode', opencodeSessionId: sessionIdA });
+  store.noteCompactIdleActivity(key1, activityAt);
+  store.noteCompactIdleActivity(key1, activityAt + 1_000);
+  assert.equal(store.getCompactIdleTracking(key1).lastActivityAt, activityAt + 1_000);
+  store.noteCompactIdleTurnEnd(key1, activityAt + 2_000);
+  assert.equal(store.getCompactIdleTracking(key1).lastTurnEndAt, activityAt + 2_000);
+});
+
+test('compactIdleTracking: clearing (session teardown) drops the entry and the map', async () => {
+  // Teardown clears it so the NEXT session finds no history and gets the FULL idle
+  // window — which is why the fresh-start path needs no special case.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  await store.setAgent(key2, { name: 'claude', claudeSessionId: sessionIdB });
+  store.noteCompactIdleActivity(key1, activityAt);
+  store.noteCompactIdleActivity(key2, activityAt);
+  await store.clearCompactIdleTracking(key1);
+  assert.equal(store.getCompactIdleTracking(key1).lastActivityAt, 0, 'entry gone');
+  assert.equal(store.getCompactIdleTracking(key2).lastActivityAt, activityAt, 'other thread kept');
+
+  await store.clearCompactIdleTracking(key2);
+  await store.flush();
+  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal('compactIdleTracking' in raw, false, 'empty map must be absent on disk');
+});
+
+test('compactIdleTracking: a session swap reads as no history (not the old marker)', async () => {
+  // The instants mean "THIS session has had a turn since ITS last compaction", so a
+  // replaced session (/new, /quit + start, a /sessions resume of an older session)
+  // must start from scratch. Binding the entry to the session id makes that true
+  // even when no stopped/closed event fired (a killed process emits none).
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  store.noteCompactIdleActivity(key1, activityAt);
+  store.noteCompactIdleTurnEnd(key1, activityAt);
+  assert.equal(store.getCompactIdleTracking(key1).lastTurnEndAt, activityAt, 'precondition: stamped');
+
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
+  assert.deepEqual(store.getCompactIdleTracking(key1), {
+    lastActivityAt: 0,
+    lastTurnEndAt: 0,
+    lastCompactionAt: 0,
+  });
+});
+
+test('compactIdleTracking: no session id on the agent record → zeros regardless', async () => {
+  // A raw `/terminal` shell has no session id and cannot be compacted anyway, so
+  // there is nothing to bind the marker to: reads are zeros and stamps are skipped.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  store.noteCompactIdleActivity(key1, activityAt);
+  await store.removeAgent(key1);
+  await store.setAgent(key1, { name: 'terminal' });
+  assert.equal(store.getCompactIdleTracking(key1).lastActivityAt, 0);
+  store.noteCompactIdleActivity(key1, activityAt + 60_000);
+  assert.equal(store.getCompactIdleTracking(key1).lastActivityAt, 0, 'stamping stays a no-op');
+});
+
+test('compactIdleTracking: a compaction stamp under a new session starts the entry fresh', async () => {
+  // Same session-swap rule as the activity/turn stamps, on the compaction path: the
+  // previous session's `lastTurnEndAt` must not ride along, or the fresh session
+  // would look like it already had a turn to compress.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  store.noteCompactIdleActivity(key1, activityAt);
+  store.noteCompactIdleTurnEnd(key1, activityAt);
+
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
+  await store.setCompactIdleCompactedAt(key1, activityAt + 120_000);
+  assert.deepEqual(store.getCompactIdleTracking(key1), {
+    lastActivityAt: 0,
+    lastTurnEndAt: 0,
+    lastCompactionAt: activityAt + 120_000,
+  });
+});
+
+test('compactIdleTracking: stamping under a new session overwrites, never merges', async () => {
+  // The old session's instants must not survive the swap — a stale `lastTurnEndAt`
+  // would claim the fresh session already has something to compress.
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  store.noteCompactIdleActivity(key1, activityAt);
+  store.noteCompactIdleTurnEnd(key1, activityAt);
+
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
+  store.noteCompactIdleActivity(key1, activityAt + 120_000);
+  assert.deepEqual(store.getCompactIdleTracking(key1), {
+    lastActivityAt: activityAt + 120_000,
+    lastTurnEndAt: 0,
+    lastCompactionAt: 0,
+  });
+});
+
 // ── setTransientFrames (transient status-frame ids — restart cleanup, S2) ──
 
 test('setTransientFrames: set → get round-trips the id list for a thread', async () => {

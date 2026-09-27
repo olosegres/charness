@@ -17,6 +17,113 @@
 export const idleCompactMs = 55 * 60 * 1000;
 
 /**
+ * Floor delay for an OVERDUE arm (the thread has been idle longer than
+ * {@link idleCompactMs}, across one or more bot restarts). Never fire instantly at
+ * boot: the reattach is still adopting sessions and the topic may be about to
+ * receive a real prompt, so give it a minute of grace first.
+ */
+export const compactIdleOverdueMinDelayMs = 60_000;
+
+/**
+ * Window the overdue arms are SPREAD over, on top of
+ * {@link compactIdleOverdueMinDelayMs}. See {@link getIdleCompactionArmDecision}
+ * for why the spread exists.
+ */
+export const compactIdleOverdueSpreadMs = 10 * 60 * 1000;
+
+/**
+ * Deterministic non-negative string hash (FNV-1a over UTF-16 code units). Local
+ * and dependency-free on purpose: its only job is to derive a STABLE per-thread
+ * offset inside the overdue spread, so "same key ⇒ same delay" is testable and no
+ * two topics need to coordinate. Not a security primitive.
+ */
+function getStableHash(text: string): number {
+  const fnvOffsetBasis = 0x811c9dc5;
+  const fnvPrime = 0x01000193;
+  let hash = fnvOffsetBasis;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, fnvPrime);
+  }
+  // `>>> 0` turns the signed 32-bit result of `Math.imul` into a non-negative int.
+  return hash >>> 0;
+}
+
+/**
+ * Which of {@link getIdleCompactionArmDecision}'s three cases produced a delay.
+ * Returned ALONGSIDE the delay rather than re-derived by the caller: the pure
+ * function owns the boundaries, and a diagnostic that recomputes them from the same
+ * inputs would start naming a case the timer is not in the moment one boundary
+ * moves — a log that can lie is worse than no log.
+ */
+export type IdleCompactionArmKind = 'fullWindow' | 'remainder' | 'overdue';
+
+/** A {@link getIdleCompactionArmDecision} decision: the delay and which case it came from. */
+export interface IdleCompactionArmDecision {
+  delayMs: number;
+  kind: IdleCompactionArmKind;
+}
+
+/**
+ * @description When the idle watchdog should fire for a thread, given when that
+ * thread was last ACTIVE (persisted, so it survives a restart) — the delay plus
+ * which of the three cases produced it.
+ *
+ * Three cases (reported back as {@link IdleCompactionArmKind}):
+ *  - no persisted history (`lastActivityAt === 0`) — a fresh session, or a state
+ *    file written before the tracking existed ⇒ the full {@link idleCompactMs}
+ *    window, i.e. exactly the pre-persistence behaviour.
+ *  - still inside the window ⇒ the REMAINDER, clamped to at most the full window:
+ *    a backward wall-clock step (an NTP correction on a VPS) puts `lastActivityAt`
+ *    in the FUTURE, which would otherwise make the thread wait the whole window
+ *    PLUS the skew — and a skew over ~24.8 days overflows `setTimeout`, which then
+ *    fires immediately with a `TimeoutOverflowWarning`. "The remainder can never
+ *    exceed the full window" is true by definition and costs nothing to enforce.
+ *    The remainder itself is the restart fix: the bot runs in hot-reload mode and
+ *    restarts on every code change, so re-arming a flat 55 minutes each time meant
+ *    a busy development day never let any topic reach the threshold.
+ *  - already past the window (idle across one or more restarts) ⇒ OVERDUE, so
+ *    fire soon, but staggered: {@link compactIdleOverdueMinDelayMs} plus a
+ *    per-thread offset inside {@link compactIdleOverdueSpreadMs}. The boot
+ *    reattach adopts every live session at once; without the stagger every
+ *    overdue topic would start an LLM compaction turn and post its notice in the
+ *    same instant. Spreading them over ~1–11 minutes keeps the backlog orderly,
+ *    and deriving the offset from the thread key keeps it deterministic (hence
+ *    testable) instead of random.
+ *
+ * The stagger being DETERMINISTIC was considered and chosen, not overlooked: a
+ * thread whose offset lands near the top of the spread never fires while the bot
+ * reloads more often than that offset, and a random offset would eventually get
+ * lucky. It is still the wrong trade — a random offset makes the fire time
+ * unpredictable and untestable, the starvation it would avoid lasts only while the
+ * operator is actively rebuilding (a state that ends), and under reloads that
+ * frequent a FULL-window arm starves just as surely, so the stagger is not
+ * uniquely affected. Do not re-litigate this as an oversight.
+ *
+ * An overdue thread is compacted even though its prompt cache has long gone
+ * cold. The 55-minute interval exists to make the compaction TURN itself cheap
+ * against a warm cache, but the payoff of compacting is that every SUBSEQUENT
+ * turn in that session reads a small context instead of a huge one — clearly
+ * worth one uncached read, whereas skipping it leaves the session permanently
+ * bloated.
+ */
+export function getIdleCompactionArmDecision(input: {
+  threadKeyString: string;
+  lastActivityAt: number;
+  now: number;
+}): IdleCompactionArmDecision {
+  if (input.lastActivityAt <= 0) return { delayMs: idleCompactMs, kind: 'fullWindow' };
+  const remainingMs = idleCompactMs - (input.now - input.lastActivityAt);
+  // Clamped: a backward clock step makes `lastActivityAt` future-dated, and the
+  // remainder must never exceed the window it is a remainder of.
+  if (remainingMs > 0) return { delayMs: Math.min(remainingMs, idleCompactMs), kind: 'remainder' };
+  return {
+    delayMs: compactIdleOverdueMinDelayMs + (getStableHash(input.threadKeyString) % compactIdleOverdueSpreadMs),
+    kind: 'overdue',
+  };
+}
+
+/**
  * @description Resolve whether compact-on-idle is enabled for a thread. A
  * per-thread override always wins; otherwise the instance-wide default applies,
  * which is ON when unset (mirrors `traceAllThreads` — the feature ships enabled).

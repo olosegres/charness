@@ -10,6 +10,9 @@ import * as assert from 'node:assert/strict';
 
 import {
   idleCompactMs,
+  getIdleCompactionArmDecision,
+  compactIdleOverdueMinDelayMs,
+  compactIdleOverdueSpreadMs,
   resolveCompactOnIdleEnabled,
   checkShouldFireIdleCompaction,
   checkIsBusyForRealTurn,
@@ -31,6 +34,132 @@ const fireBase = {
 
 test('idleCompactMs is 55 minutes', () => {
   assert.equal(idleCompactMs, 55 * 60 * 1000);
+});
+
+// ── getIdleCompactionArmDecision (the restart-safe countdown) ──
+
+/** Placeholder thread keys (the repo is public — never a real chat/topic id). */
+const threadKeyA = '-1001111111111:57';
+const threadKeyB = '-1001111111111:218';
+const now = 1_800_000_000_000;
+
+/** 3h idle — comfortably past the 55-min window, i.e. overdue. */
+const overdueLastActivityAt = now - 3 * 60 * 60 * 1000;
+
+test('getIdleCompactionArmDecision: no persisted history → the full idle window', () => {
+  // A fresh session, or a state file written before the tracking existed: behave
+  // exactly as the pre-persistence code did.
+  assert.deepEqual(
+    getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: 0, now }),
+    { delayMs: idleCompactMs, kind: 'fullWindow' },
+  );
+});
+
+test('getIdleCompactionArmDecision: a restart mid-window arms the REMAINDER, not a fresh 55 min', () => {
+  // THE reported bug: the bot hot-reloads on every code change, and re-arming a
+  // flat `idleCompactMs` on every re-adopt meant no topic ever reached the
+  // threshold. 40 minutes elapsed ⇒ 15 minutes left.
+  const fortyMinutesMs = 40 * 60 * 1000;
+  const decision = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: now - fortyMinutesMs,
+    now,
+  });
+  assert.deepEqual(decision, { delayMs: 15 * 60 * 1000, kind: 'remainder' });
+  assert.notEqual(decision.delayMs, idleCompactMs, 'a restart must not restart the countdown');
+});
+
+test('getIdleCompactionArmDecision: a future lastActivityAt is clamped to the full window', () => {
+  // A backward wall-clock step (an NTP correction on a VPS) future-dates the stamp.
+  // Unclamped the thread would wait the whole window PLUS the skew, and a skew over
+  // ~24.8 days overflows `setTimeout` — which fires IMMEDIATELY with a
+  // `TimeoutOverflowWarning`, i.e. the opposite of waiting.
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  assert.deepEqual(
+    getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: now + thirtyDaysMs, now }),
+    { delayMs: idleCompactMs, kind: 'remainder' },
+  );
+  // A one-second skew is clamped by the same rule, not special-cased.
+  assert.deepEqual(
+    getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: now + 1_000, now }),
+    { delayMs: idleCompactMs, kind: 'remainder' },
+  );
+});
+
+test('getIdleCompactionArmDecision: an overdue thread arms inside the stagger band', () => {
+  // Idle across one or more restarts (3h > 55min): fire soon, but never instantly
+  // at boot and never in lockstep with every other overdue topic.
+  const { delayMs, kind } = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: overdueLastActivityAt,
+    now,
+  });
+  assert.equal(kind, 'overdue');
+  assert.ok(delayMs >= compactIdleOverdueMinDelayMs, 'never fires instantly at boot');
+  assert.ok(delayMs < compactIdleOverdueMinDelayMs + compactIdleOverdueSpreadMs, 'stays inside the spread');
+});
+
+test('getIdleCompactionArmDecision: the reported kind matches the branch the delay came from', () => {
+  // The kind is part of the contract, not a hint: the diagnostic log prints what it
+  // is GIVEN, so a kind that disagreed with its own delay would make the log lie.
+  const full = getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: 0, now });
+  assert.equal(full.kind, 'fullWindow');
+  assert.equal(full.delayMs, idleCompactMs);
+
+  const remainder = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: now - 1_000,
+    now,
+  });
+  assert.equal(remainder.kind, 'remainder');
+  assert.ok(remainder.delayMs > 0 && remainder.delayMs < idleCompactMs);
+
+  const overdue = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: overdueLastActivityAt,
+    now,
+  });
+  assert.equal(overdue.kind, 'overdue');
+  assert.ok(overdue.delayMs < idleCompactMs, 'an overdue arm is short, never a fresh window');
+});
+
+test('getIdleCompactionArmDecision: the overdue stagger is deterministic per thread', () => {
+  // Deterministic in the key — which is what makes it testable and what lets two
+  // processes agree without coordinating.
+  const first = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: overdueLastActivityAt,
+    now,
+  });
+  const second = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: overdueLastActivityAt,
+    now,
+  });
+  assert.deepEqual(first, second);
+});
+
+test('getIdleCompactionArmDecision: overdue threads are spread, not bunched', () => {
+  // The point of the stagger: the boot reattach adopts every live session at once,
+  // so a shared delay would start every compaction turn in the same instant.
+  const keys = [threadKeyA, threadKeyB, '-1001111111111:1487', '-1001111111111:1', '-1002222222222:57'];
+  const delays = keys.map(
+    (threadKeyString) =>
+      getIdleCompactionArmDecision({ threadKeyString, lastActivityAt: overdueLastActivityAt, now }).delayMs,
+  );
+  assert.equal(new Set(delays).size, keys.length, 'each thread gets its own offset');
+});
+
+test('getIdleCompactionArmDecision: exactly at the threshold counts as overdue', () => {
+  // The boundary must not arm a zero-delay timer that fires during reattach — and
+  // the reported kind must name that same branch.
+  const { delayMs, kind } = getIdleCompactionArmDecision({
+    threadKeyString: threadKeyA,
+    lastActivityAt: now - idleCompactMs,
+    now,
+  });
+  assert.equal(kind, 'overdue');
+  assert.ok(delayMs >= compactIdleOverdueMinDelayMs);
 });
 
 test('resolveCompactOnIdleEnabled: default is ON when nothing is set', () => {

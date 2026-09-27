@@ -146,6 +146,61 @@ export interface AgentData {
   startedAt?: string;
 }
 
+/**
+ * Per-thread compact-on-idle bookkeeping (F2), persisted so a bot restart does
+ * not erase the evidence the idle watchdog reasons about. The three instants are
+ * epoch ms; each is optional and reads back as `0` when absent, so a state file
+ * written before this existed behaves exactly like an untracked thread.
+ *
+ * The entry is bound to the agent SESSION it describes (`sessionId`), not merely
+ * to the thread: the instants mean "THIS session has had a turn since ITS last
+ * compaction", so the moment the thread's session is replaced (`/new`, `/quit`
+ * then start, a backend switch to a different agent, a `/sessions` resume of an
+ * older session) the old marker is meaningless and must read as the initial state.
+ * Teardown DOES clear the entry, but that depends on a `stopped`/`closed` event
+ * actually firing — a killed or crashed process, or any future path that swaps a
+ * session without it, would silently inherit the previous session's marker.
+ * Keying on the session id makes the reset self-enforcing regardless of which
+ * lifecycle events fired. Deliberate consequence: `/claude_mode` switches the
+ * Claude backend by RESUMING the same conversation and keeps `claudeSessionId`, so
+ * the marker survives that switch — correct, since the context really is the same
+ * and really does have something to compress.
+ *
+ *  - `lastActivityAt`  — last REAL activity (user message, command, forwarded
+ *    prompt, agent output). The countdown is armed from this, so a restart
+ *    continues where it left off instead of re-arming a flat 55 minutes.
+ *  - `lastTurnEndAt`   — last agent turn that produced output, i.e. the proof
+ *    there is something to compress.
+ *  - `lastCompactionAt` — last compaction of this thread (any trigger: manual
+ *    `/compact`, the F1 tool, or an F2 idle fire).
+ *
+ * The fire guard is `lastTurnEndAt > lastCompactionAt`, which used to live in a
+ * process-local map: after a restart both were `0`, the comparison was false, and
+ * (there being no reschedule by D2) the feature stayed dead in every quiet topic
+ * until the operator wrote there.
+ */
+export interface CompactIdleTrackingEntry {
+  /**
+   * The agent session these instants describe (`claudeSessionId` /
+   * `opencodeSessionId` of the thread's {@link AgentData} at stamping time). A
+   * read whose current session id differs — or is unknown — yields all zeros.
+   */
+  sessionId?: string;
+  lastActivityAt?: number;
+  lastTurnEndAt?: number;
+  lastCompactionAt?: number;
+}
+
+/**
+ * Coarse step (ms) the activity/turn stamps must move past the last PERSISTED
+ * value before a save is scheduled. Load-bearing for cost, not correctness:
+ * those two stamps are written on EVERY agent output chunk, and `state.json` is
+ * rewritten WHOLE (atomically, with fsync) per save — so a `scheduleSave()` per
+ * chunk would turn a streaming turn into a debounced disk-rewrite loop. A
+ * 60-second granularity is irrelevant against the 55-minute idle threshold.
+ */
+export const compactIdleTrackingPersistStepMs = 60_000;
+
 export interface StateV1 {
   version: number;
   bindings: Record<string, BindingData>;
@@ -254,6 +309,15 @@ export interface StateV1 {
    * valid (a missing value = no thread latched).
    */
   compactIdleLatchedThreads?: string[];
+  /**
+   * Per-thread compact-on-idle bookkeeping keyed by {@link ThreadKey} string —
+   * the idle COUNTDOWN's restart guard (see {@link CompactIdleTrackingEntry} for
+   * the three instants and why losing them disabled the feature after every
+   * restart). Entries are dropped on session teardown (a fresh session must get
+   * the full window) and the whole map is dropped once empty, so an idle bot
+   * leaves a clean `state.json`. Optional so older state files stay valid.
+   */
+  compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
   /**
    * Limit auto-continue toggle (`/auto_continue_limits`). `autoContinueOnLimitEnabled` is
    * the INSTANCE-WIDE default, driven from the General topic; absent ⇒ ON (the
@@ -619,6 +683,14 @@ export class StateStore {
   private saveTimer: NodeJS.Timeout | null = null;
   /** Tail of the chained writes so two flushes don't try to rename simultaneously. */
   private writeChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Last compact-on-idle activity/turn stamp each thread actually asked to
+   * PERSIST, used to apply {@link compactIdleTrackingPersistStepMs}. In-memory
+   * only and deliberately NOT written to disk — it is bookkeeping ABOUT the
+   * bookkeeping, and after a restart the first stamp simply schedules one save.
+   */
+  private readonly compactIdleTrackingSavedAt = new Map<string, number>();
 
   private readonly keyLock = new KeyLock();
 
@@ -1335,6 +1407,152 @@ export class StateStore {
     if (uniqueKeys.length > 0) this.state.compactIdleLatchedThreads = uniqueKeys;
     else delete this.state.compactIdleLatchedThreads;
     this.scheduleSave();
+  }
+
+  // ── compact-on-idle per-thread bookkeeping (the countdown's restart guard) ──
+
+  /**
+   * @description `key`'s persisted compact-on-idle instants, with every absent
+   * field read back as `0`. `0` is the explicit "no history" value both readers
+   * rely on: the arming path takes it as "use the full idle window" and the fire
+   * guard's `lastTurnEndAt > lastCompactionAt` as "nothing to compress" — so a
+   * pre-feature state file behaves exactly like an untracked thread.
+   *
+   * All zeros are ALSO returned whenever the entry does not belong to the thread's
+   * CURRENT agent session (a different `sessionId`, or either id unknown): the
+   * instants describe one session's context, so a session swap must reset the
+   * marker, and deciding that here — rather than in a teardown handler — makes it
+   * true regardless of which lifecycle events fired (a killed process emits none).
+   * Unknown-means-zero is conservative in the right direction: at worst the topic
+   * waits one more full idle window.
+   */
+  getCompactIdleTracking(key: ThreadKey): {
+    lastActivityAt: number;
+    lastTurnEndAt: number;
+    lastCompactionAt: number;
+  } {
+    const k = keyToString(key);
+    const entry = this.state.compactIdleTracking?.[k];
+    const sessionId = this.getAgentSessionId(k);
+    if (!entry || !sessionId || entry.sessionId !== sessionId) {
+      return { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0 };
+    }
+    return {
+      lastActivityAt: entry.lastActivityAt ?? 0,
+      lastTurnEndAt: entry.lastTurnEndAt ?? 0,
+      lastCompactionAt: entry.lastCompactionAt ?? 0,
+    };
+  }
+
+  /**
+   * @description Stamp `key`'s last REAL activity — the instant the idle
+   * countdown is measured from. Called on every agent output chunk, so the write
+   * is COARSE: the in-memory value is always assigned (readers are exact), but a
+   * save is scheduled only once the value has moved a full
+   * {@link compactIdleTrackingPersistStepMs} past what was last persisted. The
+   * assigned value also rides along for free on the next save the ~10s
+   * {@link touchHeartbeat} loop schedules, so the coarse step costs nothing in
+   * correctness — at worst the persisted stamp trails the live one by under a
+   * minute, against a 55-minute threshold.
+   */
+  noteCompactIdleActivity(key: ThreadKey, now: number = Date.now()): void {
+    this.stampCompactIdleTracking(key, 'lastActivityAt', now);
+  }
+
+  /**
+   * @description Stamp that an agent turn produced output for `key` — the proof
+   * there is something to compress (the fire guard compares this against
+   * `lastCompactionAt`). Same per-chunk call frequency and therefore the same
+   * coarse-save rule as {@link noteCompactIdleActivity}.
+   */
+  noteCompactIdleTurnEnd(key: ThreadKey, now: number = Date.now()): void {
+    this.stampCompactIdleTracking(key, 'lastTurnEndAt', now);
+  }
+
+  /**
+   * @description Stamp that `key` was just compacted (any trigger: manual
+   * `/compact`, the F1 tool, an F2 idle fire), closing the fire guard until the
+   * next turn produces output. Rare, so it always schedules a save — persisting it
+   * is what stops a restart from re-compacting a session nothing has touched
+   * since.
+   */
+  async setCompactIdleCompactedAt(key: ThreadKey, now: number = Date.now()): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const sessionId = this.getAgentSessionId(k);
+      if (!sessionId) return; // nothing to bind the marker to — see `getAgentSessionId`
+      const tracking = (this.state.compactIdleTracking ??= {});
+      const existing = tracking[k];
+      // A stamp under a DIFFERENT session starts the entry fresh: the previous
+      // session's instants describe a context this one no longer has.
+      const base = existing?.sessionId === sessionId ? existing : {};
+      tracking[k] = { ...base, sessionId, lastCompactionAt: now };
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * @description Drop `key`'s compact-on-idle bookkeeping (session teardown:
+   * `/new`, `/quit`, unbind). Deliberately a full delete rather than a reset —
+   * with no entry the next session start finds `lastActivityAt === 0` and gets
+   * the FULL idle window, which is exactly the wanted behaviour for a fresh
+   * session, so no special case is needed on the start path. The whole map is
+   * dropped once empty so an idle bot leaves a clean `state.json`.
+   */
+  async clearCompactIdleTracking(key: ThreadKey): Promise<void> {
+    const k = keyToString(key);
+    this.compactIdleTrackingSavedAt.delete(k);
+    await this.withLock(key, async () => {
+      if (!this.state.compactIdleTracking?.[k]) return;
+      delete this.state.compactIdleTracking[k];
+      if (Object.keys(this.state.compactIdleTracking).length === 0) {
+        delete this.state.compactIdleTracking;
+      }
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * Assign one high-frequency compact-on-idle stamp in memory and schedule a save
+   * only past the coarse step (see {@link noteCompactIdleActivity}). Synchronous
+   * (no key lock) on purpose: it runs on the output hot path, and a single-field
+   * assignment cannot interleave with another write the way a read-modify-write
+   * of a whole record can.
+   */
+  private stampCompactIdleTracking(
+    key: ThreadKey,
+    field: 'lastActivityAt' | 'lastTurnEndAt',
+    now: number,
+  ): void {
+    const k = keyToString(key);
+    const sessionId = this.getAgentSessionId(k);
+    if (!sessionId) return; // nothing to bind the marker to — see `getAgentSessionId`
+    const tracking = (this.state.compactIdleTracking ??= {});
+    const existing = tracking[k];
+    // A stamp under a DIFFERENT session REPLACES the entry rather than merging
+    // into it — the old session's instants must not survive the swap.
+    const isFreshSession = !existing || existing.sessionId !== sessionId;
+    const entry: CompactIdleTrackingEntry = existing && !isFreshSession ? existing : { sessionId };
+    tracking[k] = entry;
+    entry[field] = now;
+    // A fresh session's first stamp always persists, so the new binding reaches
+    // disk instead of waiting out the coarse step behind a stale one.
+    const savedAt = isFreshSession ? 0 : this.compactIdleTrackingSavedAt.get(k) ?? 0;
+    if (now - savedAt < compactIdleTrackingPersistStepMs) return;
+    this.compactIdleTrackingSavedAt.set(k, now);
+    this.scheduleSave();
+  }
+
+  /**
+   * The thread's CURRENT agent session id — `claudeSessionId` else
+   * `opencodeSessionId` from the persisted {@link AgentData} — or `undefined` when
+   * the thread has neither. A raw `/terminal` shell has no session id and cannot be
+   * compacted anyway, so "no id" means the compact-on-idle marker has nothing to
+   * bind to: reads return zeros and stamps are skipped, keeping `state.json` clean.
+   */
+  private getAgentSessionId(keyStr: string): string | undefined {
+    const agent = this.state.agents[keyStr];
+    return agent?.claudeSessionId ?? agent?.opencodeSessionId;
   }
 
   // ── limit auto-continue toggle (`/auto_continue_limits`) ──
