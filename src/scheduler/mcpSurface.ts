@@ -614,24 +614,6 @@ function deliveryUnknownResult(message: string): CallToolResult {
   };
 }
 
-/**
- * @description The agent-facing message for a rejected create. The cap counts ALL
- * of a thread's schedules — the storage really is shared — but `schedule_list` hides
- * reminders and `schedule_cancel` refuses their ids, so whenever reminders occupy
- * slots the message has to say so: otherwise the agent reads "maximum of 30" beside
- * a list of 5, cancels all 5, still cannot create, and loops with no correct next
- * call. A topic with no reminders keeps the plain sentence, which is then the whole
- * truth.
- */
-export function getScheduleCapError(input: { limit: number; reminderCount: number }): string {
-  const capped = `cannot create: thread already has the maximum of ${input.limit} schedules`;
-  if (input.reminderCount === 0) return capped;
-  return (
-    `${capped}; ${input.reminderCount} of them are the user's reminders, which you can neither ` +
-    "list nor cancel — ask the user to delete one with the bot's /reminders command"
-  );
-}
-
 /** One-line human summary of a record for `schedule_list` / create confirmations. */
 function summarizeRecord(record: ScheduleRecord): string {
   // Local-offset ISO, never `toISOString()`'s UTC `Z`: the operator declared a
@@ -698,10 +680,12 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         isPinSilent: args.isPinSilent,
       });
       if (!created.ok) {
-        const reminderCount = deps.store
-          .getThreadSchedules(threadKey)
-          .filter((record) => checkIsReminderSchedule(record)).length;
-        return errorResult(getScheduleCapError({ limit: created.limit, reminderCount }));
+        // The cap counts only the agent-prompt jobs `schedule_list` shows, so the
+        // plain sentence is the whole truth: every slot it names is one this agent
+        // can see and cancel itself.
+        return errorResult(
+          `cannot create: thread already has the maximum of ${created.limit} schedules`,
+        );
       }
 
       const record = created.record;

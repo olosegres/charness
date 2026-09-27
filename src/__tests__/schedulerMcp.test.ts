@@ -38,7 +38,6 @@ import {
   buildSchedulerMcpToken,
   verifySchedulerMcpToken,
   buildSpecFromCreateArgs,
-  getScheduleCapError,
   resolveTargetThreadKey,
   createSchedulerMcpServer,
   serializeSchedulerScope,
@@ -502,34 +501,6 @@ describe('buildSpecFromCreateArgs', () => {
     const result = buildSpecFromCreateArgs({ onceAt: past }, nowMs);
     assert.equal(result.ok, false);
     if (!result.ok) assert.match(result.error, /past/i);
-  });
-});
-
-// ─── cap rejection message ───────────────────────────────────────────
-
-describe('getScheduleCapError', () => {
-  const limit = 30;
-
-  it('stays the plain sentence when no reminder occupies a slot', () => {
-    const message = getScheduleCapError({ limit, reminderCount: 0 });
-    assert.match(message, /maximum of 30 schedules/);
-    assert.ok(!/reminder/i.test(message), 'nothing to mention, so nothing is mentioned');
-  });
-
-  it('names the operator-owned reminders and the command that removes them', () => {
-    // Without this the agent reads "maximum of 30" beside a `schedule_list` of 5,
-    // cancels all 5, still cannot create, and loops — it has no correct next call,
-    // because the remaining slots are reminders it can neither see nor cancel.
-    const message = getScheduleCapError({ limit, reminderCount: 25 });
-    assert.match(message, /maximum of 30 schedules/, 'the cap is still stated');
-    assert.match(message, /25/, 'and how many slots it cannot reach');
-    assert.match(message, /reminders/i);
-    assert.match(message, /\/reminders/, 'the user-facing command is named literally');
-    assert.match(message, /cancel/i, 'and that cancelling is not the way out');
-  });
-
-  it('mentions reminders as soon as a single one occupies a slot', () => {
-    assert.match(getScheduleCapError({ limit, reminderCount: 1 }), /\/reminders/);
   });
 });
 

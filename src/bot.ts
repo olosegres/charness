@@ -273,7 +273,7 @@ import { configureSchedulerMcpInjection } from './scheduler/injection';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { checkIsReminderSchedule, getUnboundPausableSchedules } from './scheduler/deliveryKind';
-import { createScheduleForThread, maxSchedulesPerThread } from './scheduler/store';
+import { createScheduleForThread, maxRemindersPerThread } from './scheduler/store';
 import type { DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from './scheduler/types';
 import {
   applyReminderWizardCallback,
@@ -8266,18 +8266,17 @@ function toReminderListRows(records: readonly ScheduleRecord[]): ReminderListRow
 function buildReminderHubScreen(key: ThreadKey): ReminderScreen {
   const records = getThreadReminders(key);
   const plan = getReminderHubPlan({
+    // The reminder cap is the comparison `createScheduleForThread` makes for a
+    // reminder, so «add» is never drawn for a create the store would reject four
+    // steps later.
     reminderCount: records.length,
-    // The cap is over the thread's WHOLE schedule list — the same comparison
-    // `createScheduleForThread` makes — so «add» is never drawn for a create the
-    // store would reject four steps later.
-    scheduleCount: state.getThreadSchedules(key).length,
-    maxSchedules: maxSchedulesPerThread,
+    maxReminders: maxRemindersPerThread,
   });
   const bodyLine =
     plan.body === 'empty'
       ? t('reminders.hubEmptyLine')
       : plan.body === 'atLimit'
-        ? t('reminders.hubLimitLine', { count: records.length, limit: maxSchedulesPerThread })
+        ? t('reminders.hubLimitLine', { count: records.length, limit: maxRemindersPerThread })
         : t('reminders.hubActiveLine', { count: records.length });
   const rows = buildReminderHubKeyboard(records.length, { isAddOffered: plan.isAddOffered });
   return {
@@ -10256,11 +10255,10 @@ bot.action(reminderAddCallback, async (ctx) => {
   // rendered before the cap was reached: say why and refresh the screen.
   const hubPlan = getReminderHubPlan({
     reminderCount: getThreadReminders(key).length,
-    scheduleCount: state.getThreadSchedules(key).length,
-    maxSchedules: maxSchedulesPerThread,
+    maxReminders: maxRemindersPerThread,
   });
   if (!hubPlan.isAddOffered) {
-    await ctx.answerCbQuery(t('reminders.capReachedNotice', { limit: maxSchedulesPerThread }));
+    await ctx.answerCbQuery(t('reminders.capReachedNotice', { limit: maxRemindersPerThread }));
     await renderReminderScreen(key, messageId, buildReminderHubScreen(key));
     return;
   }

@@ -1245,10 +1245,11 @@ export interface ReminderListRow {
  * only when there is something to list; a list button that opens an empty screen is
  * a dead end. The count rides as a label var so the caller can render "📋 List (3)".
  *
- * `isAddOffered` is the per-thread schedule CAP: at the cap there is nothing an
- * «add» tap could create, so the button is not drawn (same dead-end reasoning as
- * the list button). The caller owns that comparison — the cap lives in the
- * scheduler store, not here — and it defaults to offering «add».
+ * `isAddOffered` is the per-thread REMINDER cap (counted apart from the agent's
+ * schedule cap): at the cap there is nothing an «add» tap could create, so the
+ * button is not drawn (same dead-end reasoning as the list button). The caller
+ * owns that comparison — the cap lives in the scheduler store, not here — and it
+ * defaults to offering «add».
  */
 export function buildReminderHubKeyboard(
   reminderCount: number,

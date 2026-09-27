@@ -379,7 +379,8 @@ with the thread's last-used backend.
   The agent interviews you (bare `/schedule`) or parses "every day at 9" /
   "tomorrow 15:00" itself, then calls the bot-injected `schedule_create` /
   `schedule_list` / `schedule_cancel` MCP tools (cron, one-shot, or
-  N-times; min interval 5 min; up to 30 jobs per topic).
+  N-times; min interval 5 min; up to 30 agent jobs per topic — reminders are
+  counted separately, see below).
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
 - Leaving a folder pauses the topic's scheduled prompts; `/bind` resumes
@@ -413,9 +414,10 @@ saved — send a shorter one and the reminder is created from that.
 The finished reminder shows when it fires, its text and its next run. «📋
 List» pages through the topic's reminders (8 per page); tapping one opens it
 with a «🗑 Delete» button — the card shows exactly what you are deleting, so
-there is no extra confirmation step. Reminders share the scheduler's limit of
-30 jobs per topic, survive a restart, and one missed while the bot was down
-fires a single catch-up.
+there is no extra confirmation step. A topic holds up to 100 reminders — counted
+separately from the agent's scheduled prompts, so neither takes slots from the
+other — and they survive a restart, with one missed while the bot was down firing
+a single catch-up.
 
 Reminders are yours, not the agent's: the scheduling tools an agent can call
 do not see them, so it can neither list nor delete them.

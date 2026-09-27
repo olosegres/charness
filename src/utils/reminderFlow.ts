@@ -2,10 +2,10 @@
  * @description The `/reminders` decisions that live OUTSIDE the pure wizard
  * module because they depend on the bot's own surroundings rather than on the
  * wizard's step machine: which hub screen to draw (a function of the scheduler's
- * per-thread cap), whether a step-4 text wait has expired or is already claimed by
- * another inbound message, whether the captured text is short enough to keep,
- * whether the wait survives a given wizard transition at all, and whether a tapped
- * wizard button belongs to the wizard that is live right now.
+ * per-thread reminder cap), whether a step-4 text wait has expired or is already
+ * claimed by another inbound message, whether the captured text is short enough
+ * to keep, whether the wait survives a given wizard transition at all, and
+ * whether a tapped wizard button belongs to the wizard that is live right now.
  *
  * They are here rather than in `bot.ts` for the usual reason: `bot.ts` cannot be
  * imported by a test (its module-scope `parseEnv()` exits the process), and each
@@ -47,27 +47,25 @@ export interface ReminderHubPlan {
 }
 
 /**
- * @description Decide the hub screen. At (or past) the per-thread schedule cap
+ * @description Decide the hub screen. At (or past) the per-thread REMINDER cap
  * the «add» button is NOT offered: the create would be rejected by the store, so
  * a button that can only fail is worse than no button — provided the screen says
  * why, which is what the `atLimit` body is for.
  *
- * The cap is compared against `scheduleCount`, ALL of the topic's schedules, not
- * against `reminderCount`: the store enforces one shared per-thread cap over
- * reminders AND agent-prompt jobs, so measuring reminders alone let a topic
- * already full of `/schedule` jobs draw «add», walk the operator through all four
- * steps and only then reject the create. `reminderCount` still decides the
- * empty-vs-active body, because that line describes the LIST.
+ * The comparison must be the one `createScheduleForThread` makes, or the hub walks
+ * the operator through all four steps and only then hits a rejection. That store
+ * counts a reminder against the REMINDER cap alone, so the topic's agent-prompt
+ * jobs are irrelevant here — a topic full of `/schedule` jobs still has room for
+ * reminders.
  *
  * A non-positive cap is treated as "at the limit" rather than special-cased: it
  * is the same user-visible truth (nothing more can be created).
  */
 export function getReminderHubPlan(input: {
   reminderCount: number;
-  scheduleCount: number;
-  maxSchedules: number;
+  maxReminders: number;
 }): ReminderHubPlan {
-  const isAtLimit = input.scheduleCount >= input.maxSchedules;
+  const isAtLimit = input.reminderCount >= input.maxReminders;
   if (isAtLimit) return { body: 'atLimit', isAddOffered: false };
   return { body: input.reminderCount === 0 ? 'empty' : 'active', isAddOffered: true };
 }

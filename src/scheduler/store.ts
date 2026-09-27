@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { StateStore } from '../state';
 import { keyToString, type ThreadKey } from '../types';
+import { checkIsReminderSchedule } from './deliveryKind';
 import { getNextRunAt } from './recurrence';
 import type {
   ScheduleCreatedBy,
@@ -14,11 +15,26 @@ import type {
  * create path. The persisted collection itself lives on {@link StateStore}
  * (`schedules` field + getters/setters), following the `traceConfig` pattern;
  * this module owns the bits the store shouldn't know about: how an id is
- * minted from a name, and the per-thread cap.
+ * minted from a name, and the per-thread cap of each delivery kind.
  */
 
-/** Hard cap on schedules per thread. Enforced in {@link createScheduleForThread}. */
+/**
+ * Hard cap on AGENT-PROMPT schedules per thread (records with no `deliveryKind`).
+ * Enforced in {@link createScheduleForThread}. This cap exists FOR the agent:
+ * `schedule_create` is in the model's hands and a looping one can mint junk jobs,
+ * so 30 is the muzzle.
+ */
 export const maxSchedulesPerThread = 30;
+
+/**
+ * Hard cap on `/reminders` schedules per thread, counted SEPARATELY from
+ * {@link maxSchedulesPerThread} so neither creator can eat the other's slots.
+ * It is far higher because a reminder costs four button taps — a human cannot
+ * mint 100 by accident — and bounded at all only because every record lives in
+ * the single `state.json` (rewritten whole on every change) and arms one timer at
+ * boot, so a runaway code path must not be able to write records without end.
+ */
+export const maxRemindersPerThread = 100;
 
 /** Length of the random suffix appended to a slug to keep ids unique. */
 const idSuffixLength = 6;
@@ -114,18 +130,27 @@ export type CreateScheduleResult =
   | { ok: false; reason: 'cap-reached'; limit: number };
 
 /**
- * @description Create and persist a schedule for a thread, enforcing the
- * per-thread cap. Returns the created record, or a `cap-reached` result when
- * the thread already holds {@link maxSchedulesPerThread}. The cap is checked
- * against the store's current per-thread count, then the record is upserted.
+ * @description Create and persist a schedule for a thread, enforcing the cap of
+ * the record's OWN delivery kind: a reminder counts only the thread's reminders
+ * against {@link maxRemindersPerThread}, an agent-prompt job only the thread's
+ * agent-prompt jobs against {@link maxSchedulesPerThread}. Counting the kinds
+ * apart is what keeps each rejection actionable — a shared counter let the two
+ * steal slots from each other and told the agent it had hit a limit it could not
+ * reach, because `schedule_list` hides reminders and `schedule_cancel` refuses
+ * their ids. `limit` in the result is the one that actually applied, since callers
+ * render it.
  */
 export async function createScheduleForThread(
   store: StateStore,
   args: CreateScheduleArgs,
 ): Promise<CreateScheduleResult> {
-  const existing = store.getThreadSchedules(args.threadKey);
-  if (existing.length >= maxSchedulesPerThread) {
-    return { ok: false, reason: 'cap-reached', limit: maxSchedulesPerThread };
+  const isReminder = checkIsReminderSchedule(args);
+  const limit = isReminder ? maxRemindersPerThread : maxSchedulesPerThread;
+  const sameKindCount = store
+    .getThreadSchedules(args.threadKey)
+    .filter((record) => checkIsReminderSchedule(record) === isReminder).length;
+  if (sameKindCount >= limit) {
+    return { ok: false, reason: 'cap-reached', limit };
   }
   const record = createScheduleRecord(args);
   await store.upsertSchedule(record);

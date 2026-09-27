@@ -8,11 +8,11 @@
  * Load-bearing intent (per `.claude/rules/tests.md`): each of these fails
  * SILENTLY in production, which is why they are pinned here rather than left to a
  * live check.
- * - At the per-thread schedule cap the hub must NOT offer «add» — the create
+ * - At the per-thread REMINDER cap the hub must NOT offer «add» — the create
  *   would be rejected by the store, so the button could only ever fail — and the
  *   body must say why, or the operator sees a button vanish with no explanation.
- *   The cap is over the thread's WHOLE schedule list, so a topic full of
- *   `/schedule` jobs must withhold «add» too.
+ *   The cap is the reminder one the store compares against, so a topic full of
+ *   `/schedule` jobs must still offer «add».
  * - The step-4 text wait must be DISARMED by every transition that leaves the text
  *   step, or «‹ Back» out of step 4 leaves it capturing the next ordinary message.
  * - The step-4 text wait MUST expire. It intercepts every plain message in the
@@ -56,19 +56,19 @@ import {
   reminderTextMaxLength,
   type ReminderWizardTransition,
 } from '../utils/reminderWizard';
-import { maxSchedulesPerThread } from '../scheduler/store';
+import { maxRemindersPerThread, maxSchedulesPerThread } from '../scheduler/store';
 
 // ─── hub plan ────────────────────────────────────────────────────────
 
 test('an empty topic says so and still offers add', () => {
-  assert.deepEqual(getReminderHubPlan({ reminderCount: 0, scheduleCount: 0, maxSchedules: 30 }), {
+  assert.deepEqual(getReminderHubPlan({ reminderCount: 0, maxReminders: 100 }), {
     body: 'empty',
     isAddOffered: true,
   });
 });
 
 test('a populated topic under the cap shows the count and offers add', () => {
-  assert.deepEqual(getReminderHubPlan({ reminderCount: 3, scheduleCount: 3, maxSchedules: 30 }), {
+  assert.deepEqual(getReminderHubPlan({ reminderCount: 3, maxReminders: 100 }), {
     body: 'active',
     isAddOffered: true,
   });
@@ -77,66 +77,64 @@ test('a populated topic under the cap shows the count and offers add', () => {
 test('AT the cap: add is withdrawn and the body explains why', () => {
   // The button is dropped and the `atLimit` body is what tells the operator to
   // delete one — a silently missing button is a dead end.
-  assert.deepEqual(getReminderHubPlan({ reminderCount: 30, scheduleCount: 30, maxSchedules: 30 }), {
+  assert.deepEqual(getReminderHubPlan({ reminderCount: 100, maxReminders: 100 }), {
     body: 'atLimit',
     isAddOffered: false,
   });
 });
 
 test('PAST the cap (a pre-existing overfull thread) is still at the limit', () => {
-  assert.deepEqual(getReminderHubPlan({ reminderCount: 31, scheduleCount: 31, maxSchedules: 30 }), {
+  assert.deepEqual(getReminderHubPlan({ reminderCount: 101, maxReminders: 100 }), {
     body: 'atLimit',
     isAddOffered: false,
   });
 });
 
 test('one below the cap still offers add — the boundary is not off by one', () => {
-  const plan = getReminderHubPlan({ reminderCount: 29, scheduleCount: 29, maxSchedules: 30 });
+  const plan = getReminderHubPlan({ reminderCount: 99, maxReminders: 100 });
   assert.equal(plan.isAddOffered, true);
   assert.equal(plan.body, 'active');
 });
 
-test('the cap counts AGENT-PROMPT jobs too — the store enforces one shared limit', () => {
-  // The dead end this guards: a topic whose 30 slots are `/schedule` jobs used to
-  // draw «add», walk the operator through all four steps, and only then have the
-  // store reject the create. `createScheduleForThread` compares the thread's WHOLE
-  // list, so the hub must too.
-  const plan = getReminderHubPlan({ reminderCount: 0, scheduleCount: 30, maxSchedules: 30 });
-  assert.equal(plan.isAddOffered, false, 'no «add» when the thread is full of prompt jobs');
-  assert.equal(plan.body, 'atLimit', 'and the body says why the button is gone');
-});
-
-test('a mixed topic is capped on the TOTAL, not on its reminders alone', () => {
-  const full = getReminderHubPlan({ reminderCount: 2, scheduleCount: 30, maxSchedules: 30 });
-  assert.equal(full.isAddOffered, false);
-  const roomLeft = getReminderHubPlan({ reminderCount: 2, scheduleCount: 29, maxSchedules: 30 });
-  assert.equal(roomLeft.isAddOffered, true, 'one free slot still offers add');
-  assert.equal(roomLeft.body, 'active', 'the body still counts the REMINDERS, not the schedules');
-});
-
-test('the plan is exercised against the REAL scheduler cap, not a test constant', () => {
-  // The cap the store enforces is the one the hub must agree with; a drift between
-  // them is exactly how a button that can only fail gets drawn.
+test('the plan is exercised against the REAL reminder cap, not a test constant', () => {
+  // The cap the store enforces for a reminder is the one the hub must agree with;
+  // a drift between them is exactly how a button that can only fail gets drawn.
   assert.equal(
     getReminderHubPlan({
-      reminderCount: maxSchedulesPerThread,
-      scheduleCount: maxSchedulesPerThread,
-      maxSchedules: maxSchedulesPerThread,
+      reminderCount: maxRemindersPerThread,
+      maxReminders: maxRemindersPerThread,
     }).isAddOffered,
     false,
   );
   assert.equal(
     getReminderHubPlan({
-      reminderCount: maxSchedulesPerThread - 1,
-      scheduleCount: maxSchedulesPerThread - 1,
-      maxSchedules: maxSchedulesPerThread,
+      reminderCount: maxRemindersPerThread - 1,
+      maxReminders: maxRemindersPerThread,
+    }).isAddOffered,
+    true,
+  );
+});
+
+test('a topic full of AGENT-PROMPT jobs still offers add — the caps are independent', () => {
+  // The store counts a reminder against the reminder cap alone, so a topic whose
+  // agent-prompt slots are all spent must NOT be told it is out of reminders. The
+  // hub sees only the reminder count, which is what makes that structural: there is
+  // no whole-list input left to confuse it with.
+  const plan = getReminderHubPlan({ reminderCount: 0, maxReminders: maxRemindersPerThread });
+  assert.equal(plan.isAddOffered, true);
+  assert.equal(plan.body, 'empty');
+  // And the agent cap being the SMALLER number can never masquerade as the reminder one.
+  assert.equal(
+    getReminderHubPlan({
+      reminderCount: maxSchedulesPerThread,
+      maxReminders: maxRemindersPerThread,
     }).isAddOffered,
     true,
   );
 });
 
 test('a zero cap is at the limit rather than a special case', () => {
-  assert.deepEqual(getReminderHubPlan({ reminderCount: 0, scheduleCount: 0, maxSchedules: 0 }), {
+  assert.deepEqual(getReminderHubPlan({ reminderCount: 0, maxReminders: 0 }), {
     body: 'atLimit',
     isAddOffered: false,
   });

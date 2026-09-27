@@ -4,7 +4,11 @@
  *
  *   - slugify / generateScheduleId shape.
  *   - upsert / get / remove round-trip and per-thread filtering.
- *   - per-thread cap enforcement at maxSchedulesPerThread (typed result).
+ *   - per-thread cap enforcement, counted per delivery KIND: agent-prompt jobs
+ *     against maxSchedulesPerThread, reminders against maxRemindersPerThread
+ *     (typed result naming the limit that applied). The two caps are INDEPENDENT:
+ *     one kind filling up must never withhold a slot from the other, which is the
+ *     defect a single shared counter caused.
  *   - persistence across a StateStore reload (same dataDir, new instance).
  *   - RunLedger append + rotation trigger (tmp dir under ./agent/tmp/).
  *
@@ -24,6 +28,7 @@ import {
   generateScheduleId,
   createScheduleRecord,
   createScheduleForThread,
+  maxRemindersPerThread,
   maxSchedulesPerThread,
 } from '../scheduler/store';
 import { RunLedger, maxLedgerBytes, type ScheduleRunRecord } from '../scheduler/runLedger';
@@ -175,6 +180,93 @@ describe('StateStore schedule collection', () => {
     assert.ok(otherThread.ok);
   });
 
+  /** Fill a thread with `count` schedules of one delivery kind, asserting each create. */
+  async function fillThread(
+    store: StateStore,
+    threadKey: ThreadKey,
+    count: number,
+    deliveryKind?: 'reminder',
+  ): Promise<void> {
+    for (let n = 0; n < count; n += 1) {
+      const result = await createScheduleForThread(store, {
+        threadKey,
+        name: `job ${n}`,
+        spec: dailySpec,
+        prompt: 'p',
+        createdBy: 'user',
+        nowMs,
+        ...(deliveryKind !== undefined ? { deliveryKind } : {}),
+      });
+      assert.ok(result.ok, `creation #${n} should succeed`);
+    }
+  }
+
+  it('a thread at the agent-prompt cap can still create a reminder', async () => {
+    // The defect a single shared counter caused: the two creators stole each
+    // other's slots, so a topic full of agent jobs offered the operator no
+    // reminders at all.
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    await fillThread(store, threadA, maxSchedulesPerThread);
+
+    const reminder = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'call mum', spec: dailySpec, prompt: 'call mum',
+      createdBy: 'user', nowMs, deliveryKind: 'reminder',
+    });
+    assert.ok(reminder.ok, 'the reminder cap is counted separately');
+    assert.equal(reminder.record.deliveryKind, 'reminder');
+  });
+
+  it('a thread at the reminder cap can still create an agent-prompt job', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    await fillThread(store, threadA, maxRemindersPerThread, 'reminder');
+
+    const agentJob = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'nightly', spec: dailySpec, prompt: 'run it',
+      createdBy: 'agent', nowMs,
+    });
+    assert.ok(agentJob.ok, 'the agent cap is counted separately');
+    assert.equal(agentJob.record.deliveryKind, undefined);
+  });
+
+  it('the reminder cap admits at its boundary and rejects one past it, reporting its own limit', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    // One short of the cap, then the boundary create itself: an off-by-one here
+    // would silently cost the operator a reminder slot.
+    await fillThread(store, threadA, maxRemindersPerThread - 1, 'reminder');
+    const atBoundary = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'last one', spec: dailySpec, prompt: 'x',
+      createdBy: 'user', nowMs, deliveryKind: 'reminder',
+    });
+    assert.ok(atBoundary.ok, 'the cap-th reminder is still admitted');
+
+    const overflow = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'one too many', spec: dailySpec, prompt: 'x',
+      createdBy: 'user', nowMs, deliveryKind: 'reminder',
+    });
+    assert.equal(overflow.ok, false);
+    if (!overflow.ok) {
+      assert.equal(overflow.reason, 'cap-reached');
+      // Callers render this limit, so it must be the reminder cap, not the agent one.
+      assert.equal(overflow.limit, maxRemindersPerThread);
+    }
+  });
+
+  it('the agent-prompt cap reports its OWN limit even with reminders in the thread', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    await fillThread(store, threadA, 5, 'reminder');
+    await fillThread(store, threadA, maxSchedulesPerThread);
+
+    const overflow = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'one too many', spec: dailySpec, prompt: 'p', createdBy: 'agent', nowMs,
+    });
+    assert.equal(overflow.ok, false);
+    if (!overflow.ok) assert.equal(overflow.limit, maxSchedulesPerThread);
+  });
+
   it('setSchedulePaused toggles isPaused / pauseReason and clears cleanly', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();
@@ -271,6 +363,10 @@ describe('RunLedger', () => {
   });
 });
 
-test('maxSchedulesPerThread is a sane named constant', () => {
+test('the two caps are sane named constants and the reminder one is the looser', () => {
   assert.equal(maxSchedulesPerThread, 30);
+  assert.equal(maxRemindersPerThread, 100);
+  // A reminder costs four button taps, so the human path is deliberately roomier
+  // than the muzzle the agent's `schedule_create` needs.
+  assert.ok(maxRemindersPerThread > maxSchedulesPerThread);
 });
