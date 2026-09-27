@@ -60,7 +60,15 @@ import {
 import { execFilePromise, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
-import { busyIdleWatchdogMs, checkShouldClearBusyOnIdle } from '../utils/jsonStreamBusyWatchdog';
+import {
+  busyIdleWatchdogMs,
+  checkShouldClearBusyOnIdle,
+  compactionAbsoluteTimeoutMs,
+  compactionSilenceTimeoutMs,
+  compactionWaitPollMs,
+  getCompactionTimeoutOutcome,
+  getCompactionWaitVerdict,
+} from '../utils/jsonStreamBusyWatchdog';
 import {
   buildJsonStreamTmuxSessionName,
   buildWrapperScript,
@@ -107,14 +115,11 @@ type CompactionResult =
 /** Awaiter bookkeeping for a bot-issued compaction (see {@link StreamSession.pendingCompaction}). */
 interface PendingStreamCompaction {
   resolve: (result: CompactionResult) => void;
+  /** The repeating silence watchdog (an INTERVAL, cleared on every resolve path). */
   timer: NodeJS.Timeout | null;
   /** Set when a `compact_status` reported `success` (wait for the boundary's tokens). */
   sawSuccess: boolean;
 }
-
-/** How long to wait for a `/compact` turn to report its outcome before giving up
- *  (a compaction summarisation turn is slow — ~50s observed — so this is generous). */
-const compactionTimeoutMs = 3 * 60 * 1000;
 
 /** The settled reply to a bot-issued control request (see
  *  {@link ClaudeJsonStreamAdapter.requestControl}). */
@@ -869,10 +874,39 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
     const trimmed = instruction?.trim();
     const text = trimmed ? `/compact ${trimmed}` : '/compact';
+    const startedAt = Date.now();
     const result = await new Promise<CompactionResult>((resolve) => {
-      const timer = setTimeout(() => {
-        this.resolveCompaction(session, { ok: false, error: 'timed out waiting for compaction' });
-      }, compactionTimeoutMs);
+      // Bounded by SILENCE, not by elapsed time. A flat 3-minute cap on total
+      // elapsed time is what made idle compaction look mute: a real 3 min 15.6 s
+      // compaction (`compact_metadata.duration_ms: 195649`) was declared failed
+      // while the CLI was succeeding, so the notice was never posted. Summarising
+      // scales with the context being summarised, and compact-on-idle exists FOR
+      // big contexts — any fixed cap fails exactly where the feature matters.
+      // While it works the CLI heartbeats `system/status status:"compacting"`
+      // every few seconds, so real silence is the honest death signal.
+      const timer = setInterval(() => {
+        const verdict = getCompactionWaitVerdict({
+          msSinceStdoutActivity: Date.now() - session.lastStdoutActivityAt,
+          msSinceCompactionStarted: Date.now() - startedAt,
+          silenceTimeoutMs: compactionSilenceTimeoutMs,
+          absoluteTimeoutMs: compactionAbsoluteTimeoutMs,
+        });
+        if (verdict === 'keepWaiting') return;
+        const outcome = getCompactionTimeoutOutcome({
+          verdict,
+          sawSuccess: session.pendingCompaction?.sawSuccess === true,
+        });
+        if (outcome.kind === 'succeededWithoutTokenCounts') {
+          this.resolveCompaction(session, { ok: true, preTokens: null, postTokens: null });
+          return;
+        }
+        this.resolveCompaction(session, {
+          ok: false,
+          error: outcome.reason === 'silent'
+            ? `the CLI went silent for ${Math.round(compactionSilenceTimeoutMs / 1000)}s without confirming the compaction`
+            : `the compaction did not finish within ${Math.round(compactionAbsoluteTimeoutMs / 60_000)} min`,
+        });
+      }, compactionWaitPollMs);
       timer.unref?.();
       session.pendingCompaction = { resolve, timer, sawSuccess: false };
       session.compactionInProgress = true;
@@ -1190,7 +1224,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (!pending) return;
     session.pendingCompaction = null;
     session.compactionInProgress = false;
-    if (pending.timer) clearTimeout(pending.timer);
+    if (pending.timer) clearInterval(pending.timer);
     pending.resolve(result);
   }
 
@@ -1620,7 +1654,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (session.outputTimer) { clearTimeout(session.outputTimer); session.outputTimer = null; }
     if (session.reasoningTimer) { clearTimeout(session.reasoningTimer); session.reasoningTimer = null; }
     if (session.childOutputTimer) { clearTimeout(session.childOutputTimer); session.childOutputTimer = null; }
-    // Bot-issued control requests die with the session: the process it was
+    // An in-flight compaction dies with the session: the process that was going
+    // to confirm it is gone, so settle the caller now instead of leaving it
+    // parked until the silence watchdog notices a session that no longer exists.
+    this.resolveCompaction(session, { ok: false, error: 'the session ended before the compaction confirmed' });
+    // Same reasoning for bot-issued control requests: the process they were
     // talking to is going away (stop / exit / model-effort respawn), so their
     // replies can never arrive. Settle each as an unknown (`null`) and drop the
     // map, rather than leaving a caller parked on the round-trip timeout and a

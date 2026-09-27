@@ -672,6 +672,7 @@ config/variants, not a per-message API field).
 | `utils/claudeRuntimeInfo.ts` | Bounded Claude transcript-tail reader for `/status`: parses the newest main-session model usage and version, derives documented context limits, and always closes its file descriptor |
 | `utils/threadStatusReport.ts` | The per-topic `/status` render + model resolution, kept out of `bot.ts` so both are unit-testable (importing `bot.ts` runs its module-scope `parseEnv()`, which exits the process without a bot token): `getThreadStatusReport` (session-only rows are dropped once the session stopped; unknown runtime data degrades to the localised unknown marker) and `getThreadStatusModel` (live adapter value → the runtime's self-reported model → the persisted pick; the middle step is the Claude tmux backend's ONLY model source) |
 | `utils/jsonStreamHost.ts` | Host layout + IO primitives for the json-stream EXTERNAL transport (tmux `cjson-…` prefix binding): per-thread dir under `DATA_DIR/jsonstream/`, the probe-proven `#!/bin/sh` wrapper builder (`0<>` FIFO hold, `env -u ANTHROPIC_API_KEY`, pid/exitcode capture), the `O_NONBLOCK` FIFO write-open guard (`ENXIO`→null, never a blocking open) + bounded `EAGAIN` write retry, byte-exact stdout tail state (stateful utf8 decode across split chars, line-boundary offset for restart persistence, truncation reseed), and the orphan-dir janitor sweep |
+| `utils/jsonStreamBusyWatchdog.ts` | The json-stream adapter's two SILENCE-bounded decisions (elapsed time is never the bound — a working CLI always writes stdout, a dead one stops): `checkShouldClearBusyOnIdle` (+ `busyIdleWatchdogMs`) force-clears an `isBusy` stuck by a missed terminal `result`, vetoed by any in-flight signal (tool / sub-agent / question / batched answer) so a long turn is never truncated; `getCompactionWaitVerdict` (+ `compactionSilenceTimeoutMs`, `compactionWaitPollMs`, `compactionAbsoluteTimeoutMs` as the never-finishes backstop) bounds the wait for a bot-issued `/compact` confirmation, and `getCompactionTimeoutOutcome` reports a wait that timed out AFTER a `compact_status success` as SUCCESS (only the token counts are missing) |
 | `types.ts` | Shared types incl. the `AgentAdapter` contract and `ThreadKey` |
 
 ### Adapters (`src/adapters/`) — the proxy boundary
@@ -751,7 +752,21 @@ OpenCode events / bindings).
     CLI's `compact_boundary` / `compact_status` frame to CONFIRM the compaction,
     then the bot posts a visible confirmation (F3 — previously the literal
     `/compact` reached the model as a normal prompt and the user saw nothing
-    happen); **tmux Claude** → the literal `/compact` is still forwarded verbatim
+    happen). **That wait is bounded by SILENCE, not by elapsed time**
+    (`getCompactionWaitVerdict` + `compactionSilenceTimeoutMs` in
+    `utils/jsonStreamBusyWatchdog`, polled every `compactionWaitPollMs`, with
+    `compactionAbsoluteTimeoutMs` only as a backstop against a CLI that never
+    finishes): summarising scales with the context, so the old flat 3-min cap on
+    total time failed exactly where compact-on-idle matters — a measured 3 min
+    15.6 s compaction (`compact_metadata.duration_ms: 195649`) was declared failed
+    while the CLI was succeeding, and the F2 notice was never posted, which is the
+    "it compacts but never says so" the operator reported. While it works the CLI
+    heartbeats `system/status status:"compacting"` every few seconds, so silence is
+    the honest death signal; a wait that times out AFTER a `compact_status success`
+    still reports SUCCESS (`getCompactionTimeoutOutcome`) because only the token
+    counts are missing, and a session teardown settles a parked wait at once
+    instead of leaving the caller on the watchdog. **tmux Claude** → the literal
+    `/compact` is still forwarded verbatim
     (its TUI parses it natively — intact by design); **terminal** → "not
     supported" (a shell has no context). `compactContext(key, instruction?)` takes
     an optional instruction that APPENDS to the backend's baked compaction prompt
