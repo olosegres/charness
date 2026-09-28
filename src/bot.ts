@@ -3421,13 +3421,15 @@ function checkIsAdapterBusy(key: ThreadKey): boolean {
 
 /**
  * @description S3 — should the native typing state keep showing for `key`? True
- * while output is mid-flight OR the agent is still working. The pure rule lives
- * in `utils/typingActive`; this wraps it with the two live readings.
+ * while output is mid-flight, the agent is still working, OR a bot-issued
+ * compaction is running. The pure rule lives in `utils/typingActive`; this wraps
+ * it with the three live readings.
  */
 function checkShouldKeepTyping(key: ThreadKey): boolean {
   return checkShouldKeepTypingDecision({
     isOutputStreaming: checkIsOutputStreaming(key),
     isAdapterBusy: checkIsAdapterBusy(key),
+    isCompacting: checkIsThreadCompacting(key),
   });
 }
 
@@ -3492,6 +3494,7 @@ function checkIsTypingLoopStuck(key: ThreadKey): boolean {
   const q = outputQueues.get(keyToString(key));
   return checkIsTypingStuckByLeak({
     isAdapterBusy: checkIsAdapterBusy(key),
+    isCompacting: checkIsThreadCompacting(key),
     isTransportStreaming: getOutputTransport().checkIsStreaming(key),
     hasPendingOutput: q?.pendingOutput != null,
     isProcessing: q?.isProcessing === true,
@@ -7163,12 +7166,30 @@ function getThreadCompactRoute(key: ThreadKey): CompactCommandRoute {
 const threadsCompacting = new Set<string>();
 
 /**
+ * @description Is a bot-issued compaction in flight for `key`? The live reading
+ * behind the typing indicator's `isCompacting` input (S3) — both the keep-alive
+ * rule and the leak backstop's veto read it, so a compaction shows the native
+ * "working" state for its whole duration instead of leaving the topic blank for
+ * minutes. Reuses the EXISTING {@link threadsCompacting} set (already maintained
+ * as the idle-watchdog loop guard) — no second piece of state to keep in step.
+ */
+function checkIsThreadCompacting(key: ThreadKey): boolean {
+  return threadsCompacting.has(keyToString(key));
+}
+
+/**
  * @description Shared execution seam for the compaction triggers. Resolves the
  * `/compact` route (same pure decision as the manual command), optionally
  * appends the F2 closing-section instruction, runs the REAL compaction, and — for
  * the closing-section case — lifts the appended section out of the generated
  * summary. Returns the outcome; the CALLER owns any topic message so each trigger
- * words it its own way (F1: silent; F2: the idle notice).
+ * words it its own way (the operator-present narration vs the idle notice).
+ *
+ * Also the ONE place the typing indicator is started for a compaction (S3), so all
+ * three triggers get it without each remembering to. It is deliberately NOT stopped
+ * in the `finally`: dropping the key from {@link threadsCompacting} makes the
+ * existing keep-alive rule self-stop on the loader's next tick, whereas an explicit
+ * stop here could kill a loader a CONCURRENT prompt had armed.
  */
 async function runThreadCompaction(
   key: ThreadKey,
@@ -7188,6 +7209,10 @@ async function runThreadCompaction(
 
   const kStr = keyToString(key);
   threadsCompacting.add(kStr);
+  // S3: `threadsCompacting` is set FIRST, so the loader's very first keep-alive
+  // check already sees the compaction and cannot self-stop on a topic that is
+  // otherwise idle (which is exactly what a compacting OpenCode session looks like).
+  startTypingLoader(key);
   try {
     if (route === 'forwardToAgent') {
       // tmux Claude: its TUI parses `/compact [instruction]` natively. Best-effort —

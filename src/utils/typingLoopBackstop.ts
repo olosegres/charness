@@ -18,6 +18,8 @@
  * contradiction that a working agent can never produce:
  *  - a genuinely-working agent keeps `isAdapterBusy` TRUE (a long silent
  *    Bash/Task tool, a sub-agent, an unanswered question all hold busy) → vetoed;
+ *  - a bot-issued compaction (`isCompacting`) is work the bot is itself awaiting,
+ *    and on OpenCode it sets no busy flag at all → vetoed;
  *  - a live DM draft is a real stream (`isTransportStreaming`) → vetoed;
  *  - real text waiting to send (`hasPendingOutput`) or an in-flight send
  *    (`isProcessing`, which may legitimately be a slow API call) → vetoed.
@@ -33,6 +35,15 @@
 export interface TypingLoopBackstopInput {
   /** The adapter's genuine busy signal — a real long/silent tool turn holds it. */
   isAdapterBusy: boolean;
+  /**
+   * A BOT-ISSUED compaction is in flight for this thread. A VETO, because during
+   * a compaction the "leak" pattern below is LEGITIMATE: the adapter reports idle
+   * (OpenCode sets no busy flag for `summarize`), nothing is queued, and a stale
+   * debounce handle may well be sitting there from the turn that just ended — and
+   * force-stopping on that combination would kill precisely the indicator that
+   * covers the compaction.
+   */
+  isCompacting: boolean;
   /** The output transport (DM draft cursor) reports an active live stream. */
   isTransportStreaming: boolean;
   /** `q.pendingOutput !== null` — real agent text still waiting to be sent. */
@@ -55,6 +66,9 @@ export function checkIsTypingStuckByLeak(input: TypingLoopBackstopInput): boolea
   // A genuinely working agent (long/silent tool, sub-agent, mid-turn, unanswered
   // question) keeps this true — never a leak, never cut.
   if (input.isAdapterBusy) return false;
+  // A bot-issued compaction is real work the bot itself is awaiting, even though
+  // it looks exactly like the leak from the output queue's side.
+  if (input.isCompacting) return false;
   // A live DM draft cursor is a legitimate stream, not this leak.
   if (input.isTransportStreaming) return false;
   // Real text queued → genuinely streaming.

@@ -26,6 +26,7 @@ import { checkIsTypingStuckByLeak, type TypingLoopBackstopInput } from '../utils
 function leaked(overrides: Partial<TypingLoopBackstopInput> = {}): TypingLoopBackstopInput {
   return {
     isAdapterBusy: false,
+    isCompacting: false,
     isTransportStreaming: false,
     hasPendingOutput: false,
     isProcessing: false,
@@ -44,6 +45,16 @@ test('does NOT fire when no debounce handle lingers (the queue is truly drained 
 
 test('VETO: a genuinely busy adapter (a long silent Bash/Task tool) is never cut', () => {
   assert.equal(checkIsTypingStuckByLeak(leaked({ isAdapterBusy: true })), false);
+});
+
+test('VETO: a bot-issued compaction is not cut — and the same state IS cut without one', () => {
+  // The contrast is the whole test: during a compaction the leak pattern (idle
+  // adapter + empty queue + a stale debounce handle from the turn that just ended)
+  // is LEGITIMATE, and force-stopping there would kill exactly the indicator the
+  // compaction relies on. Asserting only the veto would pass against a function
+  // that never fires at all, which proves nothing.
+  assert.equal(checkIsTypingStuckByLeak(leaked({ isCompacting: true })), false, 'compaction vetoes the force-stop');
+  assert.equal(checkIsTypingStuckByLeak(leaked({ isCompacting: false })), true, 'with no compaction the SAME state is still a leak');
 });
 
 test('VETO: a live DM draft cursor is a legitimate stream, not this leak', () => {

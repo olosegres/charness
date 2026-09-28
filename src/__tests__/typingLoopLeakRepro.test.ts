@@ -92,6 +92,7 @@ test('BACKSTOP catches the pre-fix leak and repair clears it', () => {
   const q = runTurn(/* nullOnClear */ false);
   const stuck = checkIsTypingStuckByLeak({
     isAdapterBusy: false,
+    isCompacting: false,
     isTransportStreaming: false,
     hasPendingOutput: q.pendingOutput != null,
     isProcessing: q.isProcessing,
@@ -113,6 +114,7 @@ test('POST-FIX: the isFinal flush leaves the queue fully drained → typing self
   assert.equal(
     checkIsTypingStuckByLeak({
       isAdapterBusy: false,
+      isCompacting: false,
       isTransportStreaming: false,
       hasPendingOutput: false,
       isProcessing: false,
@@ -131,6 +133,7 @@ test('a legit long silent-tool turn (adapter busy, mid-stream) is NEVER force-st
   assert.equal(
     checkIsTypingStuckByLeak({
       isAdapterBusy: true, // long silent tool → genuinely working
+      isCompacting: false,
       isTransportStreaming: false,
       hasPendingOutput: q.pendingOutput != null,
       isProcessing: q.isProcessing,
