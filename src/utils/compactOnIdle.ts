@@ -276,9 +276,11 @@ export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
  * the markers wrap, which is genuine content.
  *
  * The markers exist so the bot can find that section mechanically (§1.5); they are
- * machine scaffolding and mean nothing to a reader. Whole LINES are dropped rather
- * than the marker substrings, so the summary is not left with blank gaps where they
- * stood. A summary with no markers comes back unchanged apart from trimming.
+ * machine scaffolding and mean nothing to a reader. A marker sitting ALONE on its
+ * line takes the whole line with it (its own newline included), so the summary is
+ * not left with a blank gap where it stood; a marker the model happened to put
+ * AHEAD of real prose on one line loses only the marker, never the prose. A summary
+ * with no markers comes back unchanged apart from trimming.
  */
 export function stripCompactionClosingMarkers(summaryText: string): string {
   const markerLine = new RegExp(
@@ -315,6 +317,28 @@ export function checkShouldPostCompactionSummary(input: {
   if (!input.isEnabled) return false;
   if (input.streamsOwnSummary) return false;
   return input.route === 'adapterCompact';
+}
+
+/**
+ * @description Should the bot announce that a compaction is STARTING (the notice
+ * that goes out BEFORE the wait, for the triggers the operator is present for)?
+ *
+ * Two reasons not to:
+ *  - the route is not one the bot awaits: `forwardToAgent` hands `/compact` to a TUI
+ *    that renders its own progress, and `notSupported` never compacts at all;
+ *  - no session is live. The compaction seam's first guard is exactly that, so
+ *    announcing here would be a promise the very next message retracts — `/compact`
+ *    in a bound topic whose agent was never started hits precisely that, and before
+ *    the notice moved ahead of the wait the operator only ever saw the refusal.
+ *
+ * Deliberately NOT the same rule as the COMPLETION report, which needs no liveness
+ * input: it is reached only after a compaction really succeeded.
+ */
+export function checkShouldAnnounceCompactionStart(input: {
+  route: CompactCommandRoute;
+  isSessionActive: boolean;
+}): boolean {
+  return input.route === 'adapterCompact' && input.isSessionActive;
 }
 
 /** The three parts of an idle-compaction report, each its OWN topic message. */

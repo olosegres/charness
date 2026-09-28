@@ -353,6 +353,7 @@ import {
   extractCompactionClosingSection,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
+  checkShouldAnnounceCompactionStart,
   buildIdleCompactionNoticeParts,
   formatTokenCount,
   compactionClosingStartMarker,
@@ -3445,10 +3446,11 @@ function checkShouldKeepTyping(key: ThreadKey): boolean {
  * timers.
  *
  * S3: the loader is a PERSISTENT state — each tick keeps firing `typing` while
- * {@link checkShouldKeepTyping} holds (output streaming OR agent busy) and
- * self-stops once the topic is truly drained + idle. It is NOT cleared on the
- * first output any more; hard teardown paths (session end / question UI / unbind)
- * still call {@link stopTypingLoader} directly.
+ * {@link checkShouldKeepTyping} holds (output streaming, agent busy, OR a
+ * bot-issued compaction in flight) and self-stops once the topic is truly drained
+ * + idle + not compacting. It is NOT cleared on the first output any more; hard
+ * teardown paths (session end / question UI / unbind) still call
+ * {@link stopTypingLoader} directly.
  */
 function startTypingLoader(key: ThreadKey): void {
   const s = getThreadMessageState(key);
@@ -7289,7 +7291,13 @@ async function runThreadCompaction(
  */
 async function runNarratedCompaction(key: ThreadKey, route: CompactCommandRoute, logTag: string): Promise<void> {
   const isNarrated = route === 'adapterCompact';
-  if (isNarrated) await replyToThread(key, t('compact.started'));
+  // The START notice also needs the session to be live (pure rule): the seam refuses
+  // a dead session as its first act, and a "compacting…" ahead of that refusal is a
+  // promise the very next message retracts. The seam still re-checks, so a session
+  // lost right afterwards just reports the failure as before.
+  if (checkShouldAnnounceCompactionStart({ route, isSessionActive: getThreadAdapter(key).checkIsActive(key) })) {
+    await replyToThread(key, t('compact.started'));
+  }
 
   // No closing section: the operator is right here, so there is nothing to recap
   // to a future reader of the topic.

@@ -21,6 +21,7 @@ import {
   extractCompactionClosingSection,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
+  checkShouldAnnounceCompactionStart,
   buildIdleCompactionNoticeParts,
   formatTokenCount,
   compactionClosingStartMarker,
@@ -361,6 +362,19 @@ test('stripCompactionClosingMarkers returns a marker-free summary unchanged', ()
   assert.equal(stripCompactionClosingMarkers(summary), summary);
 });
 
+test('stripCompactionClosingMarkers keeps prose the model put on the marker line', () => {
+  // The markers are an INSTRUCTION to a model, so a run of them sharing a line with
+  // real prose is a shape that will happen. Dropping the whole line there would lose
+  // the operator's recap; only the scaffolding may go. Load-bearing in the other
+  // direction too: the prose must not come back with a stray marker fragment.
+  const summary = `Objective: ship it.\n${compactionClosingStartMarker} we were mid-refactor\n${compactionClosingEndMarker}`;
+
+  const posted = stripCompactionClosingMarkers(summary);
+
+  assert.equal(posted, 'Objective: ship it.\nwe were mid-refactor');
+  assert.ok(!posted.includes('<<<'), `no marker fragment may survive: "${posted}"`);
+});
+
 // ── checkShouldPostCompactionSummary (the whole gate, one rule) ──
 
 test('checkShouldPostCompactionSummary: enabled + non-streaming backend + a real compaction → yes', () => {
@@ -390,6 +404,37 @@ test('checkShouldPostCompactionSummary: a route the bot does not await → no su
       checkShouldPostCompactionSummary({ isEnabled: true, streamsOwnSummary: false, route }),
       false,
       `route ${route} must not post a summary`,
+    );
+  }
+});
+
+// ── checkShouldAnnounceCompactionStart (the notice that precedes the wait) ──
+
+test('checkShouldAnnounceCompactionStart: an awaited route with a live session → announce', () => {
+  assert.equal(
+    checkShouldAnnounceCompactionStart({ route: 'adapterCompact', isSessionActive: true }),
+    true,
+  );
+});
+
+test('checkShouldAnnounceCompactionStart: no live session → silence, even on the awaited route', () => {
+  // The notice now goes out BEFORE the wait, so it can run ahead of the seam's own
+  // first guard. Announcing "compacting the session context" and then answering "no
+  // active session" is a promise retracted one message later — and `/compact` in a
+  // bound topic whose agent was never started is exactly that case.
+  assert.equal(
+    checkShouldAnnounceCompactionStart({ route: 'adapterCompact', isSessionActive: false }),
+    false,
+  );
+});
+
+test('checkShouldAnnounceCompactionStart: a route the bot does not await → silence', () => {
+  // The tmux TUI renders its own compaction progress, and a terminal never compacts.
+  for (const route of ['forwardToAgent', 'notSupported'] as const) {
+    assert.equal(
+      checkShouldAnnounceCompactionStart({ route, isSessionActive: true }),
+      false,
+      `route ${route} must not announce a start`,
     );
   }
 });
