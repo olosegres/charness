@@ -177,9 +177,13 @@ config/variants, not a per-message API field).
   the old `⏳` placeholder message). It runs at every wait point — a self-greeting
   agent's boot AND every prompt forward. It is a PERSISTENT working state (S3):
   each tick keeps firing while `checkShouldKeepTyping` holds — output mid-flight
-  (`checkIsOutputStreaming`) OR the adapter is busy (`checkIsBusy`) — and
-  SELF-STOPS only when the topic is truly drained + idle (pure rule in
-  `utils/typingActive.ts`). It is NOT cleared on the first output or a status
+  (`checkIsOutputStreaming`), the adapter is busy (`checkIsBusy`), OR a bot-issued
+  compaction is in flight (`isCompacting`, read from `threadsCompacting`) — and
+  SELF-STOPS only when the topic is truly drained + idle + not compacting (pure rule
+  in `utils/typingActive.ts`). The compaction input exists because the other two are
+  BOTH false while summarising (OpenCode sets no busy flag for `summarize`, and
+  neither backend streams output), which left a 43 s — or 3-minute — compaction
+  showing nothing at all. It is NOT cleared on the first output or a status
   frame any more (that made the topic look idle mid-answer); hard teardown paths
   (session end / question UI / unbind / start-fail) still call `stopTypingLoader`.
   There is NO timeout, so a long-thinking agent keeps showing it. An adapter that prints its own greeting
@@ -589,7 +593,7 @@ config/variants, not a per-message API field).
 | `bot.ts` | **The bot.** Telegram handlers, all slash commands, output streaming. Large — most logic lives here |
 | `threadRouting.ts` | Resolve which project folder a forum topic is bound to |
 | `accessControl.ts` | Who may use the bot: `extractAdminIds` + `AdminCache` (the served group's creator/admins, read live via `getChatAdministrators`, cached 1h; a `chat_member` admin-status change in the served group invalidates the cache immediately — `checkShouldInvalidateAdminCache`, subscribed via `allowed_updates` at launch). No allow-list env, no `/grant` |
-| `state.ts` | Persistence (`state.json`): bindings, sessions, pairing; `resolveDataDir()`. Per-thread compact-on-idle bookkeeping lives here too (`compactIdleTracking`: last activity / turn-end / compaction instants, each bound to the agent session id so a session swap reads as no history) — the high-frequency stamps assign in memory always but only schedule a save past `compactIdleTrackingPersistStepMs` |
+| `state.ts` | Persistence (`state.json`): bindings, sessions, pairing; `resolveDataDir()`. The `/compact_summary` toggle lives here (`compactSummaryEnabled` instance default + `compactSummaryOverrides` per-thread map, same shape/discipline as the `compactOnIdle*` pair — an explicit `false` stored, never confused with "unset"). Per-thread compact-on-idle bookkeeping lives here too (`compactIdleTracking`: last activity / turn-end / compaction instants, each bound to the agent session id so a session swap reads as no history) — the high-frequency stamps assign in memory always but only schedule a save past `compactIdleTrackingPersistStepMs` |
 | `mcpConfig.ts` | Merge MCP server config across the user/group/project/thread hierarchy |
 | `i18n.ts` | `t(key, vars)` translations for all user-facing strings. **12 locales** (`en`, `de`, `fr`, `es`, `pt`, `ru`, `zh`, `ja`, `hi`, `uz`, `ka`, `uk`); active locale comes from async Telegram/chat context (`/language` override → Telegram `language_code` → stored chat locale → `en`); `en` is canonical (missing key falls back to `en`); per-locale modules live in `src/i18n/`. Add a new key to `en.ts` first, then mirror it in every locale. Agent-facing templates (`schedule.*`, `apiRetry.continueNudge`) keep English instructions but bake a per-locale "IN <language>" reply directive |
 | `validation.ts` | Input validation for existing-folder `/bind` args (`validateSubdir`, path-traversal/symlink-safe); `resolveBoundWorkDir` turns a persisted binding into the CANONICAL (`realpathSync`) workDir every agent, `/status` row, and `dir:` scope compares against |
@@ -609,8 +613,9 @@ config/variants, not a per-message API field).
 | `apiErrorRetry.ts` | Pure auto-retry decision layer for agent **API** errors: `classifyAgentApiError` (transient / usageLimit / null-for-auth; markers from the claude.exe strings), `parseResetAt`, `getRetryPlan` (backoff schedule), `decideRetryAction` (arm/ignore/giveUp + grace-window dedup). The `bot.ts` manager owns the timer + kick |
 | `utils/claudeAuthLogin.ts` | Pure helpers behind the json-stream `/login` out-of-band flow: `parseClaudeAuthLoginUrl` (clean OAuth URL out of the ANSI/OSC-8 pty output — stops at the BEL), `checkIsClaudeAuthLoginCodePrompt` (the "paste code" gate; shares `claudeLoginPastePromptRe` with the tmux login-paste detection), `parseAuthStatusLoggedIn` + `checkIsAuthLoginSucceeded` (status-authoritative, exit-code fallback), `getLoginCommandRoute` (`outOfBand` only for a json-stream RAW pick, else `forwardToAgent`). The impure pty driver + per-thread state live in `bot.ts` (`startClaudeAuthLogin` / `submitClaudeAuthLoginCode` / `cancelClaudeAuthLogin`) |
 | `utils/compactCommandRoute.ts` | Pure three-way route for the bot-owned `/compact`: `getCompactCommandRoute({hasCompactContext, adapterName, terminalAdapterName})` → `adapterCompact` (the backend has a real compaction path — OpenCode + json-stream Claude implement `compactContext`), `notSupported` (terminal: a shell has no context), else `forwardToAgent` (the tmux Claude backend parses `/compact` natively). Kept out of `bot.ts` so the decision is unit-testable, like `getLoginCommandRoute` |
-| `utils/compactOnIdle.ts` | Pure helpers for compact-on-idle (F2) + the shared closing-section + the D3 summary guidance: `idleCompactMs` (55min), `resolveCompactOnIdleEnabled` (per-thread override wins, else default-on), `checkShouldFireIdleCompaction` (enabled+active+not-real-turn-busy+not-latched+has-turn fire guard), `checkIsBusyForRealTurn` (`isBusy && !hasPendingQuestion` — a pending question is NOT a blocker, D1), `compactionSummaryGuidance` (the D3 maximally-complete + session-specific text, a code constant kept consistent with the OpenCode fork's baked prompt) + `buildCompactionInstruction` (compose D3 guidance — skipped for OpenCode, which bakes it — + the F2 closing directive), the closing sentinel markers (`compactionClosingStartMarker`/`compactionClosingEndMarker`), and `extractCompactionClosingSection` (lift the "Where we stopped" prose out of a generated summary, backend-agnostic), plus `getIdleCompactionArmDecision` (the restart-safe arming decision — `{delayMs, kind}`: full window with no persisted history, else the REMAINDER (clamped to the window, so a backward clock step can't inflate it into a `setTimeout` overflow), else a deterministic per-thread stagger inside `compactIdleOverdueMinDelayMs` + `compactIdleOverdueSpreadMs` for an overdue thread; it returns the `IdleCompactionArmKind` so the diagnostic log prints the case it was GIVEN instead of re-deriving a boundary that could drift). `bot.ts` owns the per-thread timers (`runThreadCompaction` seam, the idle watchdog's two arming entry points — `noteThreadActivity` for real activity, `rearmThreadIdleTimer` for a re-adopted session, which must NOT move the activity stamp — and the F1 deferred-arm drain), the persisted user-latch (`state.compactIdleLatchedThreads`, cleared by `noteThreadUserActivity`), and the D1 re-ask (`reAskedQuestionOptions` + the `reask_<idx>` action) |
-| `utils/autoContinueOnLimit.ts` | Pure layer behind `/auto_continue_limits`: `resolveAutoContinueOnLimitEnabled` (per-thread override wins, else the instance default, ON when unset — the auto-resume was unconditional before the toggle), plus the «⏭ Skip once» button's `acl_skip_<fireAt>` codec (`buildSkipArmedRetryCallbackData` / `parseSkipArmedRetryCallbackData`) and `getArmedRetrySkipDecision` — `skip` ONLY when the baked `fireAt` matches the thread's currently armed record, else `expired` with no state change, so an untouched older picker can never cancel a LATER episode |
+| `utils/compactOnIdle.ts` | Pure helpers for compact-on-idle (F2) + the shared closing-section + the D3 summary guidance: `idleCompactMs` (55min), `resolveCompactOnIdleEnabled` (per-thread override wins, else default-on), `checkShouldFireIdleCompaction` (enabled+active+not-real-turn-busy+not-latched+has-turn fire guard), `checkIsBusyForRealTurn` (`isBusy && !hasPendingQuestion` — a pending question is NOT a blocker, D1), `compactionSummaryGuidance` (the D3 maximally-complete + session-specific text, a code constant kept consistent with the OpenCode fork's baked prompt) + `buildCompactionInstruction` (compose D3 guidance — skipped for OpenCode, which bakes it — + the F2 closing directive), the closing sentinel markers (`compactionClosingStartMarker`/`compactionClosingEndMarker`), and `extractCompactionClosingSection` (lift the "Where we stopped" prose out of a generated summary, backend-agnostic), `stripCompactionClosingMarkers` (drop the sentinel marker LINES from the summary POSTED to the topic, keeping every line of prose — whole lines, so no blank gap is left where one stood), `checkShouldPostCompactionSummary` (the whole full-summary gate as one rule: the `/compact_summary` setting, the adapter's `streamsCompactionSummary`, and an `adapterCompact`-only route), `buildIdleCompactionNoticeParts` (compose the idle report as SEPARATE parts in the notice → summary → re-asked-question order, dropping the closing block whenever a summary is present), `resolveCompactSummaryEnabled` (the `/compact_summary` resolver), `formatTokenCount` (group a context-token count for the completion message with a locale-independent narrow no-break space — NOT `toLocaleString()`, whose output follows the HOST's locale rather than the topic's), plus `getIdleCompactionArmDecision` (the restart-safe arming decision — `{delayMs, kind}`: full window with no persisted history, else the REMAINDER (clamped to the window, so a backward clock step can't inflate it into a `setTimeout` overflow), else a deterministic per-thread stagger inside `compactIdleOverdueMinDelayMs` + `compactIdleOverdueSpreadMs` for an overdue thread; it returns the `IdleCompactionArmKind` so the diagnostic log prints the case it was GIVEN instead of re-deriving a boundary that could drift). `bot.ts` owns the narration (`runNarratedCompaction` — the start notice + completion report shared by the manual `/compact` and the F1 drain — and `postCompactionSummary`, the single summary poster), the per-thread timers (`runThreadCompaction` seam, the idle watchdog's two arming entry points — `noteThreadActivity` for real activity, `rearmThreadIdleTimer` for a re-adopted session, which must NOT move the activity stamp — and the F1 deferred-arm drain), the persisted user-latch (`state.compactIdleLatchedThreads`, cleared by `noteThreadUserActivity`), and the D1 re-ask (`reAskedQuestionOptions` + the `reask_<idx>` action) |
+| `utils/autoContinueOnLimit.ts` | Pure layer behind `/auto_continue_limits`: `resolveAutoContinueOnLimitEnabled` (a named wrapper over the shared `resolveDefaultOnThreadToggle`: per-thread override wins, else the instance default, ON when unset — the auto-resume was unconditional before the toggle), plus the «⏭ Skip once» button's `acl_skip_<fireAt>` codec (`buildSkipArmedRetryCallbackData` / `parseSkipArmedRetryCallbackData`) and `getArmedRetrySkipDecision` — `skip` ONLY when the baked `fireAt` matches the thread's currently armed record, else `expired` with no state change, so an untouched older picker can never cancel a LATER episode |
+| `utils/threadToggle.ts` | THE resolution rule shared by every DEFAULT-ON per-thread toggle: `resolveDefaultOnThreadToggle(globalDefault, threadOverride)` — a present override (true OR false) wins, else the instance default, ON when both are unset. Both inputs stay `boolean \| undefined` so "never set" is distinguishable from an explicit `false` (otherwise a General «Disable» would be re-enabled by the default on the next boot). Each setting keeps its OWN named wrapper — `resolveCompactOnIdleEnabled`, `resolveCompactSummaryEnabled` (both `compactOnIdle.ts`), `resolveAutoContinueOnLimitEnabled` (`autoContinueOnLimit.ts`) — because the name is what documents which setting is being resolved; extracted at the third copy, which is where copies start drifting apart |
 | `utils/limitEpisodeRecovery.ts` | Pure layer for recovering a usage-limit episode that ENDED BEFORE the bot restarted (nothing persisted to re-arm): `getLastTerminalErrorText` (the last terminal `result` error in a json-stream `stdout.jsonl` tail, reusing `parseStreamJsonLine` + `classifyClaudeStreamMessage`; a later healthy turn clears the verdict) and `decideLimitEpisodeRecovery` (arm only for `usageLimit`, only with no armed record, only when the log is younger than `limitEpisodeMaxAgeMs` = 12h, and only when the log's `LimitEpisodeMarker` identity CHANGED since the episode a previous boot already handled — else `skip: 'alreadyHandled'`). `bot.ts` does the one `statSync` + bounded tail read (`limitEpisodeTailMaxBytes` = 64 KB), stamps `state.json` `limitEpisodesRecovered`, and replays through `handleApiError`. JSON-STREAM ONLY — the other backends leave no on-disk tail |
 | `utils/openCodeAuthLogin.ts` | Pure helpers behind OpenCode `/connect`: custom OAuth/multi-step methods come from `/provider/auth`; ordinary providers (including OpenRouter) are validated against the full `/provider` catalog and receive the generic API-key method used by OpenCode's native picker. Also owns OAuth pty parsing and `auth.json` success checks |
 | `openCodeSessionRouting.ts` | Pure helpers: match an SSE event to its owning session via child→parent lineage (`checkIsEventForSession`), record lineage (`updateSessionLineage`), verify strict descent (`getLineageDepthToAncestor` — busy tracking records a busy CHILD only for a verified descendant, so a dir-fallback-routed foreign sibling's busy=true never pins the thread busy) |
@@ -691,6 +696,17 @@ controls (`setModel`, `getCurrentModel`, `getRuntimeInfo`, `sendInput`,
 `startSession`/`stopSession`/`resumeSession`/`checkIsActive`) are optional
 methods; the bot checks for them before calling. New per-backend capabilities are added here first, then surfaced
 as a command in `bot.ts`.
+
+`compactContext` resolves a `CompactionResult` (`types.ts`) rather than the old
+`string | null`: a SUCCESS carries the backend's pre/post context token counts
+(`null` = "compacted, counts unknown" — OpenCode's summarize reports none, and the
+Claude wait can confirm from `compact_status success` without the boundary frame
+— never zero), a FAILURE carries the user-facing text the bot posts verbatim. The
+bot's completion report is rendered from those counts; before this the json-stream
+adapter logged them and dropped them, so a success could carry no data at all.
+`readonly streamsCompactionSummary` is the companion CAPABILITY flag: set it when
+the backend's own compaction already reaches the topic as agent output, and the bot
+will not post a second copy (OpenCode sets it; the Claude backends do not).
 
 ### Output transport (`src/output/`) — the per-mode output boundary
 
@@ -784,6 +800,50 @@ OpenCode events / bindings).
     no bot-controlled prompt, so it rides the `/compact <instruction>` every time.
     The wording is kept consistent across both (`compactionSummaryGuidance` mirrors
     the fork's baked bullets).
+    **A bot-issued compaction is NARRATED, never silent.** `runNarratedCompaction`
+    (shared by the manual `/compact` and the `compact_conversation` drain) posts the
+    `compact.started` notice BEFORE the wait — it used to go out AFTER, so the one
+    line the operator got read "starting now" about something already over — then
+    the completion report (`compact.done_tokens` with the pre/post counts when the
+    backend reported them, else `compact.done`; OpenCode reports none) and, when
+    `/compact_summary` allows, the full summary. A FAILURE is posted too, on both
+    triggers: having announced a start, silence would leave the operator waiting on
+    a compaction that already gave up. Narration is `adapterCompact`-ONLY — on the
+    tmux route the TUI renders its own progress and the bot has no completion
+    signal to await, so "compacted" there would be a claim it cannot back. The
+    **typing indicator covers the whole compaction** (S3): `checkShouldKeepTyping`
+    and the leak backstop `checkIsTypingStuckByLeak` both take `isCompacting`, fed
+    from the existing `threadsCompacting` set — a keep-alive in the first, a VETO in
+    the second (during a compaction the leak pattern is legitimate, so without the
+    veto the backstop would cut exactly this indicator). The seam starts the loader
+    once and never stops it in its `finally`: dropping the `threadsCompacting` mark
+    lets the rule self-stop on the next tick, whereas an explicit stop could kill a
+    loader a concurrent prompt armed. Needed because the indicator's other two
+    inputs are BOTH false while summarising (OpenCode sets no busy flag for
+    `summarize`, and neither backend streams output) — measured: 43 s of complete
+    silence before this.
+    **The FULL summary is written into the topic** (`postCompactionSummary`, the one
+    poster all three triggers call after their own notice): `compact.summaryHeader`
+    + the summary, PLAIN text with no `parse_mode` (freeform model prose — one stray
+    backtick in a Markdown/HTML send drops the whole message), `splitMessage`-split
+    when it outgrows one message, never truncated, and with the sentinel marker
+    LINES removed (`stripCompactionClosingMarkers`). It must NOT go through the
+    agent-output path — that would re-arm the idle watchdog off the bot's own
+    message. A backend whose own compaction already reaches the topic declares
+    `AgentAdapter.streamsCompactionSummary` (OpenCode does: its `summarize` produces
+    a real assistant message that rides the SSE stream) and the bot posts nothing —
+    a CAPABILITY flag, not a name check. The whole gate is the pure
+    `checkShouldPostCompactionSummary({isEnabled, streamsOwnSummary, route})`.
+  - **`/compact_summary` — post the full summary (toggle, default ON).** Regular
+    topic → per-thread override; **General** → the instance-wide default; bare → an
+    Enable/Disable picker (✓ on current) that re-renders in place (repeated use).
+    Persisted as `state.json` `compactSummaryEnabled` + `compactSummaryOverrides`
+    (same shape/discipline as the `compactOnIdle*` pair), lifecycle-independent.
+    Unlike `/compact_on_idle` it is NOT gated on a live session: the value is read
+    when a compaction FINISHES rather than used to arm a timer, so setting it in a
+    quiet or not-yet-started topic is meaningful. Only a `/terminal` topic is
+    refused (`compactSummary.unsupported`). It gates ONLY the summary post — the
+    start notice, the typing indicator and the completion report are not settings.
   - **`/compact_on_idle` — auto-compaction after ~55 min idle** (F2). A per-topic
     idle watchdog (`noteThreadActivity` reset points: user prompt / any command /
     agent output; timer `idleCompactMs = 55min`, chosen to land inside the ~1h
@@ -797,12 +857,23 @@ OpenCode events / bindings).
     output resets the timer, everything else re-arms only on the next genuine USER
     message. **The feature's own notice is sent via `replyToThread`, NOT the
     agent-output path, so it can't re-arm the watchdog into a loop.** After
-    compacting, the bot posts ONE non-pinned notice (`compactOnIdle.notice`) + the
-    appended "Where we stopped" closing section, if any — lifted from the
-    freshly-generated summary via `adapter.getLatestCompactionSummary` + the pure
+    compacting, the bot posts the report as THREE SEPARATE messages in this order
+    (pure `buildIdleCompactionNoticeParts`, so the order is unit-testable):
+    **(1)** the non-pinned notice (`compactOnIdle.notice`), **(2)** the full summary
+    when `/compact_summary` allows, **(3)** the D1 re-asked question LAST. The split
+    is what keeps that question's inline option buttons reachable — joined behind a
+    full summary they end up buried under a wall of text, and the summary alone can
+    outgrow one Telegram message. **The notice carries the "Where we stopped" closing
+    section ONLY when no full summary is posted**: the block is a SLICE of the
+    summary, so printing both duplicates it. Enforced twice — `runThreadCompaction`
+    returns `closingSection: null` whenever it returns a `summary` (so each caller's
+    "append the block if present" stays a plain check), and the composer applies the
+    same rule. The block is lifted from the freshly-generated summary via
+    `adapter.getLatestCompactionSummary` + the pure
     `extractCompactionClosingSection` (sentinel markers `<<<WHERE_WE_STOPPED>>>` /
     `<<<END_WHERE_WE_STOPPED>>>`, backend-agnostic since OpenCode's markdown template
-    and Claude's freeform summary differ). The closing section is baked into the
+    and Claude's freeform summary differ); that summary is read ONCE per compaction
+    and serves both the block and the posted summary. The closing section is baked into the
     summary itself via the per-locale `compact.closingSectionInstruction` (English +
     a baked "IN <language>" directive, like the `schedule.*` templates) passed as the
     compaction instruction. The command: regular topic → per-thread override;
@@ -854,7 +925,12 @@ OpenCode events / bindings).
     then runs the same `runThreadCompaction(key, {withClosingSection:false})` seam
     the idle path uses (no closing section — the user is present). `runThreadCompaction`
     (`bot.ts`) is the single execution seam shared by F1 + F2, wrapping the
-    `getCompactCommandRoute` decision.
+    `getCompactCommandRoute` decision. The drain is NARRATED exactly like the manual
+    `/compact` (it shares `runNarratedCompaction`): start notice when the deferred
+    compaction actually begins, typing indicator throughout, then the completion
+    report + the summary. It used to post NOTHING — yet the agent only ever calls
+    this tool because the operator asked it to, so the operator is present and
+    waiting.
   - `/clear_messages` (formerly `/clear`) deletes this thread's Telegram
     messages (up to 48h, Telegram limit). The bare `/clear` is **no longer
     bot-owned** — it's forwarded verbatim to the agent (Claude
@@ -911,7 +987,8 @@ OpenCode events / bindings).
     normal welcome stack. Invalid name → error, mode stays armed for retry.
     Any command exits the mode. `/bind <subdir>` direct form is unchanged.
 - **Agent control (proxied):** `/model`, `/connect`, `/disconnect`, `/effort`,
-  `/verbosity`, `/thinking`, `/compact_on_idle`, `/auto_continue_limits`,
+  `/verbosity`, `/thinking`, `/compact_on_idle`, `/compact_summary`,
+  `/auto_continue_limits`,
   `/tool_results`, `/subagent`, `/output`, `/schedule`, `/claude_mode`, and raw TUI
   keys `/c`, `/y`, `/n`, `/enter`, `/up`, `/down`, `/tab`, `/esc` (`/escape`)
   - `/auto_continue_limits [on|off]` toggles waiting out a usage/session limit and
@@ -1413,7 +1490,8 @@ rather than typed into the agent.)
 **A one-shot setting picker CONSUMES its keyboard** — edit the message into a short
 confirmation and drop the markup (`/language`, `/auto_continue_limits`), because a
 keyboard left on screen invites a stale tap against newer state. A picker meant for
-repeated use instead re-renders in place (`/model`, `/effort`, `/compact_on_idle`);
+repeated use instead re-renders in place (`/model`, `/effort`, `/compact_on_idle`,
+`/compact_summary`);
 when its `callback_data` carries an INDEX into a mutable list, snapshot that list
 per MESSAGE (`/disconnect`) or bake the identity into the data
 (`acl_skip_<fireAt>`).
