@@ -12,8 +12,9 @@
  *   - a live session → exactly ONE `POST /session/:id/summarize`, scoped to the
  *     session's owning instance (`?directory=<workDir>`), carrying a complete
  *     `{ providerID, modelID }` and NO `auto` flag (manual compaction), and
- *     resolves to `null` (success);
- *   - NO live session → no POST at all, resolves to the `compact.*` notice;
+ *     resolves `{ ok: true }` with `null` token counts — `/summarize` reports
+ *     none, and inventing `0` would make the bot print a bogus `0 → 0 tokens`;
+ *   - NO live session → no POST at all, resolves the failing `compact.*` notice;
  *   - a model resolvable ONLY through the server default (`GET /config`) still
  *     produces complete ids — never a partial/empty ref;
  *   - no resolvable model at all → a notice and NO POST;
@@ -27,7 +28,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type CompactionResult, type ThreadKey } from '../types';
 
 interface ApiCall {
   method: string;
@@ -109,15 +110,26 @@ function injectSession(
 const getSummarizePosts = (calls: ApiCall[]): ApiCall[] =>
   calls.filter((c) => c.method === 'POST' && c.urlPath.startsWith(`/session/${sessionId}/summarize`));
 
+/** The user-facing text of a failure result; fails the case when it is a success. */
+function getError(result: CompactionResult): string {
+  if (result.ok) {
+    assert.fail(`expected a failure result, got success (pre=${result.preTokens} post=${result.postTokens})`);
+  }
+  return result.error;
+}
+
 describe('OpenCode context compaction', () => {
-  it('POSTs summarize scoped to the session instance with the session model and resolves null', async () => {
+  it('POSTs summarize scoped to the session instance with the session model and reports success with no counts', async () => {
     const { adapter, calls } = createCompactAdapter();
     const key: ThreadKey = { chatId: -100, threadId: 1 };
     injectSession(adapter, key, sessionOverrideModel);
 
     const result = await adapter.compactContext(key);
 
-    assert.equal(result, null, 'success resolves to null');
+    // OpenCode's `/summarize` reports no token counts, so a success must degrade
+    // them to `null` — the bot then posts its completion sentence WITHOUT numbers
+    // rather than printing a fabricated `0 → 0`.
+    assert.deepEqual(result, { ok: true, preTokens: null, postTokens: null }, 'success, counts unknown');
     const posts = getSummarizePosts(calls);
     assert.equal(posts.length, 1, 'compacts exactly once');
     assert.deepEqual(posts[0].body, {
@@ -148,7 +160,7 @@ describe('OpenCode context compaction', () => {
 
     const result = await adapter.compactContext(key);
 
-    assert.equal(result, null, 'success resolves to null');
+    assert.deepEqual(result, { ok: true, preTokens: null, postTokens: null }, 'success, counts unknown');
     const posts = getSummarizePosts(calls);
     assert.equal(posts.length, 1, 'compacts exactly once');
     assert.deepEqual(posts[0].body, serverDefaultModel, 'ids come from the server default');
@@ -163,8 +175,10 @@ describe('OpenCode context compaction', () => {
 
     const result = await adapter.compactContext(key);
 
-    assert.ok(typeof result === 'string' && result.length > 0, 'returns a user-facing notice');
-    assert.ok(!result.includes('{'), `notice must be fully substituted: "${result}"`);
+    assert.equal(result.ok, false, 'an unresolvable model is a FAILURE result');
+    const error = getError(result);
+    assert.ok(error.length > 0, 'returns a user-facing notice');
+    assert.ok(!error.includes('{'), `notice must be fully substituted: "${error}"`);
     assert.equal(getSummarizePosts(calls).length, 0, 'no POST without a complete model ref');
   });
 
@@ -174,8 +188,10 @@ describe('OpenCode context compaction', () => {
 
     const result = await adapter.compactContext(key);
 
-    assert.ok(typeof result === 'string' && result.length > 0, 'returns a user-facing notice');
-    assert.ok(!result.includes('{'), `notice must be fully substituted: "${result}"`);
+    assert.equal(result.ok, false, 'no live session is a FAILURE result');
+    const error = getError(result);
+    assert.ok(error.length > 0, 'returns a user-facing notice');
+    assert.ok(!error.includes('{'), `notice must be fully substituted: "${error}"`);
     assert.equal(calls.length, 0, 'no HTTP call without a live session');
   });
 
@@ -186,9 +202,10 @@ describe('OpenCode context compaction', () => {
 
     const result = await adapter.compactContext(key);
 
-    assert.ok(typeof result === 'string' && result.length > 0, 'a failed POST returns a notice, not a throw');
-    assert.ok(!result.includes('{'), `notice must be fully substituted: "${result}"`);
-    assert.ok(result.includes('500 boom'), `the failure reason must reach the user: "${result}"`);
+    assert.equal(result.ok, false, 'a failed POST is a FAILURE result, not a throw');
+    const error = getError(result);
+    assert.ok(!error.includes('{'), `notice must be fully substituted: "${error}"`);
+    assert.ok(error.includes('500 boom'), `the failure reason must reach the user: "${error}"`);
     assert.equal(getSummarizePosts(calls).length, 1, 'the POST was attempted');
   });
 });

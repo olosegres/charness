@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, OutputEventMeta, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent, ThreadKey } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, OutputEventMeta, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent, ThreadKey } from '../types';
 import { keyToString } from '../types';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
@@ -2730,12 +2730,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * defaults the flag to false (the automatic, overflow-triggered compaction is
    * server-side and untouched by this).
    */
-  async compactContext(key: ThreadKey, instruction?: string): Promise<string | null> {
+  async compactContext(key: ThreadKey, instruction?: string): Promise<CompactionResult> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return t('compact.start_agent_first');
+    if (!session?.isActive) return { ok: false, error: t('compact.start_agent_first') };
 
     const modelRef = session.modelOverride ?? (await this.getProspectiveModelRef(key));
-    if (!modelRef) return t('compact.model_unresolved');
+    if (!modelRef) return { ok: false, error: t('compact.model_unresolved') };
 
     // The fork's summarize endpoint appends `instruction` to its baked
     // compaction prompt (F2/S6) — only send it when non-empty so an ordinary
@@ -2754,11 +2754,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       console.log(
         `[OpenCode] Compacting session ${session.sessionId} with ${modelRef.providerID}/${modelRef.modelID}`,
       );
-      return null;
+      // Counts are always `null` here: `/summarize` reports none, so the bot's
+      // completion message drops the numbers rather than inventing them.
+      return { ok: true, preTokens: null, postTokens: null };
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn(`[OpenCode] context compaction failed:`, reason);
-      return t('compact.failed', { reason });
+      return { ok: false, error: t('compact.failed', { reason }) };
     }
   }
 

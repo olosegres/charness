@@ -19,7 +19,11 @@
  *     a compacting CLI emits only `status:"compacting"` frames, which classify to
  *     nothing, so an action-fed clock would read a healthy compaction as dead;
  *   - the outcome of a real confirmation still wins: the boundary frame resolves
- *     the wait with its token counts.
+ *     the wait with its token counts — and those counts must REACH the caller in
+ *     the resolved `CompactionResult`, because the bot's completion message
+ *     ("314150 → 12883 tokens") is rendered from them;
+ *   - a wait that times out after `compact_status success` reports SUCCESS with
+ *     unknown (`null`) counts, never a failure over an already-compacted session.
  *
  * The adapter's private session map is reached via runtime bracket access (tests
  * are type-stripped by tsx), same pattern as `claudeJsonStreamMcpHeal`. Stdin is
@@ -38,7 +42,7 @@ import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { createStdoutTailState, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { compactionSilenceTimeoutMs, compactionWaitPollMs } from '../utils/jsonStreamBusyWatchdog';
-import { keyToString, type ThreadKey } from '../types';
+import { keyToString, type CompactionResult, type ThreadKey } from '../types';
 
 // A key no live thread uses — every path derived from it is a no-op.
 const key: ThreadKey = { chatId: -100999778, threadId: 78 };
@@ -138,7 +142,7 @@ describe('json-stream compaction wait', () => {
     // parked for minutes on a process that no longer existed.
     const { adapter, session } = start();
 
-    let settled: string | null | undefined;
+    let settled: CompactionResult | undefined;
     const pending = adapter.compactContext(key).then((result) => { settled = result; });
     await settleTicks();
     assert.equal(settled, undefined, 'the wait is still parked while the session lives');
@@ -146,8 +150,10 @@ describe('json-stream compaction wait', () => {
 
     adapter['clearTimers'](session);
     await pending;
-    assert.equal(typeof settled, 'string', 'the caller was settled by the teardown');
-    assert.match(settled ?? '', /session ended/, `unexpected reason: ${settled}`);
+    assert.ok(settled && !settled.ok, 'the caller was settled by the teardown, as a FAILURE');
+    const reason = settled.ok ? '' : settled.error;
+    assert.match(reason, /session ended/, `unexpected reason: ${reason}`);
+    assert.ok(!reason.includes('{'), `the notice must be fully substituted: "${reason}"`);
     assert.equal(session.pendingCompaction, null, 'the awaiter was dropped');
   });
 
@@ -156,7 +162,7 @@ describe('json-stream compaction wait', () => {
     // its compaction, so the clear is part of the contract, not housekeeping.
     const { adapter, session } = start();
 
-    let settled: string | null | undefined;
+    let settled: CompactionResult | undefined;
     const pending = adapter.compactContext(key).then((result) => { settled = result; });
     await settleTicks();
     // Node stores an interval's PERIOD in `_repeat` and leaves it `null` for a
@@ -175,8 +181,45 @@ describe('json-stream compaction wait', () => {
     // The real confirmation: the boundary frame carrying the token counts.
     adapter['handleCompactBoundary'](session, { kind: 'compactBoundary', trigger: 'manual', preTokens: 314150, postTokens: 12883 });
     await pending;
-    assert.equal(settled, null, 'a confirmed compaction reports success (null = no error)');
+    // The counts are the POINT of the typed result: the bot's completion message
+    // reports "314150 → 12883 tokens" from them. Asserting only `ok: true` would
+    // pass against an adapter that resolved success and threw the numbers away —
+    // which is exactly what the old `string | null` signature forced it to do.
+    assert.deepEqual(
+      settled,
+      { ok: true, preTokens: 314150, postTokens: 12883 },
+      'a confirmed compaction reports success WITH the boundary frame\'s token counts',
+    );
     assert.equal(session.pendingCompaction, null, 'the awaiter and its watchdog were cleared');
+  });
+
+  it('a wait that times out AFTER compact_status success reports success with unknown counts', async () => {
+    // `getCompactionTimeoutOutcome`'s `succeededWithoutTokenCounts` path, seen from
+    // the caller: the CLI confirmed the compaction and only the boundary frame
+    // (which carries the numbers) never arrived. Reporting a FAILURE here would
+    // suppress the bot's notice over an already-compacted session — the very
+    // silence this feature removes — so the counts must degrade to `null` while
+    // the outcome stays `ok`.
+    const { adapter, session } = start();
+
+    let settled: CompactionResult | undefined;
+    const pending = adapter.compactContext(key).then((result) => { settled = result; });
+    await settleTicks();
+
+    // The CLI said it worked, then went quiet past the silence bound.
+    adapter['handleCompactStatus'](session, { kind: 'compactStatus', result: 'success' });
+    assert.equal(session.pendingCompaction?.sawSuccess, true, 'the success was recorded');
+    assert.equal(settled, undefined, 'a success status alone does not settle the wait');
+    session.lastStdoutActivityAt = Date.now() - compactionSilenceTimeoutMs - 1_000;
+
+    // Let the repeating watchdog tick past the silence bound.
+    await new Promise((resolve) => setTimeout(resolve, compactionWaitPollMs + 50));
+    await pending;
+    assert.deepEqual(
+      settled,
+      { ok: true, preTokens: null, postTokens: null },
+      'compacted, counts unknown — never a failure, and never a fabricated 0',
+    );
   });
 
   it('a compacting heartbeat the classifier DROPS still feeds the silence clock', async () => {
@@ -204,6 +247,6 @@ describe('json-stream compaction wait', () => {
 
     // Settle the wait so the case leaves nothing parked.
     adapter['handleCompactBoundary'](session, { kind: 'compactBoundary', trigger: 'manual', preTokens: 314150, postTokens: 12883 });
-    assert.equal(await pending, null);
+    assert.deepEqual(await pending, { ok: true, preTokens: 314150, postTokens: 12883 });
   });
 });

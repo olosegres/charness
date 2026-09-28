@@ -627,6 +627,30 @@ export interface AgentRuntimeInfo {
 }
 
 /**
+ * @name CompactionResult
+ * @description Outcome of ONE {@link AgentAdapter.compactContext} call.
+ *
+ * A discriminated result rather than the old `string | null` (an error message,
+ * or `null` for success), because a success has data worth reporting: the Claude
+ * backend's confirmation frame carries the pre/post context token counts, which
+ * the bot posts in its completion message. With the old shape those counts had
+ * nowhere to go — the adapter logged and dropped them — and a side-channel getter
+ * would be a second source of truth for one call's outcome.
+ *
+ * `preTokens`/`postTokens` are `null` when the backend reports no counts:
+ * OpenCode's `/summarize` returns none at all, and the Claude wait can confirm a
+ * compaction (`compact_status success`) without ever seeing the boundary frame
+ * that carries them. `null` therefore means "compacted, counts unknown", never
+ * "zero" — the completion message drops the numbers instead of printing zeros.
+ *
+ * `error` is the user-facing text the bot posts verbatim (already localised by
+ * the adapter), same convention as {@link AgentAdapter.renameSession}'s string.
+ */
+export type CompactionResult =
+  | { ok: true; preTokens: number | null; postTokens: number | null }
+  | { ok: false; error: string };
+
+/**
  * @description Unified interface for AI agent backends (Claude CLI, OpenCode, etc.).
  * Each adapter manages sessions keyed by `ThreadKey` and communicates via EventEmitter.
  *
@@ -775,9 +799,9 @@ export interface AgentAdapter extends EventEmitter {
 
   /**
    * Compact (summarize) the CURRENT live session's context so the conversation
-   * can keep going in a smaller window. Same convention as
-   * {@link renameSession}: resolves to `null` on success, or a short
-   * user-facing error string on failure. Awaits the compaction to actually
+   * can keep going in a smaller window. Resolves a {@link CompactionResult}: a
+   * success optionally carrying the pre/post context token counts, or a failure
+   * carrying the user-facing error text. Awaits the compaction to actually
    * COMPLETE before resolving (OpenCode's summarize blocks until the summary is
    * generated; the json-stream backend waits for the CLI's `compact_boundary`),
    * so the caller can post its notice AFTER the context was really compacted.
@@ -796,7 +820,7 @@ export interface AgentAdapter extends EventEmitter {
    * literal slash command to it instead. Adapters with neither (Terminal) get
    * the "not supported" reply.
    */
-  compactContext?(key: ThreadKey, instruction?: string): Promise<string | null>;
+  compactContext?(key: ThreadKey, instruction?: string): Promise<CompactionResult>;
 
   /**
    * Read the most recent compaction summary text for the live session, or

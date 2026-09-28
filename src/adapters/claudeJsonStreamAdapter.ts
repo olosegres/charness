@@ -5,6 +5,7 @@ import type {
   AgentAdapter,
   AgentSession,
   AgentRuntimeInfo,
+  CompactionResult,
   DisplayPrefsReader,
   JsonStreamTailOffset,
   JsonStreamTailWriter,
@@ -106,11 +107,6 @@ const streamOutputBatchMs = 350;
 /** How long to wait for the `initialize` control-response handshake before
  *  proceeding without the interactive control channel (questions unavailable). */
 const initializeHandshakeTimeoutMs = 15000;
-
-/** Outcome of an in-flight bot-issued `/compact` turn. */
-type CompactionResult =
-  | { ok: true; preTokens: number | null; postTokens: number | null }
-  | { ok: false; error: string };
 
 /** Awaiter bookkeeping for a bot-issued compaction (see {@link StreamSession.pendingCompaction}). */
 interface PendingStreamCompaction {
@@ -862,15 +858,19 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * stream-json user turn — the CLI parses the slash command, compacts, and
    * reports the outcome on a `compact_boundary` (success, with token counts) /
    * a failing `compact_status` frame. The whole turn's own output is suppressed
-   * (`compactionInProgress`) so only the bot's confirmation shows. Resolves
-   * `null` on success or a short error string, awaiting the terminal signal so
-   * the caller can post its notice AFTER the context was really compacted.
+   * (`compactionInProgress`) so only the bot's confirmation shows. Resolves the
+   * {@link CompactionResult} — a success carrying the boundary frame's pre/post
+   * token counts (`null` when only `compact_status success` was seen) — awaiting
+   * the terminal signal so the caller can post its notice AFTER the context was
+   * really compacted.
    */
-  async compactContext(key: ThreadKey, instruction?: string): Promise<string | null> {
+  async compactContext(key: ThreadKey, instruction?: string): Promise<CompactionResult> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return t('compact.start_agent_first');
-    if (session.pendingCompaction) return t('compact.failed', { reason: 'a compaction is already running' });
-    if (session.isBusy) return t('compact.busy');
+    if (!session?.isActive) return { ok: false, error: t('compact.start_agent_first') };
+    if (session.pendingCompaction) {
+      return { ok: false, error: t('compact.failed', { reason: 'a compaction is already running' }) };
+    }
+    if (session.isBusy) return { ok: false, error: t('compact.busy') };
 
     const trimmed = instruction?.trim();
     const text = trimmed ? `/compact ${trimmed}` : '/compact';
@@ -919,10 +919,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     });
     if (result.ok) {
       console.log(`[ClaudeJson] compacted ${keyToString(key)} (pre=${result.preTokens ?? '?'} post=${result.postTokens ?? '?'})`);
-      return null;
+      return result;
     }
     console.warn(`[ClaudeJson] compaction failed for ${keyToString(key)}: ${result.error}`);
-    return t('compact.failed', { reason: result.error });
+    // The raw internal reason is wrapped into the user-facing template HERE (not at
+    // the resolve sites) so every failure path reads the same way in the topic.
+    return { ok: false, error: t('compact.failed', { reason: result.error }) };
   }
 
   /**

@@ -7178,8 +7178,12 @@ async function runThreadCompaction(
     }
 
     // adapterCompact: OpenCode / json-stream — a real, awaited compaction.
-    const err = adapter.compactContext ? await adapter.compactContext(key, instruction) : null;
-    if (err) return { ok: false, error: err };
+    // `compactContext` is present on this route by construction (it IS what
+    // `getCompactCommandRoute` tested for), but the method is optional on the
+    // interface, so the absence is answered rather than non-null-asserted.
+    if (!adapter.compactContext) return { ok: false, error: t('compact.unsupported_backend', { label: adapter.label }) };
+    const compaction = await adapter.compactContext(key, instruction);
+    if (!compaction.ok) return { ok: false, error: compaction.error };
     let closingSection: string | null = null;
     if (opts.withClosingSection && adapter.getLatestCompactionSummary) {
       const summary = await adapter.getLatestCompactionSummary(key).catch(() => null);
