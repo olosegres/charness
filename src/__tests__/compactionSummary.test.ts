@@ -7,6 +7,13 @@
  *  - Claude json-stream: `readLatestCompactSummaryFromTranscript` over the
  *    on-disk transcript's `isCompactSummary:true` line.
  *
+ * Plus the WIRING of `AgentAdapter.streamsCompactionSummary`, the one field that
+ * decides whether the bot posts the summary itself: the pure gate rule is covered in
+ * `compactOnIdle.test.ts`, but nothing there proves the flag is actually declared on
+ * the backend that streams its own summary and absent on the ones that do not — and
+ * a missing declaration would silently post a SECOND copy of OpenCode's summary in
+ * every topic while every other test stayed green.
+ *
  * Test case: n/a (no Jira tracker for this project).
  */
 
@@ -16,8 +23,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { getLatestOpenCodeCompactionSummary } from '../adapters/openCodeAdapter';
-import { readLatestCompactSummaryFromTranscript } from '../adapters/claudeJsonStreamAdapter';
+import { OpenCodeAdapter, getLatestOpenCodeCompactionSummary } from '../adapters/openCodeAdapter';
+import { ClaudeJsonStreamAdapter, readLatestCompactSummaryFromTranscript } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
 
 test('getLatestOpenCodeCompactionSummary: returns the newest summary:true assistant text', () => {
   const records = [
@@ -75,4 +83,22 @@ test('readLatestCompactSummaryFromTranscript: reads the isCompactSummary line co
 
 test('readLatestCompactSummaryFromTranscript: unreadable file → null', () => {
   assert.equal(readLatestCompactSummaryFromTranscript('/no/such/transcript.jsonl'), null);
+});
+
+test('streamsCompactionSummary is declared ONLY by the backend whose summary already reaches the topic', () => {
+  // OpenCode's `POST /session/:id/summarize` produces a real assistant message that
+  // rides the SSE stream into the topic, so the bot must stay quiet; both Claude
+  // backends write the summary only into their on-disk transcript and emit no
+  // assistant text, so the bot is the ONLY thing that can surface it. The contrast is
+  // the point: asserting the `true` alone would also pass on an adapter set where
+  // every backend declared it and no summary was ever posted at all.
+  assert.equal(new OpenCodeAdapter().streamsCompactionSummary, true, 'OpenCode streams its own summary');
+  assert.ok(
+    !new ClaudeJsonStreamAdapter().streamsCompactionSummary,
+    'the json-stream backend emits no summary text — the bot must post it',
+  );
+  assert.ok(
+    !new ClaudeCliAdapter().streamsCompactionSummary,
+    'the tmux backend emits no summary text either',
+  );
 });
