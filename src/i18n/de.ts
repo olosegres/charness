@@ -302,6 +302,8 @@ export const deDict: Record<string, string> = {
   'rename_session.failed': '⚠️ Session konnte nicht umbenannt werden: {reason}',
 
   'compact.started': '🧹 Der Session-Kontext wird komprimiert — der Agent macht mit der Zusammenfassung weiter.',
+  'compact.done': '✅ Kontext komprimiert.',
+  'compact.done_tokens': '✅ Kontext komprimiert: {pre} → {post} Tokens.',
   'compact.start_agent_first': 'Keine aktive Session. Starte zuerst einen Agent (/claude oder /opencode).',
   'compact.unsupported_backend': 'Kontext-Komprimierung wird für {label} nicht unterstützt.',
   'compact.model_unresolved': '⚠️ Komprimieren nicht möglich: für diese Session ist kein Modell ermittelt. Wähle eines mit /model und versuche es erneut.',

@@ -302,6 +302,8 @@ export const zhDict: Record<string, string> = {
   'rename_session.failed': '⚠️ 重命名会话失败：{reason}',
 
   'compact.started': '🧹 正在压缩会话上下文 — 代理将基于摘要继续。',
+  'compact.done': '✅ 上下文已压缩。',
+  'compact.done_tokens': '✅ 上下文已压缩：{pre} → {post} tokens。',
   'compact.start_agent_first': '没有活跃会话。请先启动代理（/claude 或 /opencode）。',
   'compact.unsupported_backend': '{label} 不支持压缩上下文。',
   'compact.model_unresolved': '⚠️ 无法压缩：此会话未解析出模型。请用 /model 选择一个后重试。',

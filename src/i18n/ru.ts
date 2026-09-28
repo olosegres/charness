@@ -306,6 +306,8 @@ export const ruDict: Record<string, string> = {
   'rename_session.failed': '⚠️ Не удалось переименовать сессию: {reason}',
 
   'compact.started': '🧹 Сжимаю контекст сессии — агент продолжит с краткой выжимки.',
+  'compact.done': '✅ Контекст сжат.',
+  'compact.done_tokens': '✅ Контекст сжат: {pre} → {post} токенов.',
   'compact.start_agent_first': 'Нет активной сессии. Сначала запусти агента (/claude или /opencode).',
   'compact.unsupported_backend': 'Сжатие контекста не поддерживается для {label}.',
   'compact.model_unresolved': '⚠️ Нельзя сжать: для этой сессии не определена модель. Выбери её через /model и попробуй снова.',

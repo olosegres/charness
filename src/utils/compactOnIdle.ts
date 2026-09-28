@@ -215,6 +215,31 @@ export function buildCompactionInstruction(input: {
 }
 
 /**
+ * Digit-group separator for a rendered context-token count. A NARROW NO-BREAK
+ * SPACE (U+202F), not a comma or a period: both of those are DECIMAL separators
+ * in some of the bot's 12 locales, so `314,150` reads as one number in an English
+ * topic and as `314.15` in a German one. A space is unambiguous everywhere, and
+ * no-break keeps the figure from wrapping mid-number in a Telegram bubble.
+ */
+const tokenCountGroupSeparator = ' ';
+
+/**
+ * @description Render a context-token count for the compaction completion
+ * message ("314 150 → 12 883 tokens"): digits grouped in threes.
+ *
+ * Deliberately NOT `Number.toLocaleString()` — that formats for the HOST's
+ * locale, not the topic's, so the same count would render differently depending
+ * on the machine the bot happens to run on. This is fixed and testable instead.
+ */
+export function formatTokenCount(count: number): string {
+  return Math.trunc(count)
+    .toString()
+    // Insert the separator at every position that has a multiple of three digits
+    // left to run, i.e. between groups only — never before the first digit.
+    .replace(/\B(?=(\d{3})+(?!\d))/g, tokenCountGroupSeparator);
+}
+
+/**
  * FIXED (English, locale-independent) sentinel markers the closing section is
  * wrapped in. Sentinels — not a markdown heading — because the two backends
  * generate very different summary formats (OpenCode's `## Goals/…` template vs

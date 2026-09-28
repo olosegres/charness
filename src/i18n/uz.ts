@@ -302,6 +302,8 @@ export const uzDict: Record<string, string> = {
   'rename_session.failed': '⚠️ Seans nomini o‘zgartirib bo‘lmadi: {reason}',
 
   'compact.started': '🧹 Seans konteksti siqilmoqda — agent qisqa mazmundan davom etadi.',
+  'compact.done': '✅ Kontekst siqildi.',
+  'compact.done_tokens': '✅ Kontekst siqildi: {pre} → {post} token.',
   'compact.start_agent_first': 'Faol seans yo‘q. Avval agentni boshlang (/claude yoki /opencode).',
   'compact.unsupported_backend': '{label} uchun kontekstni siqish qo‘llab-quvvatlanmaydi.',
   'compact.model_unresolved': '⚠️ Siqib bo‘lmaydi: bu seans uchun model aniqlanmadi. /model bilan tanlang va qayta urinib ko‘ring.',

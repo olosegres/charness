@@ -19,6 +19,7 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   extractCompactionClosingSection,
+  formatTokenCount,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
 } from '../utils/compactOnIdle';
@@ -301,4 +302,27 @@ test('extractCompactionClosingSection: missing end marker → to end of text', (
 test('extractCompactionClosingSection: an empty section → null (never a bare block)', () => {
   const summary = `${compactionClosingStartMarker}\n   \n${compactionClosingEndMarker}`;
   assert.equal(extractCompactionClosingSection(summary), null);
+});
+
+// ── formatTokenCount (the completion message's numbers) ──
+
+test('formatTokenCount groups digits in threes with ONE locale-independent separator', () => {
+  // The separator must NOT be a comma or a period: both are DECIMAL separators in
+  // some of the bot's 12 locales, so `314,150` would read as `314.15` in a German
+  // topic. A narrow no-break space is unambiguous in all of them.
+  const formatted = formatTokenCount(314150);
+  assert.equal(formatted, '314\u202F150');
+  assert.ok(!formatted.includes(','), 'a comma reads as a decimal point in several locales');
+  assert.ok(!formatted.includes('.'), 'a period reads as a decimal point in several locales');
+  assert.equal(formatTokenCount(12883), '12\u202F883');
+  assert.equal(formatTokenCount(1234567), '1\u202F234\u202F567');
+});
+
+test('formatTokenCount leaves a short count untouched — no leading separator', () => {
+  // The `\\B` boundary is what stops a separator landing before the first digit;
+  // a plain "every 3 chars" split would emit ",123".
+  assert.equal(formatTokenCount(0), '0');
+  assert.equal(formatTokenCount(7), '7');
+  assert.equal(formatTokenCount(999), '999');
+  assert.equal(formatTokenCount(1000), '1\u202F000');
 });

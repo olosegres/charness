@@ -302,6 +302,8 @@ export const kaDict: Record<string, string> = {
   'rename_session.failed': '⚠️ სესიის სახელის შეცვლა ვერ მოხერხდა: {reason}',
 
   'compact.started': '🧹 სესიის კონტექსტი იკუმშება — აგენტი გააგრძელებს შეჯამებიდან.',
+  'compact.done': '✅ კონტექსტი შეიკუმშა.',
+  'compact.done_tokens': '✅ კონტექსტი შეიკუმშა: {pre} → {post} ტოკენი.',
   'compact.start_agent_first': 'აქტიური სესია არ არის. ჯერ გაუშვით აგენტი (/claude ან /opencode).',
   'compact.unsupported_backend': '{label}-ისთვის კონტექსტის შეკუმშვა არ არის მხარდაჭერილი.',
   'compact.model_unresolved': '⚠️ შეკუმშვა ვერ ხდება: ამ სესიისთვის მოდელი ვერ დადგინდა. აირჩიეთ /model-ით და სცადეთ ხელახლა.',

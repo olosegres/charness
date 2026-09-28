@@ -342,7 +342,7 @@ import {
   checkIsAuthLoginSucceeded,
   getLoginCommandRoute,
 } from './utils/claudeAuthLogin';
-import { getCompactCommandRoute } from './utils/compactCommandRoute';
+import { getCompactCommandRoute, type CompactCommandRoute } from './utils/compactCommandRoute';
 import {
   getIdleCompactionArmDecision,
   type IdleCompactionArmKind,
@@ -351,6 +351,7 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   extractCompactionClosingSection,
+  formatTokenCount,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
 } from './utils/compactOnIdle';
@@ -7127,6 +7128,29 @@ interface ThreadCompactionResult {
   error?: string;
   /** The extracted "Where we stopped" closing prose (F2), or null when absent. */
   closingSection?: string | null;
+  /**
+   * Context token counts the backend reported for the compaction, `null` when it
+   * reports none (see {@link CompactionResult}). Both present ⇒ the completion
+   * message names the numbers; otherwise it is the same sentence without them.
+   */
+  preTokens?: number | null;
+  postTokens?: number | null;
+}
+
+/**
+ * @description Resolve the `/compact` route for a thread's current backend — the
+ * pure {@link getCompactCommandRoute} wrapped with the live adapter reading.
+ * Every compaction entry point (the command, the seam, the F1 arm + drain, the
+ * `/compact_on_idle` gate) asks the same question, so the three-line lookup lives
+ * in ONE place rather than being spelled out at each of them.
+ */
+function getThreadCompactRoute(key: ThreadKey): CompactCommandRoute {
+  const adapter = getThreadAdapter(key);
+  return getCompactCommandRoute({
+    hasCompactContext: Boolean(adapter.compactContext),
+    adapterName: adapter.name,
+    terminalAdapterName,
+  });
 }
 
 /**
@@ -7152,11 +7176,7 @@ async function runThreadCompaction(
 ): Promise<ThreadCompactionResult> {
   const adapter = getThreadAdapter(key);
   if (!adapter.checkIsActive(key)) return { ok: false, error: t('compact.start_agent_first') };
-  const route = getCompactCommandRoute({
-    hasCompactContext: Boolean(adapter.compactContext),
-    adapterName: adapter.name,
-    terminalAdapterName,
-  });
+  const route = getThreadCompactRoute(key);
   if (route === 'notSupported') {
     return { ok: false, error: t('compact.unsupported_backend', { label: adapter.label }) };
   }
@@ -7189,10 +7209,66 @@ async function runThreadCompaction(
       const summary = await adapter.getLatestCompactionSummary(key).catch(() => null);
       closingSection = summary ? extractCompactionClosingSection(summary) : null;
     }
-    return { ok: true, closingSection };
+    return {
+      ok: true,
+      closingSection,
+      preTokens: compaction.preTokens,
+      postTokens: compaction.postTokens,
+    };
   } finally {
     threadsCompacting.delete(kStr);
   }
+}
+
+/**
+ * @description Run a bot-issued compaction the operator is PRESENT for — the
+ * manual `/compact` command and the agent's `compact_conversation` drain — and
+ * narrate it in the topic: the start notice BEFORE the wait, then the completion
+ * report (with token counts when the backend gave any).
+ *
+ * The start notice used to be posted AFTER the wait returned, which read as "it is
+ * starting now" when it was already over — and for the 1–3+ minutes in between the
+ * topic showed nothing at all. Both triggers share this one body so the two can
+ * never narrate a compaction differently.
+ *
+ * Narration is `adapterCompact`-ONLY. On the `forwardToAgent` route (the tmux
+ * Claude backend) the TUI parses `/compact` and renders its own progress, and the
+ * bot has no completion signal to await there — announcing "compacted" the instant
+ * the text was typed in would be a claim the bot cannot back.
+ */
+async function runNarratedCompaction(key: ThreadKey, route: CompactCommandRoute, logTag: string): Promise<void> {
+  const isNarrated = route === 'adapterCompact';
+  if (isNarrated) await replyToThread(key, t('compact.started'));
+
+  // No closing section: the operator is right here, so there is nothing to recap
+  // to a future reader of the topic.
+  const result = await runThreadCompaction(key, { withClosingSection: false });
+  if (!result.ok) {
+    console.warn(`[${logTag}] ${keyToString(key)} compaction failed: ${result.error ?? 'unknown'}`);
+    // Always surfaced, even on the drain, which used to only log: having just
+    // announced a start, going silent would leave the operator waiting on a
+    // compaction that already gave up.
+    await replyToThread(key, result.error ?? t('compact.failed', { reason: 'unknown' }));
+    return;
+  }
+
+  // Close the F2 fire guard. Not against an IMMEDIATE re-fire — the `command()`
+  // wrapper already re-armed a fresh idle window for this thread — but against the
+  // END of that window: without the stamp `lastTurnEndAt` would still be ahead of
+  // `lastCompactionAt` there, so the watchdog would compact again with nothing new
+  // to compress. Only on SUCCESS: stamping a compaction that never ran would
+  // durably close the guard over a still-huge context.
+  await state.setCompactIdleCompactedAt(key);
+
+  if (!isNarrated) return;
+  const { preTokens, postTokens } = result;
+  await replyToThread(
+    key,
+    // Both counts or neither: one number alone says nothing about what was saved.
+    typeof preTokens === 'number' && typeof postTokens === 'number'
+      ? t('compact.done_tokens', { pre: formatTokenCount(preTokens), post: formatTokenCount(postTokens) })
+      : t('compact.done'),
+  );
 }
 
 /**
@@ -7484,12 +7560,7 @@ function armDeferredCompaction(key: ThreadKey): { ok: boolean; message: string }
   if (!adapter.checkIsActive(key)) {
     return { ok: false, message: 'No active agent session in this topic — nothing to compact.' };
   }
-  const route = getCompactCommandRoute({
-    hasCompactContext: Boolean(adapter.compactContext),
-    adapterName: adapter.name,
-    terminalAdapterName,
-  });
-  if (route === 'notSupported') {
+  if (getThreadCompactRoute(key) === 'notSupported') {
     return { ok: false, message: 'This session type cannot be compacted.' };
   }
   deferredCompactionArmed.add(keyToString(key));
@@ -7522,16 +7593,12 @@ async function tickDeferredCompaction(key: ThreadKey): Promise<void> {
     return;
   }
   deferredCompactionArmed.delete(kStr);
-  const result = await runThreadCompaction(key, { withClosingSection: false });
-  if (!result.ok) {
-    console.warn(`[compact-tool] ${kStr} deferred compaction failed: ${result.error ?? 'unknown'}`);
-    return;
-  }
-  // Stamp the compaction (persisted) so the F2 watchdog won't immediately re-fire,
-  // in this process or after a restart. Only on SUCCESS: stamping a compaction that
-  // never ran would durably close the "has an un-compacted turn" guard, so the next
-  // idle fire would skip with "nothing to compress" while the context is still huge.
-  await state.setCompactIdleCompactedAt(key);
+  // §1.3: the agent only calls `compact_conversation` because the operator asked
+  // it to, so the operator IS present and waiting — this compaction is narrated
+  // exactly like the manual one (it used to post nothing at all). The shared body
+  // also owns the `lastCompactionAt` stamp that keeps F2 from re-firing on top of
+  // it, in this process or after a restart.
+  await runNarratedCompaction(key, getThreadCompactRoute(key), 'compact-tool');
 }
 
 /**
@@ -7651,12 +7718,7 @@ command('auto_continue_limits', async (ctx, key) => {
 // an ordinary prompt and burn a whole turn without compacting anything. The
 // three-way decision is the pure `getCompactCommandRoute`.
 command('compact', async (_ctx, key) => {
-  const adapter = getThreadAdapter(key);
-  const route = getCompactCommandRoute({
-    hasCompactContext: Boolean(adapter.compactContext),
-    adapterName: adapter.name,
-    terminalAdapterName,
-  });
+  const route = getThreadCompactRoute(key);
 
   // A raw shell has no context to compact — and typing `/compact` into it would
   // just run a meaningless command. Answered from the route HERE rather than from
@@ -7664,33 +7726,17 @@ command('compact', async (_ctx, key) => {
   // first: a terminal topic with no live shell would otherwise be told to start an
   // agent instead of that the backend cannot be compacted.
   if (route === 'notSupported') {
-    await replyToThread(key, t('compact.unsupported_backend', { label: adapter.label }));
+    await replyToThread(key, t('compact.unsupported_backend', { label: getThreadAdapter(key).label }));
     return;
   }
 
   // EXECUTION goes through the shared seam (which also carries the D3 summary
-  // guidance; no closing section — the user is present). Dispatching inline here
-  // instead was a real defect: only `runThreadCompaction` adds the thread to
-  // `threadsCompacting`, so the summary the manual compaction produced counted as a
-  // TURN, pushing `lastTurnEndAt` back ahead of the compaction stamp — and one idle
-  // window later the watchdog compacted an already-compacted context. The route is
-  // still resolved above, but now only to word the REPLY.
-  const result = await runThreadCompaction(key, { withClosingSection: false });
-  if (!result.ok) {
-    await replyToThread(key, result.error ?? t('compact.failed', { reason: 'unknown' }));
-    return;
-  }
-  // A manual compaction closes the F2 fire guard too. Not against an IMMEDIATE
-  // re-fire — the `command()` wrapper already re-armed a fresh idle window for this
-  // thread — but against the END of that window: without the stamp `lastTurnEndAt`
-  // would still be ahead of `lastCompactionAt` there, so the watchdog would compact
-  // again with nothing new to compress. Only on SUCCESS: stamping a compaction that
-  // never ran would durably close the guard over a still-huge context.
-  await state.setCompactIdleCompactedAt(key);
-  // Only the awaited route confirms. The forward route is the tmux Claude backend,
-  // whose TUI parses `/compact` and renders the compaction itself — a bot-side
-  // "started" there would duplicate what the user already sees.
-  if (route === 'adapterCompact') await replyToThread(key, t('compact.started'));
+  // guidance). Dispatching inline here instead was a real defect: only
+  // `runThreadCompaction` adds the thread to `threadsCompacting`, so the summary the
+  // manual compaction produced counted as a TURN, pushing `lastTurnEndAt` back ahead
+  // of the compaction stamp — and one idle window later the watchdog compacted an
+  // already-compacted context.
+  await runNarratedCompaction(key, route, 'compact');
 });
 
 // `/compact_on_idle` — toggle auto-compaction after ~55 min idle. Regular topic
@@ -7702,13 +7748,7 @@ command('compact_on_idle', async (ctx, key) => {
   const isGeneral = checkIsGeneral(key);
 
   if (!isGeneral) {
-    const adapter = getThreadAdapter(key);
-    const route = getCompactCommandRoute({
-      hasCompactContext: Boolean(adapter.compactContext),
-      adapterName: adapter.name,
-      terminalAdapterName,
-    });
-    if (!adapter.checkIsActive(key) || route === 'notSupported') {
+    if (!getThreadAdapter(key).checkIsActive(key) || getThreadCompactRoute(key) === 'notSupported') {
       await replyToThread(key, t('compactOnIdle.unsupported'));
       return;
     }

@@ -160,6 +160,20 @@ test('voice.retrying names the error and the pause in every locale', () => {
   }
 });
 
+test('compaction completion keys exist in every locale and keep both token placeholders', () => {
+  for (const code of ['compact.done', 'compact.done_tokens']) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  // The numbers are the whole point of the `_tokens` variant: a locale that lost
+  // one placeholder would report "314 150 → {post} tokens" to the operator.
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('compact.done_tokens', { pre: '314 150', post: '12 883' }));
+    assert.ok(out.includes('314 150'), `expected the pre-count in ${locale}: "${out}"`);
+    assert.ok(out.includes('12 883'), `expected the post-count in ${locale}: "${out}"`);
+    assert.ok(!out.includes('{'), `placeholder not substituted in ${locale}: "${out}"`);
+  }
+});
+
 test('auto-continue-limits keys exist in every locale', () => {
   for (const code of [
     'autoContinueLimits.on',

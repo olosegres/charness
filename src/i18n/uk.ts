@@ -308,6 +308,8 @@ export const ukDict: Record<string, string> = {
   'rename_session.failed': '⚠️ Не вдалося перейменувати сесію: {reason}',
 
   'compact.started': '🧹 Стискаю контекст сесії — агент продовжить із короткого підсумку.',
+  'compact.done': '✅ Контекст стиснуто.',
+  'compact.done_tokens': '✅ Контекст стиснуто: {pre} → {post} токенів.',
   'compact.start_agent_first': 'Немає активної сесії. Спершу запусти агента (/claude чи /opencode).',
   'compact.unsupported_backend': 'Стиснення контексту не підтримується для {label}.',
   'compact.model_unresolved': '⚠️ Не можу стиснути: для цієї сесії не визначено модель. Вибери її через /model і спробуй знову.',
