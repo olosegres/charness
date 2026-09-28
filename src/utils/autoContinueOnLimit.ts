@@ -13,6 +13,8 @@
  * in `compactOnIdle.ts`.
  */
 
+import { resolveDefaultOnThreadToggle } from './threadToggle';
+
 /**
  * @description Resolve whether limit auto-continue is enabled for a thread. A
  * per-thread override always wins; otherwise the instance-wide default applies,
@@ -23,8 +25,7 @@ export function resolveAutoContinueOnLimitEnabled(
   globalDefault: boolean | undefined,
   threadOverride: boolean | undefined,
 ): boolean {
-  if (threadOverride !== undefined) return threadOverride;
-  return globalDefault ?? true;
+  return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
 }
 
 /** `callback_data` prefix of the «skip this resume once» button. */

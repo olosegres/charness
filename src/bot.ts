@@ -7244,9 +7244,7 @@ async function runThreadCompaction(
     if (!compaction.ok) return { ok: false, error: compaction.error };
 
     const isWithSummary = checkShouldPostCompactionSummary({
-      // The per-topic `/compact_summary` override arrives in the next change; the
-      // feature ships ON, which is what this constant expresses in the meantime.
-      isEnabled: true,
+      isEnabled: state.checkIsCompactSummaryEnabled(key),
       streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
       route,
     });
@@ -7725,6 +7723,33 @@ function buildCompactOnIdleKeyboard(isEnabled: boolean) {
 }
 
 /**
+ * @description Apply the `/compact_summary` setting and RETURN the confirmation
+ * text — the single write path behind the command and its picker buttons, so the
+ * two can never drift. Regular topic → the per-thread override; General topic →
+ * the instance-wide default.
+ *
+ * Nothing to arm or cancel afterwards (unlike `/compact_on_idle`, which owns a
+ * timer): the toggle is read at the moment a compaction finishes.
+ */
+async function applyCompactSummary(key: ThreadKey, isGeneral: boolean, enabled: boolean): Promise<string> {
+  const stateWord = enabled ? t('compactSummary.on') : t('compactSummary.off');
+  if (isGeneral) {
+    await state.setCompactSummaryGlobalDefault(enabled);
+    return t('compactSummary.setGlobal', { state: stateWord });
+  }
+  await state.setCompactSummaryOverride(key, enabled);
+  return t('compactSummary.setThisTopic', { state: stateWord });
+}
+
+/** Build the `/compact_summary` picker keyboard (Enable / Disable, ✓ on current). */
+function buildCompactSummaryKeyboard(isEnabled: boolean) {
+  return Markup.inlineKeyboard([
+    Markup.button.callback(t('compactSummary.enableButton') + (isEnabled ? ' ✓' : ''), 'csum_on'),
+    Markup.button.callback(t('compactSummary.disableButton') + (!isEnabled ? ' ✓' : ''), 'csum_off'),
+  ]);
+}
+
+/**
  * @description Append the shared `/auto_continue_limits` pointer to a usage-limit
  * arming notice. ONE key appended at ONE place, so the reset-time notice and the
  * "retrying in N min" fallback can never drift apart (the `effort.current_hint`
@@ -7857,6 +7882,36 @@ command('compact_on_idle', async (ctx, key) => {
     ? t('compactOnIdle.titleGeneral', { state: stateWord })
     : t('compactOnIdle.title', { state: stateWord });
   await replyToThread(key, title, buildCompactOnIdleKeyboard(isEnabled));
+});
+
+// `/compact_summary` — toggle writing the agent's FULL compaction summary into the
+// topic. Regular topic → per-thread override; General → the instance-wide default.
+// Bare → an Enable/Disable picker (✓ on current). Deliberately NOT gated on an
+// active session (unlike `/compact_on_idle`, which arms a timer): this one is read
+// when a compaction finishes, so setting it in a quiet or not-yet-started topic is
+// meaningful. Only a raw shell is refused — it has no context to compact.
+command('compact_summary', async (ctx, key) => {
+  const arg = ctx.message.text.split(/\s+/).slice(1).join(' ').trim().toLowerCase();
+  const isGeneral = checkIsGeneral(key);
+
+  if (!isGeneral && getThreadCompactRoute(key) === 'notSupported') {
+    await replyToThread(key, t('compactSummary.unsupported'));
+    return;
+  }
+
+  if (arg === 'on' || arg === 'off') {
+    await replyToThread(key, await applyCompactSummary(key, isGeneral, arg === 'on'));
+    return;
+  }
+
+  const isEnabled = isGeneral
+    ? state.getCompactSummaryGlobalDefault()
+    : state.checkIsCompactSummaryEnabled(key);
+  const stateWord = isEnabled ? t('compactSummary.on') : t('compactSummary.off');
+  const title = isGeneral
+    ? t('compactSummary.titleGeneral', { state: stateWord })
+    : t('compactSummary.title', { state: stateWord });
+  await replyToThread(key, title, buildCompactSummaryKeyboard(isEnabled));
 });
 
 /**
@@ -8903,7 +8958,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'auto_continue_limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair',
 ]);
 
@@ -10376,6 +10431,37 @@ async function handleCompactOnIdleCallback(ctx: Context, enabled: boolean): Prom
 
 bot.action('coi_on', (ctx) => handleCompactOnIdleCallback(ctx, true));
 bot.action('coi_off', (ctx) => handleCompactOnIdleCallback(ctx, false));
+
+/**
+ * @description `/compact_summary` picker button. A REPEATED-USE picker, so it
+ * re-renders its keyboard in place (the ✓ follows the new state) rather than being
+ * consumed into a keyboard-less confirmation — mirrors `coi_on`/`coi_off`.
+ */
+async function handleCompactSummaryCallback(ctx: Context, enabled: boolean): Promise<void> {
+  const key = await authoriseContext(ctx);
+  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const isGeneral = checkIsGeneral(key);
+  await withThreadLocale(key, async () => {
+    await replyToThread(key, await applyCompactSummary(key, isGeneral, enabled));
+  });
+  await ctx.answerCbQuery();
+  const cbMsg = ctx.callbackQuery?.message as Message | undefined;
+  if (cbMsg) {
+    const keyboard = buildCompactSummaryKeyboard(enabled);
+    try {
+      await enqueueSend(
+        key,
+        () => bot.telegram.editMessageReplyMarkup(key.chatId, cbMsg.message_id, undefined, keyboard.reply_markup),
+      );
+    } catch (e) {
+      const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
+      if (!/message is not modified/i.test(desc)) console.warn('[csum_cb] keyboard re-render failed:', desc || e);
+    }
+  }
+}
+
+bot.action('csum_on', (ctx) => handleCompactSummaryCallback(ctx, true));
+bot.action('csum_off', (ctx) => handleCompactSummaryCallback(ctx, false));
 
 /**
  * @description Rewrite the tapped picker into a final, keyboard-less confirmation:
@@ -12375,6 +12461,7 @@ export const COMMANDS_MENU = [
   { command: 'quitall', description: '🚪 Quit ALL agents (General-only)' },
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
+  { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'auto_continue_limits', description: '🚧 Auto-resume after a usage limit (toggle)' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },

@@ -322,6 +322,17 @@ export const jaDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ アイドル自動圧縮：すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
   'compactOnIdle.unsupported': 'アイドル自動圧縮はアクティブなエージェントセッションに適用されます。まずバインド済みのトピックで /claude か /opencode を開始してください。',
   'compactOnIdle.pendingQuestionReask': '❓ 未回答の質問が残っています。オプションをタップして回答し、続行してください：',
+  'compactSummary.on': 'オン',
+  'compactSummary.off': 'オフ',
+  'compactSummary.title':
+    '📄 このトピックに圧縮の要約を投稿: {state}\n\n圧縮後、エージェントの完全な要約がトピックに書き込まれ、何が保持されたか確認できます。\n\nすべてのトピックで一括して切り替えるには、General トピックで実行してください。',
+  'compactSummary.titleGeneral':
+    '📄 圧縮の要約を投稿 — すべてのトピックの既定値: {state}\n\n圧縮後、エージェントの完全な要約がトピックに書き込まれ、何が保持されたか確認できます。\n\n各トピックは独自の /compact_summary で上書きできます。',
+  'compactSummary.enableButton': '有効にする',
+  'compactSummary.disableButton': '無効にする',
+  'compactSummary.setThisTopic': '✅ 圧縮の要約: このトピックで {state}。',
+  'compactSummary.setGlobal': '✅ 圧縮の要約: すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
+  'compactSummary.unsupported': 'シェルには圧縮するコンテキストがないため、投稿する要約もありません。',
 
   'autoContinueLimits.on': 'オン',
   'autoContinueLimits.off': 'オフ',

@@ -322,6 +322,17 @@ export const ptDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Compactação automática por inatividade: {state} para TODOS os tópicos (substituições por tópico ainda se aplicam).',
   'compactOnIdle.unsupported': 'A compactação automática por inatividade aplica-se a uma sessão de agente ativa. Inicie /claude ou /opencode em um tópico vinculado primeiro.',
   'compactOnIdle.pendingQuestionReask': '❓ Você ainda tem uma pergunta pendente. Toque em uma opção para respondê-la e continuar:',
+  'compactSummary.on': 'LIGADO',
+  'compactSummary.off': 'DESLIGADO',
+  'compactSummary.title':
+    '📄 Publicar o resumo da compactação neste tópico: {state}\n\nApós uma compactação, o resumo completo do agente é escrito no tópico, para vires o que foi mantido.\n\nPara mudar isto em TODOS os tópicos de uma vez, executa no tópico General.',
+  'compactSummary.titleGeneral':
+    '📄 Publicar o resumo da compactação — predefinição para TODOS os tópicos: {state}\n\nApós uma compactação, o resumo completo do agente é escrito no tópico, para vires o que foi mantido.\n\nCada tópico pode sobrepor isto com o seu próprio /compact_summary.',
+  'compactSummary.enableButton': 'Ativar',
+  'compactSummary.disableButton': 'Desativar',
+  'compactSummary.setThisTopic': '✅ Resumo da compactação: {state} para este tópico.',
+  'compactSummary.setGlobal': '✅ Resumo da compactação: {state} para TODOS os tópicos (as sobreposições por tópico continuam a aplicar-se).',
+  'compactSummary.unsupported': 'Uma shell não tem contexto para compactar, portanto não há resumo para publicar.',
 
   'autoContinueLimits.on': 'LIGADO',
   'autoContinueLimits.off': 'DESLIGADO',

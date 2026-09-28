@@ -9,6 +9,7 @@
  */
 
 import type { CompactCommandRoute } from './compactCommandRoute';
+import { resolveDefaultOnThreadToggle } from './threadToggle';
 
 /**
  * Idle interval before an untouched, idle agent session is auto-compacted (F2).
@@ -134,8 +135,24 @@ export function resolveCompactOnIdleEnabled(
   globalDefault: boolean | undefined,
   threadOverride: boolean | undefined,
 ): boolean {
-  if (threadOverride !== undefined) return threadOverride;
-  return globalDefault ?? true;
+  return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
+}
+
+/**
+ * @description Resolve whether the full compaction summary is posted for a thread
+ * (`/compact_summary`). A per-thread override always wins; otherwise the
+ * instance-wide default applies, which is ON when unset — the operator's stated
+ * preference is to see the summary by default.
+ *
+ * Unlike compact-on-idle this is read at COMPACTION time rather than used to arm a
+ * timer, so it is meaningful in a topic with no live session and is deliberately
+ * not gated on one.
+ */
+export function resolveCompactSummaryEnabled(
+  globalDefault: boolean | undefined,
+  threadOverride: boolean | undefined,
+): boolean {
+  return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
 }
 
 /**

@@ -322,6 +322,17 @@ export const deDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Auto-Komprimierung bei Leerlauf: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiterhin).',
   'compactOnIdle.unsupported': 'Auto-Komprimierung bei Leerlauf gilt für eine aktive Agent-Sitzung. Starte zuerst /claude oder /opencode in einem gebundenen Thema.',
   'compactOnIdle.pendingQuestionReask': '❓ Du hast noch eine offene Frage. Tippe auf eine Option, um sie zu beantworten und fortzufahren:',
+  'compactSummary.on': 'EIN',
+  'compactSummary.off': 'AUS',
+  'compactSummary.title':
+    '📄 Zusammenfassung der Komprimierung in diesem Thema posten: {state}\n\nNach einer Komprimierung wird die vollständige Zusammenfassung des Agents ins Thema geschrieben, damit du siehst, was erhalten blieb.\n\nUm das für ALLE Themen umzustellen, führe dies im Thema „General“ aus.',
+  'compactSummary.titleGeneral':
+    '📄 Zusammenfassung der Komprimierung posten — Standard für ALLE Themen: {state}\n\nNach einer Komprimierung wird die vollständige Zusammenfassung des Agents ins Thema geschrieben, damit du siehst, was erhalten blieb.\n\nJedes Thema kann das mit eigenem /compact_summary überschreiben.',
+  'compactSummary.enableButton': 'Aktivieren',
+  'compactSummary.disableButton': 'Deaktivieren',
+  'compactSummary.setThisTopic': '✅ Zusammenfassung der Komprimierung: {state} für dieses Thema.',
+  'compactSummary.setGlobal': '✅ Zusammenfassung der Komprimierung: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiter).',
+  'compactSummary.unsupported': 'Eine Shell hat keinen Kontext zum Komprimieren, also gibt es keine Zusammenfassung zu posten.',
 
   'autoContinueLimits.on': 'AN',
   'autoContinueLimits.off': 'AUS',

@@ -333,6 +333,17 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',
   'compactOnIdle.pendingQuestionReask': '❓ You still have a pending question. Tap an option to answer it and continue:',
+  'compactSummary.on': 'ON',
+  'compactSummary.off': 'OFF',
+  'compactSummary.title':
+    '📄 Post the compaction summary in this topic: {state}\n\nAfter a compaction the agent\'s full summary is written into the topic, so you can see what it kept.\n\nTo switch it for ALL topics at once, run this in the General topic.',
+  'compactSummary.titleGeneral':
+    '📄 Post the compaction summary — default for ALL topics: {state}\n\nAfter a compaction the agent\'s full summary is written into the topic, so you can see what it kept.\n\nEach topic can still override this with its own /compact_summary.',
+  'compactSummary.enableButton': 'Enable',
+  'compactSummary.disableButton': 'Disable',
+  'compactSummary.setThisTopic': '✅ Compaction summary: {state} for this topic.',
+  'compactSummary.setGlobal': '✅ Compaction summary: {state} for ALL topics (per-topic overrides still apply).',
+  'compactSummary.unsupported': 'A shell has no context to compact, so there is no summary to post.',
 
   'autoContinueLimits.on': 'ON',
   'autoContinueLimits.off': 'OFF',

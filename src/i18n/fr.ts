@@ -322,6 +322,17 @@ export const frDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Compactage auto en cas d’inactivité : {state} pour TOUS les sujets (les remplacements par sujet s’appliquent toujours).',
   'compactOnIdle.unsupported': 'Le compactage auto en cas d’inactivité s’applique à une session d’agent active. Lance d’abord /claude ou /opencode dans un sujet lié.',
   'compactOnIdle.pendingQuestionReask': '❓ Tu as encore une question en attente. Touche une option pour y répondre et continuer :',
+  'compactSummary.on': 'ACTIVÉ',
+  'compactSummary.off': 'DÉSACTIVÉ',
+  'compactSummary.title':
+    '📄 Publier le résumé du compactage dans ce sujet : {state}\n\nAprès un compactage, le résumé complet de l\'agent est écrit dans le sujet, pour que vous voyiez ce qui a été conservé.\n\nPour changer cela pour TOUS les sujets, lancez cette commande dans le sujet General.',
+  'compactSummary.titleGeneral':
+    '📄 Publier le résumé du compactage — défaut pour TOUS les sujets : {state}\n\nAprès un compactage, le résumé complet de l\'agent est écrit dans le sujet, pour que vous voyiez ce qui a été conservé.\n\nChaque sujet peut toujours le remplacer avec son propre /compact_summary.',
+  'compactSummary.enableButton': 'Activer',
+  'compactSummary.disableButton': 'Désactiver',
+  'compactSummary.setThisTopic': '✅ Résumé du compactage : {state} pour ce sujet.',
+  'compactSummary.setGlobal': '✅ Résumé du compactage : {state} pour TOUS les sujets (les remplacements par sujet s\'appliquent toujours).',
+  'compactSummary.unsupported': 'Un shell n\'a pas de contexte à compacter, donc il n\'y a aucun résumé à publier.',
 
   'autoContinueLimits.on': 'ACTIVÉ',
   'autoContinueLimits.off': 'DÉSACTIVÉ',

@@ -322,6 +322,17 @@ export const hiDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ निष्क्रियता पर स्वतः संक्षेपण: सभी विषयों के लिए {state} (प्रति-विषय ओवरराइड अब भी लागू रहते हैं)।',
   'compactOnIdle.unsupported': 'निष्क्रियता पर स्वतः संक्षेपण किसी सक्रिय एजेंट सत्र पर लागू होता है। पहले किसी बाउंड विषय में /claude या /opencode शुरू करें।',
   'compactOnIdle.pendingQuestionReask': '❓ आपका एक प्रश्न अब भी लंबित है। उत्तर देकर आगे बढ़ने के लिए किसी विकल्प पर टैप करें:',
+  'compactSummary.on': 'चालू',
+  'compactSummary.off': 'बंद',
+  'compactSummary.title':
+    '📄 इस विषय में संक्षेपण का सारांश पोस्ट करें: {state}\n\nसंक्षेपण के बाद एजेंट का पूरा सारांश विषय में लिखा जाता है, ताकि आप देख सकें कि क्या रखा गया।\n\nसभी विषयों के लिए एक साथ बदलने के लिए, इसे General विषय में चलाएँ।',
+  'compactSummary.titleGeneral':
+    '📄 संक्षेपण का सारांश पोस्ट करें — सभी विषयों के लिए डिफ़ॉल्ट: {state}\n\nसंक्षेपण के बाद एजेंट का पूरा सारांश विषय में लिखा जाता है, ताकि आप देख सकें कि क्या रखा गया।\n\nप्रत्येक विषय अपने /compact_summary से इसे बदल सकता है।',
+  'compactSummary.enableButton': 'चालू करें',
+  'compactSummary.disableButton': 'बंद करें',
+  'compactSummary.setThisTopic': '✅ संक्षेपण का सारांश: इस विषय के लिए {state}।',
+  'compactSummary.setGlobal': '✅ संक्षेपण का सारांश: सभी विषयों के लिए {state} (प्रति-विषय बदलाव फिर भी लागू रहते हैं)।',
+  'compactSummary.unsupported': 'शेल के पास संक्षिप्त करने योग्य संदर्भ नहीं है, इसलिए पोस्ट करने के लिए कोई सारांश नहीं है।',
 
   'autoContinueLimits.on': 'चालू',
   'autoContinueLimits.off': 'बंद',

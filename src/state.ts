@@ -16,7 +16,7 @@ import {
   type ThreadKey,
 } from './types';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
-import { resolveCompactOnIdleEnabled } from './utils/compactOnIdle';
+import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import type { ScheduleRecord } from './scheduler/types';
 import type { Locale } from './i18n';
@@ -297,6 +297,18 @@ export interface StateV1 {
    */
   compactOnIdleEnabled?: boolean;
   compactOnIdleOverrides?: Record<string, boolean>;
+  /**
+   * Full-compaction-summary toggle (`/compact_summary`). Same shape and discipline
+   * as the `compactOnIdle*` pair above: `compactSummaryEnabled` is the
+   * INSTANCE-WIDE default driven from General (absent ⇒ ON — the operator's stated
+   * preference is to see the summary; stored EXPLICITLY incl. `false` so a General
+   * «Disable» is durable), and `compactSummaryOverrides` holds per-thread explicit
+   * overrides keyed by {@link ThreadKey} string, a present entry winning over the
+   * default. Both optional so older state files stay valid; lifecycle-independent
+   * (only `/compact_summary` mutates them, never session teardown).
+   */
+  compactSummaryEnabled?: boolean;
+  compactSummaryOverrides?: Record<string, boolean>;
   /**
    * Threads whose compact-on-idle user-LATCH is spent (D2). A thread lands here
    * the instant an idle-compaction FIRES and is removed only by the next genuine
@@ -1376,6 +1388,62 @@ export class StateStore {
     await this.withLock(key, async () => {
       if (this.state.compactOnIdleOverrides?.[k] === enabled) return;
       (this.state.compactOnIdleOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
+  }
+
+  // ── full-summary toggle (`/compact_summary`) ──
+
+  /**
+   * @description The instance-wide full-compaction-summary default (driven from the
+   * General topic). ON when unset — mirrors {@link getCompactOnIdleGlobalDefault}.
+   */
+  getCompactSummaryGlobalDefault(): boolean {
+    return this.state.compactSummaryEnabled ?? true;
+  }
+
+  /**
+   * @description The per-thread full-summary override, or `undefined` when the
+   * thread follows the instance default. A present value (true OR false) wins.
+   */
+  getCompactSummaryOverride(key: ThreadKey): boolean | undefined {
+    return this.state.compactSummaryOverrides?.[keyToString(key)];
+  }
+
+  /**
+   * @description Whether the full compaction summary is posted for `key`: the
+   * per-thread override if set, else the instance default (ON when unset).
+   */
+  checkIsCompactSummaryEnabled(key: ThreadKey): boolean {
+    return resolveCompactSummaryEnabled(
+      this.state.compactSummaryEnabled,
+      this.getCompactSummaryOverride(key),
+    );
+  }
+
+  /**
+   * @description Set the instance-wide full-summary default (from General). Stored
+   * EXPLICITLY as a boolean (incl. `false`) so a «Disable» is durable and
+   * distinguishable from "never set", which reads back as the ON default. Debounced
+   * (a preference, not crash-critical) — mirrors
+   * {@link setCompactOnIdleGlobalDefault}.
+   */
+  async setCompactSummaryGlobalDefault(enabled: boolean): Promise<void> {
+    if (this.state.compactSummaryEnabled === enabled) return;
+    this.state.compactSummaryEnabled = enabled;
+    this.scheduleSave();
+  }
+
+  /**
+   * @description Set the per-thread full-summary override (from a regular topic).
+   * Stored explicitly (a present true/false wins over the global default).
+   * Debounced — mirrors {@link setCompactOnIdleOverride}.
+   */
+  async setCompactSummaryOverride(key: ThreadKey, enabled: boolean): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (this.state.compactSummaryOverrides?.[k] === enabled) return;
+      (this.state.compactSummaryOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
   }

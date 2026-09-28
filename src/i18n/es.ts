@@ -322,6 +322,17 @@ export const esDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Compactado automático por inactividad: {state} para TODOS los temas (las anulaciones por tema siguen aplicándose).',
   'compactOnIdle.unsupported': 'El compactado automático por inactividad se aplica a una sesión de agente activa. Inicia primero /claude o /opencode en un tema vinculado.',
   'compactOnIdle.pendingQuestionReask': '❓ Aún tienes una pregunta pendiente. Toca una opción para responderla y continuar:',
+  'compactSummary.on': 'ACTIVADO',
+  'compactSummary.off': 'DESACTIVADO',
+  'compactSummary.title':
+    '📄 Publicar el resumen de la compactación en este tema: {state}\n\nTras una compactación, el resumen completo del agente se escribe en el tema, para que veas qué se conservó.\n\nPara cambiarlo en TODOS los temas a la vez, ejecuta esto en el tema General.',
+  'compactSummary.titleGeneral':
+    '📄 Publicar el resumen de la compactación — predeterminado para TODOS los temas: {state}\n\nTras una compactación, el resumen completo del agente se escribe en el tema, para que veas qué se conservó.\n\nCada tema puede seguir anulándolo con su propio /compact_summary.',
+  'compactSummary.enableButton': 'Activar',
+  'compactSummary.disableButton': 'Desactivar',
+  'compactSummary.setThisTopic': '✅ Resumen de la compactación: {state} para este tema.',
+  'compactSummary.setGlobal': '✅ Resumen de la compactación: {state} para TODOS los temas (las anulaciones por tema siguen aplicándose).',
+  'compactSummary.unsupported': 'Un shell no tiene contexto que compactar, así que no hay resumen que publicar.',
 
   'autoContinueLimits.on': 'ACTIVADO',
   'autoContinueLimits.off': 'DESACTIVADO',

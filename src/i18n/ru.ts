@@ -326,6 +326,17 @@ export const ruDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Авто-сжатие при простое: {state} для ВСЕХ топиков (переопределения по топикам продолжают действовать).',
   'compactOnIdle.unsupported': 'Авто-сжатие при простое работает для активной сессии агента. Сначала запусти /claude или /opencode в привязанном топике.',
   'compactOnIdle.pendingQuestionReask': '❓ У тебя остался неотвеченный вопрос. Нажми на вариант, чтобы ответить и продолжить:',
+  'compactSummary.on': 'ВКЛ',
+  'compactSummary.off': 'ВЫКЛ',
+  'compactSummary.title':
+    '📄 Публиковать выжимку после сжатия в этом топике: {state}\n\nПосле сжатия полная выжимка агента пишется в топик, чтобы ты видел, что в ней осталось.\n\nЧтобы переключить сразу для ВСЕХ топиков, запусти это в топике General.',
+  'compactSummary.titleGeneral':
+    '📄 Публиковать выжимку после сжатия — по умолчанию для ВСЕХ топиков: {state}\n\nПосле сжатия полная выжимка агента пишется в топик, чтобы ты видел, что в ней осталось.\n\nКаждый топик всё равно может переопределить это своим /compact_summary.',
+  'compactSummary.enableButton': 'Включить',
+  'compactSummary.disableButton': 'Выключить',
+  'compactSummary.setThisTopic': '✅ Выжимка после сжатия: {state} для этого топика.',
+  'compactSummary.setGlobal': '✅ Выжимка после сжатия: {state} для ВСЕХ топиков (переопределения по топикам продолжают действовать).',
+  'compactSummary.unsupported': 'У шелла нет контекста для сжатия, поэтому и выжимку публиковать нечего.',
 
   'autoContinueLimits.on': 'ВКЛ',
   'autoContinueLimits.off': 'ВЫКЛ',

@@ -322,6 +322,17 @@ export const kaDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ უმოქმედობისას ავტო-შეკუმშვა: {state} ყველა თემისთვის (თემების მიხედვით გადაფარვები კვლავ მოქმედებს).',
   'compactOnIdle.unsupported': 'უმოქმედობისას ავტო-შეკუმშვა მოქმედებს აქტიურ აგენტის სესიაზე. ჯერ დაბმულ თემაში გაუშვი /claude ან /opencode.',
   'compactOnIdle.pendingQuestionReask': '❓ შენ ჯერ კიდევ გაქვს უპასუხო კითხვა. შეეხე ვარიანტს, რომ უპასუხო და გააგრძელო:',
+  'compactSummary.on': 'ჩართული',
+  'compactSummary.off': 'გამორთული',
+  'compactSummary.title':
+    '📄 შეკუმშვის შეჯამების გამოქვეყნება ამ თემაში: {state}\n\nშეკუმშვის შემდეგ აგენტის სრული შეჯამება ეწერება თემაში, რომ დაინახოთ, რა შენარჩუნდა.\n\nყველა თემისთვის ერთდროულად გადასართავად გაუშვით ეს General თემაში.',
+  'compactSummary.titleGeneral':
+    '📄 შეკუმშვის შეჯამების გამოქვეყნება — ნაგულისხმევი ყველა თემისთვის: {state}\n\nშეკუმშვის შემდეგ აგენტის სრული შეჯამება ეწერება თემაში, რომ დაინახოთ, რა შენარჩუნდა.\n\nყოველ თემას მაინც შეუძლია ეს საკუთარი /compact_summary-ით გადააწეროს.',
+  'compactSummary.enableButton': 'ჩართვა',
+  'compactSummary.disableButton': 'გამორთვა',
+  'compactSummary.setThisTopic': '✅ შეკუმშვის შეჯამება: {state} ამ თემისთვის.',
+  'compactSummary.setGlobal': '✅ შეკუმშვის შეჯამება: {state} ყველა თემისთვის (თემების ინდივიდუალური პარამეტრები კვლავ მოქმედებს).',
+  'compactSummary.unsupported': 'გარსს არ აქვს შესაკუმში კონტექსტი, ამიტომ გამოსაქვეყნებელი შეჯამებაც არ არსებობს.',
 
   'autoContinueLimits.on': 'ჩართ.',
   'autoContinueLimits.off': 'გამორთ.',

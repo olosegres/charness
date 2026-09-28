@@ -322,6 +322,17 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Bo‘sh turganda avtosiqish: BARCHA mavzular uchun {state} (mavzu bo‘yicha bekor qilishlar amal qiladi).',
   'compactOnIdle.unsupported': 'Bo‘sh turganda avtosiqish faol agent seansiga taalluqli. Avval bog‘langan mavzuda /claude yoki /opencode ni ishga tushiring.',
   'compactOnIdle.pendingQuestionReask': '❓ Sizda hali javob berilmagan savol bor. Javob berib davom etish uchun variantni bosing:',
+  'compactSummary.on': 'YONIQ',
+  'compactSummary.off': "O‘CHIQ",
+  'compactSummary.title':
+    '📄 Bu mavzuga siqish xulosasini joylash: {state}\n\nSiqishdan keyin agentning to‘liq xulosasi mavzuga yoziladi, shunda nima saqlanganini ko‘rasiz.\n\nBarcha mavzular uchun birdan almashtirish uchun buni General mavzusida bajaring.',
+  'compactSummary.titleGeneral':
+    '📄 Siqish xulosasini joylash — BARCHA mavzular uchun standart: {state}\n\nSiqishdan keyin agentning to‘liq xulosasi mavzuga yoziladi, shunda nima saqlanganini ko‘rasiz.\n\nHar bir mavzu buni o‘z /compact_summary bilan almashtira oladi.',
+  'compactSummary.enableButton': 'Yoqish',
+  'compactSummary.disableButton': "O‘chirish",
+  'compactSummary.setThisTopic': '✅ Siqish xulosasi: bu mavzu uchun {state}.',
+  'compactSummary.setGlobal': '✅ Siqish xulosasi: BARCHA mavzular uchun {state} (mavzu bo‘yicha almashtirishlar kuchda qoladi).',
+  'compactSummary.unsupported': 'Shellda siqiladigan kontekst yo‘q, shuning uchun joylanadigan xulosa ham yo‘q.',
 
   'autoContinueLimits.on': 'YONIQ',
   'autoContinueLimits.off': 'O‘CHIQ',

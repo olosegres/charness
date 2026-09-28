@@ -174,6 +174,36 @@ test('compaction completion keys exist in every locale and keep both token place
   }
 });
 
+test('compact-summary setting keys exist in every locale and substitute {state}', () => {
+  for (const code of [
+    'compactSummary.on',
+    'compactSummary.off',
+    'compactSummary.title',
+    'compactSummary.titleGeneral',
+    'compactSummary.enableButton',
+    'compactSummary.disableButton',
+    'compactSummary.setThisTopic',
+    'compactSummary.setGlobal',
+    'compactSummary.unsupported',
+  ]) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  // Both titles and both confirmations render the ON/OFF word; a locale that lost
+  // the placeholder would report the setting as a literal "{state}".
+  for (const locale of localeCodes) {
+    for (const code of [
+      'compactSummary.title',
+      'compactSummary.titleGeneral',
+      'compactSummary.setThisTopic',
+      'compactSummary.setGlobal',
+    ]) {
+      const out = runWithLocale(locale, () => t(code, { state: 'ON' }));
+      assert.ok(out.includes('ON'), `expected the state in ${locale} ${code}: "${out}"`);
+      assert.ok(!out.includes('{state}'), `placeholder not substituted in ${locale} ${code}: "${out}"`);
+    }
+  }
+});
+
 test('auto-continue-limits keys exist in every locale', () => {
   for (const code of [
     'autoContinueLimits.on',

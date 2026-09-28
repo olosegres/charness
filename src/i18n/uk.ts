@@ -328,6 +328,17 @@ export const ukDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Авто-стиснення під час простою: {state} для ВСІХ тем (перевизначення по темах діють далі).',
   'compactOnIdle.unsupported': 'Авто-стиснення під час простою застосовується до активної сесії агента. Спочатку запусти /claude або /opencode у прив’язаній темі.',
   'compactOnIdle.pendingQuestionReask': '❓ У тебе лишилося запитання без відповіді. Натисни варіант, щоб відповісти та продовжити:',
+  'compactSummary.on': 'УВІМК',
+  'compactSummary.off': 'ВИМК',
+  'compactSummary.title':
+    '📄 Публікувати підсумок після стиснення в цьому топіку: {state}\n\nПісля стиснення повний підсумок агента записується в топік, щоб ти бачив, що в ньому залишилось.\n\nЩоб перемкнути одразу для ВСІХ топіків, запусти це в топіку General.',
+  'compactSummary.titleGeneral':
+    '📄 Публікувати підсумок після стиснення — типово для ВСІХ топіків: {state}\n\nПісля стиснення повний підсумок агента записується в топік, щоб ти бачив, що в ньому залишилось.\n\nКожен топік усе одно може перевизначити це своїм /compact_summary.',
+  'compactSummary.enableButton': 'Увімкнути',
+  'compactSummary.disableButton': 'Вимкнути',
+  'compactSummary.setThisTopic': '✅ Підсумок після стиснення: {state} для цього топіка.',
+  'compactSummary.setGlobal': '✅ Підсумок після стиснення: {state} для ВСІХ топіків (перевизначення по топіках і далі діють).',
+  'compactSummary.unsupported': 'Оболонка не має контексту для стиснення, тому й підсумок публікувати нічого.',
 
   'autoContinueLimits.on': 'УВІМК',
   'autoContinueLimits.off': 'ВИМК',

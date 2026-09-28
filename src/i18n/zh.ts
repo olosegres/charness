@@ -322,6 +322,17 @@ export const zhDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ 空闲自动压缩：所有话题 {state}（各话题的覆盖设置仍然有效）。',
   'compactOnIdle.unsupported': '空闲自动压缩适用于活动的代理会话。请先在已绑定的话题中启动 /claude 或 /opencode。',
   'compactOnIdle.pendingQuestionReask': '❓ 你还有一个待回答的问题。点击一个选项来回答并继续：',
+  'compactSummary.on': '开启',
+  'compactSummary.off': '关闭',
+  'compactSummary.title':
+    '📄 在本话题中发布压缩摘要：{state}\n\n压缩后，代理的完整摘要会写入话题，便于你查看保留了哪些内容。\n\n要一次性为所有话题切换，请在 General 话题中运行此命令。',
+  'compactSummary.titleGeneral':
+    '📄 发布压缩摘要 — 所有话题的默认值：{state}\n\n压缩后，代理的完整摘要会写入话题，便于你查看保留了哪些内容。\n\n每个话题仍可用自己的 /compact_summary 覆盖。',
+  'compactSummary.enableButton': '启用',
+  'compactSummary.disableButton': '停用',
+  'compactSummary.setThisTopic': '✅ 压缩摘要：本话题 {state}。',
+  'compactSummary.setGlobal': '✅ 压缩摘要：所有话题 {state}（各话题的覆盖设置仍然有效）。',
+  'compactSummary.unsupported': 'shell 没有可压缩的上下文，因此没有摘要可发布。',
 
   'autoContinueLimits.on': '开',
   'autoContinueLimits.off': '关',
