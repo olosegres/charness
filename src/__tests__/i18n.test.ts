@@ -161,7 +161,7 @@ test('voice.retrying names the error and the pause in every locale', () => {
 });
 
 test('compaction completion keys exist in every locale and keep both token placeholders', () => {
-  for (const code of ['compact.done', 'compact.done_tokens']) {
+  for (const code of ['compact.done', 'compact.done_tokens', 'compact.summaryHeader']) {
     assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
   }
   // The numbers are the whole point of the `_tokens` variant: a locale that lost

@@ -351,6 +351,9 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   extractCompactionClosingSection,
+  stripCompactionClosingMarkers,
+  checkShouldPostCompactionSummary,
+  buildIdleCompactionNoticeParts,
   formatTokenCount,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
@@ -7129,8 +7132,18 @@ const deferredCompactionPollMs = 3_000;
 interface ThreadCompactionResult {
   ok: boolean;
   error?: string;
-  /** The extracted "Where we stopped" closing prose (F2), or null when absent. */
+  /**
+   * The extracted "Where we stopped" closing prose (F2), or null when absent.
+   * ALWAYS null when {@link summary} is set — the block is a slice of the summary,
+   * so printing both would duplicate it (§1.4).
+   */
   closingSection?: string | null;
+  /**
+   * The full compaction summary to post into the topic, marker-stripped and ready
+   * to send, or `null` when it must not be posted (the setting is off, the backend
+   * streams its own, the route never produced one, or it could not be read).
+   */
+  summary?: string | null;
   /**
    * Context token counts the backend reported for the compaction, `null` when it
    * reports none (see {@link CompactionResult}). Both present ⇒ the completion
@@ -7229,14 +7242,29 @@ async function runThreadCompaction(
     if (!adapter.compactContext) return { ok: false, error: t('compact.unsupported_backend', { label: adapter.label }) };
     const compaction = await adapter.compactContext(key, instruction);
     if (!compaction.ok) return { ok: false, error: compaction.error };
-    let closingSection: string | null = null;
-    if (opts.withClosingSection && adapter.getLatestCompactionSummary) {
-      const summary = await adapter.getLatestCompactionSummary(key).catch(() => null);
-      closingSection = summary ? extractCompactionClosingSection(summary) : null;
-    }
+
+    const isWithSummary = checkShouldPostCompactionSummary({
+      // The per-topic `/compact_summary` override arrives in the next change; the
+      // feature ships ON, which is what this constant expresses in the meantime.
+      isEnabled: true,
+      streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
+      route,
+    });
+    // ONE read serves both consumers. The summary is a transcript / HTTP read, and
+    // the closing section is a slice of the very same text.
+    const summary = (isWithSummary || opts.withClosingSection) && adapter.getLatestCompactionSummary
+      ? await adapter.getLatestCompactionSummary(key).catch(() => null)
+      : null;
+    // §1.4: with the full summary posted, the closing block would be a duplicate
+    // slice of it — so it is not extracted at all, and every caller's "append the
+    // block if present" check stays a plain check.
+    const closingSection = !isWithSummary && opts.withClosingSection && summary
+      ? extractCompactionClosingSection(summary)
+      : null;
     return {
       ok: true,
       closingSection,
+      summary: isWithSummary && summary ? stripCompactionClosingMarkers(summary) : null,
       preTokens: compaction.preTokens,
       postTokens: compaction.postTokens,
     };
@@ -7294,6 +7322,25 @@ async function runNarratedCompaction(key: ThreadKey, route: CompactCommandRoute,
       ? t('compact.done_tokens', { pre: formatTokenCount(preTokens), post: formatTokenCount(postTokens) })
       : t('compact.done'),
   );
+  if (result.summary) await postCompactionSummary(key, result.summary);
+}
+
+/**
+ * @description Post a compaction's FULL summary into the topic — the single poster
+ * shared by all three triggers, each calling it after its own notice.
+ *
+ * Sent as PLAIN text with no `parse_mode`: this is freeform model prose, and one
+ * stray backtick or asterisk in a Markdown/HTML send makes Telegram reject the
+ * whole message, which would lose the summary entirely (§1.5). Long summaries are
+ * SPLIT by the existing splitter, never truncated.
+ *
+ * Deliberately NOT routed through the agent-output path: that path stamps thread
+ * activity and would re-arm the idle watchdog off the bot's own message — the loop
+ * the `threadsCompacting` guard exists to prevent.
+ */
+async function postCompactionSummary(key: ThreadKey, summary: string): Promise<void> {
+  const chunks = splitMessage(`${t('compact.summaryHeader')}\n\n${summary}`, MAX_MESSAGE_LEN);
+  for (const chunk of chunks) await replyToThread(key, chunk);
 }
 
 /**
@@ -7517,12 +7564,18 @@ async function onIdleCompactionTimerFired(key: ThreadKey): Promise<void> {
     // The compaction failed but the question is already rejected — re-ask it so
     // the user isn't left without the pending decision (no notice: nothing was
     // compacted).
-    await postIdleCompactionResult(key, null, savedQuestion);
+    await postIdleCompactionResult(key, { noticeText: null, closingSection: null, summary: null }, savedQuestion);
     return;
   }
-  const noticeParts = [t('compactOnIdle.notice')];
-  if (result.closingSection) noticeParts.push(result.closingSection);
-  await postIdleCompactionResult(key, noticeParts, savedQuestion);
+  await postIdleCompactionResult(
+    key,
+    {
+      noticeText: t('compactOnIdle.notice'),
+      closingSection: result.closingSection ?? null,
+      summary: result.summary ?? null,
+    },
+    savedQuestion,
+  );
 }
 
 /**
@@ -7551,27 +7604,39 @@ function buildReAskKeyboard(key: ThreadKey, question: OpenCodeQuestion) {
 }
 
 /**
- * @description Post the idle-compaction outcome message (D1/D2): the optional
- * notice + closing section, and — when a question was pending at idle — the
- * RE-ASKED question with real option buttons at the END. `noticeParts` is `null`
- * on a compaction failure (re-ask only, no notice). No-op when there is nothing
- * to say (failure with no pending question).
+ * @description Post the idle-compaction outcome (D1/D2) as SEPARATE messages in
+ * the §1.4 order: notice (+ closing section when no full summary) → the full
+ * summary → the RE-ASKED question with its option buttons, LAST.
+ *
+ * The three used to be one joined message. They are split because the re-asked
+ * question carries inline buttons the operator must be able to reach: glued behind
+ * a full summary they end up buried under a wall of text, and a long summary does
+ * not fit one Telegram message at all. The ORDER is what keeps the buttons the last
+ * thing in the topic.
+ *
+ * `parts.noticeText` is `null` on a compaction failure (re-ask only, no notice).
+ * No-op when there is nothing at all to say.
  */
 async function postIdleCompactionResult(
   key: ThreadKey,
-  noticeParts: string[] | null,
+  parts: { noticeText: string | null; closingSection: string | null; summary: string | null },
   savedQuestion: PendingQuestionState | null,
 ): Promise<void> {
-  const parts: string[] = noticeParts ? [...noticeParts] : [];
-  let keyboard: ReturnType<typeof buildReAskKeyboard> | undefined;
   const question = savedQuestion?.data.questions[savedQuestion.currentIndex];
-  if (question) {
-    parts.push(t('compactOnIdle.pendingQuestionReask'));
-    parts.push(question.header ? `${question.header}\n${question.question}` : question.question);
-    keyboard = buildReAskKeyboard(key, question);
-  }
-  if (parts.length === 0) return;
-  await replyToThread(key, parts.join('\n\n'), keyboard);
+  const questionText = question
+    ? [
+        t('compactOnIdle.pendingQuestionReask'),
+        question.header ? `${question.header}\n${question.question}` : question.question,
+      ].join('\n\n')
+    : null;
+
+  const plan = buildIdleCompactionNoticeParts({ ...parts, questionText });
+  if (plan.notice) await replyToThread(key, plan.notice);
+  if (plan.summary) await postCompactionSummary(key, plan.summary);
+  // The keyboard is built HERE (not while planning): it also records the option
+  // labels a `reask_<idx>` tap resolves against, which must not happen for a
+  // question that is never posted.
+  if (plan.question && question) await replyToThread(key, plan.question, buildReAskKeyboard(key, question));
 }
 
 /**

@@ -304,6 +304,7 @@ export const ptDict: Record<string, string> = {
   'compact.started': '🧹 A compactar o contexto da sessão — o agente continua a partir do resumo.',
   'compact.done': '✅ Contexto compactado.',
   'compact.done_tokens': '✅ Contexto compactado: {pre} → {post} tokens.',
+  'compact.summaryHeader': '📄 Resumo da compactação:',
   'compact.start_agent_first': 'Sem sessão ativa. Inicia um agente primeiro (/claude ou /opencode).',
   'compact.unsupported_backend': 'A compactação de contexto não é suportada para {label}.',
   'compact.model_unresolved': '⚠️ Não é possível compactar: nenhum modelo está resolvido para esta sessão. Escolhe um com /model e tenta novamente.',

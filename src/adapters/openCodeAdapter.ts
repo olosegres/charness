@@ -1400,6 +1400,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   readonly label = 'OpenCode';
 
   /**
+   * `summarize` produces a real assistant message, which rides the SSE stream into
+   * the topic as ordinary agent output — so the bot must not post its own copy of
+   * the summary here, or the operator would read it twice.
+   */
+  readonly streamsCompactionSummary = true;
+
+  /**
    * Map of serialised `ThreadKey` (`"<chatId>:<threadId>"`) → live session.
    * Keyed by string rather than `ThreadKey` object so map lookups work — JS
    * `Map` compares object identity, not structural equality.

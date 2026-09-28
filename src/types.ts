@@ -823,6 +823,21 @@ export interface AgentAdapter extends EventEmitter {
   compactContext?(key: ThreadKey, instruction?: string): Promise<CompactionResult>;
 
   /**
+   * Whether this backend's OWN compaction summary already reaches the topic as
+   * ordinary agent output, so the bot must NOT post a second copy of it.
+   *
+   * True for OpenCode: its `POST /session/:id/summarize` produces a real assistant
+   * message, which rides the SSE stream straight into the topic. The Claude
+   * backends write the summary only into their on-disk transcript (an
+   * `isCompactSummary: true` record) and emit no assistant text at all, so they
+   * leave this unset and the bot posts the summary itself.
+   *
+   * A CAPABILITY flag, not an adapter-name check, so a future backend that streams
+   * its own summary is handled by declaring it here.
+   */
+  readonly streamsCompactionSummary?: boolean;
+
+  /**
    * Read the most recent compaction summary text for the live session, or
    * `null` when none is available / the read failed. Used by F2 to lift the
    * appended "Where we stopped" closing section out of the freshly-generated

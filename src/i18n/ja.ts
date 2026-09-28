@@ -304,6 +304,7 @@ export const jaDict: Record<string, string> = {
   'compact.started': '🧹 セッションのコンテキストを圧縮中 — エージェントは要約から続行します。',
   'compact.done': '✅ コンテキストを圧縮しました。',
   'compact.done_tokens': '✅ コンテキストを圧縮しました: {pre} → {post} トークン。',
+  'compact.summaryHeader': '📄 圧縮の要約:',
   'compact.start_agent_first': 'アクティブなセッションがありません。先にエージェントを起動してください（/claude または /opencode）。',
   'compact.unsupported_backend': '{label} ではコンテキストの圧縮はサポートされていません。',
   'compact.model_unresolved': '⚠️ 圧縮できません: このセッションのモデルが解決できません。/model で選択してから再試行してください。',

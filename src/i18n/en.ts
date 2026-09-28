@@ -308,6 +308,7 @@ export const enDict: Record<string, string> = {
   'compact.started': '🧹 Compacting the session context — the agent continues from the summary.',
   'compact.done': '✅ Context compacted.',
   'compact.done_tokens': '✅ Context compacted: {pre} → {post} tokens.',
+  'compact.summaryHeader': '📄 Compaction summary:',
   'compact.start_agent_first': 'No active session. Start an agent first (/claude or /opencode).',
   'compact.unsupported_backend': 'Context compaction is not supported for {label}.',
   'compact.model_unresolved': '⚠️ Cannot compact: no model is resolved for this session. Pick one with /model and try again.',

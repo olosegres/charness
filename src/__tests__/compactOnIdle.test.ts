@@ -19,6 +19,9 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   extractCompactionClosingSection,
+  stripCompactionClosingMarkers,
+  checkShouldPostCompactionSummary,
+  buildIdleCompactionNoticeParts,
   formatTokenCount,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
@@ -325,4 +328,137 @@ test('formatTokenCount leaves a short count untouched — no leading separator',
   assert.equal(formatTokenCount(7), '7');
   assert.equal(formatTokenCount(999), '999');
   assert.equal(formatTokenCount(1000), '1\u202F000');
+});
+
+// ── stripCompactionClosingMarkers (the summary posted to the topic) ──
+
+test('stripCompactionClosingMarkers drops the marker LINES and keeps every line of prose', () => {
+  const summary = [
+    '## Objective',
+    'Ship the compaction notice.',
+    compactionClosingStartMarker,
+    'We were fixing the login bug; next: run the e2e suite.',
+    compactionClosingEndMarker,
+  ].join('\n');
+
+  const posted = stripCompactionClosingMarkers(summary);
+
+  assert.ok(!posted.includes(compactionClosingStartMarker), 'the start marker is machine scaffolding');
+  assert.ok(!posted.includes(compactionClosingEndMarker), 'the end marker is machine scaffolding');
+  // The wrapped prose is real content — the operator must still read it.
+  assert.ok(posted.includes('We were fixing the login bug; next: run the e2e suite.'));
+  assert.ok(posted.includes('## Objective'));
+  assert.ok(posted.includes('Ship the compaction notice.'));
+  // Whole LINES go, so no blank gap is left where a marker stood.
+  assert.equal(
+    posted,
+    '## Objective\nShip the compaction notice.\nWe were fixing the login bug; next: run the e2e suite.',
+  );
+});
+
+test('stripCompactionClosingMarkers returns a marker-free summary unchanged', () => {
+  const summary = '## Goals\n- keep going\n\n## State\n- green';
+  assert.equal(stripCompactionClosingMarkers(summary), summary);
+});
+
+// ── checkShouldPostCompactionSummary (the whole gate, one rule) ──
+
+test('checkShouldPostCompactionSummary: enabled + non-streaming backend + a real compaction → yes', () => {
+  assert.equal(
+    checkShouldPostCompactionSummary({ isEnabled: true, streamsOwnSummary: false, route: 'adapterCompact' }),
+    true,
+  );
+});
+
+test('checkShouldPostCompactionSummary: the setting off → no', () => {
+  assert.equal(
+    checkShouldPostCompactionSummary({ isEnabled: false, streamsOwnSummary: false, route: 'adapterCompact' }),
+    false,
+  );
+});
+
+test('checkShouldPostCompactionSummary: a backend that streams its own summary → no (never a second copy)', () => {
+  assert.equal(
+    checkShouldPostCompactionSummary({ isEnabled: true, streamsOwnSummary: true, route: 'adapterCompact' }),
+    false,
+  );
+});
+
+test('checkShouldPostCompactionSummary: a route the bot does not await → no summary of ours to post', () => {
+  for (const route of ['forwardToAgent', 'notSupported'] as const) {
+    assert.equal(
+      checkShouldPostCompactionSummary({ isEnabled: true, streamsOwnSummary: false, route }),
+      false,
+      `route ${route} must not post a summary`,
+    );
+  }
+});
+
+// ── buildIdleCompactionNoticeParts (§1.4 order + no duplicated closing block) ──
+
+const reAskText = '❓ You still have a pending question.\n\nProceed?';
+
+test('buildIdleCompactionNoticeParts: WITH a summary the notice carries NO closing block', () => {
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: '🧹 Auto compacted on idle.',
+    closingSection: 'We stopped mid-refactor.',
+    summary: '## Goals\n- finish the refactor',
+    questionText: null,
+  });
+
+  assert.equal(parts.notice, '🧹 Auto compacted on idle.', 'only the notice — the block is a slice of the summary');
+  assert.ok(!(parts.notice ?? '').includes('We stopped mid-refactor.'), 'printing both would duplicate the text');
+  assert.equal(parts.summary, '## Goals\n- finish the refactor');
+});
+
+test('buildIdleCompactionNoticeParts: WITHOUT a summary the notice keeps the closing block', () => {
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: '🧹 Auto compacted on idle.',
+    closingSection: 'We stopped mid-refactor.',
+    summary: null,
+    questionText: null,
+  });
+
+  assert.ok((parts.notice ?? '').includes('🧹 Auto compacted on idle.'));
+  assert.ok((parts.notice ?? '').includes('We stopped mid-refactor.'), 'with no summary the block is the only recap');
+  assert.equal(parts.summary, null);
+});
+
+test('buildIdleCompactionNoticeParts: the re-asked question is its OWN part, never folded into the others', () => {
+  // Load-bearing: the question carries inline option buttons. Joined behind a full
+  // summary they are buried under a wall of text, which is why it is a separate
+  // message and posted LAST.
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: '🧹 Auto compacted on idle.',
+    closingSection: null,
+    summary: 'a very long summary',
+    questionText: reAskText,
+  });
+
+  assert.equal(parts.question, reAskText);
+  assert.ok(!(parts.notice ?? '').includes('Proceed?'), 'the question must not be glued into the notice');
+  assert.ok(!(parts.summary ?? '').includes('Proceed?'), 'the question must not be glued into the summary');
+});
+
+test('buildIdleCompactionNoticeParts: a FAILED compaction yields the question only, no notice', () => {
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: null,
+    closingSection: null,
+    summary: null,
+    questionText: reAskText,
+  });
+
+  assert.equal(parts.notice, null, 'nothing was compacted, so nothing is announced');
+  assert.equal(parts.summary, null);
+  assert.equal(parts.question, reAskText, 'the question was already rejected — it must still be re-asked');
+});
+
+test('buildIdleCompactionNoticeParts: nothing to say → every part null (the caller posts no message)', () => {
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: null,
+    closingSection: null,
+    summary: null,
+    questionText: null,
+  });
+  assert.deepEqual(parts, { notice: null, summary: null, question: null });
 });

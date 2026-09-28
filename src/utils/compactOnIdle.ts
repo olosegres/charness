@@ -8,6 +8,8 @@
  * mirroring `getCompactCommandRoute` in `compactCommandRoute.ts`.
  */
 
+import type { CompactCommandRoute } from './compactCommandRoute';
+
 /**
  * Idle interval before an untouched, idle agent session is auto-compacted (F2).
  * Chosen to fire just inside the ~1h Anthropic extended prompt-cache window, so
@@ -250,6 +252,97 @@ export function formatTokenCount(count: number): string {
  */
 export const compactionClosingStartMarker = '<<<WHERE_WE_STOPPED>>>';
 export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
+
+/**
+ * @description Remove the sentinel marker LINES from a summary that is about to be
+ * posted to the topic, keeping every line of prose — including the closing section
+ * the markers wrap, which is genuine content.
+ *
+ * The markers exist so the bot can find that section mechanically (§1.5); they are
+ * machine scaffolding and mean nothing to a reader. Whole LINES are dropped rather
+ * than the marker substrings, so the summary is not left with blank gaps where they
+ * stood. A summary with no markers comes back unchanged apart from trimming.
+ */
+export function stripCompactionClosingMarkers(summaryText: string): string {
+  const markerLine = new RegExp(
+    `^[ \\t]*(?:${escapeRegExpLiteral(compactionClosingStartMarker)}|${escapeRegExpLiteral(compactionClosingEndMarker)})[ \\t]*\\r?\\n?`,
+    'gm',
+  );
+  return summaryText.replace(markerLine, '').trim();
+}
+
+/** Escape every RegExp metacharacter in `literal` so it matches itself. */
+function escapeRegExpLiteral(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * @description Should the bot post the FULL compaction summary into the topic?
+ *
+ * Three independent reasons not to, kept in one testable rule rather than spread
+ * across the call sites:
+ *  - the per-topic `/compact_summary` setting is off;
+ *  - the backend STREAMS its own summary into the topic already
+ *    (`streamsCompactionSummary` — OpenCode's `summarize` produces a real
+ *    assistant message), so the bot posting one too would duplicate it;
+ *  - the route is not a real, awaited compaction: `forwardToAgent` hands
+ *    `/compact` to a TUI that renders its own result and gives the bot no
+ *    completion signal, and `notSupported` never compacts at all — in both cases
+ *    there is no summary of ours to post.
+ */
+export function checkShouldPostCompactionSummary(input: {
+  isEnabled: boolean;
+  streamsOwnSummary: boolean;
+  route: CompactCommandRoute;
+}): boolean {
+  if (!input.isEnabled) return false;
+  if (input.streamsOwnSummary) return false;
+  return input.route === 'adapterCompact';
+}
+
+/** The three parts of an idle-compaction report, each its OWN topic message. */
+export interface IdleCompactionNoticeParts {
+  /** The idle notice (plus the closing block when no full summary follows). */
+  notice: string | null;
+  /** The full summary, posted as its own message(s). */
+  summary: string | null;
+  /** The re-asked pending question — always LAST, so its buttons stay reachable. */
+  question: string | null;
+}
+
+/**
+ * @description Compose an idle-compaction report as SEPARATE parts in the §1.4
+ * order: notice → summary → re-asked question.
+ *
+ * Splitting what used to be one joined message is the point: the re-asked
+ * question carries inline option buttons, and gluing it behind a full summary
+ * would bury those buttons under a wall of text (and the summary alone can
+ * outgrow a single Telegram message).
+ *
+ * The closing "Where we stopped" block is dropped whenever a full summary is
+ * present, because that block is a SLICE of the summary and printing both is
+ * duplication the operator would notice. The seam that reads the summary already
+ * suppresses the block, but the rule is stated here — where it is testable — so
+ * it does not rest on a caller remembering it.
+ */
+export function buildIdleCompactionNoticeParts(input: {
+  /** The idle notice text, or `null` when the compaction FAILED (nothing to announce). */
+  noticeText: string | null;
+  closingSection: string | null;
+  summary: string | null;
+  /** The re-asked question's rendered text, or `null` when none was pending. */
+  questionText: string | null;
+}): IdleCompactionNoticeParts {
+  const closing = input.summary ? null : input.closingSection;
+  const noticeSegments = [input.noticeText, closing].filter(
+    (segment): segment is string => typeof segment === 'string' && segment.length > 0,
+  );
+  return {
+    notice: noticeSegments.length > 0 ? noticeSegments.join('\n\n') : null,
+    summary: input.summary && input.summary.length > 0 ? input.summary : null,
+    question: input.questionText && input.questionText.length > 0 ? input.questionText : null,
+  };
+}
 
 /**
  * @description Pull the closing-section prose out of a generated compaction

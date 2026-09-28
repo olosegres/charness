@@ -304,6 +304,7 @@ export const esDict: Record<string, string> = {
   'compact.started': '🧹 Compactando el contexto de la sesión: el agente continúa a partir del resumen.',
   'compact.done': '✅ Contexto compactado.',
   'compact.done_tokens': '✅ Contexto compactado: {pre} → {post} tokens.',
+  'compact.summaryHeader': '📄 Resumen de la compactación:',
   'compact.start_agent_first': 'No hay sesión activa. Inicia un agente primero (/claude o /opencode).',
   'compact.unsupported_backend': 'La compactación del contexto no es compatible con {label}.',
   'compact.model_unresolved': '⚠️ No se puede compactar: no hay modelo resuelto para esta sesión. Elige uno con /model e inténtalo de nuevo.',

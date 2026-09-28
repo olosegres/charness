@@ -304,6 +304,7 @@ export const frDict: Record<string, string> = {
   'compact.started': '🧹 Compactage du contexte de la session — l\'agent continue à partir du résumé.',
   'compact.done': '✅ Contexte compacté.',
   'compact.done_tokens': '✅ Contexte compacté : {pre} → {post} tokens.',
+  'compact.summaryHeader': '📄 Résumé du compactage :',
   'compact.start_agent_first': 'Aucune session active. Démarrez d\'abord un agent (/claude ou /opencode).',
   'compact.unsupported_backend': 'Le compactage du contexte n\'est pas pris en charge pour {label}.',
   'compact.model_unresolved': '⚠️ Compactage impossible : aucun modèle n\'est résolu pour cette session. Choisissez-en un avec /model puis réessayez.',
