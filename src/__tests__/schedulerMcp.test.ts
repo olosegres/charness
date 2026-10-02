@@ -157,7 +157,7 @@ describe('createSchedulerMcpServer port binding', () => {
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
       sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
-      sendMessagesToThread: async () => ({ ok: true, summary: 'unused' }),
+      sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0 }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
       answerRequest: async () => ({ ok: false, error: 'unused' }),
       whenSessionsRestored: async () => {},
@@ -776,7 +776,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
-      return { ok: true, summary: `Delivered ${options.messages.length} messages to the topic.` };
+      return { ok: true, summary: `Delivered ${options.messages.length} messages to the topic.`, undeliveredCount: 0 };
     };
     const messageSendHandler = { current: defaultSendMessagesToThread };
     const sendMessagesToThread: SendMessagesToThread = (threadKey, options) => {

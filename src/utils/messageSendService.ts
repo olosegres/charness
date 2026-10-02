@@ -35,8 +35,14 @@ export type DiscreteMessageItem =
   | string
   | { text?: string; path?: string; asFile?: boolean };
 
+/**
+ * @name SendMessagesToThreadResult
+ * @description `undeliveredCount` on success counts the messages that were
+ * attempted but did not land (a partial delivery stays `ok`), so a caller can
+ * tell a partial delivery from a full one without parsing `summary`.
+ */
 export type SendMessagesToThreadResult =
-  | { ok: true; summary: string }
+  | { ok: true; summary: string; undeliveredCount: number }
   | { ok: false; error: string }
   | { ok: false; kind: 'deliveryUnknown'; error: string };
 
@@ -262,6 +268,6 @@ export function createSendMessagesToThread<TTarget>(
         ? `Delivered ${formatMessageCount(landed)} to the topic.`
         : `Delivered ${landed} of ${attempted} messages to the topic (${attempted - landed} failed to send).`) +
       attachmentErrorSuffix;
-    return { ok: true, summary };
+    return { ok: true, summary, undeliveredCount: attempted - landed };
   };
 }

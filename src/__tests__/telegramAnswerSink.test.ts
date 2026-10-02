@@ -29,12 +29,20 @@ describe('createTelegramAnswerSink', () => {
     const sink = createTelegramAnswerSink({
       sendMessages: async (threadKey, options) => {
         calls.push({ threadKey, options });
-        return { ok: true, summary: 'Delivered 1 message.' };
+        return { ok: true, summary: 'Delivered 1 message.', undeliveredCount: 0 };
       },
     });
 
     assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true });
     assert.deepEqual(calls, [{ threadKey: keyToString(topicKey), options: { messages: ['**Done.**'] } }]);
+  });
+
+  it('reports a partial delivery as a success with a warning, so the agent knows part is missing', async () => {
+    const summary = 'Delivered 2 of 3 messages to the topic (1 failed to send).';
+    const partial: SendMessagesToThreadResult = { ok: true, summary, undeliveredCount: 1 };
+    const sink = createTelegramAnswerSink({ sendMessages: async () => partial });
+
+    assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true, warning: summary });
   });
 
   it('reports a failed send as an error', async () => {

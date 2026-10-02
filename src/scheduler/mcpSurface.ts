@@ -32,9 +32,10 @@ import {
 } from '../requests/answerRequest';
 
 /**
- * @description The bot-owned MCP server exposes four agent-facing tools —
- * `schedule_create`, `schedule_list`, `schedule_cancel`, and
- * `send_file_to_user` — over streamable HTTP on a loopback port. The server is
+ * @description The bot-owned MCP server exposes the agent-facing tools —
+ * `schedule_create`, `schedule_list`, `schedule_cancel`, `send_file_to_user`,
+ * `send_messages_to_user`, `compact_conversation` and `answer_request` — over
+ * streamable HTTP on a loopback port. The server is
  * INERT until `bot.ts` wires {@link createSchedulerMcpServer}; this module
  * imports nothing from `bot.ts` (every side effect is injected via
  * {@link SchedulerMcpDeps}).
@@ -43,7 +44,7 @@ import {
  * research-locked choice (plan S5) that dodges the SDK's session-loss bugs and
  * suits a single local host. The SDK binds one `McpServer` to one transport per
  * connection, so every request builds a FRESH `McpServer` + transport (see
- * {@link buildRequestServer}) that registers the same four handlers, and they
+ * {@link buildRequestServer}) that registers the same handlers, and they
  * are closed when the response finishes. MCP cancellation arrives as a separate
  * HTTP notification, so {@link createSchedulerMcpServer} keeps only the active
  * request abort controllers plus one bounded, expiring lifecycle-tombstone cache
@@ -62,7 +63,10 @@ import {
  *   - `thread:<threadKey>` — a Claude session, pinned to its exact thread.
  *   - `dir:<directory>`    — an OpenCode instance, granular to a bound folder.
  * Every tool call resolves a single target thread from the scope (see
- * {@link resolveTargetThreadKey}) and can only touch that thread's jobs.
+ * {@link resolveTargetThreadKey}) and can only touch that thread's jobs —
+ * except `answer_request`, whose request id already names the conversation: it
+ * only checks that conversation is inside the scope
+ * ({@link checkIsConversationInScope}).
  */
 
 /**
@@ -106,7 +110,7 @@ When to use it:
 • The user EXPLICITLY asks to compact/shrink/summarize this conversation's context → compact_conversation. Only on an explicit request, never on your own judgement.
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
-• A message starts with a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. The requester may not see your plain text, so anything they must read goes through answer_request.
+• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. The requester may not see your plain text, so anything they must read goes through answer_request.
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 
@@ -1028,7 +1032,7 @@ function registerAnswerRequestTool(server: McpServer, deps: SchedulerMcpDeps, sc
     {
       title: 'Answer a request',
       description:
-        'Send your answer to a request — a message that started with a "[Request <id> · from: …]" header — to ' +
+        'Send your answer to a request — a message that carries a "[Request <id> · from: …]" header — to ' +
         'the person who made it, on the surface it came from. The requester may not see your plain text, so ' +
         'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
         'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +

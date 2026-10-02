@@ -75,6 +75,7 @@ test('sends each input string as its own message, in order', async () => {
   assert.deepEqual(recorder.targets, ['-100:1', '-100:1', '-100:1']);
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.summary, 'Delivered 3 messages to the topic.');
+  assert.equal(result.ok && result.undeliveredCount, 0);
 });
 
 test('never merges two distinct short inputs into one message', async () => {
@@ -126,6 +127,7 @@ test('partial send failure stays ok but reports the landed/attempted split', asy
   const result = await service('-100:1', { messages: ['a', 'b'] });
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.summary, 'Delivered 1 of 2 messages to the topic (1 failed to send).');
+  assert.equal(result.ok && result.undeliveredCount, 1);
 });
 
 test('a target-resolution failure short-circuits before any send', async () => {
@@ -264,6 +266,7 @@ test('a failed attachment stays a partial success and names the attachment error
   assert.equal(result.ok, true);
   assert.match(result.ok ? result.summary : '', /Delivered 1 of 2 messages/);
   assert.match(result.ok ? result.summary : '', /Attachment errors: cannot read a\.png: ENOENT/);
+  assert.equal(result.ok && result.undeliveredCount, 1, 'the failed attachment counts as undelivered');
 });
 
 test('an attachment-only batch that fails returns an error naming the attachment cause', async () => {
