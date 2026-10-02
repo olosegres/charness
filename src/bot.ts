@@ -87,7 +87,7 @@ import {
   type StartupTarget,
 } from './utils/startupReadiness';
 import { getStateStore, KeyLock, type StateStore } from './state';
-import { releaseLock } from './cli/lock';
+import { releaseLock } from './instanceLock';
 import { gracefulShutdown } from './shutdown';
 import {
   createUpdateDispatcher,
@@ -148,9 +148,8 @@ import {
 } from './platform/outbound';
 import { createJiraConnectorOutbound } from './connectors/jira/outbound';
 import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
-import { getServedPlatforms, parseConnectors } from './cli/connectorGuards';
+import { getServedConversations, getServedPlatforms, parseConnectors } from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
-import { getServedTmuxSessions } from './utils/servedTmuxSessions';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
@@ -9902,6 +9901,15 @@ export async function postReattachRecap(
  * blink), shown on a real cold start. The classifier lives in
  * `bootClassifier.ts`; this function only consumes the flag.
  */
+/**
+ * @description The bindings of the platforms this instance serves — what every
+ * boot scan that adopts, resumes or heals sessions walks (Jira plan J3b, R10):
+ * a binding of another platform left in this state is never brought back here.
+ */
+function getServedBindings(): ReturnType<StateStore['listBindings']> {
+  return getServedConversations(state.listBindings(), ENV.servedPlatforms);
+}
+
 async function reattachExistingSessions(
   opts: { quietReattach: boolean } = { quietReattach: false },
 ): Promise<void> {
@@ -9911,7 +9919,7 @@ async function reattachExistingSessions(
   //    would return the wrong adapter even though the *actual* tmux /
   //    opencode session was correctly adopted below. (Review CRITICAL #3.)
   let rehydrated = 0;
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (!agent?.name) continue;
     try {
@@ -9934,7 +9942,7 @@ async function reattachExistingSessions(
   const claudeAdapter = getAdapter('claude');
   if (claudeAdapter instanceof ClaudeCliAdapter) {
     try {
-      const found = getServedTmuxSessions(await claudeAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
+      const found = getServedConversations(await claudeAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       let adopted = 0;
       let killed = 0;
       let reconciled = 0;
@@ -10041,7 +10049,7 @@ async function reattachExistingSessions(
   //    from `getThreadAdapter(key)` (review CRITICAL #2).
   const opencodeAdapter = getAdapter('opencode');
   let reopened = 0;
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (!agent || agent.name !== 'opencode' || !agent.opencodeSessionId) continue;
     if (opencodeAdapter.checkIsActive(key)) continue;
@@ -10096,7 +10104,7 @@ async function reattachExistingSessions(
   let jsonReopened = 0;
   if (claudeJsonAdapter instanceof ClaudeJsonStreamAdapter) {
     try {
-      const found = getServedTmuxSessions(await claudeJsonAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
+      const found = getServedConversations(await claudeJsonAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       for (const { key, sessionName } of found) {
         // One session's failure (a foreign key, a broken record) must not stop the others being adopted.
         try {
@@ -10132,7 +10140,7 @@ async function reattachExistingSessions(
       console.error('[reattach] claude-json-stream scan failed:', e);
     }
   }
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (!agent || agent.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) continue;
     if (claudeJsonAdapter.checkIsActive(key)) continue; // adopted above
@@ -10165,7 +10173,7 @@ async function reattachExistingSessions(
   const terminalAdapter = getAdapter('terminal');
   if (terminalAdapter instanceof TerminalAdapter) {
     try {
-      const found = getServedTmuxSessions(await terminalAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
+      const found = getServedConversations(await terminalAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       let adopted = 0;
       let killed = 0;
       for (const { key, sessionName } of found) {
@@ -10212,7 +10220,7 @@ async function reattachExistingSessions(
   // active (reattached) threads get one; a dead/idle row is left untouched
   // (its startedAt, if any, still round-trips for a later `/sessions` resume).
   const backfillIso = formatIsoLocalOffset(Date.now());
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (!agent || agent.startedAt !== undefined) continue;
     let isActive = false;
@@ -10330,7 +10338,7 @@ function recoverLimitEpisodesFromDisk(): void {
   const jsonStreamAdapter = getAdapter(claudeJsonStreamAdapterName);
   const now = Date.now();
   let recovered = 0;
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (agent?.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) continue;
     if (!jsonStreamAdapter.checkIsActive(key)) continue;
@@ -10404,7 +10412,7 @@ function recoverLimitEpisodesFromDisk(): void {
  * line per healthy thread would print the whole list on every hot reload.
  */
 function healSchedulerMcpForActiveSessions(): void {
-  for (const { key } of state.listBindings()) {
+  for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
     if (!agent?.name) continue;
     let adapter: AgentAdapter;

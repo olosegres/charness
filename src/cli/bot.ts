@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import { loadEnvWithConnectorGuards } from './connectorGuards';
-import { acquireLock, installLockCleanupHandlers } from './lock';
+import { acquireLock, installLockCleanupHandlers } from '../instanceLock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
 

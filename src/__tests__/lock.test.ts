@@ -20,7 +20,7 @@ import {
   tryAcquireLock,
   releaseLock,
   lockPath,
-} from '../cli/lock';
+} from '../instanceLock';
 
 let tmpRoot: string;
 let savedDataDir: string | undefined;

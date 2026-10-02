@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
-import { loadEnvWithConnectorGuards, parseConnectors } from './connectorGuards';
+import { loadEnvWithConnectorGuards } from './connectorGuards';
+import { parseConnectors } from '../platform/connectorSet';
 import {
   checkIsInstalled,
   ensureOpenCodeServer,

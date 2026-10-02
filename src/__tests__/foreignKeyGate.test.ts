@@ -19,7 +19,7 @@ import {
   type AdapterEventName,
 } from '../adapters/adapterEventRouting';
 import { enqueueSend, ForeignKeySendRefusedError, sendUnpaced } from '../rateLimiter';
-import { getClaudePlatformToolFlags } from '../adapters/claudePlatformFlags';
+import { getClaudePlatformFlags } from '../adapters/claudePlatformFlags';
 
 const topicKey = makeTelegramKey(-1001234567890, 42);
 const issueKey = makeJiraKey('PROJ-12');
@@ -121,9 +121,32 @@ describe('the send queue refuses a Jira conversation (R2)', () => {
   });
 });
 
-describe('getClaudePlatformToolFlags (R1)', () => {
-  it('turns the native question off outside Telegram, and only there', () => {
-    assert.deepEqual(getClaudePlatformToolFlags(issueKey), ['--disallowedTools', 'AskUserQuestion']);
-    assert.deepEqual(getClaudePlatformToolFlags(topicKey), []);
+describe('getClaudePlatformFlags (R1, R7)', () => {
+  it('outside Telegram: no user-level Claude setup, no native question; for Telegram: nothing', () => {
+    assert.deepEqual(getClaudePlatformFlags(issueKey), [
+      '--setting-sources', 'project,local',
+      '--disallowedTools', 'AskUserQuestion',
+    ]);
+    assert.deepEqual(getClaudePlatformFlags(topicKey), []);
+  });
+
+  it('every Claude launch path passes them, right before another option', () => {
+    // Each argv that names a session (`--session-id` / `--resume`) is a launch.
+    const launchArgRe = /'--(?:session-id|resume)'/g;
+    let launchCount = 0;
+    for (const file of ['claudeCliAdapter.ts', 'claudeJsonStreamAdapter.ts']) {
+      const lines = fs.readFileSync(path.join(__dirname, '..', 'adapters', file), 'utf8').split('\n');
+      lines.forEach((line, index) => {
+        if (!launchArgRe.test(line)) return;
+        launchArgRe.lastIndex = 0;
+        launchCount += 1;
+        const argvStart = lines.slice(Math.max(0, index - 25), index).join('\n');
+        const flagsUse = argvStart.lastIndexOf('...getClaudePlatformFlags(key),');
+        assert.ok(flagsUse >= 0, `${file}:${index + 1} launches without the platform flags`);
+        const nextArgument = argvStart.slice(flagsUse).split('\n').slice(1).find((next) => !next.trim().startsWith('//'));
+        assert.match(nextArgument ?? '', /^\s*('--|\.\.\.claudePermissionArgs)/, `${file}:${index + 1}: an option must follow`);
+      });
+    }
+    assert.ok(launchCount >= 3, 'tmux start, tmux resume and the json-stream spawn');
   });
 });

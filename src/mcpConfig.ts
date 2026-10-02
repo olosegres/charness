@@ -189,7 +189,10 @@ function writeGeneratedTmp(config: unknown, tmpPath: string): string | null {
  * (Jira connector plan J2, D17): it gets exactly the configs passed here — the
  * bot's MCP plus the operator's `DATA_DIR/mcp.json` and
  * `DATA_DIR/threads/<key>.json` — and nothing from the user or project MCP
- * config, whose servers reach other tenants under the operator's own keys.
+ * config, whose servers reach other tenants under the operator's own keys. It
+ * also drops the claude.ai account connectors (J3b, R8 — probed on Claude Code
+ * 2.1.287: the `system/init` `mcp_servers` listed three `claude.ai …` connectors
+ * without it and none with it), so no further switch is needed.
  */
 export async function prepareMcpFlags(opts: PrepareMcpOptions): Promise<string[]> {
   const flags: string[] = opts.key.platform === telegramPlatform ? [] : [strictMcpConfigFlag];

@@ -14,16 +14,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import {
-  getConnectorGuardErrors,
-  getPreloadGuardErrors,
-  getServedPlatforms,
-  parseConnectors,
-} from '../cli/connectorGuards';
+import { getConnectorGuardErrors, getPreloadGuardErrors } from '../cli/connectorGuards';
 import { loadEnvFiles } from '../cli/envLoader';
 import { getTmuxBaseArgs, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { installTelegramCallGuard, TelegramDisabledError } from '../connectors/telegram/telegramCallGuard';
-import { getServedTmuxSessions } from '../utils/servedTmuxSessions';
+import { getServedConversations, getServedPlatforms, parseConnectors } from '../platform/connectorSet';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
@@ -266,15 +261,15 @@ describe('installTelegramCallGuard (D9)', () => {
   });
 });
 
-describe('getServedTmuxSessions (J1 review)', () => {
+describe('getServedConversations (J1 review)', () => {
   const sessions = [
     { key: makeTelegramKey(-1001111111111, 20), sessionName: 'claude--1001111111111-20' },
     { key: makeJiraKey('PROJ-12'), sessionName: 'claude-jira-PROJ-PROJ-12' },
   ];
 
   it('a Telegram instance never adopts or kills a Jira session, and a Jira instance never a Telegram one', () => {
-    assert.deepEqual(getServedTmuxSessions(sessions, getServedPlatforms(['telegram'])).map((s) => s.sessionName), ['claude--1001111111111-20']);
-    assert.deepEqual(getServedTmuxSessions(sessions, getServedPlatforms(['jira'])).map((s) => s.sessionName), ['claude-jira-PROJ-PROJ-12']);
+    assert.deepEqual(getServedConversations(sessions, getServedPlatforms(['telegram'])).map((s) => s.sessionName), ['claude--1001111111111-20']);
+    assert.deepEqual(getServedConversations(sessions, getServedPlatforms(['jira'])).map((s) => s.sessionName), ['claude-jira-PROJ-PROJ-12']);
   });
 });
 
@@ -301,6 +296,26 @@ describe('the guards are wired where they must run', () => {
     assert.match(botSource, /const botToken = isTelegramServed \? \(process\.env\.TELEGRAM_BOT_TOKEN \?\? ''\) : '';/);
     const scans = [...botSource.matchAll(/(.{0,60})\.listExistingTmuxSessions\(\)/g)];
     assert.ok(scans.length >= 3, 'the three tmux backends are scanned');
-    for (const [, prefix] of scans) assert.match(prefix, /getServedTmuxSessions\(await \w+$/);
+    for (const [, prefix] of scans) assert.match(prefix, /getServedConversations\(await \w+$/);
+  });
+
+  it('every boot scan of the bindings walks the served ones only (R10)', () => {
+    const botSource = readSource('bot.ts');
+    for (const scanHeader of [
+      'async function reattachExistingSessions(',
+      'function recoverLimitEpisodesFromDisk(',
+      'function healSchedulerMcpForActiveSessions(',
+    ]) {
+      const start = botSource.indexOf(scanHeader);
+      assert.ok(start >= 0, scanHeader);
+      const body = botSource.slice(start, botSource.indexOf('\n}\n', start));
+      assert.doesNotMatch(body, /state\.listBindings\(\)/, `${scanHeader} walks every binding`);
+      assert.match(body, /getServedBindings\(\)/, scanHeader);
+    }
+    assert.match(botSource, /return getServedConversations\(state\.listBindings\(\), ENV\.servedPlatforms\);/);
+  });
+
+  it('bot.ts imports nothing from the CLI layer (R10)', () => {
+    assert.doesNotMatch(readSource('bot.ts'), /from '\.\/cli\//);
   });
 });

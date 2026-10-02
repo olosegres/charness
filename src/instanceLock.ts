@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { DEFAULT_WATCHDOG_MS } from '../shutdown';
+import { DEFAULT_WATCHDOG_MS } from './shutdown';
 
 /**
  * @description Number of acquisition attempts before giving up.

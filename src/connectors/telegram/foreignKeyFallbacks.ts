@@ -1,5 +1,6 @@
 import { defaultLocale, type Locale } from '../../i18n';
-import type { SessionKey } from '../../sessionKey';
+import type { PlatformId, SessionKey } from '../../sessionKey';
+import { getServedConversations } from '../../platform/connectorSet';
 import { checkIsTelegramKey, getTelegramChatId } from './sessionKeyCodec';
 
 /**
@@ -47,6 +48,9 @@ export function getTelegramPreambleGroupTitle(key: SessionKey, sources: Preamble
   return sources.checkIsDmKey(key) ? sources.getBotName() : undefined;
 }
 
+/** The platform set {@link getTelegramConversations} keeps. */
+const telegramPlatforms: ReadonlySet<PlatformId> = new Set<PlatformId>(['telegram']);
+
 /**
  * @description Only the Telegram conversations of a list. The binding store is
  * shared by every platform (a Jira issue binds its project folder too), while a
@@ -54,7 +58,7 @@ export function getTelegramPreambleGroupTitle(key: SessionKey, sources: Preamble
  * throws for a foreign key.
  */
 export function getTelegramConversations<T extends { key: SessionKey }>(entries: readonly T[]): T[] {
-  return entries.filter(({ key }) => checkIsTelegramKey(key));
+  return getServedConversations(entries, telegramPlatforms);
 }
 
 /** Distinct (primitive, conversation) pairs remembered before the memory starts over. */

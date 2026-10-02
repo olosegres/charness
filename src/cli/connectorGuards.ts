@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { PlatformId } from '../sessionKey';
+import { parseConnectors } from '../platform/connectorSet';
 import { resolveDataDir } from '../state';
 import { loadEnvFiles } from './envLoader';
 
@@ -23,12 +23,6 @@ import { loadEnvFiles } from './envLoader';
  *    settings use other names).
  */
 
-export const connectorIds = ['telegram', 'jira'] as const;
-export type ConnectorId = (typeof connectorIds)[number];
-
-/** An unset `CONNECTORS` keeps the instance what it always was. */
-export const defaultConnectors: readonly ConnectorId[] = ['telegram'];
-
 /** The Jira connector's config file under `DATA_DIR` (its content is J4's). */
 export const jiraConfigFileName = 'jira.json';
 
@@ -38,29 +32,6 @@ const defaultTmuxSocketName = 'default';
 const tmuxSocketNameRe = /^[A-Za-z0-9_-]+$/;
 const atlassianEnvPrefix = 'ATLASSIAN_';
 const envFileRequiredError = 'CONNECTORS lists jira: set ENV_FILE to the instance\'s own env file (it is the only file read)';
-
-function checkIsConnectorId(name: string): name is ConnectorId {
-  return connectorIds.some((id) => id === name);
-}
-
-export type ConnectorsParse = { ok: true; connectors: ConnectorId[] } | { ok: false; error: string };
-
-/** @description `CONNECTORS` as a comma list (`telegram`, `jira`), unset → Telegram only. */
-export function parseConnectors(raw: string | undefined): ConnectorsParse {
-  if (raw === undefined || raw.trim() === '') return { ok: true, connectors: [...defaultConnectors] };
-  const names = raw.split(',').map((name) => name.trim()).filter((name) => name !== '');
-  const unknown = names.filter((name) => !checkIsConnectorId(name));
-  if (unknown.length > 0) {
-    return { ok: false, error: `CONNECTORS has unknown connector(s) ${unknown.join(', ')} (known: ${connectorIds.join(', ')})` };
-  }
-  if (names.length === 0) return { ok: false, error: 'CONNECTORS names no connector' };
-  return { ok: true, connectors: connectorIds.filter((id) => names.includes(id)) };
-}
-
-/** @description The platforms whose conversations an instance serving `connectors` owns. */
-export function getServedPlatforms(connectors: readonly ConnectorId[]): ReadonlySet<PlatformId> {
-  return new Set<PlatformId>(connectors);
-}
 
 type EnvReading = Readonly<Record<string, string | undefined>>;
 

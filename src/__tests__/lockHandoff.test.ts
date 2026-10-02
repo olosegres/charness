@@ -32,7 +32,7 @@ import {
   releaseLock,
   lockPath,
   lockHandoffMaxWaitMs,
-} from '../cli/lock';
+} from '../instanceLock';
 import { DEFAULT_WATCHDOG_MS } from '../shutdown';
 
 let tmpRoot: string;
