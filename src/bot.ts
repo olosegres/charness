@@ -13769,14 +13769,6 @@ export async function startBot(): Promise<void> {
   state = await getStateStore();
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
 
-  // 1b. Request ledger: index the closed-request history and reconcile the open
-  //     set BEFORE the bot MCP server starts serving (step 5). A session that
-  //     survived the restart may call a tool the moment the server listens, and
-  //     a request looked up in a not-yet-loaded history would be refused as an
-  //     unknown id. An unreadable history file fails the boot loudly.
-  const requestLedger = new RequestLedger({ store: state });
-  await requestLedger.load();
-
   // 1a. Apply the operator's timezone to the PROCESS, right after the store
   //     loads and before anything reads a clock. Assigning `process.env.TZ`
   //     re-bases `Date`/`Intl`, so every host-local render downstream (cron fire
@@ -13785,6 +13777,14 @@ export async function startBot(): Promise<void> {
   //     environment is left exactly as launched.
   applyProcessTimezone(state.getTimezone());
   console.log(`Timezone:         ${getEffectiveTimezone(state.getTimezone())} (host: ${getHostTimezone()})`);
+
+  // 1b. Request ledger: index the closed-request history and reconcile the open
+  //     set BEFORE the bot MCP server starts serving (step 5). A session that
+  //     survived the restart may call a tool the moment the server listens, and
+  //     a request looked up in a not-yet-loaded history would be refused as an
+  //     unknown id. An unreadable history file fails the boot loudly.
+  const requestLedger = new RequestLedger({ store: state });
+  await requestLedger.load();
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle

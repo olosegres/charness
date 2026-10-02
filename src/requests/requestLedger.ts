@@ -72,13 +72,12 @@ export interface OpenRequestEntry {
 }
 
 const closeReasons: ReadonlySet<RequestCloseReason> = new Set(['final', 'question', 'superseded', 'cancelled']);
+const originKinds: ReadonlySet<RequestOriginKind> = new Set(['message', 'scheduledRun', 'trackerEvent']);
 
 /** Default history path under the live `DATA_DIR`. */
 function getDefaultHistoryPath(): string {
   return path.join(resolveDataDir(), 'requests.jsonl');
 }
-
-const originKinds: ReadonlySet<RequestOriginKind> = new Set(['message', 'scheduledRun', 'trackerEvent']);
 
 /**
  * @description Parse one history line, or `null` for a line that is not a
@@ -100,7 +99,10 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
   if (typeof id !== 'string' || typeof conversationKey !== 'string') return null;
   if (closeReason === undefined || !closeReasons.has(closeReason)) return null;
   if (typeof origin !== 'object' || origin === null || !originKinds.has(origin.kind)) return null;
-  if (typeof origin.attributes !== 'object' || origin.attributes === null) return null;
+  const { attributes } = origin;
+  // The answer sink of a closed request's platform reads these back verbatim.
+  if (typeof attributes !== 'object' || attributes === null || Array.isArray(attributes)) return null;
+  if (!Object.values(attributes).every((value) => typeof value === 'string')) return null;
   if (
     typeof closedAt !== 'number' || typeof createdAt !== 'number' || typeof progressAnswerCount !== 'number' ||
     typeof silentTurnCount !== 'number' || typeof wakeCount !== 'number' || typeof isWakeStopped !== 'boolean'
@@ -112,7 +114,7 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
     conversationKey,
     closedAt,
     closeReason,
-    origin: { kind: origin.kind, attributes: origin.attributes },
+    origin: { kind: origin.kind, attributes },
     createdAt,
     progressAnswerCount,
     silentTurnCount,
@@ -261,9 +263,10 @@ export class RequestLedger {
   }
 
   /**
-   * @description Change the wake-up bookkeeping of an open request. Resolves the
-   * updated request, or `null` when `id` is not open (closed or superseded in
-   * the meantime — the update is then dropped, never applied to its successor).
+   * @description Change the answer and wake-up bookkeeping of an open request.
+   * Resolves the updated request, or `null` when `id` is not open (closed or
+   * superseded in the meantime — the update is then dropped, never applied to
+   * its successor).
    */
   async updateOpenRequest(id: string, update: OpenRequestUpdate): Promise<OpenRequestState | null> {
     this.assertLoaded();

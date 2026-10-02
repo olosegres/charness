@@ -258,11 +258,22 @@ describe('RequestLedger across a restart', () => {
     const ledgerBefore = await createLoadedLedger(storeBefore);
     const request = await ledgerBefore.createRequest(topicKey, messageOrigin);
     await ledgerBefore.closeRequest(request.id, 'final');
-    fs.appendFileSync(historyPath, '{"id":"req_truncat\n{"id":"req_noReason","conversationKey":"x"}\n');
+    const closedLine = readHistory()[0];
+    const nonStringAttributeLine = {
+      ...closedLine,
+      id: 'req_badAttrs',
+      origin: { kind: 'trackerEvent', attributes: { issueKey: 123 } },
+    };
+    fs.appendFileSync(
+      historyPath,
+      '{"id":"req_truncat\n{"id":"req_noReason","conversationKey":"x"}\n' +
+        `${JSON.stringify(nonStringAttributeLine)}\n`,
+    );
 
     const ledgerAfter = await createLoadedLedger(await createStore());
 
     assert.equal(ledgerAfter.getRequest(request.id)?.isOpen, false);
     assert.equal(ledgerAfter.getRequest('req_noReason'), null);
+    assert.equal(ledgerAfter.getRequest('req_badAttrs'), null);
   });
 });

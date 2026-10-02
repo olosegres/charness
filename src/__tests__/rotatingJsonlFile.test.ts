@@ -38,8 +38,9 @@ describe('RotatingJsonlFile', () => {
 
   it('appends owner-only lines and reads them back, the rotated backup first', async () => {
     const file = new RotatingJsonlFile<SampleRecord>(filePath, smallMaxBytes);
-    // Each line is 8 bytes, so the file rolls once it holds 6 lines (48 > 40):
-    // 1–6 roll to `.1`, 7–12 roll over them (1–6 are gone), 13–14 stay live.
+    // A file rolls on the append AFTER it passes 40 bytes. Lines 1–9 are 8 bytes,
+    // 10+ are 9: 1–6 (48) roll to `.1`, then 7–11 (42) roll over them (1–6 are
+    // gone), and 12–14 stay live.
     for (let n = 1; n <= 14; n += 1) assert.equal(file.append({ n }), true);
 
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);

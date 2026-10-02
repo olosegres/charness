@@ -64,7 +64,8 @@ export interface OpenRequestState {
 
 /**
  * @name OpenRequestUpdate
- * @description The fields of an open request the wake-up engine may change.
+ * @description The fields of an open request the answer handling and the
+ * wake-up engine may change.
  */
 export type OpenRequestUpdate = Partial<
   Pick<

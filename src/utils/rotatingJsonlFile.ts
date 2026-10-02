@@ -35,7 +35,7 @@ export class RotatingJsonlFile<TRecord> {
     renameSync(this.path, `${this.path}.1`);
   }
 
-  /** @description Append one record as a JSONL line. Resolves `false` when the write failed. */
+  /** @description Append one record as a JSONL line. Returns `false` when the write failed. */
   append(record: TRecord): boolean {
     try {
       if (!this.isDirEnsured) {
