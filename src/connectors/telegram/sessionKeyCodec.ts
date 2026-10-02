@@ -46,6 +46,15 @@ export const telegramSessionKeyCodec: SessionKeyCodec = {
   matches(serialized: string): boolean {
     return telegramKeyRe.test(serialized);
   },
+
+  // The key has exactly one `:`, so the slug splits on its LAST separator: a
+  // negative chat id keeps its own leading minus (`-100123-42` with `-`).
+  decodeSlug(slug: string, separator: string): SessionKey | null {
+    const lastSeparator = slug.lastIndexOf(separator);
+    if (lastSeparator <= 0) return null;
+    const serialized = `${slug.slice(0, lastSeparator)}:${slug.slice(lastSeparator + separator.length)}`;
+    return telegramKeyRe.test(serialized) ? telegramSessionKeyCodec.decode(serialized) : null;
+  },
 };
 
 /**

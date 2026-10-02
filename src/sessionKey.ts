@@ -21,7 +21,7 @@
  * double used to exercise degraded capability paths; real surfaces are added
  * here when their connector lands.
  */
-export type PlatformId = 'telegram' | 'test';
+export type PlatformId = 'telegram' | 'jira' | 'test';
 
 /**
  * @description The core's routing key: a conversation on one platform.
@@ -58,6 +58,14 @@ export interface SessionKeyCodec {
   encode(key: SessionKey): string;
   decode(serialized: string): SessionKey;
   matches(serialized: string): boolean;
+  /**
+   * Inverse of {@link keyToSlug} for this platform's keys: the key a slug was
+   * built from with `separator`, or `null` when the slug is not one of this
+   * platform's. Only the codec knows where its halves end once every `:` became
+   * the separator. Optional — a codec without it is never read back from a
+   * tmux session or directory name.
+   */
+  decodeSlug?(slug: string, separator: string): SessionKey | null;
 }
 
 /** Registration order matters: {@link keyFromString} asks `matches` in it. */
@@ -156,13 +164,28 @@ export function tryKeyFromString(serialized: string): SessionKey | null {
  * `DATA_DIR/jsonstream/` session dirs. All three previously open-coded the
  * same substitution.
  *
- * The inverse parsers split on the LAST separator, so a format carrying more
- * than one `:` cannot round-trip through them. Telegram's has exactly one; a
- * future multi-colon platform must supply its own name shape rather than reuse
- * this slug.
+ * The inverse is {@link tryKeyFromSlug}: each codec reads its own slugs back,
+ * since a format with more than one `:` (Jira's) cannot be split on a fixed
+ * position once they all became the separator.
  */
 export function keyToSlug(key: SessionKey, separator: string): string {
   return keyToString(key).replaceAll(':', separator);
+}
+
+/**
+ * @description Inverse of {@link keyToSlug}: the first registered codec that
+ * recognises the slug decodes it, so a tmux session or directory name of any
+ * platform parses back to its key. `null` for a slug no codec claims (an
+ * unrelated tmux session, a foreign directory). Throws on an empty registry,
+ * like {@link tryKeyFromString}.
+ */
+export function tryKeyFromSlug(slug: string, separator: string): SessionKey | null {
+  assertRegistryArmed();
+  for (const codec of codecs) {
+    const key = codec.decodeSlug?.(slug, separator) ?? null;
+    if (key) return key;
+  }
+  return null;
 }
 
 /**

@@ -20,12 +20,13 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-// Arms the Telegram SessionKeyCodec for the whole suite: modules that only
-// DECODE key strings (`state.ts`, the DATA_DIR janitors) never import a
-// Telegram module, so a test exercising them in isolation would otherwise have
+// Arms the Telegram and Jira SessionKeyCodecs for the whole suite: modules that
+// only DECODE key strings (`state.ts`, the DATA_DIR janitors) never import a
+// connector module, so a test exercising them in isolation would otherwise have
 // no registered codec. Safe to hoist above the DATA_DIR redirect below — the
 // codec module reads no environment and imports nothing that does.
 import '../connectors/telegram/sessionKeyCodec';
+import '../connectors/jira/sessionKeyCodec';
 
 // A FRESH dir, never a pid-named one: a pid-named path may already exist, left behind by another
 // account's run before a pid wrap, and `mkdirSync({ recursive: true })` would silently adopt that

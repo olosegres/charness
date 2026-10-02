@@ -29,7 +29,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { setTimeout as sleep } from 'timers/promises';
-import { keyToSlug, tryKeyFromString, type SessionKey } from '../sessionKey';
+import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
 import { shellSingleQuote } from './tmuxExec';
 
@@ -92,7 +92,7 @@ export function resolveJsonStreamRoot(dataDir: string): string {
  */
 const threadDirSeparator = '_';
 
-/** The per-thread host dir name — `<chatId>_<threadId>`. */
+/** The per-thread host dir name — the key slug, for Telegram `<chatId>_<threadId>`. */
 function threadDirName(key: SessionKey): string {
   return keyToSlug(key, threadDirSeparator);
 }
@@ -109,9 +109,7 @@ export function resolveJsonStreamSessionDir(dataDir: string, key: SessionKey): s
  * swept by a mis-parse.
  */
 export function parseJsonStreamDirName(name: string): SessionKey | null {
-  const lastSeparator = name.lastIndexOf(threadDirSeparator);
-  if (lastSeparator <= 0) return null;
-  return tryKeyFromString(`${name.slice(0, lastSeparator)}:${name.slice(lastSeparator + 1)}`);
+  return tryKeyFromSlug(name, threadDirSeparator);
 }
 
 export function getJsonStreamSessionPaths(dir: string): JsonStreamSessionPaths {

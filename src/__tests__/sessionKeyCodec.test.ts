@@ -31,6 +31,7 @@ import {
   keyToString,
   keysEqual,
   registerSessionKeyCodec,
+  tryKeyFromSlug,
   tryKeyFromString,
   unregisterSessionKeyCodec,
   type SessionKey,
@@ -41,6 +42,7 @@ import {
   makeTelegramKey,
   telegramSessionKeyCodec,
 } from '../connectors/telegram/sessionKeyCodec';
+import { jiraSessionKeyCodec } from '../connectors/jira/sessionKeyCodec';
 
 test('keyToString → keyFromString round-trips across the production key domain', () => {
   const samples: SessionKey[] = [
@@ -160,11 +162,14 @@ test('an unarmed registry fails loudly instead of looking like malformed data', 
   // field would decode to null and state.json would load as zero bindings —
   // every live agent session apparently orphaned, with nothing logged.
   unregisterSessionKeyCodec('telegram');
+  unregisterSessionKeyCodec('jira');
   try {
     assert.throws(() => keyFromString('-100:7'), /No SessionKeyCodec registered/);
     assert.throws(() => tryKeyFromString('-100:7'), /No SessionKeyCodec registered/);
+    assert.throws(() => tryKeyFromSlug('-100-7', '-'), /No SessionKeyCodec registered/);
   } finally {
     registerSessionKeyCodec(telegramSessionKeyCodec);
+    registerSessionKeyCodec(jiraSessionKeyCodec);
   }
   assert.equal(keyFromString('-100:7').platform, 'telegram');
 });

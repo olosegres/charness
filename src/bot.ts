@@ -42,6 +42,9 @@ import {
   getTelegramThreadId,
   makeTelegramKey,
 } from './connectors/telegram/sessionKeyCodec';
+// Arms the Jira key codec: a Jira conversation's key read back from `state.json`
+// or a tmux / json-stream name must decode in every boot mode.
+import './connectors/jira/sessionKeyCodec';
 // Pure parser lives in `./agentTrigger` so it can be unit-tested without
 // booting Telegraf (audit S19 / #25).
 import { parseAgentTrigger as checkIsStartAgentPhrase } from './agentTrigger';

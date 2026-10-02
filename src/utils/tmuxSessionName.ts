@@ -1,4 +1,4 @@
-import { keyToSlug, tryKeyFromString, type SessionKey } from '../sessionKey';
+import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 
 /**
  * @description Separator between the serialized key's own two halves inside a
@@ -31,9 +31,10 @@ export function buildTmuxSessionName(prefix: string, key: SessionKey): string {
  * tmux session a user started by hand, or one owned by a different backend's
  * prefix).
  *
- * Carefully handles negative chat ids: `claude--1001234-42` parses to
- * `-1001234:42`. We split from the right on the last `-` so the trailing token
- * is always the thread half regardless of the space half's sign.
+ * The slug after the prefix is read back by the codec that owns it
+ * ({@link tryKeyFromSlug}): Telegram's `claude--1001234-42` parses to
+ * `-1001234:42` (split on the last `-`, whatever the chat id's sign), Jira's
+ * `claude-jira-PROJ-PROJ-12` to `jira:PROJ:PROJ-12`.
  *
  * Strictness lives in the codec (audit S1 / #22): plain `Number(...)` accepts
  * `1e5`, `0x10`, `1.5`, `" 42 "`. Such values come from a foreign tmux session
@@ -43,8 +44,5 @@ export function buildTmuxSessionName(prefix: string, key: SessionKey): string {
 export function parseTmuxSessionName(prefix: string, name: string): SessionKey | null {
   const head = `${prefix}-`;
   if (!name.startsWith(head)) return null;
-  const rest = name.slice(head.length);
-  const lastSeparator = rest.lastIndexOf(tmuxKeySeparator);
-  if (lastSeparator <= 0) return null;
-  return tryKeyFromString(`${rest.slice(0, lastSeparator)}:${rest.slice(lastSeparator + 1)}`);
+  return tryKeyFromSlug(name.slice(head.length), tmuxKeySeparator);
 }

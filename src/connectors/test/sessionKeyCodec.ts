@@ -6,11 +6,10 @@
  * `matches()`-based dispatch and every degraded capability path are unreachable
  * and would be shipped untested.
  *
- * The spelling deliberately contains no `:`. Telegram's frozen format is
- * `"<chatId>:<threadId>"` and `keyToSlug`'s inverse parsers split on the LAST
- * separator, so a second colon-bearing format could not round-trip through the
- * tmux / directory name shapes. `|` also guarantees the all-numeric Telegram
- * pattern can never claim one of these strings, and vice versa.
+ * The spelling deliberately contains no `:`, and `|` guarantees the
+ * all-numeric Telegram pattern can never claim one of these strings, and vice
+ * versa. It has no `decodeSlug`: a test key is never read back from a tmux or
+ * directory name.
  */
 
 import {
