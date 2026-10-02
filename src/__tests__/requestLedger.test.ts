@@ -336,3 +336,23 @@ describe('RequestLedger durability and the closed-id window', () => {
     assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 3);
   });
 });
+
+describe('RequestLedger close callback', () => {
+  it('reports every close exactly once, whatever closed it', async () => {
+    const store = await createStore();
+    const closed: Array<[string, string]> = [];
+    const ledger = new RequestLedger({
+      store,
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      onRequestClosed: (record) => closed.push([record.id, record.closeReason]),
+    });
+    await ledger.load();
+
+    const superseded = await ledger.createRequest(topicKey, messageOrigin);
+    const answered = await ledger.createRequest(topicKey, messageOrigin);
+    await ledger.closeRequest(answered.id, 'final');
+    await ledger.closeRequest(answered.id, 'final');
+
+    assert.deepEqual(closed, [[superseded.id, 'superseded'], [answered.id, 'final']]);
+  });
+});

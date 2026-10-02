@@ -613,4 +613,6 @@ export const jaDict: Record<string, string> = {
     '（任意）音声入力を有効にするには、.env に GROQ_API_KEY を追加して再起動してください。',
   'startup.item.optional_owner':
     '（任意）このステータスをプライベートチャットで受け取るには OWNER_USER_ID を設定してください。',
+  'requests.alert.notAnswering': '⚠️ リクエスト {requestId} に回答がありません：エージェントは回答せずにターンを終え、リマインダーも打ち切られました。このトピックのセッションを確認してください。',
+  'requests.alert.unreachable': '⚠️ リクエスト {requestId} に回答がありません：リマインダーを送るためにエージェントのセッションに接続できませんでした。このトピックのセッションを確認してください。',
 };

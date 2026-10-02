@@ -75,6 +75,12 @@ export type RequestLedgerStore = Pick<StateStore, 'getOpenRequests' | 'getOpenRe
  */
 export interface RequestLedgerDeps {
   store: RequestLedgerStore;
+  /**
+   * Called once for every request that closes, by any path (an answer, a newer
+   * request, a cancellation) — after its history line is written. The boot uses
+   * it to release a platform alert the request still holds. Must not throw.
+   */
+  onRequestClosed?: (record: ClosedRequestRecord) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -117,7 +123,7 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
   if (typeof parsed !== 'object' || parsed === null) return null;
   const {
     id, conversationKey, closedAt, closeReason, origin, createdAt,
-    progressAnswerCount, silentTurnCount, wakeCount, isWakeStopped, nextWakeAt, lastTurnActivityAt,
+    progressAnswerCount, silentTurnCount, wakeCount, isWakeStopped, nextWakeAt, lastTurnActivityAt, alertRef,
   } = parsed;
   if (typeof id !== 'string' || typeof conversationKey !== 'string') return null;
   if (closeReason === undefined || !closeReasons.has(closeReason)) return null;
@@ -146,6 +152,7 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
     // Optional fields keep their absence (`state.json` omits them when unset).
     ...(typeof nextWakeAt === 'number' ? { nextWakeAt } : {}),
     ...(typeof lastTurnActivityAt === 'number' ? { lastTurnActivityAt } : {}),
+    ...(typeof alertRef === 'string' ? { alertRef } : {}),
   };
 }
 
@@ -154,6 +161,7 @@ export class RequestLedger {
   private readonly history: RotatingJsonlFile<ClosedRequestRecord>;
   private readonly now: () => number;
   private readonly closedIndexMaxSize: number;
+  private readonly onRequestClosed: ((record: ClosedRequestRecord) => void) | undefined;
   /** Insertion order = close order, so the first key is always the oldest. */
   private readonly closedById = new Map<string, ClosedRequestRecord>();
   private loadPromise: Promise<void> | null = null;
@@ -168,6 +176,7 @@ export class RequestLedger {
     this.history = deps.history ?? new RotatingJsonlFile(getDefaultHistoryPath(), requestHistoryMaxBytes);
     this.now = deps.now ?? Date.now;
     this.closedIndexMaxSize = deps.closedIndexMaxSize ?? closedRequestIndexMaxSize;
+    this.onRequestClosed = deps.onRequestClosed;
   }
 
   /**
@@ -240,6 +249,7 @@ export class RequestLedger {
       console.warn(`[requests] could not append ${record.id} to ${this.history.filePath}; it is closed in memory only`);
     }
     this.indexClosed(record);
+    this.onRequestClosed?.(record);
   }
 
   /** Remember a closed request by id, forgetting the oldest beyond the window. */

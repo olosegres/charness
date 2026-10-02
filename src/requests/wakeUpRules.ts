@@ -1,0 +1,169 @@
+import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
+
+/**
+ * @description The wake-up rules of the request/answer core (S4), as pure
+ * decisions over an open request and what the session looks like right now:
+ *
+ *   turn ends, request still open
+ *     └─ the turn sent NO answer      → silent-turn counter +1
+ *          counter < 2                → wake the same session at once
+ *          counter = 2                → alert a person, stop waking
+ *     └─ the turn sent a progress     → counter = 0, wake again after 15 min
+ *   cap: 10 wake-ups per request      → alert, stop waking (loop guard)
+ *   backstop: nothing seen working on it for 90 min (a dead process, tracking
+ *             lost across a restart)  → resume / wake the session
+ *
+ * A wake-up never interrupts a live turn and never starts while the session is
+ * blocked on something that is not a turn end (a pending native question, a
+ * compaction, an armed API-error retry or usage-limit wait). After the alert or
+ * the cap nothing wakes the request again until it closes or is superseded.
+ */
+
+/** Silent turns in a row that make the rules give up. */
+export const maxSilentTurns = 2;
+/** Wake-ups one request may receive before the loop guard gives up. */
+export const maxWakeUpsPerRequest = 10;
+/** After a progress answer, how long before the agent is reminded again. */
+export const progressFollowUpDelayMs = 15 * 60 * 1000;
+/** Default backstop: open with nothing seen working on it for this long. */
+export const defaultRequestBackstopMs = 90 * 60 * 1000;
+const msPerMinute = 60 * 1000;
+
+/**
+ * @description The backstop window, honouring the `REQUEST_BACKSTOP_MINUTES`
+ * override (a live test shortens it to finish a killed-process scenario in
+ * minutes). A missing, non-numeric or non-positive value keeps the default.
+ */
+export function getRequestBackstopMs(overrideMinutes: string | undefined): number {
+  if (overrideMinutes === undefined || overrideMinutes.trim() === '') return defaultRequestBackstopMs;
+  const minutes = Number(overrideMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * msPerMinute : defaultRequestBackstopMs;
+}
+
+/**
+ * @name SessionTurnProbe
+ * @description What the session of a conversation looks like right now.
+ * `hasUnconsumedInput` is `null` for a backend that cannot tell (tmux Claude).
+ */
+export interface SessionTurnProbe {
+  isActive: boolean;
+  isBusy: boolean;
+  hasUnconsumedInput: boolean | null;
+  /** A pending native question, a compaction, an armed retry / limit wait. */
+  isTurnEndBlocked: boolean;
+}
+
+/**
+ * @name WakeUpDecision
+ * @description What to do for an open request, and the bookkeeping to persist
+ * with it (`update`, applied before the action runs).
+ */
+export type WakeUpDecision =
+  | { kind: 'none' }
+  | { kind: 'wake'; reason: RequestWakeUpReason; update: OpenRequestUpdate }
+  | { kind: 'followUpLater'; update: OpenRequestUpdate }
+  | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
+
+/** The update that stops every further wake-up of a request. */
+const stopWakingUpdate: OpenRequestUpdate = { isWakeStopped: true, nextWakeAt: undefined };
+
+/**
+ * @description Wake the request now unless it already used up its wake-ups, in
+ * which case the loop guard alerts instead. `update` adds to the wake's own
+ * bookkeeping.
+ */
+function getWakeOrCapDecision(
+  request: OpenRequestState,
+  reason: RequestWakeUpReason,
+  update: OpenRequestUpdate,
+): WakeUpDecision {
+  if (request.wakeCount >= maxWakeUpsPerRequest) {
+    return { kind: 'alert', reason: 'wakeCap', update: { ...update, ...stopWakingUpdate } };
+  }
+  return {
+    kind: 'wake',
+    reason,
+    update: { ...update, wakeCount: request.wakeCount + 1, nextWakeAt: undefined },
+  };
+}
+
+/**
+ * @description The decision at the end of a turn the request's message started.
+ * `progressCountAtTurnStart` is the request's progress-answer count when the
+ * turn began, so an increase means this turn sent a progress note (a `question`
+ * or `final` would have closed the request — there is nothing to decide then).
+ */
+export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStart: number, nowMs: number): WakeUpDecision {
+  if (request.isWakeStopped) return { kind: 'none' };
+  if (request.progressAnswerCount > progressCountAtTurnStart) {
+    return {
+      kind: 'followUpLater',
+      update: { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs },
+    };
+  }
+  const silentTurnCount = request.silentTurnCount + 1;
+  if (silentTurnCount >= maxSilentTurns) {
+    return { kind: 'alert', reason: 'silentTurns', update: { silentTurnCount, ...stopWakingUpdate } };
+  }
+  return getWakeOrCapDecision(request, 'silentTurn', { silentTurnCount, lastTurnActivityAt: nowMs });
+}
+
+/**
+ * @description The periodic decision for an open request whose turn is NOT being
+ * watched: a due progress follow-up, or the backstop. Never while the session is
+ * working or blocked — and a live turn counts as activity, which pushes the
+ * backstop back (the caller records it).
+ */
+export function decideUnwatchedRequest(
+  request: OpenRequestState,
+  probe: SessionTurnProbe,
+  nowMs: number,
+  backstopMs: number,
+): WakeUpDecision {
+  if (request.isWakeStopped || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
+  if (request.nextWakeAt !== undefined) {
+    return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
+  }
+  const lastSeenAt = request.lastTurnActivityAt ?? request.createdAt;
+  return nowMs - lastSeenAt >= backstopMs
+    ? getWakeOrCapDecision(request, 'backstop', { lastTurnActivityAt: nowMs })
+    : { kind: 'none' };
+}
+
+/**
+ * @name WatchedTurn
+ * @description The in-memory view of a turn started by a request's message (or
+ * by a wake-up reminder), until it ends.
+ */
+export interface WatchedTurn {
+  requestId: string;
+  progressCountAtTurnStart: number;
+  /** Busy was observed since the forward (the backend started on it). */
+  hasSeenBusy: boolean;
+  /** The agent produced output since the forward. */
+  hasSeenOutput: boolean;
+}
+
+/**
+ * @name WatchedTurnState
+ * @description Where a watched turn stands: still running (or not started on
+ * our message yet), ended, or gone (the session is no longer active — the
+ * backstop takes over).
+ */
+export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
+
+/**
+ * @description Has the turn the request's message started ended? The backend
+ * must first have TAKEN IN the message — otherwise an idle reported for the
+ * earlier turn would read as this turn's end: a backend that tracks it says so
+ * (`hasUnconsumedInput`), one that does not must have been seen busy or
+ * producing output since the forward (the busy-onset race).
+ */
+export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe): WatchedTurnState {
+  if (!probe.isActive) return 'sessionGone';
+  const isConsumed = probe.hasUnconsumedInput === null
+    ? turn.hasSeenBusy || turn.hasSeenOutput
+    : !probe.hasUnconsumedInput;
+  if (!isConsumed || probe.isBusy || probe.isTurnEndBlocked) return 'running';
+  return 'ended';
+}

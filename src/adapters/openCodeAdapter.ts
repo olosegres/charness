@@ -178,6 +178,9 @@ interface OpenCodeSessionStatus {
   next?: number;
 }
 
+/** How many recent user message ids a session remembers to de-duplicate `message.updated`. */
+const seenUserMessageIdsMax = 100;
+
 interface OpenCodeSession {
   key: SessionKey;
   sessionId: string;
@@ -289,6 +292,13 @@ interface OpenCodeSession {
    * accepts the prompt then idles with no assistant activity — live 2026-08-15).
    */
   awaitingTurnResponse: boolean;
+  /**
+   * Prompts sent that OpenCode has not yet shown as a NEW user message on the
+   * event stream (a prompt sent while a turn runs is queued into it), and the
+   * user message ids already counted. See `checkHasUnconsumedInput`.
+   */
+  unconsumedInputCount: number;
+  seenUserMessageIds: Set<string>;
   /**
    * Whether ANY assistant activity (message.updated / part, own OR sub-agent
    * child) was observed since the last prompt was sent. Reset false on prompt
@@ -1895,6 +1905,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           isBusy: false,
           awaitingTurnResponse: false,
           sawTurnActivity: false,
+          unconsumedInputCount: 0,
+          seenUserMessageIds: new Set(),
           providerRetrySignature: null,
           isAwaitingModelAfterProviderRetryAbort: false,
           isAwaitingProviderRetryAbortIdle: false,
@@ -2014,6 +2026,25 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return session?.isActive ?? false;
   }
 
+  checkHasUnconsumedInput(key: SessionKey): boolean {
+    return (this.sessions.get(keyToString(key))?.unconsumedInputCount ?? 0) > 0;
+  }
+
+  /**
+   * Count a parent-session user message the first time it shows up: OpenCode
+   * re-sends `message.updated` for one message, so ids are de-duplicated (the set
+   * is bounded — only recent ids can still repeat).
+   */
+  private noteUserMessageSeen(session: OpenCodeSession, messageId: string | undefined): void {
+    if (messageId === undefined || session.seenUserMessageIds.has(messageId)) return;
+    session.seenUserMessageIds.add(messageId);
+    if (session.seenUserMessageIds.size > seenUserMessageIdsMax) {
+      const oldestId = session.seenUserMessageIds.values().next().value;
+      if (oldestId !== undefined) session.seenUserMessageIds.delete(oldestId);
+    }
+    session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+  }
+
   checkIsBusy(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
@@ -2051,6 +2082,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
 
     console.log(`[OpenCode] sendPromptAsync: "${input}"`);
+    session.unconsumedInputCount += 1;
 
     // Bot-side fallback naming (R1 safety net): on the first MEANINGFUL prompt
     // of an untitled session, schedule a rename that only fires if opencode's
@@ -3046,6 +3078,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         isBusy: false,
         awaitingTurnResponse: false,
         sawTurnActivity: false,
+        unconsumedInputCount: 0,
+        seenUserMessageIds: new Set(),
         providerRetrySignature: null,
         isAwaitingModelAfterProviderRetryAbort: false,
         isAwaitingProviderRetryAbortIdle: false,
@@ -4661,6 +4695,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // and counting those (the old unconditional set in handlePartUpdate) marked
     // every wedge as "active" and masked it (live miss 2026-08-16).
     if (info.role === 'assistant') session.sawTurnActivity = true;
+    if (info.role === 'user' && (!info.sessionID || info.sessionID === session.sessionId)) {
+      this.noteUserMessageSeen(session, info.id);
+    }
     if (isParentAssistantMessage) {
       // The first non-stale parent assistant event marks the replacement turn's
       // boundary, even when it lacks the optional runtime token tuple.

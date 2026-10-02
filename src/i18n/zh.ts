@@ -613,4 +613,6 @@ export const zhDict: Record<string, string> = {
     '（可选）将 GROQ_API_KEY 添加到你的 .env 并重启以启用语音输入。',
   'startup.item.optional_owner':
     '（可选）设置 OWNER_USER_ID 以在你的私聊中接收此状态。',
+  'requests.alert.notAnswering': '⚠️ 请求 {requestId} 未获回复：智能体多次结束回合却未作答，提醒已停止。请检查此话题中的会话。',
+  'requests.alert.unreachable': '⚠️ 请求 {requestId} 未获回复：无法连接智能体的会话以发送提醒。请检查此话题中的会话。',
 };

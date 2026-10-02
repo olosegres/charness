@@ -291,7 +291,11 @@ import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBo
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
-import type { AnswerSinks } from './platform/answerSink';
+import { releaseClosedRequestAlert, type AnswerSinks } from './platform/answerSink';
+import { RequestWakeUpEngine } from './requests/wakeUpEngine';
+import { getRequestBackstopMs, type SessionTurnProbe } from './requests/wakeUpRules';
+import { buildWakeUpReminder } from './requests/requestHeader';
+import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { checkIsReminderSchedule, getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -936,6 +940,14 @@ let state!: StateStore;
  * threading the instance through every caller. `null` until boot wires it.
  */
 let schedulerEngine: SchedulerEngine | null = null;
+/**
+ * The request wake-up engine (request/answer core S4), assigned once by
+ * `startBot` after the request ledger loads. Module-level like
+ * {@link schedulerEngine} because the cancel paths (`/esc`, `/c`, `/quit`,
+ * `/quit-all`, `/new`, `/resume`, leaving the folder) are module-level command
+ * handlers.
+ */
+let requestWakeUpEngine: RequestWakeUpEngine | null = null;
 
 /**
  * @description Resolve the live `DATA_DIR` from the state store. The store
@@ -5586,6 +5598,8 @@ async function unbindThread(key: SessionKey): Promise<void> {
   // the message we're about to delete.
   const kStr = keyToString(key);
   unbindingKeys.add(kStr);
+  // Leaving the folder ends the conversation's work: its open request closes silently.
+  cancelConversationRequest(key);
   try {
     // Order matters: drop the pin FIRST (while binding.pinnedStatusMessageId
     // is still readable), then stop the session, then wipe the binding.
@@ -5739,6 +5753,8 @@ command(['new', 'clear_session'], async (_ctx, key) => {
     await replyToThread(key, t('thread.bind_required'));
     return;
   }
+  // A fresh session does not know the old one's request: it closes silently.
+  cancelConversationRequest(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
   // adapter selection untouched.
@@ -8289,6 +8305,8 @@ async function resumeSessionByIndex(
     // The ONLY resume path that posts the "last N messages" context block —
     // silent re-attach (bot restart) and crash recovery must stay quiet.
     await adapter.resumeSession(key, workDir, sessionId, { isWithRecentContext: true });
+    // Another session took over this topic; it does not know the open request.
+    cancelConversationRequest(key);
     // Persist the PICKED id — without this the next restart re-attaches to
     // whatever id the last fresh start wrote, silently dropping the user's
     // pick (live incident 2026-06-10).
@@ -8334,6 +8352,7 @@ command(['quit-all', 'quitall'], async (_ctx, key) => {
   let stopped = 0;
   let active = 0;
   for (const { key: bKey } of state.listBindings()) {
+    cancelConversationRequest(bKey);
     const result = stopAllAdaptersFor(bKey);
     active += result.attempted;
     stopped += result.stopped.length;
@@ -8380,6 +8399,7 @@ command(['quit', 'q'], async (_ctx, key) => {
   // does NOT go through releaseThreadSession (it stops adapters + clears ids
   // inline), so the cancel is wired here explicitly.
   cancelApiRetry(key);
+  cancelConversationRequest(key); // /quit ends the work → its open request closes silently
   cancelClaudeAuthLogin(key); // /quit teardown → kill any in-flight /login pty
   cancelOpenCodeOAuthLogin(key); // /quit teardown → kill any in-flight /connect oauth pty
   clearAuthNotice(key); // /quit teardown → retire any pinned logged-out notice
@@ -8426,6 +8446,8 @@ command(['quit', 'q'], async (_ctx, key) => {
 
 command('c', async (_ctx, key) => {
   const adapter = getThreadAdapter(key);
+  // The operator interrupted the turn: its open request closes silently.
+  cancelConversationRequest(key);
   markNeedsNewMessage(key);
   adapter.sendSignal(key, 'SIGINT');
   await replyToThread(key, 'Ctrl+C sent');
@@ -8478,6 +8500,8 @@ command('tab', async (_ctx, key) => {
 command(['esc', 'escape'], async (_ctx, key) => {
   const adapter = getThreadAdapter(key);
   if (adapter.sendEscape) {
+    // The operator interrupted the turn: its open request closes silently.
+    cancelConversationRequest(key);
     markNeedsNewMessage(key);
     adapter.sendEscape(key);
   } else {
@@ -13528,6 +13552,109 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
   measureRendered: (chunk) => renderAgentHtml(chunk).length,
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Requests — answer sinks and the wake-up engine's view of a session
+//
+//  The core (`requests/`) decides; these are the bot primitives it acts through.
+//  Telegram is the only platform this process answers on so far.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** The localized alert text per reason (the operator reads it in the topic). */
+const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
+  silentTurns: 'requests.alert.notAnswering',
+  wakeCap: 'requests.alert.notAnswering',
+  wakeFailed: 'requests.alert.unreachable',
+};
+
+/**
+ * @description Build the answer sinks of the platforms this process serves.
+ * Built once at boot and shared by `answer_request`, the wake-up alerts and the
+ * alert release on close, so all three speak to the same sink.
+ */
+function createAnswerSinks(): AnswerSinks {
+  return new Map([
+    ['telegram', createTelegramAnswerSink({
+      sendMessages: sendMessagesToThread,
+      postAlert: (key, requestId, reason) =>
+        withThreadLocale(key, () => replyToThread(key, t(requestAlertTextKeys[reason], { requestId }))),
+      // The alert must notify: the operator runs topics muted and a pin is what pierces that.
+      pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
+      unpinMessage: (key, messageId) => unpinMessageQuiet(key, messageId),
+    })],
+  ]);
+}
+
+/**
+ * @description What the wake-up engine needs to know about a conversation's
+ * session right now. "Not a turn end" covers a pending native question (OpenCode
+ * keeps it in `pendingQuestions`, a Claude selector in `questionPinnedMessageId`),
+ * a running compaction, and an armed API-error retry or usage-limit wait.
+ */
+function getSessionTurnProbe(key: SessionKey): SessionTurnProbe {
+  const kStr = keyToString(key);
+  const adapter = getThreadAdapter(key);
+  const isActive = adapter.checkIsActive(key);
+  return {
+    isActive,
+    isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),
+    hasUnconsumedInput: adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,
+    isTurnEndBlocked:
+      pendingQuestions.has(kStr) ||
+      questionPinnedMessageId.has(kStr) ||
+      threadsCompacting.has(kStr) ||
+      apiRetryTimers.has(kStr),
+  };
+}
+
+/**
+ * @description Make sure the conversation has a live session to remind: a live
+ * one is used as is; a dead one is RESUMED from its persisted session id, so the
+ * reminder reaches the same conversation (a fresh session would not know the
+ * request). Resolves `false` when there is nothing to resume.
+ */
+async function ensureSessionForWakeUp(key: SessionKey): Promise<boolean> {
+  const adapter = getThreadAdapter(key);
+  if (adapter.checkIsActive(key)) return true;
+  const agent = state.getAgent(key);
+  const sessionId = agent?.claudeSessionId ?? agent?.opencodeSessionId;
+  const workDirDecision = getWorkDirStartDecision(key);
+  if (!sessionId || !adapter.resumeSession || !workDirDecision.ok) return false;
+  try {
+    await adapter.resumeSession(key, workDirDecision.workDir, sessionId);
+    await persistAdapterSessionIds(key, adapter, state);
+    return adapter.checkIsActive(key);
+  } catch (e) {
+    console.warn(`[requests] could not resume ${keyToString(key)} for a wake-up:`, e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
+/**
+ * @description Remind the agent of an open request inside its own session. Not a
+ * request: it carries the open request's id and goes through the ordinary
+ * prompt path (the engine only wakes an idle session, so nothing is interrupted).
+ */
+async function deliverRequestWakeUp(
+  key: SessionKey,
+  request: OpenRequestState,
+  reason: RequestWakeUpReason,
+): Promise<boolean> {
+  if (!(await ensureSessionForWakeUp(key))) return false;
+  await forwardPromptToAgent(key, getThreadAdapter(key), buildWakeUpReminder({ requestId: request.id, reason }));
+  return true;
+}
+
+/**
+ * @description The person took over the conversation (interrupt, quit, restart,
+ * switch or resume of the session, leaving the folder): its open request closes
+ * silently and nothing wakes it. Safe before the engine exists (early boot).
+ */
+function cancelConversationRequest(key: SessionKey): void {
+  void requestWakeUpEngine?.cancelConversation(key).catch((e) =>
+    console.warn(`[requests] cancelling the request of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+  );
+}
+
 /**
  * @name SchedulerWiringDeps
  * @description What the bot MCP server needs from the boot that `wireScheduler`
@@ -13536,6 +13663,7 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
  */
 interface SchedulerWiringDeps {
   requestLedger: RequestLedger;
+  answerSinks: AnswerSinks;
   whenSessionsRestored: () => Promise<void>;
 }
 
@@ -13549,12 +13677,6 @@ interface SchedulerWiringDeps {
  */
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const ledger = new RunLedger();
-  // Answers go back through the request platform's sink. Telegram's is the
-  // basic one (own message, unpinned) until the Telegram views pin answers.
-  const answerSinks: AnswerSinks = new Map([
-    ['telegram', createTelegramAnswerSink({ sendMessages: sendMessagesToThread })],
-  ]);
-
   const delivery = createScheduleDelivery({
     announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
     pin: async (threadKeyStr, messageId, isSilent) => {
@@ -13641,7 +13763,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
-    answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks }, args),
+    answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks: wiring.answerSinks }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
     // Reuse the port persisted from a prior boot (env override wins) so the
@@ -13804,8 +13926,32 @@ export async function startBot(): Promise<void> {
   //     survived the restart may call a tool the moment the server listens, and
   //     a request looked up in a not-yet-loaded history would be refused as an
   //     unknown id. An unreadable history file fails the boot loudly.
-  const requestLedger = new RequestLedger({ store: state });
+  //     The answer sinks are built here, once: `answer_request`, the wake-up
+  //     alerts and the release of an alert when its request closes all share them.
+  const answerSinks = createAnswerSinks();
+  const requestLedger = new RequestLedger({
+    store: state,
+    onRequestClosed: (record) => releaseClosedRequestAlert(answerSinks, record),
+  });
   await requestLedger.load();
+  // The wake-up engine (S4) watches the turns requests start. It is created now
+  // but started only once the sessions are restored (its sweep reads them).
+  requestWakeUpEngine = new RequestWakeUpEngine({
+    ledger: requestLedger,
+    probeTurn: getSessionTurnProbe,
+    deliverWakeUp: deliverRequestWakeUp,
+    deliverAlert: async (key, request, reason) => {
+      const sink = answerSinks.get(key.platform);
+      if (!sink) return null;
+      const result = await sink.deliverAlert(key, { requestId: request.id, reason, origin: request.origin });
+      if (!result.ok) console.warn(`[requests] alert for ${request.id} not delivered: ${result.error}`);
+      return result.ok ? (result.alertRef ?? null) : null;
+    },
+    releaseAlert: async (key, alertRef) => {
+      await answerSinks.get(key.platform)?.releaseAlert(key, alertRef);
+    },
+    backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+  });
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle
@@ -13870,7 +14016,11 @@ export async function startBot(): Promise<void> {
 
   // 2. Wire adapter events.
   registerAdapterEventHandlers({
-    onOutput: (key, output, meta) => withThreadLocale(key, () => handleAgentOutput(key, output, meta)),
+    onOutput: (key, output, meta) => {
+      // Output means a turn is under way — the wake-up engine's busy-onset signal.
+      requestWakeUpEngine?.noteAgentOutput(key);
+      return withThreadLocale(key, () => handleAgentOutput(key, output, meta));
+    },
     onStatus: (key, status) => withThreadLocale(key, () => handleAdapterStatus(key, status)),
     onQuestion: (key, question) => withThreadLocale(key, () => handleAgentQuestion(key, question)),
     onThinking: (key, payload) => withThreadLocale(key, () => handleAgentThinking(key, payload)),
@@ -13968,6 +14118,7 @@ export async function startBot(): Promise<void> {
   });
   const schedulerMcpHandle = wireScheduler({
     requestLedger,
+    answerSinks,
     whenSessionsRestored: () => sessionsRestored,
   });
   const isSchedulerMcpStarted = await runSessionBootPhase({
@@ -14006,7 +14157,11 @@ export async function startBot(): Promise<void> {
     },
     // The bot MCP tools that read session state (compact_conversation) wait
     // for this: until now a surviving session would read as not running.
-    onSessionsRestored: markSessionsRestored,
+    onSessionsRestored: () => {
+      markSessionsRestored();
+      // From here the engine can tell a live turn from a dead session.
+      requestWakeUpEngine?.start();
+    },
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may
       // still hold a `telegramBot` registration from the previous bot
@@ -14215,6 +14370,7 @@ export async function startBot(): Promise<void> {
         // Scheduler (S8): clear every armed job timer; persisted nextRunAt
         // means the next boot's rearmAll picks them back up (catch-up replay).
         schedulerEngine?.shutdown();
+        requestWakeUpEngine?.stop();
         if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
       },
     });

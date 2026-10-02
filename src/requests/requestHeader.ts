@@ -1,3 +1,5 @@
+import type { RequestWakeUpReason } from './types';
+
 /**
  * @description The per-request header that rides inside the prompt text of every
  * request (request/answer core S3). The standing rule lives in the bot MCP's
@@ -31,4 +33,25 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
     lines.push('The requester does not see your plain text output — only what you send through answer_request reaches them.');
   }
   return `${lines.join('\n')}\n\n`;
+}
+
+/** What the reminder tells the agent, per wake-up reason. */
+const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
+  silentTurn: 'Your last turn ended without answering it.',
+  progressFollowUp: 'Some time has passed since your last progress note on it.',
+  backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
+};
+
+/**
+ * @description The reminder the wake-up engine forwards into the SAME session for
+ * an open request. It is not a request itself: it names the open one and asks
+ * for the answer through `answer_request`.
+ */
+export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason }): string {
+  return [
+    `[Reminder · request ${options.requestId} is still open]`,
+    wakeUpReasonLines[options.reason],
+    `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
+      '"question" if you need the requester, or a short "progress" note if you are still working — then continue.',
+  ].join('\n');
 }

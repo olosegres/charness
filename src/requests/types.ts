@@ -60,6 +60,12 @@ export interface OpenRequestState {
   lastTurnActivityAt?: number;
   /** Set once the wake-up rules gave up (alert or cap): nothing wakes it again. */
   isWakeStopped: boolean;
+  /**
+   * The platform's handle on the alert posted when the wake-up rules gave up
+   * (Telegram: the pinned message id), so the alert is released when the
+   * request closes. Opaque to the core.
+   */
+  alertRef?: string;
 }
 
 /**
@@ -70,7 +76,13 @@ export interface OpenRequestState {
 export type OpenRequestUpdate = Partial<
   Pick<
     OpenRequestState,
-    'progressAnswerCount' | 'silentTurnCount' | 'wakeCount' | 'nextWakeAt' | 'lastTurnActivityAt' | 'isWakeStopped'
+    | 'progressAnswerCount'
+    | 'silentTurnCount'
+    | 'wakeCount'
+    | 'nextWakeAt'
+    | 'lastTurnActivityAt'
+    | 'isWakeStopped'
+    | 'alertRef'
   >
 >;
 
@@ -105,3 +117,22 @@ export type RequestLookup =
  *  - `final`    — the result; closes the request.
  */
 export type RequestAnswerKind = 'progress' | 'question' | 'final';
+
+/**
+ * @name RequestWakeUpReason
+ * @description Why the agent is reminded of an open request.
+ *  - `silentTurn` — its turn ended without any answer.
+ *  - `progressFollowUp` — it sent a progress note and the follow-up delay passed.
+ *  - `backstop` — nothing was seen working on it for the backstop window (a dead
+ *    process, or tracking lost across a restart).
+ */
+export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop';
+
+/**
+ * @name RequestAlertReason
+ * @description Why the wake-up rules gave up and a person is told.
+ *  - `silentTurns` — the agent ended turns without answering twice in a row.
+ *  - `wakeCap` — the request used up its wake-ups (the loop guard).
+ *  - `wakeFailed` — the session could not be reached to deliver a reminder.
+ */
+export type RequestAlertReason = 'silentTurns' | 'wakeCap' | 'wakeFailed';

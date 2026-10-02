@@ -619,4 +619,6 @@ export const frDict: Record<string, string> = {
     '(optionnel) Ajoutez GROQ_API_KEY à votre .env et redémarrez pour activer la saisie vocale.',
   'startup.item.optional_owner':
     '(optionnel) Définissez OWNER_USER_ID pour recevoir ce statut dans votre chat privé.',
+  'requests.alert.notAnswering': "⚠️ La demande {requestId} est restée sans réponse : l'agent a terminé ses tours sans répondre et les rappels ont abandonné. Vérifiez la session dans ce sujet.",
+  'requests.alert.unreachable': "⚠️ La demande {requestId} est restée sans réponse : la session de l'agent était injoignable pour un rappel. Vérifiez la session dans ce sujet.",
 };

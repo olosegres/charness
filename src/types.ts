@@ -622,6 +622,21 @@ export interface AgentAdapter extends EventEmitter {
   checkIsBusy?(key: SessionKey): boolean;
 
   /**
+   * Whether input the bot wrote has not yet been TAKEN IN by the backend. A
+   * message written while a turn runs waits until the backend reads it (Claude
+   * json-stream and OpenCode accept it mid-turn and merge it into the running
+   * turn), so for that window the backend can report the END of the earlier
+   * turn. The request wake-up engine counts a turn end only once this is false.
+   *  - **Claude json-stream** — user messages written minus their
+   *    `--replay-user-messages` echoes (the echo arrives when Claude reads it).
+   *  - **OpenCode** — prompts sent minus the new user messages seen on the event
+   *    stream.
+   * Optional: a backend without such a signal omits it (the tmux Claude backend
+   * interrupts the running turn before typing, so it has no earlier turn).
+   */
+  checkHasUnconsumedInput?(key: SessionKey): boolean;
+
+  /**
    * Re-register the bot-owned scheduler MCP for active OpenCode directories,
    * for a listener that became available after those sessions connected. Boot
    * no longer needs it: the listener is bound before sessions are re-attached,

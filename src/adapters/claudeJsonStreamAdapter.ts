@@ -252,6 +252,12 @@ interface StreamSession {
    *  guard). `-1` until the first advance so a never-advanced session writes on
    *  its first relayed message. */
   lastWatermarkOffset: number;
+  /**
+   * User messages written to stdin that Claude has not echoed back yet
+   * (`--replay-user-messages`): a message written mid-turn is read only when the
+   * running turn reaches a point to take it in. See `checkHasUnconsumedInput`.
+   */
+  unconsumedInputCount: number;
 }
 
 /**
@@ -447,7 +453,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isRespawning: false, isBusy: false,
+      isActive: true, isStopping: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -734,7 +740,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reader: new ClaudeStreamLineReader(),
       // isBusy=false: the replayed/live events reconstruct it (deltas/toolUse
       // set it, `result` clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isRespawning: false, isBusy: false,
+      isActive: true, isStopping: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: null, reportedModel: null, effort: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -838,6 +844,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return this.sessions.get(keyToString(key))?.isBusy === true;
   }
 
+  checkHasUnconsumedInput(key: SessionKey): boolean {
+    return (this.sessions.get(keyToString(key))?.unconsumedInputCount ?? 0) > 0;
+  }
+
   async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
@@ -918,6 +928,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.emittedLength = 0;
       session.isBusy = true;
       session.lastStdoutActivityAt = Date.now();
+      // Not counted as unconsumed input: a bot-issued `/compact` is a control
+      // turn whose echo is not guaranteed, and it only runs on an idle session.
       this.writeStdin(session, { type: 'user', message: { role: 'user', content: text } });
     });
     if (result.ok) {
@@ -962,7 +974,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // sat idle for minutes (busy=false, clock stale) would trip the watchdog on
     // its very next poll — before claude has a chance to emit the first token.
     session.lastStdoutActivityAt = Date.now();
-    this.writeStdin(session, { type: 'user', message: { role: 'user', content: input } });
+    this.writeUserMessage(session, input);
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -999,6 +1011,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** Enqueue one stream-json frame onto the stdin FIFO. Fire-and-forget for
    *  callers (sync signature preserved); the per-session chain keeps wire
    *  order and absorbs transient `EAGAIN` (see `writeFifoText`). */
+  /** Write one user turn, counting it until Claude echoes it back (it has read it). */
+  private writeUserMessage(session: StreamSession, content: string): void {
+    session.unconsumedInputCount += 1;
+    this.writeStdin(session, { type: 'user', message: { role: 'user', content } });
+  }
+
   private writeStdin(session: StreamSession, obj: unknown): void {
     const line = JSON.stringify(obj) + '\n';
     session.stdinWriteChain = session.stdinWriteChain
@@ -1197,6 +1215,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // Subscription usage-window signal; not surfaced to the topic (parity).
         return;
       case 'userEcho':
+        // Claude has read one of our user messages. A message written mid-turn
+        // is taken into the RUNNING turn, so the session is busy from here until
+        // the turn's `result`, even if an earlier `result` already cleared it.
+        session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+        session.isBusy = true;
         return;
     }
   }
