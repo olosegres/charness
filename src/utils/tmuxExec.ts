@@ -23,10 +23,22 @@ export function getTmuxPaneTarget(sessionName: string): string {
   return `=${sessionName}:`;
 }
 
+/**
+ * @description The arguments every tmux call starts with (Jira connector plan J3,
+ * D8): `TMUX_SOCKET_NAME` puts the instance on its OWN tmux server (`-L`), away
+ * from the default one — a boot kills every agent session it does not own, which
+ * on a shared server would be another bot's. The CLI preflight validates the
+ * name. This file is the only place that runs tmux; keep it so.
+ */
+export function getTmuxBaseArgs(): string[] {
+  const socketName = process.env.TMUX_SOCKET_NAME;
+  return socketName ? ['-L', socketName] : [];
+}
+
 /** Best-effort tmux call: returns stdout on success, empty string on any error. */
 export async function tmuxAsync(...args: string[]): Promise<string> {
   try {
-    const { stdout } = await execFilePromise('tmux', args, {
+    const { stdout } = await execFilePromise('tmux', [...getTmuxBaseArgs(), ...args], {
       encoding: 'utf-8',
       timeout: 5000,
     });
@@ -44,7 +56,7 @@ export async function tmuxAsync(...args: string[]): Promise<string> {
  * error for the user.
  */
 export async function tmuxOrThrowAsync(...args: string[]): Promise<string> {
-  const { stdout } = await execFilePromise('tmux', args, {
+  const { stdout } = await execFilePromise('tmux', [...getTmuxBaseArgs(), ...args], {
     encoding: 'utf-8',
     timeout: 5000,
   });

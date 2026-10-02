@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
-import { loadEnvFiles } from './envLoader';
+import { loadEnvWithConnectorGuards, parseConnectors } from './connectorGuards';
 import {
   checkIsInstalled,
   ensureOpenCodeServer,
@@ -79,7 +79,8 @@ export async function runHot(): Promise<void> {
   }
   // Match the worker's env sources without changing the launch cwd that owns
   // WORK_ROOT. This is load-bearing when the repo .env selects a custom port.
-  loadEnvFiles(projectRoot);
+  // The connector guards wrap it, as in the plain start (Jira plan J3).
+  loadEnvWithConnectorGuards(projectRoot);
   // Only nodemon's replaceable worker externalizes later server generations.
   // The long-lived supervisor owns the initial server directly.
   delete process.env[openCodeExternalHostEnvName];
@@ -102,7 +103,10 @@ export async function runHot(): Promise<void> {
   // nodemon kills the worker's complete descendant tree on every rebuild.
   // Own OpenCode here, as a sibling of nodemon, so an agent turn survives the
   // relay worker being replaced. The worker's normal ensure call adopts it.
-  await prepareHotOpenCodeServer();
+  // OpenCode serves Telegram topics only; an instance without Telegram must not
+  // start — or, finding a stale server on the port, stop — any OpenCode server.
+  const connectors = parseConnectors(process.env.CONNECTORS);
+  if (connectors.ok && connectors.connectors.includes('telegram')) await prepareHotOpenCodeServer();
 
   process.stderr.write(
     `telegramcode hot: project=${projectRoot}\n` +

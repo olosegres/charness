@@ -148,6 +148,9 @@ import {
 } from './platform/outbound';
 import { createJiraConnectorOutbound } from './connectors/jira/outbound';
 import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
+import { getServedPlatforms, parseConnectors } from './cli/connectorGuards';
+import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
+import { getServedTmuxSessions } from './utils/servedTmuxSessions';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
@@ -355,8 +358,15 @@ import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connec
 function parseEnv() {
   const errors: string[] = [];
 
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) errors.push('TELEGRAM_BOT_TOKEN is required');
+  // The CLI preflight already refused a bad CONNECTORS set (and every connector
+  // guard); this reads the same value for the boot's own branches (Jira plan J3).
+  const connectorsParse = parseConnectors(process.env.CONNECTORS);
+  if (!connectorsParse.ok) errors.push(connectorsParse.error);
+  const connectors = connectorsParse.ok ? connectorsParse.connectors : [];
+  const isTelegramServed = connectors.includes('telegram');
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
+  if (isTelegramServed && !botToken) errors.push('TELEGRAM_BOT_TOKEN is required');
 
   // CHAT_MODE selects which surface(s) the instance serves: `group` (forum
   // supergroup only), `dm` (the owner's private chat only), or `both` (one
@@ -430,7 +440,9 @@ function parseEnv() {
   }
 
   return {
-    botToken: botToken!,
+    botToken,
+    servedPlatforms: getServedPlatforms(connectors),
+    isTelegramServed,
     chatMode,
     ownerUserId,
     isDmSurfaceInert,
@@ -545,6 +557,8 @@ const telegramAgent = new https.Agent({
   keepAliveMsecs: 10000,
   family: 4,
 });
+// Without the telegram connector there is no token (an empty one), and the call
+// guard below refuses every Bot API call before it is sent (Jira plan J3, D9).
 // `TELEGRAM_API_ROOT` points the client at another Bot API host — the
 // process-level test's fake on loopback; unset is the real `api.telegram.org`.
 // Telegraf drops the https agent itself for an `http://` root.
@@ -582,6 +596,10 @@ process.on('exit', flushTraceBufferSyncOnExit);
 // muted topic (operator complaint 2026-09-07). Installed OUTSIDE the trace wrap
 // so the trace records the payload actually sent.
 installLinkPreviewSuppression(bot.telegram);
+
+// OUTERMOST: an instance that does not serve Telegram must never reach the Bot
+// API — a call slipping through fails loudly before anything is sent.
+if (!ENV.isTelegramServed) installTelegramCallGuard(bot.telegram);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Access control — who may talk to the agent
@@ -9914,7 +9932,7 @@ async function reattachExistingSessions(
   const claudeAdapter = getAdapter('claude');
   if (claudeAdapter instanceof ClaudeCliAdapter) {
     try {
-      const found = await claudeAdapter.listExistingTmuxSessions();
+      const found = getServedTmuxSessions(await claudeAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       let adopted = 0;
       let killed = 0;
       let reconciled = 0;
@@ -10076,7 +10094,7 @@ async function reattachExistingSessions(
   let jsonReopened = 0;
   if (claudeJsonAdapter instanceof ClaudeJsonStreamAdapter) {
     try {
-      const found = await claudeJsonAdapter.listExistingTmuxSessions();
+      const found = getServedTmuxSessions(await claudeJsonAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       for (const { key, sessionName } of found) {
         // One session's failure (a foreign key, a broken record) must not stop the others being adopted.
         try {
@@ -10145,7 +10163,7 @@ async function reattachExistingSessions(
   const terminalAdapter = getAdapter('terminal');
   if (terminalAdapter instanceof TerminalAdapter) {
     try {
-      const found = await terminalAdapter.listExistingTmuxSessions();
+      const found = getServedTmuxSessions(await terminalAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
       let adopted = 0;
       let killed = 0;
       for (const { key, sessionName } of found) {
@@ -11141,19 +11159,26 @@ export async function startBot(): Promise<void> {
 
   // 3. Connect to Telegram and register commands menu before starting local
   // daemons. If getMe fails, we should not leave an orphan opencode server.
-  console.log('Testing Telegram API connection...');
-  try {
-    const botInfo = await bot.telegram.getMe();
-    console.log(`Bot info: @${botInfo.username} (${botInfo.id})`);
-    await bot.telegram.setMyCommands(COMMANDS_MENU);
-    console.log('Bot commands menu set');
-  } catch (err) {
-    console.error('Failed to connect to Telegram API:', err);
-    throw err;
+  //    An instance without the telegram connector skips it (Jira plan J3, D9).
+  if (ENV.isTelegramServed) {
+    console.log('Testing Telegram API connection...');
+    try {
+      const botInfo = await bot.telegram.getMe();
+      console.log(`Bot info: @${botInfo.username} (${botInfo.id})`);
+      await bot.telegram.setMyCommands(COMMANDS_MENU);
+      console.log('Bot commands menu set');
+    } catch (err) {
+      console.error('Failed to connect to Telegram API:', err);
+      throw err;
+    }
+  } else {
+    console.log('[boot] telegram connector off: no Telegram connection, commands, banners, status or polling');
   }
 
-  // 4. Pre-start OpenCode server if available so first request is fast.
-  if (getAvailableAdapters().some(a => a.name === 'opencode')) {
+  // 4. Pre-start OpenCode server if available so first request is fast. OpenCode
+  //    serves Telegram topics only: without Telegram no server is started — nor a
+  //    stale one found on the port stopped, which could be another bot's.
+  if (ENV.isTelegramServed && getAvailableAdapters().some(a => a.name === 'opencode')) {
     try {
       console.log('[boot] pre-starting OpenCode server...');
       await ensureOpenCodeServer();
@@ -11254,11 +11279,13 @@ export async function startBot(): Promise<void> {
   //     bindings created while `can_pin_messages` was missing) get one
   //     freshly pinned. Failures are best-effort — `updatePinnedStatus`
   //     logs them itself.
-  setImmediate(() => {
-    Promise.all(
-      state.listBindings().map(({ key }) => updatePinnedStatus(key).catch(() => {})),
-    ).catch(() => {});
-  });
+  if (ENV.isTelegramServed) {
+    setImmediate(() => {
+      Promise.all(
+        state.listBindings().map(({ key }) => updatePinnedStatus(key).catch(() => {})),
+      ).catch(() => {});
+    });
+  }
 
   // 5b. Audit S13 / #18: periodically GC in-memory per-thread maps
   //     against state.json. Topics deleted via Telegram's UI don't
@@ -11414,7 +11441,8 @@ export async function startBot(): Promise<void> {
   const shutdown = (signal: string): void => {
     void gracefulShutdown({
       signal,
-      bot,
+      // Without Telegram there is no polling to stop, and `bot.stop` throws when it never launched.
+      bot: ENV.isTelegramServed ? bot : { stop: () => {} },
       state,
       releaseLock,
       exit: (code) => process.exit(code),
@@ -11450,6 +11478,11 @@ export async function startBot(): Promise<void> {
   //    share that fate). Everything this needs — the paired group and botInfo
   //    (via a getMe fallback) — is already known, and sending is a direct Bot
   //    API call independent of polling. Best-effort so it can never fail boot.
+  if (!ENV.isTelegramServed) {
+    // No polling: the MCP server and the connector timers keep the process alive.
+    console.log('[boot] running without Telegram (connectors: ' + [...ENV.servedPlatforms].join(', ') + ')');
+    return;
+  }
   try {
     await sendStartupStatus(bootMode.isHotReload);
   } catch (e) {

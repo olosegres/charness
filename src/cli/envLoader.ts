@@ -56,6 +56,17 @@ export function localEnvPath(localDirectory = process.cwd()): string {
  * `telegramcode` startup banner and for test assertions.
  */
 export function loadEnvFiles(localDirectory = process.cwd()): { loaded: string[] } {
+  // An isolated instance (Jira connector plan J3, D7): ONLY its own file — no
+  // global config, no legacy config, no `$PWD/.env`, which may hold another
+  // bot's token. It wins over the inherited environment.
+  const envFile = process.env.ENV_FILE;
+  if (envFile !== undefined) {
+    if (!path.isAbsolute(envFile)) throw new Error(`ENV_FILE must be an absolute path (got "${envFile}")`);
+    if (!fs.existsSync(envFile)) throw new Error(`ENV_FILE does not exist: ${envFile}`);
+    dotenv.config({ path: envFile, override: true });
+    return { loaded: [envFile] };
+  }
+
   const loaded: string[] = [];
 
   const globalPath = globalEnvPath();

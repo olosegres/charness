@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { loadEnvFiles } from './envLoader';
+import { loadEnvWithConnectorGuards } from './connectorGuards';
 import { acquireLock, installLockCleanupHandlers } from './lock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
@@ -10,7 +10,8 @@ import { installConsoleFileTap } from '../utils/consoleFileTap';
  *
  * Responsibilities executed in order:
  *
- *   1. Load `.env` files (global, then local override). Must happen BEFORE
+ *   1. Load `.env` files (global, then local override — or ONLY `ENV_FILE`)
+ *      between the connector guards, which exit on a breach. Must happen BEFORE
  *      the bot module is imported, because `src/bot.ts` reads many
  *      `process.env.*` values at top-level (TELEGRAM_BOT_TOKEN, WORK_ROOT,
  *      ALLOWED_GROUP_ID, etc.).
@@ -25,11 +26,13 @@ import { installConsoleFileTap } from '../utils/consoleFileTap';
  *
  * The dynamic import in step 5 is deliberate: a static `import` at the top
  * of this file would resolve `process.env` at module-load time, before
- * `loadEnvFiles()` ran, and we'd see undefined tokens. `await import(...)`
+ * the env load ran, and we'd see undefined tokens. `await import(...)`
  * defers binding until after env is populated.
  */
 export async function runBot(): Promise<void> {
-  const { loaded } = loadEnvFiles();
+  // The connector guards wrap the env load: a breach exits here, before the
+  // console tee, the lock or the bot module can do anything (Jira plan J3).
+  const { loaded } = loadEnvWithConnectorGuards();
 
   // Tee stdout/stderr to an hourly bucket file under DATA_DIR as EARLY as
   // possible (right after env load, so DATA_DIR from .env is honoured) — boot
@@ -37,7 +40,7 @@ export async function runBot(): Promise<void> {
   // preserved. Best-effort; never throws into a write.
   installConsoleFileTap(resolveDataDir());
 
-  if (loaded.length === 0) {
+  if (loaded.length === 0 && !process.env.ENV_FILE) {
     process.stderr.write(
       `Warning: no .env file found in $PWD or ~/.config/telegramcode/. ` +
         `Required env (TELEGRAM_BOT_TOKEN) ` +

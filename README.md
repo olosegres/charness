@@ -567,6 +567,9 @@ your chosen providers need them.
 | `SHELL` | `/bin/bash` | You want `/terminal` to open a different shell than your login shell (host env var, not set by the bot) |
 | `SCHEDULER_MCP_PORT` | an OS-chosen free loopback port | You need a stable, explicitly chosen port; it must differ from this instance's `OPENCODE_URL` port |
 | `CLAUDE_SCRAPE_DEBUG` | off | You are debugging Claude tmux scraping and need full RAW/FILTERED chunks |
+| `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
+| `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. `scripts/run-isolated.sh <env-file>` starts an instance with a clean environment plus this variable |
+| `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list. `jira` is in development; an instance that lists it refuses to start without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment |
 
 > `WORK_DIR` (1.x) is retired. Use the wrapper from the desired parent folder
 > instead of carrying the old env forward.
@@ -646,6 +649,7 @@ Each pair of variables below must differ to avoid silent corruption:
 | `DATA_DIR` | `state.json` / `mcp.json` / `threads/` per instance; sharing → corrupted JSON |
 | `OPENCODE_URL` port | OpenCode server binds the port; second start fails with `EADDRINUSE` and you'd silently share sessions |
 | `SCHEDULER_MCP_PORT` | Optional stable scheduler-MCP port; if set, it must differ from that instance's `OPENCODE_URL` port |
+| `TMUX_SOCKET_NAME` | Optional, recommended: each instance's boot kills the agent sessions on its tmux server that its own state does not know — on one shared server, the other instance's |
 
 The shipped compose uses OpenCode ports `4096` (pet) and `4097` (work),
 with scheduler MCP on `4097` (pet) and `4107` (work). If you run
