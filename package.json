@@ -43,7 +43,7 @@
     "telegramcode": "./dist/cli.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js dist/index.js",
@@ -64,6 +64,7 @@
     "croner": "^10.0.1",
     "dotenv": "^16.4.5",
     "form-data": "^4.0.5",
+    "marklassian": "^1.2.1",
     "node-pty": "^1.0.0",
     "telegraf": "^4.16.3",
     "zod": "^4.4.3"

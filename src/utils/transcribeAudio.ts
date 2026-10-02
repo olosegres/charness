@@ -21,6 +21,7 @@ import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
 import FormData from 'form-data';
+import { getRetryAfterHeaderMs } from './retryAfterHeader';
 
 /** Pauses before the automatic retries: the 1st after 5 s, the 2nd after 15 s. */
 export const transcribeRetryDelaysMs: readonly number[] = [5_000, 15_000];
@@ -131,8 +132,8 @@ export function getTranscribeRetryDelayMs(input: {
 }
 
 function parseRetryAfterSec(header: string | string[] | undefined): number | undefined {
-  const retryAfterSec = Number.parseInt(Array.isArray(header) ? header[0] : header ?? '', 10);
-  return Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec : undefined;
+  const waitMs = getRetryAfterHeaderMs(Array.isArray(header) ? header[0] : header, Date.now());
+  return waitMs ? Math.ceil(waitMs / 1000) : undefined;
 }
 
 function getApiErrorMessage(body: string): string {

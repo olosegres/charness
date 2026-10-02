@@ -6,6 +6,18 @@ import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
 
+/**
+ * The OpenCode server URL when `OPENCODE_URL` is unset — also every OTHER
+ * instance's default on this host, which is why a Jira instance refuses it.
+ */
+export const defaultOpenCodeUrl = 'http://localhost:4096';
+const defaultOpenCodePort = new URL(defaultOpenCodeUrl).port;
+
+/** The port an OpenCode URL names; a URL without one means the default port (as `opencode serve` binds it). */
+export function getOpenCodePort(serverUrl: URL): string {
+  return serverUrl.port || defaultOpenCodePort;
+}
+
 const npmPrefix = (process.env.HOME || '/home/agent') + '/.npm-global';
 
 /** Map of tool name → npm package name */
@@ -474,7 +486,7 @@ function checkIsOpenCodeProcessOwnershipCurrent(
     return true;
   }
   const serverUrl = new URL(processOwnership.endpoint);
-  const port = serverUrl.port || '4096';
+  const port = getOpenCodePort(serverUrl);
   return getPidListeningOnEndpoint(serverUrl.hostname, port) === processOwnership.pid;
 }
 
@@ -596,7 +608,7 @@ export function extractOpenCodeVersion(raw: string | null | undefined): string |
  * dies on every prompt (e.g. `no such column: replacement_seq`).
  */
 export async function getOpenCodeServerHealth(): Promise<OpenCodeServerHealth> {
-  const url = process.env.OPENCODE_URL || 'http://localhost:4096';
+  const url = process.env.OPENCODE_URL || defaultOpenCodeUrl;
   try {
     const response = await fetch(`${url}/global/health`, { signal: AbortSignal.timeout(2000) });
     if (!response.ok) return { healthy: false, version: null };
@@ -727,7 +739,7 @@ async function stopOpenCodeProcessOwnership(
  */
 async function stopAdoptedOpenCodeServer(serverUrl: URL): Promise<void> {
   const endpoint = serverUrl.origin;
-  const port = serverUrl.port || '4096';
+  const port = getOpenCodePort(serverUrl);
   const ownedProcessOwnership = getOwnedOpenCodeProcessOwnership(endpoint);
   const listenerPid = ownedProcessOwnership
     ? null
@@ -765,8 +777,8 @@ async function stopAdoptedOpenCodeServer(serverUrl: URL): Promise<void> {
  * keeps failing prompts after an opencode update.
  */
 async function ensureOpenCodeServerUnlocked(): Promise<void> {
-  const serverUrl = new URL(process.env.OPENCODE_URL || 'http://localhost:4096');
-  const port = serverUrl.port || '4096';
+  const serverUrl = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl);
+  const port = getOpenCodePort(serverUrl);
   const endpoint = serverUrl.origin;
 
   const health = await getOpenCodeServerHealth();
@@ -909,7 +921,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
 
   try {
     // Wait for server to become ready
-    const healthUrl = `${process.env.OPENCODE_URL || 'http://localhost:4096'}/global/health`;
+    const healthUrl = `${process.env.OPENCODE_URL || defaultOpenCodeUrl}/global/health`;
     for (let i = 0; i < 15; i++) {
       await sleep(1000);
       try {
@@ -971,7 +983,7 @@ export function ensureOpenCodeServer(): Promise<void> {
  */
 export function restartOpenCodeServer(): Promise<void> {
   return runOpenCodeServerLifecycle(async () => {
-    const serverUrl = new URL(process.env.OPENCODE_URL || 'http://localhost:4096');
+    const serverUrl = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl);
     await stopAdoptedOpenCodeServer(serverUrl);
     await ensureOpenCodeServerUnlocked();
   });
@@ -979,7 +991,7 @@ export function restartOpenCodeServer(): Promise<void> {
 
 export function stopOpenCodeServer(): void {
   const child = openCodeProcess;
-  const endpoint = new URL(process.env.OPENCODE_URL || 'http://localhost:4096').origin;
+  const endpoint = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl).origin;
   const inMemoryOwnership = ownedOpenCodeProcess;
   const directlyOwnedProcess = child && inMemoryOwnership &&
     inMemoryOwnership.pid === child.pid &&

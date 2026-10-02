@@ -1326,6 +1326,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"marked@npm:^15.0.6 || ^16.0.0":
+  version: 16.4.2
+  resolution: "marked@npm:16.4.2"
+  bin:
+    marked: bin/marked.js
+  checksum: 10c0/fc6051142172454f2023f3d6b31cca92879ec8e1b96457086a54c70354c74b00e1b6543a76a1fad6d399366f52b90a848f6ffb8e1d65a5baff87f3ba9b8f1847
+  languageName: node
+  linkType: hard
+
+"marklassian@npm:^1.2.1":
+  version: 1.2.1
+  resolution: "marklassian@npm:1.2.1"
+  dependencies:
+    marked: "npm:^15.0.6 || ^16.0.0"
+  checksum: 10c0/68ab2067f6fd9b8936cab1827359296bfa727d141963f9398fa9d73dfb419619f29d3e04d67201cfb570d9b96a11bb75a9433499425a68b431a05b8e193424e9
+  languageName: node
+  linkType: hard
+
 "math-intrinsics@npm:^1.1.0":
   version: 1.1.0
   resolution: "math-intrinsics@npm:1.1.0"
@@ -2034,6 +2052,7 @@ __metadata:
     croner: "npm:^10.0.1"
     dotenv: "npm:^16.4.5"
     form-data: "npm:^4.0.5"
+    marklassian: "npm:^1.2.1"
     node-pty: "npm:^1.0.0"
     nodemon: "npm:^3.1.0"
     telegraf: "npm:^4.16.3"

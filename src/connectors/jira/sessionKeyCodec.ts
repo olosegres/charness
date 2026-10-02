@@ -27,6 +27,12 @@ const keySeparator = ':';
 const projectKeyPattern = '[A-Z][A-Z0-9_]*';
 const issueNumberPattern = '[1-9]\\d*';
 const issueKeyRe = new RegExp(`^(${projectKeyPattern})-${issueNumberPattern}$`);
+const projectKeyRe = new RegExp(`^${projectKeyPattern}$`);
+
+/** @description Whether `projectKey` is spelled like a Jira project key (`PROJ`, `MY_PROJ`). */
+export function checkIsJiraProjectKey(projectKey: string): boolean {
+  return projectKeyRe.test(projectKey);
+}
 
 /** Escape a slug separator for use inside a regular expression. */
 function escapeRegExp(text: string): string {

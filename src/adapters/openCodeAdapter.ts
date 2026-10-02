@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { checkIsInstalled, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import {
@@ -1580,7 +1580,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   constructor() {
     super();
     // Audit S7 / #34: SSRF guard on OPENCODE_URL before any fetch runs.
-    this.baseUrl = validateOpenCodeUrl(process.env.OPENCODE_URL || 'http://localhost:4096');
+    this.baseUrl = validateOpenCodeUrl(process.env.OPENCODE_URL || defaultOpenCodeUrl);
 
     const password = process.env.OPENCODE_PASSWORD;
     if (password) {

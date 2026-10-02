@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import * as path from 'path';
 import { parseConnectors } from '../platform/connectorSet';
+import { getJiraConfigPath, jiraConfigFileName } from '../connectors/jira/configFile';
 import { resolveDataDir } from '../state';
 import { loadEnvFiles } from './envLoader';
 
@@ -23,8 +23,6 @@ import { loadEnvFiles } from './envLoader';
  *    settings use other names).
  */
 
-/** The Jira connector's config file under `DATA_DIR` (its content is J4's). */
-export const jiraConfigFileName = 'jira.json';
 
 /** `tmux -L default` IS the default server. */
 const defaultTmuxSocketName = 'default';
@@ -107,7 +105,7 @@ export function loadEnvWithConnectorGuards(localDirectory?: string): { loaded: s
   exitOnGuardErrors(getPreloadGuardErrors(process.env));
   const envFileAtLaunch = process.env.ENV_FILE;
   const result = loadEnvFiles(localDirectory);
-  const hasJiraConfig = fs.existsSync(path.join(resolveDataDir(), jiraConfigFileName));
+  const hasJiraConfig = fs.existsSync(getJiraConfigPath(resolveDataDir()));
   exitOnGuardErrors(getConnectorGuardErrors({ env: process.env, hasJiraConfig, envFileAtLaunch }));
   return result;
 }
