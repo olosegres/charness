@@ -367,6 +367,82 @@ describe('what is not a turn end', () => {
   });
 });
 
+describe('usage limits', () => {
+  /** An armed limit wait holds the turn; the session is idle. */
+  const limitWaitProbe: SessionTurnProbe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+
+  it('nothing wakes the request during the wait, and at the resume its counters start from zero', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+    // One silent turn and the cap reached: without the reset the next silent turn alerts.
+    await ledger.updateOpenRequest(request.id, { silentTurnCount: 1, wakeCount: 10, nextWakeAt: nowMs });
+
+    probe = limitWaitProbe;
+    nowMs += 2 * backstopMs;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'no wake-up, follow-up or backstop during the wait');
+    assert.deepEqual(alerts, []);
+
+    // The limit window reset: the bot forwarded its "continue" nudge.
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
+    const resumed = ledger.getOpenRequest(topicKey);
+    assert.equal(resumed?.silentTurnCount, 0);
+    assert.equal(resumed?.wakeCount, 0);
+    assert.equal(resumed?.nextWakeAt, undefined);
+
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }]);
+    assert.deepEqual(alerts, []);
+  });
+
+  it('the nudge\'s turn is watched afresh: the idle the error left is not its end', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: null, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns(); // the request's own turn was seen working before the error
+
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+
+    assert.deepEqual(wakeUps, [], 'a backend without a consumption signal has not started the nudge\'s turn yet');
+    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 0);
+  });
+
+  it('a retry that is not a limit wait keeps the counters', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await ledger.updateOpenRequest(request.id, { silentTurnCount: 1, wakeCount: 3 });
+
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+
+    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 1);
+    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 3);
+  });
+
+  it('a wait that will not end by itself stops every wake-up, the backstop included', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+
+    await engine.stopWakingForLimitWait(topicKey);
+    await endTurnSilently(engine);
+    nowMs += 2 * backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, [], 'not a technical failure: the operator decides when to continue');
+    assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id, 'the request stays open');
+  });
+});
+
 describe('the backstop', () => {
   it('a dead session is left to the backstop, which wakes it after the window', async () => {
     const ledger = await createLedger();

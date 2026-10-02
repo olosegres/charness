@@ -621,4 +621,6 @@ export const uzDict: Record<string, string> = {
     '(ixtiyoriy) Ushbu holatni shaxsiy chatingizda olish uchun OWNER_USER_ID ni belgilang.',
   'requests.alert.notAnsweringNotice': '⚠️ {requestId} so‘roviga javob berilmadi: agent javob bermay navbatlarini yakunladi va eslatmalar to‘xtatildi. Ushbu mavzudagi seansni tekshiring.',
   'requests.alert.unreachableNotice': '⚠️ {requestId} so‘roviga javob berilmadi: eslatma yuborish uchun agent seansiga ulanib bo‘lmadi. Ushbu mavzudagi seansni tekshiring.',
+  'requests.limit.answerAfterResetNotice': '🚧 Foydalanish limitiga yetildi — javob {time} dan keyin keladi.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Foydalanish limitiga yetildi — keyingi urinish {time} da.',
 };

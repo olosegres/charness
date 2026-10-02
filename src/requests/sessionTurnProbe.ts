@@ -17,7 +17,10 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *    user message;
  *  - a wedged-turn recovery in flight: it restarts the session and replays the
  *    original prompt (which carries the request header), so a reminder on top
- *    would be a second recovery of the same turn.
+ *    would be a second recovery of the same turn;
+ *  - an API-error retry or limit resume being KICKED: from the moment its timer
+ *    fired until its "continue" nudge was forwarded the retry is no longer armed,
+ *    yet the idle the error left behind is not a turn end either.
  */
 
 /**
@@ -36,6 +39,7 @@ export interface SessionTurnProbeDeps {
   checkIsCompacting: (keyString: string) => boolean;
   getApiRetryTimer: (keyString: string) => NodeJS.Timeout | null | undefined;
   checkIsWedgeRecoveryInFlight: (keyString: string) => boolean;
+  checkIsRetryKickInFlight: (keyString: string) => boolean;
   serializeKey: (key: SessionKey) => string;
 }
 
@@ -52,7 +56,8 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       (adapter.isLoginPastePending?.(key) ?? false) ||
       deps.checkIsCompacting(keyString) ||
       Boolean(deps.getApiRetryTimer(keyString)) ||
-      deps.checkIsWedgeRecoveryInFlight(keyString);
+      deps.checkIsWedgeRecoveryInFlight(keyString) ||
+      deps.checkIsRetryKickInFlight(keyString);
     return {
       isActive,
       isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),

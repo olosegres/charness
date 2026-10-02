@@ -621,4 +621,6 @@ export const frDict: Record<string, string> = {
     '(optionnel) Définissez OWNER_USER_ID pour recevoir ce statut dans votre chat privé.',
   'requests.alert.notAnsweringNotice': "⚠️ La demande {requestId} est restée sans réponse : l'agent a terminé ses tours sans répondre et les rappels ont abandonné. Vérifiez la session dans ce sujet.",
   'requests.alert.unreachableNotice': "⚠️ La demande {requestId} est restée sans réponse : la session de l'agent était injoignable pour un rappel. Vérifiez la session dans ce sujet.",
+  'requests.limit.answerAfterResetNotice': '🚧 Limite d’utilisation atteinte — la réponse arrivera après {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Limite d’utilisation atteinte — prochaine tentative à {time}.',
 };

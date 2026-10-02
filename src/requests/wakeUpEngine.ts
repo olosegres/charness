@@ -134,6 +134,35 @@ export class RequestWakeUpEngine {
     if (request) await this.deps.ledger.closeRequest(request.id, 'cancelled');
   }
 
+  /**
+   * @description The bot itself forwarded a "continue" nudge into the session (an
+   * API-error retry fired, or a usage-limit wait ended): watch the turn it starts
+   * as a fresh one, so the idle the error left behind is never read as its end.
+   * `isCountersReset` (the end of a limit wait) starts the open request's
+   * wake-up bookkeeping from zero — the wait was not the agent's silence. A
+   * request the rules already gave up on stays given up.
+   */
+  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean }): Promise<void> {
+    const request = this.deps.ledger.getOpenRequest(key);
+    if (!request) return;
+    if (options.isCountersReset) {
+      await this.deps.ledger.updateOpenRequest(request.id, { silentTurnCount: 0, wakeCount: 0, nextWakeAt: undefined });
+    }
+    await this.trackForwardedTurn(key, request.id);
+  }
+
+  /**
+   * @description A usage-limit wait will not end by itself (auto-resume is off, or
+   * the operator skipped this resume): nothing wakes the open request any more,
+   * the backstop included — a reminder would only spend an attempt against the
+   * same limit. The operator's next message supersedes it.
+   */
+  async stopWakingForLimitWait(key: SessionKey): Promise<void> {
+    this.watched.delete(keyToString(key));
+    const request = this.deps.ledger.getOpenRequest(key);
+    if (request) await this.deps.ledger.updateOpenRequest(request.id, { isWakeStopped: true, nextWakeAt: undefined });
+  }
+
   /** @description One poll over the watched turns; exported for tests (the timer calls it). */
   async pollWatchedTurns(): Promise<void> {
     if (this.isPolling) return;

@@ -620,4 +620,6 @@ export const hiDict: Record<string, string> = {
     '(वैकल्पिक) यह स्थिति अपने निजी चैट में पाने के लिए OWNER_USER_ID सेट करें।',
   'requests.alert.notAnsweringNotice': '⚠️ अनुरोध {requestId} का जवाब नहीं मिला: एजेंट ने बिना जवाब दिए अपने टर्न खत्म किए और रिमाइंडर बंद कर दिए गए। इस टॉपिक में सत्र जाँचें।',
   'requests.alert.unreachableNotice': '⚠️ अनुरोध {requestId} का जवाब नहीं मिला: रिमाइंडर देने के लिए एजेंट के सत्र तक नहीं पहुँचा जा सका। इस टॉपिक में सत्र जाँचें।',
+  'requests.limit.answerAfterResetNotice': '🚧 उपयोग सीमा पूरी हो गई — जवाब {time} के बाद आएगा।',
+  'requests.limit.answerNextAttemptNotice': '🚧 उपयोग सीमा पूरी हो गई — अगला प्रयास {time} पर।',
 };

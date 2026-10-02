@@ -669,4 +669,6 @@ export const enDict: Record<string, string> = {
     '(optional) Set OWNER_USER_ID to receive this status in your private chat.',
   'requests.alert.notAnsweringNotice': '⚠️ Request {requestId} got no answer: the agent ended its turns without answering and the reminders gave up. Check the session in this topic.',
   'requests.alert.unreachableNotice': "⚠️ Request {requestId} got no answer: the agent's session could not be reached to remind it. Check the session in this topic.",
+  'requests.limit.answerAfterResetNotice': '🚧 Usage limit reached — the answer will come after {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Usage limit reached — next attempt at {time}.',
 };

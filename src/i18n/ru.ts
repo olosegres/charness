@@ -625,4 +625,6 @@ export const ruDict: Record<string, string> = {
     '(необязательно) Задайте OWNER_USER_ID, чтобы получать этот статус в личном чате.',
   'requests.alert.notAnsweringNotice': '⚠️ Запрос {requestId} остался без ответа: агент завершал ходы, не отвечая, и напоминания прекращены. Проверьте сессию в этой теме.',
   'requests.alert.unreachableNotice': '⚠️ Запрос {requestId} остался без ответа: до сессии агента не удалось достучаться с напоминанием. Проверьте сессию в этой теме.',
+  'requests.limit.answerAfterResetNotice': '🚧 Достигнут лимит использования — ответ будет после {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Достигнут лимит использования — следующая попытка в {time}.',
 };

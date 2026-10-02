@@ -621,4 +621,6 @@ export const kaDict: Record<string, string> = {
     '(არასავალდებულო) დააყენეთ OWNER_USER_ID, რომ ეს სტატუსი მიიღოთ თქვენს პირად ჩატში.',
   'requests.alert.notAnsweringNotice': '⚠️ მოთხოვნა {requestId} უპასუხოდ დარჩა: აგენტმა სვლები პასუხის გარეშე დაასრულა და შეხსენებები შეწყდა. შეამოწმეთ სესია ამ თემაში.',
   'requests.alert.unreachableNotice': '⚠️ მოთხოვნა {requestId} უპასუხოდ დარჩა: შეხსენებისთვის აგენტის სესიასთან დაკავშირება ვერ მოხერხდა. შეამოწმეთ სესია ამ თემაში.',
+  'requests.limit.answerAfterResetNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — პასუხი მოვა {time}-ის შემდეგ.',
+  'requests.limit.answerNextAttemptNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — შემდეგი მცდელობა {time}-ზე.',
 };

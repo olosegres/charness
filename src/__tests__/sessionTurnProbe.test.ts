@@ -25,6 +25,7 @@ interface ProbeScenario {
   compactingKeys: Set<string>;
   apiRetryTimers: Map<string, NodeJS.Timeout | null>;
   wedgeRecoveryKeys: Set<string>;
+  retryKickKeys: Set<string>;
 }
 
 let scenario: ProbeScenario;
@@ -42,6 +43,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
     checkIsCompacting: (keyString) => scenario.compactingKeys.has(keyString),
     getApiRetryTimer: (keyString) => scenario.apiRetryTimers.get(keyString),
     checkIsWedgeRecoveryInFlight: (keyString) => scenario.wedgeRecoveryKeys.has(keyString),
+    checkIsRetryKickInFlight: (keyString) => scenario.retryKickKeys.has(keyString),
     serializeKey: keyToString,
   };
   return createSessionTurnProbe(deps);
@@ -58,6 +60,7 @@ beforeEach(() => {
     compactingKeys: new Set(),
     apiRetryTimers: new Map(),
     wedgeRecoveryKeys: new Set(),
+    retryKickKeys: new Set(),
   };
 });
 
@@ -103,6 +106,12 @@ describe('createSessionTurnProbe', () => {
 
   it('a wedge recovery under way holds the turn: its replay is the recovery, not a reminder', () => {
     scenario.wedgeRecoveryKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+  });
+
+  it('a retry whose timer fired but whose nudge is not forwarded yet still holds the turn', () => {
+    scenario.apiRetryTimers.set(topicKeyString, null);
+    scenario.retryKickKeys.add(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
   });
 

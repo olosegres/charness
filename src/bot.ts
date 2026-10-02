@@ -38,6 +38,7 @@ import type { SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
 import {
+  checkIsTelegramKey,
   getTelegramChatId,
   getTelegramThreadId,
   makeTelegramKey,
@@ -294,6 +295,7 @@ import { answerRequest } from './requests/answerRequest';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { releaseRequestAlert, type AnswerSinks } from './platform/answerSink';
 import { createSessionTurnProbe } from './requests/sessionTurnProbe';
+import { answerOpenRequestForLimitWait, type LimitWaitAnswerDeps, type UsageLimitWait } from './requests/limitWaitAnswer';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
 import { buildWakeUpReminder } from './requests/requestHeader';
@@ -950,6 +952,8 @@ let schedulerEngine: SchedulerEngine | null = null;
  * another agent or a shell) are module-level command handlers.
  */
 let requestWakeUpEngine: RequestWakeUpEngine | null = null;
+/** What the bot's own limit-wait answer needs (S5); set at boot next to the engine. */
+let requestLimitWaitAnswerDeps: LimitWaitAnswerDeps | null = null;
 
 /**
  * @description Resolve the live `DATA_DIR` from the state store. The store
@@ -1476,6 +1480,13 @@ interface ApiRetryTimerEntry {
 }
 
 const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
+/**
+ * Threads whose retry timer FIRED and whose "continue" nudge is not forwarded
+ * yet ({@link fireApiRetry}). The retry is no longer armed then, but the idle
+ * the error left behind is still not a turn end — the request wake-up probe
+ * reads this set so it never reminds on top of the nudge.
+ */
+const apiRetryKicksInFlight = new Set<string>();
 
 /**
  * @description `fireAt` of the thread's currently PENDING usage-limit resume, or
@@ -1543,7 +1554,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     if (!autoContinueOffNoticedThreads.has(k)) {
       autoContinueOffNoticedThreads.add(k);
-      void replyToThread(key, t('autoContinueLimits.limitReachedDisabled'));
+      void announceLimitWait(key, { kind: 'autoResumeOff' }, t('autoContinueLimits.limitReachedDisabled'));
     }
     return;
   }
@@ -1593,7 +1604,10 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
           minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
           attempt: action.attempt,
         });
-    void replyToThread(key, appendAutoContinueLimitsHint(text));
+    const wait: UsageLimitWait = cls.resetAt !== undefined
+      ? { kind: 'afterReset', resetAt: cls.resetAt }
+      : { kind: 'nextAttempt', fireAt: action.fireAt };
+    void announceLimitWait(key, wait, appendAutoContinueLimitsHint(text));
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1653,6 +1667,8 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (!entry) return;
+  // Claimed in the same tick the retry stops being armed (see `apiRetryKicksInFlight`).
+  apiRetryKicksInFlight.add(k);
   entry.timer = null;
   entry.firedAt = Date.now();
 
@@ -1660,10 +1676,42 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   else void replyToThread(key, t('apiRetry.resuming'));
   try {
     await ensureAgentSession(key);
+    // The nudge is NOT a request: the open request (if any) continues under it.
     await forwardPromptToAgent(key, getThreadAdapter(key), t('apiRetry.continueNudge'));
+    await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: entry.kind === 'usageLimit' });
   } catch (e) {
     console.error('[apiRetry] kick failed:', e instanceof Error ? e.message : e);
+  } finally {
+    apiRetryKicksInFlight.delete(k);
   }
+}
+
+/**
+ * @description Post a usage-limit wait (request/answer core S5): as the bot's own
+ * `progress` answer to the open request when there is one — it REPLACES the plain
+ * notice, which would say the same thing twice — else, or when that answer could
+ * not be delivered, as the plain notice.
+ */
+async function announceLimitWait(key: SessionKey, wait: UsageLimitWait, plainNotice: string): Promise<void> {
+  let isAnswered = false;
+  if (requestLimitWaitAnswerDeps) {
+    try {
+      isAnswered = await answerOpenRequestForLimitWait(requestLimitWaitAnswerDeps, key, wait, getLimitWaitAnswerBody(key, wait));
+    } catch (e) {
+      console.warn('[requests] limit answer failed:', e instanceof Error ? e.message : e);
+    }
+  }
+  if (!isAnswered) await replyToThread(key, plainNotice);
+}
+
+/** The text of the bot's limit-wait answer, in the thread's locale. */
+function getLimitWaitAnswerBody(key: SessionKey, wait: UsageLimitWait): string {
+  if (wait.kind === 'autoResumeOff') return t('autoContinueLimits.limitReachedDisabled');
+  const text = wait.kind === 'afterReset'
+    ? t('requests.limit.answerAfterResetNotice', { time: formatLocalClock(wait.resetAt) })
+    : t('requests.limit.answerNextAttemptNotice', { time: formatLocalClock(wait.fireAt) });
+  // The pointer names a Telegram command; on another surface it would be noise.
+  return checkIsTelegramKey(key) ? appendAutoContinueLimitsHint(text) : text;
 }
 
 /**
@@ -8085,7 +8133,12 @@ async function applyAutoContinueLimits(key: SessionKey, isGeneral: boolean, enab
     return t('autoContinueLimits.setGlobal', { state: stateWord });
   }
   await state.setAutoContinueOnLimitOverride(key, enabled);
-  if (!enabled) cancelApiRetry(key);
+  if (!enabled) {
+    const isLimitWaitArmed = getArmedLimitRetryFireAt(key) !== null;
+    cancelApiRetry(key);
+    // Nothing resumes this wait any more: its request must not be woken into the same limit.
+    if (isLimitWaitArmed) await requestWakeUpEngine?.stopWakingForLimitWait(key);
+  }
   return t('autoContinueLimits.setThisTopic', { state: stateWord });
 }
 
@@ -10826,6 +10879,8 @@ bot.action(new RegExp(`^${skipArmedRetryCallbackPrefix}(\\d+)$`), async (ctx) =>
       return;
     }
     cancelApiRetry(key);
+    // The skipped resume was the only thing to continue the work — the operator writes when to.
+    await requestWakeUpEngine?.stopWakingForLimitWait(key);
     await ctx.answerCbQuery(t('autoContinueLimits.skipDone'));
     await consumeAutoContinueLimitsPicker(
       key,
@@ -13960,6 +14015,7 @@ export async function startBot(): Promise<void> {
       checkIsCompacting: (keyString) => threadsCompacting.has(keyString),
       getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
       checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
+      checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
       serializeKey: keyToString,
     }),
     prepareWakeUpSession: ensureSessionForWakeUp,
@@ -13973,6 +14029,7 @@ export async function startBot(): Promise<void> {
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
   });
+  requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle

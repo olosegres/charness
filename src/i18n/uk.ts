@@ -627,4 +627,6 @@ export const ukDict: Record<string, string> = {
     '(необов\'язково) Задай OWNER_USER_ID, щоб отримувати цей статус у своєму приватному чаті.',
   'requests.alert.notAnsweringNotice': '⚠️ Запит {requestId} залишився без відповіді: агент завершував ходи, не відповідаючи, і нагадування припинено. Перевірте сесію в цій темі.',
   'requests.alert.unreachableNotice': '⚠️ Запит {requestId} залишився без відповіді: до сесії агента не вдалося достукатися з нагадуванням. Перевірте сесію в цій темі.',
+  'requests.limit.answerAfterResetNotice': '🚧 Досягнуто ліміту використання — відповідь буде після {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Досягнуто ліміту використання — наступна спроба о {time}.',
 };

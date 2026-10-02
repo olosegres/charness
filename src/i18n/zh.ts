@@ -615,4 +615,6 @@ export const zhDict: Record<string, string> = {
     '（可选）设置 OWNER_USER_ID 以在你的私聊中接收此状态。',
   'requests.alert.notAnsweringNotice': '⚠️ 请求 {requestId} 未获回复：智能体多次结束回合却未作答，提醒已停止。请检查此话题中的会话。',
   'requests.alert.unreachableNotice': '⚠️ 请求 {requestId} 未获回复：无法连接智能体的会话以发送提醒。请检查此话题中的会话。',
+  'requests.limit.answerAfterResetNotice': '🚧 已达到使用限额 — 答复将在 {time} 之后给出。',
+  'requests.limit.answerNextAttemptNotice': '🚧 已达到使用限额 — 下次尝试时间为 {time}。',
 };

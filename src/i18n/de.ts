@@ -621,4 +621,6 @@ export const deDict: Record<string, string> = {
     '(optional) Setze OWNER_USER_ID, um diesen Status in deinem privaten Chat zu erhalten.',
   'requests.alert.notAnsweringNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Der Agent hat seine Züge ohne Antwort beendet, und die Erinnerungen haben aufgegeben. Prüfe die Sitzung in diesem Thema.',
   'requests.alert.unreachableNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Die Sitzung des Agenten war für eine Erinnerung nicht erreichbar. Prüfe die Sitzung in diesem Thema.',
+  'requests.limit.answerAfterResetNotice': '🚧 Nutzungslimit erreicht — die Antwort kommt nach {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Nutzungslimit erreicht — nächster Versuch um {time}.',
 };

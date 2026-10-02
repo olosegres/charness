@@ -615,4 +615,6 @@ export const jaDict: Record<string, string> = {
     '（任意）このステータスをプライベートチャットで受け取るには OWNER_USER_ID を設定してください。',
   'requests.alert.notAnsweringNotice': '⚠️ リクエスト {requestId} に回答がありません：エージェントは回答せずにターンを終え、リマインダーも打ち切られました。このトピックのセッションを確認してください。',
   'requests.alert.unreachableNotice': '⚠️ リクエスト {requestId} に回答がありません：リマインダーを送るためにエージェントのセッションに接続できませんでした。このトピックのセッションを確認してください。',
+  'requests.limit.answerAfterResetNotice': '🚧 使用量の上限に達しました — 回答は {time} 以降になります。',
+  'requests.limit.answerNextAttemptNotice': '🚧 使用量の上限に達しました — 次の試行は {time} です。',
 };

@@ -621,4 +621,6 @@ export const esDict: Record<string, string> = {
     '(opcional) Configura OWNER_USER_ID para recibir este estado en tu chat privado.',
   'requests.alert.notAnsweringNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: el agente terminó sus turnos sin responder y los recordatorios se rindieron. Revisa la sesión en este tema.',
   'requests.alert.unreachableNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: no se pudo alcanzar la sesión del agente para recordárselo. Revisa la sesión en este tema.',
+  'requests.limit.answerAfterResetNotice': '🚧 Se alcanzó el límite de uso — la respuesta llegará después de las {time}.',
+  'requests.limit.answerNextAttemptNotice': '🚧 Se alcanzó el límite de uso — próximo intento a las {time}.',
 };
