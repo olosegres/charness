@@ -286,7 +286,8 @@ import {
   resolveSchedulerMcpPort,
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
-import { configureSchedulerMcpInjection, schedulerMcpServerName } from './scheduler/injection';
+import { schedulerMcpServerName } from './scheduler/injection';
+import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { checkIsReminderSchedule, getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -13923,94 +13924,75 @@ export async function startBot(): Promise<void> {
     }
   }
 
-  // 5. Re-attach sessions that survived the restart. A successful re-adopt
-  //    is silent; `quietReattach` only suppresses the reattach ERROR notice
-  //    (workDir vanished) during a hot reload, surfaced on a real cold start.
-  await reattachExistingSessions({ quietReattach: bootMode.isHotReload });
-
-  // 5b. Re-arm pending interactive questions that survived the restart, so the
-  //     existing option buttons keep working. MUST run AFTER reattach so each
-  //     thread's session-active state is known (a question is restored only for
-  //     a thread whose session came back; otherwise it is unreachable, dropped).
-  restorePendingQuestions();
-
-  // 5c. Re-arm persisted API-error retries (S6) so a pending kick survives the
-  //     restart. AFTER reattach (and restorePendingQuestions) so the kick lands
-  //     in a live session; a past fireAt fires one delayed catch-up.
-  restoreApiRetries();
-
-  // 5c-bis. Recover a limit episode that ENDED before this boot and left nothing
-  //     persisted (an unrecognised wording at the time): the json-stream backend's
-  //     stdout tail still holds its terminal error frame. AFTER restoreApiRetries
-  //     so an already-armed thread is skipped.
-  recoverLimitEpisodesFromDisk();
-
-  // 5d. Delete transient status frames orphaned by an UNGRACEFUL exit (S2). AFTER
-  //     reattach so each leftover frame is provably stale (the session is idle /
-  //     will repaint). A graceful exit already cleared the set in its sweep, so
-  //     this is normally a no-op. Uses the pre-reattach snapshot (the setters
-  //     clobber the live persisted set during reattach).
-  reconcileTransientFrames(orphanedTransientFrames);
-
-  // 5-scheduler. Wire the scheduler (S8): run ledger → delivery (thin lambdas
-  //    over existing bot functions) → timer engine → bot-owned MCP server →
-  //    boot replay. Runs AFTER reattach so a catch-up fire finds adapters
-  //    registered. The MCP server is the only piece that can fail at boot (port
-  //    busy); if it does, the bot still boots and the engine still runs — only
-  //    the agent-facing tools stay unavailable (injection stays inert).
+  // 5. Session phase (order owned by `runSessionBootPhase`, see
+  //    `scheduler/mcpBoot.ts`). The bot MCP server (S8 scheduler wiring: run
+  //    ledger → delivery → timer engine → MCP server) is bound and injection is
+  //    configured FIRST, so every session re-attached or resumed below is born
+  //    WITH the bot's server — a session spawned while injection was still inert
+  //    never gets it, and the heal path cannot add an absent server. A bind
+  //    failure (port busy) keeps booting: injection stays inert, only the
+  //    agent-facing tools are missing this run, engine timers still fire.
   const schedulerMcpHandle = wireScheduler();
-  let schedulerMcpStarted = false;
-  try {
-    await schedulerMcpHandle.start();
-    schedulerMcpStarted = true;
-    const boundPort = schedulerMcpHandle.port;
-    // Persist the actually-bound port so the next boot reuses it (registrations
-    // stay valid). Skip when the operator fixed the port via env (nothing to
-    // reuse) or when it is unchanged (avoid a needless flush).
-    if (getSchedulerMcpPort() === 0 && state.getPersistedSchedulerMcpPort() !== boundPort) {
-      await state.setSchedulerMcpPort(boundPort);
-    }
-    configureSchedulerMcpInjection({
-      getSecret: () => state.getSchedulerMcpSecret(),
-      port: boundPort,
-    });
-    // Self-heal: when this boot ADOPTED an already-running opencode, that server
-    // may still hold a `telegramBot` registration from the previous bot
-    // generation pointing at a now-dead port. Reconcile against the live MCP
-    // status and force-refresh any directory that is not `connected`.
-    // Fire-and-forget (like the register call it replaced): boot must not block
-    // on opencode HTTP round-trips before `bot.launch()` (self-heal runs async).
-    // The compaction-plugin step goes FIRST: recreating a directory instance so
-    // it loads the plugin drops that directory's MCP registration, which this
-    // same reconcile then restores.
-    const openCodeAdapter = getAdapter('opencode');
-    void (async () => {
-      await openCodeAdapter.activateCompactionPluginForActiveSessions?.();
-      await openCodeAdapter.reconcileSchedulerMcpForActiveSessions?.();
-    })().catch((e) =>
-      console.warn('[scheduler] MCP reconcile failed:', e instanceof Error ? e.message : e),
-    );
-    // Same class of self-heal on the Claude side: a json-stream session that
-    // SURVIVED this restart can hold a `telegramBot` entry latched `failed`, and
-    // the CLI never retries a failed MCP server — so the bot's own tools stay
-    // gone for the rest of that session. Runs inside this `try` because it heals
-    // toward the port that was just bound; fire-and-forget, same as above.
-    healSchedulerMcpForActiveSessions();
-    console.log(`[scheduler] MCP server listening on 127.0.0.1:${boundPort}`);
-  } catch (e) {
-    // Port busy / bind failure: keep booting WITHOUT the scheduler MCP server.
-    // Injection stays unconfigured (inert), so agent sessions get no scheduling
-    // tools, but engine timers still fire for jobs created in previous runs.
-    console.error(
-      '[scheduler] MCP server failed to start; scheduling tools unavailable this run:',
-      e instanceof Error ? e.message : e,
-    );
-  }
-  // Boot catch-up replay: arm every persisted job, fire one catch-up per missed
-  // run. Independent of the MCP server (delivery does not need it).
-  await schedulerEngine!.rearmAll().catch((e) =>
-    console.error('[scheduler] rearmAll failed:', e),
-  );
+  const schedulerMcpStarted = await runSessionBootPhase({
+    startBotMcp: () =>
+      startSchedulerMcpForBoot({
+        handle: schedulerMcpHandle,
+        envPort: getSchedulerMcpPort(),
+        getPersistedPort: () => state.getPersistedSchedulerMcpPort(),
+        persistPort: (port) => state.setSchedulerMcpPort(port),
+        getSecret: () => state.getSchedulerMcpSecret(),
+      }),
+    // A successful re-adopt is silent; `quietReattach` only suppresses the
+    // reattach ERROR notice (workDir vanished) during a hot reload, surfaced on
+    // a real cold start.
+    reattachSessions: () => reattachExistingSessions({ quietReattach: bootMode.isHotReload }),
+    restoreAfterReattach: () => {
+      // Re-arm pending interactive questions that survived the restart, so the
+      // existing option buttons keep working. A question is restored only for a
+      // thread whose session came back; otherwise it is unreachable, dropped.
+      restorePendingQuestions();
+      // Re-arm persisted API-error retries (S6) so a pending kick survives the
+      // restart. AFTER restorePendingQuestions so the kick lands in a live
+      // session; a past fireAt fires one delayed catch-up.
+      restoreApiRetries();
+      // Recover a limit episode that ENDED before this boot and left nothing
+      // persisted (an unrecognised wording at the time): the json-stream
+      // backend's stdout tail still holds its terminal error frame. AFTER
+      // restoreApiRetries so an already-armed thread is skipped.
+      recoverLimitEpisodesFromDisk();
+      // Delete transient status frames orphaned by an UNGRACEFUL exit (S2). Each
+      // leftover frame is provably stale now (the session is idle / will
+      // repaint). A graceful exit already cleared the set in its sweep, so this
+      // is normally a no-op. Uses the pre-reattach snapshot (the setters clobber
+      // the live persisted set during reattach).
+      reconcileTransientFrames(orphanedTransientFrames);
+    },
+    healActiveSessions: () => {
+      // When this boot ADOPTED an already-running opencode, that server may
+      // still hold a `telegramBot` registration from the previous bot
+      // generation pointing at a now-dead port. Reconcile against the live MCP
+      // status and force-refresh any directory that is not `connected`.
+      // Fire-and-forget: boot must not block on opencode HTTP round-trips
+      // before `bot.launch()`. The compaction-plugin step goes FIRST: recreating
+      // a directory instance so it loads the plugin drops that directory's MCP
+      // registration, which this same reconcile then restores.
+      const openCodeAdapter = getAdapter('opencode');
+      void (async () => {
+        await openCodeAdapter.activateCompactionPluginForActiveSessions?.();
+        await openCodeAdapter.reconcileSchedulerMcpForActiveSessions?.();
+      })().catch((e) =>
+        console.warn('[scheduler] MCP reconcile failed:', e instanceof Error ? e.message : e),
+      );
+      // Same class of self-heal on the Claude side: a json-stream session that
+      // SURVIVED this restart can hold a `telegramBot` entry latched `failed`,
+      // and the CLI never retries a failed MCP server. Fire-and-forget.
+      healSchedulerMcpForActiveSessions();
+    },
+    // Boot catch-up replay: arm every persisted job, fire one catch-up per
+    // missed run. Independent of the MCP server (delivery does not need it).
+    rearmSchedules: () =>
+      schedulerEngine!.rearmAll().catch((e) => console.error('[scheduler] rearmAll failed:', e)),
+  });
 
   // 5a. Refresh pinned banners for every binding. Threads that have a
   //     stored `pinnedStatusMessageId` get their banner edited in place;
