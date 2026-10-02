@@ -152,15 +152,22 @@ export class RequestWakeUpEngine {
   }
 
   /**
-   * @description A usage-limit wait will not end by itself (auto-resume is off, or
-   * the operator skipped this resume): nothing wakes the open request any more,
-   * the backstop included — a reminder would only spend an attempt against the
-   * same limit. The operator's next message supersedes it.
+   * @description A usage-limit wait will not end by itself (auto-resume is off,
+   * the operator skipped or disabled this resume, or the bot gave up after its
+   * last attempt): nothing wakes the open request any more, the backstop
+   * included — a reminder would only spend an attempt against the same limit.
+   * The operator's next message supersedes it. Never rejects: its callers are
+   * command handlers and the error path, and a failed write is logged instead.
    */
   async stopWakingForLimitWait(key: SessionKey): Promise<void> {
     this.watched.delete(keyToString(key));
     const request = this.deps.ledger.getOpenRequest(key);
-    if (request) await this.deps.ledger.updateOpenRequest(request.id, { isWakeStopped: true, nextWakeAt: undefined });
+    if (!request) return;
+    try {
+      await this.deps.ledger.updateOpenRequest(request.id, { isWakeStopped: true, nextWakeAt: undefined });
+    } catch (e) {
+      logWakeUpFailure(`stopping the wake-ups of ${request.id}`, e);
+    }
   }
 
   /** @description One poll over the watched turns; exported for tests (the timer calls it). */
@@ -178,6 +185,8 @@ export class RequestWakeUpEngine {
   }
 
   private async pollWatchedTurn(keyString: string, turn: WatchedConversation): Promise<void> {
+    // Replaced or dropped since this poll took its snapshot: the newer watch (if any) decides.
+    if (this.watched.get(keyString) !== turn) return;
     const request = this.deps.ledger.getOpenRequest(turn.key);
     if (request?.id !== turn.requestId) {
       // Answered, cancelled or superseded meanwhile — nothing left to watch.
@@ -239,9 +248,14 @@ export class RequestWakeUpEngine {
 
   private async applyDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<void> {
     if (decision.kind === 'none') return;
-    const updated = await this.deps.ledger.updateOpenRequest(request.id, decision.update);
+    let isStoppedMeanwhile = false;
+    const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
+      // `request` is a snapshot: a limit wait may have stopped the wake-ups since (no alert either).
+      isStoppedMeanwhile = current.isWakeStopped;
+      return isStoppedMeanwhile ? {} : decision.update;
+    });
     // Closed or superseded while we decided: the decision belonged to the old one.
-    if (!updated) return;
+    if (!updated || isStoppedMeanwhile) return;
     if (decision.kind === 'followUpLater') return;
     if (decision.kind === 'alert') {
       await this.raiseAlert(key, updated, decision.reason);
@@ -268,8 +282,10 @@ export class RequestWakeUpEngine {
   ): Promise<WakeUpDeliveryOutcome> {
     try {
       if (!(await this.deps.prepareWakeUpSession(key))) return 'failed';
-      // The resume took a while: a reminder for a request that closed (or was replaced) meanwhile is stale.
-      if (this.deps.ledger.getOpenRequest(key)?.id !== request.id) return 'requestGone';
+      // The resume took a while: a reminder for a request that closed, was replaced
+      // or stopped being woken meanwhile is stale.
+      const current = this.deps.ledger.getOpenRequest(key);
+      if (current?.id !== request.id || current.isWakeStopped) return 'requestGone';
       await this.deps.forwardWakeUp(key, request, reason);
       return 'delivered';
     } catch (e) {

@@ -50,7 +50,10 @@ export interface SessionTurnProbe {
   isActive: boolean;
   isBusy: boolean;
   hasUnconsumedInput: boolean | null;
-  /** A pending native question, a compaction, an armed retry / limit wait. */
+  /**
+   * A pending native question, a compaction, an armed retry / limit wait, a
+   * wedged-turn recovery in flight, or a retry whose "continue" nudge is on its way.
+   */
   isTurnEndBlocked: boolean;
 }
 

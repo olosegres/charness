@@ -441,6 +441,86 @@ describe('usage limits', () => {
     assert.deepEqual(alerts, [], 'not a technical failure: the operator decides when to continue');
     assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id, 'the request stays open');
   });
+
+  it('a stop that lands while the session is being resumed for a reminder drops it: no reminder, no alert', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    duringWakeUpResume = async () => { await engine.stopWakingForLimitWait(topicKey); };
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id);
+  });
+
+  it('a stop that lands after the sweep took its snapshot wins over the stale decision', async () => {
+    const stoppedKey: SessionKey = makeTelegramKey(-1001234567890, 43);
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const first = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await ledger.createRequest(stoppedKey, { kind: 'message', attributes: {} });
+    // While the first conversation's session is resumed, the operator skips the second one's resume.
+    duringWakeUpResume = async () => {
+      duringWakeUpResume = null;
+      await engine.stopWakingForLimitWait(stoppedKey);
+    };
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, [{ requestId: first.id, reason: 'backstop' }]);
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getOpenRequest(stoppedKey)?.wakeCount, 0, 'the stale decision changed nothing');
+  });
+
+  it('a watch replaced while a poll is running is not judged by the turn it replaced', async () => {
+    const nudgedKey: SessionKey = makeTelegramKey(-1001234567890, 43);
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const first = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    const nudged = await ledger.createRequest(nudgedKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, first.id);
+    await engine.trackForwardedTurn(nudgedKey, nudged.id);
+    // A backend without a consumption signal: both turns were seen working.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: null, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    // While the first conversation is reminded, a retry's "continue" nudge reaches the second.
+    duringWakeUpResume = async () => {
+      duringWakeUpResume = null;
+      await engine.trackContinuationTurn(nudgedKey, { isCountersReset: false });
+    };
+
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+
+    assert.deepEqual(wakeUps, [{ requestId: first.id, reason: 'silentTurn' }], 'the nudge\'s turn has not started yet');
+    assert.equal(ledger.getOpenRequest(nudgedKey)?.silentTurnCount, 0);
+  });
+
+  it('stopping the wake-ups never rejects, even when the ledger write fails', async () => {
+    const ledger = await createLedger();
+    await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    const engine = new RequestWakeUpEngine({
+      ledger: {
+        getOpenRequest: (key) => ledger.getOpenRequest(key),
+        listOpenRequests: () => ledger.listOpenRequests(),
+        updateOpenRequest: async () => { throw new Error('state.json is read-only'); },
+        closeRequest: (id, reason) => ledger.closeRequest(id, reason),
+        recordAlert: (key, id, alertRef) => ledger.recordAlert(key, id, alertRef),
+      },
+      probeTurn: () => probe,
+      prepareWakeUpSession: async () => true,
+      forwardWakeUp: recordWakeUp,
+      deliverAlert: async () => null,
+      backstopMs,
+      now: () => nowMs,
+    });
+
+    await engine.stopWakingForLimitWait(topicKey);
+  });
 });
 
 describe('the backstop', () => {

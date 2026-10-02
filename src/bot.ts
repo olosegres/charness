@@ -1583,6 +1583,8 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     void replyToThread(key, t('apiRetry.giveUp', { attempts: action.attempts }));
     void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
     apiRetryTimers.delete(k);
+    // Nothing resumes this limit any more: a reminder would hit it and arm a fresh episode, endlessly.
+    if (cls.kind === 'usageLimit') void requestWakeUpEngine?.stopWakingForLimitWait(key);
     return;
   }
 
