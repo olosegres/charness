@@ -64,6 +64,36 @@ describe('dispatchAdapterEvent (R2)', () => {
     const wiredEvents = [...wiring.matchAll(/adapter\.on\('([A-Za-z]+)'/g)].map((match) => match[1]).sort();
     assert.deepEqual(wiredEvents, [...adapterEventNames].sort());
   });
+
+  it('every event an adapter emits has a route', () => {
+    const adaptersDir = path.join(__dirname, '..', 'adapters');
+    const emittedEvents = new Set<string>();
+    const dynamicEmitSites: string[] = [];
+    for (const fileName of fs.readdirSync(adaptersDir).filter((name) => name.endsWith('.ts'))) {
+      const source = fs.readFileSync(path.join(adaptersDir, fileName), 'utf8');
+      for (const match of source.matchAll(/\.emit\(\s*(?:'([A-Za-z]+)'|([A-Za-z]+))/g)) {
+        if (match[1]) emittedEvents.add(match[1]);
+        else dynamicEmitSites.push(`${fileName}: ${match[2]}`);
+      }
+    }
+    const unrouted = [...emittedEvents].filter((name) => !(adapterEventNames as readonly string[]).includes(name));
+    assert.deepEqual(unrouted, [], 'an emitted event with no route is dropped for every platform');
+    // The one name not written as a literal: `emitToAllActiveSessions`, whose parameter is typed `'error'`.
+    assert.deepEqual(dynamicEmitSites, ['openCodeAdapter.ts: eventName']);
+  });
+
+  it('every handler the bot wires goes through the gate under its own event name', () => {
+    const bot = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+    const wiringStart = bot.indexOf('registerAdapterEventHandlers({');
+    assert.notEqual(wiringStart, -1);
+    const wiring = bot.slice(wiringStart, bot.indexOf('\n  });', wiringStart));
+    const handlers = [...wiring.matchAll(/\n {4}on([A-Z][A-Za-z]*): \([^)]*\) => (\S+\([^,]*, '[A-Za-z]+')?/g)];
+    const wiredEvents = handlers.map((match) => match[1].charAt(0).toLowerCase() + match[1].slice(1));
+    assert.deepEqual([...wiredEvents].sort(), [...adapterEventNames].sort());
+    for (const [index, match] of handlers.entries()) {
+      assert.equal(match[2], `dispatchAdapterEvent(key, '${wiredEvents[index]}'`, `on${match[1]} bypasses the gate`);
+    }
+  });
 });
 
 describe('the send queue refuses a Jira conversation (R2)', () => {

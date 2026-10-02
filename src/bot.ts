@@ -9691,11 +9691,6 @@ function handleAgentError(key: SessionKey, error: Error): void {
 }
 
 /**
- * @description `started` from the adapter — flip the pinned banner to
- * `running` and refresh its model row. Fired by both `claudeCliAdapter`
- * and `openCodeAdapter` (`emit('started', key)`).
- */
-/**
  * @description What a session of another platform leaves behind when it closes
  * or stops — the request-side half of {@link handleAgentClosed} /
  * {@link handleAgentStopped}, without their Telegram frames and notices (J2b, R2).
@@ -9707,6 +9702,11 @@ function clearForeignSessionState(key: SessionKey): void {
   clearThreadContextMarker(key);
 }
 
+/**
+ * @description `started` from the adapter — flip the pinned banner to
+ * `running` and refresh its model row. Fired by both `claudeCliAdapter`
+ * and `openCodeAdapter` (`emit('started', key)`).
+ */
 function handleAgentStarted(key: SessionKey): void {
   updatePinnedStatus(key).catch(() => {});
   // A fresh/adopted session arms the compact-on-idle watchdog (F2); it won't fire

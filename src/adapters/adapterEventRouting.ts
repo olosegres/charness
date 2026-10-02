@@ -40,7 +40,7 @@ export type AdapterEventName = (typeof adapterEventNames)[number];
  */
 export type ForeignKeyEventRoute = 'none' | 'requestSide' | 'all';
 
-export const foreignKeyEventRoutes: Readonly<Record<AdapterEventName, ForeignKeyEventRoute>> = {
+export const foreignKeyEventRoutes = {
   // Output marks a turn under way (the wake-ups' busy-onset); the stream itself is display.
   output: 'requestSide',
   status: 'none',
@@ -59,19 +59,26 @@ export const foreignKeyEventRoutes: Readonly<Record<AdapterEventName, ForeignKey
   started: 'none',
   // Logged; there is no topic to post it to.
   error: 'requestSide',
-};
+} as const satisfies Readonly<Record<AdapterEventName, ForeignKeyEventRoute>>;
+
+/** The events whose foreign-key route is a dedicated request-side handler. */
+type RequestSideEventName = {
+  [E in AdapterEventName]: (typeof foreignKeyEventRoutes)[E] extends 'requestSide' ? E : never;
+}[AdapterEventName];
 
 /**
  * @description Run an adapter event's handler for its conversation's platform:
  * `onAll` for a Telegram key, else what {@link foreignKeyEventRoutes} says.
  */
-export function dispatchAdapterEvent(
+export function dispatchAdapterEvent<E extends AdapterEventName>(
   key: SessionKey,
-  eventName: AdapterEventName,
+  eventName: E,
   onAll: () => void,
-  onRequestSide?: () => void,
+  // Required for exactly the `requestSide` events: a route without its handler,
+  // or a handler its route never runs, is a compile error, not a silent drop.
+  ...onRequestSide: E extends RequestSideEventName ? [onRequestSide: () => void] : []
 ): void {
-  const route = checkIsTelegramKey(key) ? 'all' : foreignKeyEventRoutes[eventName];
+  const route: ForeignKeyEventRoute = checkIsTelegramKey(key) ? 'all' : foreignKeyEventRoutes[eventName];
   if (route === 'all') onAll();
-  else if (route === 'requestSide') onRequestSide?.();
+  else if (route === 'requestSide') onRequestSide[0]?.();
 }
