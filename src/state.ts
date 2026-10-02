@@ -18,7 +18,7 @@ import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './ut
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import type { ScheduleRecord } from './scheduler/types';
-import type { OpenRequestState } from './requests/types';
+import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import type { Locale } from './i18n';
 
 /**
@@ -404,6 +404,14 @@ export interface StateV1 {
    * valid — a missing value is an empty set.
    */
   openRequests?: Record<string, OpenRequestState>;
+  /**
+   * Alerts of CLOSED requests that are not released yet (Telegram: still
+   * pinned), keyed by request id. A request that closes while it holds an alert
+   * lands here in the same save as its close, and leaves only once the release
+   * succeeded — so a crash between the close and the unpin re-releases at the
+   * next boot instead of leaving the pin forever. Optional — absent when empty.
+   */
+  unreleasedRequestAlerts?: Record<string, UnreleasedRequestAlert>;
   /**
    * Boot-recovery markers: per {@link SessionKey} string, the `stdout.jsonl`
    * identity the recovery last armed a limit wait from (see
@@ -2044,6 +2052,29 @@ export class StateStore {
       }
       this.scheduleSave();
     });
+  }
+
+  /** @description The alerts of closed requests still to release (a copy). */
+  getUnreleasedRequestAlerts(): Record<string, UnreleasedRequestAlert> {
+    return { ...(this.state.unreleasedRequestAlerts ?? {}) };
+  }
+
+  /**
+   * @description Record that a closed request's alert still needs releasing.
+   * Synchronous on purpose: the ledger calls it inside the close's own locked
+   * step, so it rides the same save as the close.
+   */
+  addUnreleasedRequestAlert(requestId: string, alert: UnreleasedRequestAlert): void {
+    (this.state.unreleasedRequestAlerts ??= {})[requestId] = alert;
+    this.scheduleSave();
+  }
+
+  /** @description The alert of `requestId` was released; forget it. */
+  removeUnreleasedRequestAlert(requestId: string): void {
+    if (!this.state.unreleasedRequestAlerts?.[requestId]) return;
+    delete this.state.unreleasedRequestAlerts[requestId];
+    if (Object.keys(this.state.unreleasedRequestAlerts).length === 0) delete this.state.unreleasedRequestAlerts;
+    this.scheduleSave();
   }
 
   // ── handled limit episodes (boot-recovery marker) ──

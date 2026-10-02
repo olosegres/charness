@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
 import { createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { releaseClosedRequestAlert, type AnswerSinks, type RequestAnswerDelivery } from '../platform/answerSink';
+import { releaseRequestAlert, type AnswerSinks, type RequestAnswerDelivery } from '../platform/answerSink';
 import type { SendMessagesToThreadOptions, SendMessagesToThreadResult } from '../utils/messageSendService';
 
 const topicKey = makeTelegramKey(-1001234567890, 42);
@@ -97,27 +97,17 @@ describe('createTelegramAnswerSink', () => {
     assert.equal((await unsendable.deliverAlert(topicKey, alert)).ok, false);
   });
 
-  it('releasing a closed request\'s alert unpins exactly that message', async () => {
+  it('releasing an alert unpins exactly that message; an unserved platform rejects so it is kept', async () => {
     const unpinned: number[] = [];
     const sink = createTelegramAnswerSink(createDeps({ unpinMessage: async (_key, messageId) => { unpinned.push(messageId); } }));
     const sinks: AnswerSinks = new Map([['telegram', sink]]);
-    const closed = {
-      id: 'req_AbCd1234',
-      origin: { kind: 'message' as const, attributes: {} },
-      createdAt: 1,
-      progressAnswerCount: 0,
-      silentTurnCount: 2,
-      wakeCount: 1,
-      isWakeStopped: true,
-      conversationKey: keyToString(topicKey),
-      closedAt: 2,
-      closeReason: 'final' as const,
-    };
 
-    releaseClosedRequestAlert(sinks, closed);
-    releaseClosedRequestAlert(sinks, { ...closed, alertRef: alertMessageId.toString() });
-    await new Promise((resolve) => setImmediate(resolve));
-
+    await releaseRequestAlert(sinks, { conversationKey: keyToString(topicKey), alertRef: alertMessageId.toString() });
     assert.deepEqual(unpinned, [alertMessageId]);
+
+    await assert.rejects(
+      releaseRequestAlert(new Map(), { conversationKey: keyToString(topicKey), alertRef: alertMessageId.toString() }),
+      /no answer sink serves/,
+    );
   });
 });

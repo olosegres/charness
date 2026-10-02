@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideWedgeRecovery } from '../utils/wedgeRecovery';
+import { checkIsReplayablePrompt, decideWedgeRecovery } from '../utils/wedgeRecovery';
 
 describe('decideWedgeRecovery', () => {
   it('tier 0 → resend into the SAME session (transient stall, dialog intact)', () => {
@@ -60,5 +60,22 @@ describe('decideWedgeRecovery', () => {
       decideWedgeRecovery({ tier, hasReplayPrompt: true, canFork: true }),
     );
     assert.deepEqual(path, ['resend', 'fork', 'restart', 'giveUp']);
+  });
+});
+
+describe('checkIsReplayablePrompt', () => {
+  const genuinePrompt = { isSlashCommand: false, isRecoveryReplay: false, isRequestReminder: false };
+
+  it('a genuine new prompt becomes the one to replay', () => {
+    assert.equal(checkIsReplayablePrompt(genuinePrompt), true);
+  });
+
+  it('a request reminder keeps the request\'s prompt and the recovery tier', () => {
+    assert.equal(checkIsReplayablePrompt({ ...genuinePrompt, isRequestReminder: true }), false);
+  });
+
+  it('a slash command and the recovery replay itself are never cached', () => {
+    assert.equal(checkIsReplayablePrompt({ ...genuinePrompt, isSlashCommand: true }), false);
+    assert.equal(checkIsReplayablePrompt({ ...genuinePrompt, isRecoveryReplay: true }), false);
   });
 });

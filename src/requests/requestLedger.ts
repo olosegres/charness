@@ -11,6 +11,7 @@ import type {
   RequestLookup,
   RequestOrigin,
   RequestOriginKind,
+  UnreleasedRequestAlert,
 } from './types';
 
 /**
@@ -65,7 +66,16 @@ export class RequestLedgerNotLoadedError extends Error {
 }
 
 /** The part of the state store the ledger reads and writes. */
-export type RequestLedgerStore = Pick<StateStore, 'getOpenRequests' | 'getOpenRequest' | 'updateOpenRequest' | 'flush'>;
+export type RequestLedgerStore = Pick<
+  StateStore,
+  | 'getOpenRequests'
+  | 'getOpenRequest'
+  | 'updateOpenRequest'
+  | 'flush'
+  | 'getUnreleasedRequestAlerts'
+  | 'addUnreleasedRequestAlert'
+  | 'removeUnreleasedRequestAlert'
+>;
 
 /**
  * @name RequestLedgerDeps
@@ -76,11 +86,11 @@ export type RequestLedgerStore = Pick<StateStore, 'getOpenRequests' | 'getOpenRe
 export interface RequestLedgerDeps {
   store: RequestLedgerStore;
   /**
-   * Called once for every request that closes, by any path (an answer, a newer
-   * request, a cancellation) — after its history line is written. The boot uses
-   * it to release a platform alert the request still holds. Must not throw.
+   * Release the alert a closed request held (Telegram: unpin it). The ledger
+   * keeps the alert in `state.json` until this resolves, and retries every one
+   * still unreleased at the next load — a rejection leaves it for that retry.
    */
-  onRequestClosed?: (record: ClosedRequestRecord) => void;
+  releaseAlert?: (alert: UnreleasedRequestAlert) => Promise<void>;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -161,7 +171,9 @@ export class RequestLedger {
   private readonly history: RotatingJsonlFile<ClosedRequestRecord>;
   private readonly now: () => number;
   private readonly closedIndexMaxSize: number;
-  private readonly onRequestClosed: ((record: ClosedRequestRecord) => void) | undefined;
+  private readonly releaseAlert: ((alert: UnreleasedRequestAlert) => Promise<void>) | undefined;
+  /** Request ids whose alert release is under way, so two paths never release one twice at once. */
+  private readonly alertReleasesInFlight = new Set<string>();
   /** Insertion order = close order, so the first key is always the oldest. */
   private readonly closedById = new Map<string, ClosedRequestRecord>();
   private loadPromise: Promise<void> | null = null;
@@ -176,7 +188,7 @@ export class RequestLedger {
     this.history = deps.history ?? new RotatingJsonlFile(getDefaultHistoryPath(), requestHistoryMaxBytes);
     this.now = deps.now ?? Date.now;
     this.closedIndexMaxSize = deps.closedIndexMaxSize ?? closedRequestIndexMaxSize;
-    this.onRequestClosed = deps.onRequestClosed;
+    this.releaseAlert = deps.releaseAlert;
   }
 
   /**
@@ -210,11 +222,20 @@ export class RequestLedger {
     let droppedOpenCount = 0;
     for (const entry of this.getOpenEntries()) {
       if (!this.closedById.has(entry.request.id)) continue;
+      // It closed before the crash, so its alert was never handed to a release.
+      // Listed BEFORE the entry goes, so no crash between the two can lose it.
+      const { alertRef } = entry.request;
+      if (alertRef !== undefined) {
+        this.store.addUnreleasedRequestAlert(entry.request.id, { conversationKey: keyToString(entry.key), alertRef });
+      }
       await this.store.updateOpenRequest(entry.key, (current) => (current?.id === entry.request.id ? undefined : current));
       droppedOpenCount += 1;
     }
     this.isLoaded = true;
     this.resolveLoaded();
+    for (const [requestId, alert] of Object.entries(this.store.getUnreleasedRequestAlerts())) {
+      void this.releaseAlertOf(requestId, alert);
+    }
     console.log(
       `[requests] ledger loaded: ${this.getOpenEntries().length} open, ${this.closedById.size} recently closed known` +
         (droppedOpenCount > 0 ? `, ${droppedOpenCount} open entries already closed dropped` : '') +
@@ -249,7 +270,48 @@ export class RequestLedger {
       console.warn(`[requests] could not append ${record.id} to ${this.history.filePath}; it is closed in memory only`);
     }
     this.indexClosed(record);
-    this.onRequestClosed?.(record);
+    if (record.alertRef !== undefined) {
+      this.queueAlertRelease(record.id, { conversationKey: record.conversationKey, alertRef: record.alertRef });
+    }
+  }
+
+  /**
+   * Record a closed request's alert as still to release (synchronously, so it
+   * rides the close's own save), then release it.
+   */
+  private queueAlertRelease(requestId: string, alert: UnreleasedRequestAlert): void {
+    this.store.addUnreleasedRequestAlert(requestId, alert);
+    void this.releaseAlertOf(requestId, alert);
+  }
+
+  /** Release an alert; it leaves the unreleased list only once the release succeeded. */
+  private async releaseAlertOf(requestId: string, alert: UnreleasedRequestAlert): Promise<void> {
+    if (!this.releaseAlert || this.alertReleasesInFlight.has(requestId)) return;
+    this.alertReleasesInFlight.add(requestId);
+    try {
+      await this.releaseAlert(alert);
+      this.store.removeUnreleasedRequestAlert(requestId);
+    } catch (e) {
+      console.warn(`[requests] releasing the alert of ${requestId} failed; retried at the next start:`, e instanceof Error ? e.message : e);
+    } finally {
+      this.alertReleasesInFlight.delete(requestId);
+    }
+  }
+
+  /**
+   * @description Store the alert a request now holds, DURABLY (flushed): a crash
+   * that lost it would leave the alert pinned forever. Resolves `false` when the
+   * request closed meanwhile — its close found no alert, so it is released here.
+   */
+  async recordAlert(key: SessionKey, requestId: string, alertRef: string): Promise<boolean> {
+    this.assertLoaded();
+    const stored = await this.updateOpenRequest(requestId, { alertRef });
+    if (stored) {
+      await this.store.flush();
+      return true;
+    }
+    this.queueAlertRelease(requestId, { conversationKey: keyToString(key), alertRef });
+    return false;
   }
 
   /** Remember a closed request by id, forgetting the oldest beyond the window. */

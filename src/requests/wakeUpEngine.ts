@@ -35,22 +35,25 @@ export const turnActivityPersistStepMs = 60_000;
 
 /**
  * @name RequestWakeUpEngineDeps
- * @description `deliverWakeUp` forwards the reminder into the conversation's
+ * @description `prepareWakeUpSession` makes sure the conversation has a live
  * session (resuming a dead one) and resolves `false` when it could not;
- * `deliverAlert` tells a person and resolves the platform's alert handle, `null`
- * when nothing needs releasing later; `releaseAlert` undoes it (used here only
- * when the request closed while its alert was being posted — every other close
- * releases through the ledger's close callback). `now` is injectable for tests.
+ * `forwardWakeUp` then writes the reminder into it. They are two steps because
+ * a resume takes seconds, and the request may be answered, cancelled or
+ * superseded meanwhile — the engine re-checks in between. `deliverAlert` tells a
+ * person and resolves the platform's alert handle, `null` when nothing needs
+ * releasing later (the ledger stores and releases it). `now` is injectable for tests.
  */
 export interface RequestWakeUpEngineDeps {
-  ledger: Pick<RequestLedger, 'getOpenRequest' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest'>;
+  ledger: Pick<RequestLedger, 'getOpenRequest' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
-  deliverWakeUp: (key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason) => Promise<boolean>;
+  prepareWakeUpSession: (key: SessionKey) => Promise<boolean>;
+  forwardWakeUp: (key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason) => Promise<void>;
   deliverAlert: (key: SessionKey, request: OpenRequestState, reason: RequestAlertReason) => Promise<string | null>;
-  releaseAlert: (key: SessionKey, alertRef: string) => Promise<void>;
   backstopMs: number;
   now?: () => number;
 }
+
+type WakeUpDeliveryOutcome = 'delivered' | 'failed' | 'requestGone';
 
 interface WatchedConversation extends WatchedTurn {
   key: SessionKey;
@@ -215,30 +218,40 @@ export class RequestWakeUpEngine {
       await this.raiseAlert(key, updated, decision.reason);
       return;
     }
-    if (await this.deliverWakeUpSafely(key, updated, decision.reason)) {
+    const outcome = await this.deliverWakeUpSafely(key, updated, decision.reason);
+    if (outcome === 'delivered') {
       await this.trackForwardedTurn(key, updated.id);
       return;
     }
+    if (outcome === 'requestGone') return;
     const stopped = await this.deps.ledger.updateOpenRequest(updated.id, { isWakeStopped: true, nextWakeAt: undefined });
     if (stopped) await this.raiseAlert(key, stopped, 'wakeFailed');
   }
 
-  /** A reminder that threw on its way out did not reach the session: same as one that could not be delivered. */
-  private async deliverWakeUpSafely(key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason): Promise<boolean> {
+  /**
+   * Resume the session if needed, re-check the request, forward the reminder. A
+   * step that threw did not reach the session: same as one that could not.
+   */
+  private async deliverWakeUpSafely(
+    key: SessionKey,
+    request: OpenRequestState,
+    reason: RequestWakeUpReason,
+  ): Promise<WakeUpDeliveryOutcome> {
     try {
-      return await this.deps.deliverWakeUp(key, request, reason);
+      if (!(await this.deps.prepareWakeUpSession(key))) return 'failed';
+      // The resume took a while: a reminder for a request that closed (or was replaced) meanwhile is stale.
+      if (this.deps.ledger.getOpenRequest(key)?.id !== request.id) return 'requestGone';
+      await this.deps.forwardWakeUp(key, request, reason);
+      return 'delivered';
     } catch (e) {
       logWakeUpFailure(`delivering the reminder for ${request.id}`, e);
-      return false;
+      return 'failed';
     }
   }
 
   private async raiseAlert(key: SessionKey, request: OpenRequestState, reason: RequestAlertReason): Promise<void> {
     const alertRef = await this.deps.deliverAlert(key, request, reason);
-    if (alertRef === null) return;
-    const stored = await this.deps.ledger.updateOpenRequest(request.id, { alertRef });
-    // It closed while the alert was going out: its close found no alert to release.
-    if (!stored) await this.deps.releaseAlert(key, alertRef);
+    if (alertRef !== null) await this.deps.ledger.recordAlert(key, request.id, alertRef);
   }
 }
 

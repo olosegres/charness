@@ -292,9 +292,10 @@ import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBo
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
-import { releaseClosedRequestAlert, type AnswerSinks } from './platform/answerSink';
+import { releaseRequestAlert, type AnswerSinks } from './platform/answerSink';
+import { createSessionTurnProbe } from './requests/sessionTurnProbe';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
-import { getRequestBackstopMs, type SessionTurnProbe } from './requests/wakeUpRules';
+import { getRequestBackstopMs } from './requests/wakeUpRules';
 import { buildWakeUpReminder } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
@@ -359,7 +360,7 @@ import {
   type ReminderTextCaptureRoute,
 } from './utils/reminderFlow';
 import { decideRetryAction, classifyAgentApiError } from './apiErrorRetry';
-import { decideWedgeRecovery } from './utils/wedgeRecovery';
+import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import { spawn as spawnPty, type IPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from './utils/resolveBinary';
 import {
@@ -1515,6 +1516,13 @@ const lastForwardedPrompt = new Map<string, string>();
  * prompt is forwarded. See {@link decideWedgeRecovery}.
  */
 const wedgeRecoveryTier = new Map<string, number>();
+/**
+ * Threads whose wedge recovery ({@link handleNoResponse}) is under way: from the
+ * `noResponse` event until the replay was forwarded (or the recovery gave up).
+ * The request wake-up probe reads it as "not a turn end" — the wedged idle looks
+ * like one, and a reminder on top would be a second recovery of the same turn.
+ */
+const wedgeRecoveriesInFlight = new Set<string>();
 
 /**
  * @description `apiError` from the adapter — arm (or escalate) an auto-retry, or
@@ -1708,7 +1716,11 @@ function cancelApiRetry(key: SessionKey): void {
  * assistant activity), so this never disturbs a working thread.
  */
 function handleNoResponse(key: SessionKey): void {
-  void withThreadLocale(key, () => handleNoResponseWithLocale(key));
+  const k = keyToString(key);
+  // Marked synchronously, in the same tick as the wedged idle: the wake-up poll
+  // must never see that idle without the recovery already claiming it.
+  wedgeRecoveriesInFlight.add(k);
+  void withThreadLocale(key, () => handleNoResponseWithLocale(key)).finally(() => wedgeRecoveriesInFlight.delete(k));
 }
 
 async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
@@ -4752,7 +4764,7 @@ async function forwardPromptToAgent(
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
-  options: { isRecoveryReplay?: boolean; replyContext?: string } = {},
+  options: { isRecoveryReplay?: boolean; isRequestReminder?: boolean; replyContext?: string } = {},
 ): Promise<void> {
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
@@ -4767,10 +4779,17 @@ async function forwardPromptToAgent(
       : text;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
-  // Skip slash commands (not worth replaying) and the recovery replay itself
-  // (keeps the once-per-episode guard intact). A genuine new prompt also opens a
-  // fresh recovery episode (clears the guard).
-  if (!options.isRecoveryReplay && !checkShouldSkipPreambleForText(text)) {
+  // Skip slash commands (not worth replaying), the recovery replay itself (keeps
+  // the once-per-episode guard intact) and a request reminder (the request's own
+  // prompt stays the one to replay). A genuine new prompt also opens a fresh
+  // recovery episode (clears the guard).
+  if (
+    checkIsReplayablePrompt({
+      isSlashCommand: checkShouldSkipPreambleForText(text),
+      isRecoveryReplay: options.isRecoveryReplay ?? false,
+      isRequestReminder: options.isRequestReminder ?? false,
+    })
+  ) {
     lastForwardedPrompt.set(keyToString(key), body);
     wedgeRecoveryTier.delete(keyToString(key));
   }
@@ -13601,33 +13620,6 @@ function createAnswerSinks(): AnswerSinks {
 }
 
 /**
- * @description What the wake-up engine needs to know about a conversation's
- * session right now. "Not a turn end" covers a pending native question (OpenCode
- * and Claude json-stream keep it in `pendingQuestions`; a Claude TUI selector or
- * login code prompt is read off the pane by the adapter, since the question pin
- * in `questionPinnedMessageId` exists only when pinning succeeded), a running
- * compaction, and an API-error retry or usage-limit wait still ARMED — a fired
- * one's record outlives the wait and would hold the turn until the next message.
- */
-function getSessionTurnProbe(key: SessionKey): SessionTurnProbe {
-  const kStr = keyToString(key);
-  const adapter = getThreadAdapter(key);
-  const isActive = adapter.checkIsActive(key);
-  return {
-    isActive,
-    isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),
-    hasUnconsumedInput: adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,
-    isTurnEndBlocked:
-      pendingQuestions.has(kStr) ||
-      questionPinnedMessageId.has(kStr) ||
-      (adapter.isQuestionPending?.(key) ?? false) ||
-      (adapter.isLoginPastePending?.(key) ?? false) ||
-      threadsCompacting.has(kStr) ||
-      getArmedApiRetry(key) !== null,
-  };
-}
-
-/**
  * @description Make sure the conversation has a live session to remind: a live
  * one is used as is; a dead one is RESUMED from its persisted session id, so the
  * reminder reaches the same conversation (a fresh session would not know the
@@ -13653,16 +13645,17 @@ async function ensureSessionForWakeUp(key: SessionKey): Promise<boolean> {
 /**
  * @description Remind the agent of an open request inside its own session. Not a
  * request: it carries the open request's id and goes through the ordinary
- * prompt path (the engine only wakes an idle session, so nothing is interrupted).
+ * prompt path (the engine only wakes an idle session, so nothing is interrupted),
+ * marked as a reminder so a wedge recovery keeps replaying the request's prompt.
  */
-async function deliverRequestWakeUp(
+async function forwardRequestWakeUp(
   key: SessionKey,
   request: OpenRequestState,
   reason: RequestWakeUpReason,
-): Promise<boolean> {
-  if (!(await ensureSessionForWakeUp(key))) return false;
-  await forwardPromptToAgent(key, getThreadAdapter(key), buildWakeUpReminder({ requestId: request.id, reason }));
-  return true;
+): Promise<void> {
+  await forwardPromptToAgent(key, getThreadAdapter(key), buildWakeUpReminder({ requestId: request.id, reason }), undefined, {
+    isRequestReminder: true,
+  });
 }
 
 /**
@@ -13953,24 +13946,30 @@ export async function startBot(): Promise<void> {
   const answerSinks = createAnswerSinks();
   const requestLedger = new RequestLedger({
     store: state,
-    onRequestClosed: (record) => releaseClosedRequestAlert(answerSinks, record),
+    releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
   });
   await requestLedger.load();
   // The wake-up engine (S4) watches the turns requests start. It is created now
   // but started only once the sessions are restored (its sweep reads them).
   requestWakeUpEngine = new RequestWakeUpEngine({
     ledger: requestLedger,
-    probeTurn: getSessionTurnProbe,
-    deliverWakeUp: deliverRequestWakeUp,
+    probeTurn: createSessionTurnProbe({
+      getAdapter: getThreadAdapter,
+      checkHasPendingQuestion: (keyString) => pendingQuestions.has(keyString),
+      checkHasQuestionPin: (keyString) => questionPinnedMessageId.has(keyString),
+      checkIsCompacting: (keyString) => threadsCompacting.has(keyString),
+      getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
+      checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
+      serializeKey: keyToString,
+    }),
+    prepareWakeUpSession: ensureSessionForWakeUp,
+    forwardWakeUp: forwardRequestWakeUp,
     deliverAlert: async (key, request, reason) => {
       const sink = answerSinks.get(key.platform);
       if (!sink) return null;
       const result = await sink.deliverAlert(key, { requestId: request.id, reason, origin: request.origin });
       if (!result.ok) console.warn(`[requests] alert for ${request.id} not delivered: ${result.error}`);
       return result.ok ? (result.alertRef ?? null) : null;
-    },
-    releaseAlert: async (key, alertRef) => {
-      await answerSinks.get(key.platform)?.releaseAlert(key, alertRef);
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
   });

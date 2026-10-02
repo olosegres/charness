@@ -40,3 +40,29 @@ export function decideWedgeRecovery(state: WedgeRecoveryState): WedgeRecoveryAct
   if (state.tier === 2) return 'restart';
   return 'giveUp';
 }
+
+/**
+ * @name ForwardedPromptKind
+ * @description What a forward into the agent is, as far as wedge recovery cares.
+ */
+export interface ForwardedPromptKind {
+  /** A slash command forwarded to the agent — a control token, not worth replaying. */
+  isSlashCommand: boolean;
+  /** The recovery's own replay of the cached prompt. */
+  isRecoveryReplay: boolean;
+  /**
+   * A request wake-up reminder: the open request's original prompt (it carries
+   * the request header) stays the one to replay, and a recovery already under
+   * way for it keeps its tier — else a wedged reminder restarts the escalation.
+   */
+  isRequestReminder: boolean;
+}
+
+/**
+ * @description Whether a forward becomes the prompt a wedged session replays —
+ * caching it and opening a fresh recovery episode (tier reset). Only a genuine
+ * new prompt does.
+ */
+export function checkIsReplayablePrompt(kind: ForwardedPromptKind): boolean {
+  return !kind.isSlashCommand && !kind.isRecoveryReplay && !kind.isRequestReminder;
+}

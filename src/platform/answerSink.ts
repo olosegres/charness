@@ -1,5 +1,5 @@
 import { tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
-import type { ClosedRequestRecord, RequestAlertReason, RequestAnswerKind, RequestOrigin } from '../requests/types';
+import type { RequestAlertReason, RequestAnswerKind, RequestOrigin, UnreleasedRequestAlert } from '../requests/types';
 
 /**
  * @description The core-side contract for delivering an agent's answer to a
@@ -62,17 +62,15 @@ export interface AnswerSink {
 export type AnswerSinks = ReadonlyMap<PlatformId, AnswerSink>;
 
 /**
- * @description Release the alert a closing request still holds (Telegram: unpin
- * it), through its platform's sink. The request ledger's close callback, so every
- * close path — an answer, a newer request, a cancellation — releases it.
- * Fire-and-forget: a failed release is logged, never thrown into the close.
+ * @description Release an alert a closed request held (Telegram: unpin it),
+ * through its platform's sink. The request ledger calls it for every close and
+ * again at boot for every alert still unreleased. Rejects when this process
+ * cannot release it (its platform is not served here), so the ledger keeps the
+ * alert for a later start that can.
  */
-export function releaseClosedRequestAlert(answerSinks: AnswerSinks, record: ClosedRequestRecord): void {
-  if (record.alertRef === undefined) return;
-  const key = tryKeyFromString(record.conversationKey);
+export async function releaseRequestAlert(answerSinks: AnswerSinks, alert: UnreleasedRequestAlert): Promise<void> {
+  const key = tryKeyFromString(alert.conversationKey);
   const sink = key ? answerSinks.get(key.platform) : undefined;
-  if (!key || !sink) return;
-  void sink.releaseAlert(key, record.alertRef).catch((e) =>
-    console.warn(`[requests] releasing the alert of ${record.id} failed:`, e instanceof Error ? e.message : e),
-  );
+  if (!key || !sink) throw new Error(`no answer sink serves ${alert.conversationKey}`);
+  await sink.releaseAlert(key, alert.alertRef);
 }

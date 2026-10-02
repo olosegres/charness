@@ -337,22 +337,128 @@ describe('RequestLedger durability and the closed-id window', () => {
   });
 });
 
-describe('RequestLedger close callback', () => {
-  it('reports every close exactly once, whatever closed it', async () => {
+describe('RequestLedger close history', () => {
+  it('records every close exactly once, whatever closed it', async () => {
     const store = await createStore();
-    const closed: Array<[string, string]> = [];
-    const ledger = new RequestLedger({
-      store,
-      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
-      onRequestClosed: (record) => closed.push([record.id, record.closeReason]),
-    });
-    await ledger.load();
+    const ledger = await createLoadedLedger(store);
 
     const superseded = await ledger.createRequest(topicKey, messageOrigin);
     const answered = await ledger.createRequest(topicKey, messageOrigin);
     await ledger.closeRequest(answered.id, 'final');
     await ledger.closeRequest(answered.id, 'final');
 
-    assert.deepEqual(closed, [[superseded.id, 'superseded'], [answered.id, 'final']]);
+    assert.deepEqual(
+      readHistory().map((record) => [record.id, record.closeReason]),
+      [[superseded.id, 'superseded'], [answered.id, 'final']],
+    );
+  });
+});
+
+describe('RequestLedger alert release', () => {
+  const alertRef = '777';
+
+  function createReleasingLedger(store: StateStore, released: string[], isReleaseFailing = false): RequestLedger {
+    return new RequestLedger({
+      store,
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      releaseAlert: async (alert) => {
+        if (isReleaseFailing) throw new Error('telegram is unreachable');
+        released.push(`${alert.conversationKey}#${alert.alertRef}`);
+      },
+    });
+  }
+
+  const flushMicrotasks = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+  const releasedRef = `${keyToString(topicKey)}#${alertRef}`;
+
+  it('a recorded alert is on disk at once — no debounce wait', async () => {
+    const store = new StateStore(dataDir, { saveDebounceMs: 60_000 });
+    await store.init();
+    const ledger = createReleasingLedger(store, []);
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+
+    assert.equal(await ledger.recordAlert(topicKey, request.id, alertRef), true);
+
+    const onDisk: { openRequests?: Record<string, { alertRef?: string }> } = JSON.parse(
+      fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'),
+    );
+    assert.equal(onDisk.openRequests?.[keyToString(topicKey)]?.alertRef, alertRef);
+  });
+
+  it('closing a request releases its alert, and only then forgets it', async () => {
+    const store = await createStore();
+    const released: string[] = [];
+    const ledger = createReleasingLedger(store, released);
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+    await ledger.recordAlert(topicKey, request.id, alertRef);
+
+    await ledger.closeRequest(request.id, 'final');
+    await flushMicrotasks();
+
+    assert.deepEqual(released, [releasedRef]);
+    assert.deepEqual(store.getUnreleasedRequestAlerts(), {});
+  });
+
+  it('an alert recorded after its request closed is released at once', async () => {
+    const store = await createStore();
+    const released: string[] = [];
+    const ledger = createReleasingLedger(store, released);
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+    await ledger.closeRequest(request.id, 'final');
+
+    assert.equal(await ledger.recordAlert(topicKey, request.id, alertRef), false);
+    await flushMicrotasks();
+
+    assert.deepEqual(released, [releasedRef]);
+  });
+
+  it('a release that did not happen before the crash is done at the next load', async () => {
+    const storeBefore = await createStore();
+    const ledgerBefore = createReleasingLedger(storeBefore, [], true);
+    await ledgerBefore.load();
+    const request = await ledgerBefore.createRequest(topicKey, messageOrigin);
+    await ledgerBefore.recordAlert(topicKey, request.id, alertRef);
+    await ledgerBefore.closeRequest(request.id, 'final');
+    await flushMicrotasks();
+    await storeBefore.flush();
+    assert.ok(storeBefore.getUnreleasedRequestAlerts()[request.id], 'precondition: still to release');
+
+    const storeAfter = await createStore();
+    const released: string[] = [];
+    await createReleasingLedger(storeAfter, released).load();
+    await flushMicrotasks();
+
+    assert.deepEqual(released, [releasedRef]);
+    assert.deepEqual(storeAfter.getUnreleasedRequestAlerts(), {});
+  });
+
+  it('an open entry with an alert that the history shows closed has its alert released at load', async () => {
+    const storeBefore = await createStore();
+    const ledgerBefore = createReleasingLedger(storeBefore, []);
+    await ledgerBefore.load();
+    const request = await ledgerBefore.createRequest(topicKey, messageOrigin);
+    await ledgerBefore.recordAlert(topicKey, request.id, alertRef);
+    // The history line landed but the process died before state.json dropped the entry.
+    const closedLine: ClosedRequestRecord = {
+      ...request,
+      alertRef,
+      conversationKey: keyToString(topicKey),
+      closedAt: request.createdAt + 1,
+      closeReason: 'final',
+    };
+    fs.appendFileSync(historyPath, `${JSON.stringify(closedLine)}\n`);
+
+    const storeAfter = await createStore();
+    const released: string[] = [];
+    const ledgerAfter = createReleasingLedger(storeAfter, released);
+    await ledgerAfter.load();
+    await flushMicrotasks();
+
+    assert.equal(ledgerAfter.getOpenRequest(topicKey), undefined);
+    assert.deepEqual(released, [releasedRef]);
+    assert.deepEqual(storeAfter.getUnreleasedRequestAlerts(), {});
   });
 });

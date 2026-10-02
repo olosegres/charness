@@ -17,7 +17,7 @@ import type { SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { RequestWakeUpEngine } from '../requests/wakeUpEngine';
 import { progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
-import type { ClosedRequestRecord, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
+import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -33,8 +33,9 @@ let probe: SessionTurnProbe;
 let wakeUps: Array<{ requestId: string; reason: RequestWakeUpReason }>;
 let alerts: Array<{ requestId: string; reason: RequestAlertReason }>;
 let releasedAlerts: string[];
-let closedRecords: ClosedRequestRecord[];
 let isWakeUpDeliverable: boolean;
+/** Runs while the session is being resumed for a reminder (the resume race). */
+let duringWakeUpResume: (() => Promise<void>) | null;
 
 async function createLedger(): Promise<RequestLedger> {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
@@ -43,25 +44,29 @@ async function createLedger(): Promise<RequestLedger> {
     store,
     history: new RotatingJsonlFile(path.join(dataDir, 'requests.jsonl'), requestHistoryMaxBytes),
     now: () => nowMs,
-    onRequestClosed: (record) => closedRecords.push(record),
+    releaseAlert: async (alert) => { releasedAlerts.push(alert.alertRef); },
   });
   await ledger.load();
   return ledger;
 }
 
+const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason): Promise<void> => {
+  wakeUps.push({ requestId: request.id, reason });
+};
+
 function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
   return new RequestWakeUpEngine({
     ledger,
     probeTurn: () => probe,
-    deliverWakeUp: async (_key, request, reason) => {
-      wakeUps.push({ requestId: request.id, reason });
+    prepareWakeUpSession: async () => {
+      await duringWakeUpResume?.();
       return isWakeUpDeliverable;
     },
+    forwardWakeUp: recordWakeUp,
     deliverAlert: async (_key, request, reason) => {
       alerts.push({ requestId: request.id, reason });
       return alertMessageRef;
     },
-    releaseAlert: async (_key, alertRef) => { releasedAlerts.push(alertRef); },
     backstopMs,
     now: () => nowMs,
   });
@@ -85,8 +90,8 @@ beforeEach(() => {
   wakeUps = [];
   alerts = [];
   releasedAlerts = [];
-  closedRecords = [];
   isWakeUpDeliverable = true;
+  duringWakeUpResume = null;
 });
 
 afterEach(() => {
@@ -130,8 +135,11 @@ describe('silent turns', () => {
     await endTurnSilently(engine);
 
     await ledger.closeRequest(request.id, 'final');
+    await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(closedRecords.at(-1)?.alertRef, alertMessageRef);
+    const closed = ledger.getRequest(request.id);
+    assert.equal(closed?.isOpen === false ? closed.request.alertRef : null, alertMessageRef);
+    assert.deepEqual(releasedAlerts, [alertMessageRef]);
   });
 
   it('a request closed while its alert went out has the alert released at once', async () => {
@@ -139,12 +147,12 @@ describe('silent turns', () => {
     const engine = new RequestWakeUpEngine({
       ledger,
       probeTurn: () => probe,
-      deliverWakeUp: async () => true,
+      prepareWakeUpSession: async () => true,
+      forwardWakeUp: recordWakeUp,
       deliverAlert: async (_key, request) => {
         await ledger.closeRequest(request.id, 'final'); // the answer lands meanwhile
         return alertMessageRef;
       },
-      releaseAlert: async (_key, alertRef) => { releasedAlerts.push(alertRef); },
       backstopMs,
       now: () => nowMs,
     });
@@ -153,6 +161,7 @@ describe('silent turns', () => {
     await engine.trackForwardedTurn(topicKey, request.id);
 
     await endTurnSilently(engine);
+    await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(releasedAlerts, [alertMessageRef]);
   });
@@ -184,18 +193,53 @@ describe('silent turns', () => {
   });
 });
 
+describe('the resume race', () => {
+  it('a request answered while its session was being resumed gets no reminder and no alert', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    duringWakeUpResume = async () => { await ledger.closeRequest(request.id, 'final'); };
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, [], 'the stale reminder is dropped');
+    assert.deepEqual(alerts, [], 'a dropped reminder is not a failure');
+  });
+
+  it('a request replaced while its session was being resumed: no reminder for either', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    let newer: OpenRequestState | undefined;
+    duringWakeUpResume = async () => {
+      newer = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    };
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+    const open = ledger.getOpenRequest(topicKey);
+    assert.equal(open?.id, newer?.id);
+    assert.notEqual(open?.id, request.id);
+    assert.equal(open?.isWakeStopped, false, 'the newer request is not marked stopped');
+  });
+});
+
 describe('failures', () => {
   it('a reminder that throws on its way out counts as undeliverable: alert, stop', async () => {
     const ledger = await createLedger();
     const engine = new RequestWakeUpEngine({
       ledger,
       probeTurn: () => probe,
-      deliverWakeUp: async () => { throw new Error('tmux is gone'); },
+      prepareWakeUpSession: async () => true,
+      forwardWakeUp: async () => { throw new Error('tmux is gone'); },
       deliverAlert: async (_key, request, reason) => {
         alerts.push({ requestId: request.id, reason });
         return alertMessageRef;
       },
-      releaseAlert: async () => {},
       backstopMs,
       now: () => nowMs,
     });
@@ -217,12 +261,9 @@ describe('failures', () => {
         if (key.thread === topicKey.thread) throw new Error('unknown adapter');
         return probe;
       },
-      deliverWakeUp: async (_key, request, reason) => {
-        wakeUps.push({ requestId: request.id, reason });
-        return true;
-      },
+      prepareWakeUpSession: async () => true,
+      forwardWakeUp: recordWakeUp,
       deliverAlert: async () => null,
-      releaseAlert: async () => {},
       backstopMs,
       now: () => nowMs,
     });
@@ -412,7 +453,8 @@ describe('closing ends the watch', () => {
     await engine.cancelConversation(topicKey);
 
     assert.equal(ledger.getOpenRequest(topicKey), undefined);
-    assert.equal(closedRecords.at(-1)?.closeReason, 'cancelled');
+    const closed = ledger.getRequest(request.id);
+    assert.equal(closed?.isOpen === false ? closed.request.closeReason : null, 'cancelled');
     await endTurnSilently(engine);
     nowMs += 2 * backstopMs;
     await engine.sweepUnwatchedRequests();

@@ -136,3 +136,13 @@ export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop'
  *  - `wakeFailed` — the session could not be reached to deliver a reminder.
  */
 export type RequestAlertReason = 'silentTurns' | 'wakeCap' | 'wakeFailed';
+
+/**
+ * @name UnreleasedRequestAlert
+ * @description The alert of a closed request that still has to be released: its
+ * conversation (serialized key) and the platform's alert handle.
+ */
+export interface UnreleasedRequestAlert {
+  conversationKey: string;
+  alertRef: string;
+}
