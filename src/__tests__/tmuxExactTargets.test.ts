@@ -7,8 +7,10 @@
  * sessions run on; the server is killed at the end. Each case also runs the OLD
  * bare target, which must still reach the neighbour — that is the bug.
  *
- * A second check reads the adapters' source: every `-t` goes through one of the
- * two target helpers, so a new call site cannot reintroduce a bare name.
+ * A second check reads every source file under `src/`: each `-t` goes through
+ * the helper matching its command's target kind, so a new call site cannot
+ * reintroduce a bare name, nor hand a pane command a session target — which
+ * tmux refuses and `tmuxAsync` swallows, dropping the keystroke silently.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -140,18 +142,44 @@ describe('exact tmux targets on a private tmux server', () => {
   });
 });
 
-describe('every tmux -t in the adapters names its target exactly', () => {
-  const adapterFiles = ['claudeCliAdapter.ts', 'claudeJsonStreamAdapter.ts', 'terminalAdapter.ts'];
-  const targetArgRe = /'-t',\s*([^,)]+)/g;
-  const exactTargetRe = /^getTmux(Session|Pane)Target\(/;
+describe('every tmux -t in the source names its target exactly', () => {
+  const srcDir = path.join(__dirname, '..');
+  const testDirName = path.basename(__dirname);
+  const targetArgRe = /['"]-t['"],\s*([^,)]+)/g;
+  const tmuxCommandRe = /tmux(?:Async|OrThrowAsync)\(\s*['"]([a-z-]+)['"]/g;
+  /** Commands whose `-t` is a target-session; every other tmux command takes a pane or window. */
+  const sessionTargetCommands = new Set(['kill-session', 'has-session']);
 
-  it('through getTmuxSessionTarget / getTmuxPaneTarget only', () => {
+  function getSourceFiles(): string[] {
+    return fs
+      .readdirSync(srcDir, { recursive: true, encoding: 'utf8' })
+      .filter((file) => file.endsWith('.ts') && !file.startsWith(`${testDirName}${path.sep}`));
+  }
+
+  /** The tmux command a `-t` at `targetIndex` belongs to: the nearest tmux call opened before it. */
+  function getTmuxCommandBefore(source: string, targetIndex: number): string | null {
+    let command: string | null = null;
+    for (const match of source.matchAll(tmuxCommandRe)) {
+      if (match.index > targetIndex) break;
+      command = match[1];
+    }
+    return command;
+  }
+
+  it('through the helper matching the command, getTmuxSessionTarget or getTmuxPaneTarget', () => {
     let targetCount = 0;
-    for (const file of adapterFiles) {
-      const source = fs.readFileSync(path.join(__dirname, '..', 'adapters', file), 'utf8');
+    for (const file of getSourceFiles()) {
+      const source = fs.readFileSync(path.join(srcDir, file), 'utf8');
       for (const match of source.matchAll(targetArgRe)) {
         targetCount += 1;
-        assert.match(match[1].trim(), exactTargetRe, `${file}: bare tmux target ${match[1].trim()}`);
+        const command = getTmuxCommandBefore(source, match.index);
+        const expectedHelper =
+          command !== null && sessionTargetCommands.has(command) ? 'getTmuxSessionTarget' : 'getTmuxPaneTarget';
+        const target = match[1].trim();
+        assert.ok(
+          target.startsWith(`${expectedHelper}(`),
+          `${file}: tmux ${command ?? '<no tmux call>'} -t ${target} — name it with ${expectedHelper}`,
+        );
       }
     }
     assert.ok(targetCount > 0, 'the scan found the tmux call sites');
