@@ -61,10 +61,17 @@ describe('getPreloadGuardErrors', () => {
     assert.deepEqual(getPreloadGuardErrors({ CONNECTORS: 'jira', ENV_FILE: '/srv/instance.env' }), []);
     assert.deepEqual(getPreloadGuardErrors({}), []);
   });
+
+  it('a CONNECTORS the shell sets but that does not parse is refused before any file is read', () => {
+    // A typo must not pass as "not Jira" and let the shared config files (another bot's token) be read.
+    assert.match(getPreloadGuardErrors({ CONNECTORS: 'jira,Telegram' }).join('\n'), /unknown connector/);
+    assert.match(getPreloadGuardErrors({ CONNECTORS: 'slack', ENV_FILE: '/srv/instance.env' }).join('\n'), /unknown connector/);
+  });
 });
 
 describe('getConnectorGuardErrors', () => {
-  const guard = (env: Record<string, string>, hasJiraConfig = true): string[] => getConnectorGuardErrors({ env, hasJiraConfig });
+  const guard = (env: Record<string, string>, hasJiraConfig = true): string[] =>
+    getConnectorGuardErrors({ env, hasJiraConfig, envFileAtLaunch: env.ENV_FILE });
 
   it('a well-formed Jira-only instance and a plain Telegram one pass', () => {
     assert.deepEqual(guard(jiraOnlyEnv), []);
@@ -86,6 +93,20 @@ describe('getConnectorGuardErrors', () => {
     assert.match(guard(withoutSocket).join('\n'), /set TMUX_SOCKET_NAME/);
   });
 
+  it('ENV_FILE that only an env file set is refused — the instance read the shared files', () => {
+    // A shared config defining ENV_FILE + CONNECTORS would otherwise pass as an isolated start.
+    const jiraErrors = getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: undefined });
+    assert.deepEqual(jiraErrors, ['ENV_FILE is set inside an env file: it may only come from the launching environment']);
+    // An env file that redirects ENV_FILE elsewhere (a hot worker would read that one).
+    assert.match(
+      getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: '/srv/other.env' }).join('\n'),
+      /ENV_FILE is set inside an env file/,
+    );
+    // Also on a Telegram instance, and never when the value came from the launch.
+    assert.equal(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: undefined }).length, 1);
+    assert.deepEqual(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: '/srv/x.env' }), []);
+  });
+
   it('a tmux socket name may not be the default server or a path, on any instance', () => {
     for (const socketName of ['default', '../live', '/tmp/live.sock', '']) {
       assert.match(guard({ ...jiraOnlyEnv, TMUX_SOCKET_NAME: socketName }).join('\n'), /TMUX_SOCKET_NAME/, socketName);
@@ -93,7 +114,7 @@ describe('getConnectorGuardErrors', () => {
     assert.match(guard({ TMUX_SOCKET_NAME: 'default' }).join('\n'), /TMUX_SOCKET_NAME/);
   });
 
-  it('a Jira-only instance refuses inherited Atlassian variables, naming them and nothing more', () => {
+  it('a Jira-only instance refuses Atlassian variables in its environment, naming them and nothing more', () => {
     const errors = guard({ ...jiraOnlyEnv, ATLASSIAN_API_TOKEN: placeholderSecret, ATLASSIAN_SITE_NAME: placeholderSecret });
     assert.equal(errors.length, 1);
     assert.match(errors[0], /ATLASSIAN_API_TOKEN, ATLASSIAN_SITE_NAME/);
@@ -153,6 +174,22 @@ describe('loadEnvFiles with ENV_FILE', () => {
     assert.throws(() => loadEnvFiles(tmpRoot), /absolute path/);
     process.env.ENV_FILE = path.join(tmpRoot, 'missing.env');
     assert.throws(() => loadEnvFiles(tmpRoot), /does not exist/);
+    assert.equal(process.env.J3_GLOBAL_VALUE, undefined);
+  });
+
+  it('an ENV_FILE that is a directory or unreadable fails instead of loading nothing', () => {
+    // dotenv reports these read failures instead of throwing; a silent empty load
+    // would start the instance on the inherited environment.
+    const instanceDirectory = path.join(tmpRoot, 'instance');
+    fs.mkdirSync(instanceDirectory);
+    process.env.ENV_FILE = instanceDirectory;
+    assert.throws(() => loadEnvFiles(tmpRoot), /not a regular file/);
+
+    const unreadableFile = path.join(tmpRoot, 'unreadable.env');
+    fs.writeFileSync(unreadableFile, 'J3_INSTANCE_VALUE=from-instance\n', { mode: 0o000 });
+    process.env.ENV_FILE = unreadableFile;
+    assert.throws(() => loadEnvFiles(tmpRoot), /could not be read/);
+    assert.equal(process.env.J3_INSTANCE_VALUE, undefined);
     assert.equal(process.env.J3_GLOBAL_VALUE, undefined);
   });
 });
@@ -260,6 +297,8 @@ describe('the guards are wired where they must run', () => {
   it('bot.ts guards the Telegram client and filters every boot session scan by the served platforms', () => {
     const botSource = readSource('bot.ts');
     assert.match(botSource, /if \(!ENV\.isTelegramServed\) installTelegramCallGuard\(bot\.telegram\);/);
+    // The token is not even read without Telegram — a second line behind the CLI guard.
+    assert.match(botSource, /const botToken = isTelegramServed \? \(process\.env\.TELEGRAM_BOT_TOKEN \?\? ''\) : '';/);
     const scans = [...botSource.matchAll(/(.{0,60})\.listExistingTmuxSessions\(\)/g)];
     assert.ok(scans.length >= 3, 'the three tmux backends are scanned');
     for (const [, prefix] of scans) assert.match(prefix, /getServedTmuxSessions\(await \w+$/);

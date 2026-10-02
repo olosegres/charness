@@ -351,7 +351,8 @@ import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connec
  * process via `index.ts`) on any required mis-configuration so the bot
  * never silently runs in a half-broken state.
  *
- * `TELEGRAM_BOT_TOKEN` is the only normal required env var. `WORK_ROOT` is
+ * `TELEGRAM_BOT_TOKEN` is the only normal required env var — and is not read
+ * at all when `CONNECTORS` leaves the telegram connector out. `WORK_ROOT` is
  * usually supplied by the CLI wrapper as `$PWD`; the fallback here keeps a
  * direct import from silently becoming stricter than the public entrypoint.
  */
@@ -365,7 +366,8 @@ function parseEnv() {
   const connectors = connectorsParse.ok ? connectorsParse.connectors : [];
   const isTelegramServed = connectors.includes('telegram');
 
-  const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
+  // Without Telegram the token is never read, even one the CLI guard did not see.
+  const botToken = isTelegramServed ? (process.env.TELEGRAM_BOT_TOKEN ?? '') : '';
   if (isTelegramServed && !botToken) errors.push('TELEGRAM_BOT_TOKEN is required');
 
   // CHAT_MODE selects which surface(s) the instance serves: `group` (forum

@@ -40,7 +40,7 @@ export async function runBot(): Promise<void> {
   // preserved. Best-effort; never throws into a write.
   installConsoleFileTap(resolveDataDir());
 
-  if (loaded.length === 0 && !process.env.ENV_FILE) {
+  if (loaded.length === 0) {
     process.stderr.write(
       `Warning: no .env file found in $PWD or ~/.config/telegramcode/. ` +
         `Required env (TELEGRAM_BOT_TOKEN) ` +

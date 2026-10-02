@@ -44,8 +44,9 @@ function printUsage(): void {
       `  telegramcode --version, -v    Print the version\n` +
       `\n` +
       `Environment:\n` +
-      `  Loaded from ~/.config/telegramcode/.env (base) then $PWD/.env (override).\n` +
-      `  Required to start: TELEGRAM_BOT_TOKEN.\n` +
+      `  Loaded from ~/.config/telegramcode/.env (base) then $PWD/.env (override),\n` +
+      `  or with ENV_FILE=<absolute path> from that one file only.\n` +
+      `  Required to start: TELEGRAM_BOT_TOKEN (unless CONNECTORS leaves out telegram).\n` +
       `  Access = creator + admins of the served forum group (read live; no user list).\n` +
       `  ALLOWED_GROUP_ID is optional — leave it empty to auto-pair with your\n` +
       `  forum supergroup on first contact (or use /pair in the group).\n` +

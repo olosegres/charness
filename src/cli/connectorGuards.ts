@@ -19,7 +19,8 @@ import { loadEnvFiles } from './envLoader';
  *    boot kills every session it does not own): `TMUX_SOCKET_NAME` is required
  *    and may not name the default server;
  *  - acting under the operator's Atlassian identity: a Jira-only instance
- *    refuses any inherited `ATLASSIAN_*` variable.
+ *    refuses any `ATLASSIAN_*` variable in its environment (its own Jira
+ *    settings use other names).
  */
 
 export const connectorIds = ['telegram', 'jira'] as const;
@@ -36,6 +37,7 @@ const defaultTmuxSocketName = 'default';
 /** A socket NAME, never a path: `-L` puts it in tmux's own socket directory. */
 const tmuxSocketNameRe = /^[A-Za-z0-9_-]+$/;
 const atlassianEnvPrefix = 'ATLASSIAN_';
+const envFileRequiredError = 'CONNECTORS lists jira: set ENV_FILE to the instance\'s own env file (it is the only file read)';
 
 function checkIsConnectorId(name: string): name is ConnectorId {
   return connectorIds.some((id) => id === name);
@@ -66,16 +68,27 @@ type EnvReading = Readonly<Record<string, string | undefined>>;
  * @description The guard that must hold BEFORE any env file is read: an instance
  * the shell already marks as serving Jira reads its settings from `ENV_FILE`
  * only, so the shared config files (which hold a live bot's token) are never
- * opened.
+ * opened. A `CONNECTORS` the shell sets but that does not parse is refused here
+ * too: it cannot tell whether the instance was meant to serve Jira.
  */
 export function getPreloadGuardErrors(env: EnvReading): string[] {
   const parsed = parseConnectors(env.CONNECTORS);
-  if (!parsed.ok || !parsed.connectors.includes('jira') || env.ENV_FILE) return [];
-  return ['CONNECTORS lists jira: set ENV_FILE to the instance\'s own env file (it is the only file read)'];
+  if (!parsed.ok) return [parsed.error];
+  if (!parsed.connectors.includes('jira') || env.ENV_FILE) return [];
+  return [envFileRequiredError];
 }
 
-/** @description The guards on the loaded environment. Names only — never a value. */
-export function getConnectorGuardErrors(input: { env: EnvReading; hasJiraConfig: boolean }): string[] {
+/**
+ * @description The guards on the loaded environment. Names only — never a value.
+ * `envFileAtLaunch` is `ENV_FILE` as it was BEFORE the load: only that value
+ * says the instance read nothing but its own file, since a shared config file
+ * may itself define `ENV_FILE`.
+ */
+export function getConnectorGuardErrors(input: {
+  env: EnvReading;
+  hasJiraConfig: boolean;
+  envFileAtLaunch: string | undefined;
+}): string[] {
   const { env } = input;
   const parsed = parseConnectors(env.CONNECTORS);
   if (!parsed.ok) return [parsed.error];
@@ -85,8 +98,11 @@ export function getConnectorGuardErrors(input: { env: EnvReading; hasJiraConfig:
   if (!isTelegramServed && env.TELEGRAM_BOT_TOKEN) {
     errors.push('TELEGRAM_BOT_TOKEN is set but the telegram connector is off: refusing a bot token this instance must not use');
   }
-  if (isJiraServed && !env.ENV_FILE) {
-    errors.push('CONNECTORS lists jira: set ENV_FILE to the instance\'s own env file (it is the only file read)');
+  if (env.ENV_FILE !== input.envFileAtLaunch) {
+    // The env load already happened from other files; in hot mode the worker would then read a different one.
+    errors.push('ENV_FILE is set inside an env file: it may only come from the launching environment');
+  } else if (isJiraServed && !input.envFileAtLaunch) {
+    errors.push(envFileRequiredError);
   }
   if (isJiraServed && !input.hasJiraConfig) {
     errors.push(`CONNECTORS lists jira but DATA_DIR has no ${jiraConfigFileName}`);
@@ -100,7 +116,7 @@ export function getConnectorGuardErrors(input: { env: EnvReading; hasJiraConfig:
   if (isJiraServed && !isTelegramServed) {
     const atlassianNames = Object.keys(env).filter((name) => name.startsWith(atlassianEnvPrefix)).sort();
     if (atlassianNames.length > 0) {
-      errors.push(`a Jira-only instance refuses inherited Atlassian variables: ${atlassianNames.join(', ')}`);
+      errors.push(`a Jira-only instance refuses Atlassian variables in its environment: ${atlassianNames.join(', ')}`);
     }
   }
   return errors;
@@ -118,8 +134,9 @@ function exitOnGuardErrors(errors: string[]): void {
  */
 export function loadEnvWithConnectorGuards(localDirectory?: string): { loaded: string[] } {
   exitOnGuardErrors(getPreloadGuardErrors(process.env));
+  const envFileAtLaunch = process.env.ENV_FILE;
   const result = loadEnvFiles(localDirectory);
   const hasJiraConfig = fs.existsSync(path.join(resolveDataDir(), jiraConfigFileName));
-  exitOnGuardErrors(getConnectorGuardErrors({ env: process.env, hasJiraConfig }));
+  exitOnGuardErrors(getConnectorGuardErrors({ env: process.env, hasJiraConfig, envFileAtLaunch }));
   return result;
 }

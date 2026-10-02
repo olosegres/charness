@@ -21,8 +21,8 @@ case "$env_file" in
   /*) ;;
   *) echo "run-isolated: the env file must be an absolute path (got: $env_file)" >&2; exit 2 ;;
 esac
-if [ ! -r "$env_file" ]; then
-  echo "run-isolated: cannot read $env_file" >&2
+if [ ! -f "$env_file" ] || [ ! -r "$env_file" ]; then
+  echo "run-isolated: not a readable file: $env_file" >&2
   exit 2
 fi
 

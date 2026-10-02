@@ -125,8 +125,44 @@ describe('the CLI refuses a start that breaks a connector guard', () => {
     const { status, stderr } = runCli({ ENV_FILE: writeEnvFile(jiraInstance), ATLASSIAN_API_TOKEN: placeholderSecret });
 
     assert.equal(status, 1);
-    assert.match(stderr, /\[startup\] a Jira-only instance refuses inherited Atlassian variables: ATLASSIAN_API_TOKEN/);
+    assert.match(stderr, /\[startup\] a Jira-only instance refuses Atlassian variables in its environment: ATLASSIAN_API_TOKEN/);
     assert.ok(!stderr.includes(placeholderSecret));
+  });
+
+  it('an ENV_FILE that is not a readable file stops the start instead of loading nothing', () => {
+    // Loading nothing would boot on the inherited environment (here a shell bot token) as a Telegram bot.
+    const instanceDirectory = path.join(tmpRoot, 'instance');
+    fs.mkdirSync(instanceDirectory);
+
+    const { status, stderr } = runCli({ ENV_FILE: instanceDirectory, TELEGRAM_BOT_TOKEN: placeholderSecret });
+
+    assert.equal(status, 1);
+    assert.match(stderr, /ENV_FILE is not a regular file/);
+    assert.doesNotMatch(stderr, /WORK_ROOT does not exist/, 'stopped before the start went on');
+  });
+
+  it('an unparsable CONNECTORS in the shell stops before $PWD/.env could turn it into a Telegram start', () => {
+    fs.writeFileSync(path.join(tmpRoot, '.env'), `CONNECTORS=telegram\nTELEGRAM_BOT_TOKEN=${placeholderSecret}\n`);
+
+    const { status, stderr } = runCli({ CONNECTORS: 'jira,Telegram' });
+
+    assert.equal(status, 1);
+    assert.match(stderr, /\[startup\] CONNECTORS has unknown connector\(s\) Telegram/);
+    assert.doesNotMatch(stderr, /WORK_ROOT does not exist/, 'stopped before the start went on');
+  });
+
+  it('ENV_FILE set inside a shared env file does not pass for an isolated start', () => {
+    writeJiraConfig();
+    fs.writeFileSync(
+      path.join(tmpRoot, '.env'),
+      `ENV_FILE=${path.join(tmpRoot, 'instance.env')}\nCONNECTORS=telegram,jira\nTMUX_SOCKET_NAME=isolated\nTELEGRAM_BOT_TOKEN=${placeholderSecret}\n`,
+    );
+
+    const { status, stderr } = runCli({});
+
+    assert.equal(status, 1);
+    assert.match(stderr, /\[startup\] ENV_FILE is set inside an env file/);
+    assert.doesNotMatch(stderr, /WORK_ROOT does not exist/, 'stopped before the start went on');
   });
 });
 
@@ -174,8 +210,9 @@ describe('scripts/run-isolated.sh', () => {
     assert.ok(!stdout.includes(placeholderSecret), 'no inherited secret reaches the instance');
   });
 
-  it('refuses a relative or unreadable env file', () => {
+  it('refuses a relative, missing or non-file env file', () => {
     assert.equal(runIsolated(['instance.env']).status, 2);
     assert.equal(runIsolated([path.join(tmpRoot, 'missing.env')]).status, 2);
+    assert.equal(runIsolated([tmpRoot]).status, 2);
   });
 });

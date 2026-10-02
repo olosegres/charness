@@ -63,7 +63,11 @@ export function loadEnvFiles(localDirectory = process.cwd()): { loaded: string[]
   if (envFile !== undefined) {
     if (!path.isAbsolute(envFile)) throw new Error(`ENV_FILE must be an absolute path (got "${envFile}")`);
     if (!fs.existsSync(envFile)) throw new Error(`ENV_FILE does not exist: ${envFile}`);
-    dotenv.config({ path: envFile, override: true });
+    if (!fs.statSync(envFile).isFile()) throw new Error(`ENV_FILE is not a regular file: ${envFile}`);
+    // dotenv REPORTS a read failure instead of throwing; ignoring it would start
+    // the instance on the inherited environment with nothing loaded.
+    const { error } = dotenv.config({ path: envFile, override: true });
+    if (error) throw new Error(`ENV_FILE could not be read: ${envFile} (${error.message})`);
     return { loaded: [envFile] };
   }
 
