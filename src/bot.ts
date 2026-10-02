@@ -33,7 +33,7 @@ import {
 import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters/claudeJsonStreamAdapter';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
-import type { SessionKey } from './sessionKey';
+import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
 import {
@@ -139,13 +139,24 @@ import {
 } from './connectors/telegram/inbound';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
-import type { InboundCommand } from './platform/inbound';
-import type { OutboundHints } from './platform/outbound';
+import type { InboundCommand, InboundEvent } from './platform/inbound';
+import {
+  getConnectorOutbound,
+  type ConnectorOutbound,
+  type ConnectorOutbounds,
+  type OutboundHints,
+} from './platform/outbound';
+import { createJiraConnectorOutbound } from './connectors/jira/outbound';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
+import {
+  createTelegramPrimitiveGuard,
+  getTelegramConversationLocale,
+  getTelegramPreambleGroupTitle,
+} from './connectors/telegram/foreignKeyFallbacks';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
@@ -615,6 +626,23 @@ const telegramOutbound = createTelegramConnectorOutbound({
   sendFiles: (threadKeyString, request) => sendFilesToThread(threadKeyString, request),
   encodeKey: keyToString,
 });
+
+/**
+ * Every platform's outbound (Jira connector plan J2, D19). Core sites reach a
+ * conversation only through {@link getOutboundFor}, so a Jira conversation's
+ * stream never lands in a Telegram send.
+ */
+const connectorOutbounds: ConnectorOutbounds = new Map<PlatformId, ConnectorOutbound>([
+  ['telegram', telegramOutbound],
+  ['jira', createJiraConnectorOutbound()],
+]);
+
+function getOutboundFor(key: SessionKey): ConnectorOutbound {
+  return getConnectorOutbound(connectorOutbounds, key);
+}
+
+/** The Telegram I/O primitives below return early for a conversation of another platform (D19). */
+const checkIsTelegramPrimitiveKey = createTelegramPrimitiveGuard();
 
 const adminCache = new AdminCache({
   // Routed through the connector's membership lookup rather than calling
@@ -2171,7 +2199,7 @@ function checkIsOutputStreaming(key: SessionKey): boolean {
   // The DM draft transport streams via drafts, not the output queue, so ask it
   // too — otherwise the Claude liveness loop, blind to an active draft, inserts a
   // heartbeat status frame between prose deltas and chops the draft mid-answer.
-  if (telegramOutbound.checkIsDelivering(key)) return true;
+  if (getOutboundFor(key).checkIsDelivering(key)) return true;
   const q = outputQueues.get(keyToString(key));
   if (!q) return false;
   return q.pendingOutput !== null || q.isProcessing || q.debounceTimer !== null;
@@ -2243,7 +2271,7 @@ function clearThreadQueues(key: SessionKey): void {
   // `q.pendingOutput` and the clear would otherwise null it first (S2). Both
   // transports capture + reset their in-flight state SYNCHRONOUSLY before any
   // await, so the clear below can't race the drain. Fire-and-forget.
-  void telegramOutbound.finalize(key);
+  void getOutboundFor(key).finalize(key);
   clearThreadOutputQueues(outputQueues.get(k), statusCoalescers.get(k));
   // A new session starts with empty context — forget the last-sent outputs so
   // the identical-output backstop can't suppress a legitimate repeat across a
@@ -2298,6 +2326,8 @@ function getThreadKey(ctx: Context): SessionKey | null {
  * the check is per-chat (the key's surface), not a global mode.
  */
 function checkIsGeneral(key: SessionKey): boolean {
+  // A predicate answers for a conversation of another platform instead of throwing.
+  if (!checkIsTelegramKey(key)) return false;
   const generalThreadId = checkIsDmKey(key) ? DM_GENERAL_THREAD_ID : GENERAL_THREAD_ID;
   return getTelegramThreadId(key) === generalThreadId;
 }
@@ -2335,8 +2365,8 @@ function getLocaleForContext(ctx: Context): Locale {
 }
 
 function getLocaleForKey(key: SessionKey): Locale {
-  if (!state) return defaultLocale;
-  return state.getChatLocaleOverride(getTelegramChatId(key)) ?? state.getChatTelegramLocale(getTelegramChatId(key)) ?? defaultLocale;
+  // `state` is assigned at boot; a lookup before that gets the default.
+  return getTelegramConversationLocale(key, state ?? null);
 }
 
 function withThreadLocale<T>(key: SessionKey, fn: () => T): T {
@@ -2525,7 +2555,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
   stopClaudeLiveness(key);
   // Same orphan-prevention for the typing-loader timer (it lives in the
   // message-state entry too) — covers /unbind and a deleted topic.
-  telegramOutbound.setActivity(key, 'idle');
+  getOutboundFor(key).setActivity(key, 'idle');
   threadMessageStates.delete(k);
   outputQueues.delete(k);
   clearPendingQuestion(key);
@@ -2552,7 +2582,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
   // draft text (synchronously capturing it + clearing the timers); drop the now-
   // reset per-transport state so it doesn't leak across a rebind (DM: the draft map
   // entry; group: noop).
-  telegramOutbound.dispose(key);
+  getOutboundFor(key).dispose(key);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2625,6 +2655,7 @@ function describeSendError(e: unknown): string {
  * actually pinned. Bot-owned plumbing primitive for the question pin helpers.
  */
 async function pinMessageQuiet(key: SessionKey, messageId: number, options: { disableNotification: boolean }): Promise<boolean> {
+  if (!checkIsTelegramPrimitiveKey(key, 'pinMessage')) return false;
   try {
     await enqueueSend(key, () =>
       bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, { disable_notification: options.disableNotification }),
@@ -2642,6 +2673,7 @@ async function pinMessageQuiet(key: SessionKey, messageId: number, options: { di
  * Fire-and-forget sibling of {@link pinMessageQuiet}.
  */
 async function unpinMessageQuiet(key: SessionKey, messageId: number): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'unpinMessage')) return;
   try {
     await enqueueSend(key, () =>
       bot.telegram.unpinChatMessage(getTelegramChatId(key), messageId),
@@ -2706,6 +2738,7 @@ function computePinnedStatusText(key: SessionKey): string | null {
  * directly through `enqueueSend` to skip `replyToThread`'s tracking step.
  */
 async function updatePinnedStatus(key: SessionKey): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'updatePinnedStatus')) return;
   const k = keyToString(key);
   if (unbindingKeys.has(k)) return;
   if (!shouldHavePinnedStatus(key)) return;
@@ -2835,6 +2868,7 @@ function persistPinnedStatusText(key: SessionKey, text: string): void {
  * shouldn't fail because of it.
  */
 async function clearPinnedStatus(key: SessionKey): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'clearPinnedStatus')) return;
   const k = keyToString(key);
   // Same lock as `updatePinnedStatus` so an `/unbind` mid-flight doesn't
   // race a concurrent banner refresh and leak a freshly-pinned message.
@@ -2885,6 +2919,7 @@ async function clearPinnedStatus(key: SessionKey): Promise<void> {
  * so the banner's own (silent) pin is never disturbed.
  */
 async function pinThreadQuestion(key: SessionKey, messageId: number): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'pinThreadQuestion')) return;
   const kStr = keyToString(key);
   // Hold the lock across the whole read-modify-write (F2): re-read the map INSIDE
   // the critical section so a concurrent pin/unpin for this key can't make us
@@ -2991,6 +3026,7 @@ async function replyToThread(
   extra: SendExtra = {},
   options: ReplyToThreadOptions = {},
 ): Promise<number | null> {
+  if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return null;
   const sendOnce = (sendExtra: Record<string, unknown>) => {
     const send = () =>
       bot.telegram.sendMessage(
@@ -3058,6 +3094,7 @@ async function editThreadMessage(
   text: string,
   extra: SendExtra = {},
 ): Promise<boolean> {
+  if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return false;
   const editOnce = (editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
       bot.telegram.editMessageText(
@@ -3108,6 +3145,7 @@ async function deleteThreadMessage(
   key: SessionKey,
   messageId: number,
 ): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return;
   try {
     await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
   } catch {
@@ -3128,6 +3166,7 @@ async function deleteThreadMessage(
  * longer takes a pacer permit or queues behind the thread's other sends.
  */
 async function sendThreadTypingIndicator(key: SessionKey): Promise<void> {
+  if (!checkIsTelegramPrimitiveKey(key, 'sendThreadTypingIndicator')) return;
   try {
     await sendUnpaced(key, () =>
       bot.telegram.sendChatAction(
@@ -3224,7 +3263,7 @@ function checkIsTypingLoopStuck(key: SessionKey): boolean {
   return checkIsTypingStuckByLeak({
     isAdapterBusy: checkIsAdapterBusy(key),
     isCompacting: checkIsThreadCompacting(key),
-    isTransportStreaming: telegramOutbound.checkIsDelivering(key),
+    isTransportStreaming: getOutboundFor(key).checkIsDelivering(key),
     hasPendingOutput: q?.pendingOutput != null,
     isProcessing: q?.isProcessing === true,
     hasDebounceTimer: q?.debounceTimer != null,
@@ -3557,6 +3596,7 @@ async function replyChunkWithFallback(
   plainFallback: string,
   replyMarkup?: InlineKeyboardMarkup,
 ): Promise<number | null> {
+  if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return null;
   const markupExtra = replyMarkup ? { reply_markup: replyMarkup } : {};
   const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra });
   if (id) return id;
@@ -3745,12 +3785,12 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
         /* malformed key — nothing to flush for it */
       }
     }
-    for (const key of telegramOutbound.listUnfinalizedKeys()) {
-      pendingKeys.set(keyToString(key), key);
+    for (const outbound of connectorOutbounds.values()) {
+      for (const key of outbound.listUnfinalizedKeys()) pendingKeys.set(keyToString(key), key);
     }
     flushedCount = pendingKeys.size;
     await Promise.allSettled(
-      [...pendingKeys.values()].map((key) => telegramOutbound.finalize(key)),
+      [...pendingKeys.values()].map((key) => getOutboundFor(key).finalize(key)),
     );
     // A DM-surface thread on a non-draft adapter (e.g. terminal) coalesces via
     // the group `queueOutput` path, but its transport finalize handled only the
@@ -4030,7 +4070,7 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
   clearAuthNotice(key); // session released → retire any pinned logged-out notice
   // Session is going away → no output is coming, so stop the "working" loader
   // (covers the release half of /new before its fresh start re-arms it).
-  telegramOutbound.setActivity(key, 'idle');
+  getOutboundFor(key).setActivity(key, 'idle');
   // Close any still-pending OpenCode question on the server BEFORE stopping the
   // session — a stopped session can't accept the reject, and an unrejected
   // question re-surfaces on the next reattach (`restoreOpenQuestion`). No-op for
@@ -4197,7 +4237,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // prompts, so a one-shot typing ping is enough — its `ready` notice (below)
   // tells the user the session is up; a sustained loader would dangle forever.
   // A surface with no such cue (a tracker issue, R6) ignores `starting`.
-  telegramOutbound.setActivity(key, adapter.selfGreetsOnStart ? 'working' : 'starting');
+  getOutboundFor(key).setActivity(key, adapter.selfGreetsOnStart ? 'working' : 'starting');
 
   try {
     await adapter.startSession(key, workDir, args);
@@ -4239,7 +4279,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
     // rather than replaying into a dead session. Stop the boot loader too: a
     // self-greeting start armed the sustained loader, and no output is coming.
     startupPromptBuffer.discardPrompts(kStr);
-    telegramOutbound.setActivity(key, 'idle');
+    getOutboundFor(key).setActivity(key, 'idle');
     return t('agent.start_failed', {
       label: adapter.label,
       error: e instanceof Error ? e.message : String(e),
@@ -4458,7 +4498,7 @@ async function forwardPromptToAgent(
   // delayed behind a chat-wide 429 cooldown (unlike a sent message), and (S3)
   // persists while output is streaming OR the agent is busy — self-stopping only
   // when the topic drains + idles.
-  telegramOutbound.setActivity(key, 'working');
+  getOutboundFor(key).setActivity(key, 'working');
   if (adapter.interruptAndWaitIdle) {
     await adapter.interruptAndWaitIdle(key);
   }
@@ -4502,10 +4542,11 @@ async function forwardPromptToAgent(
  * label so the agent still gets a "where" even though there is no group.
  */
 function getPreambleGroupTitle(key: SessionKey): string | undefined {
-  const cached = groupTitleCache.get(getTelegramChatId(key));
-  if (cached) return cached;
-  if (checkIsDmKey(key)) return bot.botInfo?.username ?? bot.botInfo?.first_name;
-  return undefined;
+  return getTelegramPreambleGroupTitle(key, {
+    getCachedGroupTitle: (chatId) => groupTitleCache.get(chatId),
+    checkIsDmKey,
+    getBotName: () => bot.botInfo?.username ?? bot.botInfo?.first_name,
+  });
 }
 
 function getPromptWithThreadContext(key: SessionKey, text: string): string {
@@ -8447,11 +8488,11 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   // `clearPendingQuestion` (hard teardown). OpenCode questions never reach here
   // (they use the discrete `question` event + `postPendingQuestionAt`).
   if (meta?.isQuestion) {
-    telegramOutbound.setActivity(key, 'idle');
+    getOutboundFor(key).setActivity(key, 'idle');
     // The connector owns the whole sequence: land in-flight content ABOVE the
     // question, send it as its OWN pinnable message (`keepVisible`), and pin it
     // so the muted topic fires a notification.
-    void telegramOutbound.deliver(key, { text: output, keepVisible: true }, meta);
+    void getOutboundFor(key).deliver(key, { text: output, keepVisible: true }, meta);
     markNeedsNewMessage(key);
     return;
   }
@@ -8541,7 +8582,7 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   // edit-in-place persist path; DM owns the draft-cursor manager (streaming tail
   // → draft, complete one-shot → finalize-then-post, Claude baseline →
   // queueOutput).
-  void telegramOutbound.deliver(key, { text: output }, meta);
+  void getOutboundFor(key).deliver(key, { text: output }, meta);
 
   // Bug #11: the agent may KEEP working after this chunk (which just deleted the
   // status frame). Arm the liveness loop so that once output streaming pauses
@@ -8616,7 +8657,7 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // Group mode now drains any coalesced-but-unsent output here too (S2), so the
   // status likewise lands below content rather than above a still-buffered chunk;
   // a fully-delivered turn is a no-op.
-  await telegramOutbound.finalize(key);
+  await getOutboundFor(key).finalize(key);
 
   const c = getStatusCoalesceState(key);
   c.pendingText = status;
@@ -9433,9 +9474,9 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   // queueOutput in DM. Group: drain any coalesced-but-unsent output so the answer
   // lands above the prompt rather than behind it, S2). Fire-and-forget; a
   // fully-delivered turn is a no-op for both.
-  void telegramOutbound.finalize(key);
+  void getOutboundFor(key).finalize(key);
   // The question UI replaces the "working" cue — stop the typing loader.
-  telegramOutbound.setActivity(key, 'idle');
+  getOutboundFor(key).setActivity(key, 'idle');
 
   // Audit S13 / #31: register the pending question BEFORE the async
   // network round-trip. A user hammering an inline button right after
@@ -9517,7 +9558,7 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   // which `getOpenCodeReplyRoute` already accepts. Telegram says yes; a tracker
   // comment stream will not. The keyboard itself is the connector's to build:
   // the button width cap and its elision rule are Telegram's, not the core's.
-  const keyboard = telegramOutbound.capabilities.tappableOptions
+  const keyboard = getOutboundFor(key).capabilities.tappableOptions
     ? buildQuestionOptionsKeyboard(question, (optionIndex) => `qa_${qIdx}_${optionIndex}`)
     : undefined;
 
@@ -9552,7 +9593,7 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
         // a Q1→Q2 advance (Q1 stays as a "✅" message but loses its pin).
         // Capability-gated: a surface with no pin just leaves the question as an
         // ordinary message, which is all a tracker comment can be anyway.
-        if (telegramOutbound.capabilities.pinMessages) void pinThreadQuestion(key, messageId);
+        if (getOutboundFor(key).capabilities.pinMessages) void pinThreadQuestion(key, messageId);
       } else {
         // The question advanced / was answered while our send sat in the
         // queue (a fast digit reply can beat the post — seen live 2026-06-10:
@@ -9855,89 +9896,94 @@ async function reattachExistingSessions(
       let killed = 0;
       let reconciled = 0;
       for (const { key, sessionName } of found) {
-        const binding = state.getBinding(key);
-        if (!binding) {
-          // No binding at all → genuine orphan, no thread owns it.
-          await claudeAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          continue;
-        }
-        // A thread whose resolved backend is json-stream must never re-adopt a
-        // stale tmux-claude session — kill it and let the json-stream reattach
-        // (2b) own this thread instead.
-        if (getThreadAdapterNameRaw(key) === claudeJsonStreamAdapterName) {
-          await claudeAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          continue;
-        }
-        let agent = state.getAgent(key);
-        // If state and reality disagree (agent missing, or names another
-        // adapter, or claudeSessionId is gone), try to reconstruct state
-        // from the live tmux argv before declaring the session an orphan.
-        // The running tmux session is the source of truth — `state.json`
-        // can fall out of sync if the bot crashed mid-write (the 500ms
-        // debounce never flushed) or if a previous `switchThreadAdapter`
-        // call left a leftover session of the other adapter alive.
-        const needsReconcile = !agent || agent.name !== 'claude' || !agent.claudeSessionId;
-        if (needsReconcile) {
-          const recovered = await claudeAdapter.recoverSessionIdFromTmux(sessionName);
-          if (recovered) {
-            const patched: { name: string; model?: string; claudeSessionId: string; startedAt?: string } = {
-              name: 'claude',
-              claudeSessionId: recovered,
-            };
-            if (agent?.model !== undefined) patched.model = agent.model;
-            // Carry the session-start time through the reconcile rebuild so a
-            // restart doesn't reset it (a missing one is backfilled below).
-            if (agent?.startedAt !== undefined) patched.startedAt = agent.startedAt;
-            // Drop the row first so a stale opencodeSessionId doesn't
-            // ride along into the new shape (setAgent merges).
-            await state.removeAgent(key);
-            await state.setAgent(key, patched);
-            setThreadAdapter(key, 'claude');
-            agent = state.getAgent(key);
-            reconciled += 1;
-            console.log(`[reattach] reconciled state for ${keyToString(key)} (recovered claudeSessionId=${recovered})`);
-          } else {
+        // One session's failure (a foreign key, a broken record) must not stop the others being adopted.
+        try {
+          const binding = state.getBinding(key);
+          if (!binding) {
+            // No binding at all → genuine orphan, no thread owns it.
             await claudeAdapter.killOrphanTmuxSession(sessionName);
             killed += 1;
             continue;
           }
-        }
-        // After reconcile, agent is always populated with claudeSessionId.
-        if (!agent?.claudeSessionId) {
-          await claudeAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          continue;
-        }
-        const workDirDecision = getWorkDirStartDecision(key);
-        if (!workDirDecision.ok) {
-          console.warn(`[reattach] claude ${keyToString(key)} refused: ${workDirDecision.message}`);
-          await claudeAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          if (!opts.quietReattach) {
-            replyToThread(key, workDirDecision.message).catch(() => {});
+          // A thread whose resolved backend is json-stream must never re-adopt a
+          // stale tmux-claude session — kill it and let the json-stream reattach
+          // (2b) own this thread instead.
+          if (getThreadAdapterNameRaw(key) === claudeJsonStreamAdapterName) {
+            await claudeAdapter.killOrphanTmuxSession(sessionName);
+            killed += 1;
+            continue;
           }
-          continue;
-        }
-        const workDir = workDirDecision.workDir;
-        // Snapshot the persisted watermark BEFORE adopt: the live-advance tracker
-        // starts moving it toward EOF the instant the adopted session polls, so a
-        // post-adopt read could miss a genuine recap (S1-wiring).
-        const preAdoptWatermark = state.getAgent(key)?.seenWatermark ?? null;
-        if (await claudeAdapter.adoptExistingTmuxSession(key, sessionName, workDir, agent.claudeSessionId)) {
-          adopted += 1;
-          // Fire-and-forget: the body (a Claude fs read) must not serialize the
-          // reattach scan. postReattachRecap swallows its own errors; the `.catch`
-          // is defensive.
-          void postReattachRecap(
-            key,
-            claudeAdapter,
-            workDir,
-            agent.claudeSessionId,
-            preAdoptWatermark,
-            !opts.quietReattach,
-          ).catch(() => {});
+          let agent = state.getAgent(key);
+          // If state and reality disagree (agent missing, or names another
+          // adapter, or claudeSessionId is gone), try to reconstruct state
+          // from the live tmux argv before declaring the session an orphan.
+          // The running tmux session is the source of truth — `state.json`
+          // can fall out of sync if the bot crashed mid-write (the 500ms
+          // debounce never flushed) or if a previous `switchThreadAdapter`
+          // call left a leftover session of the other adapter alive.
+          const needsReconcile = !agent || agent.name !== 'claude' || !agent.claudeSessionId;
+          if (needsReconcile) {
+            const recovered = await claudeAdapter.recoverSessionIdFromTmux(sessionName);
+            if (recovered) {
+              const patched: { name: string; model?: string; claudeSessionId: string; startedAt?: string } = {
+                name: 'claude',
+                claudeSessionId: recovered,
+              };
+              if (agent?.model !== undefined) patched.model = agent.model;
+              // Carry the session-start time through the reconcile rebuild so a
+              // restart doesn't reset it (a missing one is backfilled below).
+              if (agent?.startedAt !== undefined) patched.startedAt = agent.startedAt;
+              // Drop the row first so a stale opencodeSessionId doesn't
+              // ride along into the new shape (setAgent merges).
+              await state.removeAgent(key);
+              await state.setAgent(key, patched);
+              setThreadAdapter(key, 'claude');
+              agent = state.getAgent(key);
+              reconciled += 1;
+              console.log(`[reattach] reconciled state for ${keyToString(key)} (recovered claudeSessionId=${recovered})`);
+            } else {
+              await claudeAdapter.killOrphanTmuxSession(sessionName);
+              killed += 1;
+              continue;
+            }
+          }
+          // After reconcile, agent is always populated with claudeSessionId.
+          if (!agent?.claudeSessionId) {
+            await claudeAdapter.killOrphanTmuxSession(sessionName);
+            killed += 1;
+            continue;
+          }
+          const workDirDecision = getWorkDirStartDecision(key);
+          if (!workDirDecision.ok) {
+            console.warn(`[reattach] claude ${keyToString(key)} refused: ${workDirDecision.message}`);
+            await claudeAdapter.killOrphanTmuxSession(sessionName);
+            killed += 1;
+            if (!opts.quietReattach) {
+              replyToThread(key, workDirDecision.message).catch(() => {});
+            }
+            continue;
+          }
+          const workDir = workDirDecision.workDir;
+          // Snapshot the persisted watermark BEFORE adopt: the live-advance tracker
+          // starts moving it toward EOF the instant the adopted session polls, so a
+          // post-adopt read could miss a genuine recap (S1-wiring).
+          const preAdoptWatermark = state.getAgent(key)?.seenWatermark ?? null;
+          if (await claudeAdapter.adoptExistingTmuxSession(key, sessionName, workDir, agent.claudeSessionId)) {
+            adopted += 1;
+            // Fire-and-forget: the body (a Claude fs read) must not serialize the
+            // reattach scan. postReattachRecap swallows its own errors; the `.catch`
+            // is defensive.
+            void postReattachRecap(
+              key,
+              claudeAdapter,
+              workDir,
+              agent.claudeSessionId,
+              preAdoptWatermark,
+              !opts.quietReattach,
+            ).catch(() => {});
+          }
+        } catch (e) {
+          console.warn(`[reattach] claude ${sessionName} failed:`, e instanceof Error ? e.message : e);
         }
       }
       console.log(`[reattach] tmux: adopted ${adopted}, reconciled ${reconciled}, killed ${killed} orphans (quiet=${opts.quietReattach})`);
@@ -10009,29 +10055,34 @@ async function reattachExistingSessions(
     try {
       const found = await claudeJsonAdapter.listExistingTmuxSessions();
       for (const { key, sessionName } of found) {
-        const binding = state.getBinding(key);
-        const agent = state.getAgent(key);
-        if (!binding || agent?.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) {
-          await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
-          jsonKilled += 1;
-          continue;
-        }
-        const workDirDecision = getWorkDirStartDecision(key);
-        if (!workDirDecision.ok) {
-          console.warn(`[reattach] claude-json-stream ${keyToString(key)} refused: ${workDirDecision.message}`);
-          await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
-          jsonKilled += 1;
-          if (!opts.quietReattach) replyToThread(key, workDirDecision.message).catch(() => {});
-          continue;
-        }
-        if (await claudeJsonAdapter.adoptExistingTmuxSession(
-          key, sessionName, workDirDecision.workDir, agent.claudeSessionId, agent.jsonStreamTail ?? null,
-        )) {
-          jsonAdopted += 1;
-        } else {
-          // Dead/zombie — adopt cleaned it up itself; the resume loop below
-          // still reopens this thread from the persisted session id.
-          jsonKilled += 1;
+        // One session's failure (a foreign key, a broken record) must not stop the others being adopted.
+        try {
+          const binding = state.getBinding(key);
+          const agent = state.getAgent(key);
+          if (!binding || agent?.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) {
+            await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
+            jsonKilled += 1;
+            continue;
+          }
+          const workDirDecision = getWorkDirStartDecision(key);
+          if (!workDirDecision.ok) {
+            console.warn(`[reattach] claude-json-stream ${keyToString(key)} refused: ${workDirDecision.message}`);
+            await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
+            jsonKilled += 1;
+            if (!opts.quietReattach) replyToThread(key, workDirDecision.message).catch(() => {});
+            continue;
+          }
+          if (await claudeJsonAdapter.adoptExistingTmuxSession(
+            key, sessionName, workDirDecision.workDir, agent.claudeSessionId, agent.jsonStreamTail ?? null,
+          )) {
+            jsonAdopted += 1;
+          } else {
+            // Dead/zombie — adopt cleaned it up itself; the resume loop below
+            // still reopens this thread from the persisted session id.
+            jsonKilled += 1;
+          }
+        } catch (e) {
+          console.warn(`[reattach] claude-json-stream ${sessionName} failed:`, e instanceof Error ? e.message : e);
         }
       }
     } catch (e) {
@@ -10075,29 +10126,34 @@ async function reattachExistingSessions(
       let adopted = 0;
       let killed = 0;
       for (const { key, sessionName } of found) {
-        const binding = state.getBinding(key);
-        const agent = state.getAgent(key);
-        // No binding, or the thread isn't a terminal thread → genuine orphan.
-        if (!binding || agent?.name !== 'terminal') {
-          await terminalAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          continue;
-        }
-        const workDirDecision = getWorkDirStartDecision(key);
-        if (!workDirDecision.ok) {
-          console.warn(`[reattach] terminal ${keyToString(key)} refused: ${workDirDecision.message}`);
-          await terminalAdapter.killOrphanTmuxSession(sessionName);
-          killed += 1;
-          if (!opts.quietReattach) {
-            replyToThread(key, workDirDecision.message).catch(() => {});
+        // One session's failure (a foreign key, a broken record) must not stop the others being adopted.
+        try {
+          const binding = state.getBinding(key);
+          const agent = state.getAgent(key);
+          // No binding, or the thread isn't a terminal thread → genuine orphan.
+          if (!binding || agent?.name !== 'terminal') {
+            await terminalAdapter.killOrphanTmuxSession(sessionName);
+            killed += 1;
+            continue;
           }
-          continue;
-        }
-        if (await terminalAdapter.adoptExistingTmuxSession(key, sessionName, workDirDecision.workDir)) {
-          adopted += 1;
-        } else {
-          // Adopt failed (zombie pane / vanished) — it killed the session itself.
-          killed += 1;
+          const workDirDecision = getWorkDirStartDecision(key);
+          if (!workDirDecision.ok) {
+            console.warn(`[reattach] terminal ${keyToString(key)} refused: ${workDirDecision.message}`);
+            await terminalAdapter.killOrphanTmuxSession(sessionName);
+            killed += 1;
+            if (!opts.quietReattach) {
+              replyToThread(key, workDirDecision.message).catch(() => {});
+            }
+            continue;
+          }
+          if (await terminalAdapter.adoptExistingTmuxSession(key, sessionName, workDirDecision.workDir)) {
+            adopted += 1;
+          } else {
+            // Adopt failed (zombie pane / vanished) — it killed the session itself.
+            killed += 1;
+          }
+        } catch (e) {
+          console.warn(`[reattach] terminal ${sessionName} failed:`, e instanceof Error ? e.message : e);
         }
       }
       console.log(`[reattach] terminal: adopted ${adopted}, killed ${killed} orphans (quiet=${opts.quietReattach})`);
@@ -10717,7 +10773,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = tryKeyFromString(threadKeyString);
       return key === null
         ? sendFilesToThread(threadKeyString, request)
-        : telegramOutbound.deliverFile(key, request);
+        : getOutboundFor(key).deliverFile(key, request);
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),

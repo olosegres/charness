@@ -25,6 +25,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   configureSchedulerMcpInjection,
   resetSchedulerMcpInjection,
@@ -73,6 +74,22 @@ describe('prepareMcpFlags — scheduler injection inert', () => {
     assert.equal(configPaths(flags).length, 1, 'exactly the group config, no scheduler');
     // The single config is the group tmp, NOT a scheduler tmp.
     assert.match(configPaths(flags)[0], /-group\.json$/);
+  });
+});
+
+describe('prepareMcpFlags — strict MCP config per platform (Jira connector plan J2, D17)', () => {
+  it('a Jira session starts with --strict-mcp-config ahead of its own configs', async () => {
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ mcpServers: {} }));
+    const flags = await prepareMcpFlags({ key: makeJiraKey('PROJ-12'), dataDir });
+    assert.equal(flags[0], '--strict-mcp-config');
+    assert.equal(flags.filter((flag) => flag === '--strict-mcp-config').length, 1);
+    assert.match(configPaths(flags)[0], /-group\.json$/, 'DATA_DIR/mcp.json still rides along');
+  });
+
+  it('a Telegram session keeps the user and project MCP servers', async () => {
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ mcpServers: {} }));
+    const flags = await prepareMcpFlags({ key, dataDir });
+    assert.ok(!flags.includes('--strict-mcp-config'));
   });
 });
 

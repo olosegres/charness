@@ -29,6 +29,7 @@ import {
   type SchedulerScope,
 } from '../scheduler/mcpSurface';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const secret = 'c'.repeat(64);
 const topicKey = makeTelegramKey(-1001234567890, 42);
@@ -154,5 +155,33 @@ describe('the boot gate', () => {
     const result = CallToolResultSchema.parse(await pending);
     assert.equal(result.isError === true, false);
     assert.deepEqual(compactCalls, [keyToString(topicKey)]);
+  });
+});
+
+describe('the tool set per platform (Jira connector plan J2, D18)', () => {
+  const neutralToolNames = ['answer_request', 'compact_conversation'];
+  const telegramOnlyToolNames = ['schedule_create', 'schedule_list', 'schedule_cancel', 'send_file_to_user', 'send_messages_to_user'];
+
+  it('a Jira session sees only answer_request and compact_conversation, with instructions naming no Telegram tool', async () => {
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
+
+    const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames, [...neutralToolNames].sort());
+    const instructions = client.getInstructions() ?? '';
+    assert.match(instructions, /answer_request/);
+    for (const name of telegramOnlyToolNames) assert.doesNotMatch(instructions, new RegExp(name), name);
+    assert.doesNotMatch(instructions, /Telegram/);
+  });
+
+  it('a Telegram session and an OpenCode folder session keep every tool', async () => {
+    for (const scope of [
+      { kind: 'thread' as const, threadKey: keyToString(topicKey) },
+      { kind: 'dir' as const, directory: sharedFolder },
+    ]) {
+      const client = await connectAgent(scope);
+      const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
+      for (const name of [...neutralToolNames, ...telegramOnlyToolNames]) assert.ok(toolNames.includes(name), `${scope.kind}: ${name}`);
+      assert.match(client.getInstructions() ?? '', /schedule_create/);
+    }
   });
 });

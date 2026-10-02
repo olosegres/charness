@@ -31,6 +31,11 @@ import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
 import { buildClaudeSchedulerMcpConfig } from './scheduler/injection';
 
+/** The platform whose sessions keep the user's and project's own MCP servers. */
+const telegramPlatform = 'telegram';
+/** Claude Code: use only the `--mcp-config` files, ignore every other MCP configuration. */
+const strictMcpConfigFlag = '--strict-mcp-config';
+
 export interface PrepareMcpOptions {
   key: SessionKey;
   dataDir: string;
@@ -179,9 +184,14 @@ function writeGeneratedTmp(config: unknown, tmpPath: string): string | null {
  * {@link buildClaudeSchedulerMcpConfig} returns `null`, so the output is
  * byte-identical to the pre-scheduler behavior — only the user's group/thread
  * configs are emitted.
+ *
+ * A session of any platform but Telegram starts with `--strict-mcp-config`
+ * (Jira connector plan J2, D17): it gets exactly the configs passed here — the
+ * bot's MCP and `DATA_DIR/mcp.json` — and nothing from the user or project MCP
+ * config, whose servers reach other tenants under the operator's own keys.
  */
 export async function prepareMcpFlags(opts: PrepareMcpOptions): Promise<string[]> {
-  const flags: string[] = [];
+  const flags: string[] = opts.key.platform === telegramPlatform ? [] : [strictMcpConfigFlag];
 
   const groupPath = writeExpandedTmp(
     groupMcpSource(opts.dataDir),

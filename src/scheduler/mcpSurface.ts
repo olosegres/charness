@@ -11,7 +11,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { StateStore } from '../state';
-import { keyFromString, type SessionKey } from '../sessionKey';
+import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import {
@@ -113,18 +113,42 @@ const mcpServerVersion = '1.0.0';
  * and does NOT repeat the per-tool argument recipes: each tool's own description
  * already carries those in full. Kept terse on purpose.
  */
-const mcpServerInstructions = `This MCP lets the agent act on its own Telegram topic.
+/** The instruction bullets that hold on every platform (the two platform-neutral tools). */
+const compactConversationInstruction =
+  '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
+const answerRequestInstruction =
+  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request.';
+
+const telegramInstructions = `This MCP lets the agent act on its own Telegram topic.
 
 When to use it:
 • The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat.
 • You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document, never .webm/.mov — those render as GIFs or don't play); transcode first if needed (the tool description has the ffmpeg recipe).
 • You want to deliver SEVERAL discrete messages (each as its own Telegram message, e.g. a per-item news digest) → send_messages_to_user. Each item can optionally attach ONE file/photo/video (text becomes its caption).
-• The user EXPLICITLY asks to compact/shrink/summarize this conversation's context → compact_conversation. Only on an explicit request, never on your own judgement.
+${compactConversationInstruction}
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
-• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. The requester may not see your plain text, so anything they must read goes through answer_request.
+${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request.
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
+
+/** For a conversation on a tracker: the requester sees nothing but the answers. */
+const neutralInstructions = `This MCP connects the agent to the conversation that asked for its work.
+
+When to use it:
+${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.
+${compactConversationInstruction}
+
+Each tool's own description has the exact argument recipe.`;
+
+/**
+ * @description The connect-time instructions for a session of `platform`: only
+ * a Telegram session has the scheduling and send-to-topic tools, so only its
+ * instructions name them (Jira connector plan J2, D18).
+ */
+export function buildMcpServerInstructions(platform: PlatformId | null): string {
+  return platform === 'telegram' ? telegramInstructions : neutralInstructions;
+}
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */
 const maxNameLength = 200;
@@ -171,6 +195,16 @@ export function resolveSchedulerMcpPort(
 }
 
 /** Serialise a scope to its canonical cleartext form (the string the HMAC signs). */
+/**
+ * @description The platform of the conversations a scope reaches. A `dir:`
+ * scope is an OpenCode registration, which only Telegram topics use today. A
+ * thread key no codec reads gets the narrower, platform-neutral tool set.
+ */
+export function getSchedulerScopePlatform(scope: SchedulerScope): PlatformId | null {
+  if (scope.kind === 'dir') return 'telegram';
+  return tryKeyFromString(scope.threadKey)?.platform ?? null;
+}
+
 export function serializeSchedulerScope(scope: SchedulerScope): string {
   return scope.kind === 'thread' ? `thread:${scope.threadKey}` : `dir:${scope.directory}`;
 }
@@ -1223,13 +1257,17 @@ function buildRequestServer(
   scope: SchedulerScope,
   requestSignal: AbortSignal | undefined,
 ): McpServer {
+  const platform = getSchedulerScopePlatform(scope);
   const server = new McpServer(
     { name: mcpServerName, version: mcpServerVersion },
-    { instructions: mcpServerInstructions },
+    { instructions: buildMcpServerInstructions(platform) },
   );
-  registerSchedulerTools(server, deps, scope);
-  registerFileSendTool(server, deps, scope, requestSignal);
-  registerMessageSendTool(server, deps, scope, requestSignal);
+  // These deliver into a Telegram topic; for another platform's key they would throw (D18).
+  if (platform === 'telegram') {
+    registerSchedulerTools(server, deps, scope);
+    registerFileSendTool(server, deps, scope, requestSignal);
+    registerMessageSendTool(server, deps, scope, requestSignal);
+  }
   registerCompactConversationTool(server, deps, scope);
   registerAnswerRequestTool(server, deps, scope);
   return server;

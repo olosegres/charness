@@ -13,7 +13,7 @@
  * edit-in-place vs draft-cursor streaming. Those are connector-internal.
  */
 
-import type { SessionKey } from '../sessionKey';
+import type { PlatformId, SessionKey } from '../sessionKey';
 import type { SendFilesToThreadOptions, SendFilesToThreadResult } from '../utils/fileSendService';
 
 /**
@@ -214,4 +214,19 @@ export interface ConnectorOutbound {
   listUnfinalizedKeys(): SessionKey[];
   /** What this surface can do. Read by the core to pick the rich or degraded path. */
   readonly capabilities: ConnectorCapabilities;
+}
+
+/** @description The outbound of each platform this process serves. */
+export type ConnectorOutbounds = ReadonlyMap<PlatformId, ConnectorOutbound>;
+
+/**
+ * @description The outbound of a conversation's platform — the one lookup every
+ * core site goes through, so a conversation of another platform never reaches a
+ * Telegram send. Throws for a platform with no outbound here: a conversation
+ * this process holds always belongs to a platform it wired, so that is a bug.
+ */
+export function getConnectorOutbound(outbounds: ConnectorOutbounds, key: SessionKey): ConnectorOutbound {
+  const outbound = outbounds.get(key.platform);
+  if (!outbound) throw new Error(`No connector outbound for platform "${key.platform}"`);
+  return outbound;
 }
