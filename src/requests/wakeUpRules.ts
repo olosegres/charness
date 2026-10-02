@@ -68,6 +68,15 @@ export type WakeUpDecision =
   | { kind: 'followUpLater'; update: OpenRequestUpdate }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
 
+/**
+ * @description Whether anything may still wake the request: the rules' own
+ * give-up (`isWakeStopped`, for good) and a limit stop (`isLimitStopped`, until a
+ * limit wait ends with a resume) both say no.
+ */
+export function checkIsWakingStopped(request: OpenRequestState): boolean {
+  return request.isWakeStopped || request.isLimitStopped === true;
+}
+
 /** The update that stops every further wake-up of a request. */
 const stopWakingUpdate: OpenRequestUpdate = { isWakeStopped: true, nextWakeAt: undefined };
 
@@ -98,7 +107,7 @@ function getWakeOrCapDecision(
  * or `final` would have closed the request — there is nothing to decide then).
  */
 export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStart: number, nowMs: number): WakeUpDecision {
-  if (request.isWakeStopped) return { kind: 'none' };
+  if (checkIsWakingStopped(request)) return { kind: 'none' };
   if (request.progressAnswerCount > progressCountAtTurnStart) {
     return {
       kind: 'followUpLater',
@@ -124,7 +133,7 @@ export function decideUnwatchedRequest(
   nowMs: number,
   backstopMs: number,
 ): WakeUpDecision {
-  if (request.isWakeStopped || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
+  if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextWakeAt !== undefined) {
     return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
   }

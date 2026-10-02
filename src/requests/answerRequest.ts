@@ -1,5 +1,5 @@
 import { tryKeyFromString } from '../sessionKey';
-import type { AnswerSinks } from '../platform/answerSink';
+import { getAnswerSink, type AnswerSinks } from '../platform/answerSink';
 import type { RequestLedger } from './requestLedger';
 import type { RequestAnswerKind, RequestCloseReason } from './types';
 
@@ -78,12 +78,12 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
   if (!key) {
     return { ok: false, error: `Request ${args.requestId} belongs to a conversation this bot cannot address; nothing was sent.` };
   }
-  const sink = deps.answerSinks.get(key.platform);
-  if (!sink) {
+  const sinkLookup = getAnswerSink(deps.answerSinks, key);
+  if (!sinkLookup.ok) {
     return { ok: false, error: `Answers cannot be delivered to platform "${key.platform}" by this bot; nothing was sent.` };
   }
 
-  const delivery = await sink.deliverAnswer(key, {
+  const delivery = await sinkLookup.sink.deliverAnswer(key, {
     requestId: args.requestId,
     kind: args.kind,
     body: args.body,

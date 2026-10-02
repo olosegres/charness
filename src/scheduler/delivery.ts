@@ -1,5 +1,6 @@
 import { t } from '../i18n';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
+import { formatLocalClock } from '../utils/localClock';
 import {
   buildCheckFailurePrompt,
   checkAlertOutputMaxChars,
@@ -163,7 +164,7 @@ export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireCont
 /** @description The catch-up note of a fire, empty for an on-time run. */
 function getMissedNote(fireContext: FireContext): string {
   return fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined
-    ? t('schedule.missedNote', { time: formatLocalTime(fireContext.missedAtMs) })
+    ? t('schedule.missedNote', { time: formatLocalClock(fireContext.missedAtMs) })
     : '';
 }
 
@@ -182,13 +183,6 @@ export function buildCheckFailedAnnouncement(
     command: getCheckAlertCommand(job.checkCommand ?? ''),
     output: getOutputTail(output.trim(), checkAlertOutputMaxChars) || '—',
   });
-}
-
-/** Host-local `HH:MM` of an epoch-ms instant, for the catch-up "missed at" note. */
-function formatLocalTime(epochMs: number): string {
-  const at = new Date(epochMs);
-  const pad = (value: number): string => value.toString().padStart(2, '0');
-  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 /**

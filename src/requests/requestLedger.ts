@@ -91,6 +91,12 @@ export interface RequestLedgerDeps {
    * still unreleased at the next load — a rejection leaves it for that retry.
    */
   releaseAlert?: (alert: UnreleasedRequestAlert) => Promise<void>;
+  /**
+   * Called for every new request once it is durably saved, before its id is
+   * handed out — whoever opened it. The boot uses it to tell a request opened
+   * during a usage-limit wait about that wait. Must not throw.
+   */
+  onRequestCreated?: (key: SessionKey, request: OpenRequestState) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -134,6 +140,7 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
   const {
     id, conversationKey, closedAt, closeReason, origin, createdAt,
     progressAnswerCount, silentTurnCount, wakeCount, isWakeStopped, nextWakeAt, lastTurnActivityAt, alertRef,
+    isLimitStopped, limitWaitAnsweredFor,
   } = parsed;
   if (typeof id !== 'string' || typeof conversationKey !== 'string') return null;
   if (closeReason === undefined || !closeReasons.has(closeReason)) return null;
@@ -163,6 +170,8 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
     ...(typeof nextWakeAt === 'number' ? { nextWakeAt } : {}),
     ...(typeof lastTurnActivityAt === 'number' ? { lastTurnActivityAt } : {}),
     ...(typeof alertRef === 'string' ? { alertRef } : {}),
+    ...(typeof isLimitStopped === 'boolean' ? { isLimitStopped } : {}),
+    ...(typeof limitWaitAnsweredFor === 'string' ? { limitWaitAnsweredFor } : {}),
   };
 }
 
@@ -172,6 +181,7 @@ export class RequestLedger {
   private readonly now: () => number;
   private readonly closedIndexMaxSize: number;
   private readonly releaseAlert: ((alert: UnreleasedRequestAlert) => Promise<void>) | undefined;
+  private readonly onRequestCreated: ((key: SessionKey, request: OpenRequestState) => void) | undefined;
   /** Request ids whose alert release is under way, so two paths never release one twice at once. */
   private readonly alertReleasesInFlight = new Set<string>();
   /** Insertion order = close order, so the first key is always the oldest. */
@@ -189,6 +199,7 @@ export class RequestLedger {
     this.now = deps.now ?? Date.now;
     this.closedIndexMaxSize = deps.closedIndexMaxSize ?? closedRequestIndexMaxSize;
     this.releaseAlert = deps.releaseAlert;
+    this.onRequestCreated = deps.onRequestCreated;
   }
 
   /**
@@ -351,6 +362,7 @@ export class RequestLedger {
       return request;
     });
     await this.store.flush();
+    this.onRequestCreated?.(key, request);
     return request;
   }
 

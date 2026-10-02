@@ -442,6 +442,38 @@ describe('usage limits', () => {
     assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id, 'the request stays open');
   });
 
+  it('a limit stop is lifted when a limit wait ends with a resume; the rules\' own give-up is not', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.stopWakingForLimitWait(topicKey);
+    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, true);
+    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, false, 'not the rules\' give-up');
+
+    // Auto-resume back on, a later limit wait ended with its resume.
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
+    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, undefined);
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'waking again');
+
+    await ledger.updateOpenRequest(request.id, { isWakeStopped: true });
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
+    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, true, 'an alert / cap give-up stays');
+  });
+
+  it('a transient retry\'s resume does not lift a limit stop', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.stopWakingForLimitWait(topicKey);
+
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+
+    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, true);
+    assert.deepEqual(wakeUps, []);
+  });
+
   it('a stop that lands while the session is being resumed for a reminder drops it: no reminder, no alert', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

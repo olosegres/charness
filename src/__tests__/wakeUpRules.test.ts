@@ -95,12 +95,17 @@ describe('decideTurnEnd', () => {
   it('nothing happens once the rules gave up', () => {
     assert.deepEqual(decideTurnEnd(createRequest({ isWakeStopped: true }), 0, nowMs), { kind: 'none' });
   });
+
+  it('nothing happens while a limit stop holds', () => {
+    assert.deepEqual(decideTurnEnd(createRequest({ isLimitStopped: true }), 0, nowMs), { kind: 'none' });
+  });
 });
 
 describe('decideUnwatchedRequest', () => {
   it('never wakes a stopped request, a working session or a blocked one', () => {
     const due = createRequest({ createdAt: nowMs - backstopMs - 1 });
     assert.equal(decideUnwatchedRequest(createRequest({ ...due, isWakeStopped: true }), idleProbe, nowMs, backstopMs).kind, 'none');
+    assert.equal(decideUnwatchedRequest(createRequest({ ...due, isLimitStopped: true }), idleProbe, nowMs, backstopMs).kind, 'none');
     assert.equal(decideUnwatchedRequest(due, { ...idleProbe, isBusy: true }, nowMs, backstopMs).kind, 'none');
     assert.equal(decideUnwatchedRequest(due, { ...idleProbe, isTurnEndBlocked: true }, nowMs, backstopMs).kind, 'none');
   });

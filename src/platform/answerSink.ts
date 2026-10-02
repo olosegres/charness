@@ -62,6 +62,22 @@ export interface AnswerSink {
 export type AnswerSinks = ReadonlyMap<PlatformId, AnswerSink>;
 
 /**
+ * @name AnswerSinkLookup
+ * @description The conversation's sink, or why there is none.
+ */
+export type AnswerSinkLookup = { ok: true; sink: AnswerSink } | { ok: false; error: string };
+
+/**
+ * @description The sink of a conversation's platform — the ONE lookup every
+ * answer, alert and alert release goes through, so a platform this process does
+ * not serve is reported the same way everywhere.
+ */
+export function getAnswerSink(answerSinks: AnswerSinks, key: SessionKey): AnswerSinkLookup {
+  const sink = answerSinks.get(key.platform);
+  return sink ? { ok: true, sink } : { ok: false, error: `no answer sink serves platform "${key.platform}"` };
+}
+
+/**
  * @description Release an alert a closed request held (Telegram: unpin it),
  * through its platform's sink. The request ledger calls it for every close and
  * again at boot for every alert still unreleased. Rejects when this process
@@ -70,7 +86,8 @@ export type AnswerSinks = ReadonlyMap<PlatformId, AnswerSink>;
  */
 export async function releaseRequestAlert(answerSinks: AnswerSinks, alert: UnreleasedRequestAlert): Promise<void> {
   const key = tryKeyFromString(alert.conversationKey);
-  const sink = key ? answerSinks.get(key.platform) : undefined;
-  if (!key || !sink) throw new Error(`no answer sink serves ${alert.conversationKey}`);
-  await sink.releaseAlert(key, alert.alertRef);
+  if (!key) throw new Error(`no answer sink serves ${alert.conversationKey}`);
+  const lookup = getAnswerSink(answerSinks, key);
+  if (!lookup.ok) throw new Error(lookup.error);
+  await lookup.sink.releaseAlert(key, alert.alertRef);
 }

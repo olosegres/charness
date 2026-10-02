@@ -61,6 +61,18 @@ export interface OpenRequestState {
   /** Set once the wake-up rules gave up (alert or cap): nothing wakes it again. */
   isWakeStopped: boolean;
   /**
+   * Set while a usage-limit wait will not end by itself (auto-resume off, the
+   * operator skipped or disabled the resume, the bot gave up its attempts):
+   * nothing wakes the request, as with `isWakeStopped`, but this one is LIFTED
+   * when a limit wait later ends with a resume. Absent = not stopped.
+   */
+  isLimitStopped?: boolean;
+  /**
+   * Which limit wait the bot already answered this request about (see
+   * `getUsageLimitWaitIdentity`), so each request hears about each wait once.
+   */
+  limitWaitAnsweredFor?: string;
+  /**
    * The platform's handle on the alert posted when the wake-up rules gave up
    * (Telegram: the pinned message id), so the alert is released when the
    * request closes. Opaque to the core.
@@ -82,6 +94,8 @@ export type OpenRequestUpdate = Partial<
     | 'nextWakeAt'
     | 'lastTurnActivityAt'
     | 'isWakeStopped'
+    | 'isLimitStopped'
+    | 'limitWaitAnsweredFor'
     | 'alertRef'
   >
 >;

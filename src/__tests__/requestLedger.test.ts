@@ -337,6 +337,48 @@ describe('RequestLedger durability and the closed-id window', () => {
   });
 });
 
+describe('RequestLedger create hook', () => {
+  it('reports a new request once it is on disk, before its id is handed out', async () => {
+    const store = new StateStore(dataDir, { saveDebounceMs: 60_000 });
+    await store.init();
+    const created: Array<{ conversationKey: string; requestId: string; isOnDisk: boolean }> = [];
+    const ledger = new RequestLedger({
+      store,
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      onRequestCreated: (key, request) => {
+        const onDisk: { openRequests?: Record<string, { id: string }> } = JSON.parse(
+          fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'),
+        );
+        created.push({
+          conversationKey: keyToString(key),
+          requestId: request.id,
+          isOnDisk: onDisk.openRequests?.[keyToString(key)]?.id === request.id,
+        });
+      },
+    });
+    await ledger.load();
+
+    const request = await ledger.createRequest(topicKey, trackerOrigin);
+
+    assert.deepEqual(created, [{ conversationKey: keyToString(topicKey), requestId: request.id, isOnDisk: true }]);
+  });
+});
+
+describe('RequestLedger limit fields', () => {
+  it('a closed request keeps its limit stop and answered wait in the history', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+    await ledger.updateOpenRequest(request.id, { isLimitStopped: true, limitWaitAnsweredFor: 'autoResumeOff' });
+
+    await ledger.closeRequest(request.id, 'final');
+
+    const [record] = readHistory();
+    assert.equal(record?.isLimitStopped, true);
+    assert.equal(record?.limitWaitAnsweredFor, 'autoResumeOff');
+  });
+});
+
 describe('RequestLedger close history', () => {
   it('records every close exactly once, whatever closed it', async () => {
     const store = await createStore();

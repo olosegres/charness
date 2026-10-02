@@ -2,6 +2,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from './types';
 import {
+  checkIsWakingStopped,
   checkIsWatchedTurnStale,
   decideTurnEnd,
   decideUnwatchedRequest,
@@ -139,14 +140,21 @@ export class RequestWakeUpEngine {
    * API-error retry fired, or a usage-limit wait ended): watch the turn it starts
    * as a fresh one, so the idle the error left behind is never read as its end.
    * `isCountersReset` (the end of a limit wait) starts the open request's
-   * wake-up bookkeeping from zero — the wait was not the agent's silence. A
-   * request the rules already gave up on stays given up.
+   * wake-up bookkeeping from zero — the wait was not the agent's silence — and
+   * lifts a limit stop: the work continues, so does the waking. A request the
+   * rules already gave up on stays given up.
    */
   async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean }): Promise<void> {
     const request = this.deps.ledger.getOpenRequest(key);
     if (!request) return;
     if (options.isCountersReset) {
-      await this.deps.ledger.updateOpenRequest(request.id, { silentTurnCount: 0, wakeCount: 0, nextWakeAt: undefined });
+      await this.deps.ledger.updateOpenRequest(request.id, {
+        silentTurnCount: 0,
+        wakeCount: 0,
+        nextWakeAt: undefined,
+        isLimitStopped: undefined,
+        limitWaitAnsweredFor: undefined,
+      });
     }
     await this.trackForwardedTurn(key, request.id);
   }
@@ -154,17 +162,18 @@ export class RequestWakeUpEngine {
   /**
    * @description A usage-limit wait will not end by itself (auto-resume is off,
    * the operator skipped or disabled this resume, or the bot gave up after its
-   * last attempt): nothing wakes the open request any more, the backstop
-   * included — a reminder would only spend an attempt against the same limit.
-   * The operator's next message supersedes it. Never rejects: its callers are
-   * command handlers and the error path, and a failed write is logged instead.
+   * last attempt): nothing wakes the open request, the backstop included — a
+   * reminder would only spend an attempt against the same limit — until a limit
+   * wait ends with a resume or the operator's next message supersedes it. Never
+   * rejects: its callers are command handlers and the error path, and a failed
+   * write is logged instead.
    */
   async stopWakingForLimitWait(key: SessionKey): Promise<void> {
     this.watched.delete(keyToString(key));
     const request = this.deps.ledger.getOpenRequest(key);
     if (!request) return;
     try {
-      await this.deps.ledger.updateOpenRequest(request.id, { isWakeStopped: true, nextWakeAt: undefined });
+      await this.deps.ledger.updateOpenRequest(request.id, { isLimitStopped: true, nextWakeAt: undefined });
     } catch (e) {
       logWakeUpFailure(`stopping the wake-ups of ${request.id}`, e);
     }
@@ -251,7 +260,7 @@ export class RequestWakeUpEngine {
     let isStoppedMeanwhile = false;
     const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
       // `request` is a snapshot: a limit wait may have stopped the wake-ups since (no alert either).
-      isStoppedMeanwhile = current.isWakeStopped;
+      isStoppedMeanwhile = checkIsWakingStopped(current);
       return isStoppedMeanwhile ? {} : decision.update;
     });
     // Closed or superseded while we decided: the decision belonged to the old one.
@@ -285,7 +294,7 @@ export class RequestWakeUpEngine {
       // The resume took a while: a reminder for a request that closed, was replaced
       // or stopped being woken meanwhile is stale.
       const current = this.deps.ledger.getOpenRequest(key);
-      if (current?.id !== request.id || current.isWakeStopped) return 'requestGone';
+      if (current?.id !== request.id || checkIsWakingStopped(current)) return 'requestGone';
       await this.deps.forwardWakeUp(key, request, reason);
       return 'delivered';
     } catch (e) {

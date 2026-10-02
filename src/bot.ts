@@ -293,9 +293,16 @@ import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBo
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
-import { releaseRequestAlert, type AnswerSinks } from './platform/answerSink';
+import { getAnswerSink, releaseRequestAlert, type AnswerSinks } from './platform/answerSink';
 import { createSessionTurnProbe } from './requests/sessionTurnProbe';
-import { answerOpenRequestForLimitWait, type LimitWaitAnswerDeps, type UsageLimitWait } from './requests/limitWaitAnswer';
+import {
+  answerOpenRequestForLimitWait,
+  getLimitWaitForNewRequest,
+  type LimitWaitAnswerDeps,
+  type LimitWaitAnswerOutcome,
+  type UsageLimitWait,
+} from './requests/limitWaitAnswer';
+import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
 import { buildWakeUpReminder } from './requests/requestHeader';
@@ -1477,6 +1484,9 @@ interface ApiRetryTimerEntry {
    *  episode for the «skip once» button, whose stale keyboard must never cancel a
    *  later one. */
   fireAt: number;
+  /** How a usage-limit wait ends, for the limit answer of a request opened during it.
+   *  Absent for a record re-armed at boot (`state.json` keeps only the instant). */
+  limitWait?: UsageLimitWait;
 }
 
 const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
@@ -1545,17 +1555,20 @@ const wedgeRecoveriesInFlight = new Set<string>();
  * repeated Claude scrape frame or a duplicate `session.error` never double-arms.
  *
  * `/auto_continue_limits` gates the `usageLimit` class ONLY: with it OFF the bot says so
- * once and stops, arming nothing and persisting nothing. `transient` (the short
+ * once per topic (and once per open request, which also stops being woken) and
+ * stops, arming nothing and persisting nothing. `transient` (the short
  * 5/10/20-min retries) and `auth` (surfaced, never retried) are untouched by the
  * toggle — a rate-limit hiccup always wants the automatic retry.
  */
 function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   const k = keyToString(key);
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
-    if (!autoContinueOffNoticedThreads.has(k)) {
-      autoContinueOffNoticedThreads.add(k);
-      void announceLimitWait(key, { kind: 'autoResumeOff' }, t('autoContinueLimits.limitReachedDisabled'));
-    }
+    const isFirstOffNotice = !autoContinueOffNoticedThreads.has(k);
+    autoContinueOffNoticedThreads.add(k);
+    // Each repeat is offered to the open request: the dedup is per request, so one
+    // opened after the first notice still hears about the limit (and is stopped).
+    const wait: UsageLimitWait = { kind: 'autoResumeOff' };
+    void announceLimitWait(key, wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -1592,6 +1605,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   // `/auto_continue_limits` (the escape hatch: skip this one resume, or turn the
   // mode off). The transient notice gets none — it is not governed by the toggle
   // and resumes within minutes anyway.
+  let limitWait: UsageLimitWait | undefined;
   if (cls.kind === 'usageLimit') {
     // A previous episode's pinned "work resumed" notice is stale now (we are
     // limited again) → retire it, which also re-opens the one-pin guard so THIS
@@ -1600,16 +1614,10 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     // autonomous case this feature exists for — leaving the old pin up and the
     // next resume silent.
     clearLimitResumeNotice(key);
-    const text = cls.resetAt !== undefined
-      ? t('apiRetry.usageLimitResetNotice', { time: formatLocalClock(cls.resetAt) })
-      : t('apiRetry.usageLimitDelayNotice', {
-          minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
-          attempt: action.attempt,
-        });
-    const wait: UsageLimitWait = cls.resetAt !== undefined
-      ? { kind: 'afterReset', resetAt: cls.resetAt }
+    limitWait = cls.resetAt !== undefined
+      ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    void announceLimitWait(key, wait, appendAutoContinueLimitsHint(text));
+    void announceLimitWait(key, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1636,6 +1644,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     kind: cls.kind,
     firedAt: null,
     fireAt: action.fireAt,
+    limitWait,
   });
 }
 
@@ -1691,29 +1700,74 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
 /**
  * @description Post a usage-limit wait (request/answer core S5): as the bot's own
  * `progress` answer to the open request when there is one — it REPLACES the plain
- * notice, which would say the same thing twice — else, or when that answer could
- * not be delivered, as the plain notice.
+ * notice, which would say the same thing twice. The plain notice goes out only
+ * when it is due (`isPlainNoticeDue`) and no answer said it — no open request,
+ * or the answer could not be delivered.
  */
-async function announceLimitWait(key: SessionKey, wait: UsageLimitWait, plainNotice: string): Promise<void> {
-  let isAnswered = false;
+async function announceLimitWait(
+  key: SessionKey,
+  wait: UsageLimitWait,
+  texts: LimitWaitTexts,
+  isPlainNoticeDue: boolean,
+): Promise<void> {
+  let outcome: LimitWaitAnswerOutcome = 'notAnswered';
   if (requestLimitWaitAnswerDeps) {
     try {
-      isAnswered = await answerOpenRequestForLimitWait(requestLimitWaitAnswerDeps, key, wait, getLimitWaitAnswerBody(key, wait));
+      outcome = await answerOpenRequestForLimitWait(requestLimitWaitAnswerDeps, key, wait, texts.answerBody);
     } catch (e) {
       console.warn('[requests] limit answer failed:', e instanceof Error ? e.message : e);
     }
   }
-  if (!isAnswered) await replyToThread(key, plainNotice);
+  if (outcome === 'notAnswered' && isPlainNoticeDue) await replyToThread(key, texts.plainNotice);
 }
 
-/** The text of the bot's limit-wait answer, in the thread's locale. */
-function getLimitWaitAnswerBody(key: SessionKey, wait: UsageLimitWait): string {
-  if (wait.kind === 'autoResumeOff') return t('autoContinueLimits.limitReachedDisabled');
-  const text = wait.kind === 'afterReset'
-    ? t('requests.limit.answerAfterResetNotice', { time: formatLocalClock(wait.resetAt) })
-    : t('requests.limit.answerNextAttemptNotice', { time: formatLocalClock(wait.fireAt) });
-  // The pointer names a Telegram command; on another surface it would be noise.
-  return checkIsTelegramKey(key) ? appendAutoContinueLimitsHint(text) : text;
+/**
+ * @description A request opened during a usage-limit wait hears about it too
+ * (the ledger's create hook): a scheduled run or a tracker event does not cancel
+ * the wait, and without the answer — and, with auto-resume off, the stop — it
+ * would be woken straight into the limit and end in a false alert.
+ */
+function announceLimitWaitToNewRequest(key: SessionKey): void {
+  const armed = getArmedApiRetry(key);
+  const armedLimit = armed?.kind === 'usageLimit' ? armed : null;
+  const wait = getLimitWaitForNewRequest({
+    armedLimitWait: armedLimit ? { fireAt: armedLimit.fireAt, wait: armedLimit.limitWait } : null,
+    isAutoResumeOffNoticed: autoContinueOffNoticedThreads.has(keyToString(key)),
+    isAutoResumeOn: state.checkIsAutoContinueOnLimitEnabled(key),
+  });
+  if (!wait) return;
+  void withThreadLocale(key, () =>
+    announceLimitWait(key, wait, getLimitWaitTexts(key, wait, armedLimit?.attempt ?? 0), false),
+  );
+}
+
+/** The two texts a usage-limit wait is told with: the topic's plain notice and the request's answer. */
+interface LimitWaitTexts {
+  plainNotice: string;
+  answerBody: string;
+}
+
+/**
+ * @description Both texts of a limit wait, from ONE branch on how it ends, in the
+ * thread's locale. A wait ending on another day names the date. The
+ * `/auto_continue_limits` pointer names a Telegram command — elsewhere it would
+ * be noise; the "auto-resume is off" text carries its own.
+ */
+function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number): LimitWaitTexts {
+  if (wait.kind === 'autoResumeOff') {
+    const text = t('autoContinueLimits.limitReachedDisabled');
+    return { plainNotice: text, answerBody: text };
+  }
+  const nowMs = Date.now();
+  const time = formatLocalClockWithDateIfNotToday(wait.kind === 'afterReset' ? wait.resetAt : wait.fireAt, nowMs);
+  const [noticeText, answerText] = wait.kind === 'afterReset'
+    ? [t('apiRetry.usageLimitResetNotice', { time }), t('requests.limit.answerAfterResetNotice', { time })]
+    : [
+      t('apiRetry.usageLimitDelayNotice', { minutes: Math.round((wait.fireAt - nowMs) / apiRetryMsPerMinute), attempt }),
+      t('requests.limit.answerNextAttemptNotice', { time }),
+    ];
+  const addHint = (text: string): string => (checkIsTelegramKey(key) ? appendAutoContinueLimitsHint(text) : text);
+  return { plainNotice: addHint(noticeText), answerBody: addHint(answerText) };
 }
 
 /**
@@ -1916,13 +1970,6 @@ function clearLimitResumeNotice(key: SessionKey): void {
   if (pinnedId === undefined) return;
   limitResumeNoticePinnedMessageId.delete(k);
   if (pinnedId !== pinnedNoticePendingSentinel) void unpinMessageQuiet(key, pinnedId);
-}
-
-/** Host-local `HH:MM` of an epoch-ms instant, for the usage-limit reset notice. */
-function formatLocalClock(epochMs: number): string {
-  const at = new Date(epochMs);
-  const pad = (value: number): string => value.toString().padStart(2, '0');
-  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -14004,6 +14051,7 @@ export async function startBot(): Promise<void> {
   const requestLedger = new RequestLedger({
     store: state,
     releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
+    onRequestCreated: (key) => announceLimitWaitToNewRequest(key),
   });
   await requestLedger.load();
   // The wake-up engine (S4) watches the turns requests start. It is created now
@@ -14023,9 +14071,10 @@ export async function startBot(): Promise<void> {
     prepareWakeUpSession: ensureSessionForWakeUp,
     forwardWakeUp: forwardRequestWakeUp,
     deliverAlert: async (key, request, reason) => {
-      const sink = answerSinks.get(key.platform);
-      if (!sink) return null;
-      const result = await sink.deliverAlert(key, { requestId: request.id, reason, origin: request.origin });
+      const lookup = getAnswerSink(answerSinks, key);
+      const result = lookup.ok
+        ? await lookup.sink.deliverAlert(key, { requestId: request.id, reason, origin: request.origin })
+        : lookup;
       if (!result.ok) console.warn(`[requests] alert for ${request.id} not delivered: ${result.error}`);
       return result.ok ? (result.alertRef ?? null) : null;
     },
