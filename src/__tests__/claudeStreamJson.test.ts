@@ -146,6 +146,35 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
     assert.deepEqual(classify(msg), [{ kind: 'userEcho' }]);
   });
 
+  it('the replayed echo of our message (isReplay) → userEcho, a local command\'s stdout included', () => {
+    const echo = { type: 'user', isReplay: true, parent_tool_use_id: null, message: { role: 'user', content: 'the request' } };
+    const localCommand = { ...echo, message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' } };
+    assert.deepEqual(classify(echo), [{ kind: 'userEcho' }]);
+    assert.deepEqual(classify(localCommand), [{ kind: 'userEcho' }]);
+  });
+
+  it('user lines the CLI produced itself are not echoes of our input (shapes from live stdout logs)', () => {
+    const skillLoad = {
+      type: 'user', isSynthetic: true, parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /home/user/skills/review' }] },
+    };
+    const compactedSessionSummary = {
+      type: 'user', isReplay: false, isSynthetic: true, parent_tool_use_id: null,
+      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' },
+    };
+    const subagentPrompt = {
+      type: 'user', parent_tool_use_id: 'toolu_task1', subagent_type: 'general-purpose',
+      message: { role: 'user', content: [{ type: 'text', text: 'You are the reviewer of this diff.' }] },
+    };
+    const taskNotification = {
+      type: 'user', isReplay: true, parent_tool_use_id: null, origin: { kind: 'task-notification' },
+      message: { role: 'user', content: '<task-notification> <task-id>b1</task-id> </task-notification>' },
+    };
+    for (const msg of [skillLoad, compactedSessionSummary, subagentPrompt, taskNotification]) {
+      assert.deepEqual(classify(msg), [], JSON.stringify(msg).slice(0, 60));
+    }
+  });
+
   it('result success → turnEnd with final text, no error', () => {
     const msg = { type: 'result', subtype: 'success', is_error: false, api_error_status: null, result: 'Got it—you prefer tabs.' };
     assert.deepEqual(classify(msg), [{ kind: 'turnEnd', isError: false, errorText: null, resultText: 'Got it—you prefer tabs.' }]);

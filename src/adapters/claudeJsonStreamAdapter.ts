@@ -1008,15 +1008,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.swallowNextAbortError = true;
   }
 
-  /** Enqueue one stream-json frame onto the stdin FIFO. Fire-and-forget for
-   *  callers (sync signature preserved); the per-session chain keeps wire
-   *  order and absorbs transient `EAGAIN` (see `writeFifoText`). */
   /** Write one user turn, counting it until Claude echoes it back (it has read it). */
   private writeUserMessage(session: StreamSession, content: string): void {
     session.unconsumedInputCount += 1;
     this.writeStdin(session, { type: 'user', message: { role: 'user', content } });
   }
 
+  /** Enqueue one stream-json frame onto the stdin FIFO. Fire-and-forget for
+   *  callers (sync signature preserved); the per-session chain keeps wire
+   *  order and absorbs transient `EAGAIN` (see `writeFifoText`). */
   private writeStdin(session: StreamSession, obj: unknown): void {
     const line = JSON.stringify(obj) + '\n';
     session.stdinWriteChain = session.stdinWriteChain

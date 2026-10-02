@@ -2136,6 +2136,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         }
         await this.apiRequest('POST', `/session/${session.sessionId}/prompt_async`, body);
       } catch (e) {
+        // A prompt OpenCode never accepted will never show up as a user message,
+        // so it must stop counting as unconsumed — left counted, every later turn
+        // of this session would read as "not taken in yet" and never end.
+        session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
         // The optimistic `isBusy = true` above never gets a `session.status`
         // idle to clear it if the POST failed — clear it so the next prompt
         // doesn't eat a spurious abort + wait.

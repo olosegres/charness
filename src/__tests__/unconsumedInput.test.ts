@@ -19,6 +19,16 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const key: SessionKey = makeTelegramKey(-100999444, 7);
 const userEchoLine = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'the request' } })}\n`;
+const skillLoadLine = `${JSON.stringify({
+  type: 'user',
+  isSynthetic: true,
+  message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /home/user/skills/review' }] },
+})}\n`;
+const subagentPromptLine = `${JSON.stringify({
+  type: 'user',
+  parent_tool_use_id: 'toolu_task1',
+  message: { role: 'user', content: [{ type: 'text', text: 'You are the reviewer of this diff.' }] },
+})}\n`;
 const toolResultLine = `${JSON.stringify({
   type: 'user',
   message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
@@ -69,6 +79,18 @@ describe('Claude json-stream: unconsumed input', () => {
     adapter['onStdout'](session, toolResultLine);
 
     assert.equal(adapter.checkHasUnconsumedInput(key), true);
+  });
+
+  it('a user line the CLI produced itself (skill load, sub-agent prompt) does not take our message in', () => {
+    const { adapter, session } = createAdapter();
+    adapter.sendInput(key, 'the request');
+    session.isBusy = false;
+
+    adapter['onStdout'](session, skillLoadLine);
+    adapter['onStdout'](session, subagentPromptLine);
+
+    assert.equal(adapter.checkHasUnconsumedInput(key), true, 'still waiting for the echo of our own message');
+    assert.equal(adapter.checkIsBusy(key), false);
   });
 
   it('an echo with nothing outstanding (replayed after a restart) never goes negative', () => {
@@ -146,6 +168,19 @@ describe('OpenCode: unconsumed input', () => {
 
     feedUserMessage(adapter, 'msg_user_2');
     assert.equal(adapter.checkHasUnconsumedInput(key), false);
+  });
+
+  it('a prompt whose POST failed stops counting as unconsumed', async () => {
+    const adapter = createAdapter();
+    adapter['apiRequest'] = async () => { throw new Error('connection refused'); };
+    // The adapter reports the failed send as an `error` event; unheard, emit would throw.
+    adapter.on('error', () => {});
+
+    adapter.sendInput(key, 'first');
+    assert.equal(adapter.checkHasUnconsumedInput(key), true);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(adapter.checkHasUnconsumedInput(key), false, 'a prompt OpenCode never accepted is not waiting');
   });
 
   it('a user message of a sub-agent child session does not count', () => {

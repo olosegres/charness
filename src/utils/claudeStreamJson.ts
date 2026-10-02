@@ -113,8 +113,27 @@ export type ClaudeStreamAction =
   | { kind: 'apiRetry'; text: string }
   /** `rate_limit_event` — subscription usage window signal (billing proof). */
   | { kind: 'rateLimit'; rateLimitType: string | null; utilization: number | null }
-  /** `--replay-user-messages` echo — the input-ack signal. */
+  /** `--replay-user-messages` echo of a message the BOT wrote — the input-ack
+   *  signal (see {@link checkIsOwnInputEcho} for the user lines that are not). */
   | { kind: 'userEcho' };
+
+/**
+ * @description Whether a non-tool-result `user` line is the
+ * `--replay-user-messages` echo of a message the bot wrote. The stream also
+ * carries `user` lines the CLI produced on its own, and counting one of those as
+ * our echo marks a message still waiting mid-turn as taken in (live
+ * `stdout.jsonl` logs): `isSynthetic` lines (a skill being loaded, the summary
+ * that opens a compacted session, `isReplay:false`), a sub-agent's own prompt
+ * and markers (`parent_tool_use_id` set), and a replayed background-task
+ * notification (`origin` set). Only POSITIVE evidence excludes a line, so a CLI
+ * that stamps none of these fields keeps counting every echo rather than none.
+ */
+function checkIsOwnInputEcho(msg: Record<string, unknown>): boolean {
+  return msg.parent_tool_use_id == null
+    && msg.isSynthetic !== true
+    && msg.isReplay !== false
+    && msg.origin === undefined;
+}
 
 /** Read a string field, or null. */
 function readString(rec: Record<string, unknown>, key: string): string | null {
@@ -231,7 +250,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       }
       if (actions.length > 0) return actions;
     }
-    return [{ kind: 'userEcho' }];
+    return checkIsOwnInputEcho(msg) ? [{ kind: 'userEcho' }] : [];
   }
 
   if (type === 'result') {

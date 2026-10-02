@@ -667,6 +667,6 @@ export const enDict: Record<string, string> = {
     '(optional) Add GROQ_API_KEY to your .env and restart to enable voice input.',
   'startup.item.optional_owner':
     '(optional) Set OWNER_USER_ID to receive this status in your private chat.',
-  'requests.alert.notAnswering': '⚠️ Request {requestId} got no answer: the agent ended its turns without answering and the reminders gave up. Check the session in this topic.',
-  'requests.alert.unreachable': "⚠️ Request {requestId} got no answer: the agent's session could not be reached to remind it. Check the session in this topic.",
+  'requests.alert.notAnsweringNotice': '⚠️ Request {requestId} got no answer: the agent ended its turns without answering and the reminders gave up. Check the session in this topic.',
+  'requests.alert.unreachableNotice': "⚠️ Request {requestId} got no answer: the agent's session could not be reached to remind it. Check the session in this topic.",
 };

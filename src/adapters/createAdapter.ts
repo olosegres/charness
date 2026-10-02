@@ -300,6 +300,16 @@ export function checkIsClaudeBackend(name: string): boolean {
 }
 
 /**
+ * @description Whether switching a thread from adapter `previousName` to
+ * `nextName` keeps its conversation: the same adapter, or a flip between the two
+ * Claude backends (shared transcript). Any other switch hands the topic to a
+ * different agent or a shell, which knows nothing of the old conversation.
+ */
+export function checkIsSameConversationSwitch(previousName: string, nextName: string): boolean {
+  return previousName === nextName || (checkIsClaudeBackend(previousName) && checkIsClaudeBackend(nextName));
+}
+
+/**
  * @description Which Claude backend a fresh "start Claude Code" should open for
  * `key`: the thread's explicit backend pick if it has one, else the default
  * (json-stream, {@link getDefaultClaudeBackendName}). Lets the ▶️ Claude button /

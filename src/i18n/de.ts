@@ -619,6 +619,6 @@ export const deDict: Record<string, string> = {
     '(optional) Füge GROQ_API_KEY zu deiner .env hinzu und starte neu, um Spracheingabe zu aktivieren.',
   'startup.item.optional_owner':
     '(optional) Setze OWNER_USER_ID, um diesen Status in deinem privaten Chat zu erhalten.',
-  'requests.alert.notAnswering': '⚠️ Anfrage {requestId} blieb unbeantwortet: Der Agent hat seine Züge ohne Antwort beendet, und die Erinnerungen haben aufgegeben. Prüfe die Sitzung in diesem Thema.',
-  'requests.alert.unreachable': '⚠️ Anfrage {requestId} blieb unbeantwortet: Die Sitzung des Agenten war für eine Erinnerung nicht erreichbar. Prüfe die Sitzung in diesem Thema.',
+  'requests.alert.notAnsweringNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Der Agent hat seine Züge ohne Antwort beendet, und die Erinnerungen haben aufgegeben. Prüfe die Sitzung in diesem Thema.',
+  'requests.alert.unreachableNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Die Sitzung des Agenten war für eine Erinnerung nicht erreichbar. Prüfe die Sitzung in diesem Thema.',
 };

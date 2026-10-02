@@ -184,6 +184,58 @@ describe('silent turns', () => {
   });
 });
 
+describe('failures', () => {
+  it('a reminder that throws on its way out counts as undeliverable: alert, stop', async () => {
+    const ledger = await createLedger();
+    const engine = new RequestWakeUpEngine({
+      ledger,
+      probeTurn: () => probe,
+      deliverWakeUp: async () => { throw new Error('tmux is gone'); },
+      deliverAlert: async (_key, request, reason) => {
+        alerts.push({ requestId: request.id, reason });
+        return alertMessageRef;
+      },
+      releaseAlert: async () => {},
+      backstopMs,
+      now: () => nowMs,
+    });
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+
+    await endTurnSilently(engine);
+
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'wakeFailed' }]);
+    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, true);
+  });
+
+  it('one conversation that fails never stops the others, and a tick never rejects', async () => {
+    const otherKey: SessionKey = makeTelegramKey(-1001234567890, 43);
+    const ledger = await createLedger();
+    const engine = new RequestWakeUpEngine({
+      ledger,
+      probeTurn: (key) => {
+        if (key.thread === topicKey.thread) throw new Error('unknown adapter');
+        return probe;
+      },
+      deliverWakeUp: async (_key, request, reason) => {
+        wakeUps.push({ requestId: request.id, reason });
+        return true;
+      },
+      deliverAlert: async () => null,
+      releaseAlert: async () => {},
+      backstopMs,
+      now: () => nowMs,
+    });
+    await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    const healthy = await ledger.createRequest(otherKey, { kind: 'message', attributes: {} });
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, [{ requestId: healthy.id, reason: 'backstop' }]);
+  });
+});
+
 describe('progress answers', () => {
   it('a turn that sent progress is followed up 15 min later, never while the session works', async () => {
     const ledger = await createLedger();
@@ -292,6 +344,42 @@ describe('the backstop', () => {
     nowMs += 1;
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
+  });
+
+  it('a watch whose turn end can never be seen is handed to the backstop', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+
+    // An input counter that never settles: idle, unblocked, never taken in.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: false };
+    nowMs += backstopMs - 1;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'still inside the window');
+
+    nowMs += 1;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
+  });
+
+  it('a watch held open by a pending question is never handed over', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+    nowMs += 2 * backstopMs;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+
+    assert.deepEqual(wakeUps, []);
+    probe = { ...probe, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the watch kept deciding the turn end');
   });
 
   it('a session seen working pushes the backstop back', async () => {

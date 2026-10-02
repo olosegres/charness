@@ -11,7 +11,8 @@ import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWa
  *     └─ the turn sent a progress     → counter = 0, wake again after 15 min
  *   cap: 10 wake-ups per request      → alert, stop waking (loop guard)
  *   backstop: nothing seen working on it for 90 min (a dead process, tracking
- *             lost across a restart)  → resume / wake the session
+ *             lost across a restart or a watch that never saw its turn end)
+ *                                     → resume / wake the session
  *
  * A wake-up never interrupts a live turn and never starts while the session is
  * blocked on something that is not a turn end (a pending native question, a
@@ -166,4 +167,22 @@ export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe):
     : !probe.hasUnconsumedInput;
   if (!isConsumed || probe.isBusy || probe.isTurnEndBlocked) return 'running';
   return 'ended';
+}
+
+/**
+ * @description Has a watched turn that is still `running` lost its tracking? It
+ * is idle, nothing holds it open, and nothing was seen working on the request
+ * for the whole backstop window — so what keeps it `running` is a consumption
+ * signal that never settled (an input counter left behind, a turn start never
+ * seen). Dropping the watch hands the request to the backstop: a watch that
+ * stayed forever would silence every wake-up and alert of the request.
+ */
+export function checkIsWatchedTurnStale(
+  request: OpenRequestState,
+  probe: SessionTurnProbe,
+  nowMs: number,
+  backstopMs: number,
+): boolean {
+  if (probe.isBusy || probe.isTurnEndBlocked) return false;
+  return nowMs - (request.lastTurnActivityAt ?? request.createdAt) >= backstopMs;
 }

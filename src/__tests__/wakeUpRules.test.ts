@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { OpenRequestState } from '../requests/types';
 import {
+  checkIsWatchedTurnStale,
   decideTurnEnd,
   decideUnwatchedRequest,
   defaultRequestBackstopMs,
@@ -152,5 +153,24 @@ describe('getWatchedTurnState', () => {
     assert.equal(getWatchedTurnState(createTurn(), noSignalProbe), 'running');
     assert.equal(getWatchedTurnState(createTurn({ hasSeenBusy: true }), noSignalProbe), 'ended');
     assert.equal(getWatchedTurnState(createTurn({ hasSeenOutput: true }), noSignalProbe), 'ended');
+  });
+});
+
+describe('checkIsWatchedTurnStale', () => {
+  it('a watch idle and unblocked for the whole backstop window has lost its tracking', () => {
+    const request = createRequest({ lastTurnActivityAt: nowMs - backstopMs });
+    assert.equal(checkIsWatchedTurnStale(request, idleProbe, nowMs, backstopMs), true);
+    assert.equal(checkIsWatchedTurnStale(request, idleProbe, nowMs - 1, backstopMs), false);
+  });
+
+  it('falls back to the creation time when nothing was ever seen working', () => {
+    const request = createRequest({ createdAt: nowMs - backstopMs });
+    assert.equal(checkIsWatchedTurnStale(request, idleProbe, nowMs, backstopMs), true);
+  });
+
+  it('a busy or blocked turn is never stale, however long it lasts', () => {
+    const request = createRequest({ lastTurnActivityAt: nowMs - 10 * backstopMs });
+    assert.equal(checkIsWatchedTurnStale(request, { ...idleProbe, isBusy: true }, nowMs, backstopMs), false);
+    assert.equal(checkIsWatchedTurnStale(request, { ...idleProbe, isTurnEndBlocked: true }, nowMs, backstopMs), false);
   });
 });

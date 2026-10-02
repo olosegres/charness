@@ -619,6 +619,6 @@ export const uzDict: Record<string, string> = {
     '(ixtiyoriy) Ovozli kiritishni yoqish uchun .env fayliga GROQ_API_KEY qo‘shing va qayta ishga tushiring.',
   'startup.item.optional_owner':
     '(ixtiyoriy) Ushbu holatni shaxsiy chatingizda olish uchun OWNER_USER_ID ni belgilang.',
-  'requests.alert.notAnswering': '⚠️ {requestId} so‘roviga javob berilmadi: agent javob bermay navbatlarini yakunladi va eslatmalar to‘xtatildi. Ushbu mavzudagi seansni tekshiring.',
-  'requests.alert.unreachable': '⚠️ {requestId} so‘roviga javob berilmadi: eslatma yuborish uchun agent seansiga ulanib bo‘lmadi. Ushbu mavzudagi seansni tekshiring.',
+  'requests.alert.notAnsweringNotice': '⚠️ {requestId} so‘roviga javob berilmadi: agent javob bermay navbatlarini yakunladi va eslatmalar to‘xtatildi. Ushbu mavzudagi seansni tekshiring.',
+  'requests.alert.unreachableNotice': '⚠️ {requestId} so‘roviga javob berilmadi: eslatma yuborish uchun agent seansiga ulanib bo‘lmadi. Ushbu mavzudagi seansni tekshiring.',
 };

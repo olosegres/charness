@@ -631,8 +631,11 @@ export interface AgentAdapter extends EventEmitter {
    *    `--replay-user-messages` echoes (the echo arrives when Claude reads it).
    *  - **OpenCode** — prompts sent minus the new user messages seen on the event
    *    stream.
-   * Optional: a backend without such a signal omits it (the tmux Claude backend
-   * interrupts the running turn before typing, so it has no earlier turn).
+   * Optional: a backend without such a signal omits it, and the engine falls
+   * back to busy or output seen since the forward. That fallback is exact for
+   * the tmux Claude backend only because it interrupts the running turn before
+   * typing — except while a sub-agent or compaction runs, when it queues the
+   * prompt behind that turn and the earlier turn's busy already satisfies it.
    */
   checkHasUnconsumedInput?(key: SessionKey): boolean;
 

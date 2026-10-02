@@ -26,6 +26,7 @@ import {
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
   checkIsClaudeBackend,
+  checkIsSameConversationSwitch,
   resolveClaudeBackendName,
   parseClaudeBackendArg,
   getClaudeModeAction,
@@ -944,8 +945,8 @@ let schedulerEngine: SchedulerEngine | null = null;
  * The request wake-up engine (request/answer core S4), assigned once by
  * `startBot` after the request ledger loads. Module-level like
  * {@link schedulerEngine} because the cancel paths (`/esc`, `/c`, `/quit`,
- * `/quit-all`, `/new`, `/resume`, leaving the folder) are module-level command
- * handlers.
+ * `/quit-all`, `/new`, `/resume`, leaving the folder, switching the topic to
+ * another agent or a shell) are module-level command handlers.
  */
 let requestWakeUpEngine: RequestWakeUpEngine | null = null;
 
@@ -1483,9 +1484,20 @@ const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
  * is history, not something to skip.
  */
 function getArmedLimitRetryFireAt(key: SessionKey): number | null {
-  const entry = apiRetryTimers.get(keyToString(key));
-  if (!entry || entry.timer === null || entry.kind !== 'usageLimit') return null;
+  const entry = getArmedApiRetry(key);
+  if (!entry || entry.kind !== 'usageLimit') return null;
   return entry.fireAt;
+}
+
+/**
+ * @description The thread's API-error retry or usage-limit wait while it is still
+ * ARMED, else `null`. A record whose timer already fired stays in
+ * {@link apiRetryTimers} for its grace window (see {@link fireApiRetry}) — it is
+ * history, not a wait in progress.
+ */
+function getArmedApiRetry(key: SessionKey): ApiRetryTimerEntry | null {
+  const entry = apiRetryTimers.get(keyToString(key));
+  return entry && entry.timer !== null ? entry : null;
 }
 
 /**
@@ -4409,6 +4421,10 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
  */
 async function switchThreadAdapter(key: SessionKey, newName: string): Promise<void> {
   const prevName = getThreadAdapterNameRaw(key);
+  // Another agent or a shell takes the topic over: the open request belonged to
+  // the old conversation, so it closes silently instead of a later wake-up
+  // reminding (or, in a terminal, TYPING into) a session that never saw it.
+  if (prevName && !checkIsSameConversationSwitch(prevName, newName)) cancelConversationRequest(key);
   if (prevName && prevName !== newName) {
     try {
       const prev = getAdapter(prevName);
@@ -13561,9 +13577,9 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
 
 /** The localized alert text per reason (the operator reads it in the topic). */
 const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
-  silentTurns: 'requests.alert.notAnswering',
-  wakeCap: 'requests.alert.notAnswering',
-  wakeFailed: 'requests.alert.unreachable',
+  silentTurns: 'requests.alert.notAnsweringNotice',
+  wakeCap: 'requests.alert.notAnsweringNotice',
+  wakeFailed: 'requests.alert.unreachableNotice',
 };
 
 /**
@@ -13587,8 +13603,11 @@ function createAnswerSinks(): AnswerSinks {
 /**
  * @description What the wake-up engine needs to know about a conversation's
  * session right now. "Not a turn end" covers a pending native question (OpenCode
- * keeps it in `pendingQuestions`, a Claude selector in `questionPinnedMessageId`),
- * a running compaction, and an armed API-error retry or usage-limit wait.
+ * and Claude json-stream keep it in `pendingQuestions`; a Claude TUI selector or
+ * login code prompt is read off the pane by the adapter, since the question pin
+ * in `questionPinnedMessageId` exists only when pinning succeeded), a running
+ * compaction, and an API-error retry or usage-limit wait still ARMED — a fired
+ * one's record outlives the wait and would hold the turn until the next message.
  */
 function getSessionTurnProbe(key: SessionKey): SessionTurnProbe {
   const kStr = keyToString(key);
@@ -13601,8 +13620,10 @@ function getSessionTurnProbe(key: SessionKey): SessionTurnProbe {
     isTurnEndBlocked:
       pendingQuestions.has(kStr) ||
       questionPinnedMessageId.has(kStr) ||
+      (adapter.isQuestionPending?.(key) ?? false) ||
+      (adapter.isLoginPastePending?.(key) ?? false) ||
       threadsCompacting.has(kStr) ||
-      apiRetryTimers.has(kStr),
+      getArmedApiRetry(key) !== null,
   };
 }
 
@@ -13646,8 +13667,9 @@ async function deliverRequestWakeUp(
 
 /**
  * @description The person took over the conversation (interrupt, quit, restart,
- * switch or resume of the session, leaving the folder): its open request closes
- * silently and nothing wakes it. Safe before the engine exists (early boot).
+ * switch or resume of the session, a switch to another agent or a shell, leaving
+ * the folder): its open request closes silently and nothing wakes it. Safe before
+ * the engine exists (early boot).
  */
 function cancelConversationRequest(key: SessionKey): void {
   void requestWakeUpEngine?.cancelConversation(key).catch((e) =>

@@ -619,6 +619,6 @@ export const esDict: Record<string, string> = {
     '(opcional) Añade GROQ_API_KEY a tu .env y reinicia para habilitar la entrada de voz.',
   'startup.item.optional_owner':
     '(opcional) Configura OWNER_USER_ID para recibir este estado en tu chat privado.',
-  'requests.alert.notAnswering': '⚠️ La solicitud {requestId} quedó sin respuesta: el agente terminó sus turnos sin responder y los recordatorios se rindieron. Revisa la sesión en este tema.',
-  'requests.alert.unreachable': '⚠️ La solicitud {requestId} quedó sin respuesta: no se pudo alcanzar la sesión del agente para recordárselo. Revisa la sesión en este tema.',
+  'requests.alert.notAnsweringNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: el agente terminó sus turnos sin responder y los recordatorios se rindieron. Revisa la sesión en este tema.',
+  'requests.alert.unreachableNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: no se pudo alcanzar la sesión del agente para recordárselo. Revisa la sesión en este tema.',
 };

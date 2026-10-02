@@ -14,6 +14,7 @@ import * as assert from 'node:assert/strict';
 import {
   getDefaultClaudeBackendName,
   checkIsClaudeBackend,
+  checkIsSameConversationSwitch,
   resolveClaudeBackendName,
   getThreadAdapterNameRaw,
   setThreadAdapter,
@@ -48,6 +49,15 @@ test('checkIsClaudeBackend: both Claude backends true, others false', () => {
   assert.equal(checkIsClaudeBackend(claudeJsonStreamAdapterName), true);
   assert.equal(checkIsClaudeBackend('opencode'), false);
   assert.equal(checkIsClaudeBackend('terminal'), false);
+});
+
+test('checkIsSameConversationSwitch: only the same adapter or a Claude backend flip keeps the conversation', () => {
+  assert.equal(checkIsSameConversationSwitch('opencode', 'opencode'), true);
+  assert.equal(checkIsSameConversationSwitch('claude', claudeJsonStreamAdapterName), true);
+  assert.equal(checkIsSameConversationSwitch(claudeJsonStreamAdapterName, 'claude'), true);
+  assert.equal(checkIsSameConversationSwitch(claudeJsonStreamAdapterName, 'opencode'), false);
+  assert.equal(checkIsSameConversationSwitch('opencode', 'claude'), false);
+  assert.equal(checkIsSameConversationSwitch('claude', 'terminal'), false);
 });
 
 test('resolveClaudeBackendName: no pick → json-stream default', () => {

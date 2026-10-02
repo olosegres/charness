@@ -2,6 +2,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from './types';
 import {
+  checkIsWatchedTurnStale,
   decideTurnEnd,
   decideUnwatchedRequest,
   getWatchedTurnState,
@@ -71,10 +72,18 @@ export class RequestWakeUpEngine {
     this.now = deps.now ?? Date.now;
   }
 
-  /** @description Start the poll and sweep timers (unref'd: they never keep the process alive). */
+  /**
+   * @description Start the poll and sweep timers (unref'd: they never keep the
+   * process alive). A rejected tick is logged: unhandled, it would end the whole
+   * process (Node's default for an unhandled rejection).
+   */
   start(): void {
-    this.pollTimer ??= setInterval(() => { void this.pollWatchedTurns(); }, watchedTurnPollMs);
-    this.sweepTimer ??= setInterval(() => { void this.sweepUnwatchedRequests(); }, unwatchedSweepMs);
+    this.pollTimer ??= setInterval(() => {
+      void this.pollWatchedTurns().catch((e) => logWakeUpFailure('the watched-turn poll', e));
+    }, watchedTurnPollMs);
+    this.sweepTimer ??= setInterval(() => {
+      void this.sweepUnwatchedRequests().catch((e) => logWakeUpFailure('the open-request sweep', e));
+    }, unwatchedSweepMs);
     this.pollTimer.unref?.();
     this.sweepTimer.unref?.();
   }
@@ -128,7 +137,8 @@ export class RequestWakeUpEngine {
     this.isPolling = true;
     try {
       for (const [keyString, turn] of [...this.watched]) {
-        await this.pollWatchedTurn(keyString, turn);
+        // One conversation's failure must not stop the others from being polled.
+        await this.pollWatchedTurn(keyString, turn).catch((e) => logWakeUpFailure(`polling ${keyString}`, e));
       }
     } finally {
       this.isPolling = false;
@@ -147,6 +157,8 @@ export class RequestWakeUpEngine {
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
       if (probe.isBusy) await this.recordTurnActivity(request, false);
+      // Its end can no longer be seen: the sweep's backstop takes the request over.
+      else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) this.watched.delete(keyString);
       return;
     }
     this.watched.delete(keyString);
@@ -167,16 +179,21 @@ export class RequestWakeUpEngine {
       }
       for (const { key, request } of openRequests) {
         if (this.watched.has(keyToString(key))) continue;
-        const probe = this.deps.probeTurn(key);
-        if (probe.isBusy) {
-          await this.recordTurnActivity(request, false);
-          continue;
-        }
-        await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs));
+        // One conversation's failure must not stop the others from being swept.
+        await this.sweepOpenRequest(key, request).catch((e) => logWakeUpFailure(`sweeping ${keyToString(key)}`, e));
       }
     } finally {
       this.isSweeping = false;
     }
+  }
+
+  private async sweepOpenRequest(key: SessionKey, request: OpenRequestState): Promise<void> {
+    const probe = this.deps.probeTurn(key);
+    if (probe.isBusy) {
+      await this.recordTurnActivity(request, false);
+      return;
+    }
+    await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs));
   }
 
   /** Persist that the agent is working on it, at most once per step unless forced. */
@@ -198,12 +215,22 @@ export class RequestWakeUpEngine {
       await this.raiseAlert(key, updated, decision.reason);
       return;
     }
-    if (await this.deps.deliverWakeUp(key, updated, decision.reason)) {
+    if (await this.deliverWakeUpSafely(key, updated, decision.reason)) {
       await this.trackForwardedTurn(key, updated.id);
       return;
     }
     const stopped = await this.deps.ledger.updateOpenRequest(updated.id, { isWakeStopped: true, nextWakeAt: undefined });
     if (stopped) await this.raiseAlert(key, stopped, 'wakeFailed');
+  }
+
+  /** A reminder that threw on its way out did not reach the session: same as one that could not be delivered. */
+  private async deliverWakeUpSafely(key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason): Promise<boolean> {
+    try {
+      return await this.deps.deliverWakeUp(key, request, reason);
+    } catch (e) {
+      logWakeUpFailure(`delivering the reminder for ${request.id}`, e);
+      return false;
+    }
   }
 
   private async raiseAlert(key: SessionKey, request: OpenRequestState, reason: RequestAlertReason): Promise<void> {
@@ -213,4 +240,9 @@ export class RequestWakeUpEngine {
     // It closed while the alert was going out: its close found no alert to release.
     if (!stored) await this.deps.releaseAlert(key, alertRef);
   }
+}
+
+/** Log a wake-up step that failed; the engine keeps running for every other request. */
+function logWakeUpFailure(step: string, error: unknown): void {
+  console.warn(`[requests] ${step} failed:`, error instanceof Error ? error.message : error);
 }

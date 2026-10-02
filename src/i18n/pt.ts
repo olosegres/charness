@@ -620,6 +620,6 @@ export const ptDict: Record<string, string> = {
     '(opcional) Adicione GROQ_API_KEY ao seu .env e reinicie para ativar a entrada de voz.',
   'startup.item.optional_owner':
     '(opcional) Defina OWNER_USER_ID para receber este status no seu chat privado.',
-  'requests.alert.notAnswering': '⚠️ A solicitação {requestId} ficou sem resposta: o agente terminou seus turnos sem responder e os lembretes desistiram. Verifique a sessão neste tópico.',
-  'requests.alert.unreachable': '⚠️ A solicitação {requestId} ficou sem resposta: não foi possível alcançar a sessão do agente para lembrá-lo. Verifique a sessão neste tópico.',
+  'requests.alert.notAnsweringNotice': '⚠️ A solicitação {requestId} ficou sem resposta: o agente terminou seus turnos sem responder e os lembretes desistiram. Verifique a sessão neste tópico.',
+  'requests.alert.unreachableNotice': '⚠️ A solicitação {requestId} ficou sem resposta: não foi possível alcançar a sessão do agente para lembrá-lo. Verifique a sessão neste tópico.',
 };
