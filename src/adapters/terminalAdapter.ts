@@ -4,7 +4,14 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { createSerialQueue, type SerialQueue } from '../utils/serialQueue';
 import { getNextPollDelay, basePollIntervalMs } from '../utils/pollBackoff';
-import { tmuxAsync, tmuxOrThrowAsync, checkArgsAreSafe, shellSingleQuote } from '../utils/tmuxExec';
+import {
+  tmuxAsync,
+  tmuxOrThrowAsync,
+  checkArgsAreSafe,
+  getTmuxPaneTarget,
+  getTmuxSessionTarget,
+  shellSingleQuote,
+} from '../utils/tmuxExec';
 import { cleanOutput } from '../utils/ansiClean';
 import { getNewPaneContent } from '../utils/paneDiff';
 import {
@@ -119,7 +126,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     console.log(`[Terminal] Starting tmux session ${sessionName} in ${workDir}`);
 
     // Make sure no stale session with the same name lingers.
-    await tmuxAsync('kill-session', '-t', sessionName);
+    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(sessionName));
 
     // tmux execs the trailing shell-command via `$SHELL -c`. Single-quote the
     // shell path (defence-in-depth — same idiom as the Claude command line)
@@ -138,7 +145,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
       console.log(`[Terminal] tmux session created`);
     } catch (e) {
       console.error(`[Terminal] Failed to create tmux session:`, e);
-      await tmuxAsync('kill-session', '-t', sessionName);
+      await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(sessionName));
       throw new Error(`Failed to start terminal session: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -166,7 +173,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
       session.pollTimer = null;
     }
     const killPromise = this.enqueueTmux(session, () =>
-      tmuxAsync('kill-session', '-t', session.sessionName),
+      tmuxAsync('kill-session', '-t', getTmuxSessionTarget(session.sessionName)),
     );
     this.sessions.delete(k);
     this.emit('stopped', key);
@@ -199,12 +206,12 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     // sends bytes straight to the pane). The submit Enter is a separate call.
     this.enqueueTmuxBestEffort(session, async () => {
       if (!session.isActive) return '';
-      return tmuxAsync('send-keys', '-t', session.sessionName, '-l', input);
+      return tmuxAsync('send-keys', '-t', getTmuxPaneTarget(session.sessionName), '-l', input);
     });
     if (appendEnter) {
       this.enqueueTmuxBestEffort(session, async () => {
         if (!session.isActive) return '';
-        return tmuxAsync('send-keys', '-t', session.sessionName, 'Enter');
+        return tmuxAsync('send-keys', '-t', getTmuxPaneTarget(session.sessionName), 'Enter');
       });
     }
   }
@@ -217,7 +224,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     if (signal === 'SIGINT') {
       this.enqueueTmuxBestEffort(session, async () => {
         if (!session.isActive) return '';
-        return tmuxAsync('send-keys', '-t', session.sessionName, 'C-c');
+        return tmuxAsync('send-keys', '-t', getTmuxPaneTarget(session.sessionName), 'C-c');
       });
       console.log(`[Terminal] sent Ctrl+C`);
     }
@@ -244,7 +251,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     console.log(`[Terminal] ${logLabel}`);
     this.enqueueTmuxBestEffort(session, async () => {
       if (!session.isActive) return '';
-      return tmuxAsync('send-keys', '-t', session.sessionName, tmuxKey);
+      return tmuxAsync('send-keys', '-t', getTmuxPaneTarget(session.sessionName), tmuxKey);
     });
   }
 
@@ -315,7 +322,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     if (!session?.isActive) return;
 
     const raw = await this.enqueueTmux(session, () =>
-      tmuxAsync('capture-pane', '-t', session.sessionName, '-p', '-e', '-S', '-2000'),
+      tmuxAsync('capture-pane', '-t', getTmuxPaneTarget(session.sessionName), '-p', '-e', '-S', '-2000'),
     );
     if (!session.isActive) return;
 
@@ -404,7 +411,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
       return false;
     }
 
-    const panesRaw = await tmuxAsync('list-panes', '-t', sessionName, '-F', '#{pane_pid}');
+    const panesRaw = await tmuxAsync('list-panes', '-t', getTmuxPaneTarget(sessionName), '-F', '#{pane_pid}');
     const pids = panesRaw.split('\n').map(s => s.trim()).filter(s => /^\d+$/.test(s));
     const anyAlive = pids.some(pidStr => {
       try { process.kill(Number(pidStr), 0); return true; }
@@ -412,7 +419,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     });
     if (!anyAlive) {
       console.log(`[Terminal] adopt: ${sessionName} has no live child process, killing as zombie`);
-      await tmuxAsync('kill-session', '-t', sessionName);
+      await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(sessionName));
       return false;
     }
 
@@ -427,7 +434,7 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
     // Seed the baseline from the current pane so the diff against the first poll
     // is empty (no flood of stale scrollback). Same flags as `pollOutput`.
     const initialRaw = await this.enqueueTmux(session, () =>
-      tmuxAsync('capture-pane', '-t', sessionName, '-p', '-e', '-S', '-2000'),
+      tmuxAsync('capture-pane', '-t', getTmuxPaneTarget(sessionName), '-p', '-e', '-S', '-2000'),
     );
     if (initialRaw) {
       session.lastContent = cleanOutput(initialRaw);
@@ -449,6 +456,6 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
    */
   async killOrphanTmuxSession(sessionName: string): Promise<void> {
     console.log(`[Terminal] kill orphan tmux session: ${sessionName}`);
-    await tmuxAsync('kill-session', '-t', sessionName);
+    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(sessionName));
   }
 }

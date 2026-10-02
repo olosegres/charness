@@ -59,7 +59,7 @@ import {
   type McpReconnectControlRequest,
   type McpStatusControlRequest,
 } from '../utils/claudeMcpHeal';
-import { execFilePromise, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
+import { execFilePromise, getTmuxSessionTarget, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
 import {
@@ -430,7 +430,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       fs.writeFileSync(paths.wrapperFile, buildWrapperScript(this.claudePath, args, workDir, paths), { mode: 0o755 });
       // A stale same-name tmux session (crashed bot / pre-adopt build) would make
       // `new-session` fail — and must not keep running unowned next to ours.
-      await tmuxAsync('kill-session', '-t', tmuxName);
+      await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(tmuxName));
       await tmuxOrThrowAsync('new-session', '-d', '-s', tmuxName, paths.wrapperFile);
       const pidRead = await waitForPidFile(paths.pidFile);
       if (pidRead === null) throw new Error(`claude never wrote its pid file${describeSpawnFailure(paths)}`);
@@ -440,7 +440,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       fifoFd = fdRead;
     } catch (e) {
       cleanupMcpTempFiles({ key, dataDir: resolveDataDir() });
-      await tmuxAsync('kill-session', '-t', tmuxName);
+      await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(tmuxName));
       try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       throw new Error(`Failed to start Claude stream session: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -627,7 +627,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.sessions.delete(keyToString(key));
     this.closeFifo(session);
     const stderrTail = session.isStopping ? '' : readStderrTail(session.paths.stderrFile);
-    void tmuxAsync('kill-session', '-t', buildJsonStreamTmuxSessionName(key));
+    void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     try { fs.rmSync(session.paths.dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     cleanupMcpTempFiles({ key, dataDir: resolveDataDir() });
     if (session.isStopping) {
@@ -671,7 +671,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    *  kills the tmux session). */
   async killOrphanTmuxSession(sessionName: string): Promise<void> {
     console.log(`[ClaudeJson] kill orphan tmux session: ${sessionName}`);
-    await tmuxAsync('kill-session', '-t', sessionName);
+    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(sessionName));
     const key = parseJsonStreamTmuxSessionName(sessionName);
     if (!key) return;
     try {
@@ -831,7 +831,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // Let the reject (and any queued frame) reach the FIFO before the kill.
     await session.stdinWriteChain.catch(() => { /* already logged */ });
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
-    await tmuxAsync('kill-session', '-t', buildJsonStreamTmuxSessionName(session.key));
+    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(session.key)));
     this.finalizeExternalExit(session, null);
   }
 
@@ -1672,7 +1672,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.isActive = false;
     this.closeFifo(session);
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* gone */ }
-    await tmuxAsync('kill-session', '-t', buildJsonStreamTmuxSessionName(key));
+    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     // spawnSession lays the host dir out fresh and replaces the map entry.
     await this.spawnSession(key, workDir, sessionId, { effort: change.effort, model: change.model, resume: true });
   }

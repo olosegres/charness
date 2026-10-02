@@ -3,6 +3,26 @@ import { promisify } from 'util';
 
 export const execFilePromise = promisify(execFile);
 
+/**
+ * @description `-t` target naming a tmux SESSION exactly (`kill-session`). A
+ * bare name falls back to a PREFIX match when no session has exactly that name
+ * — on tmux 3.4, with topic 2's session gone, `kill-session -t claude-<chat>-2`
+ * kills topic 20's. The leading `=` makes the match exact.
+ */
+export function getTmuxSessionTarget(sessionName: string): string {
+  return `=${sessionName}`;
+}
+
+/**
+ * @description `-t` target naming a session's current pane exactly — for every
+ * pane or window command (`send-keys`, `capture-pane`, `display-message`,
+ * `list-panes`). Exact for the same reason as {@link getTmuxSessionTarget}; the
+ * trailing `:` is required, since `send-keys -t =name` fails "can't find pane".
+ */
+export function getTmuxPaneTarget(sessionName: string): string {
+  return `=${sessionName}:`;
+}
+
 /** Best-effort tmux call: returns stdout on success, empty string on any error. */
 export async function tmuxAsync(...args: string[]): Promise<string> {
   try {
