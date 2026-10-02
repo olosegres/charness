@@ -147,6 +147,7 @@ import {
   type OutboundHints,
 } from './platform/outbound';
 import { createJiraConnectorOutbound } from './connectors/jira/outbound';
+import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
@@ -6352,7 +6353,8 @@ command(['quit-all', 'quitall'], async (_ctx, key) => {
   // summary preserves the "M of N" semantic when a stop call fails.
   let stopped = 0;
   let active = 0;
-  for (const { key: bKey } of state.listBindings()) {
+  // A Telegram command stops Telegram sessions only: a Jira issue's work is not this topic's to stop (J2b, R3).
+  for (const { key: bKey } of getTelegramConversations(state.listBindings())) {
     cancelConversationRequest(bKey);
     const result = stopAllAdaptersFor(bKey);
     active += result.attempted;
@@ -9673,6 +9675,18 @@ function handleAgentError(key: SessionKey, error: Error): void {
  * `running` and refresh its model row. Fired by both `claudeCliAdapter`
  * and `openCodeAdapter` (`emit('started', key)`).
  */
+/**
+ * @description What a session of another platform leaves behind when it closes
+ * or stops — the request-side half of {@link handleAgentClosed} /
+ * {@link handleAgentStopped}, without their Telegram frames and notices (J2b, R2).
+ */
+function clearForeignSessionState(key: SessionKey): void {
+  // A gone session has nothing to resume or compact, and a new one starts without context.
+  cancelApiRetry(key);
+  clearThreadCompaction(key);
+  clearThreadContextMarker(key);
+}
+
 function handleAgentStarted(key: SessionKey): void {
   updatePinnedStatus(key).catch(() => {});
   // A fresh/adopted session arms the compact-on-idle watchdog (F2); it won't fire
@@ -11052,24 +11066,32 @@ export async function startBot(): Promise<void> {
   }
 
   // 2. Wire adapter events.
+  // Every handler below is a Telegram one; `dispatchAdapterEvent` is the ONE gate
+  // that gives a conversation of another platform only its request-side handling
+  // (Jira connector plan J2b, R2 — the routing table is unit-tested per event).
+  const noteTurnOutput = (key: SessionKey): void => {
+    // Output means a turn is under way — the wake-up engine's busy-onset signal.
+    requestWakeUpEngine?.noteAgentOutput(key);
+  };
   registerAdapterEventHandlers({
-    onOutput: (key, output, meta) => {
-      // Output means a turn is under way — the wake-up engine's busy-onset signal.
-      requestWakeUpEngine?.noteAgentOutput(key);
-      return withThreadLocale(key, () => handleAgentOutput(key, output, meta));
-    },
-    onStatus: (key, status) => withThreadLocale(key, () => handleAdapterStatus(key, status)),
-    onQuestion: (key, question) => withThreadLocale(key, () => handleAgentQuestion(key, question)),
-    onThinking: (key, payload) => withThreadLocale(key, () => handleAgentThinking(key, payload)),
-    onToolResult: (key, payload) => withThreadLocale(key, () => handleAgentToolResult(key, payload)),
-    onSubagentStatus: (key, payload) => withThreadLocale(key, () => handleSubagentStatus(key, payload)),
-    onApiError: (key, error) => withThreadLocale(key, () => handleApiError(key, error)),
-    onNoResponse: (key) => handleNoResponse(key),
-    onQuestionGone: (key) => withThreadLocale(key, () => handleQuestionGone(key)),
-    onClosed: (key) => withThreadLocale(key, () => handleAgentClosed(key)),
-    onStarted: (key) => withThreadLocale(key, () => handleAgentStarted(key)),
-    onStopped: (key) => withThreadLocale(key, () => handleAgentStopped(key)),
-    onError: (key, error) => withThreadLocale(key, () => handleAgentError(key, error)),
+    onOutput: (key, output, meta) => dispatchAdapterEvent(key, 'output', () => {
+      noteTurnOutput(key);
+      void withThreadLocale(key, () => handleAgentOutput(key, output, meta));
+    }, () => noteTurnOutput(key)),
+    onStatus: (key, status) => dispatchAdapterEvent(key, 'status', () => withThreadLocale(key, () => handleAdapterStatus(key, status))),
+    onQuestion: (key, question) => dispatchAdapterEvent(key, 'question', () => withThreadLocale(key, () => handleAgentQuestion(key, question))),
+    onThinking: (key, payload) => dispatchAdapterEvent(key, 'thinking', () => withThreadLocale(key, () => handleAgentThinking(key, payload))),
+    onToolResult: (key, payload) => dispatchAdapterEvent(key, 'toolResult', () => withThreadLocale(key, () => handleAgentToolResult(key, payload))),
+    onSubagentStatus: (key, payload) => dispatchAdapterEvent(key, 'subagentStatus', () => withThreadLocale(key, () => handleSubagentStatus(key, payload))),
+    onApiError: (key, error) => dispatchAdapterEvent(key, 'apiError', () => withThreadLocale(key, () => handleApiError(key, error))),
+    onNoResponse: (key) => dispatchAdapterEvent(key, 'noResponse', () => handleNoResponse(key)),
+    onQuestionGone: (key) => dispatchAdapterEvent(key, 'questionGone', () => withThreadLocale(key, () => handleQuestionGone(key))),
+    onClosed: (key) => dispatchAdapterEvent(key, 'closed', () => withThreadLocale(key, () => handleAgentClosed(key)), () => clearForeignSessionState(key)),
+    onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key))),
+    onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
+    onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
+      console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
+    }),
   });
   // Both adapters branch on the per-thread display prefs while PRODUCING output
   // (OpenCode: child SSE parts on `subagent`; Claude: scrape-chunk relay routing

@@ -25,6 +25,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
+import { getClaudePlatformToolFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
@@ -387,6 +388,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const mcpFlags = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const args: string[] = [
       '-p',
+      // Followed by an option on purpose: `--disallowedTools` takes several values.
+      ...getClaudePlatformToolFlags(key),
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--include-partial-messages',

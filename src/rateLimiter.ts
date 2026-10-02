@@ -2,6 +2,7 @@ import { getAbortError, sleep } from './utils';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
 import { getTelegramChatId } from './connectors/telegram/sessionKeyCodec';
+import { createTelegramPrimitiveGuard } from './connectors/telegram/foreignKeyFallbacks';
 import { SendRateTracker } from './utils/sendRateTracker';
 import { formatRateLimit429Line, formatRateSummaryLine } from './utils/rateLimitLog';
 import { AbortableFifo } from './utils/abortableFifo';
@@ -452,6 +453,32 @@ export async function withRateLimitRetry<T>(
 }
 
 /**
+ * @description A send for a conversation of another platform (Jira connector
+ * plan J2b, R2): its operation never runs. Like a failed Telegram call it
+ * rejects, so an awaiting caller takes its error path.
+ */
+export class ForeignKeySendRefusedError extends Error {
+  constructor(key: SessionKey) {
+    super(`Telegram send refused: ${key.platform} conversation ${key.space}/${key.thread} is not a Telegram chat`);
+    this.name = 'ForeignKeySendRefusedError';
+  }
+}
+
+/** The second line behind the bot's per-primitive guards; logs once per entry point and conversation. */
+const checkIsTelegramSendKey = createTelegramPrimitiveGuard();
+
+/**
+ * The refusal of a foreign key's send. A handler is attached before it is
+ * returned, so a caller that fires and forgets it never raises an unhandled
+ * rejection — which would end the whole process.
+ */
+function getForeignKeySendRefusal<T>(key: SessionKey): Promise<T> {
+  const refusal = Promise.reject<T>(new ForeignKeySendRefusedError(key));
+  refusal.catch(() => {});
+  return refusal;
+}
+
+/**
  * @description The shared send tail both the paced and unpaced paths end in:
  * record the outbound send for the per-chat rate summary (best-effort — never
  * throws into the send path), then run `fn` through the reactive 429 retry.
@@ -487,11 +514,18 @@ function recordAndRetry<T>(
  * Do NOT route ordinary agent-output `sendMessage`s through this — that would
  * break the FCFS ordering the pacer guarantees.
  */
-export async function sendUnpaced<T>(
+export function sendUnpaced<T>(
   key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
+  // Not `async`, for the same reason as {@link enqueueSend}.
+  if (!checkIsTelegramSendKey(key, 'sendUnpaced')) return getForeignKeySendRefusal(key);
+  return sendTelegramUnpaced(key, fn, signal);
+}
+
+/** Async, so a synchronous throw on the way to the send still arrives as a rejection. */
+async function sendTelegramUnpaced<T>(key: SessionKey, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   return recordAndRetry(key, fn, signal);
 }
 
@@ -541,7 +575,17 @@ function waitForQueuedExecution<T>(
  *   await enqueueSend(key, () =>
  *     bot.telegram.sendMessage(key.chatId, text, { message_thread_id: key.threadId }));
  */
-export async function enqueueSend<T>(
+export function enqueueSend<T>(
+  key: SessionKey,
+  fn: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  // Not `async`: an async function would wrap the handled refusal in a NEW, unhandled promise.
+  if (!checkIsTelegramSendKey(key, 'enqueueSend')) return getForeignKeySendRefusal(key);
+  return enqueueTelegramSend(key, fn, signal);
+}
+
+async function enqueueTelegramSend<T>(
   key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,

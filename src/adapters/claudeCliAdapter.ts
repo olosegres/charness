@@ -28,6 +28,7 @@ import { classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry'
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
+import { getClaudePlatformToolFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
@@ -3383,6 +3384,8 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const claudeArgv: string[] = [
       claudePath,
+      // Followed by an option on purpose: `--disallowedTools` takes several values.
+      ...getClaudePlatformToolFlags(key),
       ...claudePermissionArgs,
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
@@ -4000,6 +4003,8 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const claudeArgv: string[] = [
       claudePath,
+      // Followed by an option on purpose: `--disallowedTools` takes several values.
+      ...getClaudePlatformToolFlags(key),
       ...claudePermissionArgs,
       '--resume', sessionId,
       ...mcpFlagsArr,
