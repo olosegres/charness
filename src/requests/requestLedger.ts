@@ -23,9 +23,11 @@ import type {
  *   history   — `DATA_DIR/requests.jsonl`, one line per CLOSED request
  *               (append-only, one rotated backup).
  *
- * A closed request stays known by id — an answer to it is still delivered, it
- * just changes no request — so the history is indexed in memory at {@link
- * RequestLedger.load}. Until that load resolves the ledger refuses every call
+ * A recently closed request stays known by id — an answer to it is still
+ * delivered, it just changes no request — so the history is indexed in memory
+ * at {@link RequestLedger.load}, bounded to the most recent
+ * {@link closedRequestIndexMaxSize} closed requests. A new request is durably
+ * saved before its id is handed out. Until the load resolves the ledger refuses every call
  * (it throws): the bot MCP server starts serving before sessions re-attach, and
  * an answer looked up against a not-yet-loaded history would wrongly be refused
  * as an unknown id. Tool handlers gate on {@link RequestLedger.whenLoaded}.
@@ -43,6 +45,17 @@ const requestIdPrefix = 'req_';
 /** 6 random bytes → 8 base64url chars, 48 bits. */
 const requestIdRandomByteLength = 6;
 
+/**
+ * How many CLOSED requests stay known by id (the most recent ones). A closed id
+ * is looked up only for a late answer — a turn still running when a newer
+ * request superseded its own — which arrives minutes, at most hours (a usage
+ * limit wait) after the close. 5 000 covers weeks of traffic even with every
+ * operator message a request (a few hundred a day), while keeping memory fixed
+ * (~1–2 MB) regardless of how long the bot runs. An answer to an id that fell
+ * out of the window is refused as unknown.
+ */
+export const closedRequestIndexMaxSize = 5_000;
+
 /** Thrown when the ledger is used before {@link RequestLedger.load} resolved. */
 export class RequestLedgerNotLoadedError extends Error {
   constructor() {
@@ -52,18 +65,28 @@ export class RequestLedgerNotLoadedError extends Error {
 }
 
 /** The part of the state store the ledger reads and writes. */
-export type RequestLedgerStore = Pick<StateStore, 'getOpenRequests' | 'getOpenRequest' | 'updateOpenRequest'>;
+export type RequestLedgerStore = Pick<StateStore, 'getOpenRequests' | 'getOpenRequest' | 'updateOpenRequest' | 'flush'>;
 
 /**
  * @name RequestLedgerDeps
- * @description `history` and `now` are injectable for tests; production uses the
- * `DATA_DIR` history file and the wall clock.
+ * @description `history`, `now` and `closedIndexMaxSize` are injectable for
+ * tests; production uses the `DATA_DIR` history file, the wall clock and
+ * {@link closedRequestIndexMaxSize}.
  */
 export interface RequestLedgerDeps {
   store: RequestLedgerStore;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
+  closedIndexMaxSize?: number;
 }
+
+/**
+ * @name OpenRequestUpdater
+ * @description How to change an open request: a patch, or a function of the
+ * CURRENT request run under the per-conversation lock (for a read-modify-write
+ * such as a counter increment that must not lose a concurrent one).
+ */
+export type OpenRequestUpdater = OpenRequestUpdate | ((current: OpenRequestState) => OpenRequestUpdate);
 
 /** @description An open request together with its conversation. */
 export interface OpenRequestEntry {
@@ -130,6 +153,8 @@ export class RequestLedger {
   private readonly store: RequestLedgerStore;
   private readonly history: RotatingJsonlFile<ClosedRequestRecord>;
   private readonly now: () => number;
+  private readonly closedIndexMaxSize: number;
+  /** Insertion order = close order, so the first key is always the oldest. */
   private readonly closedById = new Map<string, ClosedRequestRecord>();
   private loadPromise: Promise<void> | null = null;
   private isLoaded = false;
@@ -142,6 +167,7 @@ export class RequestLedger {
     this.store = deps.store;
     this.history = deps.history ?? new RotatingJsonlFile(getDefaultHistoryPath(), requestHistoryMaxBytes);
     this.now = deps.now ?? Date.now;
+    this.closedIndexMaxSize = deps.closedIndexMaxSize ?? closedRequestIndexMaxSize;
   }
 
   /**
@@ -169,7 +195,7 @@ export class RequestLedger {
     let skippedLineCount = 0;
     for (const line of await this.history.readLines()) {
       const record = parseClosedRequestLine(line);
-      if (record) this.closedById.set(record.id, record);
+      if (record) this.indexClosed(record);
       else skippedLineCount += 1;
     }
     let droppedOpenCount = 0;
@@ -181,7 +207,7 @@ export class RequestLedger {
     this.isLoaded = true;
     this.resolveLoaded();
     console.log(
-      `[requests] ledger loaded: ${this.getOpenEntries().length} open, ${this.closedById.size} closed in history` +
+      `[requests] ledger loaded: ${this.getOpenEntries().length} open, ${this.closedById.size} recently closed known` +
         (droppedOpenCount > 0 ? `, ${droppedOpenCount} open entries already closed dropped` : '') +
         (skippedLineCount > 0 ? `, ${skippedLineCount} unreadable history lines skipped` : ''),
     );
@@ -213,13 +239,27 @@ export class RequestLedger {
     if (!this.history.append(record)) {
       console.warn(`[requests] could not append ${record.id} to ${this.history.filePath}; it is closed in memory only`);
     }
+    this.indexClosed(record);
+  }
+
+  /** Remember a closed request by id, forgetting the oldest beyond the window. */
+  private indexClosed(record: ClosedRequestRecord): void {
+    this.closedById.delete(record.id);
     this.closedById.set(record.id, record);
+    while (this.closedById.size > this.closedIndexMaxSize) {
+      const oldestId = this.closedById.keys().next().value;
+      if (oldestId === undefined) break;
+      this.closedById.delete(oldestId);
+    }
   }
 
   /**
    * @description Open a new request for `key`'s conversation. The conversation's
    * open request, if any, is closed as `superseded` first, in the same atomic
-   * step — the latest message is the one that matters.
+   * step — the latest message is the one that matters. Resolves only once the
+   * new request is DURABLY saved: its id is about to reach an agent, and an id
+   * the agent was told about but a crash lost would make its answer refused as
+   * unknown — a dropped result.
    */
   async createRequest(key: SessionKey, origin: RequestOrigin): Promise<OpenRequestState> {
     this.assertLoaded();
@@ -238,6 +278,7 @@ export class RequestLedger {
       if (current) this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded' });
       return request;
     });
+    await this.store.flush();
     return request;
   }
 
@@ -268,14 +309,14 @@ export class RequestLedger {
    * superseded in the meantime — the update is then dropped, never applied to
    * its successor).
    */
-  async updateOpenRequest(id: string, update: OpenRequestUpdate): Promise<OpenRequestState | null> {
+  async updateOpenRequest(id: string, update: OpenRequestUpdater): Promise<OpenRequestState | null> {
     this.assertLoaded();
     const entry = this.getOpenEntries().find((candidate) => candidate.request.id === id);
     if (!entry) return null;
     let updated: OpenRequestState | null = null;
     await this.store.updateOpenRequest(entry.key, (current) => {
       if (current?.id !== id) return current;
-      const next: OpenRequestState = { ...current, ...update };
+      const next: OpenRequestState = { ...current, ...(typeof update === 'function' ? update(current) : update) };
       updated = next;
       return next;
     });

@@ -76,13 +76,16 @@ export async function startSchedulerMcpForBoot(deps: SchedulerMcpBootDeps): Prom
  * @description The boot steps whose relative order {@link runSessionBootPhase}
  * owns. `restoreAfterReattach` is the per-thread state that needs to know which
  * sessions came back (pending questions, armed retries, limit episodes, orphaned
- * status frames); `healActiveSessions` runs only when the server is up and is
- * best-effort — a throw is logged and never aborts the boot.
+ * status frames); `onSessionsRestored` opens the gate the session-reading MCP
+ * tools wait on (the server already serves, a surviving session may call in);
+ * `healActiveSessions` runs only when the server is up and is best-effort — a
+ * throw is logged and never aborts the boot.
  */
 export interface SessionBootPhaseSteps {
   startBotMcp: () => Promise<boolean>;
   reattachSessions: () => Promise<void>;
   restoreAfterReattach: () => void;
+  onSessionsRestored: () => void;
   healActiveSessions: () => void;
   rearmSchedules: () => Promise<void>;
 }
@@ -95,6 +98,7 @@ export async function runSessionBootPhase(steps: SessionBootPhaseSteps): Promise
   const isBotMcpStarted = await steps.startBotMcp();
   await steps.reattachSessions();
   steps.restoreAfterReattach();
+  steps.onSessionsRestored();
   if (isBotMcpStarted) {
     try {
       steps.healActiveSessions();

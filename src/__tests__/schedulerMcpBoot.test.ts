@@ -83,6 +83,8 @@ function createBotMcpHandle(): SchedulerMcpHandle {
     sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused' }),
     compactConversation: () => ({ ok: true, message: 'unused' }),
+    answerRequest: async () => ({ ok: false, error: 'unused' }),
+    whenSessionsRestored: async () => {},
     getSecret: async () => secret,
     port: defaultSchedulerMcpPort,
   };
@@ -132,6 +134,7 @@ describe('runSessionBootPhase', () => {
         spawnedEntry = await getSpawnedBotMcpEntry(reattachedKey);
       },
       restoreAfterReattach: () => {},
+      onSessionsRestored: () => {},
       healActiveSessions: () => {},
       rearmSchedules: async () => {},
     });
@@ -159,6 +162,7 @@ describe('runSessionBootPhase', () => {
       startBotMcp: async () => { order.push('startBotMcp'); return true; },
       reattachSessions: async () => { order.push('reattachSessions'); },
       restoreAfterReattach: () => { order.push('restoreAfterReattach'); },
+      onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },
     });
@@ -167,6 +171,7 @@ describe('runSessionBootPhase', () => {
       'startBotMcp',
       'reattachSessions',
       'restoreAfterReattach',
+      'onSessionsRestored',
       'healActiveSessions',
       'rearmSchedules',
     ]);
@@ -178,11 +183,12 @@ describe('runSessionBootPhase', () => {
       startBotMcp: async () => { order.push('startBotMcp'); return false; },
       reattachSessions: async () => { order.push('reattachSessions'); },
       restoreAfterReattach: () => { order.push('restoreAfterReattach'); },
+      onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },
     });
     assert.equal(isStarted, false);
-    assert.deepEqual(order, ['startBotMcp', 'reattachSessions', 'restoreAfterReattach', 'rearmSchedules']);
+    assert.deepEqual(order, ['startBotMcp', 'reattachSessions', 'restoreAfterReattach', 'onSessionsRestored', 'rearmSchedules']);
   });
 
   it('a throwing heal does not abort the boot: schedules are still re-armed', async () => {
@@ -191,6 +197,7 @@ describe('runSessionBootPhase', () => {
       startBotMcp: async () => true,
       reattachSessions: async () => {},
       restoreAfterReattach: () => {},
+      onSessionsRestored: () => {},
       healActiveSessions: () => { throw new Error('bindings unreadable'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },
     });

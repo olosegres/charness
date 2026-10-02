@@ -159,6 +159,8 @@ describe('createSchedulerMcpServer port binding', () => {
       sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused' }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
+      answerRequest: async () => ({ ok: false, error: 'unused' }),
+      whenSessionsRestored: async () => {},
       getSecret: async () => secret,
       port: takenPort,
     };
@@ -791,6 +793,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       sendFilesToThread,
       sendMessagesToThread,
       compactConversation: () => ({ ok: true, message: 'unused' }),
+      answerRequest: async () => ({ ok: false, error: 'unused' }),
+      whenSessionsRestored: async () => {},
       getSecret: async () => secret,
       port: 0,
     };

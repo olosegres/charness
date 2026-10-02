@@ -289,6 +289,9 @@ import {
 import { schedulerMcpServerName } from './scheduler/injection';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
+import { answerRequest } from './requests/answerRequest';
+import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
+import type { AnswerSinks } from './platform/answerSink';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { checkIsReminderSchedule, getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -13526,6 +13529,17 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
 });
 
 /**
+ * @name SchedulerWiringDeps
+ * @description What the bot MCP server needs from the boot that `wireScheduler`
+ * cannot build itself: the request ledger behind `answer_request` and the gate
+ * that opens once the boot re-attached the surviving sessions.
+ */
+interface SchedulerWiringDeps {
+  requestLedger: RequestLedger;
+  whenSessionsRestored: () => Promise<void>;
+}
+
+/**
  * @description Construct the scheduler stack (S8): run ledger → delivery (thin
  * lambdas over the bot's existing send/session functions) → timer engine
  * (assigned to the module-level {@link schedulerEngine}) → the bot-owned MCP
@@ -13533,8 +13547,13 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
  * with the actually-bound port). Lives outside `startBot` only for readability;
  * it captures the same module-level state the rest of bot.ts uses.
  */
-function wireScheduler(): SchedulerMcpHandle {
+function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const ledger = new RunLedger();
+  // Answers go back through the request platform's sink. Telegram's is the
+  // basic one (own message, unpinned) until the Telegram views pin answers.
+  const answerSinks: AnswerSinks = new Map([
+    ['telegram', createTelegramAnswerSink({ sendMessages: sendMessagesToThread })],
+  ]);
 
   const delivery = createScheduleDelivery({
     announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
@@ -13622,6 +13641,8 @@ function wireScheduler(): SchedulerMcpHandle {
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
+    answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks }, args),
+    whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
     // Reuse the port persisted from a prior boot (env override wins) so the
     // `telegramBot` registrations injected into agent sessions keep pointing at
@@ -13941,7 +13962,14 @@ export async function startBot(): Promise<void> {
   //    never gets it, and the Claude heal path cannot add an absent server. A
   //    bind failure (port busy) keeps booting: injection stays inert, sessions
   //    spawned this run lack the agent-facing tools, engine timers still fire.
-  const schedulerMcpHandle = wireScheduler();
+  let markSessionsRestored: () => void = () => {};
+  const sessionsRestored = new Promise<void>((resolve) => {
+    markSessionsRestored = resolve;
+  });
+  const schedulerMcpHandle = wireScheduler({
+    requestLedger,
+    whenSessionsRestored: () => sessionsRestored,
+  });
   const isSchedulerMcpStarted = await runSessionBootPhase({
     startBotMcp: () =>
       startSchedulerMcpForBoot({
@@ -13976,6 +14004,9 @@ export async function startBot(): Promise<void> {
       // the live persisted set during reattach).
       reconcileTransientFrames(orphanedTransientFrames);
     },
+    // The bot MCP tools that read session state (compact_conversation) wait
+    // for this: until now a surviving session would read as not running.
+    onSessionsRestored: markSessionsRestored,
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may
       // still hold a `telegramBot` registration from the previous bot

@@ -277,3 +277,62 @@ describe('RequestLedger across a restart', () => {
     assert.equal(ledgerAfter.getRequest('req_badAttrs'), null);
   });
 });
+
+describe('RequestLedger durability and the closed-id window', () => {
+  it('a new request is on disk before its id is handed out — no flush, no debounce wait', async () => {
+    // A long debounce: only an explicit durable save can make the file current.
+    const store = new StateStore(dataDir, { saveDebounceMs: 60_000 });
+    await store.init();
+    const ledger = new RequestLedger({ store, history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes) });
+    await ledger.load();
+
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+
+    const onDisk: { openRequests?: Record<string, { id: string }> } = JSON.parse(
+      fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'),
+    );
+    assert.equal(onDisk.openRequests?.[keyToString(topicKey)]?.id, request.id);
+  });
+
+  it('keeps only the most recent closed ids, at runtime and after a reload', async () => {
+    const closedIndexMaxSize = 2;
+    const store = await createStore();
+    const ledger = new RequestLedger({
+      store,
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      closedIndexMaxSize,
+    });
+    await ledger.load();
+    const closedIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const request = await ledger.createRequest(topicKey, messageOrigin);
+      await ledger.closeRequest(request.id, 'final');
+      closedIds.push(request.id);
+    }
+
+    assert.equal(ledger.getRequest(closedIds[0]), null, 'the oldest fell out of the window');
+    assert.equal(ledger.getRequest(closedIds[1])?.isOpen, false);
+    assert.equal(ledger.getRequest(closedIds[2])?.isOpen, false);
+
+    const reloaded = new RequestLedger({
+      store: await createStore(),
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      closedIndexMaxSize,
+    });
+    await reloaded.load();
+    assert.equal(reloaded.getRequest(closedIds[0]), null);
+    assert.equal(reloaded.getRequest(closedIds[2])?.isOpen, false);
+  });
+
+  it('a functional update runs on the current request under the lock', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const request = await ledger.createRequest(topicKey, messageOrigin);
+
+    await Promise.all([1, 2, 3].map(() =>
+      ledger.updateOpenRequest(request.id, (current) => ({ wakeCount: current.wakeCount + 1 })),
+    ));
+
+    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 3);
+  });
+});

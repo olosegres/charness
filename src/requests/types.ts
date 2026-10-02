@@ -95,3 +95,13 @@ export interface ClosedRequestRecord extends OpenRequestState {
 export type RequestLookup =
   | { isOpen: true; conversationKey: string; request: OpenRequestState }
   | { isOpen: false; conversationKey: string; request: ClosedRequestRecord };
+
+/**
+ * @name RequestAnswerKind
+ * @description What an `answer_request` call is.
+ *  - `progress` — an interim note; the request stays open.
+ *  - `question` — the agent needs the requester; closes the request (their reply
+ *    is a new request).
+ *  - `final`    — the result; closes the request.
+ */
+export type RequestAnswerKind = 'progress' | 'question' | 'final';

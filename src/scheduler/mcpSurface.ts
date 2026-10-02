@@ -25,6 +25,11 @@ import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
+import {
+  answerBodyMaxLength,
+  type AnswerRequestArgs,
+  type AnswerRequestOutcome,
+} from '../requests/answerRequest';
 
 /**
  * @description The bot-owned MCP server exposes four agent-facing tools —
@@ -101,6 +106,7 @@ When to use it:
 • The user EXPLICITLY asks to compact/shrink/summarize this conversation's context → compact_conversation. Only on an explicit request, never on your own judgement.
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
+• A message starts with a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. The requester may not see your plain text, so anything they must read goes through answer_request.
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 
@@ -268,6 +274,20 @@ export interface SchedulerMcpDeps {
    * `ok:false` when there is no active agent session to compact.
    */
   compactConversation: (threadKey: string) => { ok: boolean; message: string };
+  /**
+   * Deliver an agent's answer to a request and apply the close rules
+   * (`answer_request`). The surface passes the scope check in; the rules live in
+   * `requests/answerRequest.ts`.
+   */
+  answerRequest: (args: AnswerRequestArgs) => Promise<AnswerRequestOutcome>;
+  /**
+   * Resolves once the boot has re-attached the surviving sessions and rebuilt
+   * their per-thread state. The server serves BEFORE that (so a session spawned
+   * at boot is born with it), and a tool that reads session state awaits this
+   * first — otherwise a surviving session calling it in that window would be
+   * told it has no active session.
+   */
+  whenSessionsRestored: () => Promise<void>;
   getSecret: () => Promise<string>;
   /** Listen port; defaults to {@link getSchedulerMcpPort}. Tests pass `0` for ephemeral. */
   port?: number;
@@ -948,11 +968,82 @@ function registerCompactConversationTool(server: McpServer, deps: SchedulerMcpDe
       },
     },
     async (args) => {
+      // A surviving session may call this before boot re-attached it.
+      await deps.whenSessionsRestored();
       const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
       if (!resolved.ok) return errorResult(resolved.error);
       if (args.reason) console.log(`[compact_conversation] ${resolved.threadKey}: ${args.reason}`);
       const outcome = deps.compactConversation(resolved.threadKey);
       return outcome.ok ? textResult(outcome.message) : errorResult(outcome.message);
+    },
+  );
+}
+
+/**
+ * @description Whether a token's scope covers a conversation (serialized key): a
+ * `thread:` token covers exactly its thread, a `dir:` token every thread bound to
+ * its directory. Unlike {@link resolveTargetThreadKey} it never picks a target —
+ * the request id already names the conversation, this only checks the caller may
+ * act on it.
+ */
+export function checkIsConversationInScope(
+  scope: SchedulerScope,
+  conversationKey: string,
+  getThreadsForDirectory: (directory: string) => string[],
+): boolean {
+  if (scope.kind === 'thread') return scope.threadKey === conversationKey;
+  return getThreadsForDirectory(scope.directory).includes(conversationKey);
+}
+
+const answerRequestShape = {
+  requestId: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('The id from the "[Request <id> · from: …]" header of the message you are answering.'),
+  kind: z
+    .enum(['progress', 'question', 'final'])
+    .describe(
+      '"final" — the full result, at the end of your turn (closes the request); "question" — you need the ' +
+        'requester before you can go on (closes the request; their reply is a new request); "progress" — an ' +
+        'interim note (the request stays open).',
+    ),
+  body: z
+    .string()
+    .trim()
+    .min(1)
+    .max(answerBodyMaxLength)
+    .describe('The answer itself, in Markdown. Write it for the requester: they do not see your other output.'),
+};
+
+/**
+ * @description Register `answer_request` (request/answer core S3): the agent's
+ * answer to a request, delivered to the surface the request came from. The
+ * scope check is passed in so a session can only answer requests of the
+ * conversations its token covers; an id outside it reads as unknown.
+ */
+function registerAnswerRequestTool(server: McpServer, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
+  server.registerTool(
+    'answer_request',
+    {
+      title: 'Answer a request',
+      description:
+        'Send your answer to a request — a message that started with a "[Request <id> · from: …]" header — to ' +
+        'the person who made it, on the surface it came from. The requester may not see your plain text, so ' +
+        'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
+        'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +
+        'note. You may call it several times for one request; only "question" and "final" close it.',
+      inputSchema: answerRequestShape,
+    },
+    async (args) => {
+      const outcome = await deps.answerRequest({
+        requestId: args.requestId,
+        kind: args.kind,
+        body: args.body,
+        checkIsConversationInScope: (conversationKey) =>
+          checkIsConversationInScope(scope, conversationKey, deps.getThreadsForDirectory),
+      });
+      return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
     },
   );
 }
@@ -1122,6 +1213,7 @@ function buildRequestServer(
   registerFileSendTool(server, deps, scope, requestSignal);
   registerMessageSendTool(server, deps, scope, requestSignal);
   registerCompactConversationTool(server, deps, scope);
+  registerAnswerRequestTool(server, deps, scope);
   return server;
 }
 
