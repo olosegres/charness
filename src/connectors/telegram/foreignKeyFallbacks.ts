@@ -47,6 +47,16 @@ export function getTelegramPreambleGroupTitle(key: SessionKey, sources: Preamble
   return sources.checkIsDmKey(key) ? sources.getBotName() : undefined;
 }
 
+/**
+ * @description Only the Telegram conversations of a list. The binding store is
+ * shared by every platform (a Jira issue binds its project folder too), while a
+ * Telegram listing or check over it reads each key's chat or topic id — which
+ * throws for a foreign key.
+ */
+export function getTelegramConversations<T extends { key: SessionKey }>(entries: readonly T[]): T[] {
+  return entries.filter(({ key }) => checkIsTelegramKey(key));
+}
+
 /** Distinct (primitive, conversation) pairs remembered before the memory starts over. */
 const reportedPrimitiveSkipsMaxSize = 1000;
 

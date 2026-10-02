@@ -16,6 +16,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   createTelegramPrimitiveGuard,
   getTelegramConversationLocale,
+  getTelegramConversations,
   getTelegramPreambleGroupTitle,
   type TelegramChatLocaleStore,
 } from '../connectors/telegram/foreignKeyFallbacks';
@@ -87,6 +88,23 @@ describe('createTelegramPrimitiveGuard', () => {
     assert.equal(lines.length, 2, 'one line per primitive and conversation');
     assert.match(lines[0], /replyToThread skipped: jira conversation PROJ\/PROJ-12/);
     assert.match(lines[1], /pinThreadQuestion/);
+  });
+});
+
+describe('getTelegramConversations', () => {
+  it('keeps the Telegram bindings in order and drops a Jira one, whose chat id would throw', () => {
+    const otherTopicKey = makeTelegramKey(chatId, 7);
+    const bindings = [
+      { key: topicKey, data: { subdir: 'app' } },
+      { key: issueKey, data: { subdir: 'proj' } },
+      { key: otherTopicKey, data: { subdir: 'web' } },
+    ];
+
+    assert.deepEqual(
+      getTelegramConversations(bindings).map(({ data }) => data.subdir),
+      ['app', 'web'],
+    );
+    assert.equal(bindings.length, 3, 'the input list is left as it was');
   });
 });
 

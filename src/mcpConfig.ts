@@ -187,7 +187,8 @@ function writeGeneratedTmp(config: unknown, tmpPath: string): string | null {
  *
  * A session of any platform but Telegram starts with `--strict-mcp-config`
  * (Jira connector plan J2, D17): it gets exactly the configs passed here — the
- * bot's MCP and `DATA_DIR/mcp.json` — and nothing from the user or project MCP
+ * bot's MCP plus the operator's `DATA_DIR/mcp.json` and
+ * `DATA_DIR/threads/<key>.json` — and nothing from the user or project MCP
  * config, whose servers reach other tenants under the operator's own keys.
  */
 export async function prepareMcpFlags(opts: PrepareMcpOptions): Promise<string[]> {

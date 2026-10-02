@@ -106,13 +106,6 @@ const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 const mcpServerName = 'telegram-bot-scheduler';
 const mcpServerVersion = '1.0.0';
 
-/**
- * Connect-time `instructions` returned in the MCP `initialize` handshake — a
- * short, high-level pointer the client surfaces to the agent BEFORE any call.
- * Deliberately use-case oriented (when to reach for this server, what it can do)
- * and does NOT repeat the per-tool argument recipes: each tool's own description
- * already carries those in full. Kept terse on purpose.
- */
 /** The instruction bullets that hold on every platform (the two platform-neutral tools). */
 const compactConversationInstruction =
   '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
@@ -142,6 +135,12 @@ ${compactConversationInstruction}
 Each tool's own description has the exact argument recipe.`;
 
 /**
+ * Connect-time `instructions` returned in the MCP `initialize` handshake — a
+ * short, high-level pointer the client surfaces to the agent BEFORE any call.
+ * Deliberately use-case oriented (when to reach for this server, what it can do)
+ * and does NOT repeat the per-tool argument recipes: each tool's own description
+ * already carries those in full. Kept terse on purpose.
+ *
  * @description The connect-time instructions for a session of `platform`: only
  * a Telegram session has the scheduling and send-to-topic tools, so only its
  * instructions name them (Jira connector plan J2, D18).
@@ -194,7 +193,6 @@ export function resolveSchedulerMcpPort(
   return defaultSchedulerMcpPort;
 }
 
-/** Serialise a scope to its canonical cleartext form (the string the HMAC signs). */
 /**
  * @description The platform of the conversations a scope reaches. A `dir:`
  * scope is an OpenCode registration, which only Telegram topics use today. A
@@ -205,6 +203,7 @@ export function getSchedulerScopePlatform(scope: SchedulerScope): PlatformId | n
   return tryKeyFromString(scope.threadKey)?.platform ?? null;
 }
 
+/** Serialise a scope to its canonical cleartext form (the string the HMAC signs). */
 export function serializeSchedulerScope(scope: SchedulerScope): string {
   return scope.kind === 'thread' ? `thread:${scope.threadKey}` : `dir:${scope.directory}`;
 }

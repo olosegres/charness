@@ -155,6 +155,7 @@ import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import {
   createTelegramPrimitiveGuard,
   getTelegramConversationLocale,
+  getTelegramConversations,
   getTelegramPreambleGroupTitle,
 } from './connectors/telegram/foreignKeyFallbacks';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
@@ -5387,7 +5388,8 @@ interface BindingRow {
 }
 
 function collectBindingRows(): BindingRow[] {
-  const bindings = [...state.listBindings()];
+  // `/list` names Telegram topics; another platform's binding has no topic id.
+  const bindings = getTelegramConversations(state.listBindings());
   bindings.sort((a, b) => getTelegramThreadId(a.key) - getTelegramThreadId(b.key));
   return bindings.map(({ key: k, data }) => {
     const agent = state.getAgent(k);
@@ -8644,6 +8646,10 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   }
   console.log(`[Bot] status ${keyToString(key)}: ${status.slice(0, 100)}`);
   traceAgentEmit('status', key, status);
+  // The status frame is a Telegram message, and its coalescer reads the Telegram
+  // chat's rate limit — which throws for another platform's key (D19). Every tool
+  // call emits a status, so without this a Jira session crashed the process.
+  if (!checkIsTelegramPrimitiveKey(key, 'handleAgentStatus')) return;
 
   // S3: a status/thinking frame does NOT stop the typing state — both are
   // "working" cues and typing persists while the agent is busy. The loader
@@ -9218,6 +9224,9 @@ type ClaudeLivenessArmReason = 'activity' | 'busyOnset';
 function startClaudeLiveness(key: SessionKey, reason: ClaudeLivenessArmReason = 'activity'): void {
   const adapter = getThreadAdapter(key);
   if (!(adapter instanceof ClaudeCliAdapter) || !adapter.checkIsBusy) return;
+  // The loop keeps a Telegram working frame alive and its tick reads the Telegram
+  // chat's rate limit, which throws for another platform's key (D19).
+  if (!checkIsTelegramPrimitiveKey(key, 'startClaudeLiveness')) return;
   const state = getThreadMessageState(key);
   if (state.livenessTimer) return;
   if (reason === 'busyOnset') {
@@ -10832,7 +10841,8 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
   const botRights =
     groupId !== null ? await resolveBotAdminRights(groupId, botUserId) : null;
   const hasBinding =
-    groupId !== null && state.listBindings().some(({ key }) => getTelegramChatId(key) === groupId);
+    groupId !== null &&
+    getTelegramConversations(state.listBindings()).some(({ key }) => getTelegramChatId(key) === groupId);
   const availableAgents = (['claude', 'opencode'] as const).filter((name) =>
     checkIsInstalled(name),
   );
