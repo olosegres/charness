@@ -300,7 +300,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
       calls.push(url);
     }) as OpenCodeAdapter['apiRequest'];
 
-    // A bot restart restores sessions before its scheduler listener is started.
+    // A session that connected while injection was still inert.
     adapter['connectSse'](keyA);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls.length, 0, 'inert injection cannot register during reattach');

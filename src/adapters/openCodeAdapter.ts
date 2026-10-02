@@ -3198,8 +3198,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * Re-register active directories once the bot scheduler listener is ready.
-   * Reattached sessions connect before that listener starts during bot boot.
+   * Re-register active directories once the bot scheduler listener is ready,
+   * for sessions that connected while injection was still inert. Boot binds
+   * the listener before re-attaching sessions, so it does not call this.
    */
   registerSchedulerMcpForActiveSessions(): void {
     for (const session of this.sessions.values()) {

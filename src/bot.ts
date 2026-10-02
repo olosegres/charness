@@ -13929,11 +13929,11 @@ export async function startBot(): Promise<void> {
   //    ledger → delivery → timer engine → MCP server) is bound and injection is
   //    configured FIRST, so every session re-attached or resumed below is born
   //    WITH the bot's server — a session spawned while injection was still inert
-  //    never gets it, and the heal path cannot add an absent server. A bind
-  //    failure (port busy) keeps booting: injection stays inert, only the
-  //    agent-facing tools are missing this run, engine timers still fire.
+  //    never gets it, and the Claude heal path cannot add an absent server. A
+  //    bind failure (port busy) keeps booting: injection stays inert, sessions
+  //    spawned this run lack the agent-facing tools, engine timers still fire.
   const schedulerMcpHandle = wireScheduler();
-  const schedulerMcpStarted = await runSessionBootPhase({
+  const isSchedulerMcpStarted = await runSessionBootPhase({
     startBotMcp: () =>
       startSchedulerMcpForBoot({
         handle: schedulerMcpHandle,
@@ -14175,7 +14175,7 @@ export async function startBot(): Promise<void> {
         // Scheduler (S8): clear every armed job timer; persisted nextRunAt
         // means the next boot's rearmAll picks them back up (catch-up replay).
         schedulerEngine?.shutdown();
-        if (schedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
+        if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
       },
     });
   };
