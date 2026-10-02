@@ -1,6 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { resolveDataDir } from '../state';
+import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 
 /**
  * @description Append-only run ledger for the scheduler — one JSONL line per
@@ -15,7 +15,7 @@ import { resolveDataDir } from '../state';
  *
  * Size bound: once the file passes {@link maxLedgerBytes} it rolls to a single
  * `.1` backup (overwriting the previous backup), so total on-disk size never
- * exceeds roughly `2 × maxLedgerBytes`.
+ * exceeds roughly `2 × maxLedgerBytes` (the shared {@link RotatingJsonlFile}).
  */
 export const maxLedgerBytes = 10 * 1024 * 1024;
 
@@ -58,22 +58,15 @@ function getDefaultLedgerPath(): string {
  * `DATA_DIR` default.
  */
 export class RunLedger {
-  private readonly ledgerPath: string;
-  private isDirEnsured = false;
+  private readonly file: RotatingJsonlFile<ScheduleRunRecord>;
 
   constructor(ledgerPath?: string) {
-    this.ledgerPath = ledgerPath ?? getDefaultLedgerPath();
+    this.file = new RotatingJsonlFile(ledgerPath ?? getDefaultLedgerPath(), maxLedgerBytes);
   }
 
   /** Path of the live ledger file (for logging / tests). */
   get filePath(): string {
-    return this.ledgerPath;
-  }
-
-  private rotateIfOversized(): void {
-    if (!existsSync(this.ledgerPath)) return;
-    if (statSync(this.ledgerPath).size <= maxLedgerBytes) return;
-    renameSync(this.ledgerPath, `${this.ledgerPath}.1`);
+    return this.file.filePath;
   }
 
   /**
@@ -81,16 +74,7 @@ export class RunLedger {
    * ledger failure must not break a fire (same discipline as `appendDiagLog`).
    */
   append(record: ScheduleRunRecord): void {
-    try {
-      if (!this.isDirEnsured) {
-        mkdirSync(path.dirname(this.ledgerPath), { recursive: true, mode: 0o700 });
-        this.isDirEnsured = true;
-      }
-      this.rotateIfOversized();
-      // Owner-only file (mode applies at creation) — records carry prompt text.
-      appendFileSync(this.ledgerPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    } catch {
-      // Ledger is best-effort; a write failure must never break a fire.
-    }
+    // Ledger is best-effort; a write failure must never break a fire.
+    this.file.append(record);
   }
 }

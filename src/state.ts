@@ -18,6 +18,7 @@ import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './ut
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import type { ScheduleRecord } from './scheduler/types';
+import type { OpenRequestState } from './requests/types';
 import type { Locale } from './i18n';
 
 /**
@@ -394,6 +395,15 @@ export interface StateV1 {
    * after sessions are reattached, so the kick lands in a live session.
    */
   apiRetries?: Record<string, ApiRetryState>;
+  /**
+   * Open requests of the request ledger (`requests/requestLedger.ts`), keyed by
+   * {@link SessionKey} string — at most ONE per conversation (a new request
+   * supersedes the open one). Persisted so an unanswered request, its counters
+   * and its next wake-up survive a bot restart. Closed requests move to the
+   * append-only `DATA_DIR/requests.jsonl`. Optional so older state files stay
+   * valid — a missing value is an empty set.
+   */
+  openRequests?: Record<string, OpenRequestState>;
   /**
    * Boot-recovery markers: per {@link SessionKey} string, the `stdout.jsonl`
    * identity the recovery last armed a limit wait from (see
@@ -1985,6 +1995,52 @@ export class StateStore {
       delete this.state.apiRetries[k];
       if (Object.keys(this.state.apiRetries).length === 0) {
         delete this.state.apiRetries;
+      }
+      this.scheduleSave();
+    });
+  }
+
+  // ── open requests (request ledger) ──
+
+  /**
+   * @description Every open request across all conversations, keyed by
+   * {@link SessionKey} string. Returns a shallow copy so callers can't mutate the
+   * live state object.
+   */
+  getOpenRequests(): Record<string, OpenRequestState> {
+    return { ...(this.state.openRequests ?? {}) };
+  }
+
+  /** @description The open request of `key`'s conversation, or `undefined`. */
+  getOpenRequest(key: SessionKey): OpenRequestState | undefined {
+    return this.state.openRequests?.[keyToString(key)];
+  }
+
+  /**
+   * @description Replace the open request of `key`'s conversation with what
+   * `mutate` returns for the current one (`undefined` removes it), under the
+   * per-key lock — so a read-decide-write (supersede, close, counter update) is
+   * atomic against a concurrent one for the same conversation. `mutate` runs
+   * synchronously inside the lock; a side effect it performs (the ledger's
+   * history append) therefore happens before any other writer sees the result.
+   * The whole map is dropped once empty so an idle bot leaves a clean
+   * `state.json`.
+   */
+  async updateOpenRequest(
+    key: SessionKey,
+    mutate: (current: OpenRequestState | undefined) => OpenRequestState | undefined,
+  ): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const current = this.state.openRequests?.[k];
+      const next = mutate(current);
+      if (next === current) return;
+      if (next === undefined) {
+        if (!this.state.openRequests) return;
+        delete this.state.openRequests[k];
+        if (Object.keys(this.state.openRequests).length === 0) delete this.state.openRequests;
+      } else {
+        (this.state.openRequests ??= {})[k] = next;
       }
       this.scheduleSave();
     });
