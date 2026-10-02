@@ -1,9 +1,9 @@
 import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 
 /**
- * @description Separator between the serialized key's own two halves inside a
- * tmux session name. `keyToString` joins them with `:`, which tmux treats as a
- * window/pane address separator, so the name swaps it for `-`.
+ * @description What every `:` of the serialized key becomes inside a tmux
+ * session name. `keyToString` joins the key's parts with `:`, which tmux treats
+ * as a window/pane address separator, so the name swaps it for `-`.
  */
 const tmuxKeySeparator = '-';
 

@@ -8,28 +8,52 @@ import {
 /** The platform id this connector answers to. */
 const jiraPlatform: PlatformId = 'jira';
 
+/** What the serialized key joins its parts with; a slug swaps it for its own separator. */
+const keySeparator = ':';
+
 /**
  * @description A Jira conversation is one issue: `space` is the project key,
  * `thread` the issue key, spelled `jira:<PROJECT>:<ISSUE-KEY>` (`jira:PROJ:PROJ-12`).
  * The `jira:` prefix keeps it apart from Telegram's all-numeric shape.
  *
  * A project key is an upper-case letter followed by upper-case letters, digits
- * or `_`; the issue key must be that SAME project key, `-` and a number (the
- * back-reference `\1`). The back-reference is also what makes the slug
- * readable: with `_` as the separator `jira_MY_PROJ_MY_PROJ-12` has several
- * candidate split points, and only the one where both halves name the same
- * project matches.
+ * or `_`; the issue key must be that SAME project key, `-` and a number without
+ * leading zeros (the back-reference `\1`; Jira numbers issues from 1, so
+ * `PROJ-012` would be a second spelling of `PROJ-12`). The back-reference is
+ * also what makes the slug readable: with `_` as the separator
+ * `jira_MY_PROJ_MY_PROJ-12` has several candidate split points, and only the one
+ * where both halves name the same project matches.
  */
 const projectKeyPattern = '[A-Z][A-Z0-9_]*';
-const jiraKeyRe = new RegExp(`^jira:(${projectKeyPattern}):(\\1-\\d+)$`);
+const issueNumberPattern = '[1-9]\\d*';
+const issueKeyRe = new RegExp(`^(${projectKeyPattern})-${issueNumberPattern}$`);
 
 /** Escape a slug separator for use inside a regular expression. */
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function decodeJiraKey(serialized: string): SessionKey | null {
-  const match = jiraKeyRe.exec(serialized);
+/** The key's shape with `separator` between its parts — `:` for the key itself. */
+function createJiraKeyRe(separator: string): RegExp {
+  const escaped = escapeRegExp(separator);
+  return new RegExp(`^${jiraPlatform}${escaped}(${projectKeyPattern})${escaped}(\\1-${issueNumberPattern})$`);
+}
+
+const jiraKeyRe = createJiraKeyRe(keySeparator);
+
+/** Slug separators are a handful of fixed characters (tmux `-`, directory `_`). */
+const slugKeyRes = new Map<string, RegExp>();
+
+function getSlugKeyRe(separator: string): RegExp {
+  let keyRe = slugKeyRes.get(separator);
+  if (!keyRe) {
+    keyRe = createJiraKeyRe(separator);
+    slugKeyRes.set(separator, keyRe);
+  }
+  return keyRe;
+}
+
+function getJiraKeyFromMatch(match: RegExpExecArray | null): SessionKey | null {
   return match ? { platform: jiraPlatform, space: match[1], thread: match[2] } : null;
 }
 
@@ -41,12 +65,17 @@ function decodeJiraKey(serialized: string): SessionKey | null {
 export const jiraSessionKeyCodec: SessionKeyCodec = {
   platform: jiraPlatform,
 
+  // Refuses a key it could not decode again: `state.json` would otherwise drop
+  // its fields silently at the next load, and its tmux session would be neither
+  // re-adopted nor reaped.
   encode(key: SessionKey): string {
-    return `jira:${key.space}:${key.thread}`;
+    const serialized = [jiraPlatform, key.space, key.thread].join(keySeparator);
+    if (!jiraKeyRe.test(serialized)) throw new Error(`Invalid Jira SessionKey: "${serialized}"`);
+    return serialized;
   },
 
   decode(serialized: string): SessionKey {
-    const key = decodeJiraKey(serialized);
+    const key = getJiraKeyFromMatch(jiraKeyRe.exec(serialized));
     if (!key) throw new Error(`Invalid Jira SessionKey string: "${serialized}"`);
     return key;
   },
@@ -56,9 +85,7 @@ export const jiraSessionKeyCodec: SessionKeyCodec = {
   },
 
   decodeSlug(slug: string, separator: string): SessionKey | null {
-    const escaped = escapeRegExp(separator);
-    const match = new RegExp(`^jira${escaped}(${projectKeyPattern})${escaped}(\\1-\\d+)$`).exec(slug);
-    return match ? { platform: jiraPlatform, space: match[1], thread: match[2] } : null;
+    return getJiraKeyFromMatch(getSlugKeyRe(separator).exec(slug));
   },
 };
 
@@ -75,5 +102,7 @@ registerSessionKeyCodec(jiraSessionKeyCodec);
  * Throws for a string that is not an issue key.
  */
 export function makeJiraKey(issueKey: string): SessionKey {
-  return jiraSessionKeyCodec.decode(`jira:${issueKey.slice(0, issueKey.lastIndexOf('-'))}:${issueKey}`);
+  const match = issueKeyRe.exec(issueKey);
+  if (!match) throw new Error(`Invalid Jira issue key: "${issueKey}"`);
+  return { platform: jiraPlatform, space: match[1], thread: issueKey };
 }

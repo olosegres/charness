@@ -10,9 +10,19 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { keyFromString, keyToString, tryKeyFromSlug, tryKeyFromString, type SessionKey } from '../sessionKey';
+import {
+  keyFromString,
+  keyToSlug,
+  keyToString,
+  registerSessionKeyCodec,
+  tryKeyFromSlug,
+  tryKeyFromString,
+  unregisterSessionKeyCodec,
+  type SessionKey,
+} from '../sessionKey';
 import { jiraSessionKeyCodec, makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { makeTelegramKey, telegramSessionKeyCodec } from '../connectors/telegram/sessionKeyCodec';
+import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
 import { buildTmuxSessionName, parseTmuxSessionName } from '../utils/tmuxSessionName';
 import {
   buildJsonStreamTmuxSessionName,
@@ -41,11 +51,29 @@ describe('the Jira key', () => {
       'jira:PROJ:PROJ-12:extra',
       'jira:1PROJ:1PROJ-2', // a project key starts with a letter
       'jira:PROJ-12',
+      'jira:PROJ:PROJ-012', // a second spelling of PROJ-12
+      'jira:PROJ:PROJ-0', // Jira numbers issues from 1
     ]) {
       assert.equal(jiraSessionKeyCodec.matches(foreign), false, foreign);
       assert.equal(tryKeyFromString(foreign), null, foreign);
     }
-    assert.throws(() => makeJiraKey('not an issue'), /Invalid Jira SessionKey/);
+  });
+
+  it('is only built for a real issue key, and the error names what the caller passed', () => {
+    for (const notAnIssue of ['not an issue', 'PROJ12', 'PROJ-012', 'proj-12', 'PROJ-12-3']) {
+      assert.throws(
+        () => makeJiraKey(notAnIssue),
+        (error: Error) => error.message === `Invalid Jira issue key: "${notAnIssue}"`,
+        notAnIssue,
+      );
+    }
+  });
+
+  it('refuses to serialize a key it could not read back', () => {
+    // An issue of another project: encoding it would write a state.json field
+    // that the next load drops, and a tmux name nothing re-adopts or reaps.
+    const undecodable: SessionKey = { platform: 'jira', space: 'PROJ', thread: 'OTHER-1' };
+    assert.throws(() => keyToString(undecodable), /Invalid Jira SessionKey: "jira:PROJ:OTHER-1"/);
   });
 
   it('and a Telegram key never claim each other\'s strings', () => {
@@ -84,5 +112,22 @@ describe('the slug inverse', () => {
       assert.equal(tryKeyFromSlug(foreign, '-'), null, foreign);
     }
     assert.equal(parseJsonStreamDirName('jira_PROJ_OTHER-1'), null);
+    assert.equal(tryKeyFromSlug('jira-PROJ-PROJ-012', '-'), null);
+  });
+
+  it('skips a registered codec that cannot read slugs, instead of stopping at it', () => {
+    // Put the test double (no decodeSlug) FIRST, so every other codec is asked after it.
+    unregisterSessionKeyCodec('telegram');
+    unregisterSessionKeyCodec('jira');
+    registerTestSessionKeyCodec();
+    registerSessionKeyCodec(telegramSessionKeyCodec);
+    registerSessionKeyCodec(jiraSessionKeyCodec);
+    try {
+      assert.deepEqual(tryKeyFromSlug('-1001111111111-9085', '-'), makeTelegramKey(-1001111111111, 9085));
+      assert.deepEqual(tryKeyFromSlug('jira-PROJ-PROJ-12', '-'), issueKey);
+      assert.equal(tryKeyFromSlug(keyToSlug(makeTestKey('space', 'thread'), '-'), '-'), null);
+    } finally {
+      unregisterSessionKeyCodec('test');
+    }
   });
 });

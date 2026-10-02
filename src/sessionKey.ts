@@ -64,6 +64,12 @@ export interface SessionKeyCodec {
    * platform's. Only the codec knows where its halves end once every `:` became
    * the separator. Optional — a codec without it is never read back from a
    * tmux session or directory name.
+   *
+   * Slug shapes MUST be mutually unambiguous too, and that is a separate
+   * guarantee: `keyToSlug` is lossy, so formats that are disjoint as strings
+   * can still collide as slugs. {@link tryKeyFromSlug} takes the first codec
+   * that claims a name, and a misread name is a session adopted or reaped for
+   * the wrong conversation.
    */
   decodeSlug?(slug: string, separator: string): SessionKey | null;
 }

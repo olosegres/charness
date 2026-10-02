@@ -25,6 +25,11 @@ const telegramPlatform: PlatformId = 'telegram';
  */
 const telegramKeyRe = /^(-?\d+):(\d+)$/;
 
+function decodeTelegramKey(serialized: string): SessionKey | null {
+  const match = telegramKeyRe.exec(serialized);
+  return match ? { platform: telegramPlatform, space: match[1], thread: match[2] } : null;
+}
+
 /**
  * @description Telegram's {@link SessionKeyCodec}. `matches` is what lets the
  * core decode a string with no platform in hand: the all-numeric shape is
@@ -38,9 +43,9 @@ export const telegramSessionKeyCodec: SessionKeyCodec = {
   },
 
   decode(serialized: string): SessionKey {
-    const match = telegramKeyRe.exec(serialized);
-    if (!match) throw new Error(`Invalid Telegram SessionKey string: "${serialized}"`);
-    return { platform: telegramPlatform, space: match[1], thread: match[2] };
+    const key = decodeTelegramKey(serialized);
+    if (!key) throw new Error(`Invalid Telegram SessionKey string: "${serialized}"`);
+    return key;
   },
 
   matches(serialized: string): boolean {
@@ -53,7 +58,7 @@ export const telegramSessionKeyCodec: SessionKeyCodec = {
     const lastSeparator = slug.lastIndexOf(separator);
     if (lastSeparator <= 0) return null;
     const serialized = `${slug.slice(0, lastSeparator)}:${slug.slice(lastSeparator + separator.length)}`;
-    return telegramKeyRe.test(serialized) ? telegramSessionKeyCodec.decode(serialized) : null;
+    return decodeTelegramKey(serialized);
   },
 };
 
