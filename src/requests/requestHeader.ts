@@ -40,6 +40,7 @@ const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
   silentTurn: 'Your last turn ended without answering it.',
   progressFollowUp: 'Some time has passed since your last progress note on it.',
   backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
+  postRetry: 'It could not be delivered to you earlier.',
 };
 
 /**

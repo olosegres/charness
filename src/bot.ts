@@ -1719,6 +1719,9 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
   else void replyToThread(key, t('apiRetry.resuming'));
   try {
+    // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
+    // would not know the work the limit interrupted.
+    if (!checkIsTelegramKey(key)) await resumeOwnSessionUnlessStarting(key);
     await ensureAgentSession(key);
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets
@@ -1803,7 +1806,9 @@ function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: numbe
     return { plainNotice: text, answerBody: text };
   }
   const nowMs = Date.now();
-  const time = formatLocalClockWithDateIfNotToday(wait.kind === 'afterReset' ? wait.resetAt : wait.fireAt, nowMs);
+  // R31: a tracker's requester may sit in another zone — the time names the instance's.
+  const zoneSuffix = checkIsTelegramKey(key) ? '' : ` ${getCurrentTimezone()}`;
+  const time = `${formatLocalClockWithDateIfNotToday(wait.kind === 'afterReset' ? wait.resetAt : wait.fireAt, nowMs)}${zoneSuffix}`;
   const [noticeText, answerText] = wait.kind === 'afterReset'
     ? [t('apiRetry.usageLimitResetNotice', { time }), t('requests.limit.answerAfterResetNotice', { time })]
     : [
@@ -13805,6 +13810,15 @@ async function ensureSessionByResume(key: SessionKey): Promise<boolean> {
     console.warn(`[requests] could not resume ${keyToString(key)} for a wake-up:`, e instanceof Error ? e.message : e);
     return false;
   }
+}
+
+/**
+ * @description A tracker conversation's own session, back before a post into it
+ * (D5): a dead one is resumed by its persisted id, never replaced by a fresh one;
+ * a start already under way finishes on its own.
+ */
+async function resumeOwnSessionUnlessStarting(key: SessionKey): Promise<void> {
+  if (!startupPromptBuffer.checkIsStarting(keyToString(key))) await ensureSessionByResume(key);
 }
 
 /**

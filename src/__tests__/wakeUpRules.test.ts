@@ -1,8 +1,8 @@
 /**
  * @description The wake-up rules (`requests/wakeUpRules.ts`, request/answer core
  * S4) as pure decisions: every branch of the turn-end decision, the follow-up and
- * backstop sweep, the turn-end detection with both race guards, and the backstop
- * override.
+ * backstop sweep, the post retries (R28), the turn-end detection with both race
+ * guards, and the backstop override.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -15,6 +15,7 @@ import {
   decideTurnEnd,
   decideUnwatchedRequest,
   defaultRequestBackstopMs,
+  getPostRetryUpdate,
   getRequestBackstopMs,
   getWatchedTurnState,
   maxWakeUpsPerRequest,
@@ -135,6 +136,37 @@ describe('decideUnwatchedRequest', () => {
     });
     const recentlyActive = createRequest({ createdAt: nowMs - 2 * backstopMs, lastTurnActivityAt: nowMs - 1000 });
     assert.equal(decideUnwatchedRequest(recentlyActive, idleProbe, nowMs, backstopMs).kind, 'none');
+  });
+});
+
+describe('post retries (R28)', () => {
+  const minuteMs = 60 * 1000;
+
+  it('a failed post is retried after about 1, 5 and 15 minutes, then left to the normal rules', () => {
+    assert.deepEqual(getPostRetryUpdate(createRequest(), nowMs), { postRetryCount: 1, nextPostRetryAt: nowMs + minuteMs });
+    assert.deepEqual(getPostRetryUpdate(createRequest({ postRetryCount: 1 }), nowMs), { postRetryCount: 2, nextPostRetryAt: nowMs + 5 * minuteMs });
+    assert.deepEqual(getPostRetryUpdate(createRequest({ postRetryCount: 2 }), nowMs), { postRetryCount: 3, nextPostRetryAt: nowMs + 15 * minuteMs });
+    assert.equal(getPostRetryUpdate(createRequest({ postRetryCount: 3 }), nowMs), null);
+  });
+
+  it('a due retry wakes under its own reason, outside the wake-up cap', () => {
+    const due = createRequest({ nextPostRetryAt: nowMs, wakeCount: maxWakeUpsPerRequest });
+    assert.deepEqual(decideUnwatchedRequest(due, idleProbe, nowMs, backstopMs), {
+      kind: 'wake',
+      reason: 'postRetry',
+      update: { nextPostRetryAt: undefined, lastTurnActivityAt: nowMs },
+    });
+  });
+
+  it('a retry not yet due waits — the backstop does not jump ahead of it', () => {
+    const pending = createRequest({ createdAt: nowMs - 2 * backstopMs, nextPostRetryAt: nowMs + 1 });
+    assert.equal(decideUnwatchedRequest(pending, idleProbe, nowMs, backstopMs).kind, 'none');
+  });
+
+  it('a due retry still waits for a working or blocked session', () => {
+    const due = createRequest({ nextPostRetryAt: nowMs });
+    assert.equal(decideUnwatchedRequest(due, { ...idleProbe, isBusy: true }, nowMs, backstopMs).kind, 'none');
+    assert.equal(decideUnwatchedRequest(due, { ...idleProbe, isTurnEndBlocked: true }, nowMs, backstopMs).kind, 'none');
   });
 });
 

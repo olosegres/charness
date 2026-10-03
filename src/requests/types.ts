@@ -70,6 +70,10 @@ export interface OpenRequestState {
   prompt?: string;
   /** Set once a turn that carried `prompt` was seen taken in by the session. */
   isPromptTakenIn?: boolean;
+  /** Post retries scheduled so far after the prompt's post failed (R28); absent = none. */
+  postRetryCount?: number;
+  /** Epoch ms of the next post retry, while one is due (R28). */
+  nextPostRetryAt?: number;
   /**
    * Set while a usage-limit wait will not end by itself (auto-resume off, the
    * operator skipped or disabled the resume, the bot gave up its attempts):
@@ -108,6 +112,8 @@ export type OpenRequestUpdate = Partial<
     | 'limitWaitAnsweredFor'
     | 'alertRef'
     | 'isPromptTakenIn'
+    | 'postRetryCount'
+    | 'nextPostRetryAt'
   >
 >;
 
@@ -150,8 +156,10 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  *  - `progressFollowUp` — it sent a progress note and the follow-up delay passed.
  *  - `backstop` — nothing was seen working on it for the backstop window (a dead
  *    process, or tracking lost across a restart).
+ *  - `postRetry` — the request's prompt could not be posted; tried again soon
+ *    (Jira plan R28).
  */
-export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop';
+export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop' | 'postRetry';
 
 /**
  * @name RequestAlertReason

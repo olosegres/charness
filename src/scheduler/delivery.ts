@@ -1,6 +1,6 @@
 import { t } from '../i18n';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
-import { formatLocalClock } from '../utils/localClock';
+import { formatLocalClock, formatLocalDateAndClock } from '../utils/localClock';
 import {
   buildCheckFailurePrompt,
   checkAlertOutputMaxChars,
@@ -89,8 +89,9 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
  * carry the marker so the agent acts on it as a scheduled task, not a stray
  * message. Kept to one line so it never overwhelms a short prompt.
  */
-export function prependScheduledRunMarker(jobName: string, prompt: string): string {
-  return `[Scheduled run "${jobName}"]\n${prompt}`;
+export function prependScheduledRunMarker(jobName: string, prompt: string, options: { dueAtMs?: number } = {}): string {
+  const dueNote = options.dueAtMs === undefined ? '' : ` · was due at ${formatLocalDateAndClock(options.dueAtMs)}`;
+  return `[Scheduled run "${jobName}"${dueNote}]\n${prompt}`;
 }
 
 /**
@@ -175,9 +176,10 @@ async function deliverToAgent(
   deps: ScheduleDeliveryDeps,
   job: ScheduleRecord,
   prompt: string,
+  options: { heldText?: string } = {},
 ): Promise<DeliveryOutcome> {
   // 3–4. ensure a session, let a busy one finish its turn, forward the prefixed prompt
-  const posted = await postToSession(deps, job.threadKey, prompt, job.lastAdapterName);
+  const posted = await postToSession(deps, job.threadKey, prompt, job.lastAdapterName, options);
   if (posted.ok) {
     // A run held during a usage-limit wait reaches the agent once the wait ends —
     // with its resume, the operator's next message, or the next session (R23).
@@ -254,7 +256,11 @@ export function createScheduleDelivery(
     // unbound topic and in General — there is no session to fail to ensure.
     if (checkIsReminderSchedule(job)) return { status: 'delivered' };
 
-    // 3–4. wake the agent with the prompt
-    return deliverToAgent(deps, job, prependScheduledRunMarker(job.name, job.prompt));
+    // 3–4. wake the agent with the prompt. A run held over a usage-limit wait
+    // reaches the agent later: it says when it was due (R27).
+    const dueAtMs = fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined ? fireContext.missedAtMs : deps.now();
+    return deliverToAgent(deps, job, prependScheduledRunMarker(job.name, job.prompt), {
+      heldText: prependScheduledRunMarker(job.name, job.prompt, { dueAtMs }),
+    });
   };
 }

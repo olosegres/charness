@@ -8,6 +8,7 @@ import {
   checkIsWatchedTurnStale,
   decideTurnEnd,
   decideUnwatchedRequest,
+  getPostRetryUpdate,
   getWatchedTurnState,
   type SessionTurnProbe,
   type WakeUpDecision,
@@ -120,6 +121,24 @@ export class RequestWakeUpEngine {
       isRequestPrompt: options.isRequestPrompt,
     });
     await this.recordTurnActivity(request, true);
+  }
+
+  /**
+   * @description The request's prompt could not be posted to the session (no
+   * session came up, the forward failed): try again soon (R28). Once the retries
+   * are spent nothing is scheduled — the backstop and its alert take over. Never
+   * rejects: its caller is a post that already failed.
+   */
+  async notePostFailed(key: SessionKey, requestId: string): Promise<void> {
+    const request = this.deps.ledger.getOpenRequest(key);
+    if (request?.id !== requestId) return;
+    const retry = getPostRetryUpdate(request, this.now());
+    if (!retry) return;
+    try {
+      await this.deps.ledger.updateOpenRequest(request.id, retry);
+    } catch (e) {
+      logWakeUpFailure(`scheduling a post retry of ${request.id}`, e);
+    }
   }
 
   /** @description The agent produced output in this conversation (a turn is under way). */
@@ -285,6 +304,12 @@ export class RequestWakeUpEngine {
       return;
     }
     if (outcome === 'requestGone') return;
+    if (decision.reason === 'postRetry') {
+      // R28: a retry that failed again tries later; once spent, the backstop decides — no alert yet.
+      const retry = getPostRetryUpdate(updated, this.now());
+      if (retry) await this.deps.ledger.updateOpenRequest(updated.id, retry);
+      return;
+    }
     const stopped = await this.deps.ledger.updateOpenRequest(updated.id, { isWakeStopped: true, nextWakeAt: undefined });
     if (stopped) await this.raiseAlert(key, stopped, 'wakeFailed');
   }

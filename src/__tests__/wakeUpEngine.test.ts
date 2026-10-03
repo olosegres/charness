@@ -320,7 +320,7 @@ describe('progress answers', () => {
     await engine.trackForwardedTurn(topicKey, request.id);
     await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
     await endTurnSilently(engine);
-    await new Promise((resolve) => setTimeout(resolve, 20)); // let the debounced save land
+    await Promise.all(createdStores.map((store) => store.flush())); // the debounced save, landed before the "restart"
 
     const engineAfterRestart = createEngine(await createLedger());
     nowMs += progressFollowUpDelayMs;
@@ -744,5 +744,59 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     await engine.sweepUnwatchedRequests();
     assert.equal(wakeUpMessages.at(-1)?.isRequestPrompt, false);
     assert.match(wakeUpMessages.at(-1)?.text ?? '', new RegExp(`request ${plain.id} is still open`));
+  });
+});
+
+describe('a request whose post failed is retried soon, outside the wake-up cap (R28)', () => {
+  const prompt = '[Request · from: PROJ-12]\nThe whole request text.';
+  const minuteMs = 60 * 1000;
+
+  async function createFailedPost(ledger: RequestLedger, engine: RequestWakeUpEngine): Promise<OpenRequestState> {
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await engine.notePostFailed(topicKey, request.id);
+    return request;
+  }
+
+  it('the prompt is posted again a minute later, under its own reason, without spending a wake-up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    await createFailedPost(ledger, engine);
+    nowMs += minuteMs - 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages, [], 'not due yet');
+
+    nowMs += 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages, [{ reason: 'postRetry', text: prompt, isRequestPrompt: true }]);
+    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 0);
+  });
+
+  it('a retry that fails again tries after 5, then 15 minutes, with no alert; then the backstop takes over', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    await createFailedPost(ledger, engine);
+    isWakeUpDeliverable = false;
+    for (const delayMs of [minuteMs, 5 * minuteMs, 15 * minuteMs]) {
+      nowMs += delayMs;
+      await engine.sweepUnwatchedRequests();
+    }
+    assert.deepEqual(alerts, [], 'a retry is not a reminder the agent ignored');
+    const spent = ledger.getOpenRequest(topicKey);
+    assert.equal(spent?.postRetryCount, 3);
+    assert.equal(spent?.nextPostRetryAt, undefined);
+    assert.equal(spent?.isWakeStopped, false);
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(alerts.map((alert) => alert.reason), ['wakeFailed'], 'the backstop\'s own failure alerts as before');
+  });
+
+  it('a request already gone or replaced is not scheduled', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const first = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await engine.notePostFailed(topicKey, first.id);
+    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
   });
 });

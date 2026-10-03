@@ -199,4 +199,18 @@ describe('the bot holds and releases them (R23)', () => {
     assert.match(fire, /await forwardPromptToAgent\(key, getThreadAdapter\(key\), resume\.text\);/);
     assert.match(fire, /isRequestPrompt: resume\.isRequestPrompt,/);
   });
+
+  it('a limit resume continues a tracker issue in its own session; Telegram\'s resume is unchanged (R26)', () => {
+    const fire = getFunction('async function fireApiRetryWithLocale(');
+    const resume = fire.indexOf('if (!checkIsTelegramKey(key)) await resumeOwnSessionUnlessStarting(key);');
+    const ensure = fire.indexOf('await ensureAgentSession(key);');
+    assert.ok(resume > 0 && ensure > resume, 'resumed by id before a session would be started fresh');
+    assert.match(getFunction('async function resumeOwnSessionUnlessStarting('), /if \(!startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)\) await ensureSessionByResume\(key\);/);
+  });
+
+  it('a tracker\'s limit texts name the instance\'s timezone; a topic\'s do not (R31)', () => {
+    const texts = getFunction('function getLimitWaitTexts(');
+    assert.match(texts, /const zoneSuffix = checkIsTelegramKey\(key\) \? '' : ` \$\{getCurrentTimezone\(\)\}`;/);
+    assert.match(texts, /const time = `\$\{formatLocalClockWithDateIfNotToday\([^`]+\)\}\$\{zoneSuffix\}`;/);
+  });
 });

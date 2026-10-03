@@ -87,15 +87,18 @@ export async function postToSession(
   conversationKey: string,
   text: string,
   fallbackAdapterName?: string,
+  options: { heldText?: string } = {},
 ): Promise<PostToSessionResult> {
+  // What is held is read only once the wait is over: a caller may say when it was due (R27).
+  const heldText = options.heldText ?? text;
   // Checked first: no session is started or resumed into a limit.
-  if (deps.holdForLimitResume?.(conversationKey, text)) return { ok: true, isHeld: true };
+  if (deps.holdForLimitResume?.(conversationKey, heldText)) return { ok: true, isHeld: true };
   if (deps.resumeSession) await deps.resumeSession(conversationKey);
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
   if (deps.checkBusy(conversationKey)) await waitForIdle(deps, conversationKey);
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
-  if (deps.holdForLimitResume?.(conversationKey, text)) return { ok: true, isHeld: true };
+  if (deps.holdForLimitResume?.(conversationKey, heldText)) return { ok: true, isHeld: true };
   try {
     await deps.forwardPrompt(conversationKey, text);
   } catch (error) {

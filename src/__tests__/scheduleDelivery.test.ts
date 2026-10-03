@@ -285,6 +285,41 @@ test('forwarded prompt is prefixed with the scheduled-run marker carrying the jo
   assert.ok(text.includes('run the build'), 'original prompt is preserved after the marker');
 });
 
+/** `YYYY-MM-DD HH:MM` in the process timezone, computed here independently of the code under test. */
+function formatExpectedLocalDateTime(epochMs: number): string {
+  const at = new Date(epochMs);
+  const pad = (value: number): string => value.toString().padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+test('a run held over a usage-limit wait says when it was due — the fire time, or a catch-up\'s missed time (R27)', async () => {
+  const held: string[] = [];
+  const { deps, callLog, getNow } = createHarness();
+  deps.holdForLimitResume = (_key, text) => {
+    held.push(text);
+    return true;
+  };
+  const deliver = createScheduleDelivery(deps);
+  const firedAtMs = getNow();
+  assert.deepEqual(await deliver(makeJob({ name: 'Nightly build', prompt: 'run the build' }), onTime), { status: 'delivered' });
+  const missedAtMs = Date.parse('2026-06-07T09:00:00.000Z');
+  await deliver(makeJob({ name: 'Nightly build', prompt: 'run the build' }), { kind: 'catch-up', missedAtMs });
+
+  assert.deepEqual(held, [
+    `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(firedAtMs)}]\nrun the build`,
+    `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(missedAtMs)}]\nrun the build`,
+  ]);
+  assert.ok(!callLog.some((entry) => entry.step === 'forward'), 'held, not forwarded');
+});
+
+test('a run forwarded at once carries no due note (R27)', async () => {
+  const { deps, callLog } = createHarness();
+  deps.holdForLimitResume = () => false;
+  await createScheduleDelivery(deps)(makeJob({ name: 'Nightly build', prompt: 'run the build' }), onTime);
+  const forward = callLog.find((entry) => entry.step === 'forward');
+  assert.equal((forward?.detail as { text: string }).text, '[Scheduled run "Nightly build"]\nrun the build');
+});
+
 // ─── reminders (bot-local delivery kind) ─────────────────────────────
 //
 // A reminder's whole delivery is announce + pin: no session is started, none is

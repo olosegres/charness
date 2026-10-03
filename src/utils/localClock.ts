@@ -17,7 +17,11 @@ export function formatLocalClock(epochMs: number): string {
  * later today.
  */
 export function formatLocalClockWithDateIfNotToday(epochMs: number, nowMs: number): string {
-  const time = formatLocalClock(epochMs);
   const dateIso = formatReminderDateIso(new Date(epochMs));
-  return dateIso === formatReminderDateIso(getLocalDateAtDayOffset(nowMs, 0)) ? time : `${dateIso} ${time}`;
+  return dateIso === formatReminderDateIso(getLocalDateAtDayOffset(nowMs, 0)) ? formatLocalClock(epochMs) : formatLocalDateAndClock(epochMs);
+}
+
+/** `YYYY-MM-DD HH:MM` of an instant — for a text read at an unknown later time. */
+export function formatLocalDateAndClock(epochMs: number): string {
+  return `${formatReminderDateIso(new Date(epochMs))} ${formatLocalClock(epochMs)}`;
 }

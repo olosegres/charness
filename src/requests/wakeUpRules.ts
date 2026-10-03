@@ -26,6 +26,23 @@ export const maxSilentTurns = 2;
 export const maxWakeUpsPerRequest = 10;
 /** After a progress answer, how long before the agent is reminded again. */
 export const progressFollowUpDelayMs = 15 * 60 * 1000;
+/**
+ * After a request's prompt could not be posted (no session, a forward that
+ * failed), when to try again (R28): soon, then less soon — these retries are not
+ * wake-ups of a silent agent, so they do not count against the wake-up cap.
+ */
+export const postRetryDelaysMs = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000] as const;
+
+/**
+ * @description The next post retry after a failed post (R28), or `null` once the
+ * retries are spent — the normal backstop / alert rules take the request then.
+ */
+export function getPostRetryUpdate(request: OpenRequestState, nowMs: number): OpenRequestUpdate | null {
+  const retryCount = request.postRetryCount ?? 0;
+  const delayMs = postRetryDelaysMs[retryCount];
+  return delayMs === undefined ? null : { postRetryCount: retryCount + 1, nextPostRetryAt: nowMs + delayMs };
+}
+
 /** Default backstop: open with nothing seen working on it for this long. */
 export const defaultRequestBackstopMs = 90 * 60 * 1000;
 const msPerMinute = 60 * 1000;
@@ -134,6 +151,12 @@ export function decideUnwatchedRequest(
   backstopMs: number,
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
+  if (request.nextPostRetryAt !== undefined) {
+    // R28: outside the wake-up cap — the agent never saw the request, it is not looping.
+    return nowMs >= request.nextPostRetryAt
+      ? { kind: 'wake', reason: 'postRetry', update: { nextPostRetryAt: undefined, lastTurnActivityAt: nowMs } }
+      : { kind: 'none' };
+  }
   if (request.nextWakeAt !== undefined) {
     return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
   }
