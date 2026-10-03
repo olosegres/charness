@@ -100,6 +100,40 @@ test('tail: ambient frames after the error (a rate-limit event) are not activity
   assert.equal(getLastTerminalErrorText([buildResultLine(true, liveLimitText), rateLimitEventLine].join('\n')), liveLimitText);
 });
 
+test('tail: a sub-agent\'s frames after the error are not activity — a background sub-agent finishing its work is no resume', () => {
+  // The parent turn ended on the error; only a sub-agent still running in the background can write after it without
+  // anyone resuming the topic. Counting its frames would read the parked topic as resumed and lose its resume.
+  const subagentTextDeltaLine = JSON.stringify({
+    type: 'stream_event',
+    parent_tool_use_id: 'toolu_task1',
+    event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'still summarising' } },
+  });
+  const subagentThinkingDeltaLine = JSON.stringify({
+    type: 'stream_event',
+    parent_tool_use_id: 'toolu_task1',
+    event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'nearly there' } },
+  });
+  const subagentToolUseLine = JSON.stringify({
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_task1',
+    message: { content: [{ type: 'tool_use', id: 'toolu_2', name: 'Read', input: {} }] },
+  });
+  const subagentToolResultLine = JSON.stringify({
+    type: 'user',
+    parent_tool_use_id: 'toolu_task1',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: 'ok' }] },
+  });
+  for (const [label, frames] of [
+    ['its text', [subagentTextDeltaLine]],
+    ['its thinking', [subagentThinkingDeltaLine]],
+    ['its tool call', [subagentToolUseLine]],
+    ['its tool result', [subagentToolResultLine]],
+    ['all of them', [subagentTextDeltaLine, subagentThinkingDeltaLine, subagentToolUseLine, subagentToolResultLine]],
+  ] as const) {
+    assert.equal(getLastTerminalErrorText([buildResultLine(true, liveLimitText), ...frames].join('\n')), liveLimitText, label);
+  }
+});
+
 test('tail: a torn first line (the tail cut mid-JSON) is skipped, not fatal', () => {
   const tail = ['ge":{"content":[{"type":"text"', buildResultLine(true, liveLimitText)].join('\n');
   assert.equal(getLastTerminalErrorText(tail), liveLimitText);
@@ -118,8 +152,9 @@ test('with no armed retry on record, a topic resumed after the error is left alo
     decideLimitEpisodeRecovery({ errorText: getLastTerminalErrorText(resumedMidTurn), log: buildLog(now - 5_000), now, hasArmedRetry: false }),
     { action: 'skip', reason: 'noError' },
   );
-  // The other side: a restart before the nudge reached the log (it sat in the startup buffer) still finds the topic
-  // parked on the error, and recovers it — the resume is not lost.
+  // The other side: a restart before the nudge reached the log (written to the live session, not echoed yet) still
+  // finds the topic parked on the error, and recovers it — the resume is not lost. (A nudge buffered behind a session
+  // START is a different case: the fresh spawn lays the host dir out anew, so the new log holds no error to find.)
   assert.equal(
     decideLimitEpisodeRecovery({ errorText: getLastTerminalErrorText(buildResultLine(true, liveLimitText)), log: buildLog(now - 5_000), now, hasArmedRetry: false }).action,
     'arm',

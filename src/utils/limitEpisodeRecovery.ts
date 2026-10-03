@@ -53,6 +53,12 @@ export const limitEpisodeMaxAgeMs = 12 * 60 * 60 * 1000;
  * leaves in the log: the bot's own "continue" nudge and the work on it. A topic
  * with that tail is not stuck on the old error, and re-arming it at a restart
  * in the middle of that turn would resume the same episode a second time.
+ *
+ * Only the PARENT session's frames count. A terminal `result` ends the parent
+ * turn, so the one thing that can still write after it without a resume is a
+ * background sub-agent finishing its own work (`parent_tool_use_id` set); a
+ * resume always starts with the parent's own frames (the nudge's echo first), so
+ * leaving the sub-agent's out loses nothing and keeps a parked topic parked.
  */
 export function getLastTerminalErrorText(tailText: string): string | null {
   let lastErrorText: string | null = null;
@@ -71,13 +77,14 @@ export function getLastTerminalErrorText(tailText: string): string | null {
   return lastErrorText;
 }
 
-/** Frames that only a running session writes (not the ambient rate-limit / status ones). */
+/** Frames that only a running PARENT session writes (not the ambient rate-limit /
+ *  status ones, and not a sub-agent's — see {@link getLastTerminalErrorText}). */
 function checkIsSessionActivity(action: ClaudeStreamAction): boolean {
-  return action.kind === 'userEcho'
-    || action.kind === 'textDelta'
-    || action.kind === 'thinkingDelta'
-    || action.kind === 'toolUse'
-    || action.kind === 'toolResult';
+  if (action.kind === 'userEcho') return true;
+  if (action.kind === 'textDelta' || action.kind === 'thinkingDelta' || action.kind === 'toolUse' || action.kind === 'toolResult') {
+    return !action.isSubagent;
+  }
+  return false;
 }
 
 export type LimitEpisodeDecision =

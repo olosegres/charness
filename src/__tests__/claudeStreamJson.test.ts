@@ -130,15 +130,17 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bash1', content: 'hi' }] },
       parent_tool_use_id: null,
     };
-    assert.deepEqual(classify(msg), [{ kind: 'toolResult', toolUseId: 'toolu_bash1', output: 'hi' }]);
+    assert.deepEqual(classify(msg), [{ kind: 'toolResult', toolUseId: 'toolu_bash1', output: 'hi', isSubagent: false }]);
   });
 
   it('user message with array-block tool_result → concatenated text output', () => {
     const msg = {
       type: 'user',
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'line1\n' }, { type: 'text', text: 'line2' }] }] },
+      // A sub-agent's own tool result (`parent_tool_use_id` set) is flagged like its tool_use is.
+      parent_tool_use_id: 'toolu_task1',
     };
-    assert.deepEqual(classify(msg), [{ kind: 'toolResult', toolUseId: 't1', output: 'line1\nline2' }]);
+    assert.deepEqual(classify(msg), [{ kind: 'toolResult', toolUseId: 't1', output: 'line1\nline2', isSubagent: true }]);
   });
 
   it('user message with no tool_result → userEcho (replay-user-messages ack)', () => {

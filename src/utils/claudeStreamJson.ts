@@ -82,7 +82,7 @@ export type ClaudeStreamAction =
   /** A settled assistant `tool_use` block → drives the transient tool status. */
   | { kind: 'toolUse'; tool: string; toolUseId: string; isSubagent: boolean }
   /** A `tool_result` fed back in a `user` message → the `toolResult` event. */
-  | { kind: 'toolResult'; toolUseId: string; output: string }
+  | { kind: 'toolResult'; toolUseId: string; output: string; isSubagent: boolean }
   /** The turn ended (`result`); `resultText` is the final answer text. */
   | { kind: 'turnEnd'; isError: boolean; errorText: string | null; resultText: string | null }
   /** A control_request off stdout (permission / AskUserQuestion / dialog). */
@@ -245,7 +245,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       const actions: ClaudeStreamAction[] = [];
       for (const block of content) {
         if (checkIsStreamRecord(block) && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-          actions.push({ kind: 'toolResult', toolUseId: block.tool_use_id, output: extractToolResultOutput(block.content) });
+          actions.push({ kind: 'toolResult', toolUseId: block.tool_use_id, output: extractToolResultOutput(block.content), isSubagent });
         }
       }
       if (actions.length > 0) return actions;
