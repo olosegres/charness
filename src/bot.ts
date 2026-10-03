@@ -5143,7 +5143,7 @@ async function applyBinding(
   // Collision warning: one folder may host several threads (D7), but the
   // user should know they're about to join an existing workspace rather
   // than start a fresh one.
-  const peers = state.listKeysForSubdir(subdir).filter(k => keyToString(k) !== keyToString(key));
+  const peers = state.listKeysForSubdir(subdir).filter(k => checkIsTelegramKey(k) && keyToString(k) !== keyToString(key));
   await state.setBinding(key, subdir, options.topicName !== undefined ? { topicName: options.topicName } : {});
 
   const message = peers.length > 0
@@ -10828,7 +10828,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     armJob: (record) => schedulerEngine?.armJob(record),
     disarmJob: (jobId) => schedulerEngine?.disarmJob(jobId),
     getThreadsForDirectory: (directory) =>
-      getThreadKeysForDirectory(state.listBindings(), ENV.workRoot, directory),
+      // A `dir:` scope is an OpenCode registration, which serves Telegram topics only:
+      // an issue of another platform bound to the same folder is never in it.
+      getThreadKeysForDirectory(getTelegramConversations(state.listBindings()), ENV.workRoot, directory),
     getThreadAdapterName: (threadKeyStr) => {
       const key = keyFromString(threadKeyStr);
       return getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
@@ -11006,15 +11008,19 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
  * after which the wake-up engine watches the turn the request started.
  */
 function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string): Parameters<JiraConnector['start']>[0] {
-  const sessionPostDeps = createSessionPostDeps();
+  const sessionPostDeps: PostToSessionDeps = {
+    ...createSessionPostDeps(),
+    // D5: one conversation per issue — a session that died between requests is
+    // resumed, never replaced by a fresh one. A start already under way finishes.
+    resumeSession: async (conversationKey) => {
+      if (!startupPromptBuffer.checkIsStarting(conversationKey)) await ensureSessionByResume(keyFromString(conversationKey));
+    },
+  };
   return {
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
     },
     createRequest: (key, origin) => requestLedger.createRequest(key, origin),
-    cancelRequest: async (requestId) => {
-      await requestLedger.closeRequest(requestId, 'cancelled');
-    },
     postRequest: async (key, requestId, prompt) => {
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);

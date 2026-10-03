@@ -87,4 +87,13 @@ export class JiraTriggerLog {
     this.index(record);
     return true;
   }
+
+  /**
+   * @description Index a decision whose line could not be written, for this
+   * process only: a request already posted is never posted again before a
+   * restart (after one, its trigger reads as new).
+   */
+  remember(record: JiraTriggerRecord): void {
+    this.index(record);
+  }
 }

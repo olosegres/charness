@@ -1,7 +1,8 @@
 /**
  * @description The Jira trigger log (plan J5, D12): a decided trigger stays
  * decided after a restart, the run budget counts requests in a rolling 24 h,
- * and a line that cannot be written is reported, never indexed.
+ * and a line that cannot be written is reported and indexed only when the
+ * caller asks it to be remembered for this process.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -73,6 +74,16 @@ describe('JiraTriggerLog', () => {
     assert.equal(log.record({ issueKey: 'PROJ-12', triggerId: '100', outcome: 'request', at: nowMs }), false);
     assert.equal(log.checkIsSeen('PROJ-12', '100'), false);
     assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 0);
+  });
+
+  it('a decision remembered without its line counts for this process only', async () => {
+    const log = await createLoadedLog();
+    fs.mkdirSync(logPath);
+    log.remember({ issueKey: 'PROJ-12', triggerId: '100', outcome: 'request', at: nowMs });
+    assert.equal(log.checkIsSeen('PROJ-12', '100'), true);
+    assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 1);
+    fs.rmdirSync(logPath);
+    assert.equal((await createLoadedLog()).checkIsSeen('PROJ-12', '100'), false, 'a restart reads it as new');
   });
 
   it('a log that cannot be read fails the load (the start stops) instead of forgetting every trigger', async () => {

@@ -115,11 +115,12 @@ describe('prepareJiraConnector', () => {
           assert.equal(`${keyToString(key)} ${folder}`, 'jira:PROJ:PROJ-1 proj-work');
         },
         createRequest: async () => ({ id: 'req_1' }),
-        cancelRequest: async () => {},
         postRequest: async (key, requestId, prompt) => resolve(`${keyToString(key)} ${requestId} ${prompt.split('\n')[0]}`),
       });
     });
     assert.equal(await posted, 'jira:PROJ:PROJ-1 req_1 [Request req_1 · from: PROJ-1 assigned to you by someone]');
+    // The trigger is recorded once the post settled.
+    await new Promise((resolve) => setImmediate(resolve));
     assert.ok(fs.existsSync(path.join(dataDir, 'jira-triggers.jsonl')), 'the trigger was recorded');
   });
 
@@ -131,6 +132,20 @@ describe('prepareJiraConnector', () => {
       && error.reasons[0] === 'jira.json accountId is not the account its apiToken belongs to'
       && error.reasons[1] === 'project PROJ has no status named "AI To Do"');
     assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was polled');
+  });
+
+  it('a project Jira does not know is one more reason, not the only one', async () => {
+    fs.mkdirSync(path.join(workRoot, 'ops-work'));
+    writeConfig({
+      projects: {
+        PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'] },
+        OPS: { folder: 'ops-work', triggerStatuses: ['To Do'] },
+      },
+    });
+    await assert.rejects(prepare(), (error: Error) =>
+      error instanceof JiraConnectorStartError && error.reasons.length === 2
+      && error.reasons[0] === 'project PROJ has no status named "AI To Do"'
+      && /GET \/rest\/api\/3\/project\/OPS\/statuses failed with 404/.test(error.reasons[1]));
   });
 
   it('an invalid config stops the start before any request reaches Jira', async () => {
@@ -164,5 +179,15 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const post = deps.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
     const watch = deps.indexOf('await requestWakeUpEngine?.trackForwardedTurn(key, requestId);');
     assert.ok(post > 0 && watch > post);
+  });
+
+  it('an issue\'s next request resumes the issue\'s own session (D5), never a fresh one in its place', () => {
+    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
+    assert.match(deps, /resumeSession: async \(conversationKey\) => \{\s*if \(!startupPromptBuffer\.checkIsStarting\(conversationKey\)\) await ensureSessionByResume\(keyFromString\(conversationKey\)\);/);
+  });
+
+  it('a Jira issue bound to a topic\'s folder is never in that folder\'s `dir:` scope, nor named to the topic as a peer', () => {
+    assert.match(botSource, /getThreadsForDirectory: \(directory\) =>[^]{0,300}getThreadKeysForDirectory\(getTelegramConversations\(state\.listBindings\(\)\), ENV\.workRoot, directory\)/);
+    assert.match(botSource, /const peers = state\.listKeysForSubdir\(subdir\)\.filter\(k => checkIsTelegramKey\(k\) && /);
   });
 });

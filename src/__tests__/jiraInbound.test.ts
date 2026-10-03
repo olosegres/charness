@@ -1,8 +1,9 @@
 /**
  * @description The Jira inbound poller (plan J5, D12/D13/D15): one search per
- * poll, and per issue allowlist → still matching → trigger → seen → self-authored
- * → run budget → bind → request → record → post. Driven over a fake client;
- * each dependency records its call, so the order is asserted, not assumed.
+ * poll, and per issue allowlist → still matching → no post in flight → trigger →
+ * seen → self-authored → run budget → bind → request → post → record once the
+ * post settled. Driven over a fake client; each dependency records its call, so
+ * the order is asserted, not assumed.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -23,6 +24,8 @@ const aiAccountId = 'ai-account';
 const requester: JiraAccount = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
 const reporter: JiraAccount = { accountId: 'reporter-account', accountType: 'atlassian' };
 const nowMs = Date.parse('2026-10-03T12:00:00Z');
+/** Lets a post that was not awaited settle and record its trigger. */
+const flushPosts = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 const projects: ReadonlyMap<string, JiraProjectTrigger> = new Map([
   ['PROJ', { folder: 'proj-work', triggerStatusIds: new Set(['10001']) }],
   ['OPS', { folder: 'ops-work', triggerStatusIds: new Set(['20001']) }],
@@ -120,9 +123,6 @@ describe('JiraInbound', () => {
         recorded.calls.push(`create ${keyToString(key)}`);
         return { id: `req_${requestCount}` };
       },
-      cancelRequest: async (requestId) => {
-        recorded.calls.push(`cancel ${requestId}`);
-      },
       postRequest: async (key, requestId, prompt) => {
         recorded.calls.push(`post ${keyToString(key)} ${requestId} (seen=${triggerLog.checkIsSeen(key.thread, '100')})`);
         recorded.prompts.push(prompt);
@@ -143,17 +143,19 @@ describe('JiraInbound', () => {
     );
   });
 
-  it('a new trigger: bind → request → recorded BEFORE the post; the prompt carries the request and the issue', async () => {
+  it('a new trigger: bind → request → post → recorded once the post settled; the prompt carries the request and the issue', async () => {
     searchPages = [{ issues: [createIssue('PROJ-12')], isLast: true }];
     const decisions = await createInbound().pollOnce();
     assert.deepEqual([...decisions], [['PROJ-12', 'request']]);
+    await flushPosts();
     assert.deepEqual(recorded.calls, [
       'search',
       'getIssue PROJ-12',
       'bind jira:PROJ:PROJ-12 proj-work',
       'create jira:PROJ:PROJ-12',
-      'post jira:PROJ:PROJ-12 req_1 (seen=true)',
+      'post jira:PROJ:PROJ-12 req_1 (seen=false)',
     ]);
+    assert.equal(triggerLog.checkIsSeen('PROJ-12', '100'), true, 'recorded after the post');
     assert.deepEqual(recorded.origins, [{ kind: 'trackerEvent', attributes: { issueKey: 'PROJ-12', triggerId: '100', requesterAccountId: 'requester-account' } }]);
     assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-12 assigned to you by Requester\]/);
     assert.match(recorded.prompts[0], /Link: https:\/\/example\.atlassian\.net\/browse\/PROJ-12/);
@@ -164,6 +166,7 @@ describe('JiraInbound', () => {
     searchPages = [{ issues: [createIssue('PROJ-12')] }, { issues: [createIssue('PROJ-12')] }];
     const inbound = createInbound();
     await inbound.pollOnce();
+    await flushPosts();
     assert.deepEqual([...await inbound.pollOnce()], [['PROJ-12', 'seen']]);
     triggerLog = await createLoadedTriggerLog();
     searchPages = [{ issues: [createIssue('PROJ-12')] }];
@@ -174,6 +177,7 @@ describe('JiraInbound', () => {
   it('a NEW trigger on the same issue (re-assigned after a question) is a new request', async () => {
     searchPages = [{ issues: [createIssue('PROJ-12')] }];
     await createInbound().pollOnce();
+    await flushPosts();
     const reassigned = createIssue('PROJ-12', {
       histories: [
         createHistory('100', 0, [{ field: 'assignee', to: aiAccountId }]),
@@ -250,24 +254,27 @@ describe('JiraInbound', () => {
     assert.deepEqual(recorded.searches.map((search) => search.nextPageToken), [undefined, 'page-2']);
   });
 
-  it('a trigger that cannot be recorded withdraws its request and is never posted', async () => {
+  it('a trigger whose record cannot be written after its post is remembered: this process never posts it again', async () => {
     fs.mkdirSync(path.join(dataDir, jiraTriggerLogFileName));
-    searchPages = [{ issues: [createIssue('PROJ-23')] }];
-    assert.deepEqual([...await createInbound().pollOnce()], [['PROJ-23', 'failed']]);
-    assert.ok(recorded.calls.includes('cancel req_1'));
-    assert.ok(!recorded.calls.some((call) => call.startsWith('post')));
+    searchPages = [{ issues: [createIssue('PROJ-23')] }, { issues: [createIssue('PROJ-23')] }];
+    const inbound = createInbound();
+    assert.deepEqual([...await inbound.pollOnce()], [['PROJ-23', 'request']]);
+    await flushPosts();
+    assert.deepEqual([...await inbound.pollOnce()], [['PROJ-23', 'seen']]);
+    assert.equal(requestCount, 1);
   });
 
   it('a post that fails leaves the request open and recorded — the wake-up engine takes it from there', async () => {
     isPostFailing = true;
     searchPages = [{ issues: [createIssue('PROJ-24')] }];
     assert.deepEqual([...await createInbound().pollOnce()], [['PROJ-24', 'request']]);
+    await flushPosts();
     assert.equal(triggerLog.checkIsSeen('PROJ-24', '100'), true);
   });
 
-  it('a post that waits for a busy session does not hold up the rest of the poll', { timeout: 2_000 }, async () => {
+  it('a post that waits for a busy session does not hold up the poll; until it settles its issue is skipped and its trigger unrecorded', { timeout: 2_000 }, async () => {
     let releasePost: () => void = () => {};
-    searchPages = [{ issues: [createIssue('PROJ-27'), createIssue('PROJ-28')] }];
+    searchPages = [{ issues: [createIssue('PROJ-27'), createIssue('PROJ-28')] }, { issues: [createIssue('PROJ-27')] }, { issues: [createIssue('PROJ-27')] }];
     const inbound = createInbound({
       postRequest: async (key) => {
         recorded.calls.push(`post ${key.thread}`);
@@ -276,7 +283,24 @@ describe('JiraInbound', () => {
     });
     assert.deepEqual([...await inbound.pollOnce()], [['PROJ-27', 'request'], ['PROJ-28', 'request']]);
     assert.ok(recorded.calls.includes('post PROJ-28'), 'the second issue was posted while the first post still waits');
+    await flushPosts();
+    assert.deepEqual([...await inbound.pollOnce()], [['PROJ-27', 'posting']]);
+    assert.equal(triggerLog.checkIsSeen('PROJ-27', '100'), false, 'not recorded while its post waits');
+    assert.equal(requestCount, 2, 'no second request of the issue while its post waits');
     releasePost();
+    await flushPosts();
+    assert.equal(triggerLog.checkIsSeen('PROJ-27', '100'), true);
+    assert.deepEqual([...await inbound.pollOnce()], [['PROJ-27', 'seen']]);
+  });
+
+  it('a restart before the post settled leaves the trigger unrecorded: the next start opens and posts it again', async () => {
+    searchPages = [{ issues: [createIssue('PROJ-29')] }];
+    await createInbound({ postRequest: () => new Promise<void>(() => {}) }).pollOnce();
+    await flushPosts();
+    triggerLog = await createLoadedTriggerLog();
+    searchPages = [{ issues: [createIssue('PROJ-29')] }];
+    assert.deepEqual([...await createInbound().pollOnce()], [['PROJ-29', 'request']]);
+    assert.equal(requestCount, 2);
   });
 
   it('one issue failing does not stop the others in the same poll', async () => {

@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { createJiraClient, type JiraAccount } from './client';
+import { createJiraClient, type JiraAccount, type JiraClient } from './client';
 import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
@@ -21,7 +21,7 @@ export class JiraConnectorStartError extends Error {
 }
 
 /** What the connector needs from the core to open and post requests. */
-export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'cancelRequest' | 'postRequest'>;
+export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest'>;
 
 export interface JiraConnector {
   /** The backend Jira sessions run on (D16, R14). */
@@ -38,6 +38,19 @@ async function logParkedIssue(issueKey: string, requester: JiraAccount | null): 
   console.warn(`[jira] ${issueKey} parked: over its run budget (requester ${requester ? 'known' : 'unknown'}); no request opened`);
 }
 
+/** A project's trigger status ids; a failed lookup is that project's reason, like an unknown name. */
+async function getTriggerStatusIds(
+  client: JiraClient,
+  projectKey: string,
+  statusNames: readonly string[],
+): Promise<ReturnType<typeof resolveTriggerStatusIds>> {
+  try {
+    return resolveTriggerStatusIds(projectKey, statusNames, await client.getProjectStatuses(projectKey));
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function prepareJiraConnector(context: {
   dataDir: string;
   workRoot: string;
@@ -48,14 +61,22 @@ export async function prepareJiraConnector(context: {
   const { config } = loaded;
   const client = createJiraClient({ baseUrl: config.baseUrl, email: config.email, apiToken: config.apiToken });
 
-  const myself = await client.getMyself();
+  // Independent lookups, made together; a project's failed lookup is one more
+  // reason, so a misspelled key does not hide the other projects' problems.
+  const [myself, resolvedProjects] = await Promise.all([
+    client.getMyself(),
+    Promise.all([...config.projects].map(async ([projectKey, project]) => ({
+      projectKey,
+      project,
+      resolved: await getTriggerStatusIds(client, projectKey, project.triggerStatusNames),
+    }))),
+  ]);
   const reasons: string[] = [];
   if (myself.accountId !== config.accountId) {
     reasons.push('jira.json accountId is not the account its apiToken belongs to');
   }
   const projects = new Map<string, JiraProjectTrigger>();
-  for (const [projectKey, project] of config.projects) {
-    const resolved = resolveTriggerStatusIds(projectKey, project.triggerStatusNames, await client.getProjectStatuses(projectKey));
+  for (const { projectKey, project, resolved } of resolvedProjects) {
     if (resolved.ok) projects.set(projectKey, { folder: project.folder, triggerStatusIds: new Set(resolved.statusIds) });
     else reasons.push(resolved.error);
   }
