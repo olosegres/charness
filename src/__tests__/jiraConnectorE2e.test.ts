@@ -105,9 +105,13 @@ async function getFreePort(): Promise<number> {
   return address.port;
 }
 
-/** The test's own environment with `TMUX_TMPDIR` set to `dir`, or removed (tmux then uses `/tmp`) for `null`. */
+/**
+ * The test's own environment with `TMUX_TMPDIR` set to `dir`, or removed (tmux then uses `/tmp`) for `null`.
+ * `TMUX` / `TMUX_PANE` are always removed: run from inside a tmux session, a command without `-L` / `-S`
+ * goes to the server `$TMUX` names — the user's default one — whatever `TMUX_TMPDIR` says.
+ */
 function getTmuxEnv(dir: string | null): NodeJS.ProcessEnv {
-  const { TMUX_TMPDIR: _userTmuxTmpDir, ...env } = process.env;
+  const { TMUX_TMPDIR: _userTmuxTmpDir, TMUX: _userTmuxServer, TMUX_PANE: _userTmuxPane, ...env } = process.env;
   return dir === null ? env : { ...env, TMUX_TMPDIR: dir };
 }
 
@@ -313,13 +317,19 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
 
   after(async () => {
     await stopCharness();
-    if (tmuxSocketName) {
+    if (tmuxSocketName && tmuxTmpDir) {
       // Only the instance's own servers, which also ends the fake agents in them: its named server and any
-      // default server a broken `-L` guard started — both in its private TMUX_TMPDIR, never the user's.
-      spawnSync('tmux', ['-L', tmuxSocketName, 'kill-server'], { env: getInstanceTmuxEnv() });
-      spawnSync('tmux', ['kill-server'], { env: getInstanceTmuxEnv() });
-      // A broken TMUX_TMPDIR hand-over would have put the named server in tmux's own default folder (`/tmp`).
-      spawnSync('tmux', ['-L', tmuxSocketName, 'kill-server'], { env: getTmuxEnv(null) });
+      // default server a broken `-L` guard started — both in its private TMUX_TMPDIR, never the user's — and,
+      // had the TMUX_TMPDIR hand-over broken, the named server in tmux's own default folder (`/tmp`). Each is
+      // named by FULL PATH (`-S`): a bare `kill-server` run from inside a tmux session went to the server `$TMUX`
+      // names — the user's default one — and killed every session on it.
+      for (const socketPath of [
+        path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName),
+        path.join(getTmuxSocketDir(tmuxTmpDir), 'default'),
+        path.join(getTmuxSocketDir('/tmp'), tmuxSocketName),
+      ]) {
+        spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
+      }
       fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
     }
     await fakeJira?.stop();
