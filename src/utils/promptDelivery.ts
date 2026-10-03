@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import type { StartupPromptBuffer } from '../startupPromptBuffer';
+import type { BufferedPromptSettled, StartupPromptBuffer } from '../startupPromptBuffer';
 
 /**
  * @name PromptDeliveryDeps
@@ -13,6 +13,14 @@ export interface PromptDeliveryDeps {
   forwardPrompt: (key: SessionKey, text: string) => Promise<void>;
   announceQueued: (key: SessionKey) => Promise<void>;
 }
+
+/**
+ * @name PromptDelivery
+ * @description Where {@link deliverPromptOrBuffer} put the prompt: `forwarded` to the
+ * session (done), or `buffered` behind a session start (it waits in memory until the
+ * start ends — see `onBufferedSettled`).
+ */
+export type PromptDelivery = 'forwarded' | 'buffered';
 
 /**
  * @description Deliver `text` to a conversation's agent while honouring the startup
@@ -30,17 +38,24 @@ export interface PromptDeliveryDeps {
  *
  * The "queued while starting" notice is posted once per startup window, and only
  * for a Telegram conversation: a tracker issue has no topic to say it in (R6).
+ *
+ * A buffered prompt lives in memory, so a restart before the start ends loses it.
+ * A caller that must know how the wait ended — to keep what would re-send the prompt
+ * until it reached a session — passes `onBufferedSettled`; it is called once, only
+ * for a prompt that was buffered (a forwarded one is already done when this resolves).
  */
 export async function deliverPromptOrBuffer(
   deps: PromptDeliveryDeps,
   key: SessionKey,
   text: string,
   isStarting: boolean,
-): Promise<void> {
+  onBufferedSettled?: BufferedPromptSettled,
+): Promise<PromptDelivery> {
   if (!isStarting) {
     await deps.forwardPrompt(key, text);
-    return;
+    return 'forwarded';
   }
-  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text);
+  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled);
   if (isFirstBuffered && checkIsTelegramKey(key)) await deps.announceQueued(key);
+  return 'buffered';
 }

@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { keyToString, unregisterSessionKeyCodec, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
-import { StartupPromptBuffer } from '../startupPromptBuffer';
+import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
 import { deliverPromptOrBuffer, type PromptDeliveryDeps } from '../utils/promptDelivery';
 
 registerTestSessionKeyCodec();
@@ -25,6 +25,13 @@ process.on('exit', () => unregisterSessionKeyCodec('test'));
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeTestKey('PROJ', 'PROJ-7');
+
+/** Close the startup window the way a successful start does; what reached the session, in order. */
+async function replayTexts(buffer: StartupPromptBuffer, key: SessionKey): Promise<string[]> {
+  const texts: string[] = [];
+  await buffer.replayPrompts(keyToString(key), { isSessionActive: true, forward: async (text) => { texts.push(text); } });
+  return texts;
+}
 
 let startupBuffer: StartupPromptBuffer;
 let forwarded: Array<{ key: SessionKey; text: string }>;
@@ -44,21 +51,43 @@ beforeEach(() => {
 
 describe('deliverPromptOrBuffer', () => {
   it('forwards at once to a session that is not starting — nothing buffered, nothing announced', async () => {
-    await deliverPromptOrBuffer(deps, topicKey, 'hello', false);
+    const delivery = await deliverPromptOrBuffer(deps, topicKey, 'hello', false);
 
+    assert.equal(delivery, 'forwarded');
     assert.deepEqual(forwarded, [{ key: topicKey, text: 'hello' }]);
     assert.deepEqual(announced, []);
-    assert.deepEqual(startupBuffer.drainPrompts(keyToString(topicKey)), []);
+    assert.deepEqual(await replayTexts(startupBuffer, topicKey), []);
   });
 
   it('buffers for a starting session instead of forwarding — it replays in arrival order once the session is up', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
 
-    await deliverPromptOrBuffer(deps, topicKey, 'first', true);
+    const first = await deliverPromptOrBuffer(deps, topicKey, 'first', true);
     await deliverPromptOrBuffer(deps, topicKey, 'second', true);
 
+    assert.equal(first, 'buffered');
     assert.deepEqual(forwarded, [], 'a direct forward would reach an adapter that is not there yet');
-    assert.deepEqual(startupBuffer.drainPrompts(keyToString(topicKey)), ['first', 'second']);
+    assert.deepEqual(await replayTexts(startupBuffer, topicKey), ['first', 'second']);
+  });
+
+  it('tells a buffered prompt\'s caller how the wait ended: replayed once the session is up, dropped when the start fails', async () => {
+    const outcomes: BufferedPromptOutcome[] = [];
+    startupBuffer.markStarting(keyToString(topicKey));
+    await deliverPromptOrBuffer(deps, topicKey, 'replayed one', true, (outcome) => outcomes.push(outcome));
+    assert.equal(outcomes.length, 0, 'not before the window ends');
+    await replayTexts(startupBuffer, topicKey);
+    assert.deepEqual(outcomes, ['replayed']);
+
+    startupBuffer.markStarting(keyToString(topicKey));
+    await deliverPromptOrBuffer(deps, topicKey, 'dropped one', true, (outcome) => outcomes.push(outcome));
+    startupBuffer.discardPrompts(keyToString(topicKey));
+    assert.deepEqual(outcomes, ['replayed', 'dropped']);
+  });
+
+  it('a prompt forwarded at once has no wait to tell about: the callback is not called', async () => {
+    const outcomes: BufferedPromptOutcome[] = [];
+    await deliverPromptOrBuffer(deps, topicKey, 'now', false, (outcome) => outcomes.push(outcome));
+    assert.equal(outcomes.length, 0);
   });
 
   it('tells a Telegram topic once per startup window that the prompt is queued', async () => {
@@ -68,7 +97,7 @@ describe('deliverPromptOrBuffer', () => {
     await deliverPromptOrBuffer(deps, topicKey, 'second', true);
     assert.deepEqual(announced, [topicKey]);
 
-    startupBuffer.drainPrompts(keyToString(topicKey));
+    await replayTexts(startupBuffer, topicKey);
     startupBuffer.markStarting(keyToString(topicKey));
     await deliverPromptOrBuffer(deps, topicKey, 'next window', true);
     assert.deepEqual(announced, [topicKey, topicKey], 'a new startup window announces again');
@@ -81,7 +110,7 @@ describe('deliverPromptOrBuffer', () => {
 
     assert.deepEqual(announced, []);
     assert.deepEqual(forwarded, []);
-    assert.deepEqual(startupBuffer.drainPrompts(keyToString(issueKey)), ['the nudge'], 'it is still buffered, not dropped');
+    assert.deepEqual(await replayTexts(startupBuffer, issueKey), ['the nudge'], 'it is still buffered, not dropped');
   });
 
   it('forwards a Jira issue\'s prompt to a session that is up', async () => {

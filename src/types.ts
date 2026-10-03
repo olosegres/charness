@@ -220,8 +220,11 @@ export interface AgentApiErrorClass {
  * last-used adapter via `ensureAgentSession`. All fields are serialisable, so the
  * whole record is persisted to `state.json` and re-armed at boot — a multi-hour
  * usage-limit wait survives a restart. The record means ARMED: it is removed when
- * the retry stops being armed (cancelled, given up, or its kick ran its course), so a
- * restart never restores a retry that is already spent.
+ * the retry stops being armed (cancelled, given up, or its kick ran its course — the
+ * nudge forwarded, or dropped for good), so a restart never restores a retry that is
+ * already spent. A nudge still waiting in the startup buffer behind a session start
+ * has not run its course: the buffer is in memory, so the record stays until the
+ * buffer replays or drops it.
  */
 export interface ApiRetryState {
   kind: AgentApiErrorClass['kind'];

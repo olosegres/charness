@@ -164,7 +164,7 @@ import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { OutboundHints } from './platform/outbound';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
-import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
@@ -181,7 +181,7 @@ import {
 } from './sendErrorClassifier';
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
-import { StartupPromptBuffer } from './startupPromptBuffer';
+import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { getOutputFlushPlan, appendPendingOutput, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
@@ -1681,7 +1681,9 @@ function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: stri
  * {@link handleApiError}; a recovery leaves a harmless stale entry that the next,
  * later error resets to attempt 1. The SAVED record is not: it means ARMED, so the
  * kick clears it once it has run its course ({@link clearSavedApiRetry}), or a
- * restart would restore it and fire the kick again.
+ * restart would restore it and fire the kick again. A nudge still waiting in the
+ * startup buffer has not run its course — the buffer is in memory and a restart loses
+ * it — so the record stays until the buffer replays or drops the nudge.
  *
  * The notice differs by class: a `usageLimit` wait can have lasted hours, so its
  * resume is the PINNED, notifying {@link surfaceLimitResumedNotice} (the operator
@@ -1716,7 +1718,8 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   }),
   // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
   // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
-  deliverNudge: (key, text) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key))),
+  // The buffer is in memory: the kick keeps the saved record until the buffer settles the nudge.
+  deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),
   trackContinuation: async (key, options) => {
     await requestWakeUpEngine?.trackContinuationTurn(key, options);
   },
@@ -4717,9 +4720,9 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
 
     // Session is active now — replay anything the user typed while it booted,
     // in arrival order, through the normal forward path. Fire-and-forget so the
-    // `ready` message isn't delayed; `drainPrompts` runs synchronously here
-    // (before the first await inside) so the startup window is already closed
-    // by the time we return — no message can slip into a second buffer.
+    // `ready` message isn't delayed; `replayPrompts` closes the window synchronously
+    // (before the first await inside) so it is already closed by the time we
+    // return — no message can slip into a second buffer.
     void replayBufferedPrompts(key);
 
     const subdir = state.getBinding(key)?.subdir ?? path.basename(ENV.workRoot);
@@ -4852,17 +4855,14 @@ async function ensureAgentSession(
  */
 async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   const adapter = getThreadAdapter(key);
-  const prompts = startupPromptBuffer.drainPrompts(keyToString(key));
-  if (!adapter.checkIsActive(key)) return;
-  // Sequential await keeps `sendInput` calls in arrival order even when each
-  // forward awaits its own loader send first.
-  for (const prompt of prompts) {
-    try {
-      await forwardPromptToAgent(key, adapter, prompt);
-    } catch (err) {
-      console.error('[replayBufferedPrompts] forward failed:', err);
-    }
-  }
+  const isSessionActive = adapter.checkIsActive(key);
+  // The buffer closes the window synchronously and settles every prompt it held (a sender waiting on one,
+  // like the API-error retry's nudge, hears whether it reached the session).
+  await startupPromptBuffer.replayPrompts(keyToString(key), {
+    isSessionActive,
+    forward: (prompt) => forwardPromptToAgent(key, adapter, prompt),
+  });
+  if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
   // session go to this one — on their own when nothing above carried them.
   const heldText = limitHeldPrompts.releaseAll(key);
@@ -10039,8 +10039,13 @@ const promptDeliveryDeps: PromptDeliveryDeps = {
   },
 };
 
-function deliverPromptOrBuffer(key: SessionKey, promptText: string, isStarting: boolean): Promise<void> {
-  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting);
+function deliverPromptOrBuffer(
+  key: SessionKey,
+  promptText: string,
+  isStarting: boolean,
+  onBufferedSettled?: BufferedPromptSettled,
+): Promise<PromptDelivery> {
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);
 }
 
 /**

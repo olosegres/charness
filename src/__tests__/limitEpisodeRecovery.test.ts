@@ -154,7 +154,8 @@ test('with no armed retry on record, a topic resumed after the error is left alo
   );
   // The other side: a restart before the nudge reached the log (written to the live session, not echoed yet) still
   // finds the topic parked on the error, and recovers it — the resume is not lost. (A nudge buffered behind a session
-  // START is a different case: the fresh spawn lays the host dir out anew, so the new log holds no error to find.)
+  // START is a different case: the fresh spawn lays the host dir out anew, so the new log holds no error to find — the
+  // saved retry record, kept while the nudge waits in the startup buffer, is what resumes that one.)
   assert.equal(
     decideLimitEpisodeRecovery({ errorText: getLastTerminalErrorText(buildResultLine(true, liveLimitText)), log: buildLog(now - 5_000), now, hasArmedRetry: false }).action,
     'arm',

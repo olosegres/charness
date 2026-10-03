@@ -223,7 +223,7 @@ describe('the bot holds and releases them (R23)', () => {
 
   it('a new session gets them after anything typed during its boot, or on their own', () => {
     const replay = getFunction('async function replayBufferedPrompts(');
-    const loop = replay.indexOf('for (const prompt of prompts)');
+    const loop = replay.indexOf('await startupPromptBuffer.replayPrompts(');
     const release = replay.indexOf('limitHeldPrompts.releaseAll(key)');
     assert.ok(loop > 0 && release > loop);
     assert.match(getFunction('async function startAgentSession('), /void replayBufferedPrompts\(key\);/);

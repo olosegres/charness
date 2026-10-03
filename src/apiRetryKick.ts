@@ -2,6 +2,8 @@ import { keyFromString, keyToString, type SessionKey } from './sessionKey';
 import { checkIsTelegramKey } from './connectors/telegram/sessionKeyCodec';
 import { maxTimeoutMs } from './scheduler/engine';
 import type { UsageLimitWait } from './requests/limitWaitAnswer';
+import type { BufferedPromptSettled } from './startupPromptBuffer';
+import type { PromptDelivery } from './utils/promptDelivery';
 import type { AgentApiErrorClass, ApiRetryState } from './types';
 
 /**
@@ -70,8 +72,9 @@ export interface ApiRetryKickDeps {
   postTopicNotice: (key: SessionKey, notice: ApiRetryTopicNotice) => void;
   /** The nudge, or the open request's own prompt the agent never took in (R21). */
   getResumeMessage: (key: SessionKey, retryKind: AgentApiErrorClass['kind']) => { text: string; isRequestPrompt: boolean };
-  /** Through the startup buffer when another caller's start is still under way. */
-  deliverNudge: (key: SessionKey, text: string) => Promise<void>;
+  /** Through the startup buffer when another caller's start is still under way; a `buffered` nudge
+   *  tells `onBufferedSettled` how its wait ended. */
+  deliverNudge: (key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled) => Promise<PromptDelivery>;
   trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt: boolean }) => Promise<void>;
   /** Drop the retry's saved twin (`state.json`). */
   clearSavedRetry: (key: SessionKey) => void;
@@ -86,10 +89,20 @@ export interface ApiRetryKickDeps {
  * the topic gets the reason instead and nothing is forwarded.
  *
  * The saved record means ARMED, so once the kick has run its course — the nudge
- * delivered or buffered behind a session start (handed over like any prompt typed
- * during one), no session to nudge, or a delivery that threw — the saved twin goes:
- * left behind, every restart would restore it as armed and fire the kick again (a
- * second "resuming" notice, a second nudge into the topic or the issue's session).
+ * forwarded to the session, no session to nudge, or a delivery that threw — the saved
+ * twin goes: left behind, every restart would restore it as armed and fire the kick
+ * again (a second "resuming" notice, a second nudge into the topic or the issue's
+ * session). A nudge that only waits in the startup buffer behind another caller's
+ * session start has NOT run its course: the buffer is in memory, a restart loses it,
+ * and a fresh spawn lays the session log out anew, so the boot recovery finds no error
+ * to resume from either — the saved record is the only thing that fires it again. It
+ * stays until the buffer settles the nudge: `replayed` (handed to the session — a
+ * failed forward counts, as a direct delivery that threw does) or `dropped` (the start
+ * failed, or the session is not up when the window closes — the same as "no session to
+ * nudge": the starter reported the failure, an open request is left to the wake-up
+ * engine, and a record kept for a start that failed would only fire the kick again at
+ * the next restart).
+ *
  * It goes only if `entries` still holds THIS entry: a recurrence armed meanwhile (a
  * newer entry and its own saved record) or a cancel / give-up (entry gone, record
  * already cleared) must not be undone by an older kick. The in-memory entry itself is
@@ -104,6 +117,11 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
   deps.kicksInFlight.add(k);
   entry.timer = null;
   entry.firedAt = deps.now();
+
+  const clearSavedRetryIfLive = (): void => {
+    if (deps.entries.get(k) === entry) deps.clearSavedRetry(key);
+  };
+  let isNudgeBuffered = false;
 
   try {
     // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
@@ -127,7 +145,13 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.
     const resume = deps.getResumeMessage(key, entry.kind);
-    await deps.deliverNudge(key, resume.text);
+    const delivery = await deps.deliverNudge(key, resume.text, (outcome) => {
+      if (outcome === 'dropped') {
+        console.warn(`[apiRetry] nudge for ${k} dropped: the session did not come up; the retry is spent and an open request is left to the wake-up engine`);
+      }
+      clearSavedRetryIfLive();
+    });
+    isNudgeBuffered = delivery === 'buffered';
     await deps.trackContinuation(key, {
       isCountersReset: entry.kind === 'usageLimit',
       isRequestPrompt: resume.isRequestPrompt,
@@ -136,7 +160,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     console.error('[apiRetry] kick failed:', e instanceof Error ? e.message : e);
   } finally {
     deps.kicksInFlight.delete(k);
-    if (deps.entries.get(k) === entry) deps.clearSavedRetry(key);
+    // A buffered nudge keeps the record: the buffer's settle callback clears it.
+    if (!isNudgeBuffered) clearSavedRetryIfLive();
   }
 }
 

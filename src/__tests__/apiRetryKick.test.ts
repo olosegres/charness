@@ -7,9 +7,13 @@
  * first).
  *
  * The property: the saved record means "ARMED". A kick that has run its course —
- * delivered, buffered behind a session start, or found no session — leaves nothing
- * saved, so a restart (hot mode restarts on every code change) never fires it
- * again: no second "resuming" notice, no second nudge.
+ * the nudge delivered, no session to nudge, or a delivery that threw — leaves
+ * nothing saved, so a restart (hot mode restarts on every code change) never fires
+ * it again: no second "resuming" notice, no second nudge. A nudge that only waits in
+ * the startup buffer behind another caller's session start has NOT run its course:
+ * the buffer is in memory, so a restart loses it, and what a fresh spawn leaves in the
+ * session log gives the boot recovery nothing to find — the saved record is what
+ * fires it again. It goes when the buffer replays the nudge or drops it for good.
  *
  * Real timers, driven by node:test's mock clock; the world around the kick (the
  * session, the topic, the request ledger) is recorded fakes.
@@ -22,6 +26,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { keyFromString, keyToString, unregisterSessionKeyCodec, type SessionKey } from '../sessionKey';
+import { StartupPromptBuffer } from '../startupPromptBuffer';
+import { deliverPromptOrBuffer } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
 import {
@@ -54,9 +60,8 @@ interface World {
   kicksInFlight: Set<string>;
   notices: Array<{ key: string; notice: ApiRetryTopicNotice }>;
   nudges: Array<{ key: string; text: string }>;
-  /** Nudges that went into the startup buffer because another caller's session start was under way. */
-  buffered: Array<{ key: string; text: string }>;
-  isSessionStarting: boolean;
+  /** The bot's startup buffer — in memory only, so a "restart" empties it. */
+  startupBuffer: StartupPromptBuffer;
   continuations: Array<{ key: string; isCountersReset: boolean; isRequestPrompt: boolean }>;
   ownSessionResumes: string[];
   clears: string[];
@@ -81,10 +86,22 @@ function createKickDeps(): ApiRetryKickDeps {
     getResumeMessage: () => world.untakenRequestPrompt === undefined
       ? { text: continueNudge, isRequestPrompt: false }
       : { text: world.untakenRequestPrompt, isRequestPrompt: true },
-    deliverNudge: async (key, text) => {
+    // The bot's own buffer-or-forward unit over a real startup buffer, so what the kick learns about a
+    // buffered nudge is what the bot would tell it.
+    deliverNudge: async (key, text, onBufferedSettled) => {
       world.duringDelivery?.();
       if (world.deliveryError) throw world.deliveryError;
-      (world.isSessionStarting ? world.buffered : world.nudges).push({ key: keyToString(key), text });
+      return deliverPromptOrBuffer(
+        {
+          startupBuffer: world.startupBuffer,
+          forwardPrompt: async (target, prompt) => { world.nudges.push({ key: keyToString(target), text: prompt }); },
+          announceQueued: async () => {},
+        },
+        key,
+        text,
+        world.startupBuffer.checkIsStarting(keyToString(key)),
+        onBufferedSettled,
+      );
     },
     trackContinuation: async (key, options) => { world.continuations.push({ key: keyToString(key), ...options }); },
     clearSavedRetry: (key) => {
@@ -98,6 +115,7 @@ function createKickDeps(): ApiRetryKickDeps {
 function boot(options: { isServed?: (key: SessionKey) => boolean } = {}): number {
   world.entries = new Map();
   world.kicksInFlight = new Set();
+  world.startupBuffer = new StartupPromptBuffer();
   return restoreApiRetryTimers(
     {
       entries: world.entries,
@@ -107,6 +125,11 @@ function boot(options: { isServed?: (key: SessionKey) => boolean } = {}): number
     },
     { ...world.saved },
   );
+}
+
+/** The bot's forward to a conversation's live session, as far as the test sees it: the prompt lands in `nudges`. */
+function forwardToSession(key: SessionKey): (text: string) => Promise<void> {
+  return async (text) => { world.nudges.push({ key: keyToString(key), text }); };
 }
 
 /** Let every due timer fire and every kick run to its end. */
@@ -127,8 +150,7 @@ beforeEach(() => {
     kicksInFlight: new Set(),
     notices: [],
     nudges: [],
-    buffered: [],
-    isSessionStarting: false,
+    startupBuffer: new StartupPromptBuffer(),
     continuations: [],
     ownSessionResumes: [],
     clears: [],
@@ -171,21 +193,142 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       assert.deepEqual(world.saved, {});
     });
 
-    it('buffered behind another caller\'s session start: handed over like any prompt typed during a start, so not fired again either', async () => {
-      world.isSessionStarting = true;
+    it('buffered behind another caller\'s session start: the record stays, so a restart before the replay fires the retry again', async () => {
       saveRetry(key, { kind: 'transient', attempt: 2 });
       boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
       await runDueTimers();
 
-      assert.deepEqual(world.buffered, [{ key: keyString, text: continueNudge }], 'the startup buffer holds it');
-      assert.deepEqual(world.nudges, []);
-      assert.deepEqual(world.saved, {}, 'a restart before the replay loses the buffered nudge, as it does a text typed during a start');
+      assert.deepEqual(world.nudges, [], 'it waits in the startup buffer, not in the session');
+      assert.equal(world.startupBuffer.checkIsStarting(keyString), true);
+      assert.deepEqual(world.saved[keyString], { kind: 'transient', attempt: 2, fireAt: fireAtInThePast }, 'still armed: nothing has been delivered');
+      assert.deepEqual(world.clears, []);
 
+      // The bot restarts mid-start: the buffer is in memory, the nudge is gone, and the new session's log holds no
+      // error for the boot recovery to find — the saved record is all that is left to resume from.
       const rearmedAfterRestart = boot();
+      assert.equal(rearmedAfterRestart, 1, 'the restored retry is armed again');
       await runDueTimers();
-      assert.equal(world.buffered.length + world.nudges.length, 1, 'no second nudge');
+
+      assert.deepEqual(world.nudges, [{ key: keyString, text: continueNudge }], 'the nudge reaches the session the restart brought up');
+      assert.deepEqual(world.saved, {}, 'and now it has run its course');
+      assert.equal(
+        world.notices.filter(({ notice }) => notice.kind === 'resuming').length,
+        isTelegram ? 2 : 0,
+        'the price of firing again: a topic reads "resuming" once per fire',
+      );
+    });
+
+    it('buffered, then replayed: the record goes with the replay — a restart after it fires nothing', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+      assert.equal(keyString in world.saved, true, 'kept while the nudge waits');
+
+      await world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) });
+      assert.deepEqual(world.nudges, [{ key: keyString, text: continueNudge }]);
+      assert.deepEqual(world.saved, {}, 'cleared once the buffer handed the nudge to the session');
+      assert.deepEqual(world.clears, [keyString], 'cleared exactly once');
+
+      assert.equal(boot(), 0, 'nothing is armed after the restart');
+      await runDueTimers();
+      assert.equal(world.nudges.length, 1, 'no second nudge');
       assert.equal(world.notices.length, isTelegram ? 1 : 0, 'no second notice');
-      assert.equal(rearmedAfterRestart, 0);
+    });
+
+    it('buffered, then the replay\'s forward throws: still spent — nobody re-delivers it, and a restart would not fix what threw', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+      const logged = mock.method(console, 'error', () => {});
+      try {
+        await world.startupBuffer.replayPrompts(keyString, {
+          isSessionActive: true,
+          forward: async () => { throw new Error('adapter went away'); },
+        });
+      } finally {
+        logged.mock.restore();
+      }
+      assert.deepEqual(world.saved, {});
+      assert.equal(boot(), 0);
+    });
+
+    it('buffered, then the start fails: the nudge is dropped for good, so the retry is spent and a restart does not fire it', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+      assert.equal(keyString in world.saved, true);
+
+      const warned = mock.method(console, 'warn', () => {});
+      try {
+        world.startupBuffer.discardPrompts(keyString);
+        assert.equal(warned.mock.calls.length, 1, 'one line says the retry was spent without reaching a session');
+      } finally {
+        warned.mock.restore();
+      }
+      assert.deepEqual(world.saved, {}, 'the starter reported the failed start; the open request is left to the wake-up engine');
+      assert.deepEqual(world.nudges, []);
+
+      assert.equal(boot(), 0);
+    });
+
+    it('buffered, then drained into a session that is not active: dropped for good, the record goes', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+
+      const warned = mock.method(console, 'warn', () => {});
+      try {
+        await world.startupBuffer.replayPrompts(keyString, { isSessionActive: false, forward: forwardToSession(key) });
+      } finally {
+        warned.mock.restore();
+      }
+      assert.deepEqual(world.nudges, [], 'nothing was forwarded to a dead session');
+      assert.deepEqual(world.saved, {});
+    });
+
+    for (const [settleLabel, settle] of [
+      ['replayed', () => world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) })],
+      ['dropped', async () => { world.startupBuffer.discardPrompts(keyString); }],
+    ] as const) {
+      it(`a recurrence armed while the nudge waits keeps ITS saved record when the old nudge is ${settleLabel}`, async () => {
+        saveRetry(key, { attempt: 1 });
+        boot();
+        world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+        await runDueTimers();
+
+        // The nudge waits; the next error arms attempt 2 — a NEW entry and its own saved record.
+        const newer: ApiRetryTimerEntry = { timer: setTimeout(() => {}, 60_000), attempt: 2, kind: 'usageLimit', firedAt: null, fireAt: clockMs + 60_000 };
+        world.entries.set(keyString, newer);
+        world.saved[keyString] = { kind: 'usageLimit', attempt: 2, fireAt: newer.fireAt };
+
+        const warned = mock.method(console, 'warn', () => {});
+        try {
+          await settle();
+        } finally {
+          warned.mock.restore();
+        }
+        assert.deepEqual(world.saved[keyString], { kind: 'usageLimit', attempt: 2, fireAt: clockMs + 60_000 }, 'the older nudge settling must not undo it');
+        assert.equal(world.entries.get(keyString), newer);
+        assert.deepEqual(world.clears, []);
+      });
+    }
+
+    it('buffered, then the retry is cancelled (a user message, /new): the settling nudge clears nothing — the cancel already did', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+
+      // What `cancelApiRetry` does: the entry and the saved record go together.
+      world.entries.delete(keyString);
+      delete world.saved[keyString];
+      await world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) });
+      assert.deepEqual(world.clears, [], 'no second clear for a retry that no longer exists');
     });
 
     it('no session to resume: nothing forwarded, the topic told once why, and a restart does not try (or tell) again', async () => {
@@ -355,11 +498,19 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   });
 
   it('it reaches a session another start has under way through the startup buffer, never straight to the adapter', () => {
-    assert.ok(kickPorts.includes('deliverNudge: (key, text) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key))),'));
+    assert.ok(kickPorts.includes('deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),'));
     assert.doesNotMatch(kickPorts, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
-    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting);'));
+    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);'));
     assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
+  });
+
+  it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
+    // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
+    const replay = getFunction('async function replayBufferedPrompts(');
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: \(prompt\) => forwardPromptToAgent\(key, adapter, prompt\),\n\s*\}\);/);
+    assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
+    assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });
 
   it('a topic gets the reason or the "resuming" notice (pinned for a limit wait, a plain line for a transient retry)', () => {
