@@ -2,7 +2,7 @@ import * as path from 'path';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient } from './client';
 import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
-import { getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
+import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
 import { sleep } from '../../utils';
@@ -101,6 +101,9 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
   return { kind: 'ready', projects };
 }
 
+/** The start-of-polling log line that carries the poll's JQL. */
+export const jiraPollJqlLogPrefix = '[jira] poll JQL: ';
+
 export async function prepareJiraConnector(context: {
   dataDir: string;
   workRoot: string;
@@ -157,6 +160,8 @@ export async function prepareJiraConnector(context: {
     });
     inbound.start();
     console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${config.pollIntervalMs / 1000} s`);
+    // The allowlist as Jira receives it — what an operator reads to see which projects the AI account may act in.
+    console.log(`${jiraPollJqlLogPrefix}${buildJiraTriggerJql(projects)}`);
   };
 
   /** Check the setup again, with backoff, until Jira answers; then poll — or, if the setup turns out wrong, stop loudly (the process stays up). */

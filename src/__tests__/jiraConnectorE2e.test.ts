@@ -42,6 +42,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { FakeJira, fakeJiraSearchRequest, type FakeJiraIssue } from './jiraE2e/fakeJira';
+import { getPollJqlProjectKeys, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
 import {
   checkHasFlag,
   fakeClaudeLogFileNames,
@@ -198,17 +199,6 @@ function getAnswers(issueKey: string): FakeAnswer[] {
 /** The last session launch the process `pid` was started by. */
 function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
   return readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch && launch.pid === pid).at(-1);
-}
-
-/** The issues the connector's polls decided to open a request for, from its `[jira] poll: KEY decision, …` lines. */
-function getPolledRequestIssueKeys(output: string): string[] {
-  const pollLinePrefix = '[jira] poll: ';
-  return output.split('\n')
-    .filter((line) => line.startsWith(pollLinePrefix))
-    .flatMap((line) => line.slice(pollLinePrefix.length).split(', '))
-    .map((entry) => entry.split(' '))
-    .filter(([, decision]) => decision === 'request')
-    .map(([issueKey]) => issueKey);
 }
 
 function getCommentTexts(issue: FakeJiraIssue): string[] {
@@ -396,6 +386,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await startCharness();
     const envNames = charness?.pid === undefined ? null : getProcessEnvNames(charness.pid);
     if (envNames !== null) assert.deepEqual([...envNames].sort(), [...isolatedLaunchEnvNames].sort());
+    // The allowlist as Jira receives it: the poll's JQL names the configured project and nothing else.
+    assert.deepEqual(getPollJqlProjectKeys(charnessOutput), [['PROJ']]);
   });
 
   it('the requester assigns the issues: each in-scope one becomes one request', async () => {
