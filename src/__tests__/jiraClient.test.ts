@@ -184,13 +184,16 @@ describe('createJiraClient', () => {
     it('getChangelogPage, getIssue: paths with the key encoded and the fields joined', async () => {
       respondWith(
         { status: 200, body: json({ startAt: 100, maxResults: 100, total: 101, isLast: true, values: [] }) },
+        { status: 200, body: json({ startAt: 50, maxResults: 25, total: 101, isLast: false, values: [] }) },
         { status: 200, body: json({ id: '10100', key: 'PROJ-7', fields: { summary: 'Do it' } }) },
       );
       const client = createClient();
       assert.equal((await client.getChangelogPage('PROJ-7', 100)).total, 101);
+      await client.getChangelogPage('PROJ-7', 50, 25);
       assert.equal((await client.getIssue('PROJ-7', ['summary', 'comment'])).fields.summary, 'Do it');
       assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
         'GET /rest/api/3/issue/PROJ-7/changelog?startAt=100',
+        'GET /rest/api/3/issue/PROJ-7/changelog?startAt=50&maxResults=25',
         'GET /rest/api/3/issue/PROJ-7?fields=summary,comment',
       ]);
     });

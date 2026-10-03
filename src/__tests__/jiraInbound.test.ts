@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildJiraTriggerJql, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from '../connectors/jira/inbound';
+import { buildJiraTriggerJql, getJiraRetryDelayMs, jiraChangelogPageSize, JiraInbound, jiraRetryBackoffCapMs, type JiraInboundDeps, type JiraProjectTrigger } from '../connectors/jira/inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraIssue, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
 import { createdTriggerId } from '../connectors/jira/trigger';
@@ -96,11 +96,11 @@ describe('JiraInbound', () => {
           recorded.calls.push('search');
           return searchPages[pageIndex++] ?? { issues: [] };
         },
-        getChangelogPage: async (issueKey, startAt): Promise<JiraChangelogPage> => {
-          recorded.calls.push(`changelog ${issueKey} ${startAt}`);
+        getChangelogPage: async (issueKey, startAt, maxResults = jiraChangelogPageSize): Promise<JiraChangelogPage> => {
+          recorded.calls.push(`changelog ${issueKey} ${startAt}+${maxResults}`);
           const all = changelogPages.get(issueKey) ?? [];
-          const values = all.slice(startAt, startAt + 2);
-          return { startAt, maxResults: 2, total: all.length, isLast: startAt + values.length >= all.length, values };
+          const values = all.slice(startAt, startAt + maxResults);
+          return { startAt, maxResults, total: all.length, isLast: startAt + values.length >= all.length, values };
         },
         getIssue: async (issueKey) => {
           recorded.calls.push(`getIssue ${issueKey}`);
@@ -236,15 +236,56 @@ describe('JiraInbound', () => {
     assert.equal(triggerLog.checkIsSeen('PROJ-18', '100'), true, 'a parked trigger is not parked again');
   });
 
-  it('a changelog the search cut short is read whole from its own endpoint', async () => {
-    const older = createHistory('400', 0, [{ field: 'assignee', to: aiAccountId }]);
-    const newest = createHistory('401', 5, [{ field: 'status', to: '10001' }]);
-    const unrelated = createHistory('402', 10, [{ field: 'summary' }]);
-    changelogPages.set('PROJ-20', [older, newest, unrelated]);
-    searchPages = [{ issues: [createIssue('PROJ-20', { histories: [older], total: 3 })] }];
-    await createInbound().pollOnce();
-    assert.deepEqual(recorded.calls.filter((call) => call.startsWith('changelog')), ['changelog PROJ-20 0', 'changelog PROJ-20 2']);
-    assert.equal(recorded.origins[0].attributes.triggerId, '401');
+  describe('a changelog the search cut short', () => {
+    const entryCount = 250;
+    const automation: JiraAccount = { accountId: 'automation', accountType: 'app' };
+    /** A long-lived issue's changelog, oldest first (Jira's order): edits by an app, with the given entries in place. */
+    function createLongChangelog(overrides: ReadonlyMap<number, Partial<JiraChangelogHistory>>): JiraChangelogHistory[] {
+      return Array.from({ length: entryCount }, (_, index) => ({
+        id: `${1000 + index}`,
+        created: new Date(Date.parse('2026-09-01T00:00:00Z') + index * 60_000).toISOString(),
+        author: automation,
+        items: [{ field: 'labels' }],
+        ...overrides.get(index),
+      }));
+    }
+    const getChangelogCalls = (): string[] => recorded.calls.filter((call) => call.startsWith('changelog'));
+    const truncated = (issueKey: string, all: JiraChangelogHistory[]): JiraIssue => createIssue(issueKey, { histories: all.slice(0, 100), total: entryCount });
+
+    it('the newest page holds the trigger: one page is read, and once seen, one page a poll', async () => {
+      const all = createLongChangelog(new Map([[240, { author: requester, items: [{ field: 'assignee', to: aiAccountId }] }]]));
+      changelogPages.set('PROJ-20', all);
+      searchPages = [{ issues: [truncated('PROJ-20', all)] }, { issues: [truncated('PROJ-20', all)] }];
+      const inbound = createInbound();
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-20', 'request']]);
+      assert.equal(recorded.origins[0].attributes.triggerId, '1240');
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-20', 'seen']]);
+      assert.deepEqual(getChangelogCalls(), ['changelog PROJ-20 150+100', 'changelog PROJ-20 150+100']);
+    });
+
+    it('a trigger deep in the history: older pages are read back to it, no entry twice', async () => {
+      const all = createLongChangelog(new Map([[10, { author: requester, items: [{ field: 'assignee', to: aiAccountId }] }]]));
+      changelogPages.set('PROJ-21', all);
+      searchPages = [{ issues: [truncated('PROJ-21', all)] }];
+      await createInbound().pollOnce();
+      assert.deepEqual(getChangelogCalls(), ['changelog PROJ-21 150+100', 'changelog PROJ-21 50+100', 'changelog PROJ-21 0+50']);
+      assert.equal(recorded.origins[0].attributes.triggerId, '1010');
+    });
+
+    it('R24: an app\'s trigger reads back to the nearest earlier person — the requester, not the reporter', async () => {
+      const earlierPerson: JiraAccount = { accountId: 'earlier-person', accountType: 'atlassian' };
+      const all = createLongChangelog(new Map<number, Partial<JiraChangelogHistory>>([
+        [40, { author: earlierPerson, items: [{ field: 'summary' }] }],
+        [220, { items: [{ field: 'assignee', to: aiAccountId }] }],
+      ]));
+      changelogPages.set('PROJ-22', all);
+      searchPages = [{ issues: [truncated('PROJ-22', all)] }];
+      await createInbound().pollOnce();
+      assert.equal(recorded.origins[0].attributes.triggerId, '1220');
+      assert.equal(recorded.origins[0].attributes.requesterAccountId, 'earlier-person');
+      assert.equal(getChangelogCalls().length, 3, 'read back until the person was found');
+    });
   });
 
   it('every page of the search is read', async () => {
@@ -340,6 +381,53 @@ describe('JiraInbound', () => {
       inbound.stop();
       assert.ok(polls >= 2, `${polls} polls`);
       assert.equal(maxRunning, 1);
+    });
+
+    it('R22: polls that keep failing back off — the base interval doubled per failure, up to a cap', async () => {
+      assert.deepEqual([0, 1, 2, 3].map((failures) => getJiraRetryDelayMs(1_000, failures)), [1_000, 2_000, 4_000, 8_000]);
+      assert.equal(getJiraRetryDelayMs(60_000, 10), jiraRetryBackoffCapMs);
+      assert.equal(getJiraRetryDelayMs(jiraRetryBackoffCapMs * 2, 3), jiraRetryBackoffCapMs * 2, 'never below the base interval');
+      const pollTimes: number[] = [];
+      const flaky = createInbound({
+        pollIntervalMs: 10,
+        client: {
+          searchIssues: async () => {
+            pollTimes.push(Date.now());
+            throw new Error('Jira 503');
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+        },
+      });
+      flaky.start();
+      await waitMs(200);
+      flaky.stop();
+      // 10, 20, 40, 80 ms waits: at most five polls in 200 ms (a fixed 10 ms interval would make ~20).
+      assert.ok(pollTimes.length >= 3 && pollTimes.length <= 5, `${pollTimes.length} polls`);
+      const gaps = pollTimes.slice(1).map((time, index) => time - pollTimes[index]);
+      assert.ok(gaps.every((gap, index) => index === 0 || gap > gaps[index - 1]), `growing waits: ${gaps.join(', ')}`);
+    });
+
+    it('R22: a poll that succeeds again resets the backoff to the base interval', async () => {
+      let polls = 0;
+      const recovering = createInbound({
+        pollIntervalMs: 10,
+        client: {
+          searchIssues: async () => {
+            polls += 1;
+            // Three failures (waits 20, 40, 80 ms), then healthy.
+            if (polls <= 3) throw new Error('Jira 503');
+            return { issues: [] };
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+        },
+      });
+      recovering.start();
+      await waitMs(400);
+      recovering.stop();
+      // ~140 ms of backoff, then ~10 ms polls: well over a dozen. Without the reset it stays at 80 ms: about five.
+      assert.ok(polls >= 12, `${polls} polls`);
     });
 
     it('a rejected token stops polling for good; any other failure retries at the next interval', async () => {

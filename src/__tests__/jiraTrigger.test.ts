@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsPersonAccount, createdTriggerId, getIssueTrigger, getRequester } from '../connectors/jira/trigger';
+import { checkIsPersonAccount, createdTriggerId, findEarlierPerson, getIssueTrigger, getRequester } from '../connectors/jira/trigger';
 import type { JiraAccount, JiraChangelogHistory } from '../connectors/jira/client';
 
 const aiAccountId = 'ai-account';
@@ -56,15 +56,29 @@ describe('getIssueTrigger', () => {
   });
 });
 
-describe('getRequester', () => {
+describe('getRequester (R24)', () => {
   it('a person who made the change is the requester', () => {
-    assert.equal(getRequester(getIssueTrigger([assignedToAi], match, reporter), reporter), requester);
+    assert.equal(getRequester(getIssueTrigger([assignedToAi], match, reporter), [assignedToAi], reporter, aiAccountId), requester);
   });
 
-  it('an app or automation, or no author at all: the reporter is the requester', () => {
+  it('an automation\'s change: the nearest EARLIER person in the changelog, not a later one, not the AI account', () => {
+    const olderPerson = createHistory('050', '2026-10-03T08:00:00.000+0000', [{ field: 'summary' }], { accountId: 'older-person', accountType: 'atlassian' });
+    const nearerPerson = createHistory('060', '2026-10-03T08:30:00.000+0000', [{ field: 'priority' }], { accountId: 'nearer-person', accountType: 'atlassian' });
+    const byAi = createHistory('070', '2026-10-03T08:45:00.000+0000', [{ field: 'labels' }], { accountId: aiAccountId, accountType: 'atlassian' });
+    const byAutomation = createHistory('080', '2026-10-03T09:00:00.000+0000', [{ field: 'assignee', to: aiAccountId }], automation);
+    const laterPerson = createHistory('090', '2026-10-03T09:30:00.000+0000', [{ field: 'summary' }], { accountId: 'later-person', accountType: 'atlassian' });
+    const histories = [olderPerson, nearerPerson, byAi, byAutomation, laterPerson];
+    const trigger = getIssueTrigger(histories, match, reporter);
+    assert.equal(trigger.triggerId, '080');
+    assert.equal(findEarlierPerson(histories, trigger, aiAccountId)?.accountId, 'nearer-person');
+    assert.equal(getRequester(trigger, histories, reporter, aiAccountId)?.accountId, 'nearer-person');
+  });
+
+  it('no earlier person, or no author at all, or a creation trigger: the reporter', () => {
     const byAutomation = createHistory('400', '2026-10-03T12:00:00.000+0000', [{ field: 'assignee', to: aiAccountId }], automation);
-    assert.equal(getRequester(getIssueTrigger([byAutomation], match, reporter), reporter), reporter);
-    assert.equal(getRequester({ triggerId: '1', kind: 'assigned', author: null }, reporter), reporter);
+    assert.equal(getRequester(getIssueTrigger([byAutomation], match, reporter), [byAutomation], reporter, aiAccountId), reporter);
+    assert.equal(getRequester({ triggerId: '1', kind: 'assigned', author: null }, [], reporter, aiAccountId), reporter);
+    assert.equal(getRequester({ triggerId: createdTriggerId, kind: 'created', author: automation }, [assignedToAi], reporter, aiAccountId), reporter);
   });
 
   it('a missing account type is read as a person', () => {

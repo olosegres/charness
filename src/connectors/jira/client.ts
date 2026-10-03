@@ -244,7 +244,8 @@ function getFailureDetail(error: Error): string {
 export interface JiraClient {
   getMyself(): Promise<{ accountId: string }>;
   searchIssues(request: JiraSearchRequest): Promise<JiraSearchResult>;
-  getChangelogPage(issueKey: string, startAt: number): Promise<JiraChangelogPage>;
+  /** A page of the issue's changelog, oldest first (Jira's order); `maxResults` defaults to Jira's own page size. */
+  getChangelogPage(issueKey: string, startAt: number, maxResults?: number): Promise<JiraChangelogPage>;
   getIssue(issueKey: string, fields: string[]): Promise<JiraIssue>;
   addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
@@ -353,9 +354,13 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         searchResultSchema,
       ),
 
-    getChangelogPage: (issueKey, startAt) =>
+    getChangelogPage: (issueKey, startAt, maxResults) =>
       sendForJson(
-        { method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/changelog?startAt=${startAt}`, isIdempotent: true },
+        {
+          method: 'GET',
+          path: `/rest/api/3/issue/${encode(issueKey)}/changelog?startAt=${startAt}${maxResults === undefined ? '' : `&maxResults=${maxResults}`}`,
+          isIdempotent: true,
+        },
         changelogPageSchema,
       ),
 

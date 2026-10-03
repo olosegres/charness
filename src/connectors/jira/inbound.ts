@@ -2,7 +2,7 @@ import type { SessionKey } from '../../sessionKey';
 import type { RequestOrigin } from '../../requests/types';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraIssue } from './client';
 import { makeJiraKey } from './sessionKeyCodec';
-import { getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
+import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
 import { buildJiraRequestPrompt, jiraPromptIssueFields } from './prompt';
 
@@ -10,7 +10,7 @@ import { buildJiraRequestPrompt, jiraPromptIssueFields } from './prompt';
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
  * poll loop, one search per cycle, and per issue the decision chain
  *
- *   allowlist → still matching → no post in flight → trigger → seen before → self-authored
+ *   allowlist → still matching → no post in flight → trigger (newest changelog pages first) → seen before → self-authored
  *     → run budget → fetch the issue → bind → open a request → post (not awaited)
  *     → RECORD the trigger once the post settled
  *
@@ -26,6 +26,19 @@ import { buildJiraRequestPrompt, jiraPromptIssueFields } from './prompt';
  */
 
 export const jiraSearchPageSize = 50;
+/** The longest wait between two attempts while Jira keeps failing (R22). */
+export const jiraRetryBackoffCapMs = 15 * 60 * 1000;
+
+/**
+ * @description R22: the wait before the next attempt after `failureCount`
+ * failures in a row — the base interval doubled per failure, up to
+ * {@link jiraRetryBackoffCapMs} (never below the base interval).
+ */
+export function getJiraRetryDelayMs(baseMs: number, failureCount: number): number {
+  return Math.min(baseMs * 2 ** failureCount, Math.max(baseMs, jiraRetryBackoffCapMs));
+}
+/** Jira's largest changelog page. */
+export const jiraChangelogPageSize = 100;
 /** Enough of each issue to decide; the prompt's fields are fetched only for a new request. */
 export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator'];
 
@@ -90,6 +103,8 @@ function getIssueProjectKey(issueKey: string): string | null {
 export class JiraInbound {
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  /** Polls in a row that failed — the backoff's exponent (R22). */
+  private failureCount = 0;
   /** Issues whose last request's post has not settled yet. */
   private readonly postingIssueKeys = new Set<string>();
 
@@ -118,6 +133,7 @@ export class JiraInbound {
   private async runScheduledPoll(): Promise<void> {
     try {
       await this.pollOnce();
+      this.failureCount = 0;
     } catch (error) {
       if (error instanceof JiraAuthError) {
         // D14: wrong or revoked credentials do not fix themselves; one loud line, then stop.
@@ -125,9 +141,11 @@ export class JiraInbound {
         this.stop();
         return;
       }
-      console.warn(`[jira] poll failed: ${error instanceof Error ? error.message : String(error)}`);
+      // R22: a Jira outage never stops polling — the next attempt just waits longer.
+      this.failureCount += 1;
+      console.warn(`[jira] poll failed (${this.failureCount} in a row): ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (this.isRunning) this.scheduleNext(this.deps.pollIntervalMs);
+    if (this.isRunning) this.scheduleNext(getJiraRetryDelayMs(this.deps.pollIntervalMs, this.failureCount));
   }
 
   /** @description One poll: every matching issue, each decided once. A {@link JiraAuthError} propagates. */
@@ -172,18 +190,14 @@ export class JiraInbound {
       return 'notMatching';
     }
     if (this.postingIssueKeys.has(issue.key)) return 'posting';
-    const trigger = getIssueTrigger(
-      await this.getFullChangelog(issue),
-      { aiAccountId: deps.aiAccountId, triggerStatusIds: project.triggerStatusIds },
-      issue.fields.creator ?? issue.fields.reporter ?? null,
-    );
-    if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return 'seen';
+    const found = await this.findTrigger(issue, project);
+    if (found === 'seen') return 'seen';
+    const { trigger, requester } = found;
     const at = deps.now();
     if (trigger.author?.accountId === deps.aiAccountId) {
       this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'selfAuthored', at });
       return 'selfAuthored';
     }
-    const requester = getRequester(trigger, issue.fields.reporter ?? null);
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // Recorded first: a failed notice is not repeated on every poll (at most one per trigger).
       if (!this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'parked', at })) return 'failed';
@@ -246,15 +260,58 @@ export class JiraInbound {
     return isRecorded;
   }
 
-  /** D13: a changelog the search cut short (or left out) is read whole from its own endpoint. */
-  private async getFullChangelog(issue: JiraIssue): Promise<JiraChangelogHistory[]> {
-    const { changelog } = issue;
-    if (changelog && changelog.total <= changelog.histories.length) return changelog.histories;
+  /**
+   * @description The issue's trigger and its requester, reading the changelog
+   * newest pages first and only as far as needed (D13, J5b): the first page with
+   * a matching entry holds the newest one — already seen, the read stops there,
+   * so a long-lived issue costs one page a poll — and older pages are read only
+   * while an app's trigger still needs the nearest earlier person (R24).
+   */
+  private async findTrigger(issue: JiraIssue, project: JiraProjectTrigger): Promise<'seen' | { trigger: JiraIssueTrigger; requester: JiraAccount | null }> {
+    const { deps } = this;
+    const match = { aiAccountId: deps.aiAccountId, triggerStatusIds: project.triggerStatusIds };
+    const reporter = issue.fields.reporter ?? null;
     const histories: JiraChangelogHistory[] = [];
-    for (;;) {
-      const page = await this.deps.client.getChangelogPage(issue.key, histories.length);
-      histories.push(...page.values);
-      if (page.isLast || page.values.length === 0 || histories.length >= page.total) return histories;
+    for await (const page of this.getChangelogNewestPagesFirst(issue)) {
+      histories.push(...page);
+      const trigger = findNewestTrigger(histories, match);
+      if (!trigger) continue;
+      if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return 'seen';
+      const isRequesterKnown = trigger.author?.accountId === deps.aiAccountId
+        || getRequester(trigger, histories, null, deps.aiAccountId) !== null;
+      if (isRequesterKnown) return { trigger, requester: getRequester(trigger, histories, reporter, deps.aiAccountId) };
+    }
+    const trigger = getIssueTrigger(histories, match, issue.fields.creator ?? reporter);
+    if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return 'seen';
+    return { trigger, requester: getRequester(trigger, histories, reporter, deps.aiAccountId) };
+  }
+
+  /**
+   * The changelog in pages, NEWEST first: the search's own copy when complete,
+   * else read backwards from its end through its endpoint (which lists oldest
+   * first), never fetching an entry twice.
+   */
+  private async *getChangelogNewestPagesFirst(issue: JiraIssue): AsyncGenerator<JiraChangelogHistory[]> {
+    const { changelog } = issue;
+    if (changelog && changelog.total <= changelog.histories.length) {
+      yield changelog.histories;
+      return;
+    }
+    let total = changelog?.total;
+    if (total === undefined) {
+      const first = await this.deps.client.getChangelogPage(issue.key, 0, jiraChangelogPageSize);
+      if (first.total <= first.values.length) {
+        yield first.values;
+        return;
+      }
+      total = first.total;
+    }
+    for (let end = total; end > 0;) {
+      const startAt = Math.max(0, end - jiraChangelogPageSize);
+      const page = await this.deps.client.getChangelogPage(issue.key, startAt, end - startAt);
+      if (page.values.length === 0) return;
+      yield page.values;
+      end = startAt;
     }
   }
 }

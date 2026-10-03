@@ -306,3 +306,35 @@ describe('createCommentBodies (R19)', () => {
     assert.throws(() => createCommentBodies('text', { markdownMaxChars: 100, adfMaxChars: 10 }), /adfMaxChars 10 cannot hold a single character/);
   });
 });
+
+describe('no external media and no unsafe link targets in a comment (R25)', () => {
+  const collectNodes = (node: AdfNode): AdfNode[] => [node, ...(node.content ?? []).flatMap(collectNodes)];
+  const convertToNodes = (markdown: string): AdfNode[] => convertMarkdownToAdf(markdown).content.flatMap(collectNodes);
+  const getLinkTargets = (markdown: string): string[] => convertToNodes(markdown)
+    .flatMap((node) => node.marks ?? [])
+    .flatMap((mark) => (mark.type === 'link' && typeof mark.attrs?.href === 'string' ? [mark.attrs.href] : []));
+
+  it('an image becomes a plain link — never a media node any viewer\'s browser would fetch', () => {
+    for (const markdown of ['![logo](https://example.com/pixel.png)', 'before ![](https://example.com/t.gif) after', '| a |\n|---|\n| ![i](https://example.com/i.png) |']) {
+      const types = convertToNodes(markdown).map((node) => node.type);
+      assert.ok(!types.includes('media') && !types.includes('mediaSingle'), `${markdown}: ${types.join(',')}`);
+    }
+    const [paragraph] = convertMarkdownToAdf('![logo](https://example.com/pixel.png)').content;
+    assert.deepEqual(paragraph, { type: 'paragraph', content: [{ type: 'text', text: 'logo', marks: [{ type: 'link', attrs: { href: 'https://example.com/pixel.png' } }] }] });
+  });
+
+  it('a link keeps its target only for http, https and mailto', () => {
+    assert.deepEqual(
+      getLinkTargets('[a](https://example.com) [b](http://example.com) [c](mailto:someone@example.com) [d](javascript:alert(1)) [e](data:text/html,x) [f](/relative) [g](ftp://example.com)'),
+      ['https://example.com', 'http://example.com', 'mailto:someone@example.com'],
+    );
+    const texts = convertToNodes('[click](javascript:alert(1))').filter((node) => node.type === 'text').map((node) => node.text);
+    assert.deepEqual(texts, ['click'], 'the text stays, without a target');
+  });
+
+  it('an image with an unsafe address is text naming the address, never a link', () => {
+    const nodes = convertToNodes('![x](javascript:alert(1))');
+    assert.deepEqual(nodes.filter((node) => node.type === 'text').map((node) => node.text), ['x (javascript:alert(1))']);
+    assert.deepEqual(getLinkTargets('![x](javascript:alert(1))'), []);
+  });
+});

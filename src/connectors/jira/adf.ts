@@ -123,13 +123,64 @@ function getRestoredNodes(nodes: AdfNode[], isInCodeBlock = false): AdfNode[] {
   }));
 }
 
-/** Markdown the agent wrote → an ADF document for a comment body (D3); HTML in it stays literal text (R17). */
+/** R25: the only link targets a comment may carry; anything else (`javascript:`, `data:`, a relative path) stays text. */
+const safeLinkProtocols: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:']);
+
+function checkIsSafeLinkTarget(href: string): boolean {
+  try {
+    return safeLinkProtocols.has(new URL(href).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** A text node's marks without a link to an unsafe target; `undefined` when none remain. */
+function getSafeMarks(marks: AdfMark[] | undefined): AdfMark[] | undefined {
+  if (!marks) return undefined;
+  const kept = marks.filter((mark) => {
+    if (mark.type !== 'link') return true;
+    const href = mark.attrs?.href;
+    return typeof href === 'string' && checkIsSafeLinkTarget(href);
+  });
+  return kept.length > 0 ? kept : undefined;
+}
+
+/** An image as a paragraph of one text node: its alt text (or address), linked when the address is safe. */
+function getImageAsLink(mediaSingle: AdfNode): AdfNode {
+  const media = mediaSingle.content?.find((node) => node.type === 'media');
+  const url = typeof media?.attrs?.url === 'string' ? media.attrs.url : '';
+  const alt = typeof media?.attrs?.alt === 'string' ? media.attrs.alt : '';
+  const text = alt || url || 'image';
+  const marks = url && checkIsSafeLinkTarget(url) ? [{ type: 'link', attrs: { href: url } }] : undefined;
+  return { type: 'paragraph', content: [{ type: 'text', text: marks || !url || url === text ? text : `${text} (${url})`, ...(marks ? { marks } : {}) }] };
+}
+
+/**
+ * R25: no external media and no unsafe link targets in a comment. An image would
+ * be fetched by every viewer's browser — a tracking pixel, or a way to send data
+ * out in its address — so it becomes a plain link; a link to anything but
+ * http, https or mailto loses its target and stays text.
+ */
+function getSafeNodes(nodes: AdfNode[]): AdfNode[] {
+  return nodes.map((node) => {
+    if (node.type === 'mediaSingle') return getImageAsLink(node);
+    const { marks, ...rest } = node;
+    const safeMarks = getSafeMarks(marks);
+    return {
+      ...rest,
+      ...(safeMarks ? { marks: safeMarks } : {}),
+      ...(node.content ? { content: getSafeNodes(node.content) } : {}),
+    };
+  });
+}
+
+/** Markdown the agent wrote → an ADF document for a comment body (D3); HTML in it stays literal text (R17), no media or unsafe links (R25). */
 export function convertMarkdownToAdf(markdown: string): AdfDocument {
   const withoutAngleBrackets = markdown
     .replace(angleBracketPlaceholderRe, replacementCharacter)
     .replace(nonAutolinkAngleBracketRe, angleBracketPlaceholder);
   const document = markdownToAdf(withoutAngleBrackets);
-  return { ...document, content: getRestoredNodes(getNodesWithoutEmptyText(document.content)) };
+  return { ...document, content: getSafeNodes(getRestoredNodes(getNodesWithoutEmptyText(document.content))) };
 }
 
 /** Nodes that start a line of their own in the text form. */

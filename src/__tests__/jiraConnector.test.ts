@@ -13,7 +13,8 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import type { AddressInfo } from 'net';
-import { JiraConnectorStartError, prepareJiraConnector, type JiraConnector } from '../connectors/jira/connector';
+import { checkIsTransientJiraFailure, JiraConnectorStartError, prepareJiraConnector, type JiraConnector } from '../connectors/jira/connector';
+import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
 
@@ -23,6 +24,10 @@ const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
 let server: http.Server;
 let baseUrl = '';
 let myselfAccountId = aiAccountId;
+/** How many more `/myself` calls answer with this status instead (a Jira outage or a refused token). */
+let myselfFailures = { count: 0, status: 503 };
+/** Status of the project-statuses lookup; 200 serves the statuses. */
+let projectStatusesStatus = 200;
 const requestPaths: string[] = [];
 
 function sendJson(response: http.ServerResponse, body: object): void {
@@ -56,7 +61,18 @@ describe('prepareJiraConnector', () => {
       requestPaths.push(`${request.method} ${url.split('?')[0]}`);
       request.resume();
       request.on('end', () => {
+        if (url === '/rest/api/3/myself' && myselfFailures.count > 0) {
+          myselfFailures.count -= 1;
+          response.writeHead(myselfFailures.status);
+          response.end();
+          return;
+        }
         if (url === '/rest/api/3/myself') return sendJson(response, { accountId: myselfAccountId });
+        if (url === '/rest/api/3/project/PROJ/statuses' && projectStatusesStatus !== 200) {
+          response.writeHead(projectStatusesStatus, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ errorMessages: ['No project could be found'] }));
+          return;
+        }
         if (url === '/rest/api/3/project/PROJ/statuses') return sendJson(response, [{ statuses: [{ id: '10001', name: 'To Do' }, { id: '3', name: 'Done' }] }]);
         if (url === '/rest/api/3/search/jql') return sendJson(response, { issues: [issue], isLast: true });
         if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, issue);
@@ -78,6 +94,8 @@ describe('prepareJiraConnector', () => {
     workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-connector-work-'));
     fs.mkdirSync(path.join(workRoot, 'proj-work'));
     myselfAccountId = aiAccountId;
+    myselfFailures = { count: 0, status: 503 };
+    projectStatusesStatus = 200;
     requestPaths.length = 0;
   });
   afterEach(() => {
@@ -146,6 +164,42 @@ describe('prepareJiraConnector', () => {
       error instanceof JiraConnectorStartError && error.reasons.length === 2
       && error.reasons[0] === 'project PROJ has no status named "AI To Do"'
       && /GET \/rest\/api\/3\/project\/OPS\/statuses failed with 404/.test(error.reasons[1]));
+  });
+
+  it('R22: Jira unreachable at start does not refuse it — the setup is checked again, then polling starts', { timeout: 5_000 }, async () => {
+    writeConfig();
+    // Every attempt the client retries: two boot checks' worth of 503s.
+    myselfFailures = { count: 6, status: 503 };
+    connector = await prepareJiraConnector({
+      dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, testTiming: { setupRetryBaseMs: 10, sleep: async () => {} },
+    });
+    const isPosted = new Promise<boolean>((resolve) => {
+      connector?.start({
+        bindConversation: async () => {},
+        createRequest: async () => ({ id: 'req_1' }),
+        postRequest: async () => resolve(true),
+      });
+    });
+    assert.equal(await isPosted, true);
+    assert.equal(myselfFailures.count, 0, 'the outage was waited out');
+  });
+
+  it('R22: a refused token and an unknown project are the setup\'s fault — the start is refused', async () => {
+    writeConfig();
+    myselfFailures = { count: 1, status: 401 };
+    projectStatusesStatus = 404;
+    await assert.rejects(prepare(), (error: Error) =>
+      error instanceof JiraConnectorStartError && error.reasons.length === 2
+      && /refused GET \/rest\/api\/3\/myself with 401/.test(error.reasons.join('\n'))
+      && /No project could be found/.test(error.reasons.join('\n')));
+  });
+
+  it('R22: what counts as transient', () => {
+    assert.equal(checkIsTransientJiraFailure(new JiraHttpError(0, 'GET', '/x', 'fetch failed')), true);
+    assert.equal(checkIsTransientJiraFailure(new JiraHttpError(503, 'GET', '/x', 'down')), true);
+    assert.equal(checkIsTransientJiraFailure(new JiraHttpError(429, 'GET', '/x', 'slow down')), true);
+    assert.equal(checkIsTransientJiraFailure(new JiraHttpError(404, 'GET', '/x', 'no project')), false);
+    assert.equal(checkIsTransientJiraFailure(new JiraAuthError(401, 'GET', '/x')), false);
   });
 
   it('an invalid config stops the start before any request reaches Jira', async () => {
