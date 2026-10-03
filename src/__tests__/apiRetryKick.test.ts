@@ -25,11 +25,11 @@ import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { keyFromString, keyToString, unregisterSessionKeyCodec, type SessionKey } from '../sessionKey';
+import { keyFromString, keyToString, type SessionKey } from '../sessionKey';
 import { StartupPromptBuffer } from '../startupPromptBuffer';
 import { deliverPromptOrBuffer } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   apiRetryCatchUpDelayMs,
   restoreApiRetryTimers,
@@ -42,11 +42,8 @@ import {
 import type { ApiRetryState } from '../types';
 import { maxTimeoutMs } from '../scheduler/engine';
 
-registerTestSessionKeyCodec();
-process.on('exit', () => unregisterSessionKeyCodec('test'));
-
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
-const issueKey: SessionKey = makeTestKey('PROJ', 'PROJ-7');
+const issueKey: SessionKey = makeJiraKey('PROJ-7');
 const continueNudge = 'continue';
 const fireAtInThePast = 1_000;
 const clockMs = 1_000_000;

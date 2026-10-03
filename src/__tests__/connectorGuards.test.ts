@@ -361,7 +361,6 @@ describe('the guards are wired where they must run', () => {
     // Each skip must come before the scan first acts on the conversation.
     for (const [scanHeader, firstAction] of [
       ['function restorePendingQuestions(', 'getThreadAdapter(key)'],
-      ['function restoreApiRetries(', 'setTimeout('],
     ] as const) {
       const start = botSource.indexOf(scanHeader);
       assert.ok(start >= 0, scanHeader);
@@ -371,6 +370,14 @@ describe('the guards are wired where they must run', () => {
       assert.ok(action >= 0, `${scanHeader}: ${firstAction}`);
       assert.ok(skip >= 0 && skip < action, `${scanHeader} acts on every conversation`);
     }
+    // The retries' restore is `restoreApiRetryTimers` (apiRetryKick.ts, whose own test proves a skipped record is
+    // neither armed nor dropped): the bot hands it the served filter, and the module skips before it arms a timer.
+    const restoreStart = botSource.indexOf('function restoreApiRetries(');
+    assert.ok(restoreStart >= 0);
+    assert.match(botSource.slice(restoreStart, botSource.indexOf('\n}\n', restoreStart)), /isServed: \(key\) => checkIsServedConversation\(key, ENV\.servedPlatforms\),/);
+    const kickSource = readSource('apiRetryKick.ts');
+    const retrySkip = kickSource.indexOf('if (!deps.isServed(key)) continue;');
+    assert.ok(retrySkip >= 0 && retrySkip < kickSource.indexOf('setTimeout('), 'the retries\' restore acts on every conversation');
   });
 
   it('bot.ts imports nothing from the CLI layer (R10)', () => {
