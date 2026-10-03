@@ -26,6 +26,8 @@ interface ProbeScenario {
   apiRetryTimers: Map<string, NodeJS.Timeout | null>;
   wedgeRecoveryKeys: Set<string>;
   retryKickKeys: Set<string>;
+  startingKeys: Set<string>;
+  hasUnconsumedInput: boolean | undefined;
 }
 
 let scenario: ProbeScenario;
@@ -37,6 +39,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       checkIsBusy: () => scenario.isBusy,
       isQuestionPending: () => scenario.isTuiQuestionPending,
       isLoginPastePending: () => scenario.isLoginPastePending,
+      ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
     checkHasQuestionPin: (keyString) => scenario.questionPinKeys.has(keyString),
@@ -44,6 +47,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
     getApiRetryTimer: (keyString) => scenario.apiRetryTimers.get(keyString),
     checkIsWedgeRecoveryInFlight: (keyString) => scenario.wedgeRecoveryKeys.has(keyString),
     checkIsRetryKickInFlight: (keyString) => scenario.retryKickKeys.has(keyString),
+    checkIsSessionStarting: (keyString) => scenario.startingKeys.has(keyString),
     serializeKey: keyToString,
   };
   return createSessionTurnProbe(deps);
@@ -61,6 +65,8 @@ beforeEach(() => {
     apiRetryTimers: new Map(),
     wedgeRecoveryKeys: new Set(),
     retryKickKeys: new Set(),
+    startingKeys: new Set(),
+    hasUnconsumedInput: undefined,
   };
 });
 
@@ -113,6 +119,20 @@ describe('createSessionTurnProbe', () => {
     scenario.apiRetryTimers.set(topicKeyString, null);
     scenario.retryKickKeys.add(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+  });
+
+  it('a session still starting has not taken in what was forwarded — its prompt waits in the startup buffer (R21)', () => {
+    // An active backend with nothing unread: without the startup check this read as "taken in".
+    scenario.hasUnconsumedInput = false;
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, true, 'json-stream: active right after spawn, prompt still buffered');
+    scenario.hasUnconsumedInput = undefined;
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, true, 'a backend without the signal');
+
+    scenario.startingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, null, 'started: the backend\'s own signal again');
+    scenario.hasUnconsumedInput = false;
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, false);
   });
 
   it('busy is reported only for an active session', () => {

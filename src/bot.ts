@@ -163,7 +163,8 @@ import { createCommandRouter } from './platform/commandRouter';
 import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { OutboundHints } from './platform/outbound';
 import type { PostToSessionDeps } from './postToSession';
-import { getHeldPromptsWith, getLimitResumeMessage, limitHeldPromptsMax } from './utils/limitHeldPrompts';
+import { getLimitResumeMessage } from './utils/limitHeldPrompts';
+import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
@@ -307,7 +308,7 @@ import {
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
-import type { WakeUpMessage } from './requests/requestHeader';
+import { getPromptNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
@@ -1489,8 +1490,6 @@ interface ApiRetryTimerEntry {
   /** How a usage-limit wait ends, for the limit answer of a request opened during it.
    *  Absent for a record re-armed at boot (`state.json` keeps only the instant). */
   limitWait?: UsageLimitWait;
-  /** Prompts held while this usage-limit wait is armed, delivered at its resume (Jira plan R23). */
-  heldPrompts: string[];
 }
 
 const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
@@ -1525,6 +1524,20 @@ function getArmedApiRetry(key: SessionKey): ApiRetryTimerEntry | null {
   const entry = apiRetryTimers.get(keyToString(key));
   return entry && entry.timer !== null ? entry : null;
 }
+
+/**
+ * Prompts held during an armed usage-limit wait (Jira plan R23), in `state.json`
+ * apart from the retry record so they outlive a wait that ends without its
+ * resume. Released by {@link forwardPromptToAgent} (they ride the first prompt
+ * forwarded after the wait) and by {@link replayBufferedPrompts} (a new session).
+ */
+const limitHeldPrompts = new LimitHeldPromptQueue({
+  store: {
+    getLimitHeldPrompts: (key) => state.getLimitHeldPrompts(key),
+    setLimitHeldPrompts: (key, prompts) => state.setLimitHeldPrompts(key, prompts),
+  },
+  checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
+});
 
 /**
  * Last RAW prompt forwarded to each thread (pre-preamble), kept so a wedged
@@ -1633,10 +1646,8 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   // bottom (debounced; no-op when no question is pending).
   onThreadActivityWhileQuestionPending(key);
 
-  // Prompts held by the previous record stay held (none, normally: a fired wait delivered them).
-  const heldPrompts = entry?.heldPrompts ?? [];
   void state
-    .setApiRetry(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, ...(heldPrompts.length > 0 ? { heldPrompts } : {}) })
+    .setApiRetry(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt })
     .catch(e => console.error('[apiRetry] persist failed:', e));
 
   const delayMs = Math.min(action.delayMs, maxTimeoutMs);
@@ -1651,27 +1662,23 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     firedAt: null,
     fireAt: action.fireAt,
     limitWait,
-    heldPrompts,
   });
 }
 
 /**
  * @description R23: hold a prompt that arrives while `key` waits out an ARMED
- * usage limit — posting it would only hit the limit again. Kept on the armed
- * record (persisted, so a restart keeps it) and delivered by the wait's resume.
- * `false` when no usage-limit wait is armed: post as usual.
+ * usage limit — posting it would only hit the limit again. `false` when no
+ * usage-limit wait is armed: post as usual. The open request's own prompt is
+ * not copied into {@link limitHeldPrompts}: its request keeps it (R21), the
+ * resume posts it from there, and a request superseded meanwhile is never posted.
  */
 function holdPromptForLimitResume(key: SessionKey, text: string): boolean {
-  const entry = getArmedApiRetry(key);
-  if (entry?.kind !== 'usageLimit') return false;
-  const { held, droppedCount } = getHeldPromptsWith(entry.heldPrompts, text);
-  if (droppedCount > 0) console.warn(`[apiRetry] ${keyToString(key)}: ${droppedCount} oldest held prompt(s) dropped (at most ${limitHeldPromptsMax})`);
-  entry.heldPrompts = held;
-  void state
-    .setApiRetry(key, { kind: entry.kind, attempt: entry.attempt, fireAt: entry.fireAt, heldPrompts: held })
-    .catch(e => console.error('[apiRetry] persist failed:', e));
-  console.log(`[apiRetry] ${keyToString(key)}: prompt held until the usage-limit wait resumes (${held.length} held)`);
-  return true;
+  if (getArmedApiRetry(key)?.kind !== 'usageLimit') return false;
+  if (requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key)?.prompt === text) {
+    console.log(`[apiRetry] ${keyToString(key)}: request held until the usage-limit wait resumes`);
+    return true;
+  }
+  return limitHeldPrompts.holdPrompt(key, text);
 }
 
 /**
@@ -1708,25 +1715,19 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   apiRetryKicksInFlight.add(k);
   entry.timer = null;
   entry.firedAt = Date.now();
-  // R23: what was held during the wait goes out now, in place of the nudge — once.
-  const heldPrompts = entry.heldPrompts;
-  if (heldPrompts.length > 0) {
-    entry.heldPrompts = [];
-    void state
-      .setApiRetry(key, { kind: entry.kind, attempt: entry.attempt, fireAt: entry.fireAt })
-      .catch(e => console.error('[apiRetry] persist failed:', e));
-  }
 
   if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
   else void replyToThread(key, t('apiRetry.resuming'));
   try {
     await ensureAgentSession(key);
-    // The nudge is NOT a request: the open request (if any) continues under it. Prompts
-    // held during the wait (R23) replace it — the newest request is what to work on.
+    // The nudge is NOT a request: the open request (if any) continues under it. A
+    // request whose prompt never reached the agent — the wait held it (R23) — gets
+    // that prompt instead (R21). Prompts held during the wait ride whichever it is.
     const resume = getLimitResumeMessage({
-      heldPrompts,
       continueNudge: t('apiRetry.continueNudge'),
-      openRequestPrompt: requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key)?.prompt,
+      untakenRequestPrompt: entry.kind === 'usageLimit'
+        ? getPromptNotTakenIn(requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key))
+        : undefined,
     });
     await forwardPromptToAgent(key, getThreadAdapter(key), resume.text);
     await requestWakeUpEngine?.trackContinuationTurn(key, {
@@ -1824,8 +1825,9 @@ function cancelApiRetry(key: SessionKey): void {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (entry?.timer) clearTimeout(entry.timer);
-  // A held request prompt is not lost: its request keeps it, and its next wake-up re-posts it (R21).
-  if (entry && entry.heldPrompts.length > 0) console.warn(`[apiRetry] ${k}: ${entry.heldPrompts.length} held prompt(s) dropped with the wait`);
+  // Prompts held during the wait (R23) are not dropped with it: they ride the next
+  // prompt forwarded to the session — the operator's message that cancelled the
+  // wait — or go to the next session on their own (`limitHeldPrompts`).
   apiRetryTimers.delete(k);
   void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
   // The limit episode is over for this thread → retire its two one-shot markers.
@@ -4870,7 +4872,7 @@ async function ensureAgentSession(
 async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   const adapter = getThreadAdapter(key);
   const prompts = startupPromptBuffer.drainPrompts(keyToString(key));
-  if (prompts.length === 0 || !adapter.checkIsActive(key)) return;
+  if (!adapter.checkIsActive(key)) return;
   // Sequential await keeps `sendInput` calls in arrival order even when each
   // forward awaits its own loader send first.
   for (const prompt of prompts) {
@@ -4879,6 +4881,15 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
     } catch (err) {
       console.error('[replayBufferedPrompts] forward failed:', err);
     }
+  }
+  // R23: prompts held during a usage-limit wait that ended with the previous
+  // session go to this one — on their own when nothing above carried them.
+  const heldText = limitHeldPrompts.releaseAll(key);
+  if (heldText === null) return;
+  try {
+    await forwardPromptToAgent(key, adapter, heldText);
+  } catch (err) {
+    console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
   }
 }
 
@@ -4910,6 +4921,19 @@ async function forwardPromptToAgent(
 ): Promise<void> {
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
+  // Skip slash commands (not worth replaying), the recovery replay itself (keeps
+  // the once-per-episode guard intact) and a request reminder (the request's own
+  // prompt stays the one to replay).
+  const isReplayable = checkIsReplayablePrompt({
+    isSlashCommand: checkShouldSkipPreambleForText(text),
+    isRecoveryReplay: options.isRecoveryReplay ?? false,
+    isRequestReminder: options.isRequestReminder ?? false,
+  });
+  // R23: prompts held during a usage-limit wait ride the first such prompt
+  // forwarded to a live session once no wait holds them — after it, in arrival
+  // order (the resume's, the operator's message that ended the wait, a later
+  // post). Only a replayable one carries them, so a wedge recovery replays them too.
+  const textWithHeld = isReplayable && adapter.checkIsActive(key) ? limitHeldPrompts.releaseWithForward(key, text) : text;
   // Fold the reply-quote block (from a Telegram REPLY) ahead of the user's text
   // so the agent sees WHAT is being referenced — only for a normal prompt, since
   // a slash command forwarded to the agent is a control token a prefixed block
@@ -4917,21 +4941,12 @@ async function forwardPromptToAgent(
   // timestamped below.
   const body =
     options.replyContext && !checkShouldSkipPreambleForText(text)
-      ? `${options.replyContext}\n\n${text}`
-      : text;
+      ? `${options.replyContext}\n\n${textWithHeld}`
+      : textWithHeld;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
-  // Skip slash commands (not worth replaying), the recovery replay itself (keeps
-  // the once-per-episode guard intact) and a request reminder (the request's own
-  // prompt stays the one to replay). A genuine new prompt also opens a fresh
-  // recovery episode (clears the guard).
-  if (
-    checkIsReplayablePrompt({
-      isSlashCommand: checkShouldSkipPreambleForText(text),
-      isRecoveryReplay: options.isRecoveryReplay ?? false,
-      isRequestReminder: options.isRequestReminder ?? false,
-    })
-  ) {
+  // A genuine new prompt also opens a fresh recovery episode (clears the guard).
+  if (isReplayable) {
     lastForwardedPrompt.set(keyToString(key), body);
     wedgeRecoveryTier.delete(keyToString(key));
   }
@@ -13440,7 +13455,6 @@ function restoreApiRetries(): void {
       kind: record.kind,
       firedAt: null,
       fireAt: record.fireAt,
-      heldPrompts: record.heldPrompts ?? [],
     });
     restored += 1;
   }
@@ -14122,6 +14136,7 @@ export async function startBot(): Promise<void> {
       getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
       checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
       checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
+      checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
       serializeKey: keyToString,
     }),
     prepareWakeUpSession: ensureSessionByResume,

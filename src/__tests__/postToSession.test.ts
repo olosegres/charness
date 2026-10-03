@@ -67,6 +67,26 @@ describe('postToSession', () => {
     assert.deepEqual(calls, ['hold k p']);
   });
 
+  it('R23: a wait armed while the post waited for the busy turn holds the prompt — it is not forwarded into the limit', async () => {
+    const calls: string[] = [];
+    let isBusy = true;
+    let isLimitWaitArmed = false;
+    const deps = createDeps(calls, {
+      checkBusy: () => isBusy,
+      sleep: async () => {
+        // The running turn hits the usage limit: the wait is armed and the turn goes idle.
+        isLimitWaitArmed = true;
+        isBusy = false;
+      },
+      holdForLimitResume: () => {
+        calls.push(`hold? ${isLimitWaitArmed}`);
+        return isLimitWaitArmed;
+      },
+    });
+    assert.deepEqual(await postToSession(deps, 'k', 'p'), { ok: true, isHeld: true });
+    assert.deepEqual(calls, ['hold? false', 'ensure k -', 'hold? true']);
+  });
+
   it('R23: no wait armed — the post goes on as usual', async () => {
     const calls: string[] = [];
     const deps = createDeps(calls, { holdForLimitResume: () => false });

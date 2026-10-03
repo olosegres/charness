@@ -4,7 +4,9 @@
  * session when the deps can, else starting one if needed — let a
  * BUSY session finish its turn (up to {@link waitIdleTimeoutMs} — live work is
  * never interrupted on purpose; after the bound the forward takes the normal
- * interrupt path), then forward. The scheduler's fire (steps 3–4) and the Jira
+ * interrupt path), then forward — unless an armed usage-limit wait holds the
+ * prompt, checked before the session is touched and again right before the
+ * forward (R23). The scheduler's fire (steps 3–4) and the Jira
  * connector's requests share it. Every side effect is injected, so the wait
  * loop runs on a fake clock in tests.
  */
@@ -40,8 +42,8 @@ export type EnsureSessionResult = { ok: true } | { ok: false; reason: EnsureSess
 export interface PostToSessionDeps {
   /**
    * Optional: hold the prompt while the conversation waits out an armed usage
-   * limit (Jira plan R23) — posting it would only hit the limit again; the wait's
-   * resume delivers it. `true` = held, nothing else to do now.
+   * limit (Jira plan R23) — posting it would only hit the limit again; it reaches
+   * the session once the wait ends. `true` = held, nothing else to do now.
    */
   holdForLimitResume?: (conversationKey: string, text: string) => boolean;
   /** Whether the conversation's agent is mid-turn right now (sync, in-memory probe). */
@@ -62,8 +64,11 @@ export interface PostToSessionDeps {
   sleep: (ms: number) => Promise<void>;
 }
 
-/** @name PostToSessionResult @description `forward-failed` carries the forward's own error message. */
-/** @name PostToSessionResult @description `isHeld` — posted into an armed limit wait's queue, delivered at its resume. */
+/**
+ * @name PostToSessionResult
+ * @description `isHeld` — an armed usage-limit wait held the prompt; it reaches the
+ * session once the wait ends. `forward-failed` carries the forward's own error message.
+ */
 export type PostToSessionResult =
   | { ok: true; isHeld: boolean }
   | { ok: false; reason: EnsureSessionFailureReason }
@@ -89,6 +94,8 @@ export async function postToSession(
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
   if (deps.checkBusy(conversationKey)) await waitForIdle(deps, conversationKey);
+  // Again: the turn waited out above may itself have hit the limit and armed a wait.
+  if (deps.holdForLimitResume?.(conversationKey, text)) return { ok: true, isHeld: true };
   try {
     await deps.forwardPrompt(conversationKey, text);
   } catch (error) {

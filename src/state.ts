@@ -396,6 +396,14 @@ export interface StateV1 {
    */
   apiRetries?: Record<string, ApiRetryState>;
   /**
+   * Prompts held during an armed usage-limit wait (Jira plan R23), keyed by
+   * {@link SessionKey} string, oldest first. Kept apart from `apiRetries`: the
+   * wait can end without its resume (the operator writes, skips or disables it,
+   * the session ends), and the prompts must outlive it until they reach a
+   * session (`utils/limitHeldPromptQueue.ts`). Optional — absent when empty.
+   */
+  limitHeldPrompts?: Record<string, string[]>;
+  /**
    * Open requests of the request ledger (`requests/requestLedger.ts`), keyed by
    * {@link SessionKey} string — at most ONE per conversation (a new request
    * supersedes the open one). Persisted so an unanswered request, its counters
@@ -2006,6 +2014,30 @@ export class StateStore {
       }
       this.scheduleSave();
     });
+  }
+
+  // ── prompts held during a usage-limit wait (R23) ──
+
+  /** @description The prompts held for `key`, oldest first; `[]` when none. A copy. */
+  getLimitHeldPrompts(key: SessionKey): string[] {
+    return [...(this.state.limitHeldPrompts?.[keyToString(key)] ?? [])];
+  }
+
+  /**
+   * @description Replace the prompts held for `key`; `[]` drops the entry (and
+   * the map once empty). Synchronous in memory — a take must be atomic against
+   * a concurrent hold — and saved debounced like the retry record it outlives.
+   */
+  setLimitHeldPrompts(key: SessionKey, prompts: readonly string[]): void {
+    const k = keyToString(key);
+    if (prompts.length > 0) {
+      (this.state.limitHeldPrompts ??= {})[k] = [...prompts];
+    } else {
+      if (!this.state.limitHeldPrompts?.[k]) return;
+      delete this.state.limitHeldPrompts[k];
+      if (Object.keys(this.state.limitHeldPrompts).length === 0) delete this.state.limitHeldPrompts;
+    }
+    this.scheduleSave();
   }
 
   // ── open requests (request ledger) ──

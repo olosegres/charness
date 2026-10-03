@@ -106,6 +106,8 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     ? await deps.ledger.closeRequest(args.requestId, closeReason)
     : await deps.ledger.updateOpenRequest(args.requestId, (current) => ({
       progressAnswerCount: current.progressAnswerCount + 1,
+      // An answer proves the agent read the request: a later wake-up reminds, never re-posts it (R21).
+      ...(current.prompt !== undefined && current.isPromptTakenIn !== true ? { isPromptTakenIn: true } : {}),
     }));
   return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}` };
 }

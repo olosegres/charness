@@ -21,6 +21,10 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *  - an API-error retry or limit resume being KICKED: from the moment its timer
  *    fired until its "continue" nudge was forwarded the retry is no longer armed,
  *    yet the idle the error left behind is not a turn end either.
+ *
+ * A session still starting has not taken in what was forwarded to it: the
+ * prompt waits in the startup buffer, while a backend may already report itself
+ * active with nothing unread.
  */
 
 /**
@@ -40,6 +44,8 @@ export interface SessionTurnProbeDeps {
   getApiRetryTimer: (keyString: string) => NodeJS.Timeout | null | undefined;
   checkIsWedgeRecoveryInFlight: (keyString: string) => boolean;
   checkIsRetryKickInFlight: (keyString: string) => boolean;
+  /** The session is in its startup window: prompts forwarded now are buffered, not written. */
+  checkIsSessionStarting: (keyString: string) => boolean;
   serializeKey: (key: SessionKey) => string;
 }
 
@@ -61,7 +67,9 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
     return {
       isActive,
       isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),
-      hasUnconsumedInput: adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,
+      hasUnconsumedInput: deps.checkIsSessionStarting(keyString)
+        ? true
+        : adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,
       isTurnEndBlocked,
     };
   };

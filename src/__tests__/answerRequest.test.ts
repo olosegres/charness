@@ -45,6 +45,10 @@ function createRecordingSink(): RecordingSink {
       recording.deliveries.push({ key, delivery });
       return recording.nextResult;
     },
+    async deliverAlert() {
+      return { ok: true };
+    },
+    async releaseAlert() {},
   };
   return recording;
 }
@@ -117,6 +121,19 @@ describe('answerRequest close rules', () => {
     assert.equal(sink.deliveries.length, 3);
     assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id);
     assert.equal(ledger.getOpenRequest(topicKey)?.progressAnswerCount, 3);
+  });
+
+  it('a progress answer proves the agent read the request: a kept prompt counts as taken in (R21)', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin, { createPrompt: (requestId) => `[Request ${requestId}] do it` });
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+
+    const withoutPrompt = await ledger.createRequest(topicKey, origin);
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(withoutPrompt.id, { kind: 'progress' }));
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'nothing to re-post: no flag');
   });
 
   it('a late answer to a superseded request is delivered and changes no request', async () => {

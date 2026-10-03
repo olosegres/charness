@@ -168,13 +168,6 @@ export interface WatchedTurn {
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
 /**
- * @description Has the turn the request's message started ended? The backend
- * must first have TAKEN IN the message — otherwise an idle reported for the
- * earlier turn would read as this turn's end: a backend that tracks it says so
- * (`hasUnconsumedInput`), one that does not must have been seen busy or
- * producing output since the forward (the busy-onset race).
- */
-/**
  * @description Has the backend taken in what was forwarded for this turn? Its own
  * signal when it has one (nothing written is still unread), else busy or output
  * seen since the forward.
@@ -183,6 +176,13 @@ export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnPr
   return probe.hasUnconsumedInput === null ? turn.hasSeenBusy || turn.hasSeenOutput : !probe.hasUnconsumedInput;
 }
 
+/**
+ * @description Has the turn the request's message started ended? The backend
+ * must first have TAKEN IN the message — otherwise an idle reported for the
+ * earlier turn would read as this turn's end: a backend that tracks it says so
+ * (`hasUnconsumedInput`), one that does not must have been seen busy or
+ * producing output since the forward (the busy-onset race).
+ */
 export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe): WatchedTurnState {
   if (!probe.isActive) return 'sessionGone';
   if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked) return 'running';

@@ -54,14 +54,21 @@ export interface WakeUpMessage {
 }
 
 /**
- * @description R21: a request whose prompt was never taken in by the session — its
- * post failed, a restart came first, a usage-limit wait held it — gets the prompt
- * itself; a bare reminder would name a request the agent never read.
+ * @description The request's own prompt while the session never took it in — its
+ * post failed, a restart came first, a usage-limit wait held it (R21); `undefined`
+ * once it was taken in, or when the request keeps no prompt.
+ */
+export function getPromptNotTakenIn(request: OpenRequestState | null | undefined): string | undefined {
+  return request?.isPromptTakenIn === true ? undefined : request?.prompt;
+}
+
+/**
+ * @description R21: a request whose prompt was never taken in by the session gets
+ * the prompt itself; a bare reminder would name a request the agent never read.
  */
 export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason): WakeUpMessage {
-  if (request.prompt !== undefined && request.isPromptTakenIn !== true) {
-    return { reason, text: request.prompt, isRequestPrompt: true };
-  }
+  const prompt = getPromptNotTakenIn(request);
+  if (prompt !== undefined) return { reason, text: prompt, isRequestPrompt: true };
   return { reason, text: buildWakeUpReminder({ requestId: request.id, reason }), isRequestPrompt: false };
 }
 

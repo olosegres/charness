@@ -227,8 +227,6 @@ export interface ApiRetryState {
   attempt: number;
   /** Epoch ms when the retry timer should fire. */
   fireAt: number;
-  /** Prompts held while this usage-limit wait is armed, delivered at its resume (Jira plan R23). Absent = none. */
-  heldPrompts?: string[];
 }
 
 /**

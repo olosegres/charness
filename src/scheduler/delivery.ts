@@ -179,8 +179,9 @@ async function deliverToAgent(
   // 3–4. ensure a session, let a busy one finish its turn, forward the prefixed prompt
   const posted = await postToSession(deps, job.threadKey, prompt, job.lastAdapterName);
   if (posted.ok) {
-    // A run held during a usage-limit wait reaches the agent at its resume (R23).
-    if (posted.isHeld) console.log(`[scheduler] job ${job.id}: held until the usage-limit wait resumes`);
+    // A run held during a usage-limit wait reaches the agent once the wait ends —
+    // with its resume, the operator's next message, or the next session (R23).
+    if (posted.isHeld) console.log(`[scheduler] job ${job.id}: held until the usage-limit wait ends`);
     return { status: 'delivered' };
   }
   // Unbound → distinct error the engine records; S8 pauses the job on it.
