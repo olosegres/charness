@@ -6,11 +6,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
+  argvViolationExitCode,
   checkHasFlag,
   fakeClaudeLogFileNames,
   fakeClaudeVersion,
   getFlagValues,
   getLaunchSessionId,
+  requiredJiraSessionFlags,
   sessionViolationExitCode,
 } from './fakeClaudeContract';
 
@@ -231,6 +233,12 @@ async function main(): Promise<void> {
   if (!isSessionLaunch) {
     process.stdout.write(`${fakeClaudeVersion}\n`);
     return;
+  }
+  const missingFlags = requiredJiraSessionFlags.filter((flag) => !checkHasFlag(argv, flag));
+  if (missingFlags.length > 0) {
+    appendJsonLine(fakeClaudeLogFileNames.violations, { missingFlags, argv });
+    process.stderr.write(`fake claude: missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}\n`);
+    process.exit(argvViolationExitCode);
   }
   const sessionViolation = getSessionViolation(argv);
   if (sessionViolation !== null) {

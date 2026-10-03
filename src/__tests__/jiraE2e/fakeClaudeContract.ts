@@ -5,6 +5,7 @@
  * is loaded.
  */
 
+export const argvViolationExitCode = 3;
 /** What the real CLI exits with when it refuses a `--resume` / `--session-id` it cannot serve. */
 export const sessionViolationExitCode = 1;
 export const fakeClaudeVersion = '2.1.287 (Claude Code)';
@@ -14,6 +15,13 @@ export const fakeClaudeLogFileNames = {
   answers: 'answers.jsonl',
   turns: 'turns.jsonl',
 } as const;
+
+/** The flags every session launch of a Jira conversation must carry (R7, R8, R11, D17). */
+export const requiredJiraSessionFlags: ReadonlyArray<readonly string[]> = [
+  ['--disallowedTools', 'AskUserQuestion'],
+  ['--setting-sources', 'project,local'],
+  ['--strict-mcp-config'],
+];
 
 /**
  * @name FakeClaudeTurn

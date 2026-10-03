@@ -17,7 +17,7 @@ import * as path from 'path';
 import { getConnectorGuardErrors, getPreloadGuardErrors } from '../cli/connectorGuards';
 import { loadEnvFiles } from '../cli/envLoader';
 import { getTmuxBaseArgs, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
-import { installTelegramCallGuard, TelegramDisabledError } from '../connectors/telegram/telegramCallGuard';
+import { installTelegramCallGuard, TelegramDisabledError, telegramCallRefusedLogPrefix } from '../connectors/telegram/telegramCallGuard';
 import {
   checkIsServedConversation,
   getServedConversations,
@@ -276,6 +276,18 @@ describe('installTelegramCallGuard (D9)', () => {
     await assert.rejects(host.callApi('getMe', {}), TelegramDisabledError);
     await assert.rejects(host.callApi('sendMessage', { text: 'x' }), /"sendMessage" refused/);
     assert.equal(sentCalls, 0);
+  });
+
+  it('logs every refused call itself — a caller that swallows the rejection cannot hide it', async (context) => {
+    const errorLines: string[] = [];
+    context.mock.method(console, 'error', (line: string) => { errorLines.push(line); });
+    const host = { callApi: async () => true };
+    installTelegramCallGuard(host);
+
+    await host.callApi('sendChatAction', {}).catch(() => {});
+
+    assert.equal(errorLines.length, 1);
+    assert.ok(errorLines[0].startsWith(`${telegramCallRefusedLogPrefix} sendChatAction:`));
   });
 });
 
