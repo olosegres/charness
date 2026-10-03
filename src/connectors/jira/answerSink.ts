@@ -178,7 +178,8 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   /**
    * A failure before the first comment landed. The agent has no way to look at the
    * issue itself, so the text says what to do: send again — and, when the issue
-   * could not be read, that a resend may show the answer twice.
+   * could not be read, to send the same text unchanged, since only an identical
+   * resend is checked against the issue first (R29).
    */
   function getNothingPostedError(failure: CommentPostFailure): string {
     switch (failure.kind) {
@@ -188,7 +189,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         return `Jira did not confirm the comment (${failure.detail}), so it was most likely not posted; send the answer again`;
       case 'unknown':
         return `Jira did not confirm the comment and the issue could not be read to check it (${failure.detail}); it may already be there. ` +
-          'Send the answer again: before posting it, the issue is read to make sure it is not posted twice';
+          'Send the answer again, unchanged: before the same text is posted again, the issue is read, so a comment that did land is not posted twice';
       case 'unchecked':
         return `Nothing was posted: ${failure.detail}. Send the answer again in a few minutes`;
     }
@@ -200,7 +201,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     const postedPart = `the first ${posted.postedCount} of the answer's ${bodies.length} comments reached the issue`;
     if (failure.kind === 'unknown') {
       return `${postedPart}; the next one, starting at ${restStart}, may or may not have (${failure.detail}; the issue could not be read to check), ` +
-        `and nothing after it was posted. Send the rest again, starting at ${restStart} — a comment that did land is not posted twice`;
+        `and nothing after it was posted. Send the rest again, unchanged, starting at ${restStart} — the same text is checked against the issue first, so a comment that did land is not posted twice`;
     }
     if (failure.kind === 'unchecked') {
       return `${postedPart}; nothing after them was posted (${failure.detail}). Send the rest again in a few minutes, starting at ${restStart}`;

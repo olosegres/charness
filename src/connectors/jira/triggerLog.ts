@@ -48,20 +48,9 @@ export class JiraTriggerLog {
 
   /** @description Index the file. A line that does not parse is skipped with a warning (never fatal). */
   async load(): Promise<void> {
-    let skipped = 0;
-    for (const line of await this.file.readLines()) {
-      let json: object;
-      try {
-        json = JSON.parse(line);
-      } catch {
-        skipped += 1;
-        continue;
-      }
-      const parsed = triggerRecordSchema.safeParse(json);
-      if (parsed.success) this.index(parsed.data);
-      else skipped += 1;
-    }
-    if (skipped > 0) console.warn(`[jira] trigger log: ${skipped} unreadable line(s) skipped`);
+    const { records, skippedCount } = await this.file.readRecords(triggerRecordSchema);
+    for (const record of records) this.index(record);
+    if (skippedCount > 0) console.warn(`[jira] trigger log: ${skippedCount} unreadable line(s) skipped`);
   }
 
   private index(record: JiraTriggerRecord): void {

@@ -11110,7 +11110,7 @@ export async function startBot(): Promise<void> {
       serializeKey: keyToString,
     }),
     prepareWakeUpSession: (key, message) =>
-      prepareRequestWakeUpSession(key, message, undefined),
+      prepareRequestWakeUpSession(key, message, key.platform === 'jira' ? jiraConnector?.adapterName : undefined),
     forwardWakeUp: forwardRequestWakeUp,
     deliverAlert: async (key, request, reason) => {
       const lookup = getAnswerSink(answerSinks, key);

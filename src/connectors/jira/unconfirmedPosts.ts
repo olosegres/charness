@@ -47,22 +47,15 @@ export class JiraUnconfirmedPosts {
     return new JiraUnconfirmedPosts(new RotatingJsonlFile<UnconfirmedPostLine>(filePath, unconfirmedPostsMaxBytes), now);
   }
 
-  /** @description Replay the file. A line that does not parse is skipped with a warning (never fatal). */
+  /**
+   * @description Replay the file, keeping only the entries still young enough to
+   * matter. A line that does not parse is skipped with a warning (never fatal).
+   */
   async load(): Promise<void> {
-    let skipped = 0;
-    for (const line of await this.file.readLines()) {
-      let json: object;
-      try {
-        json = JSON.parse(line);
-      } catch {
-        skipped += 1;
-        continue;
-      }
-      const parsed = unconfirmedPostLineSchema.safeParse(json);
-      if (parsed.success) this.apply(parsed.data);
-      else skipped += 1;
-    }
-    if (skipped > 0) console.warn(`[jira] unconfirmed posts: ${skipped} unreadable line(s) skipped`);
+    const { records, skippedCount } = await this.file.readRecords(unconfirmedPostLineSchema);
+    for (const line of records) this.apply(line);
+    this.forgetExpired();
+    if (skippedCount > 0) console.warn(`[jira] unconfirmed posts: ${skippedCount} unreadable line(s) skipped`);
   }
 
   private apply(line: UnconfirmedPostLine): void {
@@ -73,8 +66,20 @@ export class JiraUnconfirmedPosts {
 
   /** @description When the unconfirmed post of this body started, or `null` when there is none (or it is too old to matter). */
   getPostedAt(requestId: string, bodyHash: string): number | null {
-    const postedAt = this.postedAtByIdentity.get(getPostIdentity(requestId, bodyHash));
-    return postedAt !== undefined && this.now() - postedAt < unconfirmedPostMaxAgeMs ? postedAt : null;
+    this.forgetExpired();
+    return this.postedAtByIdentity.get(getPostIdentity(requestId, bodyHash)) ?? null;
+  }
+
+  /**
+   * An entry past {@link unconfirmedPostMaxAgeMs} is dropped: most are never
+   * resent (the request closed, the agent sent other text), and kept they would
+   * only grow the map for the life of the process.
+   */
+  private forgetExpired(): void {
+    const nowMs = this.now();
+    for (const [identity, postedAt] of this.postedAtByIdentity) {
+      if (nowMs - postedAt >= unconfirmedPostMaxAgeMs) this.postedAtByIdentity.delete(identity);
+    }
   }
 
   /**

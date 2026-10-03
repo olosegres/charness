@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildJiraAlertText, buildJiraParkText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
@@ -173,7 +173,7 @@ describe('answers', () => {
       result.ok ? result.warning ?? '' : '',
       new RegExp(`^the first 1 of the answer's 3 comments reached the issue; the next one, starting at "1{80}…", may or may not have ` +
         '\\(Jira POST: outcome unknown — timeout; the issue could not be read to check\\), and nothing after it was posted\\. ' +
-        'Send the rest again, starting at "1{80}…" — a comment that did land is not posted twice$'),
+        'Send the rest again, unchanged, starting at "1{80}…" — the same text is checked against the issue first, so a comment that did land is not posted twice$'),
     );
     assert.equal(jira.calls.filter((call) => call.startsWith('comment')).length, 2, 'never re-posted by the sink');
   });
@@ -236,7 +236,7 @@ describe('a comment post of unknown outcome is read back, never re-posted blindl
     assert.equal(
       result.ok ? '' : result.error,
       'Jira did not confirm the comment and the issue could not be read to check it (Jira POST: outcome unknown — 502); it may already be there. ' +
-        'Send the answer again: before posting it, the issue is read to make sure it is not posted twice',
+        'Send the answer again, unchanged: before the same text is posted again, the issue is read, so a comment that did land is not posted twice',
     );
   });
 
@@ -301,6 +301,14 @@ describe('a resend of an unconfirmed post reads the issue first: at most once (R
     unconfirmedPosts.recordUnconfirmed('req_1', getCommentBodyHash('Done: tested.'), nowMs - 24 * 60 * 60 * 1000);
     await deliver('final', 'Done: tested.');
     assert.equal(jira.calls[0], 'comment PROJ-12');
+  });
+
+  it('a day-old entry is dropped from memory, at load too — nothing is left of it to settle', async () => {
+    const bodyHash = getCommentBodyHash('Done: tested.');
+    unconfirmedPosts.recordUnconfirmed('req_1', bodyHash, nowMs - 24 * 60 * 60 * 1000);
+    (await loadUnconfirmedPosts()).settle('req_1', bodyHash);
+    const lines = readFileSync(path.join(dataDir, jiraUnconfirmedPostsFileName), 'utf8').trim().split('\n');
+    assert.deepEqual(lines.map((line): string => JSON.parse(line).state), ['unconfirmed'], 'no settle line: the entry was already gone');
   });
 });
 
