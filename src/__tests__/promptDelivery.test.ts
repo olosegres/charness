@@ -14,17 +14,14 @@ import { beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { keyToString, unregisterSessionKeyCodec, type SessionKey } from '../sessionKey';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
 import { deliverPromptOrBuffer, type PromptDeliveryDeps } from '../utils/promptDelivery';
 
-registerTestSessionKeyCodec();
-process.on('exit', () => unregisterSessionKeyCodec('test'));
-
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
-const issueKey: SessionKey = makeTestKey('PROJ', 'PROJ-7');
+const issueKey: SessionKey = makeJiraKey('PROJ-7');
 
 /** Close the startup window the way a successful start does; what reached the session, in order. */
 async function replayTexts(buffer: StartupPromptBuffer, key: SessionKey): Promise<string[]> {

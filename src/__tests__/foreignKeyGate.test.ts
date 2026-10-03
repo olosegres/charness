@@ -156,3 +156,14 @@ describe('getClaudePlatformFlags (R1, R7)', () => {
     assert.ok(launchCount >= 3, 'tmux start, tmux resume and the json-stream spawn');
   });
 });
+
+describe('a session start reaches no Telegram primitive for a Jira conversation (R6)', () => {
+  it('the boot cue goes through the outbound, which a surface without one ignores — no platform branch in the start', () => {
+    const bot = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+    const start = bot.indexOf('async function startAgentSession(');
+    assert.notEqual(start, -1);
+    const body = bot.slice(start, bot.indexOf('\n}\n', start));
+    assert.match(body, /getOutboundFor\(key\)\.setActivity\(key, adapter\.selfGreetsOnStart \? 'working' : 'starting'\);/);
+    assert.doesNotMatch(body, /sendThreadTypingIndicator|checkIsTelegramKey/);
+  });
+});

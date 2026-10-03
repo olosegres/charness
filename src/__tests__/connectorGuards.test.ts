@@ -107,8 +107,8 @@ describe('getConnectorGuardErrors', () => {
       /ENV_FILE is set inside an env file/,
     );
     // Also on a Telegram instance, and never when the value came from the launch.
-    assert.equal(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: undefined }).length, 1);
-    assert.deepEqual(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: '/srv/x.env' }), []);
+    assert.equal(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: undefined, nodeVersion: supportedNodeVersion }).length, 1);
+    assert.deepEqual(getConnectorGuardErrors({ env: { ENV_FILE: '/srv/x.env' }, hasJiraConfig: false, envFileAtLaunch: '/srv/x.env', nodeVersion: supportedNodeVersion }), []);
   });
 
   it('a tmux socket name may not be the default server or a path, on any instance', () => {

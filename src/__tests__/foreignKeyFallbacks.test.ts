@@ -128,7 +128,7 @@ describe('the Jira outbound', () => {
     const outbound = createJiraConnectorOutbound();
 
     await outbound.deliver(issueKey, { text: 'streamed chunk', keepVisible: true });
-    outbound.setActivity(issueKey, 'working');
+    for (const activity of ['working', 'idle', 'starting'] as const) outbound.setActivity(issueKey, activity);
     assert.equal(outbound.checkIsDelivering(issueKey), false);
     assert.deepEqual(outbound.listUnfinalizedKeys(), []);
     assert.deepEqual(await outbound.deliverFile(issueKey, { paths: ['/tmp/report.png'] }), { ok: false, error: jiraFileSendRefusal });

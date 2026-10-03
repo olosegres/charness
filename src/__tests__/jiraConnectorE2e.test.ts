@@ -72,12 +72,8 @@ const projectFolder = 'proj';
 const instanceTokenEnvName = 'CHARNESS_JIRA_AI_API_TOKEN';
 /** The shortest poll the config allows. */
 const pollIntervalSeconds = 10;
-/**
- * Short, so the killed agent's request is taken up within a sweep or two — yet
- * longer than any session start: the sweep reads a request whose first post is
- * still starting its session as one nobody works on, and would wake it again.
- */
-const backstopMinutes = '0.5';
+/** The shortest useful one, so the killed agent's request is taken up by the first sweep after it. */
+const backstopMinutes = '0.1';
 
 const bootTimeoutMs = 60 * 1000;
 /** A poll, a session start and a turn, with room to spare. */
