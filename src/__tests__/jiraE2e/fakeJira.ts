@@ -1,5 +1,6 @@
 import * as http from 'http';
-import type { AdfDocument } from '../../connectors/jira/adf';
+import { z } from 'zod';
+import { adfNodeSchema, type AdfDocument, type AdfNode } from '../../connectors/jira/adf';
 import type { JiraAccount } from '../../connectors/jira/client';
 
 /**
@@ -10,7 +11,9 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * ({@link FakeJira.assignIssue}), the way a person would in Jira; the connector
  * sees it only through the API. The search ignores its JQL on purpose and
  * returns EVERY issue, so the connector's own re-check (D13) is what keeps an
- * issue of another project out.
+ * issue of another project out. Like real Jira it answers 401 to any other
+ * credentials than the AI account's, and 400 to a comment body that is not a
+ * valid ADF document (an empty text node included).
  */
 
 export interface FakeJiraStatus {
@@ -25,11 +28,18 @@ export interface FakeJiraComment {
   body: AdfDocument;
 }
 
+interface FakeJiraChangelogItem {
+  field: string;
+  fieldId: string;
+  from: string | null;
+  to: string | null;
+}
+
 interface FakeJiraHistory {
   id: string;
   created: string;
   author: JiraAccount;
-  items: Array<{ field: string; fieldId: string; from: string | null; to: string | null }>;
+  items: FakeJiraChangelogItem[];
 }
 
 export interface FakeJiraIssue {
@@ -45,8 +55,13 @@ export interface FakeJiraIssue {
   comments: FakeJiraComment[];
 }
 
+/** What a new issue is made of; the rest is filled in as Jira would. */
+export type FakeJiraNewIssue = Pick<FakeJiraIssue, 'key' | 'summary' | 'description' | 'statusId' | 'reporter'>;
+
 export interface FakeJiraOptions {
   aiAccount: JiraAccount;
+  /** The only basic-auth credentials accepted — the AI account's email and API token. */
+  credentials: { email: string; apiToken: string };
   /** Every project's statuses (one issue type). */
   statuses: FakeJiraStatus[];
 }
@@ -63,8 +78,16 @@ const restPrefix = '/rest/api/3';
 /** The connector's poll, as {@link FakeJira.requestLog} records it. */
 export const fakeJiraSearchRequest = `POST ${restPrefix}/search/jql`;
 
+/** A comment body as Jira validates it: an ADF document. */
+const commentBodySchema = z.object({ type: z.literal('doc'), version: z.literal(1), content: z.array(adfNodeSchema) });
+
 function createAdfParagraph(text: string): AdfDocument {
   return { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+}
+
+/** ADF refuses an empty text node (`minLength: 1`). */
+function checkHasEmptyTextNode(nodes: readonly AdfNode[]): boolean {
+  return nodes.some((node) => (node.type === 'text' && !node.text) || checkHasEmptyTextNode(node.content ?? []));
 }
 
 export class FakeJira {
@@ -98,7 +121,7 @@ export class FakeJira {
   }
 
   /** @description A new issue, unassigned, as its reporter created it. */
-  createIssue(issue: { key: string; summary: string; description: string; statusId: string; reporter: JiraAccount }): void {
+  createIssue(issue: FakeJiraNewIssue): void {
     this.issues.set(issue.key, {
       ...issue,
       id: (this.issues.size + 1).toString(),
@@ -111,24 +134,25 @@ export class FakeJira {
 
   /** @description Assign the issue, recording the change in its changelog under `author`. */
   assignIssue(issueKey: string, assignee: JiraAccount, author: JiraAccount): void {
-    const issue = this.getIssueOrThrow(issueKey);
+    const issue = this.getIssue(issueKey);
     this.addHistory(issue, author, { field: 'assignee', fieldId: 'assignee', from: issue.assignee?.accountId ?? null, to: assignee.accountId });
     issue.assignee = assignee;
   }
 
   getIssue(issueKey: string): FakeJiraIssue {
-    return this.getIssueOrThrow(issueKey);
-  }
-
-  private getIssueOrThrow(issueKey: string): FakeJiraIssue {
     const issue = this.issues.get(issueKey);
     if (!issue) throw new Error(`fake Jira has no issue ${issueKey}`);
     return issue;
   }
 
-  private addHistory(issue: FakeJiraIssue, author: JiraAccount, item: FakeJiraHistory['items'][number]): void {
+  private addHistory(issue: FakeJiraIssue, author: JiraAccount, changelogItem: FakeJiraChangelogItem): void {
     this.nextHistoryId += 1;
-    issue.histories.push({ id: this.nextHistoryId.toString(), created: new Date().toISOString(), author, items: [item] });
+    issue.histories.push({ id: this.nextHistoryId.toString(), created: new Date().toISOString(), author, items: [changelogItem] });
+  }
+
+  private getExpectedAuthorization(): string {
+    const { email, apiToken } = this.options.credentials;
+    return `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`;
   }
 
   private getIssueJson(issue: FakeJiraIssue, isChangelogExpanded: boolean): object {
@@ -159,8 +183,8 @@ export class FakeJira {
       response.writeHead(status, body === undefined ? {} : { 'content-type': jsonContentType });
       response.end(body === undefined ? undefined : JSON.stringify(body));
     };
-    if (!request.headers.authorization?.startsWith('Basic ')) {
-      send(401, { errorMessages: ['missing credentials'] });
+    if (request.headers.authorization !== this.getExpectedAuthorization()) {
+      send(401, { errorMessages: ['Client must be authenticated to access this resource.'] });
       return;
     }
     const requestBody = await this.readBody(request);
@@ -203,8 +227,9 @@ export class FakeJira {
       const values = issue.histories.slice(startAt, startAt + maxResults);
       send(200, { startAt, maxResults, total: issue.histories.length, isLast: startAt + values.length >= issue.histories.length, values });
     } else if (method === 'POST' && subresource === 'comment') {
-      if (requestBody.body === undefined) {
-        send(400, { errorMessages: ['body is required'] });
+      const parsedBody = commentBodySchema.safeParse(requestBody.body);
+      if (!parsedBody.success || checkHasEmptyTextNode(parsedBody.data.content)) {
+        send(400, { errorMessages: ['INVALID_INPUT'] });
         return;
       }
       this.nextCommentId += 1;
@@ -212,7 +237,7 @@ export class FakeJira {
         id: this.nextCommentId.toString(),
         author: this.options.aiAccount,
         created: new Date().toISOString(),
-        body: requestBody.body,
+        body: parsedBody.data,
       };
       issue.comments.push(comment);
       send(201, { id: comment.id });

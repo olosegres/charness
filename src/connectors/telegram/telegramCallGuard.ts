@@ -7,7 +7,9 @@ import type { CallApiHost } from '../../outputTrace';
  * through means a Telegram path a Jira conversation was supposed to stay out of.
  * Installed OUTERMOST, so the call fails before anything is sent or traced, and
  * logged here: many callers treat a failed Bot API call as best-effort and drop
- * the error, which would hide the very path this guard exists to expose.
+ * the error, which would hide the very path this guard exists to expose. Logged
+ * once per method: a path reached per output chunk or per timer tick must expose
+ * itself, not flood the log (and the console tee) with the same line.
  */
 export class TelegramDisabledError extends Error {
   constructor(method: string) {
@@ -20,8 +22,12 @@ export class TelegramDisabledError extends Error {
 export const telegramCallRefusedLogPrefix = '[telegram-guard] refused';
 
 export function installTelegramCallGuard(host: CallApiHost): void {
+  const loggedMethods = new Set<string>();
   host.callApi = async (method) => {
-    console.error(`${telegramCallRefusedLogPrefix} ${method}: a Telegram path was reached in an instance without the telegram connector`);
+    if (!loggedMethods.has(method)) {
+      loggedMethods.add(method);
+      console.error(`${telegramCallRefusedLogPrefix} ${method}: a Telegram path was reached in an instance without the telegram connector`);
+    }
     throw new TelegramDisabledError(method);
   };
 }

@@ -6,9 +6,10 @@
  * `claude` (`jiraE2e/fakeClaude.ts`, via `CLAUDE_BIN`) that answers through the
  * real bot MCP. One flow, in order:
  *
- *   isolation checked before the boot: a private tmux server, a temp HOME,
- *   DATA_DIR and WORK_ROOT with no Claude memory above, ports of its own, an env
- *   file without a bot token or Atlassian variables
+ *   isolation checked before the boot: a private tmux server (named, in a
+ *   private TMUX_TMPDIR), a temp HOME, DATA_DIR and WORK_ROOT with no Claude
+ *   memory above, ports of its own, an env file without a bot token or Atlassian
+ *   variables
  *   → the requester assigns four issues, plus one the AI assigned itself and one
  *     of a project outside the allowlist
  *   → answered: a comment by the AI account, the issue handed back
@@ -18,12 +19,15 @@
  *   → the self-assigned and the foreign issue: no request, nothing posted
  *   → charness restarted: no request is opened a second time
  *   → every session launch carried the Jira flags (R11); no Telegram call (R6);
- *     nothing of the instance on the default tmux server
+ *     every tmux call named the private server, nothing of the instance on the
+ *     user's default tmux server
  *
  * Nothing leaves the machine: Jira and the bot MCP are on loopback, the agent is
- * the fake. Everything the test starts is stopped in `after` — charness, its
- * private tmux server (with the fake agents in it), the fake Jira — and the temp
- * folder removed.
+ * the fake. The instance's TMUX_TMPDIR lies inside the temp folder, so even a
+ * broken `-L` guard could not reach the user's default tmux server — it would
+ * start a default server of its own there, which the last step catches.
+ * Everything the test starts is stopped in `after` — charness, its tmux servers
+ * (with the fake agents in them), the fake Jira — and the temp folder removed.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -38,10 +42,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { FakeJira, fakeJiraSearchRequest, type FakeJiraIssue } from './jiraE2e/fakeJira';
-import { checkHasFlag, fakeClaudeLogFileNames, requiredJiraSessionFlags } from './jiraE2e/fakeClaudeContract';
+import { checkHasFlag, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, requiredJiraSessionFlags } from './jiraE2e/fakeClaudeContract';
 import { getAdfText } from '../connectors/jira/adf';
 import { getClaudeMemoryAbove } from '../connectors/jira/config';
-import { telegramCallRefusedLogPrefix } from '../connectors/telegram/telegramCallGuard';
+import { notTelegramChatPhrase } from '../connectors/telegram/foreignKeyFallbacks';
+import { foreignKeyAccessorErrorPrefix } from '../connectors/telegram/sessionKeyCodec';
+import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../connectors/telegram/telegramCallGuard';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const cliPath = path.join(repoRoot, 'dist', 'cli.js');
@@ -50,31 +56,40 @@ const fakeClaudePath = path.join(__dirname, 'jiraE2e', 'fakeClaude.ts');
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 const aiAccount = { accountId: 'ai-account', accountType: 'atlassian', displayName: 'AI' };
+const aiCredentials = { email: 'ai@example.com', apiToken: 'fake-token' };
 const requester = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
 const inProgress = { id: '10001', name: 'In Progress' };
 const toDo = { id: '10000', name: 'To Do' };
 const projectFolder = 'proj';
 /** The shortest poll the config allows. */
 const pollIntervalSeconds = 10;
-/** A short backstop, so the killed agent's request is taken up within the sweep after it. */
-const backstopMinutes = '0.1';
+/**
+ * Short, so the killed agent's request is taken up within a sweep or two — yet
+ * longer than any session start: the sweep reads a request whose first post is
+ * still starting its session as one nobody works on, and would wake it again.
+ */
+const backstopMinutes = '0.5';
 
 const flowTimeoutMs = 6 * 60 * 1000;
 const bootTimeoutMs = 60 * 1000;
 /** A poll, a session start and a turn, with room to spare. */
 const answerTimeoutMs = 60 * 1000;
-/** The backstop window plus the wake-up engine's one-minute sweep. */
+/** The backstop window plus the wake-up engine's one-minute sweep, twice over. */
 const resumeTimeoutMs = 3 * 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const waitStepMs = 250;
+/** How much of charness's output a failed wait quotes. */
+const outputTailChars = 4000;
 
-let tmpRoot: string;
+let testRoot: string;
 let instanceHome: string;
 let dataDir: string;
 let workRoot: string;
 let fakeLogDir: string;
 let envFile: string;
 let tmuxSocketName: string;
+/** The instance's TMUX_TMPDIR — inside the temp folder, apart from the user's own servers. */
+let tmuxTmpDir: string;
 let fakeJira: FakeJira;
 let charness: ChildProcess | null = null;
 /** Everything every charness run printed, stdout and stderr together. */
@@ -90,25 +105,34 @@ async function getFreePort(): Promise<number> {
   return address.port;
 }
 
+/** The test's own environment with `TMUX_TMPDIR` set to `dir`, or removed (tmux then uses `/tmp`) for `null`. */
+function getTmuxEnv(dir: string | null): NodeJS.ProcessEnv {
+  const { TMUX_TMPDIR: _userTmuxTmpDir, ...env } = process.env;
+  return dir === null ? env : { ...env, TMUX_TMPDIR: dir };
+}
+
+/** The instance's tmux servers: the private TMUX_TMPDIR it is given. */
+function getInstanceTmuxEnv(): NodeJS.ProcessEnv {
+  return getTmuxEnv(tmuxTmpDir);
+}
+
 /** Session names on a tmux server — read-only; an empty list when that server is not running. */
-function listTmuxSessions(socketArgs: readonly string[]): string[] {
-  const result = spawnSync('tmux', [...socketArgs, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' });
+function listTmuxSessions(socketArgs: readonly string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  const result = spawnSync('tmux', [...socketArgs, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8', env });
   return result.status === 0 ? result.stdout.split('\n').filter(Boolean) : [];
 }
 
-/** Where tmux puts a named server's socket: `$TMUX_TMPDIR` (else `/tmp`) / `tmux-<uid>` / name. */
-function getTmuxSocketPath(socketName: string): string {
-  return path.join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid?.() ?? 0}`, socketName);
+/** The folder tmux keeps this user's sockets in under a TMUX_TMPDIR: `<dir>/tmux-<uid>`. */
+function getTmuxSocketDir(dir: string): string {
+  return path.join(dir, `tmux-${process.getuid?.() ?? 0}`);
 }
 
-function checkIsTmuxServerRunning(socketName: string): boolean {
-  return spawnSync('tmux', ['-L', socketName, 'list-sessions'], { encoding: 'utf8' }).status === 0;
-}
-
+/** Lines another process may still be appending to: only those already ended by a newline are read. */
 function readFakeLog<TRecord>(fileName: string): TRecord[] {
   const filePath = path.join(fakeLogDir, fileName);
   if (!fs.existsSync(filePath)) return [];
-  return fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const completeLines = fs.readFileSync(filePath, 'utf8').split('\n').slice(0, -1);
+  return completeLines.filter(Boolean).map((line) => JSON.parse(line));
 }
 
 interface FakeTurn {
@@ -122,8 +146,17 @@ interface FakeTurn {
 interface FakeLaunch {
   argv: string[];
   isSessionLaunch: boolean;
+  pid: number;
   envNames: string[];
   home: string;
+}
+
+interface FakeAnswer {
+  requestId: string;
+  issueKey: string;
+  kind: string;
+  /** The tool result the agent got back; `error: …` when `answer_request` refused. */
+  outcome: string;
 }
 
 /** The only variables `run-isolated.sh` passes to the instance. */
@@ -142,6 +175,26 @@ function getTurns(issueKey: string): FakeTurn[] {
   return readFakeLog<FakeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === issueKey);
 }
 
+function getAnswers(issueKey: string): FakeAnswer[] {
+  return readFakeLog<FakeAnswer>(fakeClaudeLogFileNames.answers).filter((answer) => answer.issueKey === issueKey);
+}
+
+/** The last session launch the process `pid` was started by. */
+function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
+  return readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch && launch.pid === pid).at(-1);
+}
+
+/** The issues the connector's polls decided to open a request for, from its `[jira] poll: KEY decision, …` lines. */
+function getPolledRequestIssueKeys(output: string): string[] {
+  const pollLinePrefix = '[jira] poll: ';
+  return output.split('\n')
+    .filter((line) => line.startsWith(pollLinePrefix))
+    .flatMap((line) => line.slice(pollLinePrefix.length).split(', '))
+    .map((entry) => entry.split(' '))
+    .filter(([, decision]) => decision === 'request')
+    .map(([issueKey]) => issueKey);
+}
+
 function getCommentTexts(issue: FakeJiraIssue): string[] {
   return issue.comments.map((comment) => getAdfText(comment.body));
 }
@@ -150,7 +203,7 @@ async function waitFor(description: string, timeoutMs: number, check: () => bool
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for ${description}; charness output tail:\n${charnessOutput.slice(-4000)}`);
+      throw new Error(`timed out waiting for ${description}; charness output tail:\n${charnessOutput.slice(-outputTailChars)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, waitStepMs));
   }
@@ -170,7 +223,7 @@ async function startCharness(): Promise<void> {
       LANG: 'C.UTF-8',
       TERM: 'dumb',
     },
-    cwd: tmpRoot,
+    cwd: testRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   charness = child;
@@ -199,7 +252,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
   fs.writeFileSync(path.join(dataDir, 'jira.json'), JSON.stringify({
     site: 'example.atlassian.net',
     baseUrl: jiraBaseUrl,
-    email: 'ai@example.com',
+    email: aiCredentials.email,
     apiToken: '${CHARNESS_JIRA_AI_API_TOKEN}',
     accountId: aiAccount.accountId,
     projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name] } },
@@ -207,9 +260,9 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     adapter: 'claude-json-stream',
   }, null, 2));
 
-  const fakeStateDir = path.join(tmpRoot, 'fake-claude-state');
+  const fakeStateDir = path.join(testRoot, 'fake-claude-state');
   fs.mkdirSync(fakeStateDir);
-  const claudeBin = path.join(tmpRoot, 'bin', 'claude');
+  const claudeBin = path.join(testRoot, 'bin', 'claude');
   fs.mkdirSync(path.dirname(claudeBin));
   fs.writeFileSync(claudeBin, [
     '#!/bin/sh',
@@ -224,11 +277,12 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     DATA_DIR: dataDir,
     WORK_ROOT: workRoot,
     TMUX_SOCKET_NAME: tmuxSocketName,
+    TMUX_TMPDIR: tmuxTmpDir,
     CLAUDE_BIN: claudeBin,
     OPENCODE_URL: `http://127.0.0.1:${ports.openCode}`,
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
-    CHARNESS_JIRA_AI_API_TOKEN: 'fake-token',
+    CHARNESS_JIRA_AI_API_TOKEN: aiCredentials.apiToken,
   };
   fs.writeFileSync(envFile, `${Object.entries(instanceEnv).map(([name, value]) => `${name}=${value}`).join('\n')}\n`, { mode: 0o600 });
 }
@@ -240,43 +294,49 @@ function createIssue(key: string, mode: string): void {
 describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)', { timeout: flowTimeoutMs }, () => {
   before(async () => {
     if (!fs.existsSync(cliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    tmpRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'charness-j7-')));
-    instanceHome = path.join(tmpRoot, 'home');
-    dataDir = path.join(tmpRoot, 'data');
-    workRoot = path.join(tmpRoot, 'work');
-    fakeLogDir = path.join(tmpRoot, 'fake-claude-log');
-    envFile = path.join(tmpRoot, 'instance.env');
+    testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'charness-j7-')));
+    instanceHome = path.join(testRoot, 'home');
+    dataDir = path.join(testRoot, 'data');
+    workRoot = path.join(testRoot, 'work');
+    fakeLogDir = path.join(testRoot, 'fake-claude-log');
+    envFile = path.join(testRoot, 'instance.env');
+    tmuxTmpDir = path.join(testRoot, 'tmux');
     for (const dir of [instanceHome, dataDir, path.join(workRoot, projectFolder), fakeLogDir]) fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(tmuxTmpDir, { mode: 0o700 });
     tmuxSocketName = `charness-j7-${randomBytes(4).toString('hex')}`;
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
-    fakeJira = new FakeJira({ aiAccount, statuses: [toDo, inProgress] });
+    fakeJira = new FakeJira({ aiAccount, credentials: aiCredentials, statuses: [toDo, inProgress] });
     const jiraBaseUrl = await fakeJira.start();
     writeInstanceFiles({ openCode: await getFreePort(), botMcp: await getFreePort() }, jiraBaseUrl);
   });
 
   after(async () => {
     await stopCharness();
-    // Only the instance's PRIVATE server, which also ends the fake agents in it; tmux leaves its socket file behind.
     if (tmuxSocketName) {
-      spawnSync('tmux', ['-L', tmuxSocketName, 'kill-server']);
-      fs.rmSync(getTmuxSocketPath(tmuxSocketName), { force: true });
+      // Only the instance's own servers, which also ends the fake agents in them: its named server and any
+      // default server a broken `-L` guard started — both in its private TMUX_TMPDIR, never the user's.
+      spawnSync('tmux', ['-L', tmuxSocketName, 'kill-server'], { env: getInstanceTmuxEnv() });
+      spawnSync('tmux', ['kill-server'], { env: getInstanceTmuxEnv() });
+      // A broken TMUX_TMPDIR hand-over would have put the named server in tmux's own default folder (`/tmp`).
+      spawnSync('tmux', ['-L', tmuxSocketName, 'kill-server'], { env: getTmuxEnv(null) });
+      fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
     }
     await fakeJira?.stop();
-    if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
+    if (testRoot) fs.rmSync(testRoot, { recursive: true, force: true });
   });
 
   it('isolation holds before the first boot', () => {
-    assert.ok(!checkIsTmuxServerRunning(tmuxSocketName), 'the private tmux server is not running yet');
+    assert.deepEqual(fs.readdirSync(tmuxTmpDir), [], 'no tmux server of the instance is running yet');
     const realHome = fs.realpathSync(os.homedir());
-    for (const dir of [instanceHome, dataDir, workRoot]) {
+    for (const dir of [instanceHome, dataDir, workRoot, tmuxTmpDir]) {
       assert.ok(!dir.startsWith(`${realHome}${path.sep}`), `${dir} is outside the user's HOME`);
     }
     assert.equal(getClaudeMemoryAbove(path.join(workRoot, projectFolder)), null, 'no Claude memory in or above the working folder');
     const envNames = fs.readFileSync(envFile, 'utf8').split('\n').filter(Boolean).map((line) => line.split('=')[0]);
     assert.ok(!envNames.includes('TELEGRAM_BOT_TOKEN'), 'no bot token');
     assert.ok(!envNames.some((name) => name.startsWith('ATLASSIAN_')), 'no Atlassian variables');
-    assert.ok(envNames.includes('TMUX_SOCKET_NAME') && envNames.includes('DATA_DIR') && envNames.includes('WORK_ROOT'));
+    for (const name of ['TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'DATA_DIR', 'WORK_ROOT']) assert.ok(envNames.includes(name), `${name} is set`);
   });
 
   it('boots Jira-only, started with nothing but run-isolated.sh\'s variables', async () => {
@@ -294,12 +354,14 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
   it('the requester assigns the issues: each in-scope one becomes one request', async () => {
     for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'OTHER-1']) fakeJira.assignIssue(key, aiAccount, requester);
     fakeJira.assignIssue('PROJ-5', aiAccount, aiAccount);
-    await waitFor('the first turn of every in-scope issue', answerTimeoutMs, () =>
-      ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'].every((key) => getTurns(key).length > 0));
+    // The polls also name each request they open — what the restart step reads back.
+    await waitFor('the first turn of every in-scope issue, and its request in the poll log', answerTimeoutMs, () =>
+      ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'].every((key) => getTurns(key).length > 0 && getPolledRequestIssueKeys(charnessOutput).includes(key)));
     for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4']) {
       assert.equal(getTurns(key)[0].isRequestPrompt, true, `${key}'s first turn is its request prompt`);
     }
-    assert.ok(listTmuxSessions(['-L', tmuxSocketName]).length >= 4, 'the agents run on the private server');
+    assert.deepEqual([...getPolledRequestIssueKeys(charnessOutput)].sort(), ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'], 'one request each');
+    assert.ok(listTmuxSessions(['-L', tmuxSocketName], getInstanceTmuxEnv()).length >= 4, 'the agents run on the private server');
   });
 
   it('an answer becomes a comment by the AI account and the issue goes back to the requester', async () => {
@@ -319,7 +381,11 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
 
   it('a progress note is a comment; the issue stays with the AI', async () => {
     const issue = fakeJira.getIssue('PROJ-4');
-    await waitFor('PROJ-4 progress comment', answerTimeoutMs, () => issue.comments.length > 0);
+    // Until `answer_request` returned, the sink may still be about to hand the issue back.
+    await waitFor('PROJ-4 progress answer returned to the agent', answerTimeoutMs, () => getAnswers('PROJ-4').length > 0);
+    const [answer] = getAnswers('PROJ-4');
+    assert.equal(answer.kind, 'progress');
+    assert.ok(!answer.outcome.startsWith('error:'), answer.outcome);
     assert.deepEqual(getCommentTexts(issue), ['Fake progress answer for PROJ-4 (progress, turn 1).']);
     assert.equal(issue.assignee?.accountId, aiAccount.accountId);
   });
@@ -329,6 +395,13 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(hangingTurn, 'PROJ-3 reached its agent');
     assert.equal(getTurns('PROJ-3').length, 1, 'its first turn is still running');
     assert.equal(fakeJira.getIssue('PROJ-3').comments.length, 0, 'nothing answered yet');
+    const hangingSessionId = getLaunchSessionId(getSessionLaunchOf(hangingTurn.pid)?.argv ?? []);
+    assert.ok(hangingSessionId, 'the hanging agent\'s launch named its conversation');
+    const commandLinePath = `/proc/${hangingTurn.pid}/cmdline`;
+    if (fs.existsSync('/proc/self')) {
+      // Never a pid that has since gone to another process.
+      assert.ok(fs.existsSync(commandLinePath) && fs.readFileSync(commandLinePath, 'utf8').includes(fakeClaudePath), 'the pid is still the fake agent');
+    }
     process.kill(hangingTurn.pid, 'SIGKILL');
 
     const issue = fakeJira.getIssue('PROJ-3');
@@ -337,8 +410,10 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(turns.length, 2);
     assert.notEqual(turns[1].pid, hangingTurn.pid, 'answered by a new agent process');
     assert.deepEqual(getCommentTexts(issue), ['Fake final answer for PROJ-3 (hang-once, turn 2).']);
-    const resumeLaunches = readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch && launch.argv.includes('--resume'));
-    assert.ok(resumeLaunches.length >= 1, 'the session was resumed by its id');
+    // The fake refuses a `--resume` of a conversation it never held, as the real CLI does.
+    const answeringLaunch = getSessionLaunchOf(turns[1].pid);
+    assert.ok(answeringLaunch, 'the answering agent\'s launch was logged');
+    assert.deepEqual(getFlagValues(answeringLaunch.argv, '--resume'), [hangingSessionId], 'turn 2 ran in a resume of PROJ-3\'s own conversation');
   });
 
   it('an issue the AI assigned itself and an issue outside the allowlist are left alone', async () => {
@@ -358,11 +433,14 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await stopCharness();
 
     const searchesBefore = fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
+    const outputBeforeRestart = charnessOutput.length;
     await startCharness();
     // Two polls after the restart: the first one decided every issue again.
     await waitFor('two polls after the restart', 3 * pollIntervalSeconds * 1000, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);
 
+    // Deterministic, whereas the counts below could be read before a re-opened request's post (not awaited) lands.
+    assert.deepEqual(getPolledRequestIssueKeys(charnessOutput.slice(outputBeforeRestart)), [], 'no poll opened a request again');
     assert.equal(requestPromptCount(), promptsBefore, 'no request prompt was posted again');
     // One request per issue. Its PROMPT may reach the agent twice: a request whose taking-in was not yet
     // seen when the agent died is re-posted to the resumed session (R21) — same request, not a second one.
@@ -394,13 +472,16 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
 
   it('no Telegram path was reached for the Jira conversations (R6)', () => {
     assert.ok(!charnessOutput.includes(telegramCallRefusedLogPrefix), 'no Telegram API call reached the guard');
-    assert.ok(!charnessOutput.includes('TelegramDisabledError'));
-    // What a Telegram primitive says when a Jira key reaches it (the rate limiter's refusal, a skipped fallback).
-    assert.doesNotMatch(charnessOutput, /is not a Telegram chat/);
+    assert.ok(!charnessOutput.includes(TelegramDisabledError.name));
+    // What a Telegram primitive says when a Jira key reaches it (a skipped primitive, the send queue's refusal).
+    assert.ok(!charnessOutput.includes(notTelegramChatPhrase), 'no Telegram primitive was handed a Jira conversation');
+    assert.ok(!charnessOutput.includes(foreignKeyAccessorErrorPrefix), 'no Telegram id was read off a Jira key');
   });
 
-  it('nothing of the instance runs on the default tmux server', () => {
-    const instanceSessions = new Set(listTmuxSessions(['-L', tmuxSocketName]));
+  it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
+    // A call without `-L` would have started (or reached) a `default` server beside it.
+    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(tmuxTmpDir)), [tmuxSocketName], 'one tmux server, the named one');
+    const instanceSessions = new Set(listTmuxSessions(['-L', tmuxSocketName], getInstanceTmuxEnv()));
     assert.ok(instanceSessions.size > 0);
     const defaultSessionsNow = listTmuxSessions([]);
     assert.deepEqual(defaultSessionsNow.filter((name) => instanceSessions.has(name)), []);

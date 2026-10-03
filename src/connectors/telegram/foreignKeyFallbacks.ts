@@ -61,6 +61,9 @@ export function getTelegramConversations<T extends { key: SessionKey }>(entries:
   return getServedConversations(entries, telegramPlatforms);
 }
 
+/** What every Telegram refusal of a foreign conversation says — the primitive guard's skip and the send queue's error alike. */
+export const notTelegramChatPhrase = 'is not a Telegram chat';
+
 /** Distinct (primitive, conversation) pairs remembered before the memory starts over. */
 const reportedPrimitiveSkipsMaxSize = 1000;
 
@@ -80,7 +83,7 @@ export function createTelegramPrimitiveGuard(
     if (!reported.has(reportKey)) {
       if (reported.size >= reportedPrimitiveSkipsMaxSize) reported.clear();
       reported.add(reportKey);
-      warn(`[telegram] ${primitive} skipped: ${key.platform} conversation ${key.space}/${key.thread} is not a Telegram chat`);
+      warn(`[telegram] ${primitive} skipped: ${key.platform} conversation ${key.space}/${key.thread} ${notTelegramChatPhrase}`);
     }
     return false;
   };

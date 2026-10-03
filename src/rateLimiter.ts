@@ -2,7 +2,7 @@ import { getAbortError, sleep } from './utils';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
 import { getTelegramChatId } from './connectors/telegram/sessionKeyCodec';
-import { createTelegramPrimitiveGuard } from './connectors/telegram/foreignKeyFallbacks';
+import { createTelegramPrimitiveGuard, notTelegramChatPhrase } from './connectors/telegram/foreignKeyFallbacks';
 import { SendRateTracker } from './utils/sendRateTracker';
 import { formatRateLimit429Line, formatRateSummaryLine } from './utils/rateLimitLog';
 import { AbortableFifo } from './utils/abortableFifo';
@@ -459,7 +459,7 @@ export async function withRateLimitRetry<T>(
  */
 export class ForeignKeySendRefusedError extends Error {
   constructor(key: SessionKey) {
-    super(`Telegram send refused: ${key.platform} conversation ${key.space}/${key.thread} is not a Telegram chat`);
+    super(`Telegram send refused: ${key.platform} conversation ${key.space}/${key.thread} ${notTelegramChatPhrase}`);
     this.name = 'ForeignKeySendRefusedError';
   }
 }

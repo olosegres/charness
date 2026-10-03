@@ -236,8 +236,9 @@ async function main(): Promise<void> {
   }
   const missingFlags = requiredJiraSessionFlags.filter((flag) => !checkHasFlag(argv, flag));
   if (missingFlags.length > 0) {
-    appendJsonLine(fakeClaudeLogFileNames.violations, { missingFlags, argv });
-    process.stderr.write(`fake claude: missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}\n`);
+    const reason = `missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}`;
+    appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
+    process.stderr.write(`fake claude: ${reason}\n`);
     process.exit(argvViolationExitCode);
   }
   const sessionViolation = getSessionViolation(argv);

@@ -92,9 +92,12 @@ export function checkIsTelegramKey(key: SessionKey): boolean {
   return key.platform === telegramPlatform;
 }
 
+/** How a native accessor's refusal of a foreign key starts — shared with the test that proves none was reached. */
+export const foreignKeyAccessorErrorPrefix = 'Expected a Telegram SessionKey';
+
 function getTelegramNumber(key: SessionKey, field: 'space' | 'thread'): number {
   if (!checkIsTelegramKey(key)) {
-    throw new Error(`Expected a Telegram SessionKey, got platform "${key.platform}"`);
+    throw new Error(`${foreignKeyAccessorErrorPrefix}, got platform "${key.platform}"`);
   }
   const value = Number(key[field]);
   if (!Number.isFinite(value)) {

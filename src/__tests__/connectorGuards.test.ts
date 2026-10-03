@@ -18,6 +18,7 @@ import { getConnectorGuardErrors, getPreloadGuardErrors } from '../cli/connector
 import { loadEnvFiles } from '../cli/envLoader';
 import { getTmuxBaseArgs, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { installTelegramCallGuard, TelegramDisabledError, telegramCallRefusedLogPrefix } from '../connectors/telegram/telegramCallGuard';
+import type { CallApiHost } from '../outputTrace';
 import {
   checkIsServedConversation,
   getServedConversations,
@@ -270,7 +271,7 @@ describe('every tmux call on the instance\'s own server (D8)', () => {
 describe('installTelegramCallGuard (D9)', () => {
   it('refuses every Bot API call before anything is sent', async () => {
     let sentCalls = 0;
-    const host = { callApi: async () => { sentCalls += 1; return true; } };
+    const host: CallApiHost = { callApi: async () => { sentCalls += 1; return true; } };
     installTelegramCallGuard(host);
 
     await assert.rejects(host.callApi('getMe', {}), TelegramDisabledError);
@@ -278,16 +279,19 @@ describe('installTelegramCallGuard (D9)', () => {
     assert.equal(sentCalls, 0);
   });
 
-  it('logs every refused call itself — a caller that swallows the rejection cannot hide it', async (context) => {
+  it('logs a refused call itself — a caller that swallows the rejection cannot hide it — once per method', async (context) => {
     const errorLines: string[] = [];
     context.mock.method(console, 'error', (line: string) => { errorLines.push(line); });
-    const host = { callApi: async () => true };
+    const host: CallApiHost = { callApi: async () => true };
     installTelegramCallGuard(host);
 
     await host.callApi('sendChatAction', {}).catch(() => {});
+    await assert.rejects(host.callApi('sendChatAction', {}), TelegramDisabledError);
+    await host.callApi('sendMessage', { text: 'x' }).catch(() => {});
 
-    assert.equal(errorLines.length, 1);
+    assert.equal(errorLines.length, 2, 'a repeat of the same method is refused but not logged again');
     assert.ok(errorLines[0].startsWith(`${telegramCallRefusedLogPrefix} sendChatAction:`));
+    assert.ok(errorLines[1].startsWith(`${telegramCallRefusedLogPrefix} sendMessage:`));
   });
 });
 
