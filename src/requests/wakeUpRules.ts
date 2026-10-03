@@ -187,7 +187,12 @@ export interface WatchedTurn {
  * @name WatchedTurnState
  * @description Where a watched turn stands: still running (or not started on
  * our message yet), ended, or gone (the session is no longer active — the
- * backstop takes over).
+ * backstop takes over). A session not active while something holds its turn
+ * open — its START under way, a recovery restarting it — is coming, not gone:
+ * the message forwarded to it waits in the startup buffer and replays once the
+ * session is up, so the watch must survive to see THAT turn end. Dropped, the
+ * replayed turn would run unwatched: a silent one would wait for the backstop
+ * (90 min) instead of its wake-up, and a backstop wake re-posts the request.
  */
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
@@ -208,7 +213,7 @@ export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnPr
  * producing output since the forward (the busy-onset race).
  */
 export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe): WatchedTurnState {
-  if (!probe.isActive) return 'sessionGone';
+  if (!probe.isActive) return probe.isTurnEndBlocked ? 'running' : 'sessionGone';
   if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked) return 'running';
   return 'ended';
 }

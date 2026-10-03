@@ -869,4 +869,25 @@ describe('a request whose first post is still starting its session (J7b)', () =>
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
   });
+
+  it('a nudge buffered while the session starts keeps its watch: the replayed turn is judged by the watch, not left to the backstop', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    // The limit resume's "continue" nudge went into the startup buffer; the watch is registered now,
+    // while the session is not up yet (the real probe over a starting session).
+    probe = probeSession(true);
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'a start under way is a hold, not a dead session');
+
+    // The session is up, the nudge replayed and taken in, its turn runs — then ends silent.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the watch survived the start and saw the turn end');
+    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 1);
+  });
 });

@@ -175,6 +175,11 @@ describe('getWatchedTurnState', () => {
     assert.equal(getWatchedTurnState(createTurn(), { ...idleProbe, isActive: false }), 'sessionGone');
   });
 
+  it('a session not active while its turn is held — its start under way — is coming, not gone (J7b)', () => {
+    const startingProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
+    assert.equal(getWatchedTurnState(createTurn(), startingProbe), 'running', 'the buffered message replays once the session is up');
+  });
+
   it('an idle backend that has not taken in the message is still running (earlier-turn race)', () => {
     assert.equal(getWatchedTurnState(createTurn(), { ...idleProbe, hasUnconsumedInput: true }), 'running');
     assert.equal(getWatchedTurnState(createTurn(), idleProbe), 'ended');
