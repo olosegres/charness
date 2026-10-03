@@ -41,6 +41,11 @@ export function addEnvFileVariableNames(names: Iterable<string>): void {
   for (const name of names) envFileVariableNames.add(name);
 }
 
+/** @description Forget the recorded names — for tests only, so each case starts from a process that loaded no env file. */
+export function resetEnvFileVariableNamesForTests(): void {
+  envFileVariableNames.clear();
+}
+
 /**
  * @description The allowlisted variables `env` holds, minus any the `ENV_FILE`
  * set — an instance file that sets `PATH` leaves the agent on the shell's default

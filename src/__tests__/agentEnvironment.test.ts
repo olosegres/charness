@@ -19,7 +19,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { addEnvFileVariableNames, agentEnvironmentNames, getAgentEnvironment } from '../utils/agentEnvironment';
+import { addEnvFileVariableNames, agentEnvironmentNames, getAgentEnvironment, resetEnvFileVariableNamesForTests } from '../utils/agentEnvironment';
 import { loadEnvFiles } from '../cli/envLoader';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
 import { buildWrapperScript, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
@@ -30,6 +30,11 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 const execFileAsync = promisify(execFile);
 const instanceSecretName = 'CHARNESS_TEST_AI_API_TOKEN';
 const instanceSecretValue = 'placeholder-secret-value';
+
+// The recorded ENV_FILE names are module-global: every case starts with none, whatever an earlier one recorded.
+beforeEach(() => {
+  resetEnvFileVariableNamesForTests();
+});
 
 /** Variable names out of `env`-style `NAME=value` lines. */
 function getEnvNames(envOutput: string): string[] {
@@ -46,6 +51,10 @@ describe('getAgentEnvironment', () => {
   it('never a variable the instance file set, even an allowlisted one', () => {
     addEnvFileVariableNames(['TZ']);
     assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', TZ: 'Europe/Berlin' }), { HOME: '/home/user' });
+  });
+
+  it('starts clean: a name an earlier case recorded is not remembered', () => {
+    assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', TZ: 'Europe/Berlin' }), { HOME: '/home/user', TZ: 'Europe/Berlin' });
   });
 });
 
