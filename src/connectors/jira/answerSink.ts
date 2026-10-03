@@ -3,6 +3,7 @@ import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink
 import type { RequestAlertReason, RequestOrigin } from '../../requests/types';
 import { convertMarkdownToAdf, createCommentBodies, getAdfText, type AdfDocument } from './adf';
 import type { JiraAccount, JiraClient } from './client';
+import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -13,15 +14,21 @@ import type { JiraAccount, JiraClient } from './client';
  * leaves the answer delivered (a warning, never a retry that would post it twice).
  * A comment post whose outcome is unknown (R18) is never re-posted blindly: the
  * issue's newest comments are read once, after a short wait, and a matching
- * comment by the AI account counts as delivered. The agent cannot look at the
- * issue itself, so every failure tells it what to send again. Bot texts on the
- * issue are English (D20).
+ * comment by the AI account counts as delivered. A post left unconfirmed is
+ * remembered on disk (R29): when the same text is sent again for the same
+ * request, the issue is read first and a comment that did land is not posted
+ * twice. The agent cannot look at the issue itself, so every failure tells it
+ * what to send again. Bot texts on the issue are English (D20).
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
 export const jiraReadBackCommentCount = 20;
-/** A comment Jira dated this much before the post started still counts as the post (clock skew). */
-export const jiraReadBackClockSkewMs = 5 * 60 * 1000;
+/**
+ * A comment Jira dated this much before the post started still counts as the post
+ * (clock skew) — short (R30), so an earlier identical comment, such as a repeated
+ * park notice, is not taken for the new one.
+ */
+export const jiraReadBackClockSkewMs = 60 * 1000;
 /**
  * How long the read-back waits after a post of unknown outcome: a post that timed
  * out or met a 5xx may still be committing on Jira's side, and reading at once
@@ -55,12 +62,22 @@ export interface JiraAnswerSinkDeps {
   now: () => number;
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
   wait: (ms: number) => Promise<void>;
+  unconfirmedPosts: Pick<JiraUnconfirmedPosts, 'getPostedAt' | 'recordUnconfirmed' | 'settle'>;
+}
+
+/**
+ * Why a comment did not land. `unchecked` — an earlier, unconfirmed post of the
+ * same text may have landed and the issue could not be read to check (R29).
+ */
+interface CommentPostFailure {
+  kind: 'refused' | 'notPosted' | 'unknown' | 'unchecked';
+  detail: string;
 }
 
 /** What posting an answer's comments did: how many landed, and why the next one did not. */
 interface CommentsPosted {
   postedCount: number;
-  failure: { kind: 'refused' | 'notPosted' | 'unknown'; detail: string } | null;
+  failure: CommentPostFailure | null;
 }
 
 /** A comment's text as the read-back compares it: its plain text, whitespace collapsed. */
@@ -82,40 +99,59 @@ export interface JiraAnswerSink extends AnswerSink {
 export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   const { client } = deps;
 
-  /** R18: did the post that left no readable answer land after all? `null` — the read-back failed too. */
-  async function checkIsCommentOnIssue(issueKey: string, body: AdfDocument, postStartedAt: number): Promise<boolean | null> {
-    await deps.wait(jiraReadBackDelayMs);
+  /** Is the comment on the issue, by the AI account, dated from the post's start on? `null` — the issue could not be read. */
+  async function checkIsCommentOnIssue(issueKey: string, comparableText: string, postStartedAt: number): Promise<boolean | null> {
     try {
-      const expected = getComparableText(body);
       const comments = await client.getRecentComments(issueKey, jiraReadBackCommentCount);
       return comments.some((comment) =>
         comment.author?.accountId === deps.aiAccountId
         && Date.parse(comment.created) >= postStartedAt - jiraReadBackClockSkewMs
-        && getComparableText(comment.body) === expected);
+        && getComparableText(comment.body) === comparableText);
     } catch (error) {
       console.warn(`[jira] ${issueKey}: read-back failed: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
   }
 
-  async function postComments(issueKey: string, bodies: readonly AdfDocument[]): Promise<CommentsPosted> {
+  /**
+   * Post one comment. With a `requestId`, a post left unconfirmed is remembered,
+   * and a resend of a remembered one reads the issue first (R29).
+   */
+  async function postComment(issueKey: string, body: AdfDocument, requestId: string | null): Promise<CommentPostFailure | 'posted'> {
+    const comparableText = getComparableText(body);
+    const bodyHash = getCommentBodyHash(comparableText);
+    const earlierPostedAt = requestId === null ? null : deps.unconfirmedPosts.getPostedAt(requestId, bodyHash);
+    if (requestId !== null && earlierPostedAt !== null) {
+      const isEarlierOnIssue = await checkIsCommentOnIssue(issueKey, comparableText, earlierPostedAt);
+      if (isEarlierOnIssue === null) {
+        return { kind: 'unchecked', detail: 'the issue could not be read to check whether the earlier attempt landed' };
+      }
+      deps.unconfirmedPosts.settle(requestId, bodyHash);
+      if (isEarlierOnIssue) return 'posted';
+    }
+    const postStartedAt = deps.now();
+    let result: Awaited<ReturnType<JiraClient['addComment']>>;
+    try {
+      result = await client.addComment(issueKey, body);
+    } catch (error) {
+      return { kind: 'refused', detail: error instanceof Error ? error.message : String(error) };
+    }
+    if (result.outcome === 'created') return 'posted';
+    // R18: a post that timed out or met a 5xx may still be committing on Jira's side.
+    await deps.wait(jiraReadBackDelayMs);
+    const isOnIssue = await checkIsCommentOnIssue(issueKey, comparableText, postStartedAt);
+    if (isOnIssue === true) return 'posted';
+    if (requestId !== null) deps.unconfirmedPosts.recordUnconfirmed(requestId, bodyHash, postStartedAt);
+    return isOnIssue === false
+      ? { kind: 'notPosted', detail: `${result.reason}; it was not on the issue ${jiraReadBackDelayMs / 1000} s later` }
+      : { kind: 'unknown', detail: result.reason };
+  }
+
+  async function postComments(issueKey: string, bodies: readonly AdfDocument[], requestId: string | null): Promise<CommentsPosted> {
     let postedCount = 0;
     for (const body of bodies) {
-      const postStartedAt = deps.now();
-      let result: Awaited<ReturnType<JiraClient['addComment']>>;
-      try {
-        result = await client.addComment(issueKey, body);
-      } catch (error) {
-        return { postedCount, failure: { kind: 'refused', detail: error instanceof Error ? error.message : String(error) } };
-      }
-      if (result.outcome === 'deliveryUnknown') {
-        const isOnIssue = await checkIsCommentOnIssue(issueKey, body, postStartedAt);
-        if (isOnIssue === false) {
-          const detail = `${result.reason}; it was not on the issue ${jiraReadBackDelayMs / 1000} s later`;
-          return { postedCount, failure: { kind: 'notPosted', detail } };
-        }
-        if (isOnIssue === null) return { postedCount, failure: { kind: 'unknown', detail: result.reason } };
-      }
+      const outcome = await postComment(issueKey, body, requestId);
+      if (outcome !== 'posted') return { postedCount, failure: outcome };
       postedCount += 1;
     }
     return { postedCount, failure: null };
@@ -144,7 +180,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * issue itself, so the text says what to do: send again — and, when the issue
    * could not be read, that a resend may show the answer twice.
    */
-  function getNothingPostedError(failure: NonNullable<CommentsPosted['failure']>): string {
+  function getNothingPostedError(failure: CommentPostFailure): string {
     switch (failure.kind) {
       case 'refused':
         return `Jira did not take the comment: ${failure.detail}`;
@@ -152,17 +188,22 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         return `Jira did not confirm the comment (${failure.detail}), so it was most likely not posted; send the answer again`;
       case 'unknown':
         return `Jira did not confirm the comment and the issue could not be read to check it (${failure.detail}); it may already be there. ` +
-          'Send the answer again (if the first one did land, the requester sees it twice)';
+          'Send the answer again: before posting it, the issue is read to make sure it is not posted twice';
+      case 'unchecked':
+        return `Nothing was posted: ${failure.detail}. Send the answer again in a few minutes`;
     }
   }
 
   /** A failure after some comments landed: where the unposted rest starts, so only that rest is sent again. */
-  function getMissingPartsWarning(bodies: readonly AdfDocument[], posted: CommentsPosted, failure: NonNullable<CommentsPosted['failure']>): string {
+  function getMissingPartsWarning(bodies: readonly AdfDocument[], posted: CommentsPosted, failure: CommentPostFailure): string {
     const restStart = `"${getTextPreview(bodies[posted.postedCount])}"`;
     const postedPart = `the first ${posted.postedCount} of the answer's ${bodies.length} comments reached the issue`;
     if (failure.kind === 'unknown') {
       return `${postedPart}; the next one, starting at ${restStart}, may or may not have (${failure.detail}; the issue could not be read to check), ` +
-        `and nothing after it was posted. Send the rest again, starting at ${restStart} (if that comment did land, the requester sees it twice)`;
+        `and nothing after it was posted. Send the rest again, starting at ${restStart} — a comment that did land is not posted twice`;
+    }
+    if (failure.kind === 'unchecked') {
+      return `${postedPart}; nothing after them was posted (${failure.detail}). Send the rest again in a few minutes, starting at ${restStart}`;
     }
     return `${postedPart}, the rest did not (${failure.detail}). Send the rest again, starting at ${restStart} — not the comments already posted`;
   }
@@ -172,7 +213,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const bodies = createCommentBodies(delivery.body);
       if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
-      const posted = await postComments(issueKey, bodies);
+      const posted = await postComments(issueKey, bodies, delivery.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
@@ -186,7 +227,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     async deliverAlert(key, alert) {
       const issueKey = key.thread;
-      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))]);
+      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const handBackWarning = await handBack(issueKey, getRequesterAccountId(alert.origin));
       if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
@@ -197,7 +238,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     async releaseAlert() {},
 
     async parkIssue(issueKey, requester) {
-      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h))]);
+      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h))], null);
       if (posted.postedCount === 0 && posted.failure) {
         console.warn(`[jira] ${issueKey}: park notice not posted: ${getNothingPostedError(posted.failure)}`);
         return;

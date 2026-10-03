@@ -11014,11 +11014,8 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
 function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string): Parameters<JiraConnector['start']>[0] {
   const sessionPostDeps: PostToSessionDeps = {
     ...createSessionPostDeps(),
-    // D5: one conversation per issue — a session that died between requests is
-    // resumed, never replaced by a fresh one. A start already under way finishes.
-    resumeSession: async (conversationKey) => {
-      if (!startupPromptBuffer.checkIsStarting(conversationKey)) await ensureSessionByResume(keyFromString(conversationKey));
-    },
+    // D5: one conversation per issue — a session that died between requests is resumed.
+    resumeSession: (conversationKey) => resumeOwnSessionUnlessStarting(keyFromString(conversationKey)),
   };
   return {
     bindConversation: async (key, folder) => {
@@ -11027,7 +11024,11 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     postRequest: async (key, requestId, prompt) => {
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
-      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
+      if (!posted.ok) {
+        // R28: retried at about 1, 5 and 15 min, outside the wake-up cap.
+        await requestWakeUpEngine?.notePostFailed(key, requestId);
+        throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
+      }
       // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
       if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
     },

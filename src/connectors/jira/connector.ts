@@ -4,6 +4,7 @@ import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
+import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
 import { sleep } from '../../utils';
 
 /**
@@ -125,13 +126,17 @@ export async function prepareJiraConnector(context: {
 
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
   await triggerLog.load();
+  const now = (): number => Date.now();
+  const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
+  await unconfirmedPosts.load();
 
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
     runBudgetPer24h: config.runBudgetPer24h,
-    now: () => Date.now(),
+    now,
     wait: sleep,
+    unconfirmedPosts,
   });
   let inbound: JiraInbound | null = null;
   let setupRetryTimer: NodeJS.Timeout | null = null;

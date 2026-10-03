@@ -3,17 +3,22 @@
  * records every call: comments in order, the hand-back only for a question or a
  * final answer to an open request and only while the issue is still the AI's,
  * a failed hand-back as a warning, the read-back of a post of unknown outcome,
- * the alert and the park notice.
+ * the at-most-once resend of an unconfirmed post (R29, over a real file), the
+ * alert and the park notice.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildJiraAlertText, buildJiraParkText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
 import { getAdfText, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import type { JiraClient, JiraComment, JiraCommentPostResult, JiraIssue } from '../connectors/jira/client';
+import { getCommentBodyHash, JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from '../connectors/jira/unconfirmedPosts';
 import type { RequestAnswerKind, RequestOrigin } from '../requests/types';
 
 const aiAccountId = 'ai-account';
@@ -36,6 +41,15 @@ interface FakeJira {
 }
 
 let jira: FakeJira;
+let dataDir: string;
+let unconfirmedPosts: JiraUnconfirmedPosts;
+
+/** The store as a restarted process finds it: read back from its file. */
+async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
+  const store = JiraUnconfirmedPosts.createForDataDir(path.join(dataDir, jiraUnconfirmedPostsFileName), () => nowMs);
+  await store.load();
+  return store;
+}
 
 function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue'> {
   return {
@@ -71,12 +85,19 @@ const sink = () => createJiraAnswerSink({
   wait: async (ms) => {
     jira.calls.push(`wait ${ms}`);
   },
+  unconfirmedPosts,
 });
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
-beforeEach(() => {
+beforeEach(async () => {
   jira = { calls: [], postedTexts: [], assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
+  dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
+  unconfirmedPosts = await loadUnconfirmedPosts();
+});
+
+afterEach(() => {
+  rmSync(dataDir, { recursive: true, force: true });
 });
 
 describe('answers', () => {
@@ -152,7 +173,7 @@ describe('answers', () => {
       result.ok ? result.warning ?? '' : '',
       new RegExp(`^the first 1 of the answer's 3 comments reached the issue; the next one, starting at "1{80}…", may or may not have ` +
         '\\(Jira POST: outcome unknown — timeout; the issue could not be read to check\\), and nothing after it was posted\\. ' +
-        'Send the rest again, starting at "1{80}…" \\(if that comment did land, the requester sees it twice\\)'),
+        'Send the rest again, starting at "1{80}…" — a comment that did land is not posted twice$'),
     );
     assert.equal(jira.calls.filter((call) => call.startsWith('comment')).length, 2, 'never re-posted by the sink');
   });
@@ -169,14 +190,15 @@ describe('answers', () => {
   });
 });
 
+const unknown: JiraCommentPostResult = { outcome: 'deliveryUnknown', reason: 'Jira POST: outcome unknown — 502' };
+const comment = (author: string, createdMs: number, text: string): JiraComment => ({
+  id: 'x',
+  author: { accountId: author },
+  created: new Date(createdMs).toISOString(),
+  body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+});
+
 describe('a comment post of unknown outcome is read back, never re-posted blindly (R18)', () => {
-  const unknown: JiraCommentPostResult = { outcome: 'deliveryUnknown', reason: 'Jira POST: outcome unknown — 502' };
-  const comment = (author: string, createdMs: number, text: string): JiraComment => ({
-    id: 'x',
-    author: { accountId: author },
-    created: new Date(createdMs).toISOString(),
-    body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
-  });
 
   it('found on the issue (by the AI account, the same text, not older than the post): delivered, handed back', async () => {
     jira.postOutcomes = [unknown];
@@ -214,8 +236,71 @@ describe('a comment post of unknown outcome is read back, never re-posted blindl
     assert.equal(
       result.ok ? '' : result.error,
       'Jira did not confirm the comment and the issue could not be read to check it (Jira POST: outcome unknown — 502); it may already be there. ' +
-        'Send the answer again (if the first one did land, the requester sees it twice)',
+        'Send the answer again: before posting it, the issue is read to make sure it is not posted twice',
     );
+  });
+
+  it('an identical comment by the AI account two minutes before the post is an earlier one, not this post (R30)', async () => {
+    jira.postOutcomes = [unknown];
+    jira.recentComments = [comment(aiAccountId, nowMs - 2 * 60 * 1000, 'Done: tested.')];
+    const result = await deliver('final', 'Done: tested.');
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? '' : result.error, /most likely not posted/);
+  });
+});
+
+describe('a resend of an unconfirmed post reads the issue first: at most once (R29)', () => {
+  /** The first attempt: Jira does not confirm, and the comment is not there 10 s later. */
+  async function deliverUnconfirmed(): Promise<void> {
+    jira.postOutcomes = [unknown];
+    jira.recentComments = [];
+    const first = await deliver('final', 'Done: tested.');
+    assert.match(first.ok ? '' : first.error, /most likely not posted/);
+    jira.calls = [];
+    jira.postedTexts = [];
+  }
+
+  it('the comment landed late: the resend — after a restart — finds it, posts nothing and hands the issue back', async () => {
+    await deliverUnconfirmed();
+    unconfirmedPosts = await loadUnconfirmedPosts();
+    jira.recentComments = [comment(aiAccountId, nowMs + 30_000, 'Done: tested.')];
+    assert.deepEqual(await deliver('final', 'Done: tested.'), { ok: true });
+    assert.deepEqual(jira.calls, ['read-back PROJ-12', 'assignee? PROJ-12', 'assign PROJ-12 requester-account']);
+  });
+
+  it('the comment did not land: the resend posts it, and a third send checks nothing any more', async () => {
+    await deliverUnconfirmed();
+    assert.deepEqual(await deliver('final', 'Done: tested.'), { ok: true });
+    assert.deepEqual(jira.calls.slice(0, 2), ['read-back PROJ-12', 'comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, ['Done: tested.']);
+    jira.calls = [];
+    await deliver('final', 'Done: tested.');
+    assert.equal(jira.calls[0], 'comment PROJ-12', 'the entry was settled — after a restart too');
+    assert.equal((await loadUnconfirmedPosts()).getPostedAt('req_1', getCommentBodyHash('Done: tested.')), null);
+  });
+
+  it('the issue cannot be read before the resend: nothing is posted, the agent is told to send again later', async () => {
+    await deliverUnconfirmed();
+    jira.recentComments = new Error('Jira GET failed: fetch failed');
+    assert.deepEqual(await deliver('final', 'Done: tested.'), {
+      ok: false,
+      error: 'Nothing was posted: the issue could not be read to check whether the earlier attempt landed. Send the answer again in a few minutes',
+    });
+    assert.deepEqual(jira.calls, ['read-back PROJ-12']);
+  });
+
+  it('another text, or the same text for another request, is posted without a check', async () => {
+    await deliverUnconfirmed();
+    await deliver('final', 'Something else.');
+    await sink().deliverAnswer(key, { requestId: 'req_2', kind: 'final', body: 'Done: tested.', origin, isRequestOpen: true });
+    assert.ok(!jira.calls.includes('read-back PROJ-12'));
+    assert.deepEqual(jira.postedTexts, ['Something else.', 'Done: tested.']);
+  });
+
+  it('an unconfirmed post a day old is forgotten', async () => {
+    unconfirmedPosts.recordUnconfirmed('req_1', getCommentBodyHash('Done: tested.'), nowMs - 24 * 60 * 60 * 1000);
+    await deliver('final', 'Done: tested.');
+    assert.equal(jira.calls[0], 'comment PROJ-12');
   });
 });
 

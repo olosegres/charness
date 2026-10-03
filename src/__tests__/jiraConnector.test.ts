@@ -261,9 +261,16 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.ok(post > 0 && watch > post);
   });
 
+  it('a post that failed is handed to the wake-up engine\'s retries before the failure is reported (R28)', () => {
+    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
+    assert.match(deps, /if \(!posted\.ok\) \{\s*\/\/[^\n]*\n\s*await requestWakeUpEngine\?\.notePostFailed\(key, requestId\);\s*throw new Error\(/);
+  });
+
   it('an issue\'s next request resumes the issue\'s own session (D5), never a fresh one in its place', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    assert.match(deps, /resumeSession: async \(conversationKey\) => \{\s*if \(!startupPromptBuffer\.checkIsStarting\(conversationKey\)\) await ensureSessionByResume\(keyFromString\(conversationKey\)\);/);
+    assert.match(deps, /resumeSession: \(conversationKey\) => resumeOwnSessionUnlessStarting\(keyFromString\(conversationKey\)\),/);
+    const helper = botSource.slice(botSource.indexOf('async function resumeOwnSessionUnlessStarting('));
+    assert.match(helper, /^[^]*?if \(!startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)\) await ensureSessionByResume\(key\);/);
   });
 
   it('a Jira issue bound to a topic\'s folder is never in that folder\'s `dir:` scope, nor named to the topic as a peer', () => {
