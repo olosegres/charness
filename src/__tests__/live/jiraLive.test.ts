@@ -176,6 +176,25 @@ function killInstanceTmuxServer(): void {
   if (socketPath && fs.existsSync(socketPath)) spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxClientEnv() });
 }
 
+/**
+ * @description Stop what the run started, SYNCHRONOUSLY — so it also runs from
+ * `process.on('exit')` after a signal or an uncaught failure, where nothing
+ * asynchronous runs any more: charness (killed outright — left alone it would keep
+ * polling the live site under the AI account's token) and the instance's own tmux
+ * server, which ends the agents in it. The requester's browser is playwright's own
+ * child and dies with this process.
+ */
+function removeInstanceSync(): void {
+  if (charness && charness.exitCode === null && charness.signalCode === null) charness.kill('SIGKILL');
+  charness = null;
+  killInstanceTmuxServer();
+}
+
+/** A signal ends the run through `exit`, whose handler cleans up (a signal's default action would skip it). */
+function exitOnSignal(signal: NodeJS.Signals): void {
+  process.exit(128 + os.constants.signals[signal]);
+}
+
 function getProcessEnvNames(pid: number): string[] | null {
   const environPath = `/proc/${pid}/environ`;
   if (!fs.existsSync(environPath)) return null;
@@ -357,6 +376,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     }
     dataDir = instanceEnv.DATA_DIR;
     socketPath = path.join(instanceEnv.TMUX_TMPDIR, `tmux-${process.getuid?.() ?? 0}`, instanceEnv.TMUX_SOCKET_NAME);
+    process.on('exit', removeInstanceSync);
+    process.once('SIGINT', exitOnSignal);
+    process.once('SIGTERM', exitOnSignal);
     const runId = `live-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     fs.mkdirSync(path.join(dataDir, 'live-runs'), { recursive: true, mode: 0o700 });
     runLogPath = path.join(dataDir, 'live-runs', `${runId}.log`);
@@ -374,8 +396,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
   });
 
   after(async () => {
+    // A graceful stop first (the normal end); the synchronous sweep is the same one a signal or a crash runs.
     await stopCharness();
-    killInstanceTmuxServer();
+    removeInstanceSync();
     if (requester) {
       // Left in place as test data, finished so that nothing about them matches a trigger any more.
       for (const issueKey of issueKeys.values()) {
@@ -388,6 +411,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       await requester.close();
     }
     report(`issues of this run: ${[...issueKeys].map(([scenario, issueKey]) => `${scenario}=${issueKey}`).join(', ')}`);
+    process.off('exit', removeInstanceSync);
+    process.off('SIGINT', exitOnSignal);
+    process.off('SIGTERM', exitOnSignal);
   });
 
   it('pre-flight: the instance env file, jira.json, the AI token, tmux and ports', async () => {

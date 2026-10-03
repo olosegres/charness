@@ -27,14 +27,13 @@ const transitionsSchema = z.object({
 const issueStateSchema = z.object({
   fields: z.object({
     assignee: z.object({ accountId: z.string() }).nullable(),
-    status: z.object({ name: z.string(), statusCategory: z.object({ key: z.string() }) }),
+    status: z.object({ statusCategory: z.object({ key: z.string() }) }),
   }),
 });
 const commentPageSchema = z.object({
   comments: z.array(z.object({
     id: z.string(),
     author: z.object({ accountId: z.string() }),
-    created: z.string(),
     body: adfNodeSchema,
   })),
 });
@@ -43,16 +42,14 @@ const commentPageSchema = z.object({
 export interface LiveComment {
   id: string;
   authorAccountId: string;
-  created: string;
   text: string;
   /** The length of the comment body's serialized ADF, as Jira returns it. */
   adfLength: number;
 }
 
-/** @name LiveIssueState @description An issue's assignee, status and comments, oldest first. */
+/** @name LiveIssueState @description An issue's assignee, whether it is finished, and its comments, oldest first. */
 export interface LiveIssueState {
   assigneeAccountId: string | null;
-  statusName: string;
   isDone: boolean;
   comments: LiveComment[];
 }
@@ -149,12 +146,10 @@ export class JiraLiveRequester {
     if (!issue || !page) throw new Error(`${issueKey}: an empty response`);
     return {
       assigneeAccountId: issue.fields.assignee?.accountId ?? null,
-      statusName: issue.fields.status.name,
       isDone: issue.fields.status.statusCategory.key === doneStatusCategoryKey,
       comments: page.comments.map((comment) => ({
         id: comment.id,
         authorAccountId: comment.author.accountId,
-        created: comment.created,
         text: getAdfText(comment.body),
         adfLength: JSON.stringify(comment.body).length,
       })),
