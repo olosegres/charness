@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildJiraAlertText, buildJiraParkText, createJiraAnswerSink, jiraReadBackClockSkewMs } from '../connectors/jira/answerSink';
+import { buildJiraAlertText, buildJiraParkText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
 import { getAdfText, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import type { JiraClient, JiraComment, JiraCommentPostResult, JiraIssue } from '../connectors/jira/client';
@@ -63,7 +63,15 @@ function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | '
   };
 }
 
-const sink = () => createJiraAnswerSink({ client: createClient(), aiAccountId, runBudgetPer24h: 5, now: () => nowMs });
+const sink = () => createJiraAnswerSink({
+  client: createClient(),
+  aiAccountId,
+  runBudgetPer24h: 5,
+  now: () => nowMs,
+  wait: async (ms) => {
+    jira.calls.push(`wait ${ms}`);
+  },
+});
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
@@ -121,13 +129,32 @@ describe('answers', () => {
     assert.equal(jira.calls.filter((call) => call.startsWith('assign ')).length, 1);
   });
 
-  it('a part that fails after the first: delivered with a warning naming what is missing; nothing re-posted', async () => {
+  it('a part that fails after the first: delivered with a warning quoting where the unposted rest starts; nothing re-posted', async () => {
     jira.postOutcomes = [{ outcome: 'created', id: 'c1' }, new Error('Jira POST failed with 400: too long')];
     const paragraphs = Array.from({ length: 3 }, (_, index) => `${index}`.repeat(paragraphLength));
     const result = await deliver('final', paragraphs.join('\n\n'));
     assert.equal(result.ok, true);
-    assert.match(result.ok ? result.warning ?? '' : '', /comment parts 2–3 of 3 were not posted \(Jira POST failed with 400: too long\); send only the missing part again/);
+    assert.equal(
+      result.ok ? result.warning : '',
+      'the first 1 of the answer\'s 3 comments reached the issue, the rest did not (Jira POST failed with 400: too long). ' +
+        `Send the rest again, starting at "${'1'.repeat(80)}…" — not the comments already posted`,
+    );
     assert.equal(jira.calls.filter((call) => call.startsWith('comment')).length, 2);
+  });
+
+  it('a later part of unknown outcome that could not be checked: the warning says it may be on the issue and where to resend from', async () => {
+    jira.postOutcomes = [{ outcome: 'created', id: 'c1' }, { outcome: 'deliveryUnknown', reason: 'Jira POST: outcome unknown — timeout' }];
+    jira.recentComments = new Error('Jira GET failed: fetch failed');
+    const paragraphs = Array.from({ length: 3 }, (_, index) => `${index}`.repeat(paragraphLength));
+    const result = await deliver('final', paragraphs.join('\n\n'));
+    assert.equal(result.ok, true);
+    assert.match(
+      result.ok ? result.warning ?? '' : '',
+      new RegExp(`^the first 1 of the answer's 3 comments reached the issue; the next one, starting at "1{80}…", may or may not have ` +
+        '\\(Jira POST: outcome unknown — timeout; the issue could not be read to check\\), and nothing after it was posted\\. ' +
+        'Send the rest again, starting at "1{80}…" \\(if that comment did land, the requester sees it twice\\)'),
+    );
+    assert.equal(jira.calls.filter((call) => call.startsWith('comment')).length, 2, 'never re-posted by the sink');
   });
 
   it('the first comment refused: an error, the request stays for a retry, no hand-back', async () => {
@@ -155,10 +182,16 @@ describe('a comment post of unknown outcome is read back, never re-posted blindl
     jira.postOutcomes = [unknown];
     jira.recentComments = [comment(aiAccountId, nowMs + 1_000, 'Done:   tested.')];
     assert.deepEqual(await deliver('final', 'Done: tested.'), { ok: true });
-    assert.deepEqual(jira.calls, ['comment PROJ-12', 'read-back PROJ-12', 'assignee? PROJ-12', 'assign PROJ-12 requester-account']);
+    assert.deepEqual(jira.calls, [
+      'comment PROJ-12',
+      `wait ${jiraReadBackDelayMs}`,
+      'read-back PROJ-12',
+      'assignee? PROJ-12',
+      'assign PROJ-12 requester-account',
+    ]);
   });
 
-  it('not found — another author, other text, or an older comment: not posted, sending it again is safe', async () => {
+  it('not found after the wait — another author, other text, or an older comment: most likely not posted, send it again', async () => {
     jira.postOutcomes = [unknown];
     jira.recentComments = [
       comment('requester-account', nowMs, 'Done: tested.'),
@@ -166,16 +199,23 @@ describe('a comment post of unknown outcome is read back, never re-posted blindl
       comment(aiAccountId, nowMs - jiraReadBackClockSkewMs - 1, 'Done: tested.'),
     ];
     const result = await deliver('final', 'Done: tested.');
-    assert.deepEqual(result, { ok: false, error: 'the comment was not posted (Jira POST: outcome unknown — 502); sending the answer again is safe' });
+    assert.deepEqual(result, {
+      ok: false,
+      error: 'Jira did not confirm the comment (Jira POST: outcome unknown — 502; it was not on the issue 10 s later), so it was most likely not posted; send the answer again',
+    });
     assert.equal(jira.calls.filter((call) => call.startsWith('comment')).length, 1, 'never re-posted by the sink');
   });
 
-  it('the read-back fails too: unknown — the agent is told to check before sending again', async () => {
+  it('the read-back fails too: unknown — the agent, which cannot look at the issue, is told to send again and what that risks', async () => {
     jira.postOutcomes = [unknown];
     jira.recentComments = new Error('Jira GET failed: fetch failed');
     const result = await deliver('final', 'Done: tested.');
     assert.equal(result.ok, false);
-    assert.match(result.ok ? '' : result.error, /could not be checked \(Jira POST: outcome unknown — 502\); it may already be on the issue — check before sending it again/);
+    assert.equal(
+      result.ok ? '' : result.error,
+      'Jira did not confirm the comment and the issue could not be read to check it (Jira POST: outcome unknown — 502); it may already be there. ' +
+        'Send the answer again (if the first one did land, the requester sees it twice)',
+    );
   });
 });
 

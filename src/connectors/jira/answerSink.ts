@@ -12,14 +12,24 @@ import type { JiraAccount, JiraClient } from './client';
  * meanwhile keeps it). Comment first, then the hand-back: a hand-back that fails
  * leaves the answer delivered (a warning, never a retry that would post it twice).
  * A comment post whose outcome is unknown (R18) is never re-posted blindly: the
- * issue's newest comments are read once, and a matching comment by the AI
- * account counts as delivered. Bot texts on the issue are English (D20).
+ * issue's newest comments are read once, after a short wait, and a matching
+ * comment by the AI account counts as delivered. The agent cannot look at the
+ * issue itself, so every failure tells it what to send again. Bot texts on the
+ * issue are English (D20).
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
 export const jiraReadBackCommentCount = 20;
 /** A comment Jira dated this much before the post started still counts as the post (clock skew). */
 export const jiraReadBackClockSkewMs = 5 * 60 * 1000;
+/**
+ * How long the read-back waits after a post of unknown outcome: a post that timed
+ * out or met a 5xx may still be committing on Jira's side, and reading at once
+ * would call it "not posted" and invite the agent to post it twice.
+ */
+export const jiraReadBackDelayMs = 10_000;
+/** How much of the first unposted part a partial delivery quotes, so the agent can tell where to resend from. */
+const missingPartPreviewChars = 80;
 
 const alertTexts: Readonly<Record<RequestAlertReason, string>> = {
   silentTurns: 'the agent ended its turns without answering, and the reminders gave up',
@@ -43,6 +53,8 @@ export interface JiraAnswerSinkDeps {
   aiAccountId: string;
   runBudgetPer24h: number;
   now: () => number;
+  /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
+  wait: (ms: number) => Promise<void>;
 }
 
 /** What posting an answer's comments did: how many landed, and why the next one did not. */
@@ -56,6 +68,12 @@ function getComparableText(body: Parameters<typeof getAdfText>[0]): string {
   return getAdfText(body).replace(/\s+/g, ' ').trim();
 }
 
+/** The start of a comment's text, for the agent to find in its own answer. */
+function getTextPreview(body: AdfDocument): string {
+  const characters = [...getComparableText(body)];
+  return characters.length > missingPartPreviewChars ? `${characters.slice(0, missingPartPreviewChars).join('')}…` : characters.join('');
+}
+
 export interface JiraAnswerSink extends AnswerSink {
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
   parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
@@ -66,6 +84,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
   /** R18: did the post that left no readable answer land after all? `null` — the read-back failed too. */
   async function checkIsCommentOnIssue(issueKey: string, body: AdfDocument, postStartedAt: number): Promise<boolean | null> {
+    await deps.wait(jiraReadBackDelayMs);
     try {
       const expected = getComparableText(body);
       const comments = await client.getRecentComments(issueKey, jiraReadBackCommentCount);
@@ -91,7 +110,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       }
       if (result.outcome === 'deliveryUnknown') {
         const isOnIssue = await checkIsCommentOnIssue(issueKey, body, postStartedAt);
-        if (isOnIssue === false) return { postedCount, failure: { kind: 'notPosted', detail: result.reason } };
+        if (isOnIssue === false) {
+          const detail = `${result.reason}; it was not on the issue ${jiraReadBackDelayMs / 1000} s later`;
+          return { postedCount, failure: { kind: 'notPosted', detail } };
+        }
         if (isOnIssue === null) return { postedCount, failure: { kind: 'unknown', detail: result.reason } };
       }
       postedCount += 1;
@@ -117,16 +139,32 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     return origin.attributes.requesterAccountId ?? '';
   }
 
-  /** A failure before the first comment landed: nothing is on the issue, the agent may send it again — or must look first. */
+  /**
+   * A failure before the first comment landed. The agent has no way to look at the
+   * issue itself, so the text says what to do: send again — and, when the issue
+   * could not be read, that a resend may show the answer twice.
+   */
   function getNothingPostedError(failure: NonNullable<CommentsPosted['failure']>): string {
     switch (failure.kind) {
       case 'refused':
         return `Jira did not take the comment: ${failure.detail}`;
       case 'notPosted':
-        return `the comment was not posted (${failure.detail}); sending the answer again is safe`;
+        return `Jira did not confirm the comment (${failure.detail}), so it was most likely not posted; send the answer again`;
       case 'unknown':
-        return `Jira did not confirm the comment and it could not be checked (${failure.detail}); it may already be on the issue — check before sending it again`;
+        return `Jira did not confirm the comment and the issue could not be read to check it (${failure.detail}); it may already be there. ` +
+          'Send the answer again (if the first one did land, the requester sees it twice)';
     }
+  }
+
+  /** A failure after some comments landed: where the unposted rest starts, so only that rest is sent again. */
+  function getMissingPartsWarning(bodies: readonly AdfDocument[], posted: CommentsPosted, failure: NonNullable<CommentsPosted['failure']>): string {
+    const restStart = `"${getTextPreview(bodies[posted.postedCount])}"`;
+    const postedPart = `the first ${posted.postedCount} of the answer's ${bodies.length} comments reached the issue`;
+    if (failure.kind === 'unknown') {
+      return `${postedPart}; the next one, starting at ${restStart}, may or may not have (${failure.detail}; the issue could not be read to check), ` +
+        `and nothing after it was posted. Send the rest again, starting at ${restStart} (if that comment did land, the requester sees it twice)`;
+    }
+    return `${postedPart}, the rest did not (${failure.detail}). Send the rest again, starting at ${restStart} — not the comments already posted`;
   }
 
   return {
@@ -137,10 +175,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const posted = await postComments(issueKey, bodies);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];
-      if (posted.failure) {
-        warnings.push(`comment parts ${posted.postedCount + 1}–${bodies.length} of ${bodies.length} were not posted (${posted.failure.detail}); ` +
-          'send only the missing part again');
-      }
+      if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
       if (delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
         const handBackWarning = await handBack(issueKey, getRequesterAccountId(delivery.origin));

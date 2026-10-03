@@ -11068,9 +11068,10 @@ export async function startBot(): Promise<void> {
 
   // 1a'. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
   //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the
-  //     answer sinks (its comments are the jira sink, J6) and the session boot phase: its launch defaults (R15) must apply to a session
-  //     resumed during reattach, and a broken setup stops the start with every
-  //     reason at once. It starts polling once the sessions are restored.
+  //     answer sinks (its comments are the jira sink, J6) and the session boot
+  //     phase: its launch defaults (R15) must apply to a session resumed during
+  //     reattach, and a broken setup stops the start with every reason at once.
+  //     It starts polling once the sessions are restored.
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   if (jiraConnector) {
     const { launchDefaults } = jiraConnector;
@@ -11121,7 +11122,6 @@ export async function startBot(): Promise<void> {
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
   });
   requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
-
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle

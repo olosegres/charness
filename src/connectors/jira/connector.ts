@@ -4,6 +4,7 @@ import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
+import { sleep } from '../../utils';
 
 /**
  * @description The Jira connector's entry point, loaded by `bot.ts` through a
@@ -130,6 +131,7 @@ export async function prepareJiraConnector(context: {
     aiAccountId: config.accountId,
     runBudgetPer24h: config.runBudgetPer24h,
     now: () => Date.now(),
+    wait: sleep,
   });
   let inbound: JiraInbound | null = null;
   let setupRetryTimer: NodeJS.Timeout | null = null;
