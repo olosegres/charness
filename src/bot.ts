@@ -1730,7 +1730,14 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
     // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
     // would not know the work the limit interrupted.
     if (!checkIsTelegramKey(key)) await resumeOwnSessionUnlessStarting(key);
-    await ensureAgentSession(key);
+    const ensured = await ensureAgentSession(key);
+    if (!ensured.ok) {
+      // No session to nudge (unbound, no adapter, a start that failed): a forward would hit a dead adapter, and
+      // watching a turn that never started would only mislead the wake-ups. The open request, if any, stays
+      // open for the wake-up engine (its backstop / retries); what was held stays held for the next session.
+      console.warn(`[apiRetry] not resuming ${k}: no session (${ensured.reason}); an open request is left to the wake-up engine`);
+      return;
+    }
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.

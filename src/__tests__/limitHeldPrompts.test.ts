@@ -244,6 +244,22 @@ describe('the bot holds and releases them (R23)', () => {
     assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
   });
 
+  it('a resume with no session to nudge stops there: no forward, no continuation watch, the open request left to the wake-up engine', () => {
+    const fire = getFunction('async function fireApiRetryWithLocale(');
+    const tryStart = fire.indexOf('  try {');
+    const ensure = fire.indexOf('const ensured = await ensureAgentSession(key);');
+    const guard = fire.indexOf('if (!ensured.ok) {');
+    const stop = fire.indexOf('return;', guard);
+    const deliver = fire.indexOf('await deliverPromptOrBuffer(');
+    const track = fire.indexOf('await requestWakeUpEngine?.trackContinuationTurn(');
+    assert.ok(tryStart > 0 && ensure > tryStart && guard > ensure && stop > guard && deliver > stop && track > deliver,
+      'inside the try (so `finally` still releases the kick), the result is checked BEFORE the nudge is delivered and watched');
+    const guardBody = fire.slice(guard, deliver);
+    assert.match(guardBody, /console\.warn\(`\[apiRetry\] not resuming \$\{k\}: no session \(\$\{ensured\.reason\}\); an open request is left to the wake-up engine`\);\n\s*return;/);
+    assert.doesNotMatch(guardBody, /closeRequest|cancelConversation|cancelApiRetry|limitHeldPrompts\./, 'the request and what was held are not dropped');
+    assert.match(fire, /finally \{\n\s*apiRetryKicksInFlight\.delete\(k\);/);
+  });
+
   it('a resume\'s topic notices go to a Telegram topic only — a tracker issue has no topic (R6)', () => {
     const fire = getFunction('async function fireApiRetryWithLocale(');
     const telegramBranch = /if \(checkIsTelegramKey\(key\)\) \{\n\s*if \(entry\.kind === 'usageLimit'\) void surfaceLimitResumedNotice\(key\);\n\s*else void replyToThread\(key, t\('apiRetry\.resuming'\)\);\n\s*\}/;
