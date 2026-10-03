@@ -40,8 +40,8 @@ export const turnActivityPersistStepMs = 60_000;
 /**
  * @name RequestWakeUpEngineDeps
  * @description `prepareWakeUpSession` makes sure the conversation has a live
- * session (resuming a dead one) and resolves `false` when it could not;
- * `forwardWakeUp` then writes the reminder into it. They are two steps because
+ * session for `message` (resuming a dead one) and resolves `false` when it could
+ * not; `forwardWakeUp` then writes the message into it. They are two steps because
  * a resume takes seconds, and the request may be answered, cancelled or
  * superseded meanwhile — the engine re-checks in between. `deliverAlert` tells a
  * person and resolves the platform's alert handle, `null` when nothing needs
@@ -50,7 +50,7 @@ export const turnActivityPersistStepMs = 60_000;
 export interface RequestWakeUpEngineDeps {
   ledger: Pick<RequestLedger, 'getOpenRequest' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
-  prepareWakeUpSession: (key: SessionKey) => Promise<boolean>;
+  prepareWakeUpSession: (key: SessionKey, message: WakeUpMessage) => Promise<boolean>;
   /** Forward the wake-up's message (the request's prompt again, or a reminder) into the session. */
   forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
   deliverAlert: (key: SessionKey, request: OpenRequestState, reason: RequestAlertReason) => Promise<string | null>;
@@ -108,6 +108,7 @@ export class RequestWakeUpEngine {
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
    * for the conversation is replaced — the newest message is the one that counts.
+   * A post retry still pending is moot from now on (R28): the session has the request.
    */
   async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
     const request = this.deps.ledger.getOpenRequest(key);
@@ -120,6 +121,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt,
     });
+    if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
     await this.recordTurnActivity(request, true);
   }
 
@@ -324,7 +326,7 @@ export class RequestWakeUpEngine {
     message: WakeUpMessage,
   ): Promise<WakeUpDeliveryOutcome> {
     try {
-      if (!(await this.deps.prepareWakeUpSession(key))) return 'failed';
+      if (!(await this.deps.prepareWakeUpSession(key, message))) return 'failed';
       // The resume took a while: a reminder for a request that closed, was replaced
       // or stopped being woken meanwhile is stale.
       const current = this.deps.ledger.getOpenRequest(key);

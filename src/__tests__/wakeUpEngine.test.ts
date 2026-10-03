@@ -36,6 +36,8 @@ let wakeUpMessages: WakeUpMessage[];
 let alerts: Array<{ requestId: string; reason: RequestAlertReason }>;
 let releasedAlerts: string[];
 let isWakeUpDeliverable: boolean;
+/** What each wake-up asked a session for — a request's own prompt may start one, a reminder never (R28). */
+let preparedFor: WakeUpMessage[];
 /** Runs while the session is being resumed for a reminder (the resume race). */
 let duringWakeUpResume: (() => Promise<void>) | null;
 
@@ -65,7 +67,8 @@ function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
   return new RequestWakeUpEngine({
     ledger,
     probeTurn: () => probe,
-    prepareWakeUpSession: async () => {
+    prepareWakeUpSession: async (_key, message) => {
+      preparedFor.push(message);
       await duringWakeUpResume?.();
       return isWakeUpDeliverable;
     },
@@ -99,6 +102,7 @@ beforeEach(() => {
   alerts = [];
   releasedAlerts = [];
   isWakeUpDeliverable = true;
+  preparedFor = [];
   duringWakeUpResume = null;
 });
 
@@ -789,6 +793,33 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     nowMs += backstopMs;
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(alerts.map((alert) => alert.reason), ['wakeFailed'], 'the backstop\'s own failure alerts as before');
+  });
+
+  it('the session is prepared for the request\'s own prompt — what lets a tracker start one when none ever came up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    await createFailedPost(ledger, engine);
+    nowMs += minuteMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(preparedFor.map((message) => [message.reason, message.isRequestPrompt]), [['postRetry', true]]);
+  });
+
+  it('a retry still pending when the prompt reaches the session another way — a limit resume — never fires', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await createFailedPost(ledger, engine);
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: true, isRequestPrompt: true });
+    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+
+    // The resumed turn sends a progress note and ends: the follow-up is the next wake-up, not a retry.
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+    nowMs += minuteMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, []);
+    nowMs += progressFollowUpDelayMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'progressFollowUp' }]);
   });
 
   it('a request already gone or replaced is not scheduled', async () => {

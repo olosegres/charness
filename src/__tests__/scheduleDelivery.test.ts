@@ -82,8 +82,11 @@ function createHarness(options: {
   pinThrows?: boolean;
   forwardThrows?: boolean;
   checkResult?: CheckRunResult | null;
+  /** How long the announce takes on the fake clock (the paced send under load). */
+  announceDelayMs?: number;
 } = {}) {
   const callLog: CallLogEntry[] = [];
+  const forwardedTexts: string[] = [];
   let nowMs = 1_000_000;
   const busyValues = options.busyValues ?? [false];
   let busyIndex = 0;
@@ -91,6 +94,7 @@ function createHarness(options: {
   const deps: ScheduleDeliveryDeps = {
     announce: async (key, text) => {
       callLog.push({ step: 'announce', detail: { key, text } });
+      nowMs += options.announceDelayMs ?? 0;
       return options.announceId === undefined ? 42 : options.announceId;
     },
     pin: async (key, messageId, isSilent) => {
@@ -108,6 +112,7 @@ function createHarness(options: {
     },
     forwardPrompt: async (key, text) => {
       callLog.push({ step: 'forward', detail: { key, text } });
+      forwardedTexts.push(text);
       if (options.forwardThrows) throw new Error('forward boom');
     },
     runCheck: async (key, command, timeoutMs) => {
@@ -125,7 +130,7 @@ function createHarness(options: {
     },
   };
 
-  return { deps, callLog, getNow: () => nowMs };
+  return { deps, callLog, forwardedTexts, getNow: () => nowMs };
 }
 
 test('happy path: announce → pin → ensureSession → forward, in order; delivered', async () => {
@@ -293,10 +298,11 @@ function formatExpectedLocalDateTime(epochMs: number): string {
 }
 
 test('a run held over a usage-limit wait says when it was due — the fire time, or a catch-up\'s missed time (R27)', async () => {
-  const held: string[] = [];
-  const { deps, callLog, getNow } = createHarness();
-  deps.holdForLimitResume = (_key, text) => {
-    held.push(text);
+  const held: { text: string; heldText?: string }[] = [];
+  // The announce and pin go through the paced send queue: the due time is the fire's, not theirs.
+  const { deps, callLog, getNow } = createHarness({ announceDelayMs: 5 * 60 * 1000 });
+  deps.holdForLimitResume = (_key, text, heldText) => {
+    held.push({ text, heldText });
     return true;
   };
   const deliver = createScheduleDelivery(deps);
@@ -305,19 +311,19 @@ test('a run held over a usage-limit wait says when it was due — the fire time,
   const missedAtMs = Date.parse('2026-06-07T09:00:00.000Z');
   await deliver(makeJob({ name: 'Nightly build', prompt: 'run the build' }), { kind: 'catch-up', missedAtMs });
 
+  const run = '[Scheduled run "Nightly build"]\nrun the build';
   assert.deepEqual(held, [
-    `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(firedAtMs)}]\nrun the build`,
-    `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(missedAtMs)}]\nrun the build`,
-  ]);
+    { text: run, heldText: `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(firedAtMs)}]\nrun the build` },
+    { text: run, heldText: `[Scheduled run "Nightly build" · was due at ${formatExpectedLocalDateTime(missedAtMs)}]\nrun the build` },
+  ], 'held as the same run — the note is what it says once it arrives late');
   assert.ok(!callLog.some((entry) => entry.step === 'forward'), 'held, not forwarded');
 });
 
 test('a run forwarded at once carries no due note (R27)', async () => {
-  const { deps, callLog } = createHarness();
+  const { deps, forwardedTexts } = createHarness();
   deps.holdForLimitResume = () => false;
   await createScheduleDelivery(deps)(makeJob({ name: 'Nightly build', prompt: 'run the build' }), onTime);
-  const forward = callLog.find((entry) => entry.step === 'forward');
-  assert.equal((forward?.detail as { text: string }).text, '[Scheduled run "Nightly build"]\nrun the build');
+  assert.deepEqual(forwardedTexts, ['[Scheduled run "Nightly build"]\nrun the build']);
 });
 
 // ─── reminders (bot-local delivery kind) ─────────────────────────────

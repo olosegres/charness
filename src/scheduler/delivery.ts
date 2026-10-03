@@ -247,6 +247,9 @@ export function createScheduleDelivery(
 ): (job: ScheduleRecord, fireContext: FireContext) => Promise<DeliveryOutcome> {
   return async (job, fireContext) => {
     if (checkIsCheckSchedule(job)) return deliverCheck(deps, job, fireContext);
+    // Read before the paced announce and pin, which can take a while under load:
+    // a run held over a usage-limit wait says when it was due (R27).
+    const dueAtMs = fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined ? fireContext.missedAtMs : deps.now();
 
     // 1–2. announce and pin
     await announceAndPin(deps, job, buildFireAnnouncement(job, fireContext));
@@ -258,7 +261,6 @@ export function createScheduleDelivery(
 
     // 3–4. wake the agent with the prompt. A run held over a usage-limit wait
     // reaches the agent later: it says when it was due (R27).
-    const dueAtMs = fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined ? fireContext.missedAtMs : deps.now();
     return deliverToAgent(deps, job, prependScheduledRunMarker(job.name, job.prompt), {
       heldText: prependScheduledRunMarker(job.name, job.prompt, { dueAtMs }),
     });

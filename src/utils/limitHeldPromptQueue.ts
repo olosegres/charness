@@ -1,5 +1,5 @@
 import { keyToString, type SessionKey } from '../sessionKey';
-import { getHeldPromptsText, getHeldPromptsWith, getTextWithHeldPrompts, limitHeldPromptsMax } from './limitHeldPrompts';
+import { getHeldPromptsText, getHeldPromptsWith, getTextWithHeldPrompts, limitHeldPromptsMax, type LimitHeldPrompt } from './limitHeldPrompts';
 
 /**
  * @name LimitHeldPromptStore
@@ -9,8 +9,8 @@ import { getHeldPromptsText, getHeldPromptsWith, getTextWithHeldPrompts, limitHe
  * Both calls are synchronous, so a take is atomic within one turn of the loop.
  */
 export interface LimitHeldPromptStore {
-  getLimitHeldPrompts: (key: SessionKey) => string[];
-  setLimitHeldPrompts: (key: SessionKey, prompts: readonly string[]) => void;
+  getLimitHeldPrompts: (key: SessionKey) => LimitHeldPrompt[];
+  setLimitHeldPrompts: (key: SessionKey, prompts: readonly LimitHeldPrompt[]) => void;
 }
 
 /**
@@ -32,10 +32,15 @@ export interface LimitHeldPromptQueueDeps {
 export class LimitHeldPromptQueue {
   constructor(private readonly deps: LimitHeldPromptQueueDeps) {}
 
-  /** @description Hold `text` while a usage-limit wait is armed; `false` — none is, post as usual. */
-  holdPrompt(key: SessionKey, text: string): boolean {
+  /**
+   * @description Hold `text` while a usage-limit wait is armed; `false` — none is,
+   * post as usual. `heldText` is what it says when it arrives late (R27), when that
+   * differs; the run itself is identified by `text`.
+   */
+  holdPrompt(key: SessionKey, text: string, heldText?: string): boolean {
     if (!this.deps.checkIsLimitWaitArmed(key)) return false;
-    const { held, droppedCount } = getHeldPromptsWith(this.deps.store.getLimitHeldPrompts(key), text);
+    const prompt: LimitHeldPrompt = heldText === undefined || heldText === text ? { text } : { text, heldText };
+    const { held, droppedCount } = getHeldPromptsWith(this.deps.store.getLimitHeldPrompts(key), prompt);
     if (droppedCount > 0) {
       console.warn(`[limitHeld] ${keyToString(key)}: ${droppedCount} oldest held prompt(s) dropped (at most ${limitHeldPromptsMax})`);
     }
@@ -59,7 +64,7 @@ export class LimitHeldPromptQueue {
     return getHeldPromptsText(this.takeHeldPrompts(key));
   }
 
-  private takeHeldPrompts(key: SessionKey): string[] {
+  private takeHeldPrompts(key: SessionKey): LimitHeldPrompt[] {
     if (this.deps.checkIsLimitWaitArmed(key)) return [];
     const held = this.deps.store.getLimitHeldPrompts(key);
     if (held.length === 0) return [];

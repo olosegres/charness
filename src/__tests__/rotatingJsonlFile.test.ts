@@ -1,7 +1,7 @@
 /**
  * @description The shared rotating JSONL file behind the scheduler run ledger and
- * the request history: append, the one-backup rotation, reading back in order,
- * and the never-throw append.
+ * the request history: append, the one-backup rotation, reading back in order
+ * (raw, or validated records), and the never-throw append.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { z } from 'zod';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 
 interface SampleRecord {
@@ -46,6 +47,14 @@ describe('RotatingJsonlFile', () => {
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
     const numbers = (await file.readLines()).map((line): number => JSON.parse(line).n);
     assert.deepEqual(numbers, [7, 8, 9, 10, 11, 12, 13, 14]);
+  });
+
+  it('reads back the records a schema accepts and counts the lines it skips — one torn by a crash, another shape', async () => {
+    const file = new RotatingJsonlFile<SampleRecord>(filePath, 1024);
+    file.append({ n: 1 });
+    fs.appendFileSync(filePath, '{"n": 2\n{"m": 3}\n');
+    file.append({ n: 4 });
+    assert.deepEqual(await file.readRecords(z.object({ n: z.number() })), { records: [{ n: 1 }, { n: 4 }], skippedCount: 2 });
   });
 
   it('reports a failed append instead of throwing', () => {

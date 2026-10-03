@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, promises as fsp, renameSync, statSync } from 'node:fs';
 import path from 'node:path';
+import type { ZodType } from 'zod';
 
 /**
  * @description An append-only JSONL file with ONE size-bounded backup: once the
@@ -69,5 +70,28 @@ export class RotatingJsonlFile<TRecord> {
       }
     }
     return lines;
+  }
+
+  /**
+   * @description The records of {@link readLines} that parse as JSON and pass
+   * `schema`, oldest first, and how many lines did not (a line torn by a crash, a
+   * shape from another version) — the caller decides whether to warn.
+   */
+  async readRecords(schema: ZodType<TRecord>): Promise<{ records: TRecord[]; skippedCount: number }> {
+    const records: TRecord[] = [];
+    let skippedCount = 0;
+    for (const line of await this.readLines()) {
+      let json: object;
+      try {
+        json = JSON.parse(line);
+      } catch {
+        skippedCount += 1;
+        continue;
+      }
+      const parsed = schema.safeParse(json);
+      if (parsed.success) records.push(parsed.data);
+      else skippedCount += 1;
+    }
+    return { records, skippedCount };
   }
 }

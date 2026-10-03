@@ -87,6 +87,27 @@ describe('postToSession', () => {
     assert.deepEqual(calls, ['hold? false', 'ensure k -', 'hold? true']);
   });
 
+  it('R27: a hold gets the run as posted at once AND what it says when late; a forward only the former', async () => {
+    const calls: string[] = [];
+    let isLimitWaitArmed = true;
+    const deps = createDeps(calls, {
+      holdForLimitResume: (conversationKey, text, heldText) => {
+        calls.push(`hold? ${text} | ${heldText ?? '-'}`);
+        return isLimitWaitArmed;
+      },
+    });
+    assert.deepEqual(await postToSession(deps, 'k', 'p', undefined, { heldText: 'p, was due at 09:00' }), { ok: true, isHeld: true });
+    isLimitWaitArmed = false;
+    assert.deepEqual(await postToSession(deps, 'k', 'p', undefined, { heldText: 'p, was due at 09:05' }), { ok: true, isHeld: false });
+    assert.deepEqual(calls, [
+      'hold? p | p, was due at 09:00',
+      'hold? p | p, was due at 09:05',
+      'ensure k -',
+      'hold? p | p, was due at 09:05',
+      'forward k p',
+    ]);
+  });
+
   it('R23: no wait armed — the post goes on as usual', async () => {
     const calls: string[] = [];
     const deps = createDeps(calls, { holdForLimitResume: () => false });

@@ -1672,13 +1672,13 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
  * not copied into {@link limitHeldPrompts}: its request keeps it (R21), the
  * resume posts it from there, and a request superseded meanwhile is never posted.
  */
-function holdPromptForLimitResume(key: SessionKey, text: string): boolean {
+function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: string): boolean {
   if (getArmedApiRetry(key)?.kind !== 'usageLimit') return false;
   if (requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key)?.prompt === text) {
     console.log(`[apiRetry] ${keyToString(key)}: request held until the usage-limit wait resumes`);
     return true;
   }
-  return limitHeldPrompts.holdPrompt(key, text);
+  return limitHeldPrompts.holdPrompt(key, text, heldText);
 }
 
 /**
@@ -13822,6 +13822,22 @@ async function resumeOwnSessionUnlessStarting(key: SessionKey): Promise<void> {
 }
 
 /**
+ * @description The session a wake-up goes into: the conversation's own, resumed
+ * when it died. A tracker request whose prompt never reached the agent — its post
+ * failed before any session came up (R28), or the resume failed — gets a session
+ * started the way its post starts one: the wake-up carries the whole request, so
+ * nothing the new session lacks is lost. A reminder never starts one: a fresh
+ * session would not know what it reminds of. A topic's wake-ups are unchanged.
+ */
+async function prepareRequestWakeUpSession(key: SessionKey, message: WakeUpMessage, fallbackAdapterName: string | undefined): Promise<boolean> {
+  if (await ensureSessionByResume(key)) return true;
+  if (checkIsTelegramKey(key) || !message.isRequestPrompt) return false;
+  await ensureAgentSession(key, { fallbackAdapterName });
+  // A start still under way is not ready: a forward now would not reach it — the next retry will.
+  return getThreadAdapter(key).checkIsActive(key);
+}
+
+/**
  * @description Remind the agent of an open request inside its own session. Not a
  * request: it carries the open request's id and goes through the ordinary
  * prompt path (the engine only wakes an idle session, so nothing is interrupted),
@@ -13865,7 +13881,7 @@ interface SchedulerWiringDeps {
  */
 function createSessionPostDeps(): PostToSessionDeps {
   return {
-    holdForLimitResume: (conversationKey, text) => holdPromptForLimitResume(keyFromString(conversationKey), text),
+    holdForLimitResume: (conversationKey, text, heldText) => holdPromptForLimitResume(keyFromString(conversationKey), text, heldText),
     checkBusy: (conversationKey) => {
       const key = keyFromString(conversationKey);
       return getThreadAdapter(key).checkIsBusy?.(key) ?? false;
@@ -14153,7 +14169,8 @@ export async function startBot(): Promise<void> {
       checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
       serializeKey: keyToString,
     }),
-    prepareWakeUpSession: ensureSessionByResume,
+    prepareWakeUpSession: (key, message) =>
+      prepareRequestWakeUpSession(key, message, undefined),
     forwardWakeUp: forwardRequestWakeUp,
     deliverAlert: async (key, request, reason) => {
       const lookup = getAnswerSink(answerSinks, key);

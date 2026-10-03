@@ -20,6 +20,7 @@ import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import type { Locale } from './i18n';
+import type { LimitHeldPrompt } from './utils/limitHeldPrompts';
 
 /**
  * @description On-disk state for the multi-thread telegram bot.
@@ -402,7 +403,7 @@ export interface StateV1 {
    * the session ends), and the prompts must outlive it until they reach a
    * session (`utils/limitHeldPromptQueue.ts`). Optional — absent when empty.
    */
-  limitHeldPrompts?: Record<string, string[]>;
+  limitHeldPrompts?: Record<string, LimitHeldPrompt[]>;
   /**
    * Open requests of the request ledger (`requests/requestLedger.ts`), keyed by
    * {@link SessionKey} string — at most ONE per conversation (a new request
@@ -2019,8 +2020,8 @@ export class StateStore {
   // ── prompts held during a usage-limit wait (R23) ──
 
   /** @description The prompts held for `key`, oldest first; `[]` when none. A copy. */
-  getLimitHeldPrompts(key: SessionKey): string[] {
-    return [...(this.state.limitHeldPrompts?.[keyToString(key)] ?? [])];
+  getLimitHeldPrompts(key: SessionKey): LimitHeldPrompt[] {
+    return (this.state.limitHeldPrompts?.[keyToString(key)] ?? []).map((prompt) => ({ ...prompt }));
   }
 
   /**
@@ -2028,10 +2029,10 @@ export class StateStore {
    * the map once empty). Synchronous in memory — a take must be atomic against
    * a concurrent hold — and saved debounced like the retry record it outlives.
    */
-  setLimitHeldPrompts(key: SessionKey, prompts: readonly string[]): void {
+  setLimitHeldPrompts(key: SessionKey, prompts: readonly LimitHeldPrompt[]): void {
     const k = keyToString(key);
     if (prompts.length > 0) {
-      (this.state.limitHeldPrompts ??= {})[k] = [...prompts];
+      (this.state.limitHeldPrompts ??= {})[k] = prompts.map((prompt) => ({ ...prompt }));
     } else {
       if (!this.state.limitHeldPrompts?.[k]) return;
       delete this.state.limitHeldPrompts[k];

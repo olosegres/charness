@@ -136,6 +136,15 @@ describe('answerRequest close rules', () => {
     assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'nothing to re-post: no flag');
   });
 
+  it('a progress answer makes a pending post retry moot: the agent has the request (R28)', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin, { createPrompt: (requestId) => `[Request ${requestId}] do it` });
+    await ledger.updateOpenRequest(request.id, { postRetryCount: 1, nextPostRetryAt: Date.now() + 60_000 });
+
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+  });
+
   it('a late answer to a superseded request is delivered and changes no request', async () => {
     await ledger.load();
     const superseded = await ledger.createRequest(topicKey, origin);

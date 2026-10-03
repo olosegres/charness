@@ -44,8 +44,9 @@ export interface PostToSessionDeps {
    * Optional: hold the prompt while the conversation waits out an armed usage
    * limit (Jira plan R23) — posting it would only hit the limit again; it reaches
    * the session once the wait ends. `true` = held, nothing else to do now.
+   * `heldText` — what it says when it arrives late (R27); the run is `text`.
    */
-  holdForLimitResume?: (conversationKey: string, text: string) => boolean;
+  holdForLimitResume?: (conversationKey: string, text: string, heldText?: string) => boolean;
   /** Whether the conversation's agent is mid-turn right now (sync, in-memory probe). */
   checkBusy: (conversationKey: string) => boolean;
   /**
@@ -90,15 +91,15 @@ export async function postToSession(
   options: { heldText?: string } = {},
 ): Promise<PostToSessionResult> {
   // What is held is read only once the wait is over: a caller may say when it was due (R27).
-  const heldText = options.heldText ?? text;
+  const { heldText } = options;
   // Checked first: no session is started or resumed into a limit.
-  if (deps.holdForLimitResume?.(conversationKey, heldText)) return { ok: true, isHeld: true };
+  if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   if (deps.resumeSession) await deps.resumeSession(conversationKey);
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
   if (deps.checkBusy(conversationKey)) await waitForIdle(deps, conversationKey);
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
-  if (deps.holdForLimitResume?.(conversationKey, heldText)) return { ok: true, isHeld: true };
+  if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   try {
     await deps.forwardPrompt(conversationKey, text);
   } catch (error) {
