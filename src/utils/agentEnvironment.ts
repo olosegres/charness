@@ -14,6 +14,10 @@
  * The variables passed on: the user, the home folder (Claude Code's login lives
  * there), the search path, the shell, the locale, the terminal type, the
  * temporary folder and the timezone (`/timezone` sets it on the process).
+ * Claude Code 2.1.287 starts and finds its login in HOME with this list alone
+ * (probed under `env -i`). A deployment that relies on `CLAUDE_CONFIG_DIR`, an
+ * HTTP(S) proxy or `NODE_EXTRA_CA_CERTS` must add the name here: a missing one
+ * fails silently (no login found, no network), never with an error.
  */
 export const agentEnvironmentNames = [
   'HOME',
