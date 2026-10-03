@@ -58,9 +58,17 @@ export const adfNodeSchema: z.ZodType<AdfNode> = z.lazy(() =>
   }),
 );
 
+/** ADF refuses an empty text node (`minLength: 1`); marklassian emits one for an empty code block. */
+function getNodesWithoutEmptyText(nodes: AdfNode[]): AdfNode[] {
+  return nodes
+    .filter((node) => node.type !== 'text' || (node.text ?? '') !== '')
+    .map((node) => (node.content ? { ...node, content: getNodesWithoutEmptyText(node.content) } : node));
+}
+
 /** Markdown the agent wrote → an ADF document for a comment body (D3). */
 export function convertMarkdownToAdf(markdown: string): AdfDocument {
-  return markdownToAdf(markdown);
+  const document = markdownToAdf(markdown);
+  return { ...document, content: getNodesWithoutEmptyText(document.content) };
 }
 
 /** Nodes that start a line of their own in the text form. */
@@ -72,16 +80,24 @@ const blockNodeTypes = new Set([
 const itemPrefix = '- ';
 const maxConsecutiveNewlines = 2;
 
-function getStringAttribute(node: AdfNode, name: string): string | null {
+function getStringAttribute(node: AdfNode | AdfMark, name: string): string | null {
   const value = node.attrs?.[name];
   return typeof value === 'string' ? value : null;
+}
+
+/** A text node; a linked one keeps its address, which the agent may need to follow. */
+function getTextNodeText(node: AdfNode): string {
+  const text = node.text ?? '';
+  const linkMark = node.marks?.find((mark) => mark.type === 'link');
+  const href = linkMark ? getStringAttribute(linkMark, 'href') : null;
+  return href && href !== text ? `${text} (${href})` : text;
 }
 
 /** The inline text a leaf node stands for. */
 function getLeafText(node: AdfNode): string {
   switch (node.type) {
     case 'text':
-      return node.text ?? '';
+      return getTextNodeText(node);
     case 'hardBreak':
       return '\n';
     case 'mention':
@@ -112,7 +128,7 @@ function getNodeText(node: AdfNode): string {
 /**
  * @description An ADF document (or node) as plain text for the agent's prompt:
  * one line per block, list items as `- …`, mentions by their display text,
- * cards by their URL. Formatting is dropped.
+ * cards by their URL, a link as `text (address)`. Other formatting is dropped.
  */
 export function getAdfText(node: AdfNode | AdfDocument | null | undefined): string {
   if (!node) return '';
@@ -178,9 +194,43 @@ function getLinePieces(lines: readonly string[], maxChars: number): string[] {
   return pieces;
 }
 
+/**
+ * A block's runs: lines of text, and each fenced code block from its opener to
+ * its closer. A fence may follow a text line with no blank line between them,
+ * and rejoining the runs with a blank line renders the same: a fence
+ * interrupts a paragraph.
+ */
+function getFenceRuns(lines: readonly string[]): string[][] {
+  const runs: string[][] = [];
+  let current: string[] = [];
+  let openFence: string | null = null;
+  for (const line of lines) {
+    const fence = fenceRe.exec(line);
+    if (openFence === null && fence) {
+      if (current.length > 0) runs.push(current);
+      current = [line];
+      openFence = fence[1];
+      continue;
+    }
+    current.push(line);
+    if (openFence !== null && fence && checkIsClosingFence(fence, openFence)) {
+      runs.push(current);
+      current = [];
+      openFence = null;
+    }
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
+}
+
 /** A block longer than a comment: split by lines; a code block is re-fenced around every piece. */
 function getOversizedBlockPieces(block: string, maxChars: number): string[] {
-  const lines = block.split('\n');
+  return getFenceRuns(block.split('\n')).flatMap((run) => getRunPieces(run, maxChars));
+}
+
+function getRunPieces(lines: readonly string[], maxChars: number): string[] {
+  const run = lines.join('\n');
+  if (run.length <= maxChars) return [run];
   const opener = lines[0] ?? '';
   const fence = fenceRe.exec(opener);
   const closer = fence?.[1] ?? '';

@@ -77,7 +77,7 @@ from your projects folder, bind a topic to an agent.
 ### 1. Install the CLI
 
 ```bash
-npm install -g telegramcode      # needs Node ≥ 22
+npm install -g telegramcode      # needs Node ≥ 22.12
 ```
 
 This registers the `telegramcode` command. Prefer containers, or want two isolated instances on one

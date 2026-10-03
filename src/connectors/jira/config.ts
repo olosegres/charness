@@ -6,6 +6,7 @@ import { defaultOpenCodeUrl, getOpenCodePort } from '../../installManager';
 import { claudeJsonStreamAdapterName } from '../../adapters/claudeJsonStreamAdapter';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
+import type { JiraProjectStatus } from './client';
 
 /**
  * @description The Jira connector's configuration (Jira connector plan J4,
@@ -38,12 +39,13 @@ const folderErrorTexts: Record<BindErrorCode, string> = {
 /** Hosts the test-only `baseUrl` override may point at. */
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-const projectSchema = z.object({
+// Strict: a misspelled key (`adaptor`, `pollIntervalSecond`) is an error, never a silently applied default.
+const projectSchema = z.strictObject({
   folder: z.string().min(1),
   triggerStatuses: z.array(z.string().min(1)).min(1),
 });
 
-const rawConfigSchema = z.object({
+const rawConfigSchema = z.strictObject({
   site: z.string().min(1),
   email: z.string().min(1),
   apiToken: z.string().min(1),
@@ -57,7 +59,7 @@ const rawConfigSchema = z.object({
 
 /** @name JiraProjectConfig @description One allowlisted project. */
 export interface JiraProjectConfig {
-  /** The working folder, a subfolder of `WORK_ROOT` (validated to exist). */
+  /** The working folder relative to `WORK_ROOT`, canonical (validated to exist), as a binding stores it. */
   folder: string;
   /** Status NAMES that make an assigned issue a request; resolved to ids at boot (D11). */
   triggerStatusNames: string[];
@@ -172,14 +174,15 @@ export function validateJiraConfig(
       errors.push(`jira.json projects.${projectKey}: not a Jira project key`);
       continue;
     }
+    let folder: string;
     try {
-      validateSubdir(context.workRoot, project.folder);
+      folder = validateSubdir(context.workRoot, project.folder);
     } catch (e) {
       const reason = e instanceof BindError ? folderErrorTexts[e.code] : 'cannot be resolved';
       errors.push(`jira.json projects.${projectKey}.folder: ${reason}`);
       continue;
     }
-    projects.set(projectKey, { folder: project.folder, triggerStatusNames: project.triggerStatuses });
+    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses });
   }
 
   if (errors.length > 0 || !checkIsJiraAdapterName(adapterName)) return { ok: false, errors };
@@ -221,32 +224,27 @@ export function loadJiraConfig(context: { dataDir: string; workRoot: string; ope
   return validateJiraConfig(parsedJson, context);
 }
 
-/** @name JiraProjectStatus @description A status as `GET /project/{key}/statuses` lists it. */
-export interface JiraProjectStatus {
-  id: string;
-  name: string;
-}
-
 /**
  * @description Resolve a project's trigger status NAMES to the ids changelog
  * items carry (D11): matched case-insensitively against every status the
  * project's workflows list. A name the project does not have is an error, so a
- * typo never silently disables the trigger.
+ * typo never silently disables the trigger; a name several statuses share
+ * (one per issue type's workflow) yields all their ids.
  */
 export function resolveTriggerStatusIds(
   projectKey: string,
   statusNames: readonly string[],
   projectStatuses: readonly JiraProjectStatus[],
 ): { ok: true; statusIds: string[] } | { ok: false; error: string } {
-  const idsByName = new Map<string, string>();
-  for (const status of projectStatuses) idsByName.set(status.name.toLowerCase(), status.id);
+  const idsByName = new Map<string, string[]>();
+  for (const status of projectStatuses) {
+    const name = status.name.toLowerCase();
+    idsByName.set(name, [...(idsByName.get(name) ?? []), status.id]);
+  }
   const missing = statusNames.filter((name) => !idsByName.has(name.toLowerCase()));
   if (missing.length > 0) {
     return { ok: false, error: `project ${projectKey} has no status named ${missing.map((name) => `"${name}"`).join(', ')}` };
   }
-  const statusIds = statusNames.flatMap((name) => {
-    const statusId = idsByName.get(name.toLowerCase());
-    return statusId === undefined ? [] : [statusId];
-  });
+  const statusIds = statusNames.flatMap((name) => idsByName.get(name.toLowerCase()) ?? []);
   return { ok: true, statusIds: [...new Set(statusIds)] };
 }

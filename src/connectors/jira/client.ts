@@ -99,7 +99,8 @@ const issueSchema = z.object({
 
 const searchResultSchema = z.object({
   issues: z.array(issueSchema),
-  nextPageToken: z.string().optional(),
+  /** Jira documents `null` on the last page. */
+  nextPageToken: z.string().nullable().optional(),
   isLast: z.boolean().optional(),
 });
 
@@ -111,8 +112,9 @@ const changelogPageSchema = z.object({
   values: z.array(changelogHistorySchema),
 });
 
+const projectStatusSchema = z.object({ id: z.string(), name: z.string() });
 const issueTypeStatusesSchema = z.array(z.object({
-  statuses: z.array(z.object({ id: z.string(), name: z.string() })),
+  statuses: z.array(projectStatusSchema),
 }));
 
 const createdCommentSchema = z.object({ id: z.string() });
@@ -123,6 +125,8 @@ export type JiraChangelogHistory = z.infer<typeof changelogHistorySchema>;
 export type JiraIssue = z.infer<typeof issueSchema>;
 export type JiraSearchResult = z.infer<typeof searchResultSchema>;
 export type JiraChangelogPage = z.infer<typeof changelogPageSchema>;
+/** A status as `GET /project/{key}/statuses` lists it. */
+export type JiraProjectStatus = z.infer<typeof projectStatusSchema>;
 
 /** @name JiraSearchRequest @description `POST /rest/api/3/search/jql` (D13). */
 export interface JiraSearchRequest {
@@ -171,6 +175,16 @@ function getErrorDetail(text: string): string {
   return text.slice(0, 200) || 'no details';
 }
 
+/** A request that got no response: `fetch` says only "fetch failed", the reason (refused, DNS, TLS) is its cause. */
+function getFailureDetail(error: Error): string {
+  const cause = error.cause instanceof Error ? error.cause : null;
+  if (!cause) return error.message;
+  const code = 'code' in cause && typeof cause.code === 'string' ? cause.code : '';
+  // A refused dual-stack connect is an AggregateError: a code, an empty message.
+  const reason = cause.message.includes(code) ? cause.message : [code, cause.message].filter((part) => part !== '').join(': ');
+  return reason ? `${error.message} (${reason})` : error.message;
+}
+
 export interface JiraClient {
   getMyself(): Promise<{ accountId: string }>;
   searchIssues(request: JiraSearchRequest): Promise<JiraSearchResult>;
@@ -178,7 +192,7 @@ export interface JiraClient {
   getIssue(issueKey: string, fields: string[]): Promise<JiraIssue>;
   addComment(issueKey: string, body: AdfDocument): Promise<{ id: string }>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
-  getProjectStatuses(projectKey: string): Promise<Array<{ id: string; name: string }>>;
+  getProjectStatuses(projectKey: string): Promise<JiraProjectStatus[]>;
 }
 
 export function createJiraClient(options: JiraClientOptions): JiraClient {
@@ -208,7 +222,7 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         // Inside the try: the timeout also covers the body, and a connection can drop while it streams.
         text = await response.text();
       } catch (e) {
-        lastError = new JiraHttpError(0, request.method, request.path, e instanceof Error ? e.message : 'network failure');
+        lastError = new JiraHttpError(0, request.method, request.path, e instanceof Error ? getFailureDetail(e) : 'network failure');
         if (!request.isIdempotent || attempt === jiraMaxAttempts) throw lastError;
         await sleepImpl(jiraBackoffMs[attempt - 1]);
         continue;
@@ -219,13 +233,10 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       }
       lastError = new JiraHttpError(response.status, request.method, request.path, getErrorDetail(text));
       if (attempt === jiraMaxAttempts) break;
-      if (response.status === 429) {
+      // Atlassian: a transient 5xx (such as 503) may also carry a `Retry-After`.
+      if (response.status === 429 || (response.status >= 500 && request.isIdempotent)) {
         const retryAfterMs = getRetryAfterHeaderMs(response.headers.get('retry-after'), Date.now());
         await sleepImpl(retryAfterMs === null ? jiraBackoffMs[attempt - 1] : Math.min(retryAfterMs, jiraRetryAfterCapMs));
-        continue;
-      }
-      if (response.status >= 500 && request.isIdempotent) {
-        await sleepImpl(jiraBackoffMs[attempt - 1]);
         continue;
       }
       break;
@@ -297,7 +308,7 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         { method: 'GET', path: `/rest/api/3/project/${encode(projectKey)}/statuses`, isIdempotent: true },
         issueTypeStatusesSchema,
       );
-      const byId = new Map<string, { id: string; name: string }>();
+      const byId = new Map<string, JiraProjectStatus>();
       for (const issueType of issueTypes) for (const status of issueType.statuses) byId.set(status.id, status);
       return [...byId.values()];
     },

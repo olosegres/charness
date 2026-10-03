@@ -163,6 +163,13 @@ describe('createJiraClient', () => {
       assert.deepEqual(JSON.parse(requests[0].body), { jql: 'x', fields: [], maxResults: 1 });
     });
 
+    it('searchIssues accepts the last page\'s null token — Jira documents null there, not an absent key', async () => {
+      respondWith({ status: 200, body: json({ issues: [], nextPageToken: null, isLast: true }) });
+      const result = await createClient().searchIssues({ jql: 'x', fields: [], isChangelogExpanded: false, maxResults: 1 });
+      assert.equal(result.nextPageToken, null);
+      assert.equal(result.isLast, true);
+    });
+
     it('getChangelogPage, getIssue: paths with the key encoded and the fields joined', async () => {
       respondWith(
         { status: 200, body: json({ startAt: 100, maxResults: 100, total: 101, isLast: true, values: [] }) },
@@ -252,6 +259,17 @@ describe('createJiraClient', () => {
       assert.deepEqual(sleeps, [...jiraBackoffMs]);
     });
 
+    it('a 5xx on a read with its own Retry-After waits that long (capped alike), not the backoff', async () => {
+      respondWith(
+        { status: 503, headers: { 'Retry-After': '7' } },
+        { status: 503, headers: { 'Retry-After': '3600' } },
+        { status: 200, body: json({ accountId: 'a' }) },
+      );
+      await createClient().getMyself();
+      assert.equal(requests.length, 3);
+      assert.deepEqual(sleeps, [7_000, jiraRetryAfterCapMs]);
+    });
+
     it('5xx on a read, every attempt: the last status and Jira\'s messages are thrown', async () => {
       respondWith({ status: 503 }, { status: 503 }, { status: 503, body: json({ errorMessages: ['Down'], errors: { jql: 'bad' } }) });
       await assert.rejects(createClient().getMyself(), (error: Error) =>
@@ -302,6 +320,18 @@ describe('createJiraClient', () => {
       respondWith({ status: 200, body: json({ accountId: 'a' }) });
       await createClient({ fetchImpl }).getMyself();
       assert.equal(calls, 2);
+    });
+
+    it('a refused connection names its cause, not only "fetch failed"', async () => {
+      const closedServer = http.createServer();
+      await new Promise<void>((resolve) => closedServer.listen(0, '127.0.0.1', resolve));
+      const address: AddressInfo | string | null = closedServer.address();
+      assert.ok(address !== null && typeof address === 'object');
+      await new Promise<void>((resolve) => closedServer.close(() => resolve()));
+      const client = createJiraClient({ baseUrl: `http://127.0.0.1:${address.port}`, email, apiToken, sleepImpl: async () => {} });
+      await assert.rejects(client.getMyself(), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 0 && /^Jira GET \/rest\/api\/3\/myself failed: fetch failed \(.*ECONNREFUSED/.test(error.message)
+        && !error.message.includes(apiToken));
     });
 
     for (const status of [401, 403]) {

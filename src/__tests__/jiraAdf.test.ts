@@ -32,6 +32,15 @@ describe('convertMarkdownToAdf', () => {
     const markTypes = JSON.stringify(doc);
     for (const mark of ['"strong"', '"code"', '"link"', 'https://example.com']) assert.ok(markTypes.includes(mark), mark);
   });
+
+  it('an empty code block keeps no empty text node — ADF refuses one (text minLength 1) and Jira would reject the comment', () => {
+    for (const markdown of ['```\n```', '```sh\n\n```', 'before\n\n```\n```\n\nafter']) {
+      const doc = convertMarkdownToAdf(markdown);
+      const emptyTexts = JSON.stringify(doc).match(/"type":"text","text":""/g);
+      assert.equal(emptyTexts, null, markdown);
+      assert.ok(doc.content.flatMap(getNodeTypes).includes('codeBlock'), markdown);
+    }
+  });
 });
 
 function cell(type: 'tableHeader' | 'tableCell', text: string): AdfNode {
@@ -76,6 +85,17 @@ describe('getAdfText', () => {
       getAdfText(description),
       'Goal\nAsk @Requester about it\nhttps://example.com/spec\n- first\n- second\nStep | Owner\nbuild | AI\nnpm test',
     );
+  });
+
+  it('a link keeps its address beside its text; a bare link whose text is the address is not doubled', () => {
+    const link = (text: string, href: string): AdfNode => ({ type: 'text', text, marks: [{ type: 'link', attrs: { href } }] });
+    const doc: AdfNode = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [
+        { type: 'text', text: 'See ' }, link('the spec', 'https://example.com/spec'), { type: 'text', text: ' and ' }, link('https://example.com/x', 'https://example.com/x'),
+      ] }],
+    };
+    assert.equal(getAdfText(doc), 'See the spec (https://example.com/spec) and https://example.com/x');
   });
 
   it('an absent description is empty text', () => {
@@ -130,6 +150,27 @@ describe('splitMarkdownForComments', () => {
     const chunks = splitMarkdownForComments(`\`\`\`\n${lines.join('\n')}\n\`\`\``, 18);
     assert.ok(chunks.length > 1);
     assert.deepEqual(chunks.flatMap((chunk) => chunk.split('\n').slice(1, -1)), lines);
+  });
+
+  it('an oversized block with a fence right after a text line: the text stays text, every code piece fenced, nothing lost', () => {
+    const lines = Array.from({ length: 12 }, (_, index) => `# step ${index} *x*`);
+    const chunks = splitMarkdownForComments(`Here is the script:\n\`\`\`sh\n${lines.join('\n')}\n\`\`\`\nThat is all.`, 60);
+    assert.equal(chunks[0].split('\n\n')[0], 'Here is the script:');
+    const codePieces = chunks.flatMap((chunk) => chunk.split('\n\n')).filter((piece) => piece.startsWith('```'));
+    assert.ok(codePieces.length > 1);
+    for (const piece of codePieces) assert.match(piece, /^```sh\n[\s\S]*\n```$/);
+    assert.deepEqual(codePieces.flatMap((piece) => piece.split('\n').slice(1, -1)), lines);
+    assert.equal(chunks.at(-1)?.split('\n\n').at(-1), 'That is all.');
+    for (const chunk of chunks) assert.ok(chunk.length <= 60, `${chunk.length} chars`);
+  });
+
+  it('two fenced blocks with no blank line between them in an oversized block are each re-fenced on their own', () => {
+    const first = Array.from({ length: 6 }, (_, index) => `a${index}`);
+    const second = Array.from({ length: 6 }, (_, index) => `b${index}`);
+    const chunks = splitMarkdownForComments(`\`\`\`\n${first.join('\n')}\n\`\`\`\n~~~\n${second.join('\n')}\n~~~`, 24);
+    const pieces = chunks.flatMap((chunk) => chunk.split('\n\n'));
+    for (const piece of pieces) assert.match(piece, /^(```\n[\s\S]*\n```|~~~\n[\s\S]*\n~~~)$/, piece);
+    assert.deepEqual(pieces.flatMap((piece) => piece.split('\n').slice(1, -1)), [...first, ...second]);
   });
 
   it('a line longer than a comment is cut, nothing lost', () => {

@@ -36,7 +36,7 @@ function createConfig(overrides: Record<string, string | number | object | undef
     email: 'ai-account@example.com',
     apiToken: `\${${tokenVarName}}`,
     accountId: 'placeholder-account',
-    projects: { CHRN: { folder: 'charness-work', triggerStatuses: ['AI To Do'] } },
+    projects: { CHRN: { folder: 'proj-work', triggerStatuses: ['AI To Do'] } },
     ...overrides,
   };
 }
@@ -51,7 +51,7 @@ describe('validateJiraConfig', () => {
   before(() => {
     workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
-    fs.mkdirSync(path.join(workRoot, 'charness-work'));
+    fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;
   });
   after(() => {
@@ -69,7 +69,7 @@ describe('validateJiraConfig', () => {
     assert.equal(config.pollIntervalMs, jiraPollIntervalDefaultSeconds * 1000);
     assert.equal(config.runBudgetPer24h, jiraRunBudgetDefault);
     assert.equal(config.adapter, 'claude-json-stream');
-    assert.deepEqual([...config.projects], [['CHRN', { folder: 'charness-work', triggerStatusNames: ['AI To Do'] }]]);
+    assert.deepEqual([...config.projects], [['CHRN', { folder: 'proj-work', triggerStatusNames: ['AI To Do'] }]]);
   });
 
   it('explicit poll interval, budget and the tmux Claude backend are taken', () => {
@@ -117,7 +117,7 @@ describe('validateJiraConfig', () => {
   });
 
   it('a baseUrl off loopback (or not http) is refused — it would send the token elsewhere', () => {
-    for (const baseUrl of ['https://example.atlassian.net', 'http://10.8.0.1:8099', 'file:///tmp/x', 'not a url']) {
+    for (const baseUrl of ['https://example.atlassian.net', 'http://192.0.2.10:8099', 'file:///tmp/x', 'not a url']) {
       const errors = getErrors(createConfig({ baseUrl }));
       assert.equal(errors.length, 1, baseUrl);
       assert.match(errors[0], /^jira\.json baseUrl /);
@@ -147,7 +147,7 @@ describe('validateJiraConfig', () => {
   it('a project key that is not a Jira key, and a folder outside WORK_ROOT or missing, are refused', () => {
     const errors = getErrors(createConfig({
       projects: {
-        chrn: { folder: 'charness-work', triggerStatuses: ['AI To Do'] },
+        chrn: { folder: 'proj-work', triggerStatuses: ['AI To Do'] },
         MISSING: { folder: 'no-such-folder', triggerStatuses: ['AI To Do'] },
         ESCAPE: { folder: '../', triggerStatuses: ['AI To Do'] },
       },
@@ -156,6 +156,28 @@ describe('validateJiraConfig', () => {
     assert.equal(errors[0], 'jira.json projects.chrn: not a Jira project key');
     assert.equal(errors[1], 'jira.json projects.MISSING.folder: does not exist under WORK_ROOT');
     assert.equal(errors[2], 'jira.json projects.ESCAPE.folder: is outside WORK_ROOT');
+  });
+
+  it('a folder is stored in the canonical relative form a binding uses, not as written', () => {
+    for (const folder of ['./proj-work/', ' proj-work ', path.join(workRoot, 'proj-work')]) {
+      const result = validateJiraConfig(
+        createConfig({ projects: { PROJ: { folder, triggerStatuses: ['AI To Do'] } } }),
+        { workRoot, openCodeUrl: isolatedOpenCodeUrl },
+      );
+      assert.ok(result.ok, folder);
+      assert.equal(result.config.projects.get('PROJ')?.folder, 'proj-work', folder);
+    }
+  });
+
+  it('an unknown or misspelled key is refused by name — never a silently applied default — and its value is not echoed', () => {
+    const errors = getErrors(createConfig({
+      adaptor: tokenValue,
+      projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], triggerStatus: tokenValue } },
+    }));
+    assert.equal(errors.length, 2, errors.join('\n'));
+    assert.ok(errors.some((error) => /^jira\.json \(root\): .*"adaptor"/.test(error)), errors.join('\n'));
+    assert.ok(errors.some((error) => /^jira\.json projects\.PROJ: .*"triggerStatus"/.test(error)), errors.join('\n'));
+    for (const error of errors) assert.ok(!error.includes(tokenValue), error);
   });
 
   it('an empty project list is refused — the allowlist must name a project', () => {
@@ -167,7 +189,7 @@ describe('validateJiraConfig', () => {
       apiToken: undefined,
       pollIntervalSeconds: 601,
       runBudgetPer24h: 0,
-      projects: { CHRN: { folder: 'charness-work', triggerStatuses: [] } },
+      projects: { CHRN: { folder: 'proj-work', triggerStatuses: [] } },
     }));
     const fields = errors.map((error) => error.split(':')[0]).sort();
     assert.deepEqual(fields, [
@@ -186,7 +208,7 @@ describe('loadJiraConfig', () => {
   before(() => {
     workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
-    fs.mkdirSync(path.join(workRoot, 'charness-work'));
+    fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;
   });
   after(() => {
@@ -227,6 +249,11 @@ describe('resolveTriggerStatusIds', () => {
 
   it('matches names case-insensitively, in order, without duplicates', () => {
     assert.deepEqual(resolveTriggerStatusIds('CHRN', ['ai to do', 'Done', 'AI TO DO'], statuses), { ok: true, statusIds: ['10001', '3'] });
+  });
+
+  it('a name several issue types\' statuses share yields every id, so no issue type\'s status is missed', () => {
+    const shared = [...statuses, { id: '10005', name: 'AI To Do' }];
+    assert.deepEqual(resolveTriggerStatusIds('PROJ', ['AI To Do'], shared), { ok: true, statusIds: ['10001', '10005'] });
   });
 
   it('a name the project lacks is an error naming it, so a typo never disables the trigger silently', () => {
