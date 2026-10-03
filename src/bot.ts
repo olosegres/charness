@@ -13725,12 +13725,13 @@ function createAnswerSinks(): AnswerSinks {
 }
 
 /**
- * @description Make sure the conversation has a live session to remind: a live
- * one is used as is; a dead one is RESUMED from its persisted session id, so the
- * reminder reaches the same conversation (a fresh session would not know the
- * request). Resolves `false` when there is nothing to resume.
+ * @description Make sure the conversation has a live session of its OWN: a live
+ * one is used as is; a dead one is RESUMED from its persisted session id, so a
+ * wake-up reminder — or a Jira issue's next request (D5: one conversation per
+ * issue) — reaches the same conversation (a fresh session would not know it).
+ * Resolves `false` when there is nothing to resume.
  */
-async function ensureSessionForWakeUp(key: SessionKey): Promise<boolean> {
+async function ensureSessionByResume(key: SessionKey): Promise<boolean> {
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) return true;
   const agent = state.getAgent(key);
@@ -13788,14 +13789,6 @@ interface SchedulerWiringDeps {
 }
 
 /**
- * @description Construct the scheduler stack (S8): run ledger → delivery (thin
- * lambdas over the bot's existing send/session functions) → timer engine
- * (assigned to the module-level {@link schedulerEngine}) → the bot-owned MCP
- * server handle (NOT started — the caller starts it and wires the injection
- * with the actually-bound port). Lives outside `startBot` only for readability;
- * it captures the same module-level state the rest of bot.ts uses.
- */
-/**
  * @description How a prompt is posted into a conversation's session — the deps of
  * {@link postToSession}, shared by the scheduler's fire and the Jira connector's
  * requests (Jira plan J5, D21).
@@ -13819,6 +13812,14 @@ function createSessionPostDeps(): PostToSessionDeps {
   };
 }
 
+/**
+ * @description Construct the scheduler stack (S8): run ledger → delivery (thin
+ * lambdas over the bot's existing send/session functions) → timer engine
+ * (assigned to the module-level {@link schedulerEngine}) → the bot-owned MCP
+ * server handle (NOT started — the caller starts it and wires the injection
+ * with the actually-bound port). Lives outside `startBot` only for readability;
+ * it captures the same module-level state the rest of bot.ts uses.
+ */
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const ledger = new RunLedger();
   const delivery = createScheduleDelivery({
@@ -14080,7 +14081,7 @@ export async function startBot(): Promise<void> {
       checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
       serializeKey: keyToString,
     }),
-    prepareWakeUpSession: ensureSessionForWakeUp,
+    prepareWakeUpSession: ensureSessionByResume,
     forwardWakeUp: forwardRequestWakeUp,
     deliverAlert: async (key, request, reason) => {
       const lookup = getAnswerSink(answerSinks, key);
