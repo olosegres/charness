@@ -229,57 +229,6 @@ describe('the bot holds and releases them (R23)', () => {
     assert.match(getFunction('async function startAgentSession('), /void replayBufferedPrompts\(key\);/);
   });
 
-  it('the resume forwards the nudge, or the untaken request prompt of a limit wait (R21)', () => {
-    const fire = getFunction('async function fireApiRetryWithLocale(');
-    assert.match(fire, /untakenRequestPrompt: entry\.kind === 'usageLimit'\n\s*\? getPromptNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.getOpenRequest\(key\)\)\n\s*: undefined,/);
-    assert.match(fire, /await deliverPromptOrBuffer\(key, resume\.text, startupPromptBuffer\.checkIsStarting\(k\)\);/);
-    assert.match(fire, /isRequestPrompt: resume\.isRequestPrompt,/);
-  });
-
-  it('the resume reaches a session another start has under way through the startup buffer, never straight to the adapter', () => {
-    const fire = getFunction('async function fireApiRetryWithLocale(');
-    assert.doesNotMatch(fire, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
-    // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
-    assert.match(getFunction('function deliverPromptOrBuffer('), /return deliverPromptWithDeps\(promptDeliveryDeps, key, promptText, isStarting\);/);
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
-  });
-
-  it('a resume with no session to nudge stops there: no forward, no continuation watch, the open request left to the wake-up engine', () => {
-    const fire = getFunction('async function fireApiRetryWithLocale(');
-    const tryStart = fire.indexOf('  try {');
-    const ensure = fire.indexOf('const ensured = await ensureAgentSession(key);');
-    const guard = fire.indexOf('if (!ensured.ok) {');
-    const stop = fire.indexOf('return;', guard);
-    const deliver = fire.indexOf('await deliverPromptOrBuffer(');
-    const track = fire.indexOf('await requestWakeUpEngine?.trackContinuationTurn(');
-    assert.ok(tryStart > 0 && ensure > tryStart && guard > ensure && stop > guard && deliver > stop && track > deliver,
-      'inside the try (so `finally` still releases the kick), the result is checked BEFORE the nudge is delivered and watched');
-    const guardBody = fire.slice(guard, deliver);
-    assert.match(guardBody, /console\.warn\(`\[apiRetry\] not resuming \$\{k\}: no session \(\$\{ensured\.reason\}\); an open request is left to the wake-up engine`\);\n.*\n\s*if \(checkIsTelegramKey\(key\)\) void replyToThread\(key, ensured\.message\);\n\s*return;/,
-      'a topic is told why nothing resumed');
-    const notice = fire.indexOf('void surfaceLimitResumedNotice(key);');
-    assert.ok(notice > stop && notice < deliver, 'the "resuming" notice (pinned for a limit) is posted only once there is a session to resume');
-    assert.doesNotMatch(guardBody, /closeRequest|cancelConversation|cancelApiRetry|limitHeldPrompts\./, 'the request and what was held are not dropped');
-    assert.match(fire, /finally \{\n\s*apiRetryKicksInFlight\.delete\(k\);/);
-  });
-
-  it('a resume\'s topic notices go to a Telegram topic only — a tracker issue has no topic (R6)', () => {
-    const fire = getFunction('async function fireApiRetryWithLocale(');
-    const telegramBranch = /if \(checkIsTelegramKey\(key\)\) \{\n\s*if \(entry\.kind === 'usageLimit'\) void surfaceLimitResumedNotice\(key\);\n\s*else void replyToThread\(key, t\('apiRetry\.resuming'\)\);\n\s*\}/;
-    assert.match(fire, telegramBranch);
-    const telegramFailureReply = /if \(checkIsTelegramKey\(key\)\) void replyToThread\(key, ensured\.message\);/;
-    assert.match(fire, telegramFailureReply);
-    assert.equal(fire.replace(telegramBranch, '').replace(telegramFailureReply, '').match(/surfaceLimitResumedNotice\(|replyToThread\(/), null, 'no notice outside the branch');
-  });
-
-  it('a limit resume continues a tracker issue in its own session; Telegram\'s resume is unchanged (R26)', () => {
-    const fire = getFunction('async function fireApiRetryWithLocale(');
-    const resume = fire.indexOf('if (!checkIsTelegramKey(key)) await resumeOwnSessionUnlessStarting(key);');
-    const ensure = fire.indexOf('await ensureAgentSession(key);');
-    assert.ok(resume > 0 && ensure > resume, 'resumed by id before a session would be started fresh');
-    assert.match(getFunction('async function resumeOwnSessionUnlessStarting('), /if \(!startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)\) await ensureSessionByResume\(key\);/);
-  });
-
   it('a tracker\'s limit texts name the instance\'s timezone; a topic\'s do not (R31)', () => {
     const texts = getFunction('function getLimitWaitTexts(');
     assert.match(texts, /const zoneSuffix = checkIsTelegramKey\(key\) \? '' : ` \$\{getCurrentTimezone\(\)\}`;/);

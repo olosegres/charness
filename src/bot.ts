@@ -165,6 +165,7 @@ import type { OutboundHints } from './platform/outbound';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { restoreApiRetryTimers, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
@@ -1463,40 +1464,17 @@ async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
 /** One minute in ms — used only to render the "in N min" notices. */
 const apiRetryMsPerMinute = 60_000;
 
-/**
- * Catch-up delay for a retry whose `fireAt` is already in the past at boot.
- * Small (not zero) so the kick is armed via `setTimeout` instead of firing
- * synchronously in the adopt tick — a freshly-adopted Claude pane may still be
- * repainting, and the Enter-verification in `sendInput` covers the residual race.
- */
-const apiRetryCatchUpDelayMs = 5_000;
-
-/**
- * @description One thread's live armed-retry timer + bookkeeping. The persisted
- * twin lives in `state.json` (`ApiRetryState`); this in-memory entry additionally
- * holds the actual `NodeJS.Timeout` (not serialisable) and `firedAt` (set when
- * the timer fires) so {@link decideRetryAction} can tell a same-episode
- * recurrence (escalate) from a fresh one (reset to attempt 1).
- */
-interface ApiRetryTimerEntry {
-  /** The armed timer, or `null` once it has fired (record kept until outcome known). */
-  timer: NodeJS.Timeout | null;
-  /** 1-based attempt the current/last timer was armed for. */
-  attempt: number;
-  /** Error class that armed it. */
-  kind: AgentApiErrorClass['kind'];
-  /** Epoch ms when the timer fired, or `null` while still pending. */
-  firedAt: number | null;
-  /** Epoch ms the timer is due (mirrors the persisted `fireAt`). It IDENTIFIES the
-   *  episode for the «skip once» button, whose stale keyboard must never cancel a
-   *  later one. */
-  fireAt: number;
-  /** How a usage-limit wait ends, for the limit answer of a request opened during it.
-   *  Absent for a record re-armed at boot (`state.json` keeps only the instant). */
-  limitWait?: UsageLimitWait;
-}
-
 const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
+
+/**
+ * @description Drop the thread's saved retry (`state.json` `apiRetries`). The saved
+ * record means ARMED: it is set when a retry is armed and cleared whenever the
+ * retry stops being armed — a cancel, a give-up, or a kick that ran its course — so
+ * a restart never restores a retry that is already spent.
+ */
+function clearSavedApiRetry(key: SessionKey): void {
+  void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
+}
 /**
  * Threads whose retry timer FIRED and whose "continue" nudge is not forwarded
  * yet ({@link fireApiRetry}). The retry is no longer armed then, but the idle
@@ -1615,7 +1593,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
 
   if (action.action === 'giveUp') {
     void replyToThread(key, t('apiRetry.giveUp', { attempts: action.attempts }));
-    void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
+    clearSavedApiRetry(key);
     apiRetryTimers.delete(k);
     // Nothing resumes this limit any more: a reminder would hit it and arm a fresh episode, endlessly.
     if (cls.kind === 'usageLimit') void requestWakeUpEngine?.stopWakingForLimitWait(key);
@@ -1690,17 +1668,20 @@ function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: stri
  * an OpenCode `session.error` it still is, so `ensureAgentSession` is a no-op and
  * the nudge lands in the SAME live session — context intact; only a
  * genuinely-dead session is restarted via the thread's last adapter), tell the
- * user we're resuming, then forward a neutral "continue" nudge. With no session
- * to resume the topic gets the reason instead, and nothing is forwarded.
+ * user we're resuming, then hand over a neutral "continue" nudge. With no session
+ * to resume the topic gets the reason instead, and nothing is forwarded. The kick
+ * itself lives in `apiRetryKick.ts`, on the ports {@link apiRetryKickDeps}.
  *
- * CRITICAL: the kick goes through {@link forwardPromptToAgent} directly, NEVER a
- * scheduler wait-for-idle path — OpenCode's optimistic `isBusy` is not cleared on
- * `session.error`, so a wait-for-idle kick would stall the full 10-min cap.
+ * CRITICAL: the nudge goes through the prompt path ({@link deliverPromptOrBuffer}),
+ * NEVER a scheduler wait-for-idle path — OpenCode's optimistic `isBusy` is not
+ * cleared on `session.error`, so a wait-for-idle kick would stall the full 10-min cap.
  *
- * The armed record is intentionally KEPT after firing (timer nulled, `firedAt`
+ * The IN-MEMORY entry is intentionally KEPT after firing (timer nulled, `firedAt`
  * stamped): a recurrence within the grace window re-arms at attempt+1 via
- * {@link handleApiError}; a recovery leaves a harmless stale record that the
- * next, later error resets to attempt 1.
+ * {@link handleApiError}; a recovery leaves a harmless stale entry that the next,
+ * later error resets to attempt 1. The SAVED record is not: it means ARMED, so the
+ * kick clears it once it has run its course ({@link clearSavedApiRetry}), or a
+ * restart would restore it and fire the kick again.
  *
  * The notice differs by class: a `usageLimit` wait can have lasted hours, so its
  * resume is the PINNED, notifying {@link surfaceLimitResumedNotice} (the operator
@@ -1709,61 +1690,38 @@ function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: stri
  * relentlessly.
  */
 async function fireApiRetry(key: SessionKey): Promise<void> {
-  return withThreadLocale(key, () => fireApiRetryWithLocale(key));
+  return withThreadLocale(key, () => runApiRetryKick(apiRetryKickDeps, key));
 }
 
-async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
-  const k = keyToString(key);
-  const entry = apiRetryTimers.get(k);
-  if (!entry) return;
-  // Claimed in the same tick the retry stops being armed (see `apiRetryKicksInFlight`).
-  apiRetryKicksInFlight.add(k);
-  entry.timer = null;
-  entry.firedAt = Date.now();
-
-  try {
-    // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
-    // would not know the work the limit interrupted.
-    if (!checkIsTelegramKey(key)) await resumeOwnSessionUnlessStarting(key);
-    const ensured = await ensureAgentSession(key);
-    if (!ensured.ok) {
-      // No session to nudge (unbound, no adapter, a start that failed): a forward would hit a dead adapter, and
-      // watching a turn that never started would only mislead the wake-ups. The open request, if any, stays
-      // open for the wake-up engine (its backstop / retries); what was held stays held for the next session.
-      console.warn(`[apiRetry] not resuming ${k}: no session (${ensured.reason}); an open request is left to the wake-up engine`);
-      // A topic is told why nothing resumed — it waits for the operator's next message now (R6: not a tracker issue).
-      if (checkIsTelegramKey(key)) void replyToThread(key, ensured.message);
-      return;
-    }
-    // Announced only once there is a session to resume: a pinned "resuming" over a start that failed would
-    // read as work under way. The notices are topic messages (a pin among them): a tracker issue hears about
-    // the wait from the request's own answer (`announceLimitWait`), and has no topic for the rest (R6).
-    if (checkIsTelegramKey(key)) {
-      if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
-      else void replyToThread(key, t('apiRetry.resuming'));
-    }
-    // The nudge is NOT a request: the open request (if any) continues under it. A
-    // request whose prompt never reached the agent — the wait held it (R23) — gets
-    // that prompt instead (R21). Prompts held during the wait ride whichever it is.
-    const resume = getLimitResumeMessage({
-      continueNudge: t('apiRetry.continueNudge'),
-      untakenRequestPrompt: entry.kind === 'usageLimit'
-        ? getPromptNotTakenIn(requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key))
-        : undefined,
-    });
-    // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
-    // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
-    await deliverPromptOrBuffer(key, resume.text, startupPromptBuffer.checkIsStarting(k));
-    await requestWakeUpEngine?.trackContinuationTurn(key, {
-      isCountersReset: entry.kind === 'usageLimit',
-      isRequestPrompt: resume.isRequestPrompt,
-    });
-  } catch (e) {
-    console.error('[apiRetry] kick failed:', e instanceof Error ? e.message : e);
-  } finally {
-    apiRetryKicksInFlight.delete(k);
-  }
-}
+/**
+ * The ports of the retry kick (`apiRetryKick.ts`): the bot's own retry map and
+ * in-flight set, and what the kick does to the world.
+ */
+const apiRetryKickDeps: ApiRetryKickDeps = {
+  entries: apiRetryTimers,
+  kicksInFlight: apiRetryKicksInFlight,
+  now: () => Date.now(),
+  resumeOwnSession: resumeOwnSessionUnlessStarting,
+  ensureSession: (key) => ensureAgentSession(key),
+  postTopicNotice: (key, notice) => {
+    if (notice.kind === 'noSession') void replyToThread(key, notice.message);
+    else if (notice.retryKind === 'usageLimit') void surfaceLimitResumedNotice(key);
+    else void replyToThread(key, t('apiRetry.resuming'));
+  },
+  getResumeMessage: (key, retryKind) => getLimitResumeMessage({
+    continueNudge: t('apiRetry.continueNudge'),
+    untakenRequestPrompt: retryKind === 'usageLimit'
+      ? getPromptNotTakenIn(requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key))
+      : undefined,
+  }),
+  // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
+  // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
+  deliverNudge: (key, text) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key))),
+  trackContinuation: async (key, options) => {
+    await requestWakeUpEngine?.trackContinuationTurn(key, options);
+  },
+  clearSavedRetry: clearSavedApiRetry,
+};
 
 /**
  * @description Post a usage-limit wait (request/answer core S5): as the bot's own
@@ -1855,7 +1813,7 @@ function cancelApiRetry(key: SessionKey): void {
   // prompt forwarded to the session — the operator's message that cancelled the
   // wait — or go to the next session on their own (`limitHeldPrompts`).
   apiRetryTimers.delete(k);
-  void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
+  clearSavedApiRetry(key);
   // The limit episode is over for this thread → retire its two one-shot markers.
   // Unlike the logged-out notice below, BOTH are safe to drop here: the pinned
   // "work resumed" message announces a PAST event (nothing re-posts it), and the
@@ -13435,39 +13393,29 @@ function restorePendingQuestions(): void {
  * {@link restorePendingQuestions}) so each thread's session is already
  * adopted/resumed and the kick lands in a live session.
  *
- * For each record we re-populate `apiRetryTimers` and arm one unref'd timer at
- * `fireAt - now` (clamped to `maxTimeoutMs`). A `fireAt` already in the past
- * fires ONE catch-up after {@link apiRetryCatchUpDelayMs} — not synchronously in
- * the adopt tick, since a freshly-adopted Claude pane may still be repainting.
- * The arm notice is NOT re-posted (the user saw it before the restart); the
- * `↻ resuming` notice fires when the timer fires.
+ * The work is `restoreApiRetryTimers` (`apiRetryKick.ts`): each record re-populates
+ * `apiRetryTimers` with one unref'd timer at `fireAt - now` (a past one fires ONE
+ * catch-up after a short delay, not in the adopt tick). A saved record means ARMED
+ * — a retry whose kick already ran is not in the state file any more — so what is
+ * restored here has not fired yet. The arm notice is NOT re-posted (the user saw it
+ * before the restart); the `↻ resuming` notice fires when the timer fires.
+ *
+ * A retry of a platform this instance does not serve is neither armed nor
+ * dropped (Jira plan J3b, R10): its kick would start that conversation's session
+ * here, under this instance's environment and tmux server.
  */
 function restoreApiRetries(): void {
-  let restored = 0;
-  for (const [keyStr, record] of Object.entries(state.getApiRetries())) {
-    let key: SessionKey;
-    try {
-      key = keyFromString(keyStr);
-    } catch {
-      // Hand-edited / corrupt key (can't come from `keyToString`): skip it,
-      // keep booting. Tolerated-and-skipped, like restorePendingQuestions.
-      continue;
-    }
-    const dueInMs = record.fireAt - Date.now();
-    const delayMs = dueInMs > 0 ? Math.min(dueInMs, maxTimeoutMs) : apiRetryCatchUpDelayMs;
-    const timer = setTimeout(() => {
-      void fireApiRetry(key);
-    }, delayMs);
-    timer.unref?.();
-    apiRetryTimers.set(keyStr, {
-      timer,
-      attempt: record.attempt,
-      kind: record.kind,
-      firedAt: null,
-      fireAt: record.fireAt,
-    });
-    restored += 1;
-  }
+  const restored = restoreApiRetryTimers(
+    {
+      entries: apiRetryTimers,
+      now: () => Date.now(),
+      isServed: checkIsTelegramKey,
+      fire: (key) => {
+        void fireApiRetry(key);
+      },
+    },
+    state.getApiRetries(),
+  );
   console.log(`[reattach] api retries: re-armed ${restored}`);
 }
 

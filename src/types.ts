@@ -219,7 +219,9 @@ export interface AgentApiErrorClass {
  * prompt. No adapter name either — the kick reuses the thread's existing
  * last-used adapter via `ensureAgentSession`. All fields are serialisable, so the
  * whole record is persisted to `state.json` and re-armed at boot — a multi-hour
- * usage-limit wait survives a restart.
+ * usage-limit wait survives a restart. The record means ARMED: it is removed when
+ * the retry stops being armed (cancelled, given up, or its kick ran its course), so a
+ * restart never restores a retry that is already spent.
  */
 export interface ApiRetryState {
   kind: AgentApiErrorClass['kind'];

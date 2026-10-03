@@ -391,7 +391,9 @@ export interface StateV1 {
    * otherwise lost, so an agent that died on a rate-limit / usage-limit error
    * would never get its scheduled nudge — especially a multi-hour usage-limit
    * wait. The persisted `fireAt` lets boot re-arm the timer (or fire one
-   * immediate catch-up when the time already passed). Optional so older state
+   * immediate catch-up when the time already passed). A record means ARMED: it is
+   * cleared once the retry's kick has run its course, else every restart would fire
+   * the kick again. Optional so older state
    * files stay valid — a missing value is an empty set. Restored at boot only
    * after sessions are reattached, so the kick lands in a live session.
    */
