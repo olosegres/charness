@@ -10136,7 +10136,9 @@ async function reattachExistingSessions(
             console.warn(`[reattach] claude-json-stream ${keyToString(key)} refused: ${workDirDecision.message}`);
             await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
             jsonKilled += 1;
-            if (!opts.quietReattach) replyToThread(key, workDirDecision.message).catch(() => {});
+            // The vanished-folder notice is a topic message: a tracker conversation (json-stream only, R14)
+            // has no topic and hears from its agent through `answer_request` alone (R2).
+            if (!opts.quietReattach && checkIsTelegramKey(key)) replyToThread(key, workDirDecision.message).catch(() => {});
             continue;
           }
           if (await claudeJsonAdapter.adoptExistingTmuxSession(
@@ -10164,7 +10166,8 @@ async function reattachExistingSessions(
       const workDirDecision = getWorkDirStartDecision(key);
       if (!workDirDecision.ok) {
         console.warn(`[reattach] claude-json-stream ${keyToString(key)} refused: ${workDirDecision.message}`);
-        if (!opts.quietReattach) replyToThread(key, workDirDecision.message).catch(() => {});
+        // A topic message only — a tracker conversation has no topic (R2, as above).
+        if (!opts.quietReattach && checkIsTelegramKey(key)) replyToThread(key, workDirDecision.message).catch(() => {});
         continue;
       }
       const workDir = workDirDecision.workDir;
