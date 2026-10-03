@@ -75,7 +75,8 @@ export interface JiraInboundDeps {
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
   bindConversation: (key: SessionKey, folder: string) => Promise<void>;
-  createRequest: (key: SessionKey, origin: RequestOrigin) => Promise<{ id: string }>;
+  /** Open the request; `createPrompt` builds its prompt from its id, which the request keeps for a re-post (R21). */
+  createRequest: (key: SessionKey, origin: RequestOrigin, createPrompt: (requestId: string) => string) => Promise<{ id: string }>;
   /** Post the request's prompt to the issue's session (and start watching its turn). */
   postRequest: (key: SessionKey, requestId: string, prompt: string) => Promise<void>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
@@ -219,17 +220,18 @@ export class JiraInbound {
     const details = await deps.client.getIssue(issue.key, jiraPromptIssueFields);
     const key = makeJiraKey(issue.key);
     await deps.bindConversation(key, project.folder);
-    const request = await deps.createRequest(key, {
-      kind: 'trackerEvent',
-      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, requesterAccountId: requester?.accountId ?? '' },
-    });
-    const prompt = buildJiraRequestPrompt({
-      requestId: request.id,
+    const createPrompt = (requestId: string): string => buildJiraRequestPrompt({
+      requestId,
       issue: details,
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,
     });
+    const request = await deps.createRequest(key, {
+      kind: 'trackerEvent',
+      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, requesterAccountId: requester?.accountId ?? '' },
+    }, createPrompt);
+    const prompt = createPrompt(request.id);
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of
     // the poll must not wait for it; until the post settles, the issue is skipped.
     this.postingIssueKeys.add(issue.key);

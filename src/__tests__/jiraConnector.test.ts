@@ -231,7 +231,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('a posted request is watched by the wake-up engine, after the post', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
     const post = deps.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
-    const watch = deps.indexOf('await requestWakeUpEngine?.trackForwardedTurn(key, requestId);');
+    const watch = deps.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });');
     assert.ok(post > 0 && watch > post);
   });
 

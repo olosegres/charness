@@ -11020,11 +11020,12 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
     },
-    createRequest: (key, origin) => requestLedger.createRequest(key, origin),
+    createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     postRequest: async (key, requestId, prompt) => {
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      await requestWakeUpEngine?.trackForwardedTurn(key, requestId);
+      // A held prompt is tracked when the limit wait's resume delivers it.
+      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
     },
   };
 }

@@ -206,6 +206,7 @@ describe('the bot holds and releases them (R23)', () => {
 
   it('the scheduler and the Jira connector post through the same hold', () => {
     assert.match(getFunction('function createSessionPostDeps('), /holdForLimitResume: \(conversationKey, text, heldText\) => holdPromptForLimitResume\(keyFromString\(conversationKey\), text, heldText\),/);
+    assert.match(getFunction('function createJiraSessionDeps('), /\.\.\.createSessionPostDeps\(\),/);
     assert.match(getFunction('function wireScheduler('), /\.\.\.createSessionPostDeps\(\),/);
   });
 
@@ -233,5 +234,9 @@ describe('the bot holds and releases them (R23)', () => {
     const texts = getFunction('function getLimitWaitTexts(');
     assert.match(texts, /const zoneSuffix = checkIsTelegramKey\(key\) \? '' : ` \$\{getCurrentTimezone\(\)\}`;/);
     assert.match(texts, /const time = `\$\{formatLocalClockWithDateIfNotToday\([^`]+\)\}\$\{zoneSuffix\}`;/);
+  });
+
+  it('a held Jira request is watched when the resume delivers it, not when it was held', () => {
+    assert.match(getFunction('function createJiraSessionDeps('), /if \(!posted\.isHeld\) await requestWakeUpEngine\?\.trackForwardedTurn\(key, requestId, \{ isRequestPrompt: true \}\);/);
   });
 });

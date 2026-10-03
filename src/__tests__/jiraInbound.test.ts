@@ -56,6 +56,8 @@ interface Recorded {
   searches: JiraSearchRequest[];
   origins: RequestOrigin[];
   prompts: string[];
+  /** What each request was opened with, to keep for a re-post (R21). */
+  storedPrompts: string[];
   parked: Array<{ issueKey: string; requester: JiraAccount | null }>;
 }
 
@@ -70,7 +72,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], origins: [], prompts: [], parked: [] };
+    recorded = { calls: [], searches: [], origins: [], prompts: [], storedPrompts: [], parked: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -117,10 +119,11 @@ describe('JiraInbound', () => {
       bindConversation: async (key, folder) => {
         recorded.calls.push(`bind ${keyToString(key)} ${folder}`);
       },
-      createRequest: async (key, origin) => {
+      createRequest: async (key, origin, createPrompt) => {
         requestCount += 1;
         recorded.origins.push(origin);
         recorded.calls.push(`create ${keyToString(key)}`);
+        recorded.storedPrompts.push(createPrompt(`req_${requestCount}`));
         return { id: `req_${requestCount}` };
       },
       postRequest: async (key, requestId, prompt) => {
@@ -160,6 +163,15 @@ describe('JiraInbound', () => {
     assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-12 assigned to you by Requester\]/);
     assert.match(recorded.prompts[0], /Link: https:\/\/example\.atlassian\.net\/browse\/PROJ-12/);
     assert.equal(recorded.searches[0].isChangelogExpanded, true);
+  });
+
+  it('R21: the request keeps exactly the prompt that is posted, header and all', async () => {
+    searchPages = [{ issues: [createIssue('PROJ-12')], isLast: true }];
+    await createInbound().pollOnce();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(recorded.storedPrompts.length, 1);
+    assert.equal(recorded.storedPrompts[0], recorded.prompts[0]);
+    assert.match(recorded.storedPrompts[0], /^\[Request req_1 · from: /);
   });
 
   it('the same trigger is never a second request — in the next poll, and after a restart', async () => {
