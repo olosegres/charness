@@ -79,12 +79,26 @@ const replacementCharacter = '\uFFFD';
 /**
  * A `<` that does NOT open a CommonMark autolink (`<scheme:address>`,
  * `<name@host>`). An autolink is a link token, never HTML — a tag name holds
- * neither `:` nor `@` — so it keeps its `<` and stays a link.
+ * neither `:` nor `@` — so it keeps its `<` and stays a link. An address may
+ * not start with `!` or `?`: `<!` and `<?` open HTML (a comment, a
+ * declaration, a processing instruction) before an autolink is ever read, and
+ * would hide the rest of the answer.
  */
 const nonAutolinkAngleBracketRe = new RegExp(
-  '<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\s<>]*>|[A-Za-z0-9.!#$%&\'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>)',
+  '<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\s<>]*>|[A-Za-z0-9.#$%&\'*+/=^_`{|}~-][A-Za-z0-9.!#$%&\'*+/=?^_`{|}~-]*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>)',
   'g',
 );
+/**
+ * In prose, CommonMark reads `\<` as an escaped `<`; hidden from the lexer the
+ * `<` was no escape and the backslash stayed. Code, and a link's text (an
+ * autolink's text is its address), keep the backslash as written.
+ */
+const optionallyEscapedPlaceholderRe = new RegExp(`\\\\?${angleBracketPlaceholder}`, 'g');
+
+function getRestoredText(node: AdfNode, isInCodeBlock: boolean): string {
+  const isLiteral = isInCodeBlock || (node.marks ?? []).some((mark) => mark.type === 'code' || mark.type === 'link');
+  return (node.text ?? '').replace(isLiteral ? angleBracketPlaceholderRe : optionallyEscapedPlaceholderRe, '<');
+}
 
 function getRestoredAttributeValue(value: AdfAttributeValue): AdfAttributeValue {
   if (typeof value === 'string') return value.replace(angleBracketPlaceholderRe, '<');
@@ -99,13 +113,13 @@ function getRestoredAttributes(attrs: Record<string, AdfAttributeValue> | undefi
   return attrs && Object.fromEntries(Object.entries(attrs).map(([name, value]) => [name, getRestoredAttributeValue(value)]));
 }
 
-function getRestoredNodes(nodes: AdfNode[]): AdfNode[] {
+function getRestoredNodes(nodes: AdfNode[], isInCodeBlock = false): AdfNode[] {
   return nodes.map((node) => ({
     ...node,
-    ...(node.text !== undefined ? { text: node.text.replace(angleBracketPlaceholderRe, '<') } : {}),
+    ...(node.text !== undefined ? { text: getRestoredText(node, isInCodeBlock) } : {}),
     ...(node.attrs ? { attrs: getRestoredAttributes(node.attrs) } : {}),
     ...(node.marks ? { marks: node.marks.map((mark) => (mark.attrs ? { ...mark, attrs: getRestoredAttributes(mark.attrs) } : mark)) } : {}),
-    ...(node.content ? { content: getRestoredNodes(node.content) } : {}),
+    ...(node.content ? { content: getRestoredNodes(node.content, isInCodeBlock || node.type === 'codeBlock') } : {}),
   }));
 }
 
@@ -224,18 +238,22 @@ function getMarkdownBlocks(markdown: string): string[] {
   return blocks;
 }
 
+/** The first half of a character outside the BMP: a cut right after it leaves a lone surrogate on each side. */
+const highSurrogateRe = /^[\uD800-\uDBFF]$/;
+
 /**
  * A line cut into parts of at most `maxChars`, each cut after the last space
  * that fits (the space stays, so the text is unchanged) — a cut inside a word
  * would split it and the emphasis around it across two comments. A run with no
- * space is cut hard.
+ * space is cut hard, never between the two halves of a surrogate pair.
  */
 function getLineParts(line: string, maxChars: number): string[] {
   const parts: string[] = [];
   let rest = line;
   while (rest.length > maxChars) {
     const lastSpace = rest.lastIndexOf(' ', maxChars - 1);
-    const cutAt = lastSpace > 0 ? lastSpace + 1 : maxChars;
+    const hardCutAt = maxChars > 1 && highSurrogateRe.test(rest[maxChars - 1] ?? '') ? maxChars - 1 : maxChars;
+    const cutAt = lastSpace > 0 ? lastSpace + 1 : hardCutAt;
     parts.push(rest.slice(0, cutAt));
     rest = rest.slice(cutAt);
   }

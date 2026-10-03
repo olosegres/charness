@@ -82,6 +82,24 @@ describe('convertMarkdownToAdf keeps HTML as literal text (R17)', () => {
     assert.deepEqual(link.marks, [{ type: 'link', attrs: { href: 'https://example.com/x' } }]);
     assert.deepEqual(convertToTexts('a \uE000 b'), ['a \uFFFD b']);
   });
+
+  it('an address-shaped <!\u2026 or <?\u2026 is HTML to the lexer, never an autolink: the rest of the answer survives', () => {
+    // `<?` opens a processing instruction and `<!--` a comment that run to the end of the answer.
+    for (const opener of ['<?@a.bc>', '<!--@x.yz>', '<!A@b.cd>', '<?x@host.example>']) {
+      const texts = convertToTexts(`Intro.\n\n${opener} kept\n\nand the next paragraph`);
+      assert.equal(texts.join(''), `Intro.${opener} keptand the next paragraph`, opener);
+    }
+  });
+
+  it('an escaped \\< is a plain < in prose, and stays as written in code', () => {
+    assert.deepEqual(convertToTexts('List\\<String\\>'), ['List<String', '>']);
+    assert.deepEqual(convertToTexts('a \\\\<b>'), ['a ', '\\', '<b>']);
+    assert.deepEqual(convertToTexts('`List\\<T>`'), ['List\\<T>']);
+    // A bare address is linked as written: its text must not drift from its target.
+    const [, link] = convertMarkdownToAdf('see https://a.example/x\\<y').content.flatMap(getTextNodes);
+    assert.deepEqual([link.text, link.marks], ['https://a.example/x\\<y', [{ type: 'link', attrs: { href: 'https://a.example/x\\<y' } }]]);
+    assert.deepEqual(getTextNodes(convertMarkdownToAdf('```\nList\\<T>\n```').content[0]).map((node) => node.text), ['List\\<T>']);
+  });
 });
 
 describe('getAdfText', () => {
@@ -219,6 +237,16 @@ describe('splitMarkdownForComments', () => {
   it('a line longer than a comment is cut, nothing lost', () => {
     const chunks = splitMarkdownForComments('y'.repeat(25), 10);
     assert.deepEqual(chunks, ['y'.repeat(10), 'y'.repeat(10), 'y'.repeat(5)]);
+  });
+
+  it('a hard cut never splits a character outside the BMP: a lone surrogate is not valid text', () => {
+    const line = `a${'😀'.repeat(10)}`;
+    const chunks = splitMarkdownForComments(line, 6);
+    for (const chunk of chunks) {
+      assert.ok(chunk.length <= 6, chunk);
+      assert.doesNotMatch(chunk, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/, JSON.stringify(chunk));
+    }
+    assert.equal(chunks.join(''), line);
   });
 
   it('a longer fence is closed only by a fence at least as long without an info string', () => {
