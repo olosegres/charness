@@ -164,6 +164,7 @@ import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { OutboundHints } from './platform/outbound';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
+import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
@@ -707,6 +708,9 @@ const telegramOutbound = createTelegramConnectorOutbound({
   setTypingLoader: (key, isActive) => {
     if (isActive) startTypingLoader(key);
     else stopTypingLoader(key);
+  },
+  sendTypingPing: (key) => {
+    sendThreadTypingIndicator(key).catch(() => {});
   },
   sendFiles: (threadKeyString, request) => sendFilesToThread(threadKeyString, request),
   encodeKey: keyToString,
@@ -1716,8 +1720,12 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   entry.timer = null;
   entry.firedAt = Date.now();
 
-  if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
-  else void replyToThread(key, t('apiRetry.resuming'));
+  // The notices are topic messages (a pin among them): a tracker issue hears about the wait from the
+  // request's own answer (`announceLimitWait`), and has no topic for the rest (R6).
+  if (checkIsTelegramKey(key)) {
+    if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
+    else void replyToThread(key, t('apiRetry.resuming'));
+  }
   try {
     // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
     // would not know the work the limit interrupted.
@@ -1732,7 +1740,9 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
         ? getPromptNotTakenIn(requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key))
         : undefined,
     });
-    await forwardPromptToAgent(key, getThreadAdapter(key), resume.text);
+    // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
+    // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
+    await deliverPromptOrBuffer(key, resume.text, startupPromptBuffer.checkIsStarting(k));
     await requestWakeUpEngine?.trackContinuationTurn(key, {
       isCountersReset: entry.kind === 'usageLimit',
       isRequestPrompt: resume.isRequestPrompt,
@@ -4721,11 +4731,8 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // non-self-greeting agent (OpenCode/terminal) emits nothing until the user
   // prompts, so a one-shot typing ping is enough — its `ready` notice (below)
   // tells the user the session is up; a sustained loader would dangle forever.
-  if (adapter.selfGreetsOnStart) {
-    telegramOutbound.setActivity(key, 'working');
-  } else {
-    sendThreadTypingIndicator(key).catch(() => {});
-  }
+  // A surface with no such cue (a tracker issue, R6) ignores `starting`.
+  telegramOutbound.setActivity(key, adapter.selfGreetsOnStart ? 'working' : 'starting');
 
   try {
     await adapter.startSession(key, workDir, args);
@@ -9570,10 +9577,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    const isFirstBuffered = startupPromptBuffer.addPrompt(kStr, text);
-    if (isFirstBuffered) {
-      await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
-    }
+    await deliverPromptOrBuffer(key, text, true);
     return;
   }
 
@@ -9882,10 +9886,7 @@ async function processVoiceJob(
 
     // Session is mid-startup → buffer the transcript and replay it once ready.
     if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      const isFirstBuffered = startupPromptBuffer.addPrompt(keyToString(key), transcript);
-      if (isFirstBuffered) {
-        await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
-      }
+      await deliverPromptOrBuffer(key, transcript, true);
       return;
     }
 
@@ -10054,30 +10055,23 @@ async function downloadIncomingFile(
 
 /**
  * @description Deliver one already-built prompt to the thread's agent,
- * honouring the startup window: mid-startup the prompt is buffered (replays in
- * order when ready, exactly like a text prompt typed during boot); otherwise it
- * is forwarded immediately through the normal choke point. This is the single
- * "buffer-or-forward" unit shared by file/album intake and the `/schedule`
- * command (S7) so the startup-window handling never drifts between them.
- *
- * `isStarting` is passed in (not read here) because the album collector
- * captures it AT FLUSH TIME — a session that finished booting mid-burst must
- * forward, not buffer.
+ * honouring the startup window (`utils/promptDelivery.ts`): mid-startup the
+ * prompt is buffered, otherwise it is forwarded immediately through the normal
+ * choke point. This is the single "buffer-or-forward" unit shared by the text and
+ * voice handlers' mid-startup buffering, file/album intake, the `/schedule` command
+ * (S7), the Jira connector's posts and an API-error retry's "continue" nudge, so the
+ * startup-window handling never drifts between them.
  */
-async function deliverPromptOrBuffer(
-  key: SessionKey,
-  promptText: string,
-  isStarting: boolean,
-): Promise<void> {
-  const kStr = keyToString(key);
-  if (isStarting) {
-    const isFirstBuffered = startupPromptBuffer.addPrompt(kStr, promptText);
-    if (isFirstBuffered) {
-      await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
-    }
-    return;
-  }
-  await forwardPromptToAgent(key, getThreadAdapter(key), promptText);
+const promptDeliveryDeps: PromptDeliveryDeps = {
+  startupBuffer: startupPromptBuffer,
+  forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),
+  announceQueued: async (key) => {
+    await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
+  },
+};
+
+function deliverPromptOrBuffer(key: SessionKey, promptText: string, isStarting: boolean): Promise<void> {
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting);
 }
 
 /**

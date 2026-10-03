@@ -95,6 +95,8 @@ export interface TelegramOutboundDeps {
   pinMessage: (key: SessionKey, messageId: number) => Promise<void>;
   /** Start (`true`) or stop (`false`) the repeating `sendChatAction('typing')` loop. */
   setTypingLoader: (key: SessionKey, isActive: boolean) => void;
+  /** One `sendChatAction('typing')`, no loop — a booting session that has nothing to stream. */
+  sendTypingPing: (key: SessionKey) => void;
   /** The reusable file-send service, already composed with the Telegram gateway. */
   sendFiles: SendFilesToThread;
   /** Serialize a key for the string-keyed file-send service. */
@@ -140,6 +142,10 @@ export function createTelegramConnectorOutbound(deps: TelegramOutboundDeps): Con
     },
 
     setActivity(key: SessionKey, activity: ActivityState): void {
+      if (activity === 'starting') {
+        deps.sendTypingPing(key);
+        return;
+      }
       deps.setTypingLoader(key, activity === 'working');
     },
 

@@ -20,9 +20,13 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *    would be a second recovery of the same turn;
  *  - an API-error retry or limit resume being KICKED: from the moment its timer
  *    fired until its "continue" nudge was forwarded the retry is no longer armed,
- *    yet the idle the error left behind is not a turn end either.
+ *    yet the idle the error left behind is not a turn end either;
+ *  - a session START under way: a request's first post is starting the session it
+ *    will run in, so nothing has gone quiet — without this the sweep reads the
+ *    request as one nobody works on and wakes it (or raises an alert) once the
+ *    backstop window is shorter than the start.
  *
- * A session still starting has not taken in what was forwarded to it: the
+ * A session still starting has not taken in what was forwarded to it either: the
  * prompt waits in the startup buffer, while a backend may already report itself
  * active with nothing unread.
  */
@@ -63,7 +67,8 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       deps.checkIsCompacting(keyString) ||
       Boolean(deps.getApiRetryTimer(keyString)) ||
       deps.checkIsWedgeRecoveryInFlight(keyString) ||
-      deps.checkIsRetryKickInFlight(keyString);
+      deps.checkIsRetryKickInFlight(keyString) ||
+      deps.checkIsSessionStarting(keyString);
     return {
       isActive,
       isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),

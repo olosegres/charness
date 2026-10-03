@@ -13,9 +13,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { StateStore } from '../state';
-import type { SessionKey } from '../sessionKey';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { RequestWakeUpEngine } from '../requests/wakeUpEngine';
+import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
 import { progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
@@ -784,7 +785,8 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
       nowMs += delayMs;
       await engine.sweepUnwatchedRequests();
     }
-    assert.deepEqual(alerts, [], 'a retry is not a reminder the agent ignored');
+    // Not `deepEqual(alerts, [])`: it would narrow `alerts` to `never[]` for the reasons read below.
+    assert.equal(alerts.length, 0, 'a retry is not a reminder the agent ignored');
     const spent = ledger.getOpenRequest(topicKey);
     assert.equal(spent?.postRetryCount, 3);
     assert.equal(spent?.nextPostRetryAt, undefined);
@@ -829,5 +831,42 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
     await engine.notePostFailed(topicKey, first.id);
     assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+  });
+});
+
+describe('a request whose first post is still starting its session (J7b)', () => {
+  /** The REAL probe over a scripted adapter: until its start ends the session is not up. */
+  function probeSession(isStarting: boolean): SessionTurnProbe {
+    return createSessionTurnProbe({
+      getAdapter: () => ({ checkIsActive: () => !isStarting, checkIsBusy: () => false }),
+      checkHasPendingQuestion: () => false,
+      checkHasQuestionPin: () => false,
+      checkIsCompacting: () => false,
+      getApiRetryTimer: () => undefined,
+      checkIsWedgeRecoveryInFlight: () => false,
+      checkIsRetryKickInFlight: () => false,
+      checkIsSessionStarting: () => isStarting,
+      serializeKey: keyToString,
+    })(topicKey);
+  }
+
+  it('the sweep leaves it alone however old it is — no wake-up, no alert — and takes it once the start is over', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    // Older than the backstop window — a short window and a slow start meet exactly here.
+    nowMs += 2 * backstopMs;
+
+    probe = probeSession(true);
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'its post is starting the session: nothing has gone quiet');
+    assert.equal(alerts.length, 0);
+    assert.equal(preparedFor.length, 0, 'no resume or start was attempted on top of the one under way');
+    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 0);
+
+    // The control: the same request, the same age, the start over and nothing seen on it — due.
+    probe = probeSession(false);
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
   });
 });

@@ -135,6 +135,20 @@ describe('createSessionTurnProbe', () => {
     assert.equal(createProbe()(topicKey).hasUnconsumedInput, false);
   });
 
+  it('a session START under way holds the turn: the request whose first post is starting it is not one nobody works on', () => {
+    scenario.isActive = false; // the session is not up yet — its start is the work being done
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+
+    scenario.startingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'started or failed: nothing holds it any more');
+  });
+
+  it('another thread\'s start never holds this one', () => {
+    scenario.startingKeys.add(keyToString(makeTelegramKey(-1001234567890, 43)));
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false);
+  });
+
   it('busy is reported only for an active session', () => {
     scenario.isBusy = true;
     assert.equal(createProbe()(topicKey).isBusy, true);

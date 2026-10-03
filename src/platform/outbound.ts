@@ -159,9 +159,11 @@ export interface OutboundHints {
  * @name ActivityState
  * @description What the conversation should look like it is doing.
  * `working` while the agent is producing an answer, `idle` once the turn is
- * drained. A surface without an activity affordance ignores both.
+ * drained. `starting` is a session booting that will say nothing until the
+ * user's next prompt (so no sustained indicator to stop later): a ONE-SHOT cue.
+ * A surface without an activity affordance ignores all three.
  */
-export type ActivityState = 'working' | 'idle';
+export type ActivityState = 'working' | 'idle' | 'starting';
 
 /**
  * @description A request to deliver files from the thread's bound folder.
@@ -191,7 +193,7 @@ export interface ConnectorOutbound {
   deliver(key: SessionKey, content: OutboundContent, hints?: OutboundHints): Promise<void>;
   /** Send files from the thread's bound folder into the conversation. */
   deliverFile(key: SessionKey, request: OutboundFileRequest): Promise<OutboundFileResult>;
-  /** Show or clear the "working" affordance. Fire-and-forget by design. */
+  /** Show or clear the "working" affordance, or give the one-shot `starting` cue. Fire-and-forget by design. */
   setActivity(key: SessionKey, activity: ActivityState): void;
   /**
    * Land anything still in flight for the conversation as permanent content, so

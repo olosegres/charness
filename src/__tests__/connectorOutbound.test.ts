@@ -39,6 +39,7 @@ interface Recorder {
   standalone: { text: string; replyMarkup?: InlineKeyboardMarkup }[];
   pinned: number[];
   typing: boolean[];
+  typingPings: SessionKey[];
   files: { threadKeyString: string; request: SendFilesToThreadOptions }[];
 }
 
@@ -53,6 +54,7 @@ function makeOutbound(
     standalone: [],
     pinned: [],
     typing: [],
+    typingPings: [],
     files: [],
   };
   let nextMessageId = 500;
@@ -83,6 +85,9 @@ function makeOutbound(
     },
     setTypingLoader: (_key, isActive) => {
       recorder.typing.push(isActive);
+    },
+    sendTypingPing: (pingedKey) => {
+      recorder.typingPings.push(pingedKey);
     },
     sendFiles: async (threadKeyString, request) => {
       recorder.files.push({ threadKeyString, request });
@@ -204,6 +209,17 @@ test('setActivity maps the two states onto the typing loop', () => {
   outbound.setActivity(key, 'working');
   outbound.setActivity(key, 'idle');
   assert.deepEqual(recorder.typing, [true, false]);
+});
+
+test('a session starting is ONE typing ping — no loop is started that something would have to stop', () => {
+  const { outbound, recorder } = makeOutbound();
+  outbound.setActivity(key, 'starting');
+  assert.deepEqual(recorder.typingPings, [key]);
+  assert.deepEqual(recorder.typing, [], 'the sustained loader is untouched');
+
+  outbound.setActivity(key, 'working');
+  outbound.setActivity(key, 'idle');
+  assert.deepEqual(recorder.typingPings, [key], 'working and idle never ping');
 });
 
 test('finalize and dispose delegate to the chat-mode transport', async () => {

@@ -122,11 +122,13 @@ test('no activity indicator → setActivity is silently dropped', () => {
   const poor = createTestConnector(minimalCapabilities);
   poor.setActivity(key, 'working');
   poor.setActivity(key, 'idle');
+  poor.setActivity(key, 'starting');
   assert.deepEqual(poor.activity, []);
 
   const rich = createTestConnector(richCapabilities);
   rich.setActivity(key, 'working');
-  assert.deepEqual(rich.activity, [{ key, state: 'working' }]);
+  rich.setActivity(key, 'starting');
+  assert.deepEqual(rich.activity, [{ key, state: 'working' }, { key, state: 'starting' }]);
 });
 
 test('no attachments → deliverFile reports a failure instead of pretending', async () => {
@@ -177,7 +179,8 @@ test('the inbound half only routes once armed', async () => {
   };
 
   await connector.emit(event);
-  assert.deepEqual(seen, []);
+  // `deepEqual(seen, [])` would narrow `seen` to `never[]` for the pushes below.
+  assert.equal(seen.length, 0);
 
   await connector.start((received) => {
     seen.push(received.text);

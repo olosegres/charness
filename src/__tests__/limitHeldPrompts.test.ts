@@ -232,8 +232,23 @@ describe('the bot holds and releases them (R23)', () => {
   it('the resume forwards the nudge, or the untaken request prompt of a limit wait (R21)', () => {
     const fire = getFunction('async function fireApiRetryWithLocale(');
     assert.match(fire, /untakenRequestPrompt: entry\.kind === 'usageLimit'\n\s*\? getPromptNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.getOpenRequest\(key\)\)\n\s*: undefined,/);
-    assert.match(fire, /await forwardPromptToAgent\(key, getThreadAdapter\(key\), resume\.text\);/);
+    assert.match(fire, /await deliverPromptOrBuffer\(key, resume\.text, startupPromptBuffer\.checkIsStarting\(k\)\);/);
     assert.match(fire, /isRequestPrompt: resume\.isRequestPrompt,/);
+  });
+
+  it('the resume reaches a session another start has under way through the startup buffer, never straight to the adapter', () => {
+    const fire = getFunction('async function fireApiRetryWithLocale(');
+    assert.doesNotMatch(fire, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
+    // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
+    assert.match(getFunction('function deliverPromptOrBuffer('), /return deliverPromptWithDeps\(promptDeliveryDeps, key, promptText, isStarting\);/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
+  });
+
+  it('a resume\'s topic notices go to a Telegram topic only — a tracker issue has no topic (R6)', () => {
+    const fire = getFunction('async function fireApiRetryWithLocale(');
+    const telegramBranch = /if \(checkIsTelegramKey\(key\)\) \{\n\s*if \(entry\.kind === 'usageLimit'\) void surfaceLimitResumedNotice\(key\);\n\s*else void replyToThread\(key, t\('apiRetry\.resuming'\)\);\n\s*\}/;
+    assert.match(fire, telegramBranch);
+    assert.equal(fire.replace(telegramBranch, '').match(/surfaceLimitResumedNotice\(|replyToThread\(/), null, 'no notice outside the branch');
   });
 
   it('a limit resume continues a tracker issue in its own session; Telegram\'s resume is unchanged (R26)', () => {
