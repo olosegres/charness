@@ -5,12 +5,16 @@ import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
  * @description Claude Code flags a session needs because of its conversation's
  * platform. Outside Telegram (Jira connector plan J2b R1, J3b R7):
  *
- *  - `--setting-sources project,local` — the session never sees the operator's
- *    personal Claude setup: no user-level `CLAUDE.md` (it names where the
- *    operator's own tracker credentials live), no user settings, no user hooks,
- *    no user skills. Probed on Claude Code 2.1.287: the user memory, the user
- *    `model` setting and the user skills are gone while the subscription login
- *    still works.
+ *  - `--setting-sources project,local` — the session does not load the
+ *    operator's personal Claude setup as USER config: no user-level `CLAUDE.md`
+ *    (personal instructions, which may point at the operator's own
+ *    credentials), no user settings, no user hooks, no user skills. Probed on
+ *    Claude Code 2.1.287: the user memory, the user `model` setting and the user
+ *    skills are gone while the subscription login still works. Project memory
+ *    still loads from the working folder AND every parent folder, and for a
+ *    folder under HOME that walk reads `~/.claude/CLAUDE.md` back in (probed:
+ *    present under HOME, absent in /tmp). The flag alone is therefore enough
+ *    only for a working folder outside HOME whose parents hold no Claude memory.
  *  - `--disallowedTools AskUserQuestion` — a tracker has no surface for a native
  *    question, and a pending one holds every wake-up, so the request would hang
  *    with no alert; the agent asks through `answer_request` kind `question`.

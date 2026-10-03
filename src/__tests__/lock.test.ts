@@ -1,5 +1,5 @@
 /**
- * @description Coverage for `src/cli/lock.ts` — single-instance lockfile.
+ * @description Coverage for `src/instanceLock.ts` — single-instance lockfile.
  *
  * Tests the pure `tryAcquireLock` core (returns a structured result instead
  * of calling `process.exit`) so we can assert against the failure shape

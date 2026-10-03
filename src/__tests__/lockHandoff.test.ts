@@ -58,7 +58,7 @@ afterEach(() => {
 
 /**
  * @description Compute the 12-char SHA-256 prefix the lockfile records for
- * a given raw token. Mirrors `hashToken` in `cli/lock.ts` — duplicated here
+ * a given raw token. Mirrors `hashToken` in `instanceLock.ts` — duplicated here
  * because that helper isn't exported (it's an internal implementation
  * detail and we don't want to widen the surface just for tests).
  */

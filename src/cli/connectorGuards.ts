@@ -5,10 +5,11 @@ import { resolveDataDir } from '../state';
 import { loadEnvFiles } from './envLoader';
 
 /**
- * @description Which connectors an instance serves, and the fail-closed guards
- * that stop a start before it can touch anything (Jira connector plan J3: D6,
- * D7, D8). They run in the CLI preflight — before the console tee, the lock and
- * the bot module — for the plain and the hot start alike.
+ * @description The fail-closed guards that stop a start before it can touch
+ * anything (Jira connector plan J3: D6, D7, D8); which connectors an instance
+ * serves is `platform/connectorSet.ts`. They run in the CLI preflight — before
+ * the console tee, the lock and the bot module — for the plain and the hot
+ * start alike.
  *
  * What they make impossible for an instance that serves Jira:
  *  - using a Telegram bot token it inherited (a live bot's): with the Telegram

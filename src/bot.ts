@@ -148,7 +148,12 @@ import {
 } from './platform/outbound';
 import { createJiraConnectorOutbound } from './connectors/jira/outbound';
 import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
-import { getServedConversations, getServedPlatforms, parseConnectors } from './platform/connectorSet';
+import {
+  checkIsServedConversation,
+  getServedConversations,
+  getServedPlatforms,
+  parseConnectors,
+} from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
@@ -9883,6 +9888,15 @@ export async function postReattachRecap(
 }
 
 /**
+ * @description The bindings of the platforms this instance serves — what every
+ * boot scan that adopts, resumes or heals sessions walks (Jira plan J3b, R10):
+ * a binding of another platform left in this state is never brought back here.
+ */
+function getServedBindings(): ReturnType<StateStore['listBindings']> {
+  return getServedConversations(state.listBindings(), ENV.servedPlatforms);
+}
+
+/**
  * @description Re-adopt tmux sessions and OpenCode SSE streams that
  * outlived the bot process.
  *
@@ -9901,15 +9915,6 @@ export async function postReattachRecap(
  * blink), shown on a real cold start. The classifier lives in
  * `bootClassifier.ts`; this function only consumes the flag.
  */
-/**
- * @description The bindings of the platforms this instance serves — what every
- * boot scan that adopts, resumes or heals sessions walks (Jira plan J3b, R10):
- * a binding of another platform left in this state is never brought back here.
- */
-function getServedBindings(): ReturnType<StateStore['listBindings']> {
-  return getServedConversations(state.listBindings(), ENV.servedPlatforms);
-}
-
 async function reattachExistingSessions(
   opts: { quietReattach: boolean } = { quietReattach: false },
 ): Promise<void> {
@@ -10247,6 +10252,10 @@ async function reattachExistingSessions(
  * store, preventing a stale entry from lingering across boots. The persisted
  * `messageId` is preserved, so the OLD buttons resolve correctly; the question
  * is never re-posted.
+ *
+ * A question of a platform this instance does not serve is left as it is (Jira
+ * plan J3b, R10): its session was never brought back here, and dropping it would
+ * lose it for the instance that does serve it.
  */
 function restorePendingQuestions(): void {
   let restored = 0;
@@ -10260,6 +10269,7 @@ function restorePendingQuestions(): void {
       // keep booting. Tolerated-and-skipped, like state.ts's own key parsers.
       continue;
     }
+    if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
     const adapter = getThreadAdapter(key);
     if (adapter.checkIsActive(key)) {
       // Restore-compat (S2): an OLD persisted entry has only `{ data, messageId }`
@@ -10299,7 +10309,7 @@ function restoreApiRetries(): void {
     {
       entries: apiRetryTimers,
       now: () => Date.now(),
-      isServed: checkIsTelegramKey,
+      isServed: (key) => checkIsServedConversation(key, ENV.servedPlatforms),
       fire: (key) => {
         void fireApiRetry(key);
       },

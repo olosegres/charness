@@ -1,6 +1,6 @@
 import { defaultLocale, type Locale } from '../../i18n';
 import type { PlatformId, SessionKey } from '../../sessionKey';
-import { getServedConversations } from '../../platform/connectorSet';
+import { getServedConversations, getServedPlatforms } from '../../platform/connectorSet';
 import { checkIsTelegramKey, getTelegramChatId } from './sessionKeyCodec';
 
 /**
@@ -49,7 +49,7 @@ export function getTelegramPreambleGroupTitle(key: SessionKey, sources: Preamble
 }
 
 /** The platform set {@link getTelegramConversations} keeps. */
-const telegramPlatforms: ReadonlySet<PlatformId> = new Set<PlatformId>(['telegram']);
+const telegramPlatforms: ReadonlySet<PlatformId> = getServedPlatforms(['telegram']);
 
 /**
  * @description Only the Telegram conversations of a list. The binding store is

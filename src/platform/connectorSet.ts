@@ -37,6 +37,15 @@ export function getServedPlatforms(connectors: readonly ConnectorId[]): Readonly
 }
 
 /**
+ * @description Does the conversation belong to one of `platforms`? The one rule
+ * behind {@link getServedConversations}, for a boot scan that walks a persisted
+ * map by serialized key rather than a list of entries.
+ */
+export function checkIsServedConversation(key: SessionKey, platforms: ReadonlySet<PlatformId>): boolean {
+  return platforms.has(key.platform);
+}
+
+/**
  * @description Only the entries (tmux sessions found at boot, bindings, …) whose
  * conversation belongs to one of `platforms`. Every boot scan adopts, resumes or
  * KILLS what it is given, so it first keeps what this instance serves: a Telegram
@@ -47,5 +56,5 @@ export function getServedConversations<T extends { key: SessionKey }>(
   entries: readonly T[],
   platforms: ReadonlySet<PlatformId>,
 ): T[] {
-  return entries.filter(({ key }) => platforms.has(key.platform));
+  return entries.filter(({ key }) => checkIsServedConversation(key, platforms));
 }

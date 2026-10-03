@@ -5,7 +5,7 @@
  * **Why a dedicated module:**
  *
  *   - **Single owner of exit ordering.** The previous code had two SIGTERM
- *     handlers: `installLockCleanupHandlers()` (in `cli/lock.ts`) was
+ *     handlers: `installLockCleanupHandlers()` (in `instanceLock.ts`) was
  *     registered first and called `releaseLock(); process.exit(0)` *synchronously*,
  *     pre-empting the bot's own async `state.flush()`. Frequent reloads
  *     under nodemon could therefore lose the last <500ms of state (one

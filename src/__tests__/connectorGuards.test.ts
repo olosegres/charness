@@ -19,7 +19,12 @@ import { getConnectorGuardErrors, getPreloadGuardErrors } from '../cli/connector
 import { loadEnvFiles } from '../cli/envLoader';
 import { getTmuxBaseArgs, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { installTelegramCallGuard, TelegramDisabledError } from '../connectors/telegram/telegramCallGuard';
-import { getServedConversations, getServedPlatforms, parseConnectors } from '../platform/connectorSet';
+import {
+  checkIsServedConversation,
+  getServedConversations,
+  getServedPlatforms,
+  parseConnectors,
+} from '../platform/connectorSet';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
@@ -272,6 +277,13 @@ describe('getServedConversations (J1 review)', () => {
     assert.deepEqual(getServedConversations(sessions, getServedPlatforms(['telegram'])).map((s) => s.sessionName), ['claude--1001111111111-20']);
     assert.deepEqual(getServedConversations(sessions, getServedPlatforms(['jira'])).map((s) => s.sessionName), ['claude-jira-PROJ-PROJ-12']);
   });
+
+  it('checkIsServedConversation is the same rule for a single key', () => {
+    const [topic, issue] = sessions;
+    assert.equal(checkIsServedConversation(topic.key, getServedPlatforms(['telegram'])), true);
+    assert.equal(checkIsServedConversation(issue.key, getServedPlatforms(['telegram'])), false);
+    assert.equal(checkIsServedConversation(issue.key, getServedPlatforms(['telegram', 'jira'])), true);
+  });
 });
 
 describe('the guards are wired where they must run', () => {
@@ -314,6 +326,23 @@ describe('the guards are wired where they must run', () => {
       assert.match(body, /getServedBindings\(\)/, scanHeader);
     }
     assert.match(botSource, /return getServedConversations\(state\.listBindings\(\), ENV\.servedPlatforms\);/);
+  });
+
+  it('the boot restore of persisted questions and retries skips an unserved conversation (R10)', () => {
+    const botSource = readSource('bot.ts');
+    // Each skip must come before the scan first acts on the conversation.
+    for (const [scanHeader, firstAction] of [
+      ['function restorePendingQuestions(', 'getThreadAdapter(key)'],
+      ['function restoreApiRetries(', 'setTimeout('],
+    ] as const) {
+      const start = botSource.indexOf(scanHeader);
+      assert.ok(start >= 0, scanHeader);
+      const body = botSource.slice(start, botSource.indexOf('\n}\n', start));
+      const skip = body.indexOf('if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;');
+      const action = body.indexOf(firstAction);
+      assert.ok(action >= 0, `${scanHeader}: ${firstAction}`);
+      assert.ok(skip >= 0 && skip < action, `${scanHeader} acts on every conversation`);
+    }
   });
 
   it('bot.ts imports nothing from the CLI layer (R10)', () => {

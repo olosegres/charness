@@ -3,7 +3,7 @@
  * orchestrator.
  *
  * Ordering is the whole point of this module: the *old* bot had two
- * SIGTERM handlers (one in `cli/lock.ts`, one in `bot.ts:4116`) where the
+ * SIGTERM handlers (one in `instanceLock.ts`, one in `bot.ts:4116`) where the
  * lock handler — registered first — called `releaseLock(); process.exit(0)`
  * synchronously, preempting the bot's async `state.flush()`. These tests
  * pin down the new contract:

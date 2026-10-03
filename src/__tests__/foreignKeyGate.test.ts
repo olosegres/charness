@@ -130,9 +130,10 @@ describe('getClaudePlatformFlags (R1, R7)', () => {
     assert.deepEqual(getClaudePlatformFlags(topicKey), []);
   });
 
-  it('every Claude launch path passes them, right before another option', () => {
-    // Each argv that names a session (`--session-id` / `--resume`) is a launch.
-    const launchArgRe = /'--(?:session-id|resume)'/g;
+  it('every Claude launch path passes them, right before another option, and the MCP flags (R8)', () => {
+    // Each argv that names a session (`--session-id` / `--resume` / `--continue` /
+    // `--fork-session`) is a launch.
+    const launchArgRe = /'--(?:session-id|resume|continue|fork-session)'/g;
     let launchCount = 0;
     for (const file of ['claudeCliAdapter.ts', 'claudeJsonStreamAdapter.ts']) {
       const lines = fs.readFileSync(path.join(__dirname, '..', 'adapters', file), 'utf8').split('\n');
@@ -145,6 +146,11 @@ describe('getClaudePlatformFlags (R1, R7)', () => {
         assert.ok(flagsUse >= 0, `${file}:${index + 1} launches without the platform flags`);
         const nextArgument = argvStart.slice(flagsUse).split('\n').slice(1).find((next) => !next.trim().startsWith('//'));
         assert.match(nextArgument ?? '', /^\s*('--|\.\.\.claudePermissionArgs)/, `${file}:${index + 1}: an option must follow`);
+        // `--strict-mcp-config` (the only thing keeping the account connectors out) rides these flags.
+        const mcpFlagsName = /const (\w+) = await prepareMcpFlags\(\{ key,/.exec(argvStart)?.[1];
+        assert.ok(mcpFlagsName, `${file}:${index + 1} launches without the MCP flags`);
+        const argvAround = lines.slice(Math.max(0, index - 25), index + 5).join('\n');
+        assert.ok(argvAround.includes(`...${mcpFlagsName}`), `${file}:${index + 1} does not pass ${mcpFlagsName}`);
       });
     }
     assert.ok(launchCount >= 3, 'tmux start, tmux resume and the json-stream spawn');
