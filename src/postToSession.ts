@@ -38,6 +38,12 @@ export type EnsureSessionResult = { ok: true } | { ok: false; reason: EnsureSess
  * lambdas parse it back where needed.
  */
 export interface PostToSessionDeps {
+  /**
+   * Optional: hold the prompt while the conversation waits out an armed usage
+   * limit (Jira plan R23) — posting it would only hit the limit again; the wait's
+   * resume delivers it. `true` = held, nothing else to do now.
+   */
+  holdForLimitResume?: (conversationKey: string, text: string) => boolean;
   /** Whether the conversation's agent is mid-turn right now (sync, in-memory probe). */
   checkBusy: (conversationKey: string) => boolean;
   /**
@@ -57,8 +63,9 @@ export interface PostToSessionDeps {
 }
 
 /** @name PostToSessionResult @description `forward-failed` carries the forward's own error message. */
+/** @name PostToSessionResult @description `isHeld` — posted into an armed limit wait's queue, delivered at its resume. */
 export type PostToSessionResult =
-  | { ok: true }
+  | { ok: true; isHeld: boolean }
   | { ok: false; reason: EnsureSessionFailureReason }
   | { ok: false; reason: 'forward-failed'; error: string };
 
@@ -76,6 +83,8 @@ export async function postToSession(
   text: string,
   fallbackAdapterName?: string,
 ): Promise<PostToSessionResult> {
+  // Checked first: no session is started or resumed into a limit.
+  if (deps.holdForLimitResume?.(conversationKey, text)) return { ok: true, isHeld: true };
   if (deps.resumeSession) await deps.resumeSession(conversationKey);
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
@@ -85,5 +94,5 @@ export async function postToSession(
   } catch (error) {
     return { ok: false, reason: 'forward-failed', error: error instanceof Error ? error.message : String(error) };
   }
-  return { ok: true };
+  return { ok: true, isHeld: false };
 }

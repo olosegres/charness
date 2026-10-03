@@ -40,6 +40,8 @@ import type {
 
 /** History size bound per file before it rolls to `.1` (same as the run ledger). */
 export const requestHistoryMaxBytes = 10 * 1024 * 1024;
+/** The longest prompt an open request keeps for a re-post (R21); `state.json` is rewritten whole. */
+export const requestPromptMaxLength = 64_000;
 
 /** Request ids read `req_<random>`: short enough for a prompt header, unguessable across topics. */
 const requestIdPrefix = 'req_';
@@ -276,7 +278,10 @@ export class RequestLedger {
     }
   }
 
-  private appendClosed(record: ClosedRequestRecord): void {
+  private appendClosed(closing: ClosedRequestRecord): void {
+    // The prompt was kept for a re-post only; a closed request is never re-posted,
+    // and the history must not grow by every prompt (issue text included).
+    const { prompt: _prompt, isPromptTakenIn: _isPromptTakenIn, ...record } = closing;
     if (!this.history.append(record)) {
       console.warn(`[requests] could not append ${record.id} to ${this.history.filePath}; it is closed in memory only`);
     }
@@ -344,18 +349,28 @@ export class RequestLedger {
    * the agent was told about but a crash lost would make its answer refused as
    * unknown — a dropped result.
    */
-  async createRequest(key: SessionKey, origin: RequestOrigin): Promise<OpenRequestState> {
+  async createRequest(
+    key: SessionKey,
+    origin: RequestOrigin,
+    options: { createPrompt?: (requestId: string) => string } = {},
+  ): Promise<OpenRequestState> {
     this.assertLoaded();
     const createdAt = this.now();
     const conversationKey = keyToString(key);
+    const id = this.createRequestId();
+    const prompt = options.createPrompt?.(id);
+    if (prompt !== undefined && prompt.length > requestPromptMaxLength) {
+      console.warn(`[requests] ${id}: prompt of ${prompt.length} chars not kept (over ${requestPromptMaxLength}); a wake-up sends a reminder instead`);
+    }
     const request: OpenRequestState = {
-      id: this.createRequestId(),
+      id,
       origin,
       createdAt,
       progressAnswerCount: 0,
       silentTurnCount: 0,
       wakeCount: 0,
       isWakeStopped: false,
+      ...(prompt !== undefined && prompt.length <= requestPromptMaxLength ? { prompt } : {}),
     };
     await this.store.updateOpenRequest(key, (current) => {
       if (current) this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded' });

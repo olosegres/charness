@@ -23,6 +23,7 @@ import {
   RequestLedgerNotLoadedError,
   parseClosedRequestLine,
   requestHistoryMaxBytes,
+  requestPromptMaxLength,
 } from '../requests/requestLedger';
 import type { ClosedRequestRecord, RequestOrigin } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
@@ -49,7 +50,12 @@ beforeEach(() => {
   historyPath = path.join(dataDir, 'requests.jsonl');
 });
 
-afterEach(() => {
+/** Every store a test made, flushed before its folder goes: a pending save would otherwise fail on the removed folder. */
+let createdStores: StateStore[] = [];
+
+afterEach(async () => {
+  await Promise.all(createdStores.map((store) => store.flush()));
+  createdStores = [];
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   fs.rmSync(fakeHome, { recursive: true, force: true });
@@ -58,6 +64,7 @@ afterEach(() => {
 async function createStore(): Promise<StateStore> {
   const store = new StateStore(dataDir, { saveDebounceMs });
   await store.init();
+  createdStores.push(store);
   return store;
 }
 
@@ -393,6 +400,30 @@ describe('RequestLedger close history', () => {
       readHistory().map((record) => [record.id, record.closeReason]),
       [[superseded.id, 'superseded'], [answered.id, 'final']],
     );
+  });
+});
+
+describe('RequestLedger stored prompt (R21)', () => {
+  it('a request keeps the prompt built from its own id — across a restart — and its history line never carries it', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const request = await ledger.createRequest(topicKey, messageOrigin, { createPrompt: (requestId) => `[Request ${requestId}] do it` });
+    assert.equal(request.prompt, `[Request ${request.id}] do it`);
+    const reloaded = await createLoadedLedger(await createStore());
+    assert.equal(reloaded.getOpenRequest(topicKey)?.prompt, `[Request ${request.id}] do it`);
+
+    await reloaded.closeRequest(request.id, 'final');
+    const [line] = fs.readFileSync(historyPath, 'utf8').split('\n');
+    assert.ok(!line.includes('do it'), line);
+    assert.equal(readHistory()[0].id, request.id);
+  });
+
+  it('a prompt over the cap is not kept (a wake-up then reminds)', async () => {
+    const ledger = await createLoadedLedger(await createStore());
+    const request = await ledger.createRequest(topicKey, messageOrigin, { createPrompt: () => 'x'.repeat(requestPromptMaxLength + 1) });
+    assert.equal(request.prompt, undefined);
+    const fits = await ledger.createRequest(topicKey, messageOrigin, { createPrompt: () => 'x'.repeat(requestPromptMaxLength) });
+    assert.equal(fits.prompt?.length, requestPromptMaxLength);
   });
 });
 

@@ -61,6 +61,16 @@ export interface OpenRequestState {
   /** Set once the wake-up rules gave up (alert or cap): nothing wakes it again. */
   isWakeStopped: boolean;
   /**
+   * The request's own prompt, kept so a request whose prompt never reached the
+   * agent — its post failed, a restart came first, a usage-limit wait held it —
+   * gets the prompt again on its next wake-up instead of a bare reminder (Jira
+   * plan R21). Absent when the request was opened without one, or it was over
+   * `requestPromptMaxLength`.
+   */
+  prompt?: string;
+  /** Set once a turn that carried `prompt` was seen taken in by the session. */
+  isPromptTakenIn?: boolean;
+  /**
    * Set while a usage-limit wait will not end by itself (auto-resume off, the
    * operator skipped or disabled the resume, the bot gave up its attempts):
    * nothing wakes the request, as with `isWakeStopped`, but this one is LIFTED
@@ -97,6 +107,7 @@ export type OpenRequestUpdate = Partial<
     | 'isLimitStopped'
     | 'limitWaitAnsweredFor'
     | 'alertRef'
+    | 'isPromptTakenIn'
   >
 >;
 

@@ -1,4 +1,4 @@
-import type { RequestWakeUpReason } from './types';
+import type { OpenRequestState, RequestWakeUpReason } from './types';
 
 /**
  * @description The per-request header that rides inside the prompt text of every
@@ -41,6 +41,29 @@ const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
   progressFollowUp: 'Some time has passed since your last progress note on it.',
   backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
 };
+
+/**
+ * @name WakeUpMessage
+ * @description What a wake-up forwards: the request's own prompt when it never
+ * reached the agent (R21), else the reminder for `reason`.
+ */
+export interface WakeUpMessage {
+  reason: RequestWakeUpReason;
+  text: string;
+  isRequestPrompt: boolean;
+}
+
+/**
+ * @description R21: a request whose prompt was never taken in by the session — its
+ * post failed, a restart came first, a usage-limit wait held it — gets the prompt
+ * itself; a bare reminder would name a request the agent never read.
+ */
+export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason): WakeUpMessage {
+  if (request.prompt !== undefined && request.isPromptTakenIn !== true) {
+    return { reason, text: request.prompt, isRequestPrompt: true };
+  }
+  return { reason, text: buildWakeUpReminder({ requestId: request.id, reason }), isRequestPrompt: false };
+}
 
 /**
  * @description The reminder the wake-up engine forwards into the SAME session for

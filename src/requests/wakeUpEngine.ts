@@ -1,7 +1,9 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from './types';
+import type { OpenRequestState, RequestAlertReason } from './types';
+import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
+  checkIsTurnInputConsumed,
   checkIsWakingStopped,
   checkIsWatchedTurnStale,
   decideTurnEnd,
@@ -48,7 +50,8 @@ export interface RequestWakeUpEngineDeps {
   ledger: Pick<RequestLedger, 'getOpenRequest' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
   prepareWakeUpSession: (key: SessionKey) => Promise<boolean>;
-  forwardWakeUp: (key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason) => Promise<void>;
+  /** Forward the wake-up's message (the request's prompt again, or a reminder) into the session. */
+  forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
   deliverAlert: (key: SessionKey, request: OpenRequestState, reason: RequestAlertReason) => Promise<string | null>;
   backstopMs: number;
   now?: () => number;
@@ -105,7 +108,7 @@ export class RequestWakeUpEngine {
    * the conversation's session: watch the turn it starts. A watch already there
    * for the conversation is replaced — the newest message is the one that counts.
    */
-  async trackForwardedTurn(key: SessionKey, requestId: string): Promise<void> {
+  async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
     const request = this.deps.ledger.getOpenRequest(key);
     if (request?.id !== requestId) return;
     this.watched.set(keyToString(key), {
@@ -114,6 +117,7 @@ export class RequestWakeUpEngine {
       progressCountAtTurnStart: request.progressAnswerCount,
       hasSeenBusy: false,
       hasSeenOutput: false,
+      isRequestPrompt: options.isRequestPrompt,
     });
     await this.recordTurnActivity(request, true);
   }
@@ -144,7 +148,7 @@ export class RequestWakeUpEngine {
    * lifts a limit stop: the work continues, so does the waking. A request the
    * rules already gave up on stays given up.
    */
-  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean }): Promise<void> {
+  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt?: boolean }): Promise<void> {
     const request = this.deps.ledger.getOpenRequest(key);
     if (!request) return;
     if (options.isCountersReset) {
@@ -156,7 +160,7 @@ export class RequestWakeUpEngine {
         limitWaitAnsweredFor: undefined,
       });
     }
-    await this.trackForwardedTurn(key, request.id);
+    await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true });
   }
 
   /**
@@ -204,6 +208,10 @@ export class RequestWakeUpEngine {
     }
     const probe = this.deps.probeTurn(turn.key);
     if (probe.isBusy) turn.hasSeenBusy = true;
+    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
+      // R21: from now on a wake-up is a reminder — the agent has read the request.
+      await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
+    }
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
       if (probe.isBusy) await this.recordTurnActivity(request, false);
@@ -270,9 +278,10 @@ export class RequestWakeUpEngine {
       await this.raiseAlert(key, updated, decision.reason);
       return;
     }
-    const outcome = await this.deliverWakeUpSafely(key, updated, decision.reason);
+    const message = getWakeUpMessage(updated, decision.reason);
+    const outcome = await this.deliverWakeUpSafely(key, updated, message);
     if (outcome === 'delivered') {
-      await this.trackForwardedTurn(key, updated.id);
+      await this.trackForwardedTurn(key, updated.id, { isRequestPrompt: message.isRequestPrompt });
       return;
     }
     if (outcome === 'requestGone') return;
@@ -287,7 +296,7 @@ export class RequestWakeUpEngine {
   private async deliverWakeUpSafely(
     key: SessionKey,
     request: OpenRequestState,
-    reason: RequestWakeUpReason,
+    message: WakeUpMessage,
   ): Promise<WakeUpDeliveryOutcome> {
     try {
       if (!(await this.deps.prepareWakeUpSession(key))) return 'failed';
@@ -295,7 +304,7 @@ export class RequestWakeUpEngine {
       // or stopped being woken meanwhile is stale.
       const current = this.deps.ledger.getOpenRequest(key);
       if (current?.id !== request.id || checkIsWakingStopped(current)) return 'requestGone';
-      await this.deps.forwardWakeUp(key, request, reason);
+      await this.deps.forwardWakeUp(key, request, message);
       return 'delivered';
     } catch (e) {
       logWakeUpFailure(`delivering the reminder for ${request.id}`, e);

@@ -155,6 +155,8 @@ export interface WatchedTurn {
   hasSeenBusy: boolean;
   /** The agent produced output since the forward. */
   hasSeenOutput: boolean;
+  /** The turn carries the request's own prompt (not a reminder or a "continue" nudge) — R21. */
+  isRequestPrompt: boolean;
 }
 
 /**
@@ -172,12 +174,18 @@ export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
  * (`hasUnconsumedInput`), one that does not must have been seen busy or
  * producing output since the forward (the busy-onset race).
  */
+/**
+ * @description Has the backend taken in what was forwarded for this turn? Its own
+ * signal when it has one (nothing written is still unread), else busy or output
+ * seen since the forward.
+ */
+export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  return probe.hasUnconsumedInput === null ? turn.hasSeenBusy || turn.hasSeenOutput : !probe.hasUnconsumedInput;
+}
+
 export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe): WatchedTurnState {
   if (!probe.isActive) return 'sessionGone';
-  const isConsumed = probe.hasUnconsumedInput === null
-    ? turn.hasSeenBusy || turn.hasSeenOutput
-    : !probe.hasUnconsumedInput;
-  if (!isConsumed || probe.isBusy || probe.isTurnEndBlocked) return 'running';
+  if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked) return 'running';
   return 'ended';
 }
 

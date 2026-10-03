@@ -19,6 +19,7 @@ import { RequestWakeUpEngine } from '../requests/wakeUpEngine';
 import { progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
+import type { WakeUpMessage } from '../requests/requestHeader';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
@@ -31,15 +32,20 @@ let dataDir: string;
 let nowMs: number;
 let probe: SessionTurnProbe;
 let wakeUps: Array<{ requestId: string; reason: RequestWakeUpReason }>;
+let wakeUpMessages: WakeUpMessage[];
 let alerts: Array<{ requestId: string; reason: RequestAlertReason }>;
 let releasedAlerts: string[];
 let isWakeUpDeliverable: boolean;
 /** Runs while the session is being resumed for a reminder (the resume race). */
 let duringWakeUpResume: (() => Promise<void>) | null;
 
+/** Every store a test made, flushed before its folder goes: a pending save would otherwise fail on the removed folder. */
+let createdStores: StateStore[] = [];
+
 async function createLedger(): Promise<RequestLedger> {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
+  createdStores.push(store);
   const ledger = new RequestLedger({
     store,
     history: new RotatingJsonlFile(path.join(dataDir, 'requests.jsonl'), requestHistoryMaxBytes),
@@ -50,8 +56,9 @@ async function createLedger(): Promise<RequestLedger> {
   return ledger;
 }
 
-const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, reason: RequestWakeUpReason): Promise<void> => {
-  wakeUps.push({ requestId: request.id, reason });
+const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message: WakeUpMessage): Promise<void> => {
+  wakeUps.push({ requestId: request.id, reason: message.reason });
+  wakeUpMessages.push(message);
 };
 
 function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
@@ -88,13 +95,16 @@ beforeEach(() => {
   nowMs = 1_000_000_000;
   probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
   wakeUps = [];
+  wakeUpMessages = [];
   alerts = [];
   releasedAlerts = [];
   isWakeUpDeliverable = true;
   duringWakeUpResume = null;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(createdStores.map((store) => store.flush()));
+  createdStores = [];
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   fs.rmSync(fakeHome, { recursive: true, force: true });
@@ -674,5 +684,65 @@ describe('closing ends the watch', () => {
     await endTurnSilently(engine);
 
     assert.deepEqual(wakeUps, []);
+  });
+});
+
+describe('a request whose prompt never reached the agent is re-posted, not reminded (R21)', () => {
+  const prompt = '[Request · from: PROJ-12]\nThe whole request text.';
+
+  it('a post that never happened: the backstop re-posts the stored prompt; once it was taken in, a wake-up reminds', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    assert.equal(ledger.getOpenRequest(topicKey)?.prompt, prompt);
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages, [{ reason: 'backstop', text: prompt, isRequestPrompt: true }]);
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'not read yet');
+
+    // The re-posted prompt's turn runs and ends silently: it was taken in, so the next wake-up is a reminder.
+    await endTurnSilently(engine);
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.equal(wakeUpMessages.length, 2);
+    assert.equal(wakeUpMessages[1].isRequestPrompt, false);
+    assert.match(wakeUpMessages[1].text, new RegExp(`^\\[Reminder · request ${request.id} is still open\\]`));
+  });
+
+  it('the posted prompt\'s turn taken in marks it at once; a session that died before reading it does not', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: false };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'still unread');
+    // A dead backend has nothing unread to report — that is not the prompt being read.
+    probe = { isActive: false, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'the session died first: the prompt was never read');
+
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+  });
+
+  it('a reminder\'s turn never marks the prompt taken in; a request without a prompt is reminded as before', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const withPrompt = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await engine.trackForwardedTurn(topicKey, withPrompt.id);
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+
+    const plain = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns(); // the superseded request's watch goes
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.equal(wakeUpMessages.at(-1)?.isRequestPrompt, false);
+    assert.match(wakeUpMessages.at(-1)?.text ?? '', new RegExp(`request ${plain.id} is still open`));
   });
 });
