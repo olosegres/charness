@@ -15,6 +15,7 @@ import {
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
+import { postToSession, type PostToSessionDeps } from '../postToSession';
 
 /**
  * @description Scheduler delivery (plan S4): the real `deliver(job, fireContext)`
@@ -25,16 +26,13 @@ import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
  *   2. pin      — pin that announcement (silent ONLY when the job opted in;
  *      default notifies all members). A pin failure degrades to a `console.warn`
  *      and the flow continues — the announcement is already visible.
- *   3. ensure session — if the thread's agent is active but BUSY, poll its busy
- *      probe every {@link busyPollIntervalMs} up to {@link waitIdleTimeoutMs}
- *      (do NOT interrupt live work), then forward (forwarding interrupts only as
- *      the timeout fallback — existing `forwardPromptToAgent` semantics). If no
- *      session, start one (with the job's `lastAdapterName` snapshot as the
- *      adapter fallback — a topic that never picked an agent and carries no
- *      snapshot fails with `no agent selected`). An unbound topic → outcome
- *      `failed` with a distinct error string the engine records (S8 turns that
- *      into a pause).
- *   4. forward — hand the prefixed prompt to the agent.
+ *   3–4. post the prefixed prompt to the session ({@link postToSession}, shared
+ *      with the Jira connector): ensure a session (starting one with the job's
+ *      `lastAdapterName` snapshot as the adapter fallback — a topic that never
+ *      picked an agent and carries no snapshot fails with `no agent selected`),
+ *      let a BUSY one finish its turn up to the wait bound, then forward. An
+ *      unbound topic → outcome `failed` with a distinct error string the engine
+ *      records (S8 turns that into a pause).
  *
  * A REMINDER record (`deliveryKind: 'reminder'`) stops after step 2: its whole
  * delivery IS the announcement plus its pin, which is what pierces a muted topic.
@@ -56,32 +54,8 @@ import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
  * lambdas (S8) and the wait-loop is unit-testable on a fake clock.
  */
 
-/** Poll cadence for the wait-for-idle loop: re-check the busy probe every 5s. */
-export const busyPollIntervalMs = 5000;
-
-/**
- * Upper bound on waiting for a busy session to go idle before forwarding anyway
- * (10 min, per plan IDEAL "after waitIdleTimeoutMs deliver anyway"). The forward
- * then takes the normal interrupt path (`forwardPromptToAgent` interrupts a
- * still-running turn), so a wedged turn never blocks a scheduled run forever.
- */
-export const waitIdleTimeoutMs = 10 * 60 * 1000;
-
 /** Distinct error string the engine records when a fire hits an unbound topic. */
 export const unboundDeliveryError = 'thread is unbound';
-
-/**
- * @name EnsureSessionResult
- * @description What {@link ScheduleDeliveryDeps.ensureSession} reports back. It
- * mirrors bot.ts's `ensureAgentSession` outcome without importing it: `ok` means
- * a session is ready (active, mid-startup, or just started — a prompt forwarded
- * now is delivered or buffered-then-replayed); `unbound`/`no-adapter`/
- * `start-failed` are the three failure reasons (`no-adapter` = bound topic that
- * never picked an agent and the job carried no `lastAdapterName`).
- */
-export type EnsureSessionResult =
-  | { ok: true }
-  | { ok: false; reason: 'unbound' | 'no-adapter' | 'start-failed' };
 
 /**
  * @name ScheduleDeliveryDeps
@@ -90,7 +64,7 @@ export type EnsureSessionResult =
  * `threadKey` is the serialized `"<chatId>:<threadId>"` string carried on the
  * record; the bot's lambdas parse it back into a `SessionKey` where needed.
  */
-export interface ScheduleDeliveryDeps {
+export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   /**
    * Post the announcement into the topic (the bot bakes in priority
    * `'interactive'`). Resolves with the sent message id, or `null` when the
@@ -99,20 +73,10 @@ export interface ScheduleDeliveryDeps {
   announce: (threadKey: string, text: string) => Promise<number | null>;
   /** Pin the announcement. `isSilent` ⇒ `disable_notification`. Rejects on failure. */
   pin: (threadKey: string, messageId: number, isSilent: boolean) => Promise<void>;
-  /** Whether the thread's agent is mid-turn right now (sync, in-memory probe). */
-  checkBusy: (threadKey: string) => boolean;
-  /** Ensure a session is ready, starting one with `fallbackAdapterName` if needed. */
-  ensureSession: (threadKey: string, fallbackAdapterName?: string) => Promise<EnsureSessionResult>;
-  /** Forward the (already-prefixed) prompt to the thread's agent. */
-  forwardPrompt: (threadKey: string, text: string) => Promise<void>;
   /** Run a check job's command in the thread's bound folder; `null` when the thread is unbound. */
   runCheck: (threadKey: string, command: string, timeoutMs: number) => Promise<CheckRunResult | null>;
   /** Persist a check job's failing flag (it decides whether the next run alerts). */
   setCheckFailing: (jobId: string, isFailing: boolean) => Promise<void>;
-  /** Current epoch ms — injected so the wait loop runs on a fake clock in tests. */
-  now: () => number;
-  /** Sleep `ms` — injected so the wait loop's pauses are driven by a fake timer in tests. */
-  sleep: (ms: number) => Promise<void>;
 }
 
 /**
@@ -186,22 +150,6 @@ export function buildCheckFailedAnnouncement(
 }
 
 /**
- * @description Wait for a busy session to go idle, polling the busy probe every
- * {@link busyPollIntervalMs} until it reports idle or {@link waitIdleTimeoutMs}
- * elapses (whichever comes first). Returns when it is time to forward — the
- * caller forwards regardless (a timeout falls through to the normal interrupt
- * path). Driven by the injected `now`/`sleep` so a test can advance a fake clock
- * and assert the exact number of polls.
- */
-async function waitForIdle(deps: ScheduleDeliveryDeps, threadKey: string): Promise<void> {
-  const deadline = deps.now() + waitIdleTimeoutMs;
-  while (deps.checkBusy(threadKey)) {
-    if (deps.now() >= deadline) return;
-    await deps.sleep(busyPollIntervalMs);
-  }
-}
-
-/**
  * @description Steps 1–2: post the announcement and pin it. A pin failure only
  * logs — the announcement is already visible.
  */
@@ -219,43 +167,31 @@ async function announceAndPin(deps: ScheduleDeliveryDeps, job: ScheduleRecord, t
 }
 
 /**
- * @description Steps 3–4: make sure the thread has a session, wait for a busy one
- * to go idle, and forward `prompt` (already carrying its marker).
+ * @description Steps 3–4: post `prompt` (already carrying its marker) into the
+ * thread's session through {@link postToSession} and map its outcome onto the
+ * engine's delivery outcome.
  */
 async function deliverToAgent(
   deps: ScheduleDeliveryDeps,
   job: ScheduleRecord,
   prompt: string,
 ): Promise<DeliveryOutcome> {
-  const { threadKey } = job;
-
-  // 3. ensure a session and (if busy) wait for idle
-  const session = await deps.ensureSession(threadKey, job.lastAdapterName);
-  if (!session.ok) {
-    // Unbound → distinct error the engine records; S8 pauses the job on it.
-    // no-adapter → the topic never picked an agent; start-failed → a start
-    // that threw. Both surface their own readable ledger reason.
-    const error =
-      session.reason === 'unbound'
-        ? unboundDeliveryError
-        : session.reason === 'no-adapter'
-          ? 'no agent selected for this topic'
-          : 'failed to start agent session';
-    return { status: 'failed', error };
+  // 3–4. ensure a session, let a busy one finish its turn, forward the prefixed prompt
+  const posted = await postToSession(deps, job.threadKey, prompt, job.lastAdapterName);
+  if (posted.ok) return { status: 'delivered' };
+  // Unbound → distinct error the engine records; S8 pauses the job on it.
+  // no-adapter → the topic never picked an agent; start-failed → a start
+  // that threw; a failed forward keeps its own message.
+  switch (posted.reason) {
+    case 'unbound':
+      return { status: 'failed', error: unboundDeliveryError };
+    case 'no-adapter':
+      return { status: 'failed', error: 'no agent selected for this topic' };
+    case 'start-failed':
+      return { status: 'failed', error: 'failed to start agent session' };
+    case 'forward-failed':
+      return { status: 'failed', error: posted.error };
   }
-
-  if (deps.checkBusy(threadKey)) {
-    await waitForIdle(deps, threadKey);
-  }
-
-  // 4. forward the prefixed prompt (forward interrupts only as the fallback)
-  try {
-    await deps.forwardPrompt(threadKey, prompt);
-  } catch (error) {
-    return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
-  }
-
-  return { status: 'delivered' };
 }
 
 /**

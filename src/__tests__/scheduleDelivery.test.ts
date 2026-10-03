@@ -17,12 +17,10 @@ import {
   createScheduleDelivery,
   buildFireAnnouncement,
   prependScheduledRunMarker,
-  busyPollIntervalMs,
-  waitIdleTimeoutMs,
   unboundDeliveryError,
   type ScheduleDeliveryDeps,
-  type EnsureSessionResult,
 } from '../scheduler/delivery';
+import { busyPollIntervalMs, waitIdleTimeoutMs, type EnsureSessionResult } from '../postToSession';
 import {
   checkIsReminderSchedule,
   getUnboundPausableSchedules,

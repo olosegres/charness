@@ -162,6 +162,7 @@ import { buildOptionsKeyboard, createTelegramConnectorOutbound } from './connect
 import { createCommandRouter } from './platform/commandRouter';
 import type { InboundCommand, InboundEvent } from './platform/inbound';
 import type { OutboundHints } from './platform/outbound';
+import type { PostToSessionDeps } from './postToSession';
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
@@ -13794,9 +13795,34 @@ interface SchedulerWiringDeps {
  * with the actually-bound port). Lives outside `startBot` only for readability;
  * it captures the same module-level state the rest of bot.ts uses.
  */
+/**
+ * @description How a prompt is posted into a conversation's session — the deps of
+ * {@link postToSession}, shared by the scheduler's fire and the Jira connector's
+ * requests (Jira plan J5, D21).
+ */
+function createSessionPostDeps(): PostToSessionDeps {
+  return {
+    checkBusy: (conversationKey) => {
+      const key = keyFromString(conversationKey);
+      return getThreadAdapter(key).checkIsBusy?.(key) ?? false;
+    },
+    ensureSession: async (conversationKey, fallbackAdapterName) => {
+      const result = await ensureAgentSession(keyFromString(conversationKey), { fallbackAdapterName });
+      return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+    },
+    forwardPrompt: async (conversationKey, text) => {
+      const key = keyFromString(conversationKey);
+      await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey));
+    },
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+}
+
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const ledger = new RunLedger();
   const delivery = createScheduleDelivery({
+    ...createSessionPostDeps(),
     announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
     pin: async (threadKeyStr, messageId, isSilent) => {
       const key = keyFromString(threadKeyStr);
@@ -13807,18 +13833,6 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
             disable_notification: isSilent,
           }),
       );
-    },
-    checkBusy: (threadKeyStr) => {
-      const key = keyFromString(threadKeyStr);
-      return getThreadAdapter(key).checkIsBusy?.(key) ?? false;
-    },
-    ensureSession: async (threadKeyStr, fallbackAdapterName) => {
-      const result = await ensureAgentSession(keyFromString(threadKeyStr), { fallbackAdapterName });
-      return result.ok ? { ok: true } : { ok: false, reason: result.reason };
-    },
-    forwardPrompt: async (threadKeyStr, text) => {
-      const key = keyFromString(threadKeyStr);
-      await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(threadKeyStr));
     },
     runCheck: async (threadKeyStr, command, timeoutMs) => {
       const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
@@ -13831,8 +13845,6 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       await state.upsertSchedule({ ...record, isCheckFailing: isFailing, updatedAt: new Date().toISOString() });
       await state.flush();
     },
-    now: () => Date.now(),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   /**
