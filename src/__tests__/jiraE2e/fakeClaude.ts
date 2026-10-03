@@ -11,6 +11,7 @@ import {
   fakeClaudeLogFileNames,
   fakeClaudeVersion,
   getFlagValues,
+  getForeignAgentEnvNames,
   getLaunchSessionId,
   requiredJiraSessionFlags,
   sessionViolationExitCode,
@@ -237,6 +238,14 @@ async function main(): Promise<void> {
   const missingFlags = requiredJiraSessionFlags.filter((flag) => !checkHasFlag(argv, flag));
   if (missingFlags.length > 0) {
     const reason = `missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}`;
+    appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
+    process.stderr.write(`fake claude: ${reason}\n`);
+    process.exit(argvViolationExitCode);
+  }
+  // R32: an agent of a tracker conversation starts with the allowlist only — no instance variable, no secret.
+  const foreignEnvNames = getForeignAgentEnvNames(Object.keys(process.env));
+  if (foreignEnvNames.length > 0) {
+    const reason = `environment carries ${foreignEnvNames.join(', ')}`;
     appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
     process.stderr.write(`fake claude: ${reason}\n`);
     process.exit(argvViolationExitCode);

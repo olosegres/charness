@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as dotenv from 'dotenv';
+import { addEnvFileVariableNames } from '../utils/agentEnvironment';
 
 /** Canonical per-user config dir name under `~/.config` (post-rename). */
 const configDirName = 'telegramcode';
@@ -66,8 +67,10 @@ export function loadEnvFiles(localDirectory = process.cwd()): { loaded: string[]
     if (!fs.statSync(envFile).isFile()) throw new Error(`ENV_FILE is not a regular file: ${envFile}`);
     // dotenv REPORTS a read failure instead of throwing; ignoring it would start
     // the instance on the inherited environment with nothing loaded.
-    const { error } = dotenv.config({ path: envFile, override: true });
+    const { error, parsed } = dotenv.config({ path: envFile, override: true });
     if (error) throw new Error(`ENV_FILE could not be read: ${envFile} (${error.message})`);
+    // R32: what the instance file set never reaches a tracker conversation's agent.
+    addEnvFileVariableNames(Object.keys(parsed ?? {}));
     return { loaded: [envFile] };
   }
 

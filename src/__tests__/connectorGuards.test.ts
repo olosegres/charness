@@ -382,7 +382,7 @@ describe('the guards are wired where they must run', () => {
     // A module joins this list only once it is known to read no settings at load time.
     const allowed = [
       'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'platform/connectorSet.ts',
-      'sessionKey.ts', 'state.ts', 'utils/autoContinueOnLimit.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts',
+      'sessionKey.ts', 'state.ts', 'utils/agentEnvironment.ts', 'utils/autoContinueOnLimit.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts',
     ];
     assert.deepEqual(projectModules.filter((name) => !allowed.includes(name)), []);
     assert.ok(projectModules.includes('cli/connectorGuards.ts'), 'the probe is not vacuous');

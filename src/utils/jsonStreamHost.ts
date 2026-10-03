@@ -142,19 +142,26 @@ export function parseJsonStreamTmuxSessionName(name: string): SessionKey | null 
  * stdin FIFO READ-WRITE on fd 0 — the load-bearing trick: claude itself holds a
  * read end open, so the bot (a plain writer) can die and reconnect freely.
  * `env -u ANTHROPIC_API_KEY` keeps subscription billing (`apiKeySource:"none"`)
- * even if the tmux server environment carries a key. All embedded strings are
- * single-quoted; `claudePath` must be ABSOLUTE (tmux server PATH differs).
+ * even if the tmux server environment carries a key. With an `environment`
+ * (a tracker conversation, R32) claude gets exactly those variables instead —
+ * `env -i`, so nothing of the tmux server's environment reaches it (no API key
+ * either). All embedded strings are single-quoted; `claudePath` must be ABSOLUTE
+ * (tmux server PATH differs).
  */
 export function buildWrapperScript(
   claudePath: string,
   args: readonly string[],
   workDir: string,
   paths: JsonStreamSessionPaths,
+  environment: Readonly<Record<string, string>> | null = null,
 ): string {
   const command = [claudePath, ...args].map(shellSingleQuote).join(' ');
+  const envCommand = environment === null
+    ? 'env -u ANTHROPIC_API_KEY'
+    : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`))].join(' ');
   return `#!/bin/sh
 cd ${shellSingleQuote(workDir)} || exit ${wrapperCdFailExitCode}
-env -u ANTHROPIC_API_KEY ${command} \\
+${envCommand} ${command} \\
   0<> ${shellSingleQuote(paths.stdinFifo)} >> ${shellSingleQuote(paths.stdoutFile)} 2>> ${shellSingleQuote(paths.stderrFile)} &
 CHILD=$!
 echo $CHILD > ${shellSingleQuote(paths.pidFile)}

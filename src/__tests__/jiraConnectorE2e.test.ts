@@ -42,7 +42,14 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { FakeJira, fakeJiraSearchRequest, type FakeJiraIssue } from './jiraE2e/fakeJira';
-import { checkHasFlag, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, requiredJiraSessionFlags } from './jiraE2e/fakeClaudeContract';
+import {
+  checkHasFlag,
+  fakeClaudeLogFileNames,
+  getFlagValues,
+  getForeignAgentEnvNames,
+  getLaunchSessionId,
+  requiredJiraSessionFlags,
+} from './jiraE2e/fakeClaudeContract';
 import { getAdfText } from '../connectors/jira/adf';
 import { getClaudeMemoryAbove } from '../connectors/jira/config';
 import { notTelegramChatPhrase } from '../connectors/telegram/foreignKeyFallbacks';
@@ -61,6 +68,8 @@ const requester = { accountId: 'requester-account', accountType: 'atlassian', di
 const inProgress = { id: '10001', name: 'In Progress' };
 const toDo = { id: '10000', name: 'To Do' };
 const projectFolder = 'proj';
+/** The instance's secret: the AI account's token, which jira.json takes from the env file. */
+const instanceTokenEnvName = 'CHARNESS_JIRA_AI_API_TOKEN';
 /** The shortest poll the config allows. */
 const pollIntervalSeconds = 10;
 /**
@@ -70,13 +79,22 @@ const pollIntervalSeconds = 10;
  */
 const backstopMinutes = '0.5';
 
-const flowTimeoutMs = 6 * 60 * 1000;
 const bootTimeoutMs = 60 * 1000;
 /** A poll, a session start and a turn, with room to spare. */
 const answerTimeoutMs = 60 * 1000;
 /** The backstop window plus the wake-up engine's one-minute sweep, twice over. */
 const resumeTimeoutMs = 3 * 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
+/** The restart step waits for this many polls. */
+const restartPollWaitMs = 3 * pollIntervalSeconds * 1000;
+/** Room for the steps' own work between their waits. */
+const flowMarginMs = 60 * 1000;
+/**
+ * Every wait the flow can spend, added up — two boots, the answer waits of five
+ * steps, the resume, the restart's polls, two stops (the restart's and
+ * `after`'s) — so a slow run fails at the step that is late, never at the suite.
+ */
+const flowTimeoutMs = 2 * bootTimeoutMs + 5 * answerTimeoutMs + resumeTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 const waitStepMs = 250;
 /** How much of charness's output a failed wait quotes. */
 const outputTailChars = 4000;
@@ -165,8 +183,6 @@ interface FakeAnswer {
 
 /** The only variables `run-isolated.sh` passes to the instance. */
 const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
-/** Variables of another bot or of the operator's Atlassian account — never in the instance, never in its agent. */
-const foreignEnvNameRe = /^(TELEGRAM_BOT_TOKEN|ATLASSIAN_|TELEGRAMCODE_)/;
 
 /** The variable NAMES a running process was started with (Linux `/proc`); `null` where `/proc` is not available. */
 function getProcessEnvNames(pid: number): string[] | null {
@@ -257,7 +273,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     site: 'example.atlassian.net',
     baseUrl: jiraBaseUrl,
     email: aiCredentials.email,
-    apiToken: '${CHARNESS_JIRA_AI_API_TOKEN}',
+    apiToken: `\${${instanceTokenEnvName}}`,
     accountId: aiAccount.accountId,
     projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name] } },
     pollIntervalSeconds,
@@ -286,9 +302,41 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     OPENCODE_URL: `http://127.0.0.1:${ports.openCode}`,
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
-    CHARNESS_JIRA_AI_API_TOKEN: aiCredentials.apiToken,
+    [instanceTokenEnvName]: aiCredentials.apiToken,
   };
   fs.writeFileSync(envFile, `${Object.entries(instanceEnv).map(([name, value]) => `${name}=${value}`).join('\n')}\n`, { mode: 0o600 });
+}
+
+/**
+ * @description Stop everything the flow started, SYNCHRONOUSLY — so it also runs
+ * from `process.on('exit')` after a signal or an uncaught failure, where nothing
+ * asynchronous runs any more: charness (killed outright), the instance's own tmux
+ * servers (which ends the fake agents in them) and the temp folder. The fake Jira
+ * dies with the process. Only the instance's servers: its named one and any
+ * default server a broken `-L` guard started — both in its private TMUX_TMPDIR,
+ * never the user's; a broken TMUX_TMPDIR hand-over would have put the named one in
+ * tmux's own default folder (`/tmp`).
+ */
+function removeInstanceSync(): void {
+  if (charness && charness.exitCode === null && charness.signalCode === null) charness.kill('SIGKILL');
+  charness = null;
+  if (tmuxSocketName && tmuxTmpDir) {
+    // Every kill names its socket by FULL PATH (`-S`), which tmux never swaps for the server `$TMUX` names.
+    for (const socketPath of [
+      path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName),
+      path.join(getTmuxSocketDir(tmuxTmpDir), 'default'),
+      path.join(getTmuxSocketDir('/tmp'), tmuxSocketName),
+    ]) {
+      spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
+    }
+    fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
+  }
+  if (testRoot) fs.rmSync(testRoot, { recursive: true, force: true });
+}
+
+/** A signal ends the run through `exit`, whose handler cleans up (a signal's default action would skip it). */
+function exitOnSignal(signal: NodeJS.Signals): void {
+  process.exit(128 + os.constants.signals[signal]);
 }
 
 function createIssue(key: string, mode: string): void {
@@ -310,30 +358,23 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     tmuxSocketName = `charness-j7-${randomBytes(4).toString('hex')}`;
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
+    process.on('exit', removeInstanceSync);
+    process.once('SIGINT', exitOnSignal);
+    process.once('SIGTERM', exitOnSignal);
+
     fakeJira = new FakeJira({ aiAccount, credentials: aiCredentials, statuses: [toDo, inProgress] });
     const jiraBaseUrl = await fakeJira.start();
     writeInstanceFiles({ openCode: await getFreePort(), botMcp: await getFreePort() }, jiraBaseUrl);
   });
 
   after(async () => {
+    // A graceful stop first (the normal end); the synchronous sweep is the same one a signal or a crash runs.
     await stopCharness();
-    if (tmuxSocketName && tmuxTmpDir) {
-      // Only the instance's own servers, which also ends the fake agents in them: its named server and any
-      // default server a broken `-L` guard started — both in its private TMUX_TMPDIR, never the user's — and,
-      // had the TMUX_TMPDIR hand-over broken, the named server in tmux's own default folder (`/tmp`). Each is
-      // named by FULL PATH (`-S`): a bare `kill-server` run from inside a tmux session went to the server `$TMUX`
-      // names — the user's default one — and killed every session on it.
-      for (const socketPath of [
-        path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName),
-        path.join(getTmuxSocketDir(tmuxTmpDir), 'default'),
-        path.join(getTmuxSocketDir('/tmp'), tmuxSocketName),
-      ]) {
-        spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
-      }
-      fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
-    }
+    removeInstanceSync();
     await fakeJira?.stop();
-    if (testRoot) fs.rmSync(testRoot, { recursive: true, force: true });
+    process.off('exit', removeInstanceSync);
+    process.off('SIGINT', exitOnSignal);
+    process.off('SIGTERM', exitOnSignal);
   });
 
   it('isolation holds before the first boot', () => {
@@ -446,7 +487,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const outputBeforeRestart = charnessOutput.length;
     await startCharness();
     // Two polls after the restart: the first one decided every issue again.
-    await waitFor('two polls after the restart', 3 * pollIntervalSeconds * 1000, () =>
+    await waitFor('two polls after the restart', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);
 
     // Deterministic, whereas the counts below could be read before a re-opened request's post (not awaited) lands.
@@ -461,13 +502,20 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(fakeJira.getIssue('PROJ-4').assignee?.accountId, aiAccount.accountId, 'PROJ-4 still matches — its trigger was remembered');
   });
 
-  it('the agent got the instance\'s temp HOME and no other bot\'s or Atlassian variables', () => {
-    const launches = readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches);
-    assert.ok(launches.length > 0);
-    for (const launch of launches) {
-      assert.equal(launch.home, instanceHome);
-      assert.deepEqual(launch.envNames.filter((name) => foreignEnvNameRe.test(name)), []);
+  it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {
+    const sessionLaunches = readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch);
+    assert.ok(sessionLaunches.length > 0);
+    for (const launch of sessionLaunches) {
+      assert.equal(launch.home, instanceHome, 'HOME is the launch environment\'s');
+      assert.deepEqual(getForeignAgentEnvNames(launch.envNames), [], 'nothing but the allowlist');
+      assert.ok(!launch.envNames.includes(instanceTokenEnvName), 'not the tracker token');
     }
+    // Every session inherits the server's global environment, and any process on the server can read it back.
+    const serverEnvironment = spawnSync('tmux', ['-L', tmuxSocketName, 'show-environment', '-g'], { encoding: 'utf8', env: getInstanceTmuxEnv() });
+    assert.equal(serverEnvironment.status, 0, 'the private server answered');
+    const serverEnvNames = serverEnvironment.stdout.split('\n').filter(Boolean).map((line) => line.replace(/^-/, '').split('=')[0]);
+    assert.ok(serverEnvNames.includes('HOME'), 'the server environment was read');
+    assert.deepEqual(getForeignAgentEnvNames(serverEnvNames.filter((name) => name !== 'TMUX_TMPDIR')), [], 'the server started clean');
   });
 
   it('every session launch carried the Jira flags (R11)', () => {

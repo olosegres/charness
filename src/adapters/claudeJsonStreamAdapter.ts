@@ -25,7 +25,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
-import { getClaudePlatformFlags } from './claudePlatformFlags';
+import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
@@ -428,8 +428,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     args.push(...prepareClaudeCompactHookFlags(resolveDataDir()));
 
     // Subscription billing: the wrapper runs `env -u ANTHROPIC_API_KEY` (a set
-    // key would meter the API). The CLI reads the OAuth login from ~/.claude —
-    // `apiKeySource:"none"` (probe-verified under the wrapper).
+    // key would meter the API); a tracker conversation's wrapper starts claude
+    // with `env -i` and the agent allowlist instead (R32) — no key either. The CLI
+    // reads the OAuth login from ~/.claude — `apiKeySource:"none"` (probe-verified
+    // under the wrapper).
     const sessionDir = resolveJsonStreamSessionDir(resolveDataDir(), key);
     const paths = getJsonStreamSessionPaths(sessionDir);
     const tmuxName = buildJsonStreamTmuxSessionName(key);
@@ -442,7 +444,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       fs.rmSync(sessionDir, { recursive: true, force: true });
       fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
       await execFilePromise('mkfifo', [paths.stdinFifo]);
-      fs.writeFileSync(paths.wrapperFile, buildWrapperScript(this.claudePath, args, workDir, paths), { mode: 0o755 });
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript(this.claudePath, args, workDir, paths, getClaudePlatformEnvironment(key)), { mode: 0o755 });
       // A stale same-name tmux session (crashed bot / pre-adopt build) would make
       // `new-session` fail — and must not keep running unowned next to ours.
       await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(tmuxName));

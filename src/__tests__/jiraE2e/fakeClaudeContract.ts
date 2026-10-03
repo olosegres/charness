@@ -5,6 +5,8 @@
  * is loaded.
  */
 
+import { agentEnvironmentNames } from '../../utils/agentEnvironment';
+
 export const argvViolationExitCode = 3;
 /** What the real CLI exits with when it refuses a `--resume` / `--session-id` it cannot serve. */
 export const sessionViolationExitCode = 1;
@@ -23,6 +25,8 @@ export const requiredJiraSessionFlags: ReadonlyArray<readonly string[]> = [
   ['--strict-mcp-config'],
 ];
 
+/** What the fake's own launcher script exports: where it logs and keeps its state. */
+export const fakeClaudeOwnEnvPrefix = 'FAKE_CLAUDE_';
 /**
  * @name FakeClaudeTurn
  * @description One line of the fake's `turns.jsonl`: the request the turn
@@ -53,6 +57,18 @@ export interface FakeClaudeAnswer {
   kind: string;
   outcome: string;
 }
+/** What `/bin/sh` adds by itself to the environment it runs a command with. */
+const shellAddedEnvNames: readonly string[] = ['PWD'];
+
+/**
+ * @description The variables of an agent's environment R32 does not allow: anything
+ * but the agent allowlist, what a shell adds, and the fake's own launcher variables.
+ */
+export function getForeignAgentEnvNames(envNames: readonly string[]): string[] {
+  const allowedNames: readonly string[] = [...agentEnvironmentNames, ...shellAddedEnvNames];
+  return envNames.filter((name) => !allowedNames.includes(name) && !name.startsWith(fakeClaudeOwnEnvPrefix));
+}
+
 /** @description Whether `argv` carries `flag` followed by its values. */
 export function checkHasFlag(argv: readonly string[], flag: readonly string[]): boolean {
   return argv.some((_, index) => flag.every((part, offset) => argv[index + offset] === part));

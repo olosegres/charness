@@ -1,5 +1,6 @@
 import type { SessionKey } from '../sessionKey';
 import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { getAgentEnvironment } from '../utils/agentEnvironment';
 
 /**
  * @description Claude Code flags a session needs because of its conversation's
@@ -26,4 +27,14 @@ import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 export function getClaudePlatformFlags(key: SessionKey): string[] {
   if (checkIsTelegramKey(key)) return [];
   return ['--setting-sources', 'project,local', '--disallowedTools', 'AskUserQuestion'];
+}
+
+/**
+ * @description The environment a session starts with because of its platform:
+ * outside Telegram only the agent allowlist (R32 — never the instance's own
+ * variables, its tracker token among them); `null` — a Telegram topic keeps the
+ * environment it has always had.
+ */
+export function getClaudePlatformEnvironment(key: SessionKey): Record<string, string> | null {
+  return checkIsTelegramKey(key) ? null : getAgentEnvironment();
 }

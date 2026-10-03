@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { getAgentEnvironment } from './agentEnvironment';
 
 export const execFilePromise = promisify(execFile);
 
@@ -35,12 +36,27 @@ export function getTmuxBaseArgs(): string[] {
   return socketName ? ['-L', socketName] : [];
 }
 
+/**
+ * @description The environment a tmux call runs with. On a PRIVATE server
+ * (`TMUX_SOCKET_NAME`) only the agent allowlist plus where its socket lives
+ * (R32): the call that starts the server hands it its global environment, which
+ * every session inherits and any process on the server can read back — a
+ * tracker instance's secrets must not be in it. The default server (a Telegram
+ * instance) keeps the bot's own environment, as before.
+ */
+export function getTmuxExecEnv(): NodeJS.ProcessEnv | undefined {
+  if (!process.env.TMUX_SOCKET_NAME) return undefined;
+  const socketDir = process.env.TMUX_TMPDIR;
+  return { ...getAgentEnvironment(), ...(socketDir ? { TMUX_TMPDIR: socketDir } : {}) };
+}
+
 /** Best-effort tmux call: returns stdout on success, empty string on any error. */
 export async function tmuxAsync(...args: string[]): Promise<string> {
   try {
     const { stdout } = await execFilePromise('tmux', [...getTmuxBaseArgs(), ...args], {
       encoding: 'utf-8',
       timeout: 5000,
+      env: getTmuxExecEnv(),
     });
     return stdout.toString().trim();
   } catch {
@@ -59,6 +75,7 @@ export async function tmuxOrThrowAsync(...args: string[]): Promise<string> {
   const { stdout } = await execFilePromise('tmux', [...getTmuxBaseArgs(), ...args], {
     encoding: 'utf-8',
     timeout: 5000,
+    env: getTmuxExecEnv(),
   });
   return stdout.toString().trim();
 }
