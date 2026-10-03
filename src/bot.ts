@@ -1686,11 +1686,12 @@ function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: stri
 }
 
 /**
- * @description The retry kick (timer callback): tell the user we're resuming,
- * make sure a session is up (after an OpenCode `session.error` it still is, so
- * `ensureAgentSession` is a no-op and the nudge lands in the SAME live session —
- * context intact; only a genuinely-dead session is restarted via the thread's
- * last adapter), then forward a neutral "continue" nudge.
+ * @description The retry kick (timer callback): make sure a session is up (after
+ * an OpenCode `session.error` it still is, so `ensureAgentSession` is a no-op and
+ * the nudge lands in the SAME live session — context intact; only a
+ * genuinely-dead session is restarted via the thread's last adapter), tell the
+ * user we're resuming, then forward a neutral "continue" nudge. With no session
+ * to resume the topic gets the reason instead, and nothing is forwarded.
  *
  * CRITICAL: the kick goes through {@link forwardPromptToAgent} directly, NEVER a
  * scheduler wait-for-idle path — OpenCode's optimistic `isBusy` is not cleared on
@@ -1720,12 +1721,6 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
   entry.timer = null;
   entry.firedAt = Date.now();
 
-  // The notices are topic messages (a pin among them): a tracker issue hears about the wait from the
-  // request's own answer (`announceLimitWait`), and has no topic for the rest (R6).
-  if (checkIsTelegramKey(key)) {
-    if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
-    else void replyToThread(key, t('apiRetry.resuming'));
-  }
   try {
     // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
     // would not know the work the limit interrupted.
@@ -1736,7 +1731,16 @@ async function fireApiRetryWithLocale(key: SessionKey): Promise<void> {
       // watching a turn that never started would only mislead the wake-ups. The open request, if any, stays
       // open for the wake-up engine (its backstop / retries); what was held stays held for the next session.
       console.warn(`[apiRetry] not resuming ${k}: no session (${ensured.reason}); an open request is left to the wake-up engine`);
+      // A topic is told why nothing resumed — it waits for the operator's next message now (R6: not a tracker issue).
+      if (checkIsTelegramKey(key)) void replyToThread(key, ensured.message);
       return;
+    }
+    // Announced only once there is a session to resume: a pinned "resuming" over a start that failed would
+    // read as work under way. The notices are topic messages (a pin among them): a tracker issue hears about
+    // the wait from the request's own answer (`announceLimitWait`), and has no topic for the rest (R6).
+    if (checkIsTelegramKey(key)) {
+      if (entry.kind === 'usageLimit') void surfaceLimitResumedNotice(key);
+      else void replyToThread(key, t('apiRetry.resuming'));
     }
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets

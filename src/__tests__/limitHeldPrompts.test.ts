@@ -255,7 +255,10 @@ describe('the bot holds and releases them (R23)', () => {
     assert.ok(tryStart > 0 && ensure > tryStart && guard > ensure && stop > guard && deliver > stop && track > deliver,
       'inside the try (so `finally` still releases the kick), the result is checked BEFORE the nudge is delivered and watched');
     const guardBody = fire.slice(guard, deliver);
-    assert.match(guardBody, /console\.warn\(`\[apiRetry\] not resuming \$\{k\}: no session \(\$\{ensured\.reason\}\); an open request is left to the wake-up engine`\);\n\s*return;/);
+    assert.match(guardBody, /console\.warn\(`\[apiRetry\] not resuming \$\{k\}: no session \(\$\{ensured\.reason\}\); an open request is left to the wake-up engine`\);\n.*\n\s*if \(checkIsTelegramKey\(key\)\) void replyToThread\(key, ensured\.message\);\n\s*return;/,
+      'a topic is told why nothing resumed');
+    const notice = fire.indexOf('void surfaceLimitResumedNotice(key);');
+    assert.ok(notice > stop && notice < deliver, 'the "resuming" notice (pinned for a limit) is posted only once there is a session to resume');
     assert.doesNotMatch(guardBody, /closeRequest|cancelConversation|cancelApiRetry|limitHeldPrompts\./, 'the request and what was held are not dropped');
     assert.match(fire, /finally \{\n\s*apiRetryKicksInFlight\.delete\(k\);/);
   });
@@ -264,7 +267,9 @@ describe('the bot holds and releases them (R23)', () => {
     const fire = getFunction('async function fireApiRetryWithLocale(');
     const telegramBranch = /if \(checkIsTelegramKey\(key\)\) \{\n\s*if \(entry\.kind === 'usageLimit'\) void surfaceLimitResumedNotice\(key\);\n\s*else void replyToThread\(key, t\('apiRetry\.resuming'\)\);\n\s*\}/;
     assert.match(fire, telegramBranch);
-    assert.equal(fire.replace(telegramBranch, '').match(/surfaceLimitResumedNotice\(|replyToThread\(/), null, 'no notice outside the branch');
+    const telegramFailureReply = /if \(checkIsTelegramKey\(key\)\) void replyToThread\(key, ensured\.message\);/;
+    assert.match(fire, telegramFailureReply);
+    assert.equal(fire.replace(telegramBranch, '').replace(telegramFailureReply, '').match(/surfaceLimitResumedNotice\(|replyToThread\(/), null, 'no notice outside the branch');
   });
 
   it('a limit resume continues a tracker issue in its own session; Telegram\'s resume is unchanged (R26)', () => {
