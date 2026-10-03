@@ -9884,7 +9884,9 @@ export async function postReattachRecap(
       hasTurns: recap.turns.length > 0,
       isColdStart,
     });
-    if (shouldPost) {
+    // The recap is what a topic reader missed while the bot was down; a conversation of
+    // another platform has no topic, and its answers reach it only through `answer_request` (R2).
+    if (shouldPost && checkIsTelegramKey(key)) {
       const text = withThreadLocale(key, () => formatReattachRecap(recap));
       if (text) await deps.reply(key, text);
     }

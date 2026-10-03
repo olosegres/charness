@@ -28,6 +28,7 @@ import { postReattachRecap } from '../bot';
 import type { AgentAdapter, ReattachRecap, SeenWatermark } from '../types';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 const workDir = '/work/ws-setup';
@@ -124,6 +125,21 @@ describe('postReattachRecap (S1 idempotency)', () => {
     };
     await postReattachRecap(key, makeAdapter(recap), workDir, sessionId, snapshot, false, deps);
     assert.equal(advanceCalls.length, 0, 'no advance when the head is unknown — retry next reattach');
+  });
+
+  it('posts nothing for a conversation of another platform, and still advances to head (R2)', async () => {
+    const recap: ReattachRecap = {
+      missedCount: 3,
+      turns: oneTurn,
+      isWatermarkKnown: true,
+      isActive: false,
+      headWatermark: head,
+    };
+    const jiraKey = makeJiraKey('PROJ-4');
+    // A cold start with missed output — exactly what posts the recap in a Telegram topic.
+    await postReattachRecap(jiraKey, makeAdapter(recap), workDir, sessionId, snapshot, true, deps);
+    assert.equal(replyCalls.length, 0, 'no topic to post the recap in');
+    assert.deepEqual(advanceCalls, [{ key: jiraKey, watermark: head }]);
   });
 
   it('is a no-op for an adapter without getReattachRecap (Terminal)', async () => {
