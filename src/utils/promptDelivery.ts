@@ -43,6 +43,8 @@ export type PromptDelivery = 'forwarded' | 'buffered';
  * A caller that must know how the wait ended — to keep what would re-send the prompt
  * until it reached a session — passes `onBufferedSettled`; it is called once, only
  * for a prompt that was buffered (a forwarded one is already done when this resolves).
+ * A failed "queued" notice is logged and does not change the answer: the prompt was
+ * buffered before the notice went out.
  */
 export async function deliverPromptOrBuffer(
   deps: PromptDeliveryDeps,
@@ -56,6 +58,15 @@ export async function deliverPromptOrBuffer(
     return 'forwarded';
   }
   const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled);
-  if (isFirstBuffered && checkIsTelegramKey(key)) await deps.announceQueued(key);
+  if (isFirstBuffered && checkIsTelegramKey(key)) {
+    // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not
+    // read as a delivery that failed: a caller keeping something until the prompt reached a session would
+    // otherwise treat the buffered prompt as spent.
+    try {
+      await deps.announceQueued(key);
+    } catch (err) {
+      console.error(`[promptDelivery] queued notice for ${keyToString(key)} failed:`, err);
+    }
+  }
   return 'buffered';
 }

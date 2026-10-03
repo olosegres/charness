@@ -64,6 +64,8 @@ interface World {
   startupBuffer: StartupPromptBuffer;
   continuations: Array<{ key: string; isCountersReset: boolean; isRequestPrompt: boolean }>;
   ownSessionResumes: string[];
+  /** The session steps in the order the kick took them. */
+  sessionSteps: Array<'resumeOwnSession' | 'ensureSession'>;
   clears: string[];
   ensureOutcome: ApiRetryEnsureOutcome;
   /** Runs while the nudge is being handed over (a recurrence, a user message, a crash). */
@@ -80,8 +82,14 @@ function createKickDeps(): ApiRetryKickDeps {
     entries: world.entries,
     kicksInFlight: world.kicksInFlight,
     now: () => clockMs,
-    resumeOwnSession: async (key) => { world.ownSessionResumes.push(keyToString(key)); },
-    ensureSession: async () => world.ensureOutcome,
+    resumeOwnSession: async (key) => {
+      world.ownSessionResumes.push(keyToString(key));
+      world.sessionSteps.push('resumeOwnSession');
+    },
+    ensureSession: async () => {
+      world.sessionSteps.push('ensureSession');
+      return world.ensureOutcome;
+    },
     postTopicNotice: (key, notice) => { world.notices.push({ key: keyToString(key), notice }); },
     getResumeMessage: () => world.untakenRequestPrompt === undefined
       ? { text: continueNudge, isRequestPrompt: false }
@@ -153,6 +161,7 @@ beforeEach(() => {
     startupBuffer: new StartupPromptBuffer(),
     continuations: [],
     ownSessionResumes: [],
+    sessionSteps: [],
     clears: [],
     ensureOutcome: { ok: true },
     duringDelivery: null,
@@ -183,6 +192,11 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
         'a tracker issue has no topic to say it in (R6)',
       );
       assert.deepEqual(world.ownSessionResumes, isTelegram ? [] : [keyString], 'an issue resumes its own session first (R26)');
+      assert.deepEqual(
+        world.sessionSteps,
+        isTelegram ? ['ensureSession'] : ['resumeOwnSession', 'ensureSession'],
+        'resumed by id BEFORE a session would be started fresh',
+      );
 
       // The bot restarts: what it saved is all it has.
       const rearmedAfterRestart = boot();

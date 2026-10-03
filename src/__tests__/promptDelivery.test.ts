@@ -10,7 +10,7 @@
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -82,6 +82,28 @@ describe('deliverPromptOrBuffer', () => {
     await deliverPromptOrBuffer(deps, topicKey, 'dropped one', true, (outcome) => outcomes.push(outcome));
     startupBuffer.discardPrompts(keyToString(topicKey));
     assert.deepEqual(outcomes, ['replayed', 'dropped']);
+  });
+
+  it('a "queued" notice that fails is logged; the prompt is still buffered and its caller still hears how the wait ends', async () => {
+    const outcomes: BufferedPromptOutcome[] = [];
+    startupBuffer.markStarting(keyToString(topicKey));
+    const logged = mock.method(console, 'error', () => {});
+    let delivery: Awaited<ReturnType<typeof deliverPromptOrBuffer>>;
+    try {
+      delivery = await deliverPromptOrBuffer(
+        { ...deps, announceQueued: async () => { throw new Error('notice failed'); } },
+        topicKey,
+        'the nudge',
+        true,
+        (outcome) => outcomes.push(outcome),
+      );
+      assert.equal(logged.mock.calls.length, 1);
+    } finally {
+      logged.mock.restore();
+    }
+    assert.equal(delivery, 'buffered', 'the notice is not the delivery');
+    assert.deepEqual(await replayTexts(startupBuffer, topicKey), ['the nudge']);
+    assert.deepEqual(outcomes, ['replayed']);
   });
 
   it('a prompt forwarded at once has no wait to tell about: the callback is not called', async () => {
