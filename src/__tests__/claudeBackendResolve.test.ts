@@ -21,7 +21,7 @@ import {
   parseClaudeBackendArg,
   getClaudeModeAction,
 } from '../adapters/createAdapter';
-import { claudeJsonStreamAdapterName } from '../adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from '../adapters/adapterNames';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 

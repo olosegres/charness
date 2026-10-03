@@ -17,7 +17,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { getCompactCommandRoute } from '../utils/compactCommandRoute';
-import { claudeJsonStreamAdapterName } from '../adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from '../adapters/adapterNames';
 
 const terminalAdapterName = 'terminal';
 

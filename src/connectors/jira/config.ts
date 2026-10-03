@@ -1,16 +1,18 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { z } from 'zod';
 import { expandEnvVars } from '../../mcpConfig';
 import { BindError, validateSubdir, type BindErrorCode } from '../../validation';
 import { defaultOpenCodeUrl, getOpenCodePort } from '../../installManager';
-import { claudeJsonStreamAdapterName } from '../../adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from '../../adapters/adapterNames';
+import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
 import type { JiraProjectStatus } from './client';
 
 /**
  * @description The Jira connector's configuration (Jira connector plan J4,
- * D10/D11/D16, R4/R9): `DATA_DIR/jira.json`, `${VAR}` placeholders expanded from
+ * D10/D11/D16, R4/R9; J4b R12/R14/R15): `DATA_DIR/jira.json`, `${VAR}` placeholders expanded from
  * the environment (the secrets stay in the instance's env file, never in the
  * JSON). Validation names the field that is wrong and never echoes a value.
  */
@@ -22,9 +24,24 @@ export const jiraPollIntervalDefaultSeconds = 90;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
 
-/** The Claude backends a Jira project may use (D16); OpenCode is refused (R4). */
-const jiraAdapterNames = [claudeJsonStreamAdapterName, 'claude'] as const;
-const openCodeAdapterName = 'opencode';
+/** The one backend a Jira session runs on (D16, R14). */
+const jiraAdapterName = claudeJsonStreamAdapterName;
+/** Backends refused for a Jira project, each with its reason. */
+const refusedAdapterReasons: ReadonlyMap<string, string> = new Map([
+  ['opencode', 'OpenCode is not available for a Jira project (it cannot be isolated yet)'],
+  ['claude', 'the tmux Claude backend is not available for a Jira project (its folder-trust dialog would hold the session)'],
+]);
+
+/**
+ * What Claude Code loads as project memory from the working folder AND every
+ * folder above it (R12): any of these above a Jira folder brings someone's
+ * instructions into the session — under HOME that is the operator's own setup.
+ */
+export const claudeMemoryMarkerNames = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude'] as const;
+
+/** A model name as `claude --model` takes it (`opus`, `claude-opus-5-5`, `opus[1m]`). */
+const claudeModelRe = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/;
+const claudeModelMaxLength = 100;
 
 /** A Jira Cloud site: a bare `<name>.atlassian.net` host — no scheme, port or path. */
 const atlassianSiteRe = /^[a-z0-9][a-z0-9-]*\.atlassian\.net$/;
@@ -54,6 +71,9 @@ const rawConfigSchema = z.strictObject({
   pollIntervalSeconds: z.number().int().min(jiraPollIntervalMinSeconds).max(jiraPollIntervalMaxSeconds).optional(),
   runBudgetPer24h: z.number().int().min(1).optional(),
   adapter: z.string().min(1).optional(),
+  // R15: user settings no longer apply in a Jira session, so its model and effort come from here.
+  model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
+  effort: z.enum(claudeEffortLevels).optional(),
   baseUrl: z.string().min(1).optional(),
 });
 
@@ -77,13 +97,29 @@ export interface JiraConfig {
   projects: ReadonlyMap<string, JiraProjectConfig>;
   pollIntervalMs: number;
   runBudgetPer24h: number;
-  adapter: (typeof jiraAdapterNames)[number];
+  adapter: typeof jiraAdapterName;
+  /** The sessions' model; absent → Claude's default. */
+  model: string | null;
+  /** The sessions' reasoning effort; absent → the bot's default. */
+  effort: ClaudeEffortLevel | null;
 }
 
 export type JiraConfigResult = { ok: true; config: JiraConfig } | { ok: false; errors: string[] };
 
-function checkIsJiraAdapterName(name: string): name is (typeof jiraAdapterNames)[number] {
-  return jiraAdapterNames.some((adapterName) => adapterName === name);
+/**
+ * @description R12: the marker of Claude memory nearest a folder — in the folder
+ * itself or any folder above it, up to the filesystem root — with how many
+ * levels up it was found; `null` when the ancestry is clean.
+ */
+export function getClaudeMemoryAbove(folderPath: string): { markerName: string; levelsUp: number } | null {
+  let current = path.resolve(folderPath);
+  for (let levelsUp = 0; ; levelsUp += 1) {
+    const markerName = claudeMemoryMarkerNames.find((name) => fs.existsSync(path.join(current, name)));
+    if (markerName) return { markerName, levelsUp };
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 /** Names of the fields that still hold a `${VAR}` placeholder — a variable the env file does not set. */
@@ -157,11 +193,12 @@ export function validateJiraConfig(
     const baseUrlError = getBaseUrlError(raw.baseUrl);
     if (baseUrlError) errors.push(`jira.json ${baseUrlError}`);
   }
-  const adapterName = raw.adapter ?? claudeJsonStreamAdapterName;
-  if (adapterName === openCodeAdapterName) {
-    errors.push('jira.json adapter: OpenCode is not available for a Jira project (it cannot be isolated yet)');
-  } else if (!checkIsJiraAdapterName(adapterName)) {
-    errors.push(`jira.json adapter must be one of ${jiraAdapterNames.join(', ')}`);
+  const adapterName = raw.adapter ?? jiraAdapterName;
+  const refusedReason = refusedAdapterReasons.get(adapterName);
+  if (refusedReason) {
+    errors.push(`jira.json adapter: ${refusedReason}`);
+  } else if (adapterName !== jiraAdapterName) {
+    errors.push(`jira.json adapter must be ${jiraAdapterName}`);
   }
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
@@ -182,10 +219,16 @@ export function validateJiraConfig(
       errors.push(`jira.json projects.${projectKey}.folder: ${reason}`);
       continue;
     }
+    const memory = getClaudeMemoryAbove(path.join(fs.realpathSync(context.workRoot), folder));
+    if (memory) {
+      const where = memory.levelsUp === 0 ? 'in it' : `${memory.levelsUp} folder(s) above it`;
+      errors.push(`jira.json projects.${projectKey}.folder: Claude would load ${memory.markerName} found ${where} — pick a folder outside HOME and any repository`);
+      continue;
+    }
     projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses });
   }
 
-  if (errors.length > 0 || !checkIsJiraAdapterName(adapterName)) return { ok: false, errors };
+  if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
     config: {
@@ -197,7 +240,9 @@ export function validateJiraConfig(
       projects,
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
-      adapter: adapterName,
+      adapter: jiraAdapterName,
+      model: raw.model ?? null,
+      effort: raw.effort ?? null,
     },
   };
 }

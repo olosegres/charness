@@ -96,9 +96,8 @@ import {
   type JsonStreamSessionPaths,
   type StdoutTailState,
 } from '../utils/jsonStreamHost';
+import { claudeJsonStreamAdapterName } from './adapterNames';
 
-/** Adapter name (the `state.agents[key].name` value + factory key). */
-export const claudeJsonStreamAdapterName = 'claude-json-stream';
 
 /**
  * @description Coalesce window for streamed answer/thinking deltas before an

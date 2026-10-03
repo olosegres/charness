@@ -6,7 +6,8 @@ import { ClaudeCliAdapter } from './claudeCliAdapter';
 import { OpenCodeAdapter } from './openCodeAdapter';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { TerminalAdapter } from './terminalAdapter';
-import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from './adapterNames';
 
 type AdapterFactory = () => AgentAdapter;
 

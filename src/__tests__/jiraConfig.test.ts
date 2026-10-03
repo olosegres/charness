@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  getClaudeMemoryAbove,
   getOpenCodeIsolationError,
   jiraPollIntervalDefaultSeconds,
   jiraRunBudgetDefault,
@@ -22,6 +23,7 @@ import {
 } from '../connectors/jira/config';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { defaultOpenCodeUrl } from '../installManager';
+import { getModulesLoadedBy } from './loadedModulesProbe';
 
 const tokenVarName = 'CHARNESS_TEST_JIRA_TOKEN';
 const tokenValue = 'token-value-never-echoed';
@@ -36,7 +38,7 @@ function createConfig(overrides: Record<string, string | number | object | undef
     email: 'ai-account@example.com',
     apiToken: `\${${tokenVarName}}`,
     accountId: 'placeholder-account',
-    projects: { CHRN: { folder: 'proj-work', triggerStatuses: ['AI To Do'] } },
+    projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'] } },
     ...overrides,
   };
 }
@@ -47,9 +49,17 @@ function getErrors(parsedJson: object, context: { openCodeUrl: string | undefine
   return result.ok ? [] : result.errors;
 }
 
+/** R12 refuses a folder with Claude memory above it, so the temp folder itself must have a clean ancestry. */
+function createCleanWorkRoot(): string {
+  const created = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
+  const memory = getClaudeMemoryAbove(created);
+  assert.equal(memory, null, `the temp folder's ancestry holds ${memory?.markerName}: run the tests with TMPDIR outside HOME and any repository`);
+  return created;
+}
+
 describe('validateJiraConfig', () => {
   before(() => {
-    workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
+    workRoot = createCleanWorkRoot();
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
     fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;
@@ -69,18 +79,55 @@ describe('validateJiraConfig', () => {
     assert.equal(config.pollIntervalMs, jiraPollIntervalDefaultSeconds * 1000);
     assert.equal(config.runBudgetPer24h, jiraRunBudgetDefault);
     assert.equal(config.adapter, 'claude-json-stream');
-    assert.deepEqual([...config.projects], [['CHRN', { folder: 'proj-work', triggerStatusNames: ['AI To Do'] }]]);
+    assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'] }]]);
   });
 
-  it('explicit poll interval, budget and the tmux Claude backend are taken', () => {
+  it('explicit poll interval, budget, json-stream adapter, model and effort are taken; absent model and effort are null', () => {
     const result = validateJiraConfig(
-      createConfig({ pollIntervalSeconds: 30, runBudgetPer24h: 2, adapter: 'claude' }),
+      createConfig({ pollIntervalSeconds: 30, runBudgetPer24h: 2, adapter: 'claude-json-stream', model: 'opus[1m]', effort: 'high' }),
       { workRoot, openCodeUrl: isolatedOpenCodeUrl },
     );
-    assert.ok(result.ok);
+    assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
     assert.equal(result.config.pollIntervalMs, 30_000);
     assert.equal(result.config.runBudgetPer24h, 2);
-    assert.equal(result.config.adapter, 'claude');
+    assert.equal(result.config.adapter, 'claude-json-stream');
+    assert.equal(result.config.model, 'opus[1m]');
+    assert.equal(result.config.effort, 'high');
+    const defaults = validateJiraConfig(createConfig(), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+    assert.ok(defaults.ok);
+    assert.equal(defaults.config.model, null);
+    assert.equal(defaults.config.effort, null);
+  });
+
+  it('R15: an effort outside Claude\'s levels and a model that is not a model name are refused by field', () => {
+    const errors = getErrors(createConfig({ effort: 'extreme', model: 'opus --dangerously-skip-permissions' }));
+    assert.deepEqual(errors.map((error) => error.split(':')[0]).sort(), ['jira.json effort', 'jira.json model']);
+  });
+
+  it('R14: the tmux Claude backend is refused for a Jira project, with its reason', () => {
+    assert.deepEqual(getErrors(createConfig({ adapter: 'claude' })), [
+      'jira.json adapter: the tmux Claude backend is not available for a Jira project (its folder-trust dialog would hold the session)',
+    ]);
+  });
+
+  it('R12: a folder with Claude memory in it or anywhere above it is refused, naming the marker and how far up', () => {
+    const cases: Array<[string, string, string]> = [
+      ['CLAUDE.md', 'memory-file/project', 'Claude would load CLAUDE.md found 1 folder(s) above it'],
+      ['CLAUDE.local.md', 'memory-local/project', 'Claude would load CLAUDE.local.md found 1 folder(s) above it'],
+      ['AGENTS.md', 'memory-agents/deep/project', 'Claude would load AGENTS.md found 2 folder(s) above it'],
+      ['.claude', 'memory-dir/project', 'Claude would load .claude found 1 folder(s) above it'],
+    ];
+    for (const [markerName, folder, expected] of cases) {
+      fs.mkdirSync(path.join(workRoot, folder), { recursive: true });
+      const markerParent = path.join(workRoot, folder.split('/')[0]);
+      if (markerName === '.claude') fs.mkdirSync(path.join(markerParent, markerName));
+      else fs.writeFileSync(path.join(markerParent, markerName), '# memory\n');
+      const errors = getErrors(createConfig({ projects: { PROJ: { folder, triggerStatuses: ['AI To Do'] } } }));
+      assert.deepEqual(errors, [`jira.json projects.PROJ.folder: ${expected} — pick a folder outside HOME and any repository`], markerName);
+    }
+    fs.mkdirSync(path.join(workRoot, 'memory-inside'));
+    fs.writeFileSync(path.join(workRoot, 'memory-inside', 'CLAUDE.md'), '# memory\n');
+    assert.match(getErrors(createConfig({ projects: { PROJ: { folder: 'memory-inside', triggerStatuses: ['x'] } } }))[0], /CLAUDE\.md found in it/);
   });
 
   it('a placeholder whose variable is unset names the field and the variable, never a value', () => {
@@ -95,7 +142,7 @@ describe('validateJiraConfig', () => {
       site: `https://${tokenValue}.example.com/path`,
       baseUrl: `http://${tokenValue}.example.com`,
       adapter: tokenValue,
-      projects: { CHRN: { folder: tokenValue, triggerStatuses: ['x'] } },
+      projects: { PROJ: { folder: tokenValue, triggerStatuses: ['x'] } },
     }));
     assert.equal(schemaErrors.length, 2, schemaErrors.join('\n'));
     assert.equal(ruleErrors.length, 4, ruleErrors.join('\n'));
@@ -131,7 +178,7 @@ describe('validateJiraConfig', () => {
   });
 
   it('an unknown adapter is refused', () => {
-    assert.deepEqual(getErrors(createConfig({ adapter: 'terminal' })), ['jira.json adapter must be one of claude-json-stream, claude']);
+    assert.deepEqual(getErrors(createConfig({ adapter: 'terminal' })), ['jira.json adapter must be claude-json-stream']);
   });
 
   it('R9: an unset or default OPENCODE_URL is refused, a port of its own is accepted', () => {
@@ -147,13 +194,13 @@ describe('validateJiraConfig', () => {
   it('a project key that is not a Jira key, and a folder outside WORK_ROOT or missing, are refused', () => {
     const errors = getErrors(createConfig({
       projects: {
-        chrn: { folder: 'proj-work', triggerStatuses: ['AI To Do'] },
+        proj: { folder: 'proj-work', triggerStatuses: ['AI To Do'] },
         MISSING: { folder: 'no-such-folder', triggerStatuses: ['AI To Do'] },
         ESCAPE: { folder: '../', triggerStatuses: ['AI To Do'] },
       },
     }));
     assert.equal(errors.length, 3, errors.join('\n'));
-    assert.equal(errors[0], 'jira.json projects.chrn: not a Jira project key');
+    assert.equal(errors[0], 'jira.json projects.proj: not a Jira project key');
     assert.equal(errors[1], 'jira.json projects.MISSING.folder: does not exist under WORK_ROOT');
     assert.equal(errors[2], 'jira.json projects.ESCAPE.folder: is outside WORK_ROOT');
   });
@@ -189,13 +236,13 @@ describe('validateJiraConfig', () => {
       apiToken: undefined,
       pollIntervalSeconds: 601,
       runBudgetPer24h: 0,
-      projects: { CHRN: { folder: 'proj-work', triggerStatuses: [] } },
+      projects: { PROJ: { folder: 'proj-work', triggerStatuses: [] } },
     }));
     const fields = errors.map((error) => error.split(':')[0]).sort();
     assert.deepEqual(fields, [
       'jira.json apiToken',
       'jira.json pollIntervalSeconds',
-      'jira.json projects.CHRN.triggerStatuses',
+      'jira.json projects.PROJ.triggerStatuses',
       'jira.json runBudgetPer24h',
     ]);
     assert.deepEqual(getErrors(createConfig({ pollIntervalSeconds: 9 })).map((error) => error.split(':')[0]), ['jira.json pollIntervalSeconds']);
@@ -206,7 +253,7 @@ describe('loadJiraConfig', () => {
   const configPath = (): string => getJiraConfigPath(dataDir);
 
   before(() => {
-    workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
+    workRoot = createCleanWorkRoot();
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
     fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;
@@ -248,7 +295,7 @@ describe('resolveTriggerStatusIds', () => {
   ];
 
   it('matches names case-insensitively, in order, without duplicates', () => {
-    assert.deepEqual(resolveTriggerStatusIds('CHRN', ['ai to do', 'Done', 'AI TO DO'], statuses), { ok: true, statusIds: ['10001', '3'] });
+    assert.deepEqual(resolveTriggerStatusIds('PROJ', ['ai to do', 'Done', 'AI TO DO'], statuses), { ok: true, statusIds: ['10001', '3'] });
   });
 
   it('a name several issue types\' statuses share yields every id, so no issue type\'s status is missed', () => {
@@ -257,9 +304,17 @@ describe('resolveTriggerStatusIds', () => {
   });
 
   it('a name the project lacks is an error naming it, so a typo never disables the trigger silently', () => {
-    assert.deepEqual(resolveTriggerStatusIds('CHRN', ['AI To Do', 'Ai Todo', 'Review'], statuses), {
+    assert.deepEqual(resolveTriggerStatusIds('PROJ', ['AI To Do', 'Ai Todo', 'Review'], statuses), {
       ok: false,
-      error: 'project CHRN has no status named "Ai Todo", "Review"',
+      error: 'project PROJ has no status named "Ai Todo", "Review"',
     });
+  });
+});
+
+describe('what the config module loads', () => {
+  it('not the json-stream adapter: it needs only that backend\'s name (J4 review)', () => {
+    const { projectModules } = getModulesLoadedBy('connectors/jira/config.ts');
+    assert.ok(projectModules.includes('connectors/jira/config.ts'), 'the probe is not vacuous');
+    assert.ok(!projectModules.includes('adapters/claudeJsonStreamAdapter.ts'), projectModules.join('\n'));
   });
 });

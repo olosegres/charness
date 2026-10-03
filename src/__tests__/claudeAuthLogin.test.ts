@@ -23,7 +23,7 @@ import {
   checkIsAuthLoginSucceeded,
   getLoginCommandRoute,
 } from '../utils/claudeAuthLogin';
-import { claudeJsonStreamAdapterName } from '../adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from '../adapters/adapterNames';
 
 // Real terminal control bytes, built at runtime so no raw control char lands in
 // this source file (keeps it grep-clean and unambiguous).

@@ -122,7 +122,7 @@ describe('createJiraClient', () => {
     it('searchIssues: POST /search/jql with fields, changelog expansion and the page token', async () => {
       const issue = {
         id: '10100',
-        key: 'CHRN-7',
+        key: 'PROJ-7',
         fields: {
           summary: 'Do it',
           status: { id: '10001', name: 'AI To Do' },
@@ -136,13 +136,13 @@ describe('createJiraClient', () => {
       };
       respondWith({ status: 200, body: json({ issues: [issue], nextPageToken: 'page-2', isLast: false }) });
       const result = await createClient().searchIssues({
-        jql: 'project = CHRN',
+        jql: 'project = PROJ',
         fields: ['summary', 'status'],
         isChangelogExpanded: true,
         maxResults: 50,
         nextPageToken: 'page-1',
       });
-      assert.equal(result.issues[0].key, 'CHRN-7');
+      assert.equal(result.issues[0].key, 'PROJ-7');
       // An item without `toString` (the first) must not fail on the inherited Object.prototype.toString.
       assert.deepEqual(result.issues[0].changelog?.histories.map((history) => history.items[0]), [
         { field: 'status', from: '1', to: '10001' },
@@ -153,7 +153,7 @@ describe('createJiraClient', () => {
       assert.equal(requests[0].url, '/rest/api/3/search/jql');
       assert.equal(requests[0].contentType, 'application/json');
       assert.deepEqual(JSON.parse(requests[0].body), {
-        jql: 'project = CHRN', fields: ['summary', 'status'], maxResults: 50, expand: 'changelog', nextPageToken: 'page-1',
+        jql: 'project = PROJ', fields: ['summary', 'status'], maxResults: 50, expand: 'changelog', nextPageToken: 'page-1',
       });
     });
 
@@ -173,14 +173,14 @@ describe('createJiraClient', () => {
     it('getChangelogPage, getIssue: paths with the key encoded and the fields joined', async () => {
       respondWith(
         { status: 200, body: json({ startAt: 100, maxResults: 100, total: 101, isLast: true, values: [] }) },
-        { status: 200, body: json({ id: '10100', key: 'CHRN-7', fields: { summary: 'Do it' } }) },
+        { status: 200, body: json({ id: '10100', key: 'PROJ-7', fields: { summary: 'Do it' } }) },
       );
       const client = createClient();
-      assert.equal((await client.getChangelogPage('CHRN-7', 100)).total, 101);
-      assert.equal((await client.getIssue('CHRN-7', ['summary', 'comment'])).fields.summary, 'Do it');
+      assert.equal((await client.getChangelogPage('PROJ-7', 100)).total, 101);
+      assert.equal((await client.getIssue('PROJ-7', ['summary', 'comment'])).fields.summary, 'Do it');
       assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
-        'GET /rest/api/3/issue/CHRN-7/changelog?startAt=100',
-        'GET /rest/api/3/issue/CHRN-7?fields=summary,comment',
+        'GET /rest/api/3/issue/PROJ-7/changelog?startAt=100',
+        'GET /rest/api/3/issue/PROJ-7?fields=summary,comment',
       ]);
     });
 
@@ -188,11 +188,11 @@ describe('createJiraClient', () => {
       const adf = convertMarkdownToAdf('Done.');
       respondWith({ status: 201, body: json({ id: '20001', self: 'ignored' }) }, { status: 204 });
       const client = createClient();
-      assert.deepEqual(await client.addComment('CHRN-7', adf), { id: '20001' });
-      await client.assignIssue('CHRN-7', 'placeholder-requester');
+      assert.deepEqual(await client.addComment('PROJ-7', adf), { id: '20001' });
+      await client.assignIssue('PROJ-7', 'placeholder-requester');
       assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
-        'POST /rest/api/3/issue/CHRN-7/comment',
-        'PUT /rest/api/3/issue/CHRN-7/assignee',
+        'POST /rest/api/3/issue/PROJ-7/comment',
+        'PUT /rest/api/3/issue/PROJ-7/assignee',
       ]);
       assert.deepEqual(JSON.parse(requests[0].body), { body: adf });
       assert.deepEqual(JSON.parse(requests[1].body), { accountId: 'placeholder-requester' });
@@ -206,10 +206,10 @@ describe('createJiraClient', () => {
           { name: 'Bug', statuses: [{ id: '10001', name: 'AI To Do' }, { id: '3', name: 'Done' }] },
         ]),
       });
-      assert.deepEqual(await createClient().getProjectStatuses('CHRN'), [
+      assert.deepEqual(await createClient().getProjectStatuses('PROJ'), [
         { id: '1', name: 'To Do' }, { id: '10001', name: 'AI To Do' }, { id: '3', name: 'Done' },
       ]);
-      assert.equal(requests[0].url, '/rest/api/3/project/CHRN/statuses');
+      assert.equal(requests[0].url, '/rest/api/3/project/PROJ/statuses');
     });
   });
 
@@ -236,7 +236,7 @@ describe('createJiraClient', () => {
 
     it('429 retries even a comment POST — Jira refused it, nothing was created', async () => {
       respondWith({ status: 429, headers: { 'Retry-After': '1' } }, { status: 201, body: json({ id: '20001' }) });
-      assert.deepEqual(await createClient().addComment('CHRN-7', convertMarkdownToAdf('x')), { id: '20001' });
+      assert.deepEqual(await createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), { id: '20001' });
       assert.equal(requests.length, 2);
     });
 
@@ -279,7 +279,7 @@ describe('createJiraClient', () => {
 
     it('5xx on a comment POST is NOT retried: the comment may exist already', async () => {
       respondWith({ status: 502 }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient().addComment('CHRN-7', convertMarkdownToAdf('x')), (error: Error) =>
+      await assert.rejects(createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
         error instanceof JiraHttpError && error.status === 502);
       assert.equal(requests.length, 1);
       assert.deepEqual(sleeps, []);
@@ -293,7 +293,7 @@ describe('createJiraClient', () => {
 
       requests = [];
       respondWith({ status: 201, isHanging: true }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient({ timeoutMs: 100 }).addComment('CHRN-7', convertMarkdownToAdf('x')), (error: Error) =>
+      await assert.rejects(createClient({ timeoutMs: 100 }).addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
         error instanceof JiraHttpError && error.status === 0);
       assert.equal(requests.length, 1);
     });
@@ -305,7 +305,7 @@ describe('createJiraClient', () => {
 
       requests = [];
       respondWith({ status: 201, isBodyCut: true }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient().addComment('CHRN-7', convertMarkdownToAdf('x')), (error: Error) =>
+      await assert.rejects(createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
         error instanceof JiraHttpError && error.status === 0);
       assert.equal(requests.length, 1);
     });

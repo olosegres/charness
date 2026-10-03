@@ -30,7 +30,8 @@ import {
   parseClaudeBackendArg,
   getClaudeModeAction,
 } from './adapters/createAdapter';
-import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
@@ -155,6 +156,7 @@ import {
   parseConnectors,
 } from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
+import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import type { PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
@@ -10987,6 +10989,13 @@ export async function startBot(): Promise<void> {
   // exact line across instances.
   state = await getStateStore();
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
+  // R13: before anything reads, rewrites or acts on the state, it must hold only
+  // conversations of the platforms this instance serves.
+  const unservedStateError = getUnservedStateError(getPersistedConversations(state), ENV.servedPlatforms);
+  if (unservedStateError) {
+    console.error(`[startup] ${unservedStateError}`);
+    process.exit(1);
+  }
 
   // 1a. Apply the operator's timezone to the PROCESS, right after the store
   //     loads and before anything reads a clock. Assigning `process.env.TZ`

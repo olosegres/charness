@@ -11,7 +11,6 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -27,6 +26,7 @@ import {
 } from '../platform/connectorSet';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
+import { getModulesLoadedBy } from './loadedModulesProbe';
 
 const srcDir = path.join(__dirname, '..');
 const placeholderSecret = 'placeholder-secret-value';
@@ -350,21 +350,13 @@ describe('the guards are wired where they must run', () => {
   });
 
   it('the guards load only their own small module set — they run before any env file is read (J4)', () => {
-    // A fresh process: this test file's own imports would hide what the guards pull in.
-    const listLoadedModules = [
-      `const before = new Set(Object.keys(require.cache));`,
-      `require(${JSON.stringify(path.join(srcDir, 'cli', 'connectorGuards.ts'))});`,
-      `const prefix = ${JSON.stringify(`${srcDir}${path.sep}`)};`,
-      `process.stdout.write(JSON.stringify(Object.keys(require.cache).filter((name) => !before.has(name) && name.startsWith(prefix)).map((name) => name.slice(prefix.length))));`,
-    ].join('\n');
-    const output = execFileSync(process.execPath, ['--import', 'tsx', '-e', listLoadedModules], { encoding: 'utf8' });
-    const loaded: string[] = JSON.parse(output);
+    const { projectModules } = getModulesLoadedBy('cli/connectorGuards.ts');
     // A module joins this list only once it is known to read no settings at load time.
     const allowed = [
       'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'platform/connectorSet.ts',
       'sessionKey.ts', 'state.ts', 'utils/autoContinueOnLimit.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts',
-    ].map((name) => name.split('/').join(path.sep));
-    assert.deepEqual(loaded.filter((name) => !allowed.includes(name)), []);
-    assert.ok(loaded.includes(path.join('cli', 'connectorGuards.ts')), 'the probe is not vacuous');
+    ];
+    assert.deepEqual(projectModules.filter((name) => !allowed.includes(name)), []);
+    assert.ok(projectModules.includes('cli/connectorGuards.ts'), 'the probe is not vacuous');
   });
 });
