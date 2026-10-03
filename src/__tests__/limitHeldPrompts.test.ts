@@ -236,7 +236,7 @@ describe('the bot holds and releases them (R23)', () => {
     assert.match(texts, /const time = `\$\{formatLocalClockWithDateIfNotToday\([^`]+\)\}\$\{zoneSuffix\}`;/);
   });
 
-  it('a held Jira request is watched when the resume delivers it, not when it was held', () => {
+  it('a held Jira request is watched when its prompt is posted, not when it was held', () => {
     assert.match(getFunction('function createJiraSessionDeps('), /if \(!posted\.isHeld\) await requestWakeUpEngine\?\.trackForwardedTurn\(key, requestId, \{ isRequestPrompt: true \}\);/);
   });
 });

@@ -11028,7 +11028,7 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
     postRequest: async (key, requestId, prompt) => {
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      // A held prompt is tracked when the limit wait's resume delivers it.
+      // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
       if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
     },
   };
