@@ -11,9 +11,12 @@ import { adfNodeSchema, type AdfDocument } from './adf';
  * Retries:
  *  - 429 — Jira refused the request, so ANY request is retried after its
  *    `Retry-After` (capped at 60 s), at most 3 attempts;
- *  - 5xx / network error / timeout — retried with backoff, but only for a
- *    request that is safe to repeat: a comment POST that timed out may have
- *    been created, and a second one would post the answer twice;
+ *  - 5xx / network error / timeout — retried with a jittered backoff, but only
+ *    for a request that is safe to repeat. A comment POST is never repeated: when
+ *    its request may have reached Jira (a timeout, a connection dropped
+ *    mid-response, a 5xx, an unreadable 2xx) `addComment` reports
+ *    `deliveryUnknown` instead (R18) — a second POST would post the answer
+ *    twice — and only a failure before anything was sent is an error;
  *  - 401 / 403 — never retried: {@link JiraAuthError}, which the poller turns
  *    into one loud line and a stop.
  *
@@ -25,12 +28,34 @@ export const jiraMaxAttempts = 3;
 export const jiraRetryAfterCapMs = 60_000;
 /** Backoff before the 2nd and 3rd attempt of a retryable 5xx / network failure. */
 export const jiraBackoffMs = [1_000, 4_000] as const;
+/** Up to this share is added at random to a backoff, so clients that failed together do not retry together. */
+export const jiraBackoffJitterRatio = 0.5;
+/**
+ * Network error codes that mean the request never left this host — no
+ * connection, no address, no TLS session — so nothing reached Jira.
+ */
+const failedBeforeSendingCodes: ReadonlySet<string> = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
+  'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
 
 /** The credentials were refused (401) or lack the permission (403). Never retried. */
 export class JiraAuthError extends Error {
   constructor(readonly status: number, readonly method: string, readonly requestPath: string) {
     super(`Jira refused ${method} ${requestPath} with ${status}: check the AI account's token and permissions`);
     this.name = 'JiraAuthError';
+  }
+}
+
+/**
+ * A request that is not safe to repeat may have reached Jira, but its outcome
+ * is unknown (R18). Turned into `addComment`'s `deliveryUnknown` result.
+ */
+class JiraDeliveryUnknownError extends Error {
+  constructor(method: string, requestPath: string, detail: string) {
+    super(`Jira ${method} ${requestPath}: outcome unknown — ${detail}`);
+    this.name = 'JiraDeliveryUnknownError';
   }
 }
 
@@ -137,6 +162,14 @@ export interface JiraSearchRequest {
   nextPageToken?: string;
 }
 
+/**
+ * @name JiraCommentPostResult
+ * @description `created` — Jira returned the new comment's id; `deliveryUnknown`
+ * — the request may have created the comment but the response did not say so
+ * (R18). The answer sink reads the issue's comments to decide, never re-posts.
+ */
+export type JiraCommentPostResult = { outcome: 'created'; id: string } | { outcome: 'deliveryUnknown'; reason: string };
+
 export interface JiraClientOptions {
   /** `https://<site>.atlassian.net`, or a loopback server in tests. */
   baseUrl: string;
@@ -144,6 +177,8 @@ export interface JiraClientOptions {
   apiToken: string;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
+  /** In [0, 1); the backoff jitter's source. */
+  randomImpl?: () => number;
   timeoutMs?: number;
 }
 
@@ -175,6 +210,23 @@ function getErrorDetail(text: string): string {
   return text.slice(0, 200) || 'no details';
 }
 
+/** The error codes on a failed `fetch`: its cause's, or each of a dual-stack connect's attempts. */
+function getFailureCodes(error: Error): string[] {
+  const cause = error.cause instanceof Error ? error.cause : null;
+  if (!cause) return [];
+  const own = 'code' in cause && typeof cause.code === 'string' ? [cause.code] : [];
+  const attempts = cause instanceof AggregateError
+    ? cause.errors.flatMap((attempt) => (attempt instanceof Error && 'code' in attempt && typeof attempt.code === 'string' ? [attempt.code] : []))
+    : [];
+  return [...own, ...attempts];
+}
+
+/** Did the request fail before anything was sent? Only then is it certain Jira received nothing. */
+function checkIsFailedBeforeSending(error: Error): boolean {
+  const codes = getFailureCodes(error);
+  return codes.length > 0 && codes.every((code) => failedBeforeSendingCodes.has(code));
+}
+
 /** A request that got no response: `fetch` says only "fetch failed", the reason (refused, DNS, TLS) is its cause. */
 function getFailureDetail(error: Error): string {
   const cause = error.cause instanceof Error ? error.cause : null;
@@ -190,15 +242,33 @@ export interface JiraClient {
   searchIssues(request: JiraSearchRequest): Promise<JiraSearchResult>;
   getChangelogPage(issueKey: string, startAt: number): Promise<JiraChangelogPage>;
   getIssue(issueKey: string, fields: string[]): Promise<JiraIssue>;
-  addComment(issueKey: string, body: AdfDocument): Promise<{ id: string }>;
+  addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
   getProjectStatuses(projectKey: string): Promise<JiraProjectStatus[]>;
+}
+
+function getParsedResponse<T>(text: string, schema: z.ZodType<T>): { ok: true; value: T } | { ok: false; detail: string } {
+  let json: object;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { ok: false, detail: 'the response is not JSON' };
+  }
+  const parsed = schema.safeParse(json);
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, detail: `unexpected response shape at ${parsed.error.issues[0]?.path.join('.') || '(root)'}` };
 }
 
 export function createJiraClient(options: JiraClientOptions): JiraClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl ?? sleep;
+  const randomImpl = options.randomImpl ?? Math.random;
   const timeoutMs = options.timeoutMs ?? jiraRequestTimeoutMs;
+  const getBackoffMs = (attempt: number): number => {
+    const baseMs = jiraBackoffMs[attempt - 1] ?? jiraBackoffMs[jiraBackoffMs.length - 1];
+    return Math.round(baseMs * (1 + jiraBackoffJitterRatio * randomImpl()));
+  };
   const authorization = `Basic ${Buffer.from(`${options.email}:${options.apiToken}`).toString('base64')}`;
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
 
@@ -222,21 +292,28 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         // Inside the try: the timeout also covers the body, and a connection can drop while it streams.
         text = await response.text();
       } catch (e) {
-        lastError = new JiraHttpError(0, request.method, request.path, e instanceof Error ? getFailureDetail(e) : 'network failure');
+        const detail = e instanceof Error ? getFailureDetail(e) : 'network failure';
+        if (!request.isIdempotent && !(e instanceof Error && checkIsFailedBeforeSending(e))) {
+          throw new JiraDeliveryUnknownError(request.method, request.path, detail);
+        }
+        lastError = new JiraHttpError(0, request.method, request.path, detail);
         if (!request.isIdempotent || attempt === jiraMaxAttempts) throw lastError;
-        await sleepImpl(jiraBackoffMs[attempt - 1]);
+        await sleepImpl(getBackoffMs(attempt));
         continue;
       }
       if (response.ok) return text;
       if (response.status === 401 || response.status === 403) {
         throw new JiraAuthError(response.status, request.method, request.path);
       }
+      if (!request.isIdempotent && response.status >= 500) {
+        throw new JiraDeliveryUnknownError(request.method, request.path, `${response.status}: ${getErrorDetail(text)}`);
+      }
       lastError = new JiraHttpError(response.status, request.method, request.path, getErrorDetail(text));
       if (attempt === jiraMaxAttempts) break;
       // Atlassian: a transient 5xx (such as 503) may also carry a `Retry-After`.
       if (response.status === 429 || (response.status >= 500 && request.isIdempotent)) {
         const retryAfterMs = getRetryAfterHeaderMs(response.headers.get('retry-after'), Date.now());
-        await sleepImpl(retryAfterMs === null ? jiraBackoffMs[attempt - 1] : Math.min(retryAfterMs, jiraRetryAfterCapMs));
+        await sleepImpl(retryAfterMs === null ? getBackoffMs(attempt) : Math.min(retryAfterMs, jiraRetryAfterCapMs));
         continue;
       }
       break;
@@ -245,18 +322,9 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
   }
 
   async function sendForJson<T>(request: JiraRequest, schema: z.ZodType<T>): Promise<T> {
-    const text = await send(request);
-    let json: object;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new JiraHttpError(0, request.method, request.path, 'the response is not JSON');
-    }
-    const parsed = schema.safeParse(json);
-    if (!parsed.success) {
-      throw new JiraHttpError(0, request.method, request.path, `unexpected response shape at ${parsed.error.issues[0]?.path.join('.') || '(root)'}`);
-    }
-    return parsed.data;
+    const parsed = getParsedResponse(await send(request), schema);
+    if (!parsed.ok) throw new JiraHttpError(0, request.method, request.path, parsed.detail);
+    return parsed.value;
   }
 
   const encode = encodeURIComponent;
@@ -293,11 +361,21 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         issueSchema,
       ),
 
-    addComment: (issueKey, body) =>
-      sendForJson(
-        { method: 'POST', path: `/rest/api/3/issue/${encode(issueKey)}/comment`, isIdempotent: false, body: { body } },
-        createdCommentSchema,
-      ),
+    addComment: async (issueKey, body) => {
+      const request: JiraRequest = { method: 'POST', path: `/rest/api/3/issue/${encode(issueKey)}/comment`, isIdempotent: false, body: { body } };
+      let text: string;
+      try {
+        text = await send(request);
+      } catch (e) {
+        if (e instanceof JiraDeliveryUnknownError) return { outcome: 'deliveryUnknown', reason: e.message };
+        throw e;
+      }
+      // A 2xx means Jira took the request; a body that does not say which comment it made leaves the outcome open.
+      const parsed = getParsedResponse(text, createdCommentSchema);
+      return parsed.ok
+        ? { outcome: 'created', id: parsed.value.id }
+        : { outcome: 'deliveryUnknown', reason: `Jira ${request.method} ${request.path}: ${parsed.detail}` };
+    },
 
     assignIssue: async (issueKey, accountId) => {
       await send({ method: 'PUT', path: `/rest/api/3/issue/${encode(issueKey)}/assignee`, isIdempotent: true, body: { accountId } });

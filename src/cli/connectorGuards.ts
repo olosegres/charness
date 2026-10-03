@@ -30,6 +30,18 @@ const defaultTmuxSocketName = 'default';
 /** A socket NAME, never a path: `-L` puts it in tmux's own socket directory. */
 const tmuxSocketNameRe = /^[A-Za-z0-9_-]+$/;
 const atlassianEnvPrefix = 'ATLASSIAN_';
+/**
+ * The oldest Node the Jira connector runs on (R20): it loads an ES-module-only
+ * package through `require()`, unflagged from 22.12 — earlier, its first answer
+ * would crash the instance instead of refusing the start.
+ */
+const jiraMinimumNodeVersion = [22, 12] as const;
+
+/** Is `version` (`process.versions.node`, e.g. `22.11.0`) older than `minimum`? */
+function checkIsNodeVersionBelow(version: string, minimum: readonly [number, number]): boolean {
+  const [major = 0, minor = 0] = version.split('.').map((part) => Number.parseInt(part, 10));
+  return major < minimum[0] || (major === minimum[0] && minor < minimum[1]);
+}
 const envFileRequiredError = 'CONNECTORS lists jira: set ENV_FILE to the instance\'s own env file (it is the only file read)';
 
 type EnvReading = Readonly<Record<string, string | undefined>>;
@@ -58,6 +70,8 @@ export function getConnectorGuardErrors(input: {
   env: EnvReading;
   hasJiraConfig: boolean;
   envFileAtLaunch: string | undefined;
+  /** `process.versions.node`. */
+  nodeVersion: string;
 }): string[] {
   const { env } = input;
   const parsed = parseConnectors(env.CONNECTORS);
@@ -73,6 +87,9 @@ export function getConnectorGuardErrors(input: {
     errors.push('ENV_FILE is set inside an env file: it may only come from the launching environment');
   } else if (isJiraServed && !input.envFileAtLaunch) {
     errors.push(envFileRequiredError);
+  }
+  if (isJiraServed && checkIsNodeVersionBelow(input.nodeVersion, jiraMinimumNodeVersion)) {
+    errors.push(`CONNECTORS lists jira: Node ${input.nodeVersion} is too old — the Jira connector needs Node ${jiraMinimumNodeVersion.join('.')} or newer`);
   }
   if (isJiraServed && !input.hasJiraConfig) {
     errors.push(`CONNECTORS lists jira but DATA_DIR has no ${jiraConfigFileName}`);
@@ -107,6 +124,6 @@ export function loadEnvWithConnectorGuards(localDirectory?: string): { loaded: s
   const envFileAtLaunch = process.env.ENV_FILE;
   const result = loadEnvFiles(localDirectory);
   const hasJiraConfig = fs.existsSync(getJiraConfigPath(resolveDataDir()));
-  exitOnGuardErrors(getConnectorGuardErrors({ env: process.env, hasJiraConfig, envFileAtLaunch }));
+  exitOnGuardErrors(getConnectorGuardErrors({ env: process.env, hasJiraConfig, envFileAtLaunch, nodeVersion: process.versions.node }));
   return result;
 }

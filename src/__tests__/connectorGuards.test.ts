@@ -30,6 +30,8 @@ import { getModulesLoadedBy } from './loadedModulesProbe';
 
 const srcDir = path.join(__dirname, '..');
 const placeholderSecret = 'placeholder-secret-value';
+/** A Node the Jira connector runs on, so the other guards are tested alone. */
+const supportedNodeVersion = '22.12.0';
 
 /** A Jira-only environment that passes every guard; each case breaks one thing. */
 const jiraOnlyEnv = {
@@ -72,7 +74,7 @@ describe('getPreloadGuardErrors', () => {
 
 describe('getConnectorGuardErrors', () => {
   const guard = (env: Record<string, string>, hasJiraConfig = true): string[] =>
-    getConnectorGuardErrors({ env, hasJiraConfig, envFileAtLaunch: env.ENV_FILE });
+    getConnectorGuardErrors({ env, hasJiraConfig, envFileAtLaunch: env.ENV_FILE, nodeVersion: supportedNodeVersion });
 
   it('a well-formed Jira-only instance and a plain Telegram one pass', () => {
     assert.deepEqual(guard(jiraOnlyEnv), []);
@@ -96,11 +98,11 @@ describe('getConnectorGuardErrors', () => {
 
   it('ENV_FILE that only an env file set is refused — the instance read the shared files', () => {
     // A shared config defining ENV_FILE + CONNECTORS would otherwise pass as an isolated start.
-    const jiraErrors = getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: undefined });
+    const jiraErrors = getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: undefined, nodeVersion: supportedNodeVersion });
     assert.deepEqual(jiraErrors, ['ENV_FILE is set inside an env file: it may only come from the launching environment']);
     // An env file that redirects ENV_FILE elsewhere (a hot worker would read that one).
     assert.match(
-      getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: '/srv/other.env' }).join('\n'),
+      getConnectorGuardErrors({ env: jiraOnlyEnv, hasJiraConfig: true, envFileAtLaunch: '/srv/other.env', nodeVersion: supportedNodeVersion }).join('\n'),
       /ENV_FILE is set inside an env file/,
     );
     // Also on a Telegram instance, and never when the value came from the launch.
@@ -122,6 +124,16 @@ describe('getConnectorGuardErrors', () => {
     assert.ok(!errors[0].includes(placeholderSecret));
     // Next to Telegram (whose tooling may use them) they are not this guard's business.
     assert.deepEqual(guard({ ...jiraOnlyEnv, CONNECTORS: 'telegram,jira', ATLASSIAN_SITE_NAME: placeholderSecret }), []);
+  });
+
+  it('R20: a Jira instance refuses a Node below 22.12; a Telegram one does not care', () => {
+    const withNode = (env: Record<string, string>, nodeVersion: string): string[] =>
+      getConnectorGuardErrors({ env, hasJiraConfig: true, envFileAtLaunch: env.ENV_FILE, nodeVersion });
+    const tooOld = 'CONNECTORS lists jira: Node 22.11.0 is too old — the Jira connector needs Node 22.12 or newer';
+    assert.deepEqual(withNode(jiraOnlyEnv, '22.11.0'), [tooOld]);
+    assert.match(withNode(jiraOnlyEnv, '20.19.1').join('\n'), /Node 20\.19\.1 is too old/);
+    for (const supported of ['22.12.0', '22.23.1', '23.0.0', '24.4.1']) assert.deepEqual(withNode(jiraOnlyEnv, supported), [], supported);
+    assert.deepEqual(withNode({}, '20.19.1'), []);
   });
 
   it('an unparsable CONNECTORS is the error itself', () => {

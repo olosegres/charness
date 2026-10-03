@@ -14,6 +14,7 @@ import * as http from 'http';
 import type { AddressInfo } from 'net';
 import {
   createJiraClient,
+  jiraBackoffJitterRatio,
   jiraBackoffMs,
   jiraMaxAttempts,
   jiraRetryAfterCapMs,
@@ -54,7 +55,7 @@ function respondWith(...canned: CannedResponse[]): void {
   responses = canned;
 }
 
-function createClient(overrides: { timeoutMs?: number; fetchImpl?: typeof fetch } = {}): JiraClient {
+function createClient(overrides: { timeoutMs?: number; fetchImpl?: typeof fetch; randomImpl?: () => number } = {}): JiraClient {
   return createJiraClient({
     baseUrl: `${baseUrl}/`,
     email,
@@ -62,8 +63,18 @@ function createClient(overrides: { timeoutMs?: number; fetchImpl?: typeof fetch 
     sleepImpl: async (ms) => {
       sleeps.push(ms);
     },
+    // No jitter unless a test asks for it, so the waits are the backoff itself.
+    randomImpl: () => 0,
     ...overrides,
   });
+}
+
+const commentBody = convertMarkdownToAdf('x');
+
+/** The refused-connection error `fetch` raises: nothing was sent. */
+function createRefusedFetchError(): TypeError {
+  const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9'), { code: 'ECONNREFUSED' });
+  return new TypeError('fetch failed', { cause });
 }
 
 const json = (value: object): string => JSON.stringify(value);
@@ -188,7 +199,7 @@ describe('createJiraClient', () => {
       const adf = convertMarkdownToAdf('Done.');
       respondWith({ status: 201, body: json({ id: '20001', self: 'ignored' }) }, { status: 204 });
       const client = createClient();
-      assert.deepEqual(await client.addComment('PROJ-7', adf), { id: '20001' });
+      assert.deepEqual(await client.addComment('PROJ-7', adf), { outcome: 'created', id: '20001' });
       await client.assignIssue('PROJ-7', 'placeholder-requester');
       assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
         'POST /rest/api/3/issue/PROJ-7/comment',
@@ -236,7 +247,7 @@ describe('createJiraClient', () => {
 
     it('429 retries even a comment POST — Jira refused it, nothing was created', async () => {
       respondWith({ status: 429, headers: { 'Retry-After': '1' } }, { status: 201, body: json({ id: '20001' }) });
-      assert.deepEqual(await createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), { id: '20001' });
+      assert.deepEqual(await createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), { outcome: 'created', id: '20001' });
       assert.equal(requests.length, 2);
     });
 
@@ -277,15 +288,41 @@ describe('createJiraClient', () => {
       assert.equal(requests.length, jiraMaxAttempts);
     });
 
-    it('5xx on a comment POST is NOT retried: the comment may exist already', async () => {
-      respondWith({ status: 502 }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
-        error instanceof JiraHttpError && error.status === 502);
+    it('R18: 5xx on a comment POST is deliveryUnknown, never retried — the comment may exist already', async () => {
+      respondWith({ status: 502, body: json({ errorMessages: ['Bad gateway'] }) }, { status: 201, body: json({ id: 'second-comment' }) });
+      const result = await createClient().addComment('PROJ-7', commentBody);
+      assert.equal(result.outcome, 'deliveryUnknown');
+      assert.match(result.outcome === 'deliveryUnknown' ? result.reason : '', /outcome unknown — 502: Bad gateway/);
       assert.equal(requests.length, 1);
       assert.deepEqual(sleeps, []);
     });
 
-    it('a timeout on a read is retried; on a comment POST it is thrown at once', async () => {
+    it('R18: a 2xx whose body does not name the comment is deliveryUnknown', async () => {
+      respondWith({ status: 201, body: '<html>proxy</html>' });
+      assert.deepEqual(await createClient().addComment('PROJ-7', commentBody), {
+        outcome: 'deliveryUnknown',
+        reason: 'Jira POST /rest/api/3/issue/PROJ-7/comment: the response is not JSON',
+      });
+    });
+
+    it('R18: a comment POST that failed before anything was sent is an error, not unknown, and not retried', async () => {
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls += 1;
+        throw createRefusedFetchError();
+      };
+      await assert.rejects(createClient({ fetchImpl }).addComment('PROJ-7', commentBody), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 0 && /ECONNREFUSED/.test(error.message));
+      assert.equal(calls, 1);
+    });
+
+    it('R18: a 4xx on a comment POST is an error — Jira refused it', async () => {
+      respondWith({ status: 400, body: json({ errors: { comment: 'Comment body is too long' } }) });
+      await assert.rejects(createClient().addComment('PROJ-7', commentBody), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 400 && /too long/.test(error.message));
+    });
+
+    it('a timeout on a read is retried; on a comment POST it is deliveryUnknown at once (R18)', async () => {
       respondWith({ status: 200, isHanging: true }, { status: 200, body: json({ accountId: 'a' }) });
       await createClient({ timeoutMs: 100 }).getMyself();
       assert.equal(requests.length, 2);
@@ -293,21 +330,25 @@ describe('createJiraClient', () => {
 
       requests = [];
       respondWith({ status: 201, isHanging: true }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient({ timeoutMs: 100 }).addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
-        error instanceof JiraHttpError && error.status === 0);
+      assert.equal((await createClient({ timeoutMs: 100 }).addComment('PROJ-7', commentBody)).outcome, 'deliveryUnknown');
       assert.equal(requests.length, 1);
     });
 
-    it('a connection dropped while the body streams is a network failure: a read retries, a comment POST does not', async () => {
+    it('a connection dropped while the body streams: a read retries, a comment POST is deliveryUnknown (R18)', async () => {
       respondWith({ status: 200, isBodyCut: true }, { status: 200, body: json({ accountId: 'a' }) });
       assert.deepEqual(await createClient().getMyself(), { accountId: 'a' });
       assert.equal(requests.length, 2);
 
       requests = [];
       respondWith({ status: 201, isBodyCut: true }, { status: 201, body: json({ id: 'second-comment' }) });
-      await assert.rejects(createClient().addComment('PROJ-7', convertMarkdownToAdf('x')), (error: Error) =>
-        error instanceof JiraHttpError && error.status === 0);
+      assert.equal((await createClient().addComment('PROJ-7', commentBody)).outcome, 'deliveryUnknown');
       assert.equal(requests.length, 1);
+    });
+
+    it('the backoff carries jitter: up to half again, from the random source', async () => {
+      respondWith({ status: 503 }, { status: 503 }, { status: 200, body: json({ accountId: 'a' }) });
+      await createClient({ randomImpl: () => 0.5 }).getMyself();
+      assert.deepEqual(sleeps, jiraBackoffMs.map((ms) => ms * (1 + jiraBackoffJitterRatio * 0.5)));
     });
 
     it('a network failure on a read is retried', async () => {

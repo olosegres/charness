@@ -10,6 +10,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adfNodeSchema,
+  createCommentBodies,
+  jiraCommentAdfMaxChars,
   convertMarkdownToAdf,
   getAdfText,
   jiraCommentMarkdownMaxChars,
@@ -46,6 +48,41 @@ describe('convertMarkdownToAdf', () => {
 function cell(type: 'tableHeader' | 'tableCell', text: string): AdfNode {
   return { type, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
 }
+
+function getTextNodes(node: AdfNode): AdfNode[] {
+  return node.type === 'text' ? [node] : (node.content ?? []).flatMap(getTextNodes);
+}
+
+describe('convertMarkdownToAdf keeps HTML as literal text (R17)', () => {
+  const convertToTexts = (markdown: string): string[] => convertMarkdownToAdf(markdown).content.flatMap(getTextNodes).map((node) => node.text ?? '');
+
+  it('a generic type stays in the text, in prose and in code', () => {
+    assert.deepEqual(convertToTexts('Returns Promise<string>, see `Map<K, V>`.'), ['Returns Promise<string>, see ', 'Map<K, V>', '.']);
+    const codeBlock = convertMarkdownToAdf('```ts\nconst list: Array<number> = [];\n```').content[0];
+    assert.deepEqual(getTextNodes(codeBlock).map((node) => node.text), ['const list: Array<number> = [];']);
+  });
+
+  it('an issue key in angle brackets stays as written', () => {
+    assert.deepEqual(convertToTexts('Blocked by <PROJ-12>.'), ['Blocked by <PROJ-12>.']);
+  });
+
+  it('an <adf> block never becomes a node: a mention in it stays text that notifies nobody', () => {
+    const markdown = '<adf>{"type":"mention","attrs":{"id":"placeholder-account","text":"@all"}}</adf>';
+    const document = convertMarkdownToAdf(markdown);
+    const types = document.content.flatMap(function collect(node: AdfNode): string[] {
+      return [node.type, ...(node.content ?? []).flatMap(collect)];
+    });
+    assert.ok(!types.includes('mention'), types.join(','));
+    assert.deepEqual(convertToTexts(markdown), [markdown]);
+  });
+
+  it('a real autolink stays a link with a clean address; a stray placeholder character cannot become <', () => {
+    const [prefix, link] = convertMarkdownToAdf('See <https://example.com/x>').content.flatMap(getTextNodes);
+    assert.equal(prefix.text, 'See ');
+    assert.deepEqual(link.marks, [{ type: 'link', attrs: { href: 'https://example.com/x' } }]);
+    assert.deepEqual(convertToTexts('a \uE000 b'), ['a \uFFFD b']);
+  });
+});
 
 describe('getAdfText', () => {
   const description: AdfNode = {
@@ -173,6 +210,12 @@ describe('splitMarkdownForComments', () => {
     assert.deepEqual(pieces.flatMap((piece) => piece.split('\n').slice(1, -1)), [...first, ...second]);
   });
 
+  it('a long line is cut after the last space that fits, never inside a word', () => {
+    const chunks = splitMarkdownForComments('alpha beta gamma delta', 12);
+    assert.deepEqual(chunks, ['alpha beta ', 'gamma delta']);
+    assert.equal(chunks.join(''), 'alpha beta gamma delta');
+  });
+
   it('a line longer than a comment is cut, nothing lost', () => {
     const chunks = splitMarkdownForComments('y'.repeat(25), 10);
     assert.deepEqual(chunks, ['y'.repeat(10), 'y'.repeat(10), 'y'.repeat(5)]);
@@ -201,5 +244,37 @@ describe('splitMarkdownForComments', () => {
     const chunks = splitMarkdownForComments(Array.from({ length: 7 }, () => paragraph).join('\n\n'));
     assert.ok(chunks.length >= 3);
     for (const chunk of chunks) assert.ok(chunk.length <= jiraCommentMarkdownMaxChars);
+  });
+});
+
+describe('createCommentBodies (R19)', () => {
+  const getAdfLength = (body: object): number => JSON.stringify(body).length;
+
+  it('a short answer is one body, identical to its conversion', () => {
+    assert.deepEqual(createCommentBodies('Done.'), [convertMarkdownToAdf('Done.')]);
+  });
+
+  it('every body fits by BOTH counts, even when the Markdown cap alone would let the ADF overflow', () => {
+    // Short marked-up words: about 9 Markdown characters become a ~60-character text node each.
+    const markdown = Array.from({ length: 300 }, (_, index) => `**w${index}** _x_`).join(' ');
+    const limits = { markdownMaxChars: 5_000, adfMaxChars: 4_000 };
+    assert.ok(markdown.length < limits.markdownMaxChars, 'the Markdown alone fits one comment');
+    assert.ok(getAdfLength(convertMarkdownToAdf(markdown)) > limits.adfMaxChars, 'its ADF does not');
+    const bodies = createCommentBodies(markdown, limits);
+    assert.ok(bodies.length > 1);
+    for (const body of bodies) assert.ok(getAdfLength(body) <= limits.adfMaxChars, `${getAdfLength(body)} chars`);
+    const words = (text: string): string[] => text.split(/\s+/).filter(Boolean);
+    assert.deepEqual(bodies.flatMap((body) => words(getAdfText(body))), words(getAdfText(convertMarkdownToAdf(markdown))), 'nothing lost or reordered');
+  });
+
+  it('the real limits are under Jira\'s 32 767 characters', () => {
+    assert.ok(jiraCommentAdfMaxChars < 32_767);
+    for (const body of createCommentBodies(Array.from({ length: 3_000 }, (_, index) => `- **item ${index}** \`code\``).join('\n'))) {
+      assert.ok(getAdfLength(body) <= jiraCommentAdfMaxChars);
+    }
+  });
+
+  it('a limit too small to hold one character is an error, never an endless split', { timeout: 5_000 }, () => {
+    assert.throws(() => createCommentBodies('text', { markdownMaxChars: 100, adfMaxChars: 10 }), /adfMaxChars 10 cannot hold a single character/);
   });
 });
