@@ -21,7 +21,7 @@
  */
 
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { classifyClaudeStreamMessage, parseStreamJsonLine } from './claudeStreamJson';
+import { classifyClaudeStreamMessage, parseStreamJsonLine, type ClaudeStreamAction } from './claudeStreamJson';
 import type { AgentApiErrorClass, LimitEpisodeMarker } from '../types';
 
 /**
@@ -41,10 +41,18 @@ export const limitEpisodeTailMaxBytes = 64 * 1024;
 export const limitEpisodeMaxAgeMs = 12 * 60 * 60 * 1000;
 
 /**
- * @description The error text of the LAST terminal `result` frame in a stdout tail,
- * or `null` when the tail ends on a healthy turn (or holds no terminal frame at
- * all). Reuses the adapter's own NDJSON parse + message classifier, so "what counts
- * as a terminal error and where its text lives" has exactly one definition.
+ * @description The error text the session is PARKED on, read out of a stdout
+ * tail: the last terminal `result` frame's error, or `null` when the tail ends on
+ * a healthy turn, holds no terminal frame, or shows the session moving on after
+ * the error. Reuses the adapter's own NDJSON parse + message classifier, so "what
+ * counts as a terminal error and where its text lives" has exactly one definition.
+ *
+ * Anything real written AFTER the error — the echo of a message sent to the
+ * session, the agent's text, thinking or tool frames — clears the verdict, though
+ * the turn it belongs to has no terminal frame yet. That is what a limit resume
+ * leaves in the log: the bot's own "continue" nudge and the work on it. A topic
+ * with that tail is not stuck on the old error, and re-arming it at a restart
+ * in the middle of that turn would resume the same episode a second time.
  */
 export function getLastTerminalErrorText(tailText: string): string | null {
   let lastErrorText: string | null = null;
@@ -52,12 +60,24 @@ export function getLastTerminalErrorText(tailText: string): string | null {
     const parsed = parseStreamJsonLine(line);
     if (!parsed) continue; // blank, or the tail's torn first line
     for (const action of classifyClaudeStreamMessage(parsed)) {
-      if (action.kind !== 'turnEnd') continue;
-      // A later healthy turn CLEARS the verdict — the session recovered.
-      lastErrorText = action.isError ? action.errorText : null;
+      if (action.kind === 'turnEnd') {
+        // A later healthy turn CLEARS the verdict — the session recovered.
+        lastErrorText = action.isError ? action.errorText : null;
+      } else if (checkIsSessionActivity(action)) {
+        lastErrorText = null;
+      }
     }
   }
   return lastErrorText;
+}
+
+/** Frames that only a running session writes (not the ambient rate-limit / status ones). */
+function checkIsSessionActivity(action: ClaudeStreamAction): boolean {
+  return action.kind === 'userEcho'
+    || action.kind === 'textDelta'
+    || action.kind === 'thinkingDelta'
+    || action.kind === 'toolUse'
+    || action.kind === 'toolResult';
 }
 
 export type LimitEpisodeDecision =
