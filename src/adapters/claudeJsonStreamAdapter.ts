@@ -97,6 +97,7 @@ import {
   type StdoutTailState,
 } from '../utils/jsonStreamHost';
 import { claudeJsonStreamAdapterName } from './adapterNames';
+import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 
 
 /**
@@ -308,6 +309,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private displayPrefsReader: DisplayPrefsReader | null = null;
   private seenWatermarkWriter: SeenWatermarkWriter | null = null;
   private jsonStreamTailWriter: JsonStreamTailWriter | null = null;
+  private sessionLaunchDefaultsReader: SessionLaunchDefaultsReader | null = null;
   /** In-flight explicit stops, per key — a second stop (or a start's implicit
    *  stop) AWAITS the first instead of racing it: the delayed first
    *  `tmux kill-session` could otherwise land AFTER a fresh same-name spawn
@@ -326,6 +328,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.jsonStreamTailWriter = writer;
   }
 
+  setSessionLaunchDefaultsReader(reader: SessionLaunchDefaultsReader): void {
+    this.sessionLaunchDefaultsReader = reader;
+  }
+
+  private getLaunchOptions(key: SessionKey): { model: string | null; effort: string } {
+    return getSessionLaunchOptions({
+      savedEffort: this.getEffort(key),
+      defaults: this.sessionLaunchDefaultsReader?.(key) ?? null,
+      botDefaultEffort: defaultEffortLevel,
+    });
+  }
+
   private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
     return this.displayPrefsReader?.(key) ?? getDefaultDisplayPrefs();
   }
@@ -341,15 +355,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async startSession(key: SessionKey, workDir: string, _args?: string, sessionId?: string): Promise<void> {
     await this.stopSessionInternal(key);
     const id = sessionId && checkIsValidUuid(sessionId) ? sessionId : randomUUID();
-    const effort = this.getEffort(key) ?? defaultEffortLevel;
-    await this.spawnSession(key, workDir, id, { effort, model: null, resume: false });
+    await this.spawnSession(key, workDir, id, { ...this.getLaunchOptions(key), resume: false });
   }
 
   async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
     if (!checkIsValidUuid(sessionId)) throw new Error(`Invalid sessionId: ${sessionId}`);
-    const effort = this.getEffort(key) ?? defaultEffortLevel;
-    await this.spawnSession(key, workDir, sessionId, { effort, model: null, resume: true });
+    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), resume: true });
 
     // Post the short last-N-turn context block ONLY on the explicit user resume
     // (`/sessions` pick) — a silent re-attach stays quiet (ResumeSessionOptions).

@@ -69,7 +69,10 @@ export class JiraHttpError extends Error {
 
 const accountSchema = z.object({
   accountId: z.string(),
+  /** `atlassian` for a person, `app` for an app or automation, `customer` for a service-desk customer. */
   accountType: z.string().optional(),
+  /** Runtime data for the agent's prompt only — never logged or stored. */
+  displayName: z.string().optional(),
 });
 
 /**
@@ -97,6 +100,7 @@ const issueFieldsSchema = z.object({
   status: z.object({ id: z.string(), name: z.string() }).optional(),
   assignee: accountSchema.nullable().optional(),
   reporter: accountSchema.nullable().optional(),
+  creator: accountSchema.nullable().optional(),
   created: z.string().optional(),
   description: adfNodeSchema.nullable().optional(),
   comment: z.object({

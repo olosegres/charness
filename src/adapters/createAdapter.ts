@@ -8,6 +8,7 @@ import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName } from './adapterNames';
+import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 
 type AdapterFactory = () => AgentAdapter;
 
@@ -35,6 +36,10 @@ function checkAdapterTakesLocaleReader(adapter: AgentAdapter): adapter is AgentA
 
 function checkAdapterTakesWatermarkWriter(adapter: AgentAdapter): adapter is AgentAdapter & { setSeenWatermarkWriter(writer: SeenWatermarkWriter): void } {
   return typeof (adapter as { setSeenWatermarkWriter?: unknown }).setSeenWatermarkWriter === 'function';
+}
+
+function checkAdapterTakesLaunchDefaults(adapter: AgentAdapter): adapter is AgentAdapter & { setSessionLaunchDefaultsReader(reader: SessionLaunchDefaultsReader): void } {
+  return 'setSessionLaunchDefaultsReader' in adapter && typeof adapter.setSessionLaunchDefaultsReader === 'function';
 }
 
 function checkAdapterTakesJsonStreamTailWriter(adapter: AgentAdapter): adapter is AgentAdapter & { setJsonStreamTailWriter(writer: JsonStreamTailWriter): void } {
@@ -152,6 +157,21 @@ export function registerJsonStreamTailWriter(writer: JsonStreamTailWriter): void
   }
 }
 
+/** Per-conversation launch defaults (model / effort) — same late-wiring idiom. */
+let sessionLaunchDefaultsReader: SessionLaunchDefaultsReader | null = null;
+
+/**
+ * @description Register what a platform wants a new session launched with (Jira
+ * plan J5, R15: `jira.json`'s model and effort). Wired by the Jira connector when
+ * it starts; until then (and for Telegram) sessions launch as before.
+ */
+export function registerSessionLaunchDefaultsReader(reader: SessionLaunchDefaultsReader): void {
+  sessionLaunchDefaultsReader = reader;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesLaunchDefaults(adapter)) adapter.setSessionLaunchDefaultsReader(reader);
+  }
+}
+
 function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onOutput) adapter.on('output', onOutput);
   if (onStatus) adapter.on('status', onStatus);
@@ -235,6 +255,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (jsonStreamTailWriter && checkAdapterTakesJsonStreamTailWriter(adapter)) {
       adapter.setJsonStreamTailWriter(jsonStreamTailWriter);
+    }
+    if (sessionLaunchDefaultsReader && checkAdapterTakesLaunchDefaults(adapter)) {
+      adapter.setSessionLaunchDefaultsReader(sessionLaunchDefaultsReader);
     }
   }
   return adapter;

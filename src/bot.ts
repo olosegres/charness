@@ -21,6 +21,7 @@ import {
   registerDisplayPrefsReader,
   registerSeenWatermarkWriter,
   registerJsonStreamTailWriter,
+  registerSessionLaunchDefaultsReader,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -157,11 +158,13 @@ import {
 } from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
-import type { PostToSessionDeps } from './postToSession';
+import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
+import { postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
+import type { JiraConnector } from './connectors/jira/connector';
 import {
   createTelegramPrimitiveGuard,
   getTelegramConversationLocale,
@@ -4582,13 +4585,16 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
 
   const binding = state.getBinding(key);
   const subdir = binding?.subdir ?? path.basename(ENV.workRoot);
-  const preamble = buildThreadContextPreamble({
-    topicName: binding?.topicName,
-    groupTitle: getPreambleGroupTitle(key),
-    key,
-    subdir,
-    timezone: getCurrentTimezone(),
-  });
+  // A Jira issue gets its own context (Jira plan J5, R5): where, and for whom — not a topic's.
+  const preamble = key.platform === 'jira'
+    ? buildJiraContextPreamble({ key, subdir, timezone: getCurrentTimezone() })
+    : buildThreadContextPreamble({
+      topicName: binding?.topicName,
+      groupTitle: getPreambleGroupTitle(key),
+      key,
+      subdir,
+      timezone: getCurrentTimezone(),
+    });
 
   const kStr = keyToString(key);
   if (!checkShouldInjectPreamble(preamble, threadContextMarkers.get(kStr))) {
@@ -10974,6 +10980,49 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
   console.warn('[startup-status] no reachable target — status not delivered');
 }
 
+/**
+ * @description Load and prepare the Jira connector, or end the start: a broken
+ * config, a token of another account or an unknown trigger status is fatal, with
+ * every reason on its own line (values never printed).
+ */
+async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
+  const { prepareJiraConnector, JiraConnectorStartError } = await import('./connectors/jira/connector');
+  try {
+    return await prepareJiraConnector({
+      dataDir: path.dirname(state.stateFilePath),
+      workRoot: ENV.workRoot,
+      openCodeUrl: process.env.OPENCODE_URL,
+    });
+  } catch (error) {
+    const reasons = error instanceof JiraConnectorStartError ? error.reasons : [error instanceof Error ? error.message : String(error)];
+    for (const reason of reasons) console.error(`[startup] Jira connector: ${reason}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * @description What the Jira connector opens and posts requests with (Jira plan
+ * J5): the issue's binding, the request ledger, and the shared session post —
+ * after which the wake-up engine watches the turn the request started.
+ */
+function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string): Parameters<JiraConnector['start']>[0] {
+  const sessionPostDeps = createSessionPostDeps();
+  return {
+    bindConversation: async (key, folder) => {
+      if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
+    },
+    createRequest: (key, origin) => requestLedger.createRequest(key, origin),
+    cancelRequest: async (requestId) => {
+      await requestLedger.closeRequest(requestId, 'cancelled');
+    },
+    postRequest: async (key, requestId, prompt) => {
+      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
+      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
+      await requestWakeUpEngine?.trackForwardedTurn(key, requestId);
+    },
+  };
+}
+
 export async function startBot(): Promise<void> {
   console.log('');
   console.log('=================================');
@@ -11050,6 +11099,17 @@ export async function startBot(): Promise<void> {
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
   });
   requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
+
+  // 1c. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
+  //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the
+  //     session boot phase: its launch defaults (R15) must apply to a session
+  //     resumed during reattach, and a broken setup stops the start with every
+  //     reason at once. It starts polling once the sessions are restored.
+  const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
+  if (jiraConnector) {
+    const { launchDefaults } = jiraConnector;
+    registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));
+  }
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle
@@ -11274,6 +11334,7 @@ export async function startBot(): Promise<void> {
       markSessionsRestored();
       // From here the engine can tell a live turn from a dead session.
       requestWakeUpEngine?.start();
+      jiraConnector?.start(createJiraSessionDeps(requestLedger, jiraConnector.adapterName));
     },
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may
@@ -11487,6 +11548,7 @@ export async function startBot(): Promise<void> {
         // means the next boot's rearmAll picks them back up (catch-up replay).
         schedulerEngine?.shutdown();
         requestWakeUpEngine?.stop();
+        jiraConnector?.stop();
         if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
       },
     });
