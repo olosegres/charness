@@ -95,6 +95,18 @@ const changelogHistorySchema = z.object({
   items: z.array(changelogItemSchema),
 });
 
+const commentSchema = z.object({
+  id: z.string(),
+  author: accountSchema.optional(),
+  created: z.string(),
+  body: adfNodeSchema.nullable().optional(),
+});
+
+const commentPageSchema = z.object({
+  total: z.number().optional(),
+  comments: z.array(commentSchema),
+});
+
 const issueFieldsSchema = z.object({
   summary: z.string().optional(),
   status: z.object({ id: z.string(), name: z.string() }).optional(),
@@ -105,12 +117,7 @@ const issueFieldsSchema = z.object({
   description: adfNodeSchema.nullable().optional(),
   comment: z.object({
     total: z.number().optional(),
-    comments: z.array(z.object({
-      id: z.string(),
-      author: accountSchema.optional(),
-      created: z.string(),
-      body: adfNodeSchema.nullable().optional(),
-    })),
+    comments: z.array(commentSchema),
   }).optional(),
 });
 
@@ -152,6 +159,7 @@ const myselfSchema = z.object({ accountId: z.string() });
 export type JiraAccount = z.infer<typeof accountSchema>;
 export type JiraChangelogHistory = z.infer<typeof changelogHistorySchema>;
 export type JiraIssue = z.infer<typeof issueSchema>;
+export type JiraComment = z.infer<typeof commentSchema>;
 export type JiraSearchResult = z.infer<typeof searchResultSchema>;
 export type JiraChangelogPage = z.infer<typeof changelogPageSchema>;
 /** A status as `GET /project/{key}/statuses` lists it. */
@@ -248,6 +256,8 @@ export interface JiraClient {
   getChangelogPage(issueKey: string, startAt: number, maxResults?: number): Promise<JiraChangelogPage>;
   getIssue(issueKey: string, fields: string[]): Promise<JiraIssue>;
   addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
+  /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
+  getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
   getProjectStatuses(projectKey: string): Promise<JiraProjectStatus[]>;
 }
@@ -384,6 +394,14 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       return parsed.ok
         ? { outcome: 'created', id: parsed.value.id }
         : { outcome: 'deliveryUnknown', reason: `Jira ${request.method} ${request.path}: ${parsed.detail}` };
+    },
+
+    getRecentComments: async (issueKey, maxResults) => {
+      const page = await sendForJson(
+        { method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/comment?orderBy=-created&maxResults=${maxResults}`, isIdempotent: true },
+        commentPageSchema,
+      );
+      return page.comments;
     },
 
     assignIssue: async (issueKey, accountId) => {

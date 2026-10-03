@@ -631,4 +631,5 @@ export const hiDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ अनुरोध {requestId} का जवाब नहीं मिला: रिमाइंडर देने के लिए एजेंट के सत्र तक नहीं पहुँचा जा सका। इस टॉपिक में सत्र जाँचें।',
   'requests.limit.answerAfterResetNotice': '🚧 उपयोग सीमा पूरी हो गई — जवाब {time} के बाद आएगा।',
   'requests.limit.answerNextAttemptNotice': '🚧 उपयोग सीमा पूरी हो गई — अगला प्रयास {time} पर।',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 उपयोग सीमा पूरी हो गई। स्वचालित पुनरारंभ बंद है, इसलिए काम तब तक रुका रहेगा जब तक ऑपरेटर इसे फिर से शुरू नहीं करता।',
 };

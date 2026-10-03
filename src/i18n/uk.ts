@@ -638,4 +638,5 @@ export const ukDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ Запит {requestId} залишився без відповіді: до сесії агента не вдалося достукатися з нагадуванням. Перевірте сесію в цій темі.',
   'requests.limit.answerAfterResetNotice': '🚧 Досягнуто ліміту використання — відповідь буде після {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Досягнуто ліміту використання — наступна спроба о {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Досягнуто ліміту використання. Автопродовження вимкнено — робота чекатиме, доки оператор її не відновить.',
 };

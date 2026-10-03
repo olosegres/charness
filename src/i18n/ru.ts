@@ -636,4 +636,5 @@ export const ruDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ Запрос {requestId} остался без ответа: до сессии агента не удалось достучаться с напоминанием. Проверьте сессию в этой теме.',
   'requests.limit.answerAfterResetNotice': '🚧 Достигнут лимит использования — ответ будет после {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Достигнут лимит использования — следующая попытка в {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Достигнут лимит использования. Автопродолжение выключено — работа подождёт, пока оператор её не возобновит.',
 };

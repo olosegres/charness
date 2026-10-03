@@ -632,4 +632,5 @@ export const deDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Die Sitzung des Agenten war für eine Erinnerung nicht erreichbar. Prüfe die Sitzung in diesem Thema.',
   'requests.limit.answerAfterResetNotice': '🚧 Nutzungslimit erreicht — die Antwort kommt nach {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Nutzungslimit erreicht — nächster Versuch um {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Nutzungslimit erreicht. Die automatische Fortsetzung ist aus — die Arbeit wartet, bis der Betreiber sie fortsetzt.',
 };

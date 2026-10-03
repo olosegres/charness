@@ -305,7 +305,7 @@ import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBo
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
-import { getAnswerSink, releaseRequestAlert, type AnswerSinks } from './platform/answerSink';
+import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
 import { createSessionTurnProbe } from './requests/sessionTurnProbe';
 import {
   answerOpenRequestForLimitWait,
@@ -1804,7 +1804,8 @@ interface LimitWaitTexts {
 function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number): LimitWaitTexts {
   if (wait.kind === 'autoResumeOff') {
     const text = t('autoContinueLimits.limitReachedDisabled');
-    return { plainNotice: text, answerBody: text };
+    // The topic text names a Telegram command; another surface's requester gets the neutral wording (Jira plan J6).
+    return { plainNotice: text, answerBody: checkIsTelegramKey(key) ? text : t('requests.limit.answerAutoResumeOffNotice') };
   }
   const nowMs = Date.now();
   // R31: a tracker's requester may sit in another zone — the time names the instance's.
@@ -10633,8 +10634,8 @@ const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
  * Built once at boot and shared by `answer_request`, the wake-up alerts and the
  * alert release on close, so all three speak to the same sink.
  */
-function createAnswerSinks(): AnswerSinks {
-  return new Map([
+function createAnswerSinks(jiraAnswerSink: AnswerSink | null): AnswerSinks {
+  const sinks = new Map<PlatformId, AnswerSink>([
     ['telegram', createTelegramAnswerSink({
       sendMessages: sendMessagesToThread,
       postAlert: (key, requestId, reason) =>
@@ -10646,6 +10647,9 @@ function createAnswerSinks(): AnswerSinks {
       setAnswerPinMessageId: (key, messageId) => state.setAnswerPinMessageId(key, messageId),
     })],
   ]);
+  // Jira answers are comments on the issue (Jira plan J6); the sink comes with the lazily loaded connector.
+  if (jiraAnswerSink) sinks.set('jira', jiraAnswerSink);
+  return sinks;
 }
 
 /**
@@ -11062,6 +11066,17 @@ export async function startBot(): Promise<void> {
   applyProcessTimezone(state.getTimezone());
   console.log(`Timezone:         ${getEffectiveTimezone(state.getTimezone())} (host: ${getHostTimezone()})`);
 
+  // 1a'. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
+  //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the
+  //     answer sinks (its comments are the jira sink, J6) and the session boot phase: its launch defaults (R15) must apply to a session
+  //     resumed during reattach, and a broken setup stops the start with every
+  //     reason at once. It starts polling once the sessions are restored.
+  const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
+  if (jiraConnector) {
+    const { launchDefaults } = jiraConnector;
+    registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));
+  }
+
   // 1b. Request ledger: index the closed-request history and reconcile the open
   //     set BEFORE the bot MCP server starts serving (step 5). A session that
   //     survived the restart may call a tool the moment the server listens, and
@@ -11069,7 +11084,7 @@ export async function startBot(): Promise<void> {
   //     unknown id. An unreadable history file fails the boot loudly.
   //     The answer sinks are built here, once: `answer_request`, the wake-up
   //     alerts and the release of an alert when its request closes all share them.
-  const answerSinks = createAnswerSinks();
+  const answerSinks = createAnswerSinks(jiraConnector?.answerSink ?? null);
   const requestLedger = new RequestLedger({
     store: state,
     releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
@@ -11107,16 +11122,6 @@ export async function startBot(): Promise<void> {
   });
   requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
 
-  // 1c. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
-  //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the
-  //     session boot phase: its launch defaults (R15) must apply to a session
-  //     resumed during reattach, and a broken setup stops the start with every
-  //     reason at once. It starts polling once the sessions are restored.
-  const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
-  if (jiraConnector) {
-    const { launchDefaults } = jiraConnector;
-    registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));
-  }
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle

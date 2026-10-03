@@ -632,4 +632,5 @@ export const kaDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ მოთხოვნა {requestId} უპასუხოდ დარჩა: შეხსენებისთვის აგენტის სესიასთან დაკავშირება ვერ მოხერხდა. შეამოწმეთ სესია ამ თემაში.',
   'requests.limit.answerAfterResetNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — პასუხი მოვა {time}-ის შემდეგ.',
   'requests.limit.answerNextAttemptNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — შემდეგი მცდელობა {time}-ზე.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 გამოყენების ლიმიტი ამოიწურა. ავტომატური გაგრძელება გამორთულია, ამიტომ სამუშაო დაელოდება, სანამ ოპერატორი არ განაახლებს მას.',
 };

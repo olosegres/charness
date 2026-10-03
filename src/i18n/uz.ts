@@ -632,4 +632,5 @@ export const uzDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ {requestId} so‘roviga javob berilmadi: eslatma yuborish uchun agent seansiga ulanib bo‘lmadi. Ushbu mavzudagi seansni tekshiring.',
   'requests.limit.answerAfterResetNotice': '🚧 Foydalanish limitiga yetildi — javob {time} dan keyin keladi.',
   'requests.limit.answerNextAttemptNotice': '🚧 Foydalanish limitiga yetildi — keyingi urinish {time} da.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Foydalanish limitiga yetildi. Avtomatik davom ettirish o‘chirilgan, shuning uchun ish operator uni davom ettirguncha kutadi.',
 };

@@ -680,4 +680,5 @@ export const enDict: Record<string, string> = {
   'requests.alert.unreachableNotice': "⚠️ Request {requestId} got no answer: the agent's session could not be reached to remind it. Check the session in this topic.",
   'requests.limit.answerAfterResetNotice': '🚧 Usage limit reached — the answer will come after {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Usage limit reached — next attempt at {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Usage limit reached. Automatic resume is off, so the work waits until the operator resumes it.',
 };

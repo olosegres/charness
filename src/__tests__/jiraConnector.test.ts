@@ -17,6 +17,7 @@ import { checkIsTransientJiraFailure, JiraConnectorStartError, prepareJiraConnec
 import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const aiAccountId = 'ai-account';
 const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
@@ -76,6 +77,16 @@ describe('prepareJiraConnector', () => {
         if (url === '/rest/api/3/project/PROJ/statuses') return sendJson(response, [{ statuses: [{ id: '10001', name: 'To Do' }, { id: '3', name: 'Done' }] }]);
         if (url === '/rest/api/3/search/jql') return sendJson(response, { issues: [issue], isLast: true });
         if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, issue);
+        if (request.method === 'POST' && url === '/rest/api/3/issue/PROJ-1/comment') {
+          response.writeHead(201, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ id: '20001' }));
+          return;
+        }
+        if (request.method === 'PUT' && url === '/rest/api/3/issue/PROJ-1/assignee') {
+          response.writeHead(204);
+          response.end();
+          return;
+        }
         response.writeHead(404);
         response.end();
       });
@@ -202,6 +213,21 @@ describe('prepareJiraConnector', () => {
     assert.equal(checkIsTransientJiraFailure(new JiraAuthError(401, 'GET', '/x')), false);
   });
 
+  it('J6: an answer through the real client — the comment, the assignee read, the hand-back', async () => {
+    writeConfig();
+    connector = await prepare();
+    requestPaths.length = 0;
+    const result = await connector.answerSink.deliverAnswer(makeJiraKey('PROJ-1'), {
+      requestId: 'req_1',
+      kind: 'final',
+      body: 'Done.',
+      origin: { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-1', triggerId: '100', requesterAccountId: 'requester-account' } },
+      isRequestOpen: true,
+    });
+    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(requestPaths, ['POST /rest/api/3/issue/PROJ-1/comment', 'GET /rest/api/3/issue/PROJ-1', 'PUT /rest/api/3/issue/PROJ-1/assignee']);
+  });
+
   it('an invalid config stops the start before any request reaches Jira', async () => {
     writeConfig({ adapter: 'opencode' });
     await assert.rejects(prepare(), (error: Error) => error instanceof JiraConnectorStartError && /OpenCode is not available/.test(error.reasons.join('\n')));
@@ -243,5 +269,19 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('a Jira issue bound to a topic\'s folder is never in that folder\'s `dir:` scope, nor named to the topic as a peer', () => {
     assert.match(botSource, /getThreadsForDirectory: \(directory\) =>[^]{0,300}getThreadKeysForDirectory\(getTelegramConversations\(state\.listBindings\(\)\), ENV\.workRoot, directory\)/);
     assert.match(botSource, /const peers = state\.listKeysForSubdir\(subdir\)\.filter\(k => checkIsTelegramKey\(k\) && /);
+  });
+});
+
+describe('bot.ts wires the Jira answer sink (J6)', () => {
+  const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+
+  it('the connector is prepared before the sinks are built, and its sink answers for jira', () => {
+    const startBody = botSource.slice(botSource.indexOf('export async function startBot('));
+    assert.ok(startBody.indexOf('await prepareJiraConnectorOrExit()') < startBody.indexOf('const answerSinks = createAnswerSinks(jiraConnector?.answerSink ?? null);'));
+    assert.match(botSource, /if \(jiraAnswerSink\) sinks\.set\('jira', jiraAnswerSink\);/);
+  });
+
+  it('the "auto-resume is off" answer names no Telegram command outside Telegram', () => {
+    assert.match(botSource, /answerBody: checkIsTelegramKey\(key\) \? text : t\('requests\.limit\.answerAutoResumeOffNotice'\)/);
   });
 });

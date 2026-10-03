@@ -626,4 +626,5 @@ export const jaDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ リクエスト {requestId} に回答がありません：リマインダーを送るためにエージェントのセッションに接続できませんでした。このトピックのセッションを確認してください。',
   'requests.limit.answerAfterResetNotice': '🚧 使用量の上限に達しました — 回答は {time} 以降になります。',
   'requests.limit.answerNextAttemptNotice': '🚧 使用量の上限に達しました — 次の試行は {time} です。',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 使用量の上限に達しました。自動再開はオフのため、オペレーターが再開するまで作業は待機します。',
 };

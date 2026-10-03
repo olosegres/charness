@@ -633,4 +633,5 @@ export const ptDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ A solicitação {requestId} ficou sem resposta: não foi possível alcançar a sessão do agente para lembrá-lo. Verifique a sessão neste tópico.',
   'requests.limit.answerAfterResetNotice': '🚧 Limite de uso atingido — a resposta virá depois das {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Limite de uso atingido — próxima tentativa às {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Limite de uso atingido. A retomada automática está desligada, então o trabalho espera até o operador retomá-lo.',
 };

@@ -212,6 +212,13 @@ describe('createJiraClient', () => {
       assert.deepEqual(JSON.parse(requests[1].body), { accountId: 'placeholder-requester' });
     });
 
+    it('getRecentComments reads the issue\'s newest comments, newest first (R18\'s read-back)', async () => {
+      respondWith({ status: 200, body: json({ total: 1, comments: [{ id: '5', author: { accountId: 'a' }, created: '2026-10-03T10:00:00.000+0000', body: null }] }) });
+      const comments = await createClient().getRecentComments('PROJ-7', 20);
+      assert.deepEqual(comments.map((comment) => comment.id), ['5']);
+      assert.equal(requests[0].url, '/rest/api/3/issue/PROJ-7/comment?orderBy=-created&maxResults=20');
+    });
+
     it('getProjectStatuses flattens every issue type\'s statuses, deduplicated by id', async () => {
       respondWith({
         status: 200,

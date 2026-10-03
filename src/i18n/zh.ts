@@ -626,4 +626,5 @@ export const zhDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ 请求 {requestId} 未获回复：无法连接智能体的会话以发送提醒。请检查此话题中的会话。',
   'requests.limit.answerAfterResetNotice': '🚧 已达到使用限额 — 答复将在 {time} 之后给出。',
   'requests.limit.answerNextAttemptNotice': '🚧 已达到使用限额 — 下次尝试时间为 {time}。',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 已达到使用限额。自动恢复已关闭，工作将等待操作员恢复。',
 };

@@ -632,4 +632,5 @@ export const frDict: Record<string, string> = {
   'requests.alert.unreachableNotice': "⚠️ La demande {requestId} est restée sans réponse : la session de l'agent était injoignable pour un rappel. Vérifiez la session dans ce sujet.",
   'requests.limit.answerAfterResetNotice': '🚧 Limite d’utilisation atteinte — la réponse arrivera après {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Limite d’utilisation atteinte — prochaine tentative à {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Limite d’utilisation atteinte. La reprise automatique est désactivée : le travail attend que l’opérateur le reprenne.',
 };

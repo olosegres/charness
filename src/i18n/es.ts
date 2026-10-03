@@ -632,4 +632,5 @@ export const esDict: Record<string, string> = {
   'requests.alert.unreachableNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: no se pudo alcanzar la sesión del agente para recordárselo. Revisa la sesión en este tema.',
   'requests.limit.answerAfterResetNotice': '🚧 Se alcanzó el límite de uso — la respuesta llegará después de las {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Se alcanzó el límite de uso — próximo intento a las {time}.',
+  'requests.limit.answerAutoResumeOffNotice': '🚧 Se alcanzó el límite de uso. La reanudación automática está desactivada, así que el trabajo espera hasta que el operador lo reanude.',
 };

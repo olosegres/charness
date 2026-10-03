@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { createJiraClient, JiraAuthError, JiraHttpError, type JiraAccount, type JiraClient } from './client';
+import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient } from './client';
+import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
@@ -28,14 +29,11 @@ export interface JiraConnector {
   adapterName: JiraConfig['adapter'];
   /** `jira.json`'s model and effort for new sessions (R15). */
   launchDefaults: { model: string | null; effort: string | null };
+  /** Where answers, alerts and park notices go: comments on the issue (J6). */
+  answerSink: JiraAnswerSink;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
-}
-
-/** Until the answer side lands (J6), a parked trigger is only logged. */
-async function logParkedIssue(issueKey: string, requester: JiraAccount | null): Promise<void> {
-  console.warn(`[jira] ${issueKey} parked: over its run budget (requester ${requester ? 'known' : 'unknown'}); no request opened`);
 }
 
 /**
@@ -127,6 +125,12 @@ export async function prepareJiraConnector(context: {
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
   await triggerLog.load();
 
+  const answerSink = createJiraAnswerSink({
+    client,
+    aiAccountId: config.accountId,
+    runBudgetPer24h: config.runBudgetPer24h,
+    now: () => Date.now(),
+  });
   let inbound: JiraInbound | null = null;
   let setupRetryTimer: NodeJS.Timeout | null = null;
   let isStarted = false;
@@ -142,7 +146,7 @@ export async function prepareJiraConnector(context: {
       pollIntervalMs: config.pollIntervalMs,
       triggerLog,
       now: () => Date.now(),
-      parkIssue: logParkedIssue,
+      parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
     });
     inbound.start();
     console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${config.pollIntervalMs / 1000} s`);
@@ -164,6 +168,7 @@ export async function prepareJiraConnector(context: {
   return {
     adapterName: config.adapter,
     launchDefaults: { model: config.model, effort: config.effort },
+    answerSink,
     start: (deps) => {
       if (isStarted) return;
       isStarted = true;
