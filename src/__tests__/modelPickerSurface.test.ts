@@ -1,8 +1,9 @@
 /**
  * Test case: N/A — TelegramCode has no Jira tracker
  *
- * @description The `bot.ts` half of the `/model` picker and `/disconnect`
- * wiring — the parts that are decisions, not Telegram I/O.
+ * @description The decision half of the `/model` picker and `/disconnect`
+ * wiring (`commands/modelProviders.ts` and the `/` menu) — the parts that are
+ * decisions, not Telegram I/O.
  *
  * Three confirmed regressions are pinned here:
  *   • a BUTTON model pick left `awaitingModelSelection` armed forever, so a
@@ -20,15 +21,15 @@
 import './modelPickerSurface.testSetup';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { Markup } from 'telegraf';
+import { COMMANDS_MENU } from '../bot';
 import {
-  COMMANDS_MENU,
-  applyModelPagePickArming,
   buildModelPageRender,
   buildModelProviderRender,
-  checkIsNumberedModelPickArmed,
-  getNumberedModelPick,
+  createModelProviders,
   getProviderAuthAdapter,
-} from '../bot';
+} from '../connectors/telegram/commands/modelProviders';
+import { createInertBotCore } from './commandModuleHarness';
 import {
   buildModelCatalog,
   checkIsCallbackDataWithinLimit,
@@ -41,6 +42,19 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const key: SessionKey = makeTelegramKey(-1001111111111, 111);
 const openCodeAdapterLabel = 'OpenCode';
+
+/** The numbered-pick affordance is state of a module instance: fresh per-thread sets, no port beyond them is reached. */
+const { applyModelPagePickArming, checkIsNumberedModelPickArmed, getNumberedModelPick } = createModelProviders({
+  ...createInertBotCore(),
+  awaitingModelSelection: new Set(),
+  awaitingSessionSelection: new Set(),
+  awaitingFolderName: new Set(),
+  threadModelLists: new Map(),
+  pendingProviderConnects: new Map(),
+  connectMethodLists: new Map(),
+  disconnectProviderLists: new Map(),
+  startOpenCodeOAuthLogin: async () => {},
+});
 
 /** A two-provider catalog with enough models to paginate (page size is 10). */
 function createPagedCatalog(): ModelCatalog {
@@ -179,7 +193,7 @@ describe('bare-digit arming follows the rendered text', () => {
     const empty = buildModelCatalog([], openCodeAdapterLabel, []);
     applyModelPagePickArming(key, {
       text: '',
-      keyboard: { reply_markup: { inline_keyboard: [] } },
+      keyboard: Markup.inlineKeyboard([]),
       pageModels: [],
       isNumberedPickArmed: true,
     });

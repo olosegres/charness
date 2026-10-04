@@ -1,7 +1,8 @@
 /**
- * @description Pure reply-decision for the four `/model`-set paths in `bot.ts`
- * (the `/model <num>` and `/model <name>` commands, the text-handler numeric
- * pick, and the `model_<id>` button callback). All four asked the adapter to
+ * @description Pure reply-decision for the four `/model`-set paths (the
+ * `/model <num>` and `/model <name>` commands, the text-handler numeric pick,
+ * and the `model_<id>` button callback — all through `applyModelSelection` in
+ * `connectors/telegram/commands/modelProviders.ts`). All four asked the adapter to
  * set the model and now must build the SAME user-facing reply — so the branchy
  * decision lives here, unit-testable without the Telegraf machinery (same
  * pattern as `statusFlushDecision.ts`).

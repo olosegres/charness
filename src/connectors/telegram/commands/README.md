@@ -30,3 +30,16 @@ the send-error path's job once the topic is gone. `bot.ts` reaches into the flow
 handlers through `claimReminderTextCapture` (the single-use claim of step 4's wait — two concurrent messages
 must make ONE reminder) and `finishReminderWizard` / `expireReminderWizard`, and from any command through
 `cancelReminderWizard`. The scheduler engine arrives through a getter: it is built after the handlers register.
+
+## `modelProviders.ts`
+
+`/model` (the provider → models picker), `/effort`, `/connect`, `/disconnect` and the ten buttons behind them. The
+module registers in THREE places: `registerProviderCommands` (where `/connect` and `/disconnect` sat),
+`registerModelCommands` (`/model`, `/effort`) and `registerModelCallbacks`; the neighbouring `/claude_mode`
+stays in `bot.ts` between the first two. The per-thread picker state (`awaitingModelSelection`,
+`threadModelLists`, the pending-connect and snapshot maps, the other input-mode sets) is owned by `bot.ts`,
+which clears it on teardown and reads it in the text handler, and is passed in. A bare digit is read as a model
+pick only while `awaitingModelSelection` holds the thread, and every numbered pick — typed or tapped — disarms
+it. A pasted provider key is deleted from the topic as a secret only when it can be a real key; an implausible
+one stays visible and the connect stays armed. The OAuth buttons reach the sign-in driver
+(`../../../agentLogin/`) through the `startOpenCodeOAuthLogin` port.
