@@ -19,8 +19,10 @@
  *     the plain text is not shown; in the full stream no request is opened; a
  *     silent turn is woken; `/schedule` and a scheduled run are requests too
  *   → every answer is pinned with a notification and only the latest stays
- *     pinned, across a restart; an agent that never answers gets a pinned alert,
- *     released when the next message supersedes its request
+ *     pinned, across a restart; a restart that finds the bot MCP port held for a
+ *     moment waits it out, so the re-adopted agent still answers; an agent that
+ *     never answers gets a pinned alert, released when the next message
+ *     supersedes its request
  *   → in «Answers only» a turn posts nothing but its pinned answer — no text, no
  *     status, no thinking, no tool result — while the typing indicator still
  *     runs; back in «Stream + answers» the same turn shows its stream again
@@ -50,6 +52,7 @@ import {
   getProcessEnvNames,
   getTmuxEnv,
   getTmuxSocketDir,
+  holdPort,
   IsolatedCharness,
   isolatedLaunchEnvNames,
   listTmuxSessions,
@@ -73,10 +76,10 @@ const launchLine = 'Launching Telegraf bot (long polling';
 /**
  * The boot's line naming the port the bot MCP bound. The port is FIXED across the
  * restarts because a re-adopted agent keeps the MCP address of its launch; a
- * boot that finds the port taken (another process grabbed it while the instance
- * was down) falls back to an ephemeral port, and the agent's answers go to a
- * dead one. Every start asserts the line, so that case names itself instead of
- * timing out on the agent's answer.
+ * boot that finds the port still taken after its retries (another process grabbed
+ * it while the instance was down) falls back to an ephemeral port, and the
+ * agent's answers go to a dead one. Every start asserts the line, so that case
+ * names itself instead of timing out on the agent's answer.
  */
 function getMcpListeningLine(port: number): string {
   return `MCP server listening on 127.0.0.1:${port}`;
@@ -451,6 +454,28 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the pin moved to the new answer', replyTimeoutMs, () =>
       getPinKinds(answer.message_id).includes('pin') && getPinKinds(latestBefore).includes('unpin'));
     assert.ok(!fakeTelegram.listPinnedMessageIds().includes(latestBefore));
+  });
+
+  it('a restart that finds the bot MCP port held for a moment waits it out: the same port is bound and the re-adopted agent still answers', async () => {
+    await getCharness().stop();
+    const holder = await holdPort(schedulerMcpPort);
+    const outputStart = getCharness().output.length;
+    const takenLine = `requested port ${schedulerMcpPort} is in use`;
+    try {
+      // The holder lets go only once the boot has met it: a start that never meets it proves nothing.
+      await Promise.all([
+        startCharness(),
+        getCharness().waitFor('the boot to find the bot MCP port taken', bootTimeoutMs, () => getCharness().output.slice(outputStart).includes(takenLine))
+          .then(() => holder.release()),
+      ]);
+    } finally {
+      await holder.release();
+    }
+    assert.ok(getCharness().output.slice(outputStart).includes(`${takenLine}; retrying`), 'the boot waited for the port instead of falling back');
+    // The agent keeps the MCP address of its launch: its answer arrives only if the bot is still on that port.
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-12 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-12');
+    await waitForTopicMessage('the answer after the port wait', (message) => message.text.includes('Fake final answer for TOPIC-12'));
   });
 
   it('an agent that never answers gets a pinned alert; the next message supersedes the request and releases the alert', async () => {

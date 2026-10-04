@@ -45,8 +45,13 @@ constants in the code; this README keeps what the code cannot say.
 
 - Stateless streamable HTTP on loopback. The port is OS-ephemeral but PERSISTED in `state.json`
   (`schedulerMcpPort`) and reused so injected URLs stay valid across restarts; `SCHEDULER_MCP_PORT` pins it
-  and wins. If the bind fails the bot still boots with injection inert — sessions spawned meanwhile lack the
-  agent-facing tools, and a Claude one keeps lacking them (the heal never adds an absent server).
+  and wins. A port in use at a start is retried (`schedulerMcpBindRetryCount` × `schedulerMcpBindRetryDelayMs`,
+  the shutdown watchdog's bound: the previous process may still be exiting) before the ONE fallback to an
+  ephemeral port. The fallback is logged as an error because a Claude session launched earlier keeps the
+  address of its launch and loses the bot's tools until it is restarted (the heal reconnects to that same
+  address, it cannot move a session). If the bind fails the bot still boots with injection inert — sessions
+  spawned meanwhile lack the agent-facing tools, and a Claude one keeps lacking them (the heal never adds an
+  absent server).
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
   thread bound to the folder).
 - The server serves BEFORE sessions re-attach, so a tool that reads session state awaits

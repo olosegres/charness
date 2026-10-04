@@ -66,6 +66,28 @@ function checkIsPortFree(port: number): Promise<boolean> {
   });
 }
 
+/** A listener holding a port, see {@link holdPort}. */
+export interface HeldPort {
+  port: number;
+  release: () => Promise<void>;
+}
+
+/**
+ * @description A listener that holds `port` (`0`: any free one) until released —
+ * what a start meets when the process before it is still exiting, or when any
+ * other process was handed the port. `release` may be called more than once.
+ */
+export async function holdPort(port: number): Promise<HeldPort> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('the port holder did not bind a TCP port');
+  return { port: address.port, release: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+}
+
 /**
  * @description A free port the instance must bind on EVERY start — the bot MCP's:
  * a re-adopted agent keeps the MCP address of its launch, so a restart that

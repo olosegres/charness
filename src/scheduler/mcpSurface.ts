@@ -81,6 +81,18 @@ export const schedulerMcpPath = '/mcp';
 /** Per-registration identity used to isolate equal JSON-RPC request IDs. */
 export const schedulerMcpClientIdHeader = 'x-telegramcode-mcp-client-id';
 
+/**
+ * A port that is in use at the start is retried this many times, this far apart,
+ * before the bot binds another one. Another port orphans every Claude session
+ * launched before (it keeps the MCP address of its launch), and the holder may
+ * let go soon: the previous process still exiting, or a short connection of
+ * another process that was handed the port as its local one while the bot was
+ * down. Together they span the shutdown watchdog's bound (`DEFAULT_WATCHDOG_MS`),
+ * the longest the previous generation can take to exit.
+ */
+export const schedulerMcpBindRetryCount = 20;
+export const schedulerMcpBindRetryDelayMs = 500;
+
 /** Pending cancellations and recent completions remain correlatable for this window. */
 export const schedulerMcpPendingCancellationTtlMs = 30_000;
 
@@ -295,6 +307,8 @@ export interface SchedulerMcpDeps {
   getSecret: () => Promise<string>;
   /** Listen port; defaults to {@link getSchedulerMcpPort}. Tests pass `0` for ephemeral. */
   port?: number;
+  /** How a `port` in use is waited out before falling back; defaults to {@link schedulerMcpBindRetryCount} × {@link schedulerMcpBindRetryDelayMs}. */
+  portBindRetry?: { count: number; delayMs: number };
 }
 
 /**
@@ -1362,7 +1376,9 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
         socket.once('close', () => sockets.delete(socket));
       });
 
-      let retriedEphemeral = false;
+      const portBindRetry = deps.portBindRetry ?? { count: schedulerMcpBindRetryCount, delayMs: schedulerMcpBindRetryDelayMs };
+      let retryCount = 0;
+      let isFallenBack = false;
 
       const handleListening = (): void => {
         const address = server.address();
@@ -1374,15 +1390,37 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
 
       const handleError = (error: NodeJS.ErrnoException): void => {
         // A non-zero requested port already in use (a persisted port a prior
-        // generation still holds, or a sibling instance) must not wedge boot:
-        // retry ONCE on an ephemeral port. Port 0 can never hit EADDRINUSE.
-        if (error.code === 'EADDRINUSE' && requestedPort !== 0 && !retriedEphemeral) {
-          retriedEphemeral = true;
+        // generation still holds, or a sibling instance) must not wedge boot: it
+        // is retried (`portBindRetry`), then bound on an ephemeral port ONCE.
+        // Port 0 can never hit EADDRINUSE.
+        if (error.code === 'EADDRINUSE' && requestedPort !== 0 && !isFallenBack) {
           // Track the server before the retry so a stop() in the retry window
           // still closes the eventually-bound listener (no orphan).
           httpServer = server;
-          console.warn(
-            `[scheduler-mcp] requested port ${requestedPort} is in use; falling back to an ephemeral port`,
+          if (retryCount < portBindRetry.count) {
+            if (retryCount === 0) {
+              console.warn(
+                `[scheduler-mcp] requested port ${requestedPort} is in use; retrying for up to ${portBindRetry.count * portBindRetry.delayMs} ms`,
+              );
+            }
+            retryCount += 1;
+            setTimeout(() => {
+              // A stop() during the wait already settled this server: binding now
+              // would leave a listener nobody closes.
+              if (httpServer !== server) {
+                server.off('listening', handleListening);
+                reject(new Error(`stopped while waiting for port ${requestedPort}`));
+                return;
+              }
+              server.listen(requestedPort, '127.0.0.1');
+            }, portBindRetry.delayMs);
+            return;
+          }
+          isFallenBack = true;
+          console.error(
+            `[scheduler-mcp] requested port ${requestedPort} is still in use after ${portBindRetry.count * portBindRetry.delayMs} ms; ` +
+            `falling back to an ephemeral port. A Claude session that was already running keeps the MCP address of its launch ` +
+            `(127.0.0.1:${requestedPort}) and loses the bot's tools until it is restarted.`,
           );
           server.listen(0, '127.0.0.1');
           return;

@@ -25,7 +25,7 @@
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
-import { beforeEach, afterEach, describe, it } from 'node:test';
+import { beforeEach, afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -54,7 +54,8 @@ import {
   type SchedulerMcpHandle,
   type SchedulerMcpDeps,
 } from '../scheduler/mcpSurface';
-import { createServer, request, type ClientRequest } from 'node:http';
+import { request, type ClientRequest } from 'node:http';
+import { connect, Server } from 'node:net';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
   createSendFilesToThread,
@@ -71,6 +72,7 @@ import {
   type RecordedFileSendGatewayCall,
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { holdPort } from './e2e/isolatedCharness';
 
 const secret = 'a'.repeat(64);
 const threadAKey = keyToString(makeTelegramKey(-1001234567890, 11));
@@ -143,14 +145,31 @@ describe('resolveSchedulerMcpPort', () => {
 });
 
 describe('createSchedulerMcpServer port binding', () => {
-  it('falls back to an ephemeral port when the requested port is already in use', async () => {
-    // Occupy a port with a throwaway server, then ask the scheduler server for
-    // that same port: it must NOT reject boot — it retries on an ephemeral one.
-    const blocker = createServer(() => {});
-    await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', () => resolve()));
-    const takenPort = (blocker.address() as { port: number }).port;
+  const retryDelayMs = 10;
+  const spentRetryCount = 3;
+  const unspentRetryCount = 100;
+  /** A product that stops retrying or never reports must fail these cases, not hang the run. */
+  const testTimeoutMs = 10_000;
+  /** Long enough for a retry still running after a stop() to have bound the freed port. */
+  const settleWaitMs = 500;
 
-    const deps: SchedulerMcpDeps = {
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  function checkIsPortListening(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = connect(port, '127.0.0.1');
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('error', () => resolve(false));
+    });
+  }
+
+  function createBindingDeps(port: number, portBindRetry: SchedulerMcpDeps['portBindRetry']): SchedulerMcpDeps {
+    return {
       store: {} as SchedulerMcpDeps['store'],
       armJob: () => {},
       disarmJob: () => {},
@@ -162,17 +181,72 @@ describe('createSchedulerMcpServer port binding', () => {
       answerRequest: async () => ({ ok: false, error: 'unused' }),
       whenSessionsRestored: async () => {},
       getSecret: async () => secret,
-      port: takenPort,
+      port,
+      portBindRetry,
     };
-    const handle = createSchedulerMcpServer(deps);
+  }
+
+  it('retries a port that is in use a bounded number of times, then falls back to an ephemeral one and says what that costs', { timeout: testTimeoutMs }, async () => {
+    const holder = await holdPort(0);
+    const listen = mock.method(Server.prototype, 'listen');
+    const warn = mock.method(console, 'warn', () => {});
+    const error = mock.method(console, 'error', () => {});
+    const handle = createSchedulerMcpServer(createBindingDeps(holder.port, { count: spentRetryCount, delayMs: retryDelayMs }));
     try {
       await handle.start();
       assert.ok(handle.port > 0, 'a port was bound');
-      assert.notEqual(handle.port, takenPort, 'did not bind the occupied port');
+      assert.notEqual(handle.port, holder.port, 'did not bind the occupied port');
+      assert.deepEqual(
+        listen.mock.calls.map((call) => call.arguments[0]),
+        [...Array<number>(spentRetryCount + 1).fill(holder.port), 0],
+        'the requested port is tried once and retried the allowed number of times, then one ephemeral listen',
+      );
+      assert.equal(warn.mock.callCount(), 1, 'one line for the whole wait, not one per retry');
+      assert.equal(error.mock.callCount(), 1);
+      assert.match(error.mock.calls[0].arguments[0], new RegExp(`port ${holder.port} is still in use`));
+      assert.match(error.mock.calls[0].arguments[0], /Claude session that was already running keeps the MCP address of its launch .*loses the bot's tools/);
     } finally {
       await handle.stop();
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await holder.release();
     }
+  });
+
+  it('binds the requested port once its holder lets go during the retries: no fallback, no error', { timeout: testTimeoutMs }, async () => {
+    const holder = await holdPort(0);
+    // The first conflict is the cue to let go, so the test does not depend on a clock.
+    const warn = mock.method(console, 'warn', () => {
+      void holder.release();
+    });
+    const error = mock.method(console, 'error', () => {});
+    const handle = createSchedulerMcpServer(createBindingDeps(holder.port, { count: unspentRetryCount, delayMs: retryDelayMs }));
+    try {
+      await handle.start();
+      assert.equal(handle.port, holder.port, 'the port every launched session points at');
+      assert.match(warn.mock.calls[0].arguments[0], new RegExp(`port ${holder.port} is in use; retrying`));
+      assert.equal(error.mock.callCount(), 0);
+    } finally {
+      await handle.stop();
+      await holder.release();
+    }
+  });
+
+  it('a stop() during the wait leaves nothing bound afterwards, and start() fails instead of hanging', { timeout: testTimeoutMs }, async () => {
+    const holder = await holdPort(0);
+    const listen = mock.method(Server.prototype, 'listen');
+    const conflictSeen = new Promise<void>((resolve) => {
+      mock.method(console, 'warn', () => resolve());
+    });
+    mock.method(console, 'error', () => {});
+    const handle = createSchedulerMcpServer(createBindingDeps(holder.port, { count: unspentRetryCount, delayMs: retryDelayMs }));
+    const starting = handle.start().then(() => 'bound', () => 'refused');
+    await conflictSeen;
+    await handle.stop();
+    // Free now: a retry that still ran would bind it and leave a listener nobody can stop.
+    await holder.release();
+    const settleDeadline = new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), settleWaitMs));
+    assert.equal(await Promise.race([starting, settleDeadline]), 'refused');
+    assert.equal(await checkIsPortListening(holder.port), false, 'no listener was left on the requested port');
+    assert.equal(listen.mock.calls.filter((call) => call.arguments[0] === holder.port).length, 1, 'the requested port was not retried after the stop');
   });
 });
 
@@ -1024,7 +1098,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     fixture.boundThreads.set(fixture.fileWorkDir, [threadAKey]);
     fixture.messageSendHandler.current = createSendMessagesToThread<string>({
       resolveTarget: (threadKey) => ({ ok: true, target: threadKey }),
-      sendChunk: async () => true,
+      sendChunk: async () => 1,
       sendFiles: fixture.fileSendHandler.current,
       splitMessage,
       maxMessageLength: 4_096,
