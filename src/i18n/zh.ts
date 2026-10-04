@@ -483,6 +483,9 @@ export const zhDict: Record<string, string> = {
   'schedule.fired':
     '⏰ 定时任务「{name}」({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — 在 {time} 错过，正在追赶',
+  'schedule.checkFailed':
+    '🚨 检查「{name}」失败：{failure}（{schedule}）{missedNote}\n$ {command}\n\n{output}\n\n正在唤醒代理。检查再次通过之前不会再发出警报。',
+  'schedule.checkRecovered': '✅ 检查「{name}」已再次通过。',
   'schedule.pausedUnbound':
     '⏸ 已暂停的定时任务: {count} — 话题已从文件夹解绑。/bind 将恢复它们。',
   'schedule.resumedRebind': '▶️ 已恢复的定时任务: {count}（下次运行从现在重新计算）。',

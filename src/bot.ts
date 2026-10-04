@@ -262,6 +262,7 @@ import {
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError } from './scheduler/delivery';
+import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
 import { createSchedulerEngine, maxTimeoutMs, type SchedulerEngine } from './scheduler/engine';
 import {
   createSchedulerMcpServer,
@@ -13304,6 +13305,17 @@ function wireScheduler(): SchedulerMcpHandle {
     forwardPrompt: async (threadKeyStr, text) => {
       const key = keyFromString(threadKeyStr);
       await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(threadKeyStr));
+    },
+    runCheck: async (threadKeyStr, command, timeoutMs) => {
+      const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
+      if (decision.kind !== 'proceed') return null;
+      return runCheckCommand({ command, cwd: decision.workDir, timeoutMs, env: buildCheckEnv(process.env) });
+    },
+    setCheckFailing: async (jobId, isFailing) => {
+      const record = state.getSchedules()[jobId];
+      if (!record) return;
+      await state.upsertSchedule({ ...record, isCheckFailing: isFailing, updatedAt: new Date().toISOString() });
+      await state.flush();
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

@@ -489,6 +489,9 @@ export const ukDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Розклад «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — пропущено о {time}, надолужую',
+  'schedule.checkFailed':
+    '🚨 Перевірка «{name}» не пройшла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБуджу агента. Нових тривог не буде, доки перевірка знову не пройде.',
+  'schedule.checkRecovered': '✅ Перевірка «{name}» знову проходить.',
   'schedule.pausedUnbound':
     '⏸ Розкладів на паузі: {count} — топік відв\'язано від папки. /bind поверне їх у роботу.',
   'schedule.resumedRebind': '▶️ Розкладів відновлено: {count} (наступний запуск перераховано від поточного моменту).',

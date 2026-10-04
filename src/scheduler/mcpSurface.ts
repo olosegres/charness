@@ -20,7 +20,8 @@ import {
   type SendMessagesToThread,
 } from '../utils/messageSendService';
 import { getAbortError } from '../utils';
-import { checkIsReminderSchedule } from './deliveryKind';
+import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } from './checkRun';
+import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
@@ -99,8 +100,9 @@ When to use it:
 • You want to deliver SEVERAL discrete messages (each as its own Telegram message, e.g. a per-item news digest) → send_messages_to_user. Each item can optionally attach ONE file/photo/video (text becomes its caption).
 • The user EXPLICITLY asks to compact/shrink/summarize this conversation's context → compact_conversation. Only on an explicit request, never on your own judgement.
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
+• You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
 
-Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times).`;
+Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */
 const maxNameLength = 200;
@@ -379,10 +381,33 @@ const scheduleCreateShape = {
     .min(1)
     .max(maxPromptLength)
     .describe(
-      'The prompt forwarded to the agent at fire time. Make it SELF-CONTAINED — the future run starts ' +
+      'The prompt forwarded to the agent at fire time (for a check: only when the check fails, after ' +
+        'the failure details). Make it SELF-CONTAINED — the future run starts ' +
         'with no memory of this conversation. Bake in everything it needs: the plan file path + scope, ' +
         'whether to delegate to a sub-agent, and any constraints. Put the WORK in the prompt; do the ' +
         'investigation later, when it fires.',
+    ),
+  checkCommand: z
+    .string()
+    .max(maxCheckCommandLength)
+    .optional()
+    .describe(
+      'Makes the job a WATCHDOG CHECK: a shell command (run with /bin/sh -c in the bound folder) the bot ' +
+        'executes at every fire instead of waking you. Exit 0 = healthy, nothing is posted. The first ' +
+        'non-zero exit or timeout pins an alert in the topic and wakes you with `prompt` plus the exit ' +
+        'code and output tail; later failures stay silent until a run passes again (the topic is told). ' +
+        'Keep it a quick probe, e.g. `systemctl --user is-active myapp`, `curl -fsS -m 10 http://127.0.0.1:8080/health`, ' +
+        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`.',
+    ),
+  checkTimeoutSeconds: z
+    .number()
+    .int()
+    .positive()
+    .max(maxCheckTimeoutSec)
+    .optional()
+    .describe(
+      `Seconds a check run may take before it is stopped and counted as a failure (default ${defaultCheckTimeoutSec}). ` +
+        'Only with checkCommand.',
     ),
   isPinSilent: z
     .boolean()
@@ -621,7 +646,10 @@ function summarizeRecord(record: ScheduleRecord): string {
   // other zone than the one the job actually fires in is actively misleading.
   const next = record.nextRunAt !== null ? formatIsoLocalOffset(record.nextRunAt) : 'none';
   const pausedNote = record.isPaused ? ' [paused]' : '';
-  return `${record.name} (id: ${record.id}) — ${describeSchedule(record.spec)}; next run: ${next}${pausedNote}`;
+  const checkNote = checkIsCheckSchedule(record)
+    ? `; check: \`${record.checkCommand ?? ''}\` (${record.isCheckFailing ? 'FAILING' : 'passing'})`
+    : '';
+  return `${record.name} (id: ${record.id}) — ${describeSchedule(record.spec)}${checkNote}; next run: ${next}${pausedNote}`;
 }
 
 // ─── tool handlers (scope-bound) ─────────────────────────────────────
@@ -651,7 +679,12 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         "(e.g. \"schedule finishing plan X in 2h\", \"run this plan tomorrow morning\"). " +
         'Schedule IMMEDIATELY: write the request straight into `prompt` and create the job FIRST — ' +
         'do NOT read code, explore the repo, or deliberate before scheduling. Plan now, figure out the ' +
-        'details at fire time. The future run does the investigation, not this call.',
+        'details at fire time. The future run does the investigation, not this call.\n\n' +
+        'WATCHDOG: to monitor something (a service, process, build, deploy, disk, URL), pass checkCommand ' +
+        'with a cron — the bot runs it in this folder and wakes you only when it starts failing. This is ' +
+        'the ONLY reliable watcher: it survives bot restarts and crashes. Never build your own (a ' +
+        'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
+        'or a restart and then fails silently.',
       inputSchema: scheduleCreateShape,
     },
     async (args) => {
@@ -669,6 +702,12 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         return errorResult(`invalid threadKey "${resolved.threadKey}"`);
       }
 
+      const checkCommand = normalizeOptionalArg(args.checkCommand);
+      const notes = built.note ? [built.note] : [];
+      if (!checkCommand && args.checkTimeoutSeconds !== undefined) {
+        notes.push('checkTimeoutSeconds was ignored — it only applies with checkCommand.');
+      }
+
       const created = await createScheduleForThread(deps.store, {
         threadKey,
         name: args.name,
@@ -678,6 +717,9 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
         nowMs,
         lastAdapterName: deps.getThreadAdapterName(resolved.threadKey),
         isPinSilent: args.isPinSilent,
+        ...(checkCommand
+          ? { deliveryKind: 'check' as const, checkCommand, checkTimeoutSec: args.checkTimeoutSeconds }
+          : {}),
       });
       if (!created.ok) {
         // The cap counts only the agent-prompt jobs `schedule_list` shows, so the
@@ -690,7 +732,7 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
 
       const record = created.record;
       deps.armJob(record);
-      const noteSuffix = built.note ? `\n\nℹ️ ${built.note}` : '';
+      const noteSuffix = notes.map((note) => `\n\nℹ️ ${note}`).join('');
       return textResult(`Scheduled "${record.name}".\n${summarizeRecord(record)}${noteSuffix}`);
     },
   );

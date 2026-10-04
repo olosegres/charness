@@ -500,6 +500,9 @@ export const enDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Schedule "{name}" ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — missed at {time}, catching up',
+  'schedule.checkFailed':
+    '🚨 Check "{name}" failed: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nWaking the agent. No more alerts until the check passes again.',
+  'schedule.checkRecovered': '✅ Check "{name}" passes again.',
   'schedule.pausedUnbound':
     '⏸ Schedules paused: {count} — the topic was unbound from its folder. /bind will bring them back.',
   'schedule.resumedRebind': '▶️ Schedules resumed: {count} (next run recomputed from now).',

@@ -19,10 +19,10 @@ import type {
  */
 
 /**
- * Hard cap on AGENT-PROMPT schedules per thread (records with no `deliveryKind`).
- * Enforced in {@link createScheduleForThread}. This cap exists FOR the agent:
- * `schedule_create` is in the model's hands and a looping one can mint junk jobs,
- * so 30 is the muzzle.
+ * Hard cap on the AGENT's schedules per thread — prompt jobs (no `deliveryKind`)
+ * and checks, i.e. everything but reminders. Enforced in
+ * {@link createScheduleForThread}. This cap exists FOR the agent: `schedule_create`
+ * is in the model's hands and a looping one can mint junk jobs, so 30 is the muzzle.
  */
 export const maxSchedulesPerThread = 30;
 
@@ -87,8 +87,12 @@ export interface CreateScheduleArgs {
   nowMs: number;
   lastAdapterName?: string;
   isPinSilent?: boolean;
-  /** Omit for the agent-prompt default; `'reminder'` for a bot-local reminder. */
+  /** Omit for the agent-prompt default; `'reminder'` for a bot-local reminder, `'check'` for a watchdog. */
   deliveryKind?: ScheduleDeliveryKind;
+  /** The command of a `'check'` job. */
+  checkCommand?: string;
+  /** The run timeout of a `'check'` job, in seconds. */
+  checkTimeoutSec?: number;
 }
 
 /**
@@ -116,6 +120,8 @@ export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
   if (isPinSilent) record.isPinSilent = true;
   // Absent means the agent-prompt kind, so the field is written only when set.
   if (args.deliveryKind !== undefined) record.deliveryKind = args.deliveryKind;
+  if (args.checkCommand !== undefined) record.checkCommand = args.checkCommand;
+  if (args.checkTimeoutSec !== undefined) record.checkTimeoutSec = args.checkTimeoutSec;
   return record;
 }
 

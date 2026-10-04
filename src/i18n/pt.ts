@@ -483,6 +483,9 @@ export const ptDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Agendamento «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — perdido às {time}, a recuperar',
+  'schedule.checkFailed':
+    '🚨 A verificação «{name}» falhou: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nA acordar o agente. Sem mais alertas até a verificação voltar a passar.',
+  'schedule.checkRecovered': '✅ A verificação «{name}» voltou a passar.',
   'schedule.pausedUnbound':
     '⏸ Agendamentos em pausa: {count} — o tópico foi desvinculado da sua pasta. /bind irá restaurá-los.',
   'schedule.resumedRebind': '▶️ Agendamentos retomados: {count} (próximo recalculado a partir de agora).',

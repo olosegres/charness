@@ -483,6 +483,9 @@ export const frDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Planification « {name} » ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — manqué à {time}, rattrapage',
+  'schedule.checkFailed':
+    '🚨 Vérification « {name} » en échec : {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nJe réveille l’agent. Plus d’alerte tant que la vérification n’est pas de nouveau réussie.',
+  'schedule.checkRecovered': '✅ La vérification « {name} » réussit de nouveau.',
   'schedule.pausedUnbound':
     '⏸ Planifications en pause : {count} — le topic a été détaché de son dossier. /bind les restaurera.',
   'schedule.resumedRebind': '▶️ Planifications reprises : {count} (prochain recalculé à partir de maintenant).',

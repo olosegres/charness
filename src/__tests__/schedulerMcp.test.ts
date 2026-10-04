@@ -909,6 +909,9 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       assert.match(instructions, /send_file_to_user/);
       assert.match(instructions, /send_messages_to_user/);
       assert.match(instructions, /fresh session/);
+      // Watchdogs go through a check, never a hand-made watcher.
+      assert.match(instructions, /checkCommand/);
+      assert.match(instructions, /NEVER build your own watcher/);
     } finally {
       await client.close();
     }
@@ -1622,6 +1625,49 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     const emptyList = await client.callTool({ name: 'schedule_list', arguments: {} });
     assert.match(firstText(emptyList), /No schedules/);
 
+    await client.close();
+  });
+
+  it('thread-scope: checkCommand creates a watchdog check that list shows with its state', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({
+      name: 'schedule_create',
+      arguments: {
+        name: 'API health',
+        cron: '*/5 * * * *',
+        prompt: 'Restart the API.',
+        checkCommand: '  curl -fsS http://127.0.0.1:8080/health  ',
+        checkTimeoutSeconds: 15,
+      },
+    });
+    assert.notEqual(result.isError, true, firstText(result));
+    const record = fixture.armed.find((r) => r.name === 'API health');
+    assert.ok(record);
+    assert.equal(record.deliveryKind, 'check');
+    assert.equal(record.checkCommand, 'curl -fsS http://127.0.0.1:8080/health');
+    assert.equal(record.checkTimeoutSec, 15);
+    assert.match(firstText(result), /check: `curl -fsS http:\/\/127\.0\.0\.1:8080\/health` \(passing\)/);
+
+    // A check counts against the agent's cap and is listed like any agent job.
+    const listText = firstText(await client.callTool({ name: 'schedule_list', arguments: {} }));
+    assert.match(listText, /API health/);
+    await client.close();
+  });
+
+  it('thread-scope: checkTimeoutSeconds without checkCommand is ignored with a note', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({
+      name: 'schedule_create',
+      arguments: { name: 'Plain', cron: '0 9 * * *', prompt: 'p', checkTimeoutSeconds: 15 },
+    });
+    assert.notEqual(result.isError, true, firstText(result));
+    assert.match(firstText(result), /checkTimeoutSeconds was ignored/);
+    const record = fixture.armed.find((r) => r.name === 'Plain');
+    assert.ok(record);
+    assert.equal(record.deliveryKind, undefined);
+    assert.equal(record.checkTimeoutSec, undefined);
     await client.close();
   });
 

@@ -1,6 +1,17 @@
 import { t } from '../i18n';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
-import { checkIsReminderSchedule } from './deliveryKind';
+import {
+  buildCheckFailurePrompt,
+  checkAlertOutputMaxChars,
+  checkIsCheckPassing,
+  defaultCheckTimeoutSec,
+  describeCheckFailure,
+  getCheckAlertCommand,
+  getCheckAlertDecision,
+  getOutputTail,
+  type CheckRunResult,
+} from './checkRun';
+import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
 
@@ -29,6 +40,14 @@ import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
  * Steps 3–4 are skipped entirely, so a reminder fires in an unbound topic and in
  * General — there is no session to ensure, nothing to interrupt, and no agent to
  * tell about the run.
+ *
+ * A CHECK record (`deliveryKind: 'check'`) runs its command FIRST and decides
+ * from the result and its persisted failing flag: a pass after a pass, or a
+ * failure after a failure, posts nothing; a pass after a failure posts one
+ * unpinned "passes again" line; the first failure posts the alert, pins it, and
+ * then wakes the agent through steps 3–4 with the failure details ahead of the
+ * job's prompt. An unbound topic fails with the same distinct error as a prompt
+ * job, so it is paused the same way.
  *
  * It owns NO bot.ts import: every side effect is injected via
  * {@link ScheduleDeliveryDeps} (announce / pin / busy probe / ensure-session /
@@ -85,6 +104,10 @@ export interface ScheduleDeliveryDeps {
   ensureSession: (threadKey: string, fallbackAdapterName?: string) => Promise<EnsureSessionResult>;
   /** Forward the (already-prefixed) prompt to the thread's agent. */
   forwardPrompt: (threadKey: string, text: string) => Promise<void>;
+  /** Run a check job's command in the thread's bound folder; `null` when the thread is unbound. */
+  runCheck: (threadKey: string, command: string, timeoutMs: number) => Promise<CheckRunResult | null>;
+  /** Persist a check job's failing flag (it decides whether the next run alerts). */
+  setCheckFailing: (jobId: string, isFailing: boolean) => Promise<void>;
   /** Current epoch ms — injected so the wait loop runs on a fake clock in tests. */
   now: () => number;
   /** Sleep `ms` — injected so the wait loop's pauses are driven by a fake timer in tests. */
@@ -121,10 +144,7 @@ export function prependScheduledRunMarker(jobName: string, prompt: string): stri
  * and card show, because describing one reminder two different ways is a defect.
  */
 export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireContext): string {
-  const missedNote =
-    fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined
-      ? t('schedule.missedNote', { time: formatLocalTime(fireContext.missedAtMs) })
-      : '';
+  const missedNote = getMissedNote(fireContext);
   if (checkIsReminderSchedule(job)) {
     return t('reminders.fired', {
       text: job.prompt,
@@ -137,6 +157,30 @@ export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireCont
     schedule: describeSchedule(job.spec),
     prompt: job.prompt,
     missedNote,
+  });
+}
+
+/** @description The catch-up note of a fire, empty for an on-time run. */
+function getMissedNote(fireContext: FireContext): string {
+  return fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined
+    ? t('schedule.missedNote', { time: formatLocalTime(fireContext.missedAtMs) })
+    : '';
+}
+
+/** @description The topic alert of a check's first failure: what failed, how, and the output tail. */
+export function buildCheckFailedAnnouncement(
+  job: ScheduleRecord,
+  fireContext: FireContext,
+  failure: string,
+  output: string,
+): string {
+  return t('schedule.checkFailed', {
+    name: job.name,
+    schedule: describeSchedule(job.spec),
+    missedNote: getMissedNote(fireContext),
+    failure,
+    command: getCheckAlertCommand(job.checkCommand ?? ''),
+    output: getOutputTail(output.trim(), checkAlertOutputMaxChars) || '—',
   });
 }
 
@@ -164,6 +208,100 @@ async function waitForIdle(deps: ScheduleDeliveryDeps, threadKey: string): Promi
 }
 
 /**
+ * @description Steps 1–2: post the announcement and pin it. A pin failure only
+ * logs — the announcement is already visible.
+ */
+async function announceAndPin(deps: ScheduleDeliveryDeps, job: ScheduleRecord, text: string): Promise<void> {
+  const messageId = await deps.announce(job.threadKey, text);
+  if (messageId === null) return;
+  try {
+    await deps.pin(job.threadKey, messageId, job.isPinSilent === true);
+  } catch (error) {
+    console.warn(
+      `[scheduler] pin announcement for job ${job.id} failed:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * @description Steps 3–4: make sure the thread has a session, wait for a busy one
+ * to go idle, and forward `prompt` (already carrying its marker).
+ */
+async function deliverToAgent(
+  deps: ScheduleDeliveryDeps,
+  job: ScheduleRecord,
+  prompt: string,
+): Promise<DeliveryOutcome> {
+  const { threadKey } = job;
+
+  // 3. ensure a session and (if busy) wait for idle
+  const session = await deps.ensureSession(threadKey, job.lastAdapterName);
+  if (!session.ok) {
+    // Unbound → distinct error the engine records; S8 pauses the job on it.
+    // no-adapter → the topic never picked an agent; start-failed → a start
+    // that threw. Both surface their own readable ledger reason.
+    const error =
+      session.reason === 'unbound'
+        ? unboundDeliveryError
+        : session.reason === 'no-adapter'
+          ? 'no agent selected for this topic'
+          : 'failed to start agent session';
+    return { status: 'failed', error };
+  }
+
+  if (deps.checkBusy(threadKey)) {
+    await waitForIdle(deps, threadKey);
+  }
+
+  // 4. forward the prefixed prompt (forward interrupts only as the fallback)
+  try {
+    await deps.forwardPrompt(threadKey, prompt);
+  } catch (error) {
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+  }
+
+  return { status: 'delivered' };
+}
+
+/**
+ * @description The check flow: run the command, then stay quiet, post the
+ * "passes again" line, or raise the alert and wake the agent. The failing flag is
+ * stored BEFORE the agent is woken, so a restart mid-delivery cannot raise the
+ * same alert twice.
+ */
+async function deliverCheck(
+  deps: ScheduleDeliveryDeps,
+  job: ScheduleRecord,
+  fireContext: FireContext,
+): Promise<DeliveryOutcome> {
+  const timeoutSec = job.checkTimeoutSec ?? defaultCheckTimeoutSec;
+  const command = job.checkCommand ?? '';
+  const result = await deps.runCheck(job.threadKey, command, timeoutSec * 1000);
+  if (!result) return { status: 'failed', error: unboundDeliveryError };
+
+  const decision = getCheckAlertDecision({
+    isPassing: checkIsCheckPassing(result),
+    wasFailing: job.isCheckFailing === true,
+  });
+  if (decision === 'quiet') return { status: 'delivered' };
+  if (decision === 'recovered') {
+    await deps.setCheckFailing(job.id, false);
+    await deps.announce(job.threadKey, t('schedule.checkRecovered', { name: job.name }));
+    return { status: 'delivered' };
+  }
+
+  await deps.setCheckFailing(job.id, true);
+  const failure = describeCheckFailure(result, timeoutSec);
+  await announceAndPin(deps, job, buildCheckFailedAnnouncement(job, fireContext, failure, result.output));
+  return deliverToAgent(
+    deps,
+    job,
+    buildCheckFailurePrompt({ name: job.name, command, failure, output: result.output, prompt: job.prompt }),
+  );
+}
+
+/**
  * @description Build the engine's `deliver(job, fireContext)` callback bound to
  * the injected deps. See the module header for the locked flow.
  */
@@ -171,55 +309,17 @@ export function createScheduleDelivery(
   deps: ScheduleDeliveryDeps,
 ): (job: ScheduleRecord, fireContext: FireContext) => Promise<DeliveryOutcome> {
   return async (job, fireContext) => {
-    const { threadKey } = job;
+    if (checkIsCheckSchedule(job)) return deliverCheck(deps, job, fireContext);
 
-    // 1. announce
-    const announcement = buildFireAnnouncement(job, fireContext);
-    const messageId = await deps.announce(threadKey, announcement);
-
-    // 2. pin (degrade to log-only on failure — the announcement is already up)
-    if (messageId !== null) {
-      try {
-        await deps.pin(threadKey, messageId, job.isPinSilent === true);
-      } catch (error) {
-        console.warn(
-          `[scheduler] pin announcement for job ${job.id} failed:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-    }
+    // 1–2. announce and pin
+    await announceAndPin(deps, job, buildFireAnnouncement(job, fireContext));
 
     // A reminder is done here: announced and pinned, with no agent involved at
     // all. Returning before `ensureSession` is also what lets it fire in an
     // unbound topic and in General — there is no session to fail to ensure.
     if (checkIsReminderSchedule(job)) return { status: 'delivered' };
 
-    // 3. ensure a session and (if busy) wait for idle
-    const session = await deps.ensureSession(threadKey, job.lastAdapterName);
-    if (!session.ok) {
-      // Unbound → distinct error the engine records; S8 pauses the job on it.
-      // no-adapter → the topic never picked an agent; start-failed → a start
-      // that threw. Both surface their own readable ledger reason.
-      const error =
-        session.reason === 'unbound'
-          ? unboundDeliveryError
-          : session.reason === 'no-adapter'
-            ? 'no agent selected for this topic'
-            : 'failed to start agent session';
-      return { status: 'failed', error };
-    }
-
-    if (deps.checkBusy(threadKey)) {
-      await waitForIdle(deps, threadKey);
-    }
-
-    // 4. forward the prefixed prompt (forward interrupts only as the fallback)
-    try {
-      await deps.forwardPrompt(threadKey, prependScheduledRunMarker(job.name, job.prompt));
-    } catch (error) {
-      return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
-    }
-
-    return { status: 'delivered' };
+    // 3–4. wake the agent with the prompt
+    return deliverToAgent(deps, job, prependScheduledRunMarker(job.name, job.prompt));
   };
 }

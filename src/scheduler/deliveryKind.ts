@@ -21,9 +21,15 @@ export function checkIsReminderSchedule(record: Pick<ScheduleRecord, 'deliveryKi
   return record.deliveryKind === 'reminder';
 }
 
+/** @description Whether a record is a watchdog check (the bot runs its command; a failure wakes the agent). */
+export function checkIsCheckSchedule(record: Pick<ScheduleRecord, 'deliveryKind'>): boolean {
+  return record.deliveryKind === 'check';
+}
+
 /**
- * @description The jobs an UNBOUND topic must pause: the agent-prompt ones only,
- * reminders left out so they stay armed. The caller must therefore count what this
+ * @description The jobs an UNBOUND topic must pause: the agent-prompt jobs and the
+ * checks (a check runs in the bound folder and wakes the agent), reminders left
+ * out so they stay armed. The caller must therefore count what this
  * returns rather than the thread's whole list — a thread holding only reminders
  * yields an empty array, i.e. nothing paused and no notice to post.
  */

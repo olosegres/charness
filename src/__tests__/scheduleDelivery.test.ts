@@ -28,6 +28,7 @@ import {
   getUnboundPausableSchedules,
 } from '../scheduler/deliveryKind';
 import { describeSchedule } from '../scheduler/recurrence';
+import type { CheckRunResult } from '../scheduler/checkRun';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
 import { runWithLocale } from '../i18n';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
@@ -67,7 +68,7 @@ function makeReminder(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
 const onTime: FireContext = { kind: 'on-time' };
 
 interface CallLogEntry {
-  step: 'announce' | 'pin' | 'ensureSession' | 'forward';
+  step: 'announce' | 'pin' | 'ensureSession' | 'forward' | 'runCheck' | 'setCheckFailing';
   detail?: unknown;
 }
 
@@ -82,6 +83,7 @@ function createHarness(options: {
   announceId?: number | null;
   pinThrows?: boolean;
   forwardThrows?: boolean;
+  checkResult?: CheckRunResult | null;
 } = {}) {
   const callLog: CallLogEntry[] = [];
   let nowMs = 1_000_000;
@@ -109,6 +111,15 @@ function createHarness(options: {
     forwardPrompt: async (key, text) => {
       callLog.push({ step: 'forward', detail: { key, text } });
       if (options.forwardThrows) throw new Error('forward boom');
+    },
+    runCheck: async (key, command, timeoutMs) => {
+      callLog.push({ step: 'runCheck', detail: { key, command, timeoutMs } });
+      return options.checkResult === undefined
+        ? { exitCode: 0, signal: null, isTimedOut: false, output: '' }
+        : options.checkResult;
+    },
+    setCheckFailing: async (jobId, isFailing) => {
+      callLog.push({ step: 'setCheckFailing', detail: { jobId, isFailing } });
     },
     now: () => nowMs,
     sleep: async (ms) => {
@@ -453,4 +464,103 @@ test('getUnboundPausableSchedules: a reminder-only thread pauses nothing (no not
 
 test('getUnboundPausableSchedules: an empty thread yields an empty list', () => {
   assert.deepEqual(getUnboundPausableSchedules([]), []);
+});
+
+// ─── check (watchdog) kind ───────────────────────────────────────────
+
+function makeCheck(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
+  return makeJob({
+    id: 'api-health-abc123',
+    name: 'API health',
+    spec: { kind: 'cron', cronExpr: '*/5 * * * *' },
+    prompt: 'Find out why the API is down and restart it.',
+    deliveryKind: 'check',
+    checkCommand: 'curl -fsS http://127.0.0.1:8080/health',
+    ...overrides,
+  });
+}
+
+const failedRun: CheckRunResult = { exitCode: 7, signal: null, isTimedOut: false, output: 'curl: (7) Failed to connect\n' };
+
+test('check: a passing run after a pass posts nothing and wakes nobody', async () => {
+  const { deps, callLog } = createHarness();
+  const outcome = await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck']);
+  assert.deepEqual(callLog[0].detail, {
+    key: threadKey,
+    command: 'curl -fsS http://127.0.0.1:8080/health',
+    timeoutMs: 60_000,
+  });
+});
+
+test('check: the first failure stores the flag, pins the alert, then wakes the agent', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun });
+  const outcome = await createScheduleDelivery(deps)(makeCheck({ checkTimeoutSec: 20 }), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(
+    callLog.map((entry) => entry.step),
+    ['runCheck', 'setCheckFailing', 'announce', 'pin', 'ensureSession', 'forward'],
+  );
+  assert.equal((callLog[0].detail as { timeoutMs: number }).timeoutMs, 20_000);
+  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', isFailing: true });
+
+  const alert = (callLog[2].detail as { text: string }).text;
+  assert.match(alert, /API health/);
+  assert.match(alert, /exit 7/);
+  assert.match(alert, /\$ curl -fsS/);
+  assert.match(alert, /Failed to connect/);
+  assert.equal((callLog[3].detail as { isSilent: boolean }).isSilent, false, 'the alert pin notifies');
+
+  const prompt = (callLog[5].detail as { text: string }).text;
+  assert.ok(prompt.startsWith('[Scheduled check "API health" failed]'));
+  assert.match(prompt, /Result: exit 7/);
+  assert.match(prompt, /Failed to connect/);
+  assert.ok(prompt.endsWith('Find out why the API is down and restart it.'), 'the job prompt comes last');
+});
+
+test('check: a failure while already failing stays silent', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun });
+  const outcome = await createScheduleDelivery(deps)(makeCheck({ isCheckFailing: true }), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck']);
+});
+
+test('check: a pass after a failure clears the flag and posts one unpinned line', async () => {
+  const { deps, callLog } = createHarness();
+  const outcome = await runWithLocale('en', () =>
+    createScheduleDelivery(deps)(makeCheck({ isCheckFailing: true }), onTime),
+  );
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck', 'setCheckFailing', 'announce']);
+  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', isFailing: false });
+  assert.equal((callLog[2].detail as { text: string }).text, '✅ Check "API health" passes again.');
+});
+
+test('check: a timeout is a failure and names its limit', async () => {
+  const { deps, callLog } = createHarness({
+    checkResult: { exitCode: null, signal: 'SIGTERM', isTimedOut: true, output: '' },
+  });
+  await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  const prompt = (callLog.find((entry) => entry.step === 'forward')?.detail as { text: string }).text;
+  assert.match(prompt, /Result: timeout 60s/);
+  assert.match(prompt, /\(no output\)/);
+});
+
+test('check: an unbound topic runs nothing and fails with the unbound error (the bot pauses it)', async () => {
+  const { deps, callLog } = createHarness({ checkResult: null });
+  const outcome = await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  assert.deepEqual(outcome, { status: 'failed', error: unboundDeliveryError });
+  assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck']);
+});
+
+test('getUnboundPausableSchedules: a check pauses with the prompt jobs', () => {
+  const pausable = getUnboundPausableSchedules([makeCheck({ id: 'c' }), makeReminder({ id: 'r' })]);
+  assert.deepEqual(pausable.map((record) => record.id), ['c']);
 });

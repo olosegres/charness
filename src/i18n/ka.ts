@@ -483,6 +483,9 @@ export const kaDict: Record<string, string> = {
   'schedule.fired':
     '⏰ განრიგი «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — გამოტოვებულია {time}-ზე, მიწევს',
+  'schedule.checkFailed':
+    '🚨 შემოწმება «{name}» ვერ გაიარა: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nაგენტს ვაღვიძებ. ახალი გაფრთხილება აღარ იქნება, სანამ შემოწმება ისევ არ გაივლის.',
+  'schedule.checkRecovered': '✅ შემოწმება «{name}» ისევ გადის.',
   'schedule.pausedUnbound':
     '⏸ შეჩერებული განრიგები: {count} — თემა მოხსნილია თავის საქაღალდიდან. /bind დააბრუნებს მათ.',
   'schedule.resumedRebind': '▶️ განრიგები გაგრძელდა: {count} (შემდეგი გაშვება ხელახლა გამოითვლება ახლანდელი დროიდან).',

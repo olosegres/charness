@@ -487,6 +487,9 @@ export const ruDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Расписание «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — пропущено в {time}, догоняю',
+  'schedule.checkFailed':
+    '🚨 Проверка «{name}» не прошла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБужу агента. Новых тревог не будет, пока проверка снова не пройдёт.',
+  'schedule.checkRecovered': '✅ Проверка «{name}» снова проходит.',
   'schedule.pausedUnbound':
     '⏸ Расписаний на паузе: {count} — топик отвязан от папки. /bind вернёт их в строй.',
   'schedule.resumedRebind': '▶️ Расписаний возобновлено: {count} (следующий запуск пересчитан от текущего момента).',

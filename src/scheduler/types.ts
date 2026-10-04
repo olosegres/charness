@@ -27,13 +27,14 @@ export type ScheduleCreatedBy = 'user' | 'agent';
 /**
  * @name ScheduleDeliveryKind
  * @description WHAT a fire does, for the kinds that are not the original
- * agent-prompt delivery. Only `'reminder'` exists: a bot-LOCAL job whose whole
- * delivery is the announcement + its pin (no session started, none touched).
- *
- * A one-member union rather than a boolean because a third kind is plausible and
- * a `deliveryKind` reads at the call site as the discriminator it is.
+ * agent-prompt delivery:
+ *  - `'reminder'` — a bot-LOCAL job whose whole delivery is the announcement +
+ *    its pin (no session started, none touched).
+ *  - `'check'` — a watchdog: the bot runs {@link ScheduleRecord.checkCommand} in
+ *    the bound folder, stays silent while it passes, and on the first failure
+ *    pins an alert and wakes the agent with `prompt` (see `checkRun.ts`).
  */
-export type ScheduleDeliveryKind = 'reminder';
+export type ScheduleDeliveryKind = 'reminder' | 'check';
 
 /**
  * Outcome of the most recent fire, persisted for `/schedule list` display.
@@ -65,8 +66,9 @@ export interface ScheduleRecord {
   spec: ScheduleSpec;
   /**
    * The text the fire delivers: forwarded to the agent as the prompt for an
-   * agent-prompt job, POSTED into the topic as the message for a reminder. One
-   * field for both kinds on purpose — a second text field would need a state
+   * agent-prompt job, POSTED into the topic as the message for a reminder, and
+   * forwarded to the agent after the failure details when a check fails. One
+   * field for every kind on purpose — a second text field would need a state
    * migration and could disagree with this one.
    */
   prompt: string;
@@ -98,6 +100,16 @@ export interface ScheduleRecord {
    * "no kind recorded" can only ever mean the prompt path.
    */
   deliveryKind?: ScheduleDeliveryKind;
+  /** The shell command a `'check'` job runs in the bound folder; exit 0 passes. */
+  checkCommand?: string;
+  /** Seconds a `'check'` run may take before it is stopped and counted as failed. */
+  checkTimeoutSec?: number;
+  /**
+   * True from the failed check run that raised the alert until a run passes
+   * again. Persisted so a restart neither repeats the alert nor forgets to say
+   * the check recovered.
+   */
+  isCheckFailing?: boolean;
 }
 
 /**

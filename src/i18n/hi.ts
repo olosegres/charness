@@ -483,6 +483,9 @@ export const hiDict: Record<string, string> = {
   'schedule.fired':
     '⏰ शेड्यूल «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — {time} पर छूटा, पकड़ रहा हूँ',
+  'schedule.checkFailed':
+    '🚨 जाँच «{name}» विफल: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nएजेंट को जगा रहा हूँ। जाँच फिर से पास होने तक और अलर्ट नहीं आएँगे।',
+  'schedule.checkRecovered': '✅ जाँच «{name}» फिर से पास हो रही है।',
   'schedule.pausedUnbound':
     '⏸ रुके हुए शेड्यूल: {count} — टॉपिक अपने फ़ोल्डर से अनबाउंड हो गया। /bind उन्हें वापस लाएगा।',
   'schedule.resumedRebind': '▶️ शेड्यूल पुनः शुरू: {count} (अगला रन अब से पुनः गणना)।',

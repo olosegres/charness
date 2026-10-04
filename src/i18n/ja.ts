@@ -483,6 +483,9 @@ export const jaDict: Record<string, string> = {
   'schedule.fired':
     '⏰ スケジュール「{name}」({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — {time} に見逃し、追従中',
+  'schedule.checkFailed':
+    '🚨 チェック「{name}」が失敗しました: {failure}（{schedule}）{missedNote}\n$ {command}\n\n{output}\n\nエージェントを起こします。チェックが再び通るまで追加の警告は出しません。',
+  'schedule.checkRecovered': '✅ チェック「{name}」が再び通りました。',
   'schedule.pausedUnbound':
     '⏸ 一時停止中のスケジュール: {count} — トピックがフォルダからアンバインドされました。/bind で復元されます。',
   'schedule.resumedRebind': '▶️ スケジュールを再開: {count}（次回実行は現在時刻から再計算）。',

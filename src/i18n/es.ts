@@ -483,6 +483,9 @@ export const esDict: Record<string, string> = {
   'schedule.fired':
     '⏰ Programación «{name}» ({schedule}){missedNote}\n\n{prompt}',
   'schedule.missedNote': ' — perdido a las {time}, recuperando',
+  'schedule.checkFailed':
+    '🚨 La comprobación «{name}» falló: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nDespertando al agente. No habrá más alertas hasta que la comprobación vuelva a pasar.',
+  'schedule.checkRecovered': '✅ La comprobación «{name}» vuelve a pasar.',
   'schedule.pausedUnbound':
     '⏸ Programaciones en pausa: {count} — el topic se desvinculó de su carpeta. /bind las restaurará.',
   'schedule.resumedRebind': '▶️ Programaciones reanudadas: {count} (próxima recalculada desde ahora).',
