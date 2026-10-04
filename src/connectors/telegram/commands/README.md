@@ -3,7 +3,8 @@
 Slash commands and their buttons that were decomposed out of `bot.ts`, one file per feature. A file exports
 `create<Feature>(ports)`; `bot.ts` builds ONE ports bag (`BotCore` in `botCore.ts`: the telegraf instance, the
 neutral `command` registrar, the topic send helpers, a state getter) and calls the factory and its `register…()`
-functions where the handlers used to be registered. A module never imports `bot.ts`.
+functions where the handlers used to be registered. A module never imports `bot.ts` (guarded by
+`__tests__/compositionRootImports.test.ts`).
 
 - **Registration order is part of the contract.** Commands go through the neutral router, so only their names
   matter; telegraf runs the FIRST matching `action` / `on`, so a `register…Callbacks()` call keeps the position
