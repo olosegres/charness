@@ -485,8 +485,10 @@ test(
     const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-orphan-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const port = await getUnusedPort();
+    const descendantLogPath = path.join(testDirectory, 'descendants.log');
     const owner = spawn(process.execPath, ['-e', persistentChildScript], { stdio: 'ignore' });
     let server: ExternalProcessIdentity | undefined;
+    let descendantPid: number | undefined;
 
     try {
       assert.ok(owner.pid);
@@ -500,9 +502,14 @@ test(
           FAKE_OPENCODE_NEVER_READY: '1',
           FAKE_OPENCODE_SPAWN_LOG: path.join(testDirectory, 'spawn.log'),
           FAKE_OPENCODE_PID_FILE: path.join(testDirectory, 'server.pid'),
+          FAKE_OPENCODE_DESCENDANT_LOG: descendantLogPath,
         },
       );
       assert.equal(checkIsTestProcessAlive(server.pid), true);
+      await waitForTestFile(descendantLogPath);
+      [descendantPid] = getSpawnedPids(descendantLogPath);
+      assert.ok(descendantPid);
+      assert.equal(checkIsTestProcessAlive(descendantPid), true);
 
       const ownerExit = new Promise<void>((resolve) => owner.once('exit', () => resolve()));
       owner.kill('SIGKILL');
@@ -514,8 +521,15 @@ test(
         false,
         'a fixture server must not outlive the test process that owns it',
       );
+      await waitForTestProcessExit(descendantPid);
+      assert.equal(
+        checkIsTestProcessAlive(descendantPid),
+        false,
+        'a fixture server descendant must not outlive the test process that owns it',
+      );
     } finally {
       if (server) stopTestProcess(server.pid);
+      if (descendantPid) stopTestProcess(descendantPid);
       owner.kill('SIGKILL');
       fs.rmSync(testDirectory, { recursive: true, force: true });
     }
