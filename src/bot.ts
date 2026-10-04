@@ -7252,13 +7252,17 @@ function buildDisplayModeKeyboard(
   callbackPrefix: string,
   marked: DisplayVerbosityMode | null,
 ) {
-  const buttons = displayVerbosityModeOptions.map((mode) =>
+  return Markup.inlineKeyboard(buildDisplayModeButtons(i18nGroup, callbackPrefix, marked), { columns: displayVerbosityModeOptions.length });
+}
+
+/** One button per display-verbosity mode (`<callbackPrefix>_<mode>`), `✓` on `marked` — the row every mode picker shares. */
+function buildDisplayModeButtons(i18nGroup: string, callbackPrefix: string, marked: DisplayVerbosityMode | null) {
+  return displayVerbosityModeOptions.map((mode) =>
     Markup.button.callback(
       mode === marked ? `${t(`${i18nGroup}.mode.${mode}`)} ✓` : t(`${i18nGroup}.mode.${mode}`),
       `${callbackPrefix}_${mode}`,
     ),
   );
-  return Markup.inlineKeyboard(buttons, { columns: displayVerbosityModeOptions.length });
 }
 
 /**
@@ -7448,13 +7452,7 @@ function formatTopicView(view: TopicView): string {
  * command and both callback re-renders, so the two rows never drift.
  */
 function buildVerbosityKeyboard(prefs: ResolvedThreadDisplayPrefs) {
-  const uniformLevel = getUniformVerbosityLevel(prefs);
-  const detailRow = displayVerbosityModeOptions.map((mode) =>
-    Markup.button.callback(
-      mode === uniformLevel ? `${t(`verbosity.mode.${mode}`)} ✓` : t(`verbosity.mode.${mode}`),
-      `verb_${mode}`,
-    ),
-  );
+  const detailRow = buildDisplayModeButtons('verbosity', 'verb', getUniformVerbosityLevel(prefs));
   const viewRow = topicViewOptions.map((view) =>
     Markup.button.callback(view === prefs.view ? `${formatTopicView(view)} ✓` : formatTopicView(view), `view_${view}`),
   );
@@ -11323,7 +11321,7 @@ interface DisplayModeCallbackConfig {
    * The picker to re-render after the pick; defaults to the shared one-row
    * keyboard. `/verbosity` renders its two rows (detail + view, S6) instead.
    */
-  buildKeyboard?: (key: SessionKey, picked: DisplayVerbosityMode) => ReturnType<typeof buildDisplayModeKeyboard>;
+  buildKeyboard?: (key: SessionKey) => ReturnType<typeof buildDisplayModeKeyboard>;
 }
 
 /**
@@ -11390,7 +11388,7 @@ async function handleDisplayModeCallback(
   await ctx.answerCbQuery(t(config.setCbKey, { mode: t(`${config.i18nGroup}.mode.${picked}`) }));
 
   const keyboard = config.buildKeyboard
-    ? config.buildKeyboard(key, picked)
+    ? config.buildKeyboard(key)
     : buildDisplayModeKeyboard(config.i18nGroup, config.callbackPrefix, picked);
   await rerenderPickerKeyboard(ctx, key, keyboard, config.logTag);
 }
