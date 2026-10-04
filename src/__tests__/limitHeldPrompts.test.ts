@@ -199,7 +199,7 @@ describe('the bot holds and releases them (R23)', () => {
   it('only an ARMED usage-limit wait holds; the open request\'s own prompt stays with its request', () => {
     const hold = getFunction('function holdPromptForLimitResume(');
     assert.match(hold, /if \(getArmedApiRetry\(key\)\?\.kind !== 'usageLimit'\) return false;/);
-    assert.match(hold, /if \(requestLimitWaitAnswerDeps\?\.ledger\.getOpenRequest\(key\)\?\.prompt === text\) \{/);
+    assert.match(hold, /if \(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\)\.some\(\(request\) => request\.prompt === text\)\) \{/);
     assert.match(hold, /return limitHeldPrompts\.holdPrompt\(key, text, heldText\);/);
     assert.match(botSource, /checkIsLimitWaitArmed: \(key\) => getArmedApiRetry\(key\)\?\.kind === 'usageLimit',/);
   });

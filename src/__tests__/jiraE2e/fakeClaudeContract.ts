@@ -20,14 +20,16 @@ export const fakeClaudeLogFileNames = {
  * @description One line of the fake's `turns.jsonl`: the request the turn
  * belonged to (`null` for a prompt without a request header), the `KEY-n` label
  * of its text, whether the text was the request's own prompt (not a reminder),
- * whether its header said the requester does not see plain text, the turn's
- * count for that request, and the fake's pid.
+ * whether its header said the requester does not see plain text, the request
+ * ids its header named as replaced by this request (one answer covers them),
+ * the turn's count for that request, and the fake's pid.
  */
 export interface FakeClaudeTurn {
   requestId: string | null;
   issueKey: string;
   isRequestPrompt: boolean;
   isPlainTextHidden: boolean;
+  supersededRequestIds: string[];
   turnCount: number;
   pid: number;
 }

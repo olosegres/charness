@@ -115,6 +115,50 @@ afterEach(async () => {
   fs.rmSync(fakeHome, { recursive: true, force: true });
 });
 
+describe('two requesters in one conversation', () => {
+  const operatorOrigin = { kind: 'message' as const, attributes: { requester: '424242' } };
+  const colleagueOrigin = { kind: 'message' as const, attributes: { requester: '535353' } };
+
+  it('each open request is watched to its own turn end: the answered one closes, the silent one is woken', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const operatorRequest = await ledger.createRequest(topicKey, operatorOrigin);
+    await engine.trackForwardedTurn(topicKey, operatorRequest.id);
+    const colleagueRequest = await ledger.createRequest(topicKey, colleagueOrigin);
+    await engine.trackForwardedTurn(topicKey, colleagueRequest.id);
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [operatorRequest.id, colleagueRequest.id], 'both stay open');
+
+    // The agent answers the colleague's request during the turn, never the operator's.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await ledger.closeRequest(colleagueRequest.id, 'final');
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+
+    assert.deepEqual(wakeUps, [{ requestId: operatorRequest.id, reason: 'silentTurn' }], 'only the unanswered request is woken');
+    assert.equal(ledger.getOpenRequestById(operatorRequest.id)?.request.silentTurnCount, 1);
+  });
+
+  it('the operator taking over cancels every open request of the conversation', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const operatorRequest = await ledger.createRequest(topicKey, operatorOrigin);
+    const colleagueRequest = await ledger.createRequest(topicKey, colleagueOrigin);
+    await engine.trackForwardedTurn(topicKey, operatorRequest.id);
+    await engine.trackForwardedTurn(topicKey, colleagueRequest.id);
+
+    await engine.cancelConversation(topicKey);
+
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey), []);
+    for (const id of [operatorRequest.id, colleagueRequest.id]) {
+      const lookup = ledger.getRequest(id);
+      assert.equal(lookup?.isOpen === false ? lookup.request.closeReason : null, 'cancelled', id);
+    }
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'nothing left to wake');
+  });
+});
+
 describe('silent turns', () => {
   it('a silent turn is woken at once; the second alerts, stops waking and holds the alert', async () => {
     const ledger = await createLedger();
@@ -124,13 +168,13 @@ describe('silent turns', () => {
 
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }]);
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 1);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1);
 
     // The reminder's own turn ends silent too.
     await endTurnSilently(engine);
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }]);
     assert.equal(wakeUps.length, 1, 'no second wake-up');
-    const stopped = ledger.getOpenRequest(topicKey);
+    const stopped = ledger.getNewestOpenRequest(topicKey);
     assert.equal(stopped?.isWakeStopped, true);
     assert.equal(stopped?.alertRef, alertMessageRef);
 
@@ -191,7 +235,7 @@ describe('silent turns', () => {
     await endTurnSilently(engine);
 
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'wakeFailed' }]);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isWakeStopped, true);
   });
 
   it('the wake-up cap alerts instead of a further wake-up', async () => {
@@ -236,7 +280,7 @@ describe('the resume race', () => {
 
     assert.deepEqual(wakeUps, []);
     assert.deepEqual(alerts, []);
-    const open = ledger.getOpenRequest(topicKey);
+    const open = ledger.getNewestOpenRequest(topicKey);
     assert.equal(open?.id, newer?.id);
     assert.notEqual(open?.id, request.id);
     assert.equal(open?.isWakeStopped, false, 'the newer request is not marked stopped');
@@ -264,7 +308,7 @@ describe('failures', () => {
     await endTurnSilently(engine);
 
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'wakeFailed' }]);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isWakeStopped, true);
   });
 
   it('one conversation that fails never stops the others, and a tick never rejects', async () => {
@@ -302,7 +346,7 @@ describe('progress answers', () => {
 
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [], 'no wake-up right after a progress note');
-    assert.equal(ledger.getOpenRequest(topicKey)?.nextWakeAt, nowMs + progressFollowUpDelayMs);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextWakeAt, nowMs + progressFollowUpDelayMs);
 
     nowMs += progressFollowUpDelayMs - 1;
     await engine.sweepUnwatchedRequests();
@@ -403,7 +447,7 @@ describe('usage limits', () => {
 
     // The limit window reset: the bot forwarded its "continue" nudge.
     await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
-    const resumed = ledger.getOpenRequest(topicKey);
+    const resumed = ledger.getNewestOpenRequest(topicKey);
     assert.equal(resumed?.silentTurnCount, 0);
     assert.equal(resumed?.wakeCount, 0);
     assert.equal(resumed?.nextWakeAt, undefined);
@@ -426,7 +470,7 @@ describe('usage limits', () => {
     await engine.pollWatchedTurns();
 
     assert.deepEqual(wakeUps, [], 'a backend without a consumption signal has not started the nudge\'s turn yet');
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
   });
 
   it('a retry that is not a limit wait keeps the counters', async () => {
@@ -437,8 +481,8 @@ describe('usage limits', () => {
 
     await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
 
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 1);
-    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 3);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 3);
   });
 
   it('a wait that will not end by itself stops every wake-up, the backstop included', async () => {
@@ -454,7 +498,7 @@ describe('usage limits', () => {
 
     assert.deepEqual(wakeUps, []);
     assert.deepEqual(alerts, [], 'not a technical failure: the operator decides when to continue');
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id, 'the request stays open');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, request.id, 'the request stays open');
   });
 
   it('a limit stop is lifted when a limit wait ends with a resume; the rules\' own give-up is not', async () => {
@@ -462,18 +506,18 @@ describe('usage limits', () => {
     const engine = createEngine(ledger);
     const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
     await engine.stopWakingForLimitWait(topicKey);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, true);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, false, 'not the rules\' give-up');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isLimitStopped, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isWakeStopped, false, 'not the rules\' give-up');
 
     // Auto-resume back on, a later limit wait ended with its resume.
     await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
-    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isLimitStopped, undefined);
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'waking again');
 
     await ledger.updateOpenRequest(request.id, { isWakeStopped: true });
     await engine.trackContinuationTurn(topicKey, { isCountersReset: true });
-    assert.equal(ledger.getOpenRequest(topicKey)?.isWakeStopped, true, 'an alert / cap give-up stays');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isWakeStopped, true, 'an alert / cap give-up stays');
   });
 
   it('a transient retry\'s resume does not lift a limit stop', async () => {
@@ -485,7 +529,7 @@ describe('usage limits', () => {
     await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
     await endTurnSilently(engine);
 
-    assert.equal(ledger.getOpenRequest(topicKey)?.isLimitStopped, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isLimitStopped, true);
     assert.deepEqual(wakeUps, []);
   });
 
@@ -500,7 +544,7 @@ describe('usage limits', () => {
 
     assert.deepEqual(wakeUps, []);
     assert.deepEqual(alerts, []);
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, request.id);
   });
 
   it('a stop that lands after the sweep took its snapshot wins over the stale decision', async () => {
@@ -520,7 +564,7 @@ describe('usage limits', () => {
 
     assert.deepEqual(wakeUps, [{ requestId: first.id, reason: 'backstop' }]);
     assert.deepEqual(alerts, []);
-    assert.equal(ledger.getOpenRequest(stoppedKey)?.wakeCount, 0, 'the stale decision changed nothing');
+    assert.equal(ledger.getNewestOpenRequest(stoppedKey)?.wakeCount, 0, 'the stale decision changed nothing');
   });
 
   it('a watch replaced while a poll is running is not judged by the turn it replaced', async () => {
@@ -544,7 +588,7 @@ describe('usage limits', () => {
     await engine.pollWatchedTurns();
 
     assert.deepEqual(wakeUps, [{ requestId: first.id, reason: 'silentTurn' }], 'the nudge\'s turn has not started yet');
-    assert.equal(ledger.getOpenRequest(nudgedKey)?.silentTurnCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(nudgedKey)?.silentTurnCount, 0);
   });
 
   it('stopping the wake-ups never rejects, even when the ledger write fails', async () => {
@@ -552,7 +596,8 @@ describe('usage limits', () => {
     await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
     const engine = new RequestWakeUpEngine({
       ledger: {
-        getOpenRequest: (key) => ledger.getOpenRequest(key),
+        getOpenRequestById: (id) => ledger.getOpenRequestById(id),
+        listOpenRequestsOf: (key) => ledger.listOpenRequestsOf(key),
         listOpenRequests: () => ledger.listOpenRequests(),
         updateOpenRequest: async () => { throw new Error('state.json is read-only'); },
         closeRequest: (id, reason) => ledger.closeRequest(id, reason),
@@ -655,7 +700,7 @@ describe('closing ends the watch', () => {
 
     await engine.cancelConversation(topicKey);
 
-    assert.equal(ledger.getOpenRequest(topicKey), undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey), undefined);
     const closed = ledger.getRequest(request.id);
     assert.equal(closed?.isOpen === false ? closed.request.closeReason : null, 'cancelled');
     await endTurnSilently(engine);
@@ -675,8 +720,8 @@ describe('closing ends the watch', () => {
     await endTurnSilently(engine);
 
     assert.deepEqual(wakeUps, []);
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, second.id);
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, second.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
   });
 
   it('a forward for a request that is not the open one is not watched', async () => {
@@ -699,16 +744,16 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     const ledger = await createLedger();
     const engine = createEngine(ledger);
     const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
-    assert.equal(ledger.getOpenRequest(topicKey)?.prompt, prompt);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.prompt, prompt);
 
     nowMs += backstopMs;
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(wakeUpMessages, [{ reason: 'backstop', text: prompt, isRequestPrompt: true }]);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'not read yet');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'not read yet');
 
     // The re-posted prompt's turn runs and ends silently: it was taken in, so the next wake-up is a reminder.
     await endTurnSilently(engine);
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
     assert.equal(wakeUpMessages.length, 2);
     assert.equal(wakeUpMessages[1].isRequestPrompt, false);
     assert.match(wakeUpMessages[1].text, new RegExp(`^\\[Reminder · request ${request.id} is still open\\]`));
@@ -721,16 +766,16 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: false };
     await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'still unread');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'still unread');
     // A dead backend has nothing unread to report — that is not the prompt being read.
     probe = { isActive: false, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'the session died first: the prompt was never read');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'the session died first: the prompt was never read');
 
     probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
     await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
   });
 
   it('a reminder\'s turn never marks the prompt taken in; a request without a prompt is reminded as before', async () => {
@@ -740,7 +785,7 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     await engine.trackForwardedTurn(topicKey, withPrompt.id);
     probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
 
     const plain = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
@@ -773,7 +818,7 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     nowMs += 1;
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(wakeUpMessages, [{ reason: 'postRetry', text: prompt, isRequestPrompt: true }]);
-    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 0);
   });
 
   it('a retry that fails again tries after 5, then 15 minutes, with no alert; then the backstop takes over', async () => {
@@ -787,7 +832,7 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     }
     // Not `deepEqual(alerts, [])`: it would narrow `alerts` to `never[]` for the reasons read below.
     assert.equal(alerts.length, 0, 'a retry is not a reminder the agent ignored');
-    const spent = ledger.getOpenRequest(topicKey);
+    const spent = ledger.getNewestOpenRequest(topicKey);
     assert.equal(spent?.postRetryCount, 3);
     assert.equal(spent?.nextPostRetryAt, undefined);
     assert.equal(spent?.isWakeStopped, false);
@@ -811,7 +856,7 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     const engine = createEngine(ledger);
     const request = await createFailedPost(ledger, engine);
     await engine.trackContinuationTurn(topicKey, { isCountersReset: true, isRequestPrompt: true });
-    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
 
     // The resumed turn sends a progress note and ends: the follow-up is the next wake-up, not a retry.
     await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
@@ -830,7 +875,7 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     const first = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
     await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
     await engine.notePostFailed(topicKey, first.id);
-    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
   });
 });
 
@@ -862,7 +907,7 @@ describe('a request whose first post is still starting its session (J7b)', () =>
     assert.deepEqual(wakeUps, [], 'its post is starting the session: nothing has gone quiet');
     assert.equal(alerts.length, 0);
     assert.equal(preparedFor.length, 0, 'no resume or start was attempted on top of the one under way');
-    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 0);
 
     // The control: the same request, the same age, the start over and nothing seen on it — due.
     probe = probeSession(false);
@@ -888,6 +933,6 @@ describe('a request whose first post is still starting its session (J7b)', () =>
     probe = { ...probe, isBusy: false };
     await engine.pollWatchedTurns();
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the watch survived the start and saw the turn end');
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 1);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1);
   });
 });

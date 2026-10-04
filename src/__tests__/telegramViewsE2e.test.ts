@@ -23,6 +23,9 @@
  *     moment waits it out, so the re-adopted agent still answers; an agent that
  *     never answers gets a pinned alert, released when the next message
  *     supersedes its request
+ *   → two messages in a row from the operator merge into ONE open request whose
+ *     header names the replaced one, so one answer covers both; two messages in
+ *     a row from two people stay two open requests, each answered on its own
  *   → in «Answers only» a turn posts nothing but its pinned answer — no text, no
  *     status, no thinking, no tool result — while the typing indicator still
  *     runs; back in «Stream + answers» the same turn shows its stream again
@@ -67,6 +70,8 @@ import {
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
+/** A second group admin: the bot serves them too, and their requests are their own (never merged with the operator's). */
+const colleague = { id: 535353, is_bot: false, first_name: 'Colleague' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
@@ -190,6 +195,14 @@ function readPersistedState(): { openRequests?: Record<string, OpenRequestState>
   return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
 }
 
+/** The open requests persisted for the test topic (`openRequests` is keyed by the topic's key plus the requester), oldest first. */
+function listPersistedOpenTopicRequests(): OpenRequestState[] {
+  return Object.entries(readPersistedState().openRequests ?? {})
+    .filter(([groupKey]) => groupKey.startsWith(`${group.id}:${topicThreadId}`))
+    .map(([, request]) => request)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
 function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
@@ -204,7 +217,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
 
-    fakeTelegram = new FakeTelegram({ botUser, operator, group });
+    fakeTelegram = new FakeTelegram({ botUser, operator, admins: [colleague], group });
     const apiRoot = await fakeTelegram.start();
     const claudeBin = writeFakeClaudeLauncher(layout);
     schedulerMcpPort = await getFreeFixedPort();
@@ -342,7 +355,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
     const closed = readClosedRequests().find((record) => record.id === turn.requestId);
     assert.equal(closed?.closeReason, 'final');
-    assert.deepEqual(closed?.origin, { kind: 'message', attributes: { source: 'text' } });
+    assert.deepEqual(closed?.origin, { kind: 'message', attributes: { source: 'text', requester: operator.id.toString() } }, 'the origin names the sender: the merge key\'s requester');
   });
 
   it('in «Answers only» the header tells the agent its plain text is not shown', async () => {
@@ -359,7 +372,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.equal(getTurns('TOPIC-3')[0].requestId, null, 'no request header');
     await waitForTopicMessage('the agent\'s stream text', (message) => message.text.includes('Working on TOPIC-3'));
     assert.deepEqual(getAnswers('TOPIC-3'), [], 'nothing to answer');
-    assert.equal(readPersistedState().openRequests?.[`${group.id}:${topicThreadId}`], undefined, 'no request is open for the topic');
+    assert.deepEqual(listPersistedOpenTopicRequests(), [], 'no request is open for the topic');
   });
 
   it('a turn that ends without an answer is woken, and the answer follows', async () => {
@@ -376,7 +389,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     const [turn] = getTurns('TOPIC-5');
     assert.equal(turn.isRequestPrompt, true);
     await getCharness().waitFor('the /schedule request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
-    assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'message', attributes: { source: 'schedule' } });
+    assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'message', attributes: { source: 'schedule', requester: operator.id.toString() } });
   });
 
   it('a scheduled run fires as a request: the announcement is pinned and the agent answers it', async () => {
@@ -404,7 +417,11 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     const [turn] = getTurns('TOPIC-6');
     assert.equal(turn.isRequestPrompt, true);
     await getCharness().waitFor('the scheduled run\'s request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
-    assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'scheduledRun', attributes: { source: 'scheduledRun' } });
+    assert.deepEqual(
+      readClosedRequests().find((record) => record.id === turn.requestId)?.origin,
+      { kind: 'scheduledRun', attributes: { source: 'scheduledRun', requester: 'scheduler' } },
+      'a scheduled run is the scheduler\'s request, never merged with a person\'s',
+    );
   });
 
   // ── S8 — pinned answer delivery ──────────────────────────────────────
@@ -493,6 +510,47 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the alert released', replyTimeoutMs, () => getPinKinds(alert.message_id).includes('unpin'));
     await getCharness().waitFor('the silent request closed as superseded', replyTimeoutMs, () =>
       readClosedRequests().find((record) => record.id === turn.requestId)?.closeReason === 'superseded');
+  });
+
+  it('two messages in a row from the operator merge into one open request; its header names the replaced one and one answer covers both', async () => {
+    // The first turn stays silent, so its request is still open when the second message lands a moment later.
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-20 [fake:silent-once]');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-21 [fake:answer]');
+    const answer = await waitForFakeAnswer('TOPIC-21');
+    assert.ok(answer.outcome.startsWith('Delivered'), answer.outcome);
+    const [firstTurn] = getTurns('TOPIC-20');
+    const [secondTurn] = getTurns('TOPIC-21');
+    assert.deepEqual(secondTurn.supersededRequestIds, [firstTurn.requestId], 'the second request\'s header names the first as replaced');
+    assert.deepEqual(firstTurn.supersededRequestIds, [], 'the first replaced nothing');
+
+    await getCharness().waitFor('the first request closed as superseded', replyTimeoutMs, () =>
+      readClosedRequests().some((record) => record.id === firstTurn.requestId));
+    const superseded = readClosedRequests().find((record) => record.id === firstTurn.requestId);
+    assert.equal(superseded?.closeReason, 'superseded');
+    assert.equal(superseded?.supersededBy, secondTurn.requestId, 'the history names the request that replaced it');
+    await getCharness().waitFor('the second request closed by its answer', replyTimeoutMs, () =>
+      readClosedRequests().find((record) => record.id === secondTurn.requestId)?.closeReason === 'final');
+    assert.deepEqual(getAnswers('TOPIC-20'), [], 'the replaced request is never answered on its own — no reminder wakes it');
+    assert.equal(listTopicMessages().filter((message) => message.text.includes('Fake final answer for TOPIC-21')).length, 1, 'one answer in the topic');
+  });
+
+  it('two messages in a row from two people stay two open requests, each answered on its own', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-22 [fake:silent-once]');
+    fakeTelegram.pushUserMessage(topicThreadId, 'TOPIC-23 [fake:answer]', colleague);
+    await waitForFakeAnswer('TOPIC-23');
+    const [operatorTurn] = getTurns('TOPIC-22');
+    const [colleagueTurn] = getTurns('TOPIC-23');
+    assert.deepEqual(colleagueTurn.supersededRequestIds, [], 'the colleague\'s request replaced nothing: the operator\'s is not theirs');
+
+    // The operator's silent turn is woken and answered on its own — it was never superseded.
+    const operatorAnswer = await waitForFakeAnswer('TOPIC-22');
+    assert.ok(operatorAnswer.outcome.startsWith('Delivered'), operatorAnswer.outcome);
+    assert.equal(operatorAnswer.requestId, operatorTurn.requestId);
+    await getCharness().waitFor('both requests closed by their own answers', replyTimeoutMs, () =>
+      [operatorTurn.requestId, colleagueTurn.requestId].every((id) => readClosedRequests().find((record) => record.id === id)?.closeReason === 'final'));
+    assert.deepEqual(getTurns('TOPIC-22').map((turn) => turn.isRequestPrompt), [true, false], 'the operator\'s request, then its reminder');
+    await waitForTopicMessage('the operator\'s answer in the topic', (message) => message.text.includes('Fake final answer for TOPIC-22'));
+    await waitForTopicMessage('the colleague\'s answer in the topic', (message) => message.text.includes('Fake final answer for TOPIC-23'));
   });
 
   // ── S9 — answers-only suppression ────────────────────────────────────

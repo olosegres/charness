@@ -206,7 +206,14 @@ import {
   checkShouldExpireSubagentStatus,
 } from './utils/subagentStatusRender';
 import { checkIsAgentEventShown, type AgentStreamEvent } from './utils/topicView';
-import { buildTopicRequestHeader, checkShouldOpenTopicRequest, getTopicRequestOrigin, type TopicRequestSource } from './utils/topicRequest';
+import {
+  buildTopicRequestHeader,
+  checkShouldOpenTopicRequest,
+  getTopicRequesterId,
+  getTopicRequestOrigin,
+  scheduledRunRequester,
+  type TopicRequestIntake,
+} from './utils/topicRequest';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 import { getVoiceTranscriptionQueue } from './voiceQueue';
 import {
@@ -282,7 +289,7 @@ import {
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
-import { getPromptNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
+import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
@@ -880,17 +887,19 @@ const noTopicRequest: TopicRequestOpening = { header: '', requestId: null };
  * keeps the header + text as the request's prompt (re-posted when the session
  * never took it in), and `createRequest` resolves only once the id is on disk. A
  * conversation of another platform opens its requests itself (Jira: J5). A
- * `null` source is a prompt that is not a request by rule — an answer to the
- * agent's own question, delivered as a prompt.
+ * `null` intake is a prompt that is not a request by rule — an answer to the
+ * agent's own question, delivered as a prompt. The intake's requester decides
+ * which open request, if any, the new one supersedes (`requestGroup.ts`); the
+ * header then names the replaced ones.
  */
-async function openTopicRequest(key: SessionKey, text: string, source: TopicRequestSource | null): Promise<TopicRequestOpening> {
-  if (source === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
+async function openTopicRequest(key: SessionKey, text: string, intake: TopicRequestIntake | null): Promise<TopicRequestOpening> {
+  if (intake === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
   const view = state.getDisplayPrefs(key).view;
   if (!checkShouldOpenTopicRequest(view, checkShouldSkipPreambleForText(text))) return noTopicRequest;
-  const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(source), {
-    createPrompt: (requestId) => `${buildTopicRequestHeader(requestId, source, view)}${text}`,
+  const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(intake), {
+    createPrompt: (requestId, supersededRequestIds) => `${buildTopicRequestHeader(requestId, intake.source, view, supersededRequestIds)}${text}`,
   });
-  return { header: buildTopicRequestHeader(request.id, source, view), requestId: request.id };
+  return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds), requestId: request.id };
 }
 
 /**
@@ -1604,7 +1613,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
  */
 function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: string): boolean {
   if (getArmedApiRetry(key)?.kind !== 'usageLimit') return false;
-  if (requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key)?.prompt === text) {
+  if (requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key).some((request) => request.prompt === text)) {
     console.log(`[apiRetry] ${keyToString(key)}: request held until the usage-limit wait resumes`);
     return true;
   }
@@ -1661,7 +1670,7 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   getResumeMessage: (key, retryKind) => getLimitResumeMessage({
     continueNudge: t('apiRetry.continueNudge'),
     untakenRequestPrompt: retryKind === 'usageLimit'
-      ? getPromptNotTakenIn(requestLimitWaitAnswerDeps?.ledger.getOpenRequest(key))
+      ? joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? [])
       : undefined,
   }),
   // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
@@ -6620,7 +6629,7 @@ command('timestamps', async (_ctx, key, parsed) => {
  * `deliverPromptOrBuffer` forwards (active) or buffers (mid-startup), reading
  * the startup window AFTER the ensure so a freshly-started session forwards.
  */
-command('schedule', async (_ctx, key, parsed) => {
+command('schedule', async (ctx, key, parsed) => {
   const text = parsed.argsText;
   // The agent has no clock of its own, so the wrapper carries the CURRENT
   // instant + zone: without it "tomorrow at 9" resolves against whatever the
@@ -6648,7 +6657,7 @@ command('schedule', async (_ctx, key, parsed) => {
   if (result.message) await replyToThread(key, result.message);
 
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-  const opening = await openTopicRequest(key, wrappedPrompt, 'schedule');
+  const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
   await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting);
   trackTopicRequestTurn(key, opening);
 });
@@ -6886,7 +6895,7 @@ bot.on(message('text'), async (ctx) => {
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
     // The request is opened at capture time (S7): the buffered text carries its header.
-    const opening = await openTopicRequest(key, text, 'text');
+    const opening = await openTopicRequest(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) });
     await deliverPromptOrBuffer(key, `${opening.header}${text}`, true);
     trackTopicRequestTurn(key, opening);
     return;
@@ -7062,7 +7071,7 @@ bot.on(message('text'), async (ctx) => {
   // REPLY folds the quoted message into the prompt (see `getReplyQuoteBlock`).
   if (adapter.checkIsActive(key)) {
     const replyBlock = getReplyQuoteBlock(ctx.message);
-    await deliverActivePrompt(key, adapter, text, 'text', ctx.message.date * 1000, replyBlock);
+    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, replyBlock);
     return;
   }
 
@@ -7117,7 +7126,7 @@ bot.on(message('voice'), async (ctx) => {
   // update loop and only sees `key`/`bot`.
   const replyBlock = getReplyQuoteBlock(ctx.message);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, sentAtMs, replyBlock))
+    .run(() => processVoiceJob(key, fileId, getTopicRequesterId(ctx.from), sentAtMs, replyBlock))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     });
@@ -7133,11 +7142,13 @@ bot.on(message('voice'), async (ctx) => {
  * captured by the handler for the `/timestamps` injection (transcription can
  * take ~20s, so "now" at forward time would drift). `replyContext` is the
  * reply-quote block the handler built from `ctx.message` (a Telegram REPLY on
- * the voice note), plumbed here since the job no longer has `ctx`.
+ * the voice note), plumbed here since the job no longer has `ctx`; so is
+ * `requesterId`, the sender the transcript's request is filed under.
  */
 async function processVoiceJob(
   key: SessionKey,
   fileId: string,
+  requesterId: string,
   sentAtMs?: number,
   replyContext?: string,
 ): Promise<void> {
@@ -7197,7 +7208,7 @@ async function processVoiceJob(
 
     // Session is mid-startup → buffer the transcript and replay it once ready.
     if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      const opening = await openTopicRequest(key, transcript, 'voice');
+      const opening = await openTopicRequest(key, transcript, { source: 'voice', requesterId });
       await deliverPromptOrBuffer(key, `${opening.header}${transcript}`, true);
       trackTopicRequestTurn(key, opening);
       return;
@@ -7245,7 +7256,7 @@ async function processVoiceJob(
     // CANCELS it (a transcript is free-form prose, never a bare digit) and is
     // delivered as a fresh prompt — closing the gap where voice queued behind a
     // blocked question-turn and the user got no reply.
-    await deliverActivePrompt(key, adapter, transcript, 'voice', sentAtMs, replyContext);
+    await deliverActivePrompt(key, adapter, transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
   } catch (err) {
     console.error('[Bot] Voice handling error:', err);
     await replyToThread(key, 'Error processing voice message');
@@ -7408,6 +7419,8 @@ interface AlbumCollectorItem {
   messageId: number;
   albumFile: AlbumFile;
   caption?: string;
+  /** The sender, by Telegram user id — the album's request is filed under them. */
+  requesterId: string;
 }
 
 /**
@@ -7437,7 +7450,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       // A user album is genuine user activity → clear the compact-on-idle latch (D2).
       noteThreadUserActivity(key);
       try {
-        const opening = await openTopicRequest(key, promptText, 'album');
+        const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
         await deliverPromptOrBuffer(key, `${opening.header}${promptText}`, isStarting);
         trackTopicRequestTurn(key, opening);
       } catch (err) {
@@ -7497,6 +7510,7 @@ async function handleAlbumFile(
     messageId: ctx.message.message_id,
     albumFile: { kind: meta.kind, savedPath, fileSize: meta.fileSize },
     caption: meta.caption,
+    requesterId: getTopicRequesterId(ctx.from),
   });
 }
 
@@ -7534,7 +7548,7 @@ async function handleIncomingFile(
   cancelApiRetry(key);
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
   noteThreadUserActivity(key);
-  const opening = await openTopicRequest(key, promptText, 'file');
+  const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
   await deliverPromptOrBuffer(key, `${opening.header}${promptText}`, isStarting);
   trackTopicRequestTurn(key, opening);
 }
@@ -8195,7 +8209,7 @@ async function deliverActivePrompt(
   key: SessionKey,
   adapter: AgentAdapter,
   text: string,
-  source: TopicRequestSource | null,
+  intake: TopicRequestIntake | null,
   sentAtMs?: number,
   replyContext?: string,
 ): Promise<void> {
@@ -8215,7 +8229,7 @@ async function deliverActivePrompt(
       return;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
-    const opening = await openTopicRequest(key, text, source);
+    const opening = await openTopicRequest(key, text, intake);
     await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header);
     trackTopicRequestTurn(key, opening);
     return;
@@ -8248,7 +8262,7 @@ async function deliverActivePrompt(
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
-  const opening = await openTopicRequest(key, text, source);
+  const opening = await openTopicRequest(key, text, intake);
   await forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader: opening.header });
   trackTopicRequestTurn(key, opening);
 }
@@ -10612,7 +10626,7 @@ function createSessionPostDeps(): PostToSessionDeps {
       const key = keyFromString(conversationKey);
       // A scheduled run in a topic with requests on is a request (S7); a tracker's
       // post arrives with its request already open and its header in the text.
-      const opening = await openTopicRequest(key, text, 'scheduledRun');
+      const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
       await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey));
       trackTopicRequestTurn(key, opening);
     },

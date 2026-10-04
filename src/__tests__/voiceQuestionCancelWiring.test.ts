@@ -49,7 +49,7 @@ test('S4: processVoiceJob delivers the transcript via the shared deliverActivePr
   // so the guard keys on the ROUTE, not the extra arguments.
   assert.match(
     body,
-    /await\s+deliverActivePrompt\(\s*key\s*,\s*adapter\s*,\s*transcript\s*,\s*'voice'\s*(?:,\s*sentAtMs\s*)?(?:,\s*replyContext\s*)?\)/,
+    /await\s+deliverActivePrompt\(\s*key\s*,\s*adapter\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*(?:,\s*sentAtMs\s*)?(?:,\s*replyContext\s*)?\)/,
     'voice must route the transcript through deliverActivePrompt (the text+voice choke point)',
   );
 });

@@ -14,12 +14,24 @@ import type { OpenRequestState, RequestWakeUpReason } from './types';
  * @description `originDescription` says where the request came from in a few
  * words ("a message in this topic", "PROJ-123 assigned to you by …").
  * `isPlainTextHidden` adds the line that the requester never sees the agent's
- * ordinary output.
+ * ordinary output. `supersededRequestIds` are the same requester's earlier
+ * requests this one replaced while they were still open (`requestGroup.ts`);
+ * when given, the header names them and says one answer to THIS request covers
+ * them all — so the agent never answers each of them separately.
  */
 export interface RequestHeaderOptions {
   requestId: string;
   originDescription: string;
   isPlainTextHidden: boolean;
+  supersededRequestIds?: readonly string[];
+}
+
+/** @description The header's line naming the requests this one replaced; empty when it replaced none. */
+export function buildSupersededRequestsLine(supersededRequestIds: readonly string[]): string {
+  if (supersededRequestIds.length === 0) return '';
+  const noun = supersededRequestIds.length === 1 ? 'request' : 'requests';
+  return `It replaces the same requester's earlier ${noun} ${supersededRequestIds.join(', ')}, still unanswered: ` +
+    'one answer to this request covers them all — do not answer those separately.';
 }
 
 /** @description The header block, ending with a blank line before the request's own text. */
@@ -29,6 +41,8 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
     `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
       '"question" if you need the requester before you can go on, "progress" for an interim note.',
   ];
+  const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
+  if (supersededLine !== '') lines.push(supersededLine);
   if (options.isPlainTextHidden) {
     lines.push('The requester does not see your plain text output — only what you send through answer_request reaches them.');
   }
@@ -61,6 +75,20 @@ export interface WakeUpMessage {
  */
 export function getPromptNotTakenIn(request: OpenRequestState | null | undefined): string | undefined {
   return request?.isPromptTakenIn === true ? undefined : request?.prompt;
+}
+
+/** Between two requests' prompts re-posted in one message (each prompt ends with its own text, not a blank line). */
+const joinedPromptsSeparator = '\n\n';
+
+/**
+ * @description The prompts of every request in `requests` the session never took
+ * in, in the given order, as ONE text to post — a conversation may hold one open
+ * request per requester, and a resume must re-post each of them. `undefined` when
+ * none is left to post.
+ */
+export function joinPromptsNotTakenIn(requests: readonly OpenRequestState[]): string | undefined {
+  const prompts = requests.map(getPromptNotTakenIn).filter((prompt): prompt is string => prompt !== undefined);
+  return prompts.length === 0 ? undefined : prompts.join(joinedPromptsSeparator);
 }
 
 /**

@@ -1,7 +1,8 @@
 /**
  * @description The request ledger (`requests/requestLedger.ts`, core plan S2):
- * one open request per conversation in `state.json`, closed requests in the
- * `requests.jsonl` history, the supersede rule, and the reload at boot.
+ * one open request per request GROUP (conversation + requester) in `state.json`,
+ * closed requests in the `requests.jsonl` history, the supersede rule, and the
+ * reload at boot.
  *
  * Every test uses a real `StateStore` over a temp `DATA_DIR` (with a fake HOME so
  * the legacy-migration probe never touches the real one) and a real history file,
@@ -24,7 +25,9 @@ import {
   parseClosedRequestLine,
   requestHistoryMaxBytes,
   requestPromptMaxLength,
+  supersededRequestIdsMaxLength,
 } from '../requests/requestLedger';
+import { requestRequesterAttribute } from '../requests/requestGroup';
 import type { ClosedRequestRecord, RequestOrigin } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -33,6 +36,8 @@ import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/ses
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const otherTopicKey: SessionKey = makeTelegramKey(-1001234567890, 99);
 const messageOrigin: RequestOrigin = { kind: 'message', attributes: {} };
+const operatorOrigin: RequestOrigin = { kind: 'message', attributes: { [requestRequesterAttribute]: '424242' } };
+const colleagueOrigin: RequestOrigin = { kind: 'message', attributes: { [requestRequesterAttribute]: '535353' } };
 const trackerOrigin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-123', triggerId: '10001' } };
 const requestIdRe = /^req_[A-Za-z0-9_-]{8}$/;
 const saveDebounceMs = 5;
@@ -133,7 +138,7 @@ describe('RequestLedger requests', () => {
       wakeCount: 0,
       isWakeStopped: false,
     });
-    assert.deepEqual(store.getOpenRequest(topicKey), request);
+    assert.deepEqual(store.getOpenRequest({ conversation: topicKey, requester: '' }), request);
     assert.deepEqual(ledger.getRequest(request.id), {
       isOpen: true,
       conversationKey: keyToString(topicKey),
@@ -150,14 +155,57 @@ describe('RequestLedger requests', () => {
     const second = await ledger.createRequest(topicKey, messageOrigin);
 
     assert.notEqual(second.id, first.id);
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, second.id);
-    assert.equal(ledger.getOpenRequest(otherTopicKey)?.id, elsewhere.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, second.id);
+    assert.equal(ledger.getNewestOpenRequest(otherTopicKey)?.id, elsewhere.id);
     const firstLookup = ledger.getRequest(first.id);
     assert.equal(firstLookup?.isOpen, false);
     assert.equal(firstLookup?.isOpen === false ? firstLookup.request.closeReason : null, 'superseded');
     assert.deepEqual(readHistory().map((record) => [record.id, record.closeReason, record.conversationKey]), [
       [first.id, 'superseded', keyToString(topicKey)],
     ]);
+  });
+
+  it('a new request supersedes only the SAME requester\'s open one; another requester\'s stays open beside it', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const operatorFirst = await ledger.createRequest(topicKey, operatorOrigin);
+    const colleague = await ledger.createRequest(topicKey, colleagueOrigin);
+
+    const operatorSecond = await ledger.createRequest(topicKey, operatorOrigin);
+
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [colleague.id, operatorSecond.id], 'oldest first, one per requester');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, operatorSecond.id);
+    assert.equal(ledger.getRequest(colleague.id)?.isOpen, true, 'the colleague\'s request is untouched');
+    assert.deepEqual(operatorSecond.supersededRequestIds, [operatorFirst.id], 'the new request names the one it replaced');
+    assert.equal(colleague.supersededRequestIds, undefined);
+    const closed = ledger.getRequest(operatorFirst.id);
+    assert.equal(closed?.isOpen === false ? closed.request.closeReason : null, 'superseded');
+    assert.equal(closed?.isOpen === false ? closed.request.supersededBy : null, operatorSecond.id, 'the history names the successor');
+    assert.deepEqual(readHistory().map((record) => [record.id, record.supersededBy]), [[operatorFirst.id, operatorSecond.id]]);
+  });
+
+  it('a requester who keeps writing builds the chain of replaced ids, newest kept up to the bound', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const ids: string[] = [];
+    for (let index = 0; index < supersededRequestIdsMaxLength + 2; index += 1) {
+      const request = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: (id, superseded) => `${id}<${superseded.join(',')}` });
+      if (index === 2) assert.deepEqual(request.supersededRequestIds, ids.slice(0, 2), 'the third names both earlier ones');
+      if (index === 2) assert.equal(request.prompt, `${request.id}<${ids.slice(0, 2).join(',')}`, 'the kept prompt was built from the same ids');
+      ids.push(request.id);
+    }
+    const newest = ledger.getNewestOpenRequest(topicKey);
+    assert.deepEqual(newest?.supersededRequestIds, ids.slice(-supersededRequestIdsMaxLength - 1, -1));
+    assert.equal(newest?.supersededRequestIds?.length, supersededRequestIdsMaxLength);
+  });
+
+  it('requests without a requester share one group — the rule the ledger had before requesters', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const first = await ledger.createRequest(topicKey, messageOrigin);
+    const second = await ledger.createRequest(topicKey, messageOrigin);
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [second.id]);
+    assert.equal(ledger.getRequest(first.id)?.isOpen, false);
   });
 
   it('concurrent requests in one conversation leave exactly one open and lose none', async () => {
@@ -170,7 +218,7 @@ describe('RequestLedger requests', () => {
       ledger.createRequest(topicKey, messageOrigin),
     ]);
 
-    const openId = ledger.getOpenRequest(topicKey)?.id;
+    const openId = ledger.getNewestOpenRequest(topicKey)?.id;
     const supersededIds = readHistory().map((record) => record.id);
     assert.equal(supersededIds.length, 2);
     assert.deepEqual([openId, ...supersededIds].sort(), created.map((request) => request.id).sort());
@@ -184,7 +232,7 @@ describe('RequestLedger requests', () => {
     const closed = await ledger.closeRequest(request.id, 'final');
 
     assert.equal(closed?.closeReason, 'final');
-    assert.equal(ledger.getOpenRequest(topicKey), undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey), undefined);
     assert.equal(await ledger.closeRequest(request.id, 'cancelled'), null);
     assert.equal(await ledger.closeRequest('req_unknown0', 'cancelled'), null);
     assert.deepEqual(readHistory().map((record) => [record.id, record.closeReason]), [[request.id, 'final']]);
@@ -198,12 +246,12 @@ describe('RequestLedger requests', () => {
 
     const updated = await ledger.updateOpenRequest(first.id, { progressAnswerCount: 1, nextWakeAt: 5_000 });
     assert.equal(updated?.progressAnswerCount, 1);
-    assert.equal(store.getOpenRequest(topicKey)?.nextWakeAt, 5_000);
+    assert.equal(store.getOpenRequest({ conversation: topicKey, requester: '' })?.nextWakeAt, 5_000);
 
     const second = await ledger.createRequest(topicKey, messageOrigin);
     assert.equal(await ledger.updateOpenRequest(first.id, { silentTurnCount: 2 }), null);
-    assert.equal(ledger.getOpenRequest(topicKey)?.silentTurnCount, 0);
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, second.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, second.id);
   });
 
   it('keys requests by any platform, not only Telegram', async () => {
@@ -214,7 +262,7 @@ describe('RequestLedger requests', () => {
 
     const request = await ledger.createRequest(trackerKey, trackerOrigin);
 
-    assert.deepEqual(ledger.listOpenRequests(), [{ key: trackerKey, request }]);
+    assert.deepEqual(ledger.listOpenRequests(), [{ key: trackerKey, group: { conversation: trackerKey, requester: '' }, request }]);
     assert.equal(ledger.getRequest(request.id)?.conversationKey, keyToString(trackerKey));
   });
 });
@@ -231,7 +279,7 @@ describe('RequestLedger across a restart', () => {
 
     const ledgerAfter = await createLoadedLedger(await createStore());
 
-    assert.deepEqual(ledgerAfter.getOpenRequest(topicKey), { ...stillOpen, wakeCount: 3, lastTurnActivityAt: 7_000 });
+    assert.deepEqual(ledgerAfter.getNewestOpenRequest(topicKey), { ...stillOpen, wakeCount: 3, lastTurnActivityAt: 7_000 });
     const answeredLookup = ledgerAfter.getRequest(answered.id);
     assert.equal(answeredLookup?.isOpen, false);
     assert.equal(answeredLookup?.isOpen === false ? answeredLookup.request.closeReason : null, 'question');
@@ -253,10 +301,10 @@ describe('RequestLedger across a restart', () => {
     fs.appendFileSync(historyPath, `${JSON.stringify(closedLine)}\n`);
 
     const storeAfter = await createStore();
-    assert.equal(storeAfter.getOpenRequest(topicKey)?.id, request.id, 'precondition: still open on disk');
+    assert.equal(storeAfter.getOpenRequest({ conversation: topicKey, requester: '' })?.id, request.id, 'precondition: still open on disk');
     const ledgerAfter = await createLoadedLedger(storeAfter);
 
-    assert.equal(ledgerAfter.getOpenRequest(topicKey), undefined);
+    assert.equal(ledgerAfter.getNewestOpenRequest(topicKey), undefined);
     assert.equal(ledgerAfter.getRequest(request.id)?.isOpen, false);
   });
 
@@ -340,7 +388,7 @@ describe('RequestLedger durability and the closed-id window', () => {
       ledger.updateOpenRequest(request.id, (current) => ({ wakeCount: current.wakeCount + 1 })),
     ));
 
-    assert.equal(ledger.getOpenRequest(topicKey)?.wakeCount, 3);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 3);
   });
 });
 
@@ -410,7 +458,7 @@ describe('RequestLedger stored prompt (R21)', () => {
     const request = await ledger.createRequest(topicKey, messageOrigin, { createPrompt: (requestId) => `[Request ${requestId}] do it` });
     assert.equal(request.prompt, `[Request ${request.id}] do it`);
     const reloaded = await createLoadedLedger(await createStore());
-    assert.equal(reloaded.getOpenRequest(topicKey)?.prompt, `[Request ${request.id}] do it`);
+    assert.equal(reloaded.getNewestOpenRequest(topicKey)?.prompt, `[Request ${request.id}] do it`);
 
     await reloaded.closeRequest(request.id, 'final');
     const [line] = fs.readFileSync(historyPath, 'utf8').split('\n');
@@ -530,7 +578,7 @@ describe('RequestLedger alert release', () => {
     await ledgerAfter.load();
     await flushMicrotasks();
 
-    assert.equal(ledgerAfter.getOpenRequest(topicKey), undefined);
+    assert.equal(ledgerAfter.getNewestOpenRequest(topicKey), undefined);
     assert.deepEqual(released, [releasedRef]);
     assert.deepEqual(storeAfter.getUnreleasedRequestAlerts(), {});
   });

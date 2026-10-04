@@ -123,12 +123,12 @@ describe('answer_request over the bot MCP server', () => {
     const refused = await callAnswer(client, foreign.id);
     assert.equal(refused.isError, true);
     assert.match(refused.text, /Unknown request id/);
-    assert.equal(ledger.getOpenRequest(otherTopicKey)?.id, foreign.id);
+    assert.equal(ledger.getNewestOpenRequest(otherTopicKey)?.id, foreign.id);
 
     const answered = await callAnswer(client, own.id);
     assert.equal(answered.isError, false);
     assert.deepEqual(deliveries.map((delivery) => delivery.requestId), [own.id]);
-    assert.equal(ledger.getOpenRequest(topicKey), undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey), undefined);
   });
 
   it('a dir token answers the requests of every thread bound to its folder, and no other', async () => {

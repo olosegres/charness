@@ -1,6 +1,7 @@
 import type { SessionKey } from '../sessionKey';
 import { getAnswerSink, type AnswerSinks } from '../platform/answerSink';
 import type { RequestLedger } from './requestLedger';
+import type { OpenRequestState } from './types';
 import type { RequestWakeUpEngine } from './wakeUpEngine';
 
 /**
@@ -75,7 +76,7 @@ export function getLimitWaitForNewRequest(episode: LimitEpisodeState): UsageLimi
 }
 
 export interface LimitWaitAnswerDeps {
-  ledger: Pick<RequestLedger, 'getOpenRequest' | 'updateOpenRequest'>;
+  ledger: Pick<RequestLedger, 'listOpenRequestsOf' | 'updateOpenRequest'>;
   engine: Pick<RequestWakeUpEngine, 'stopWakingForLimitWait'>;
   answerSinks: AnswerSinks;
 }
@@ -89,10 +90,11 @@ export interface LimitWaitAnswerDeps {
 export type LimitWaitAnswerOutcome = 'answered' | 'alreadyAnswered' | 'notAnswered';
 
 /**
- * @description Tell the conversation's open request about a limit wait, once per
- * request and wait. With auto-resume off nothing will continue the work, so the
- * request also stops being woken (liftable: a later wait that ends with a resume
- * lifts it).
+ * @description Tell every open request of the conversation (one per requester at
+ * most) about a limit wait, once per request and wait. With auto-resume off
+ * nothing will continue the work, so the requests also stop being woken
+ * (liftable: a later wait that ends with a resume lifts it). `answered` when at
+ * least one request was answered now; `alreadyAnswered` when every one had been.
  */
 export async function answerOpenRequestForLimitWait(
   deps: LimitWaitAnswerDeps,
@@ -100,8 +102,21 @@ export async function answerOpenRequestForLimitWait(
   wait: UsageLimitWait,
   body: string,
 ): Promise<LimitWaitAnswerOutcome> {
-  const request = deps.ledger.getOpenRequest(key);
-  if (!request) return 'notAnswered';
+  const outcomes: LimitWaitAnswerOutcome[] = [];
+  for (const request of deps.ledger.listOpenRequestsOf(key)) {
+    outcomes.push(await answerOneRequestForLimitWait(deps, key, request, wait, body));
+  }
+  if (outcomes.includes('answered')) return 'answered';
+  return outcomes.includes('alreadyAnswered') ? 'alreadyAnswered' : 'notAnswered';
+}
+
+async function answerOneRequestForLimitWait(
+  deps: LimitWaitAnswerDeps,
+  key: SessionKey,
+  request: OpenRequestState,
+  wait: UsageLimitWait,
+  body: string,
+): Promise<LimitWaitAnswerOutcome> {
   const identity = getUsageLimitWaitIdentity(wait);
   // The common repeat (another frame of the same error) costs no state write.
   if (request.limitWaitAnsweredFor === identity) return 'alreadyAnswered';

@@ -7,7 +7,8 @@
  * the bot posted, edited, pinned and unpinned in each topic.
  *
  * Only what the flow needs is modelled: ONE forum supergroup with the operator
- * as its creator, numbered topics, message ids in one sequence (operator and
+ * as its creator (plus any further admins a flow names, who may write too),
+ * numbered topics, message ids in one sequence (operator and
  * bot messages alike, as on Telegram), the pin state of every message, and
  * every call in order. A method the fake does not model answers `true` and is
  * recorded, so a new call the bot starts making shows up in `calls` instead of
@@ -23,7 +24,7 @@ import type { AddressInfo } from 'net';
 interface ApiOk { ok: true; result: unknown }
 interface ApiError { ok: false; error_code: number; description: string }
 
-interface TelegramUser {
+export interface TelegramUser {
   id: number;
   is_bot: boolean;
   first_name: string;
@@ -69,6 +70,8 @@ export interface FakeTelegramPinEvent {
 export interface FakeTelegramOptions {
   botUser: TelegramUser;
   operator: TelegramUser;
+  /** Further group administrators (the bot serves every admin); the operator is always one. */
+  admins?: TelegramUser[];
   group: { id: number; title: string };
 }
 
@@ -128,7 +131,12 @@ export class FakeTelegram {
 
   /** @description The operator writes `text` in topic `threadId`; resolves the message id. */
   pushOperatorMessage(threadId: number, text: string): number {
-    const message = this.storeMessage(threadId, text, this.options.operator, { entities: getCommandEntities(text) });
+    return this.pushUserMessage(threadId, text, this.options.operator);
+  }
+
+  /** @description `from` writes `text` in topic `threadId` (another admin, say); resolves the message id. */
+  pushUserMessage(threadId: number, text: string, from: TelegramUser): number {
+    const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
     this.pushUpdate({ message });
     return message.message_id;
   }
@@ -248,7 +256,13 @@ export class FakeTelegram {
       case 'getUpdates':
         return { ok: true, result: await this.takeUpdates(Number(payload.limit ?? maxUpdatesPerPoll)) };
       case 'getChatAdministrators':
-        return { ok: true, result: [{ status: 'creator', user: this.options.operator, is_anonymous: false }] };
+        return {
+          ok: true,
+          result: [
+            { status: 'creator', user: this.options.operator, is_anonymous: false },
+            ...(this.options.admins ?? []).map((admin) => ({ status: 'administrator', user: admin, is_anonymous: false })),
+          ],
+        };
       case 'getChat':
         return { ok: true, result: this.chat };
       case 'sendMessage': {

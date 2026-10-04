@@ -57,6 +57,8 @@ const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
 /** The request header's line that the requester does not see the agent's plain text (`requests/requestHeader.ts`). */
 const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text';
+/** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
+const supersededRequestsLineRe = /It replaces the same requester's earlier requests? ((?:req_[A-Za-z0-9_-]+(?:, )?)+), still unanswered/;
 /** How much of a stdin line that is not JSON the error message quotes. */
 const skippedLinePreviewChars = 200;
 
@@ -189,7 +191,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const requestId = requestIdRe.exec(content)?.[0];
   if (!requestId) {
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, turnCount: 1, pid: process.pid });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, issueKeyRe.exec(content)?.[1] ?? 'unknown');
     endTurn(sessionId, 'Nothing to do.');
     return;
@@ -197,11 +199,12 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isRequestPrompt = content.includes(`[Request ${requestId}`);
   // The header's line for a requester who never sees the agent's plain text (a Telegram answers-only topic, a tracker).
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
+  const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
   const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0 };
   state.turnCount += 1;
   fs.writeFileSync(getStatePath(requestId), JSON.stringify(state));
-  appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, turnCount: state.turnCount, pid: process.pid });
+  appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });
 
   emitTurnActivity(sessionId, state.issueKey);
   const isFirstTurn = state.turnCount === 1;

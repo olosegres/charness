@@ -94,7 +94,7 @@ describe('answerOpenRequestForLimitWait', () => {
       origin: request.origin,
       isRequestOpen: true,
     }]);
-    const open = deps.ledger.getOpenRequest(topicKey);
+    const open = deps.ledger.getNewestOpenRequest(topicKey);
     assert.equal(open?.id, request.id);
     assert.equal(open?.progressAnswerCount, 0, 'no 15-minute follow-up is started by the bot\'s own note');
     assert.equal(open?.isLimitStopped, undefined, 'auto-resume continues the work: wake-ups are only paused');
@@ -114,12 +114,24 @@ describe('answerOpenRequestForLimitWait', () => {
     assert.deepEqual(deliveries.map((delivery) => delivery.requestId).slice(1), [later.id]);
   });
 
+  it('every requester\'s open request in the conversation hears about the wait, each once', async () => {
+    const deps = await createDeps();
+    const operatorRequest = await deps.ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    const colleagueRequest = await deps.ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '535353' } });
+    const wait: UsageLimitWait = { kind: 'afterReset', resetAt, fireAt: resetAt + 1 };
+
+    assert.equal(await answerOpenRequestForLimitWait(deps, topicKey, wait, answerBody), 'answered');
+    assert.deepEqual(deliveries.map((delivery) => delivery.requestId).sort(), [operatorRequest.id, colleagueRequest.id].sort());
+    assert.equal(await answerOpenRequestForLimitWait(deps, topicKey, wait, answerBody), 'alreadyAnswered');
+    assert.equal(deliveries.length, 2, 'the repeat delivers nothing');
+  });
+
   it('a repeated error and a request opened at the same moment answer once', async () => {
     const deps = await createDeps();
     await deps.ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
     // A state write still in flight: both calls read the request before either claims it.
     const busyLedger: LimitWaitAnswerDeps['ledger'] = {
-      getOpenRequest: (key) => deps.ledger.getOpenRequest(key),
+      listOpenRequestsOf: (key) => deps.ledger.listOpenRequestsOf(key),
       updateOpenRequest: async (id, update) => {
         await new Promise((resolve) => setImmediate(resolve));
         return deps.ledger.updateOpenRequest(id, update);
@@ -152,13 +164,13 @@ describe('answerOpenRequestForLimitWait', () => {
     const off: UsageLimitWait = { kind: 'autoResumeOff' };
 
     assert.equal(await answerOpenRequestForLimitWait(deps, topicKey, off, answerBody), 'answered');
-    const first = deps.ledger.getOpenRequest(topicKey);
+    const first = deps.ledger.getNewestOpenRequest(topicKey);
     assert.equal(first?.isLimitStopped, true);
     assert.equal(first?.isWakeStopped, false);
 
     await deps.ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} });
     assert.equal(await answerOpenRequestForLimitWait(deps, topicKey, off, answerBody), 'answered');
-    assert.equal(deps.ledger.getOpenRequest(topicKey)?.isLimitStopped, true, 'the later request is stopped too');
+    assert.equal(deps.ledger.getNewestOpenRequest(topicKey)?.isLimitStopped, true, 'the later request is stopped too');
   });
 
   it('without an open request nothing is answered and the plain notice stays', async () => {

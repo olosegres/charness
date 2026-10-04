@@ -17,7 +17,9 @@ import {
 
 /**
  * @description The wake-up engine of the request/answer core (S4): it watches
- * the turn each request (or reminder) started until that turn ends, and runs a
+ * the turn each request (or reminder) started until that turn ends — one watch
+ * per REQUEST, so two requesters' open requests in one conversation are each
+ * followed to their own turn end (`requestGroup.ts`) — and runs a
  * slower sweep over the open requests nobody is watching (the 15-minute
  * follow-up after a progress note, and the backstop). Every decision is made by
  * `wakeUpRules.ts`; this module only observes, persists and acts.
@@ -48,7 +50,7 @@ export const turnActivityPersistStepMs = 60_000;
  * releasing later (the ledger stores and releases it). `now` is injectable for tests.
  */
 export interface RequestWakeUpEngineDeps {
-  ledger: Pick<RequestLedger, 'getOpenRequest' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
+  ledger: Pick<RequestLedger, 'getOpenRequestById' | 'listOpenRequestsOf' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
   prepareWakeUpSession: (key: SessionKey, message: WakeUpMessage) => Promise<boolean>;
   /** Forward the wake-up's message (the request's prompt again, or a reminder) into the session. */
@@ -60,14 +62,15 @@ export interface RequestWakeUpEngineDeps {
 
 type WakeUpDeliveryOutcome = 'delivered' | 'failed' | 'requestGone';
 
-interface WatchedConversation extends WatchedTurn {
+interface WatchedRequestTurn extends WatchedTurn {
   key: SessionKey;
 }
 
 export class RequestWakeUpEngine {
   private readonly deps: RequestWakeUpEngineDeps;
   private readonly now: () => number;
-  private readonly watched = new Map<string, WatchedConversation>();
+  /** The watched turns by REQUEST id (a conversation may hold one per requester). */
+  private readonly watched = new Map<string, WatchedRequestTurn>();
   /** Last persisted live-turn activity per request id, for the persist step. */
   private readonly activityPersistedAt = new Map<string, number>();
   private pollTimer: NodeJS.Timeout | null = null;
@@ -104,16 +107,29 @@ export class RequestWakeUpEngine {
     this.sweepTimer = null;
   }
 
+  /** The open request `requestId` when it belongs to `key`'s conversation, else `undefined`. */
+  private getOpenRequestOf(key: SessionKey, requestId: string): OpenRequestState | undefined {
+    const entry = this.deps.ledger.getOpenRequestById(requestId);
+    return entry && keyToString(entry.key) === keyToString(key) ? entry.request : undefined;
+  }
+
+  /** The watched turns of `key`'s conversation. */
+  private getWatchedTurnsOf(key: SessionKey): WatchedRequestTurn[] {
+    const conversationKey = keyToString(key);
+    return [...this.watched.values()].filter((turn) => keyToString(turn.key) === conversationKey);
+  }
+
   /**
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
-   * for the conversation is replaced — the newest message is the one that counts.
-   * A post retry still pending is moot from now on (R28): the session has the request.
+   * for the SAME request is replaced — its newest message is the one that counts;
+   * another requester's request in the conversation keeps its own watch. A post
+   * retry still pending is moot from now on (R28): the session has the request.
    */
   async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
-    const request = this.deps.ledger.getOpenRequest(key);
-    if (request?.id !== requestId) return;
-    this.watched.set(keyToString(key), {
+    const request = this.getOpenRequestOf(key, requestId);
+    if (!request) return;
+    this.watched.set(requestId, {
       key,
       requestId,
       progressCountAtTurnStart: request.progressAnswerCount,
@@ -132,8 +148,8 @@ export class RequestWakeUpEngine {
    * rejects: its caller is a post that already failed.
    */
   async notePostFailed(key: SessionKey, requestId: string): Promise<void> {
-    const request = this.deps.ledger.getOpenRequest(key);
-    if (request?.id !== requestId) return;
+    const request = this.getOpenRequestOf(key, requestId);
+    if (!request) return;
     const retry = getPostRetryUpdate(request, this.now());
     if (!retry) return;
     try {
@@ -145,43 +161,47 @@ export class RequestWakeUpEngine {
 
   /** @description The agent produced output in this conversation (a turn is under way). */
   noteAgentOutput(key: SessionKey): void {
-    const turn = this.watched.get(keyToString(key));
-    if (turn) turn.hasSeenOutput = true;
+    for (const turn of this.getWatchedTurnsOf(key)) turn.hasSeenOutput = true;
+  }
+
+  /** Drop every watch of `key`'s conversation. */
+  private unwatchConversation(key: SessionKey): void {
+    for (const turn of this.getWatchedTurnsOf(key)) this.watched.delete(turn.requestId);
   }
 
   /**
    * @description The person took over (interrupted, quit, restarted, switched or
-   * resumed the session, left the folder): the open request closes silently and
-   * nothing wakes it.
+   * resumed the session, left the folder): every open request of the
+   * conversation closes silently and nothing wakes them.
    */
   async cancelConversation(key: SessionKey): Promise<void> {
-    this.watched.delete(keyToString(key));
-    const request = this.deps.ledger.getOpenRequest(key);
-    if (request) await this.deps.ledger.closeRequest(request.id, 'cancelled');
+    this.unwatchConversation(key);
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) await this.deps.ledger.closeRequest(request.id, 'cancelled');
   }
 
   /**
    * @description The bot itself forwarded a "continue" nudge into the session (an
    * API-error retry fired, or a usage-limit wait ended): watch the turn it starts
    * as a fresh one, so the idle the error left behind is never read as its end.
-   * `isCountersReset` (the end of a limit wait) starts the open request's
+   * `isCountersReset` (the end of a limit wait) starts every open request's
    * wake-up bookkeeping from zero — the wait was not the agent's silence — and
    * lifts a limit stop: the work continues, so does the waking. A request the
-   * rules already gave up on stays given up.
+   * rules already gave up on stays given up. The one session turn the nudge
+   * starts is watched for every open request of the conversation.
    */
   async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt?: boolean }): Promise<void> {
-    const request = this.deps.ledger.getOpenRequest(key);
-    if (!request) return;
-    if (options.isCountersReset) {
-      await this.deps.ledger.updateOpenRequest(request.id, {
-        silentTurnCount: 0,
-        wakeCount: 0,
-        nextWakeAt: undefined,
-        isLimitStopped: undefined,
-        limitWaitAnsweredFor: undefined,
-      });
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      if (options.isCountersReset) {
+        await this.deps.ledger.updateOpenRequest(request.id, {
+          silentTurnCount: 0,
+          wakeCount: 0,
+          nextWakeAt: undefined,
+          isLimitStopped: undefined,
+          limitWaitAnsweredFor: undefined,
+        });
+      }
+      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true });
     }
-    await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true });
   }
 
   /**
@@ -194,13 +214,13 @@ export class RequestWakeUpEngine {
    * write is logged instead.
    */
   async stopWakingForLimitWait(key: SessionKey): Promise<void> {
-    this.watched.delete(keyToString(key));
-    const request = this.deps.ledger.getOpenRequest(key);
-    if (!request) return;
-    try {
-      await this.deps.ledger.updateOpenRequest(request.id, { isLimitStopped: true, nextWakeAt: undefined });
-    } catch (e) {
-      logWakeUpFailure(`stopping the wake-ups of ${request.id}`, e);
+    this.unwatchConversation(key);
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      try {
+        await this.deps.ledger.updateOpenRequest(request.id, { isLimitStopped: true, nextWakeAt: undefined });
+      } catch (e) {
+        logWakeUpFailure(`stopping the wake-ups of ${request.id}`, e);
+      }
     }
   }
 
@@ -209,22 +229,22 @@ export class RequestWakeUpEngine {
     if (this.isPolling) return;
     this.isPolling = true;
     try {
-      for (const [keyString, turn] of [...this.watched]) {
-        // One conversation's failure must not stop the others from being polled.
-        await this.pollWatchedTurn(keyString, turn).catch((e) => logWakeUpFailure(`polling ${keyString}`, e));
+      for (const turn of [...this.watched.values()]) {
+        // One request's failure must not stop the others from being polled.
+        await this.pollWatchedTurn(turn).catch((e) => logWakeUpFailure(`polling ${turn.requestId}`, e));
       }
     } finally {
       this.isPolling = false;
     }
   }
 
-  private async pollWatchedTurn(keyString: string, turn: WatchedConversation): Promise<void> {
+  private async pollWatchedTurn(turn: WatchedRequestTurn): Promise<void> {
     // Replaced or dropped since this poll took its snapshot: the newer watch (if any) decides.
-    if (this.watched.get(keyString) !== turn) return;
-    const request = this.deps.ledger.getOpenRequest(turn.key);
-    if (request?.id !== turn.requestId) {
+    if (this.watched.get(turn.requestId) !== turn) return;
+    const request = this.getOpenRequestOf(turn.key, turn.requestId);
+    if (!request) {
       // Answered, cancelled or superseded meanwhile — nothing left to watch.
-      this.watched.delete(keyString);
+      this.watched.delete(turn.requestId);
       return;
     }
     const probe = this.deps.probeTurn(turn.key);
@@ -237,10 +257,10 @@ export class RequestWakeUpEngine {
     if (turnState === 'running') {
       if (probe.isBusy) await this.recordTurnActivity(request, false);
       // Its end can no longer be seen: the sweep's backstop takes the request over.
-      else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) this.watched.delete(keyString);
+      else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) this.watched.delete(turn.requestId);
       return;
     }
-    this.watched.delete(keyString);
+    this.watched.delete(turn.requestId);
     // A dead session is not a turn end: the backstop resumes it later.
     if (turnState === 'sessionGone') return;
     await this.applyDecision(turn.key, request, decideTurnEnd(request, turn.progressCountAtTurnStart, this.now()));
@@ -257,7 +277,7 @@ export class RequestWakeUpEngine {
         if (!openIds.has(requestId)) this.activityPersistedAt.delete(requestId);
       }
       for (const { key, request } of openRequests) {
-        if (this.watched.has(keyToString(key))) continue;
+        if (this.watched.has(request.id)) continue;
         // One conversation's failure must not stop the others from being swept.
         await this.sweepOpenRequest(key, request).catch((e) => logWakeUpFailure(`sweeping ${keyToString(key)}`, e));
       }
@@ -329,8 +349,8 @@ export class RequestWakeUpEngine {
       if (!(await this.deps.prepareWakeUpSession(key, message))) return 'failed';
       // The resume took a while: a reminder for a request that closed, was replaced
       // or stopped being woken meanwhile is stale.
-      const current = this.deps.ledger.getOpenRequest(key);
-      if (current?.id !== request.id || checkIsWakingStopped(current)) return 'requestGone';
+      const current = this.getOpenRequestOf(key, request.id);
+      if (!current || checkIsWakingStopped(current)) return 'requestGone';
       await this.deps.forwardWakeUp(key, request, message);
       return 'delivered';
     } catch (e) {

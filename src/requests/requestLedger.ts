@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { keyToString, tryKeyFromString, type SessionKey } from '../sessionKey';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { resolveDataDir, type StateStore } from '../state';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
+import { getRequestGroupKey, tryRequestGroupKeyFromString, type RequestGroupKey } from './requestGroup';
 import type {
   ClosedRequestRecord,
   OpenRequestState,
@@ -18,9 +19,11 @@ import type {
  * @description The request ledger (core plan S2): which unit of work each
  * conversation's agent still owes an answer to.
  *
- *   open set  — `state.json` `openRequests`, at most ONE per conversation, keyed
- *               by the platform-agnostic `SessionKey` (Telegram topics and
- *               tracker issues alike). A new request SUPERSEDES the open one.
+ *   open set  — `state.json` `openRequests`, at most ONE per request GROUP
+ *               (`requestGroup.ts`: the platform-agnostic `SessionKey` of the
+ *               conversation — Telegram topics and tracker issues alike — plus
+ *               the requester). A new request SUPERSEDES the group's open one;
+ *               other requesters' requests in the conversation stay open.
  *   history   — `DATA_DIR/requests.jsonl`, one line per CLOSED request
  *               (append-only, one rotated backup).
  *
@@ -47,6 +50,12 @@ export const requestPromptMaxLength = 64_000;
 const requestIdPrefix = 'req_';
 /** 6 random bytes → 8 base64url chars, 48 bits. */
 const requestIdRandomByteLength = 6;
+/**
+ * How many replaced ids a request carries (`supersededRequestIds`): a requester
+ * who keeps writing without an answer in between builds a chain, and the header
+ * naming it must stay short. The newest ones are kept.
+ */
+export const supersededRequestIdsMaxLength = 10;
 
 /**
  * How many CLOSED requests stay known by id (the most recent ones). A closed id
@@ -112,10 +121,22 @@ export interface RequestLedgerDeps {
  */
 export type OpenRequestUpdater = OpenRequestUpdate | ((current: OpenRequestState) => OpenRequestUpdate);
 
-/** @description An open request together with its conversation. */
+/** @description An open request together with its conversation (`key`) and its group. */
 export interface OpenRequestEntry {
   key: SessionKey;
+  group: RequestGroupKey;
   request: OpenRequestState;
+}
+
+/**
+ * @name CreateRequestOptions
+ * @description `createPrompt` builds the prompt the request keeps for a re-post
+ * (R21) from the id just drawn and the ids of the open requests it replaces —
+ * the same inputs the header is built from, so the kept prompt and the forwarded
+ * one read the same.
+ */
+export interface CreateRequestOptions {
+  createPrompt?: (requestId: string, supersededRequestIds: readonly string[]) => string;
 }
 
 const closeReasons: ReadonlySet<RequestCloseReason> = new Set(['final', 'question', 'superseded', 'cancelled']);
@@ -142,7 +163,7 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
   const {
     id, conversationKey, closedAt, closeReason, origin, createdAt,
     progressAnswerCount, silentTurnCount, wakeCount, isWakeStopped, nextWakeAt, lastTurnActivityAt, alertRef,
-    isLimitStopped, limitWaitAnsweredFor,
+    isLimitStopped, limitWaitAnsweredFor, supersededBy, supersededRequestIds,
   } = parsed;
   if (typeof id !== 'string' || typeof conversationKey !== 'string') return null;
   if (closeReason === undefined || !closeReasons.has(closeReason)) return null;
@@ -174,6 +195,10 @@ export function parseClosedRequestLine(line: string): ClosedRequestRecord | null
     ...(typeof alertRef === 'string' ? { alertRef } : {}),
     ...(typeof isLimitStopped === 'boolean' ? { isLimitStopped } : {}),
     ...(typeof limitWaitAnsweredFor === 'string' ? { limitWaitAnsweredFor } : {}),
+    ...(typeof supersededBy === 'string' ? { supersededBy } : {}),
+    ...(Array.isArray(supersededRequestIds) && supersededRequestIds.every((value) => typeof value === 'string')
+      ? { supersededRequestIds }
+      : {}),
   };
 }
 
@@ -241,7 +266,7 @@ export class RequestLedger {
       if (alertRef !== undefined) {
         this.store.addUnreleasedRequestAlert(entry.request.id, { conversationKey: keyToString(entry.key), alertRef });
       }
-      await this.store.updateOpenRequest(entry.key, (current) => (current?.id === entry.request.id ? undefined : current));
+      await this.store.updateOpenRequest(entry.group, (current) => (current?.id === entry.request.id ? undefined : current));
       droppedOpenCount += 1;
     }
     this.isLoaded = true;
@@ -260,14 +285,18 @@ export class RequestLedger {
     if (!this.isLoaded) throw new RequestLedgerNotLoadedError();
   }
 
-  /** Open entries whose key still decodes (a key of an unregistered platform is left alone). */
+  /** Open entries whose group key still decodes (a key of an unregistered platform is left alone), oldest first. */
   private getOpenEntries(): OpenRequestEntry[] {
     const entries: OpenRequestEntry[] = [];
-    for (const [keyString, request] of Object.entries(this.store.getOpenRequests())) {
-      const key = tryKeyFromString(keyString);
-      if (key) entries.push({ key, request });
+    for (const [groupString, request] of Object.entries(this.store.getOpenRequests())) {
+      const group = tryRequestGroupKeyFromString(groupString);
+      if (group) entries.push({ key: group.conversation, group, request });
     }
-    return entries;
+    return entries.sort((a, b) => a.request.createdAt - b.request.createdAt);
+  }
+
+  private getOpenEntryById(id: string): OpenRequestEntry | undefined {
+    return this.getOpenEntries().find((entry) => entry.request.id === id);
   }
 
   private createRequestId(): string {
@@ -342,40 +371,45 @@ export class RequestLedger {
   }
 
   /**
-   * @description Open a new request for `key`'s conversation. The conversation's
-   * open request, if any, is closed as `superseded` first, in the same atomic
-   * step — the latest message is the one that matters. Resolves only once the
-   * new request is DURABLY saved: its id is about to reach an agent, and an id
-   * the agent was told about but a crash lost would make its answer refused as
-   * unknown — a dropped result.
+   * @description Open a new request for `key`'s conversation. The open request of
+   * the same GROUP (same conversation, same requester — `getRequestGroupKey`), if
+   * any, is closed as `superseded` first, in the same atomic step — the latest
+   * message of a requester is the one that matters, and the new request names it
+   * (and what it had replaced in turn) in `supersededRequestIds`, so one answer
+   * covers them all. Another requester's open request in the conversation is
+   * untouched. Resolves only once the new request is DURABLY saved: its id is
+   * about to reach an agent, and an id the agent was told about but a crash lost
+   * would make its answer refused as unknown — a dropped result.
    */
-  async createRequest(
-    key: SessionKey,
-    origin: RequestOrigin,
-    options: { createPrompt?: (requestId: string) => string } = {},
-  ): Promise<OpenRequestState> {
+  async createRequest(key: SessionKey, origin: RequestOrigin, options: CreateRequestOptions = {}): Promise<OpenRequestState> {
     this.assertLoaded();
     const createdAt = this.now();
     const conversationKey = keyToString(key);
+    const group = getRequestGroupKey(key, origin);
     const id = this.createRequestId();
-    const prompt = options.createPrompt?.(id);
-    if (prompt !== undefined && prompt.length > requestPromptMaxLength) {
-      console.warn(`[requests] ${id}: prompt of ${prompt.length} chars not kept (over ${requestPromptMaxLength}); a wake-up sends a reminder instead`);
-    }
-    const request: OpenRequestState = {
-      id,
-      origin,
-      createdAt,
-      progressAnswerCount: 0,
-      silentTurnCount: 0,
-      wakeCount: 0,
-      isWakeStopped: false,
-      ...(prompt !== undefined && prompt.length <= requestPromptMaxLength ? { prompt } : {}),
-    };
-    await this.store.updateOpenRequest(key, (current) => {
-      if (current) this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded' });
-      return request;
+    let request: OpenRequestState | null = null;
+    await this.store.updateOpenRequest(group, (current) => {
+      const supersededRequestIds = current ? [...(current.supersededRequestIds ?? []), current.id].slice(-supersededRequestIdsMaxLength) : [];
+      const prompt = options.createPrompt?.(id, supersededRequestIds);
+      if (prompt !== undefined && prompt.length > requestPromptMaxLength) {
+        console.warn(`[requests] ${id}: prompt of ${prompt.length} chars not kept (over ${requestPromptMaxLength}); a wake-up sends a reminder instead`);
+      }
+      const created: OpenRequestState = {
+        id,
+        origin,
+        createdAt,
+        progressAnswerCount: 0,
+        silentTurnCount: 0,
+        wakeCount: 0,
+        isWakeStopped: false,
+        ...(prompt !== undefined && prompt.length <= requestPromptMaxLength ? { prompt } : {}),
+        ...(supersededRequestIds.length > 0 ? { supersededRequestIds } : {}),
+      };
+      if (current) this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded', supersededBy: id });
+      request = created;
+      return created;
     });
+    if (!request) throw new Error(`[requests] ${id}: the store did not run the create`);
     await this.store.flush();
     this.onRequestCreated?.(key, request);
     return request;
@@ -384,19 +418,41 @@ export class RequestLedger {
   /** @description A request by id, open or closed, or `null` for an unknown id. */
   getRequest(id: string): RequestLookup | null {
     this.assertLoaded();
-    const open = this.getOpenEntries().find((entry) => entry.request.id === id);
+    const open = this.getOpenEntryById(id);
     if (open) return { isOpen: true, conversationKey: keyToString(open.key), request: open.request };
     const closed = this.closedById.get(id);
     return closed ? { isOpen: false, conversationKey: closed.conversationKey, request: closed } : null;
   }
 
-  /** @description The open request of `key`'s conversation, or `undefined`. */
-  getOpenRequest(key: SessionKey): OpenRequestState | undefined {
+  /** @description The open request `id`, with its conversation, or `undefined` when `id` is not open. */
+  getOpenRequestById(id: string): OpenRequestEntry | undefined {
     this.assertLoaded();
-    return this.store.getOpenRequest(key);
+    return this.getOpenEntryById(id);
   }
 
-  /** @description Every open request with its conversation. */
+  /**
+   * @description The open requests of `key`'s conversation, oldest first — one per
+   * requester at most (see `requestGroup.ts`).
+   */
+  listOpenRequestsOf(key: SessionKey): OpenRequestState[] {
+    this.assertLoaded();
+    const conversationKey = keyToString(key);
+    return this.getOpenEntries()
+      .filter((entry) => keyToString(entry.key) === conversationKey)
+      .map((entry) => entry.request);
+  }
+
+  /**
+   * @description The NEWEST open request of `key`'s conversation, or `undefined`.
+   * A conversation may hold one open request per requester; a caller that must
+   * act on all of them uses {@link listOpenRequestsOf}.
+   */
+  getNewestOpenRequest(key: SessionKey): OpenRequestState | undefined {
+    this.assertLoaded();
+    return this.listOpenRequestsOf(key).at(-1);
+  }
+
+  /** @description Every open request with its conversation, oldest first. */
   listOpenRequests(): OpenRequestEntry[] {
     this.assertLoaded();
     return this.getOpenEntries();
@@ -410,10 +466,10 @@ export class RequestLedger {
    */
   async updateOpenRequest(id: string, update: OpenRequestUpdater): Promise<OpenRequestState | null> {
     this.assertLoaded();
-    const entry = this.getOpenEntries().find((candidate) => candidate.request.id === id);
+    const entry = this.getOpenEntryById(id);
     if (!entry) return null;
     let updated: OpenRequestState | null = null;
-    await this.store.updateOpenRequest(entry.key, (current) => {
+    await this.store.updateOpenRequest(entry.group, (current) => {
       if (current?.id !== id) return current;
       const next: OpenRequestState = { ...current, ...(typeof update === 'function' ? update(current) : update) };
       updated = next;
@@ -428,11 +484,11 @@ export class RequestLedger {
    */
   async closeRequest(id: string, reason: RequestCloseReason): Promise<ClosedRequestRecord | null> {
     this.assertLoaded();
-    const entry = this.getOpenEntries().find((candidate) => candidate.request.id === id);
+    const entry = this.getOpenEntryById(id);
     if (!entry) return null;
     const conversationKey = keyToString(entry.key);
     let closed: ClosedRequestRecord | null = null;
-    await this.store.updateOpenRequest(entry.key, (current) => {
+    await this.store.updateOpenRequest(entry.group, (current) => {
       if (current?.id !== id) return current;
       const record: ClosedRequestRecord = { ...current, conversationKey, closedAt: this.now(), closeReason: reason };
       this.appendClosed(record);

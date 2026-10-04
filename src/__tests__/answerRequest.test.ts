@@ -103,7 +103,7 @@ describe('answerRequest close rules', () => {
     await answerRequest({ ledger, answerSinks: sinks }, createArgs(questionRequest.id, { kind: 'question' }));
     const closedQuestion = ledger.getRequest(questionRequest.id);
     assert.equal(closedQuestion?.isOpen === false ? closedQuestion.request.closeReason : null, 'question');
-    assert.equal(ledger.getOpenRequest(topicKey), undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey), undefined);
   });
 
   it('progress answers keep the request open and are all counted, concurrent ones included', async () => {
@@ -119,21 +119,21 @@ describe('answerRequest close rules', () => {
 
     assert.ok(outcomes.every((outcome) => outcome.ok));
     assert.equal(sink.deliveries.length, 3);
-    assert.equal(ledger.getOpenRequest(topicKey)?.id, request.id);
-    assert.equal(ledger.getOpenRequest(topicKey)?.progressAnswerCount, 3);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, request.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.progressAnswerCount, 3);
   });
 
   it('a progress answer proves the agent read the request: a kept prompt counts as taken in (R21)', async () => {
     await ledger.load();
     const request = await ledger.createRequest(topicKey, origin, { createPrompt: (requestId) => `[Request ${requestId}] do it` });
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
 
     await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
 
     const withoutPrompt = await ledger.createRequest(topicKey, origin);
     await answerRequest({ ledger, answerSinks: sinks }, createArgs(withoutPrompt.id, { kind: 'progress' }));
-    assert.equal(ledger.getOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'nothing to re-post: no flag');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'nothing to re-post: no flag');
   });
 
   it('a progress answer makes a pending post retry moot: the agent has the request (R28)', async () => {
@@ -142,7 +142,7 @@ describe('answerRequest close rules', () => {
     await ledger.updateOpenRequest(request.id, { postRetryCount: 1, nextPostRetryAt: Date.now() + 60_000 });
 
     await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
-    assert.equal(ledger.getOpenRequest(topicKey)?.nextPostRetryAt, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
   });
 
   it('a late answer to a superseded request is delivered and changes no request', async () => {
@@ -153,9 +153,13 @@ describe('answerRequest close rules', () => {
     const outcome = await answerRequest({ ledger, answerSinks: sinks }, createArgs(superseded.id));
 
     assert.equal(outcome.ok, true);
-    assert.match(outcome.ok ? outcome.message : '', /already closed \(superseded\)/);
+    assert.match(
+      outcome.ok ? outcome.message : '',
+      new RegExp(`already closed \\(superseded by request ${current.id} from the same requester`),
+      'the result names the request that replaced it, so the agent answers that one',
+    );
     assert.equal(sink.deliveries[0]?.delivery.isRequestOpen, false);
-    assert.deepEqual(ledger.getOpenRequest(topicKey), current, 'the newer request is untouched');
+    assert.deepEqual(ledger.getNewestOpenRequest(topicKey), current, 'the newer request is untouched');
     const lookup = ledger.getRequest(superseded.id);
     assert.equal(lookup?.isOpen === false ? lookup.request.closeReason : null, 'superseded');
   });
@@ -176,7 +180,7 @@ describe('answerRequest refusals', () => {
       unknown.ok ? '' : unknown.error.replace('req_unknown0', 'ID'),
     );
     assert.deepEqual(sink.deliveries, []);
-    assert.equal(ledger.getOpenRequest(otherTopicKey)?.id, elsewhere.id);
+    assert.equal(ledger.getNewestOpenRequest(otherTopicKey)?.id, elsewhere.id);
   });
 
   it('a failed delivery is reported and leaves the request open for a retry', async () => {
@@ -188,7 +192,7 @@ describe('answerRequest refusals', () => {
 
     assert.equal(outcome.ok, false);
     assert.match(outcome.ok ? '' : outcome.error, /NOT delivered: the surface is down/);
-    assert.deepEqual(ledger.getOpenRequest(topicKey), request);
+    assert.deepEqual(ledger.getNewestOpenRequest(topicKey), request);
   });
 
   it('a platform without an answer sink is refused, nothing changes', async () => {
@@ -204,7 +208,7 @@ describe('answerRequest refusals', () => {
 
     assert.equal(outcome.ok, false);
     assert.match(outcome.ok ? '' : outcome.error, /platform "test"/);
-    assert.equal(ledger.getOpenRequest(trackerKey)?.id, request.id);
+    assert.equal(ledger.getNewestOpenRequest(trackerKey)?.id, request.id);
   });
 
   it('a delivery warning is passed on with the success', async () => {

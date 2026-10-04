@@ -2,8 +2,10 @@
  * @description Telegram request intake decisions (`utils/topicRequest.ts`,
  * request/answer plan S7): a prompt opens a request only in a view with
  * requests on and only when it is not a slash command forwarded to the agent;
- * the origin names the entry point; the header tells the agent its plain text
- * is hidden exactly in the answers-only view. Load-bearing: `bot.ts` applies
+ * the origin names the entry point and the requester (the merge key's part the
+ * topic does not carry); the header tells the agent its plain text is hidden
+ * exactly in the answers-only view and names the requests it replaced.
+ * Load-bearing: `bot.ts` applies
  * these at every entry point, so a wrong answer opens requests nobody sees
  * answered, or forwards `/compact` as work the agent owes an answer to.
  */
@@ -16,10 +18,13 @@ import { topicViewOptions } from '../utils/topicView';
 import {
   buildTopicRequestHeader,
   checkShouldOpenTopicRequest,
+  getTopicRequesterId,
   getTopicRequestOrigin,
+  scheduledRunRequester,
   topicRequestSourceAttribute,
   type TopicRequestSource,
 } from '../utils/topicRequest';
+import { requestRequesterAttribute } from '../requests/requestGroup';
 
 const sources: readonly TopicRequestSource[] = ['text', 'voice', 'file', 'album', 'schedule', 'scheduledRun'];
 
@@ -37,14 +42,30 @@ describe('checkShouldOpenTopicRequest', () => {
 
 describe('getTopicRequestOrigin', () => {
   it('a scheduled run is its own origin kind; every operator entry point is a message', () => {
-    assert.equal(getTopicRequestOrigin('scheduledRun').kind, 'scheduledRun');
+    assert.equal(getTopicRequestOrigin({ source: 'scheduledRun', requesterId: scheduledRunRequester }).kind, 'scheduledRun');
     for (const source of sources.filter((candidate) => candidate !== 'scheduledRun')) {
-      assert.equal(getTopicRequestOrigin(source).kind, 'message', source);
+      assert.equal(getTopicRequestOrigin({ source, requesterId: '424242' }).kind, 'message', source);
     }
   });
 
-  it('records the entry point in the attributes', () => {
-    for (const source of sources) assert.equal(getTopicRequestOrigin(source).attributes[topicRequestSourceAttribute], source);
+  it('records the entry point and the requester in the attributes — the ledger merges by requester', () => {
+    for (const source of sources) {
+      const origin = getTopicRequestOrigin({ source, requesterId: '424242' });
+      assert.equal(origin.attributes[topicRequestSourceAttribute], source);
+      assert.equal(origin.attributes[requestRequesterAttribute], '424242');
+    }
+  });
+});
+
+describe('getTopicRequesterId', () => {
+  it('is the sending user\'s id as text; a message without a sender has the empty requester', () => {
+    assert.equal(getTopicRequesterId({ id: 424242 }), '424242');
+    assert.equal(getTopicRequesterId(undefined), '');
+  });
+
+  it('the scheduler is a requester of its own, never a person', () => {
+    assert.notEqual(scheduledRunRequester, '');
+    assert.doesNotMatch(scheduledRunRequester, /^\d+$/);
   });
 });
 
@@ -61,6 +82,13 @@ describe('buildTopicRequestHeader', () => {
     assert.match(buildTopicRequestHeader('req_abc', 'text', 'answers'), hiddenLine);
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'), hiddenLine);
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'stream'), hiddenLine);
+  });
+
+  it('names the requests it replaced and says one answer covers them; silent when it replaced none', () => {
+    const merged = buildTopicRequestHeader('req_c', 'text', 'streamAnswers', ['req_a', 'req_b']);
+    assert.match(merged, /replaces the same requester's earlier requests req_a, req_b/);
+    assert.match(merged, /one answer to this request covers them all/);
+    assert.doesNotMatch(buildTopicRequestHeader('req_c', 'text', 'streamAnswers'), /replaces/);
   });
 
   it('every entry point has its own description', () => {

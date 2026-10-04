@@ -8,6 +8,7 @@
  */
 import type { RequestOrigin } from '../requests/types';
 import { buildRequestHeader } from '../requests/requestHeader';
+import { requestRequesterAttribute } from '../requests/requestGroup';
 import type { TopicView } from '../types';
 import { checkAreRequestsEnabled, checkIsStreamShown } from './topicView';
 
@@ -20,6 +21,29 @@ export type TopicRequestSource = 'text' | 'voice' | 'file' | 'album' | 'schedule
 
 /** The attribute name the source is stored under in a topic request's origin. */
 export const topicRequestSourceAttribute = 'source';
+
+/**
+ * The requester a scheduled run is filed under (`requestGroup.ts`): the
+ * scheduler, not a person — so a run never merges with, nor is merged into, an
+ * operator's open request in the same topic.
+ */
+export const scheduledRunRequester = 'scheduler';
+
+/**
+ * @name TopicRequestIntake
+ * @description One prompt entering a topic as a request: the entry point it came
+ * through and who raised it — the Telegram user id for an operator entry point
+ * ({@link getTopicRequesterId}), {@link scheduledRunRequester} for a scheduled run.
+ */
+export interface TopicRequestIntake {
+  source: TopicRequestSource;
+  requesterId: string;
+}
+
+/** @description The requester of an operator entry point: the sending Telegram user, by id. */
+export function getTopicRequesterId(from: { id: number } | undefined): string {
+  return from?.id.toString() ?? '';
+}
 
 /** What the agent is told the request came from, per entry point. */
 const topicRequestOriginDescriptions: Readonly<Record<TopicRequestSource, string>> = {
@@ -42,19 +66,34 @@ export function checkShouldOpenTopicRequest(view: TopicView, isSlashCommand: boo
   return checkAreRequestsEnabled(view) && !isSlashCommand;
 }
 
-/** @description The origin a topic request is opened with. */
-export function getTopicRequestOrigin(source: TopicRequestSource): RequestOrigin {
-  return { kind: source === 'scheduledRun' ? 'scheduledRun' : 'message', attributes: { [topicRequestSourceAttribute]: source } };
+/**
+ * @description The origin a topic request is opened with. The requester rides in
+ * the attributes: the ledger's merge rule (`requestGroup.ts`) reads it, so two
+ * people's messages in one topic never supersede each other.
+ */
+export function getTopicRequestOrigin(intake: TopicRequestIntake): RequestOrigin {
+  return {
+    kind: intake.source === 'scheduledRun' ? 'scheduledRun' : 'message',
+    attributes: { [topicRequestSourceAttribute]: intake.source, [requestRequesterAttribute]: intake.requesterId },
+  };
 }
 
 /**
  * @description The header that rides the request's prompt. In the answers-only
  * view the agent is told its plain text is not shown; in the stream views it is.
+ * `supersededRequestIds` are the requester's still-open requests this one
+ * replaced — the header says one answer covers them all.
  */
-export function buildTopicRequestHeader(requestId: string, source: TopicRequestSource, view: TopicView): string {
+export function buildTopicRequestHeader(
+  requestId: string,
+  source: TopicRequestSource,
+  view: TopicView,
+  supersededRequestIds: readonly string[] = [],
+): string {
   return buildRequestHeader({
     requestId,
     originDescription: topicRequestOriginDescriptions[source],
     isPlainTextHidden: !checkIsStreamShown(view),
+    supersededRequestIds,
   });
 }

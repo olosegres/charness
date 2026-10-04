@@ -507,7 +507,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   });
 
   it('what it hands over is the nudge, or the open request\'s prompt the agent never took in — only for a limit wait (R21)', () => {
-    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompt: retryKind === 'usageLimit'\n\s*\? getPromptNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.getOpenRequest\(key\)\)\n\s*: undefined,\n\s*\}\),/);
+    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompt: retryKind === 'usageLimit'\n\s*\? joinPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
     assert.ok(kickPorts.includes('await requestWakeUpEngine?.trackContinuationTurn(key, options);'));
   });
 

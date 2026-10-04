@@ -1,7 +1,7 @@
 import { tryKeyFromString } from '../sessionKey';
 import { getAnswerSink, type AnswerSinks } from '../platform/answerSink';
 import type { RequestLedger } from './requestLedger';
-import type { RequestAnswerKind, RequestCloseReason } from './types';
+import type { ClosedRequestRecord, RequestAnswerKind, RequestCloseReason } from './types';
 
 /**
  * @description The `answer_request` contract (request/answer core S3), kept out
@@ -14,7 +14,9 @@ import type { RequestAnswerKind, RequestCloseReason } from './types';
  *   delivered, request open:   progress → counted, stays open
  *                              question / final → closes the request
  *   delivered, request closed: nothing changes (a late answer from a turn that
- *     outlived its request is still delivered — content is never dropped)
+ *     outlived its request is still delivered — content is never dropped); a
+ *     superseded request's result names the request that replaced it, so the
+ *     agent knows which one its answer should have gone to
  */
 
 /** The longest answer body accepted; the sinks split it to their surface's limits. */
@@ -67,6 +69,14 @@ function buildOpenAnswerMessage(requestId: string, kind: RequestAnswerKind, wasC
   return `Delivered. Request ${requestId} is now closed (${kind}).`;
 }
 
+/** The agent-facing line for an answer delivered to a request that was already closed. */
+function buildClosedAnswerMessage(requestId: string, closed: ClosedRequestRecord): string {
+  const replacedBy = closed.closeReason === 'superseded' && closed.supersededBy !== undefined
+    ? ` by request ${closed.supersededBy} from the same requester — answer that one, it covers this request too`
+    : '';
+  return `Delivered. Request ${requestId} was already closed (${closed.closeReason}${replacedBy}), so nothing about it changed.`;
+}
+
 /** @description Deliver one answer and apply the close rules. */
 export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequestArgs): Promise<AnswerRequestOutcome> {
   await deps.ledger.whenLoaded();
@@ -96,10 +106,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
   const warning = delivery.warning ? ` Note: ${delivery.warning}` : '';
 
   if (!lookup.isOpen) {
-    return {
-      ok: true,
-      message: `Delivered. Request ${args.requestId} was already closed (${lookup.request.closeReason}), so nothing about it changed.${warning}`,
-    };
+    return { ok: true, message: `${buildClosedAnswerMessage(args.requestId, lookup.request)}${warning}` };
   }
   const closeReason = closingAnswerReasons[args.kind];
   const changed = closeReason

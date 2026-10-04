@@ -1,8 +1,8 @@
 /**
  * @description Shapes of the request ledger (core plan S2). A REQUEST is one unit
  * of work the agent owes an answer to — an operator message, a scheduled run, a
- * tracker event. At most one request per conversation is OPEN; a closed one moves
- * to the append-only history.
+ * tracker event. At most one request per REQUEST GROUP (conversation + requester,
+ * `requestGroup.ts`) is OPEN; a closed one moves to the append-only history.
  */
 
 /**
@@ -31,7 +31,8 @@ export interface RequestOrigin {
  * @description Why a request left the open set.
  *  - `final`      — the agent answered with the result.
  *  - `question`   — the agent asked the requester; their reply is a new request.
- *  - `superseded` — a newer request arrived in the same conversation.
+ *  - `superseded` — a newer request of the same group (same conversation, same
+ *    requester) arrived; one answer to that one covers this one too.
  *  - `cancelled`  — the work was stopped without an answer (interrupt, quit,
  *    leaving the folder, a view switch that turns requests off).
  */
@@ -40,7 +41,7 @@ export type RequestCloseReason = 'final' | 'question' | 'superseded' | 'cancelle
 /**
  * @name OpenRequestState
  * @description An open request as persisted in `state.json` `openRequests`
- * (keyed by the conversation's serialized `SessionKey`). The wake-up fields are
+ * (keyed by its serialized request group, `requestGroup.ts`). The wake-up fields are
  * owned by the wake-up engine (S4) and persisted here so a restart keeps them.
  */
 export interface OpenRequestState {
@@ -92,6 +93,14 @@ export interface OpenRequestState {
    * request closes. Opaque to the core.
    */
   alertRef?: string;
+  /**
+   * The still-open requests of the same group this one replaced when it was
+   * created — the one open at the time and, through it, the ones that one had
+   * replaced (oldest first, bounded by `supersededRequestIdsMaxLength`). The
+   * header names them so the agent gives ONE answer covering them all. Absent
+   * when nothing was replaced.
+   */
+  supersededRequestIds?: string[];
 }
 
 /**
@@ -128,6 +137,8 @@ export interface ClosedRequestRecord extends OpenRequestState {
   /** Epoch ms the request closed. */
   closedAt: number;
   closeReason: RequestCloseReason;
+  /** For `superseded`: the id of the request that replaced it (an answer to it covers this one). */
+  supersededBy?: string;
 }
 
 /**

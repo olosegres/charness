@@ -89,7 +89,8 @@ per-backend controls are optional methods the bot checks before calling.
   runs are held and ride the resume). Detector guards: see `getClaudeAgentErrorLine` /
   `handleAutoLifecycle` (`claudeCliAdapter.ts`); a missed API error leaves no `[Claude] API error detected`
   line in the bot log.
-- **Request/answer core** (`src/requests/`). A conversation has at most ONE open request; the agent answers
+- **Request/answer core** (`src/requests/`). A conversation has at most ONE open request PER REQUESTER (a
+  newer message supersedes only the same person's open request — `requestGroup.ts`); the agent answers
   through `answer_request` (`progress` / `question` / `final`) and the platform's `AnswerSink` delivers it; a
   wake-up engine re-prods silent turns and alerts when it gives up.
 - **Compaction.** `/compact` is bot-owned and per backend (OpenCode: server summarize; json-stream: confirmed
