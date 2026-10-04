@@ -18,6 +18,7 @@ import { createScheduleRecord } from '../scheduler/store';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import type { OpenRequestState } from '../requests/types';
+import { getRequestGroupKey } from '../requests/requestGroup';
 
 const nowMs = Date.parse('2026-10-03T09:00:00Z');
 const topicKey = makeTelegramKey(-1001111111111, 20);
@@ -52,8 +53,10 @@ describe('the unserved-state guard (R13)', () => {
     await store.setBinding(topicKey, 'topic-folder');
     await store.setBinding(issueKey, 'issue-folder');
     await store.setBinding(otherIssueKey, 'issue-folder');
-    await store.updateOpenRequest(issueKey, () => createOpenRequest('req_issue'));
-    await store.updateOpenRequest(topicKey, () => createOpenRequest('req_topic'));
+    const issueRequest = createOpenRequest('req_issue');
+    const topicRequest = createOpenRequest('req_topic');
+    await store.updateOpenRequest(getRequestGroupKey(issueKey, issueRequest.origin), () => issueRequest);
+    await store.updateOpenRequest(getRequestGroupKey(topicKey, topicRequest.origin), () => topicRequest);
     await store.upsertSchedule(createScheduleRecord({
       threadKey: issueKey,
       name: 'Nightly',
