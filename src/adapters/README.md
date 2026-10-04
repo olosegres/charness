@@ -1,10 +1,11 @@
 # `src/adapters/` — agent backends
 
 Every backend implements the `AgentAdapter` seam (`../types.ts`); the bot never
-talks to an agent directly. The root `CLAUDE.md` "Adapters" table is the per-file
-map. This README documents the one thing that is NOT discoverable from the code
-or public docs: the reverse-engineered stdio control protocol behind
-`claudeJsonStreamAdapter`.
+talks to an agent directly. Each file's header says what it is; `createAdapter.ts`
+is the factory and the late-wiring (DI) hub. This README documents
+what is NOT discoverable from the code or public docs: the reverse-engineered stdio
+control protocol behind `claudeJsonStreamAdapter`, then the traps of the other
+backends.
 
 ## `claude-json-stream` — driving the CLI over stream-json
 
@@ -178,3 +179,57 @@ Both Claude backends drive the same `claude` binary against
 `~/.claude/projects/<slug>/…`, so `/sessions` reads the same transcripts (the
 tmux adapter's readers are reused) and a session started in one backend is
 resumable in the other.
+
+## OpenCode (`openCodeAdapter.ts`)
+
+- **One `/global/event` stream for the whole server**, opened with the first active session anywhere and closed
+  with the last. The per-folder `/event?directory=` it replaced goes silent for an aged sole subscriber (only
+  `server.heartbeat` keeps flowing), so the stall watchdog never trips and the topic hangs.
+- **Owner resolution.** An event routes by `sessionID` (direct, else child→parent lineage — sub-agents run in
+  CHILD sessions); when both miss it falls back to the envelope's directory (the sole active session there, or,
+  when two topics share a folder, only a genuine lineage ancestor, else a LOUD drop — never a guess). Events
+  for directories the bot does not own drop cheaply. Lineage is recorded from ANY event exposing `parentID`
+  and refreshed on use. `question.asked` / `permission.asked` are CRITICAL: an unroutable one is logged, never
+  swallowed (the old silent drop looked like a hung topic).
+- **Busy queue and provider retry.** A healthy busy turn keeps new `prompt_async` messages queued. A
+  provider-managed `session.status=retry` is the exception: the next prompt ABORTS the old provider wait and
+  posts with the current `/model` (a model switch + `continue` would otherwise sit unread behind the old
+  provider's retry deadline). Since `session.status` carries no turn id, own idles are ignored until the
+  replacement's own `busy` — a wait bounded by `providerRetryReplacementStartTimeoutMs`, after which the same
+  `noResponse` escalation runs.
+- **Wedged turns.** A bloated session can accept every prompt (`prompt_async` 204) while its agent loop exits at
+  step 0: `session.idle` arrives with ZERO assistant activity, and even a server-side summarize hits the dead
+  loop. `sawTurnActivity` is set ONLY by an assistant `message.updated` — the USER prompt echoes back as
+  `message.part` events, and counting those masked every wedge. The bot recovers in three escalating tiers, one
+  attempt each per prompt episode (`utils/wedgeRecovery.ts`, `handleNoResponse` in `bot.ts`): `resend` →
+  `fork` (a fresh session carrying the full conversation) → `restart` (blank session, dialog dropped) → give up.
+  The replay rides `isRecoveryReplay` so the tier only advances.
+- **Background sub-agents.** OpenCode's `task` tool is synchronous: the parent session is LOCKED for the whole
+  sub-agent run, so a new message queues behind it and the topic looks hung (abort does not free it). The server
+  is spawned with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and `forwardPromptToAgent` calls
+  `detachRunningSubagents` before `sendInput`, which detaches a blocking sub-agent (best effort, only while a
+  child session is busy); OpenCode injects its result back when it finishes.
+- **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
+  passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
+- **Effort** rides the prompt as `body.variant`, clamped to the model's variants. Provider auth is NOT
+  thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
+- To prove a per-prompt override applied, read `GET /session/<id>/message`: the stored turns echo
+  `model.variant`.
+
+## Claude, both backends
+
+- **Effort.** Claude persists `/effort` GLOBALLY in its own settings, so a fresh TUI would inherit another
+  topic's level. On every fresh spawn the tmux adapter arms the thread's stored level (`pendingEffortReapply`)
+  and types `/effort <level>` the FIRST time the input box is ready — not at the spawn instant, when the banner
+  is still painting and the command is left unsubmitted. Never on adopt/reattach (the surviving process keeps
+  its state).
+- **Survey.** The end-of-turn feedback survey is dismissed (one Escape per appearance) by `extractClaudeSurvey`,
+  whose header list (`CLAUDE_SURVEY_HEADER_REGEX`) is CLOSED and anchored on purpose — an open prose pattern
+  once fired on a quoted survey. A new wording left unrecognised sits on the pane and swallows the Enter of
+  the next prompt, stranding it in the input box; add the wording to that alternation.
+- **Sub-agent transcripts** for `/subagent full` are tailed from the on-disk `subagents/agent-*.jsonl` files; the
+  first scan seeds offsets to EOF, so there is no backlog replay on resume or adopt.
+- **Interrupt.** An interrupt the bot issued yields a contentless `is_error` result on json-stream; it is
+  swallowed once (`swallowNextAbortError`, armed in `sendInterrupt`) instead of surfacing a bogus
+  `Claude error: API error`.
+
