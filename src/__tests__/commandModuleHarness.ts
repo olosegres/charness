@@ -32,9 +32,9 @@ export interface RecordedSend {
 
 type CommandHandler = Parameters<RegisterCommand>[1];
 
-/** @description A command's context as far as the handlers read it: the typed message's id. */
-function createCommandContext(messageId: number): CommandContext {
-  return { message: { message_id: messageId } } as CommandContext;
+/** @description A command's context as far as the handlers read it: the typed message's id and text. */
+function createCommandContext(messageId: number, text: string): CommandContext {
+  return { message: { message_id: messageId, text } } as CommandContext;
 }
 
 /** The id of the operator's command message when a test does not name one. */
@@ -104,7 +104,7 @@ export class CommandHarness {
   async runCommand(name: string, argsText = '', messageId = defaultCommandMessageId): Promise<void> {
     const handler = this.commandHandlers.get(name);
     if (!handler) throw new Error(`/${name} is not registered`);
-    await handler(createCommandContext(messageId), this.key, { name, args: argsText ? argsText.split(' ') : [], argsText });
+    await handler(createCommandContext(messageId, `/${name}${argsText ? ` ${argsText}` : ''}`), this.key, { name, args: argsText ? argsText.split(' ') : [], argsText });
   }
 
   /** @description The operator taps `callbackData` on the bot's message `messageId`, through telegraf's middleware chain. */

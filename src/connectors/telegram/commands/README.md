@@ -58,3 +58,14 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
 `reAskedQuestionOptions` (the re-ask button). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
+
+## `autoContinueLimits.ts`
+
+`/auto_continue_limits` and its buttons `acl_on` / `acl_off`: whether the bot waits out a usage-limit window and
+resumes the agent by itself. A regular topic sets its own override, General the instance-wide default. The
+command is deliberately not gated on a session — a limit can hit any topic and the preference must be settable
+before it does. Turning it off drops the topic's armed resume and stops waking its request, but only when a wait
+WAS armed. The picker shows a «skip once» row only while a resume is armed; a tap consumes the picker into a
+keyboard-less confirmation. The usage-limit notice appends the shared pointer through
+`appendAutoContinueLimitsHint` and its own «skip once» button consumes the picker through the returned
+`consumeAutoContinueLimitsPicker`.
