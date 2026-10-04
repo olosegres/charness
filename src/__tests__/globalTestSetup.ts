@@ -17,7 +17,7 @@
  * `process.env.DATA_DIR`, so it still wins. Matches neither the `*.test.ts` nor
  * `*.e2e.ts` runner globs, so it is never executed as a test itself.
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // Arms the Telegram SessionKeyCodec for the whole suite: modules that only
@@ -27,11 +27,13 @@ import path from 'node:path';
 // codec module reads no environment and imports nothing that does.
 import '../connectors/telegram/sessionKeyCodec';
 
-const testDataDir = path.join(os.tmpdir(), `telegramcode-test-${process.pid}`);
-mkdirSync(testDataDir, { recursive: true });
+// A FRESH dir, never a pid-named one: a pid-named path may already exist, left behind by another
+// account's run before a pid wrap, and `mkdirSync({ recursive: true })` would silently adopt that
+// foreign (unwritable) dir, so the first `DATA_DIR` write in the test would fail with `EACCES`.
+const testDataDir = mkdtempSync(path.join(os.tmpdir(), 'telegramcode-test-'));
 process.env.DATA_DIR = testDataDir;
 
-// The dir is named after this process and read by nobody once it is gone; left alone it piles up
+// The dir is private to this process and read by nobody once it is gone; left alone it piles up
 // in the OS temp dir, one per test process, for good. An `exit` listener runs for a drained event
 // loop, `process.exit()` and an uncaught exception alike (a signal kill skips it).
 process.on('exit', () => rmSync(testDataDir, { recursive: true, force: true }));
