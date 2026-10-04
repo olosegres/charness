@@ -17,7 +17,8 @@
 
 A Telegram **forum-supergroup bot that proxies user commands and messages to agentic CLIs** — **Claude Code**
 and **OpenCode** (plus a raw `$SHELL`). The bot has almost no "AI" logic: routing, session lifecycle,
-translating chat input into the right call to the agent, and streaming the output back into the topic.
+translating chat input into the right call to the agent, and streaming the output back into the topic. The
+same core serves a second surface — Jira issues (`CONNECTORS=jira`) — through the connector seam.
 
 **Core mental model — the bot is a proxy/relay.** Most commands are *forwarded* to the agent:
 
@@ -68,7 +69,8 @@ per-backend controls are optional methods the bot checks before calling.
   per chat off the `SessionKey`; `OWNER_USER_ID` required for `dm`, optional for `both`).
 - **Bot-injected MCP server `telegramBot`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
   `dir:`) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
-  `send_file_to_user`, `send_messages_to_user`. It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
+  `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
+  `compact_conversation`). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit
   only after reconnecting; tool RESULTS reflect live code.
 - **Scheduler** (`src/scheduler/`). `/schedule` hands free text to the agent, which calls `schedule_*`;
@@ -108,38 +110,45 @@ per-backend controls are optional methods the bot checks before calling.
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
+- **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);
+  the agent talks back only through `answer_request`, which becomes comments. Isolation is FAIL-CLOSED and
+  checked at boot (`cli/connectorGuards.ts`); an instance never boots on another platform's state; errors name
+  variables and fields, never secret values; Jira code loads lazily — nothing `bot.ts` imports statically may
+  reach its packages (`jiraLazyLoad.test.ts`).
 
 ## Module map (`src/`)
 
 | Path | What it is |
 |------|------------|
-| `cli.ts`, `cli/` | CLI dispatch: `envLoader.ts` (`.env` / `ENV_FILE`), `hot.ts` + `botEntry.ts` (hot supervisor / worker), `bot.ts` (shared startup) |
+| `cli.ts`, `cli/` | CLI dispatch: `envLoader.ts` (`.env` / `ENV_FILE`), `connectorGuards.ts` (fail-closed isolation preflight), `hot.ts` + `botEntry.ts` (hot supervisor / worker), `bot.ts` (shared startup) |
 | `bot.ts` | **The bot**: Telegram handlers, every slash command (on the neutral `commandRouter`), output streaming, composition root; ~11k lines (feature slices are moving out into the modules below). A test cannot import it (module-scope `parseEnv()` exits the process), so logic goes into pure helpers that `bot.ts` wires |
 | `agentLogin/` | `createAgentLogin(ports)`: the out-of-band sign-in drivers — json-stream `/login` and OpenCode `/connect` OAuth, each a pty relayed through the topic. README: contracts |
 | `connectors/telegram/commands/` | Slash commands + buttons decomposed out of `bot.ts`, one `create<Feature>(ports)` per file over the shared `BotCore` ports bag (`displayModes.ts`, `reminders.ts`, `modelProviders.ts`, `compaction.ts`, `autoContinueLimits.ts`, …). README: registration-order and ports contract |
 | `state.ts` | `state.json` persistence (bindings, sessions, prefs, schedules, open requests); `resolveDataDir()` |
 | `sessionKey.ts`, `types.ts` | `SessionKey` + codec registry; shared types incl. the `AgentAdapter` contract |
 | `threadRouting.ts`, `accessControl.ts`, `validation.ts`, `folderName.ts` | Topic → folder binding; who may use the bot (`AdminCache` is the single authority); `/bind` validation (path-traversal/symlink safe, canonical `resolveBoundWorkDir`); new-folder-name gate |
-| `mcpConfig.ts`, `i18n.ts`, `i18n/` | MCP hierarchy merge; `t(key, vars)` over 12 locales, `en` canonical |
-| `rateLimiter.ts` | Per-user limits, the global send pacer, `enqueueSend` / `sendUnpaced` |
+| `mcpConfig.ts`, `i18n.ts`, `i18n/` | MCP hierarchy merge (non-Telegram sessions get `--strict-mcp-config`); `t(key, vars)` over 12 locales, `en` canonical |
+| `rateLimiter.ts` | Per-user limits, the global send pacer, `enqueueSend` / `sendUnpaced` (both refuse a foreign-platform key) |
 | `apiErrorRetry.ts`, `apiRetryKick.ts` | API-error classification + retry plan; the retry timer, its kick and boot restore |
 | `postToSession.ts`, `startupPromptBuffer.ts` | Post a prompt into a conversation's session (ensure/resume, wait for idle, forward); the startup buffer |
 | `threadContextPreamble.ts`, `resumeContext.ts`, `pinnedStatus.ts`, `pendingQuestionRepost.ts`, `progressLine.ts` | Thread-context preamble; recent-turns block on resume; pinned status banner; keep a pending question last in its topic; collapse Claude's transient progress shapes into one edited message |
 | `openCode*.ts`, `sessionPick.ts`, `effortLevels.ts` | Pure OpenCode helpers (event→session routing, question flow/recovery, titles); the `/sessions` pick; effort catalogs |
 | `installManager.ts` | Locate/install agent binaries; OpenCode server generations (launched outside nodemon's tree) |
-| `outputTrace.ts`, `diagLog.ts`, `cli/lock.ts`, `shutdown.ts`, `bootClassifier.ts` | Always-on trace (`/trace`) + diagnostic log; single-instance lock; ordered graceful shutdown; hot-reload vs cold-start decision |
+| `outputTrace.ts`, `diagLog.ts`, `instanceLock.ts`, `shutdown.ts`, `bootClassifier.ts` | Always-on trace (`/trace`) + diagnostic log; single-instance lock; ordered graceful shutdown; hot-reload vs cold-start decision |
 | `botFileStorage.ts`, `voiceQueue.ts`, `agentTrigger.ts`, `sendErrorClassifier.ts` | File-intake dirs + janitor; per-thread voice queue; natural-language agent trigger; send-failure classes |
-| `adapters/` | Backends behind `AgentAdapter`: `claudeJsonStreamAdapter`, `claudeCliAdapter` (tmux scrape), `openCodeAdapter`, `terminalAdapter`; `createAdapter.ts` (factory + DI hub). README: protocol + traps |
-| `connectors/telegram/` | All code that touches the Telegram library: inbound/outbound translation, HTML, splitting, file intake + send gateway, answer sink, pickers, `output/` (`CHAT_MODE` transports) |
+| `adapters/` | Backends behind `AgentAdapter`: `claudeJsonStreamAdapter`, `claudeCliAdapter` (tmux scrape), `openCodeAdapter`, `terminalAdapter`; `createAdapter.ts` (factory + DI hub), `adapterEventRouting.ts` (foreign-platform event gate), `claudePlatformFlags.ts`, `sessionLaunchDefaults.ts`. README: protocol + traps |
+| `connectors/telegram/` | All code that touches the Telegram library: inbound/outbound translation, HTML, splitting, file intake + send gateway, answer sink, pickers, call guard, `output/` (`CHAT_MODE` transports) |
+| `connectors/jira/` | Jira Cloud connector: config, REST client, poller, trigger rules, prompt, answer sink, ADF |
 | `connectors/test/` | Capability-configurable test double; TESTS ONLY, no production import |
-| `platform/` | Core-side seam contracts: inbound/outbound/answer sink, command router, capability fallback |
+| `platform/` | Core-side seam contracts: inbound/outbound/answer sink, command router, capability fallback, `CONNECTORS` filter, unserved-state guard |
 | `requests/` | Request ledger, `answer_request`, wake-up engine + rules, session turn probe, limit-wait answers |
 | `scheduler/` | Schedule store/engine/recurrence/delivery/run ledger; the bot-owned MCP server (`mcpSurface.ts`), its injection and boot order |
 | `utils/` | ~85 mostly pure helpers behind `bot.ts` and the adapters: Claude scrape pipeline, tmux primitives, json-stream host, picker/render plans, reminders, timezone, limit/compaction rules, file send |
 
 **Platform boundary.** `platformBoundary.test.ts` fails if a module outside `connectors/telegram/` imports the
-Telegram library (its exemption ledger, just `bot.ts`, may only shrink). The core reaches a connector's
-answer sink only through `getAnswerSink` by `key.platform`. Details: `src/platform/README.md`.
+Telegram library (its exemption ledger, just `bot.ts`, may only shrink). The core reaches a connector only
+through `getConnectorOutbound` / `getAnswerSink` by `key.platform`, and a Telegram I/O primitive in `bot.ts`
+must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
 
 ## Conventions and pitfalls
 
@@ -203,6 +212,13 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   whatever `TMUX_TMPDIR` says. A test's own servers are private (`TMUX_SOCKET_NAME` + a `TMUX_TMPDIR` inside
   a temp dir) and are ended only by the FULL socket path (`tmux -S <path> kill-server`). Compare a read-only
   `tmux ls` before and after a suite — a session that disappears is a suite bug.
+- `jiraConnectorE2e.test.ts` (~1.5 min, part of `yarn test`) boots a real Jira-only instance through
+  `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
+  and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
+  exit/signal. `live/jiraLive.test.ts` (~10 min) runs the same loop against a REAL Jira Cloud site and a real
+  Claude agent and is SKIPPED unless `JIRA_LIVE_ENV_FILE`, `JIRA_LIVE_SITE` and
+  `JIRA_LIVE_REQUESTER_STORAGE_STATE` are set — don't set them unless asked; run it directly
+  (`node --import tsx --test src/__tests__/live/jiraLive.test.ts`) with `TMUX` / `TMUX_PANE` unset.
 - **Verifying code you wrote is YOUR job** — run it, drive the real surface; never hand the check to the user.
   If the usual tool is missing, find another path (live OpenCode over HTTP, a real tmux pane, the code path).
 - **Output / rendering / relay changes must be verified LIVE** on the dedicated test topic ("Telegram code

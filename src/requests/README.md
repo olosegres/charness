@@ -2,7 +2,7 @@
 
 A *request* is one unit of work handed to a conversation's agent: a user message, a scheduled run, a tracker
 event. The agent answers through the `answer_request` MCP tool and the platform's `AnswerSink`
-(`../platform/answerSink.ts`) delivers it. Nothing here knows Telegram — every platform goes through the same code.
+(`../platform/answerSink.ts`) delivers it. Nothing here knows Telegram or Jira — both go through the same code.
 Numeric bounds are named constants in the files below; this README says only what the code cannot.
 
 ## Merge rule (`requestGroup.ts`)

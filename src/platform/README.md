@@ -8,10 +8,12 @@ implements the other side. No platform library may be imported here (the archite
 | File | Contract |
 |------|----------|
 | `inbound.ts` | `InboundEvent`, `NormalizedAttachment`, `PlatformMember`, `ConnectorInbound` |
-| `outbound.ts` | `OutboundContent`, `OutboundHints`, `ActivityState`, `ConnectorCapabilities`, `ConnectorOutbound` |
+| `outbound.ts` | `OutboundContent`, `OutboundHints`, `ActivityState`, `ConnectorCapabilities`, `ConnectorOutbound`, and `getConnectorOutbound(outbounds, key)` — the ONE lookup by `key.platform` |
 | `answerSink.ts` | `AnswerSink`: `deliverAnswer`, `deliverAlert`, `releaseAlert`; found through the ONE lookup `getAnswerSink` |
 | `capabilityFallback.ts` | `getDegradedContent`, `checkNeedsOwnMessage` — how content degrades when a surface cannot express it |
 | `commandRouter.ts` | The neutral name → handler table |
+| `connectorSet.ts` | `CONNECTORS` parsing and `getServedConversations` |
+| `unservedStateGuard.ts` | Refuses to boot on another platform's persisted state |
 
 ## Rules that are not obvious from the types
 
@@ -22,10 +24,14 @@ implements the other side. No platform library may be imported here (the archite
   an answer must report whether it landed (the agent retries on a failure). One sink per platform, built once
   at boot and shared by `answer_request`, the wake-up alerts and the ledger's `releaseAlert`, which rejects when
   no sink serves the platform so the alert stays listed for a start that can.
-- **A platform with no registered sink is an error** — a wiring bug, never a silent drop.
+- **A platform with no registered outbound or sink throws** — a wiring bug, never a silent drop.
 - **Degradation is one shared rule** applied by every connector (a tracker has no pinning and no tappable
   buttons, so options stay as the enumerated text the body already carries and the user answers by index);
   the core never branches on a platform. `../connectors/test/` makes the degraded half reachable from tests.
+- **Boot scans walk only served platforms.** Every scan that adopts, resumes, heals or KILLS sessions goes
+  through `getServedConversations`, so a Telegram instance never touches a Jira conversation's session nor the
+  reverse. `unservedStateGuard` is the second line: the state file is shared, so a save by one instance would
+  rewrite the other platform's conversations, and two instances on one `DATA_DIR` would fight over it.
 - **The command router matches names EXACTLY, case included** (telegraf's own match is case-sensitive). The
   connector recognises its trigger syntax; the core owns dispatch.
 

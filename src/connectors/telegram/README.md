@@ -94,5 +94,10 @@ agent by itself for an `http://` root.
 
 ## Guards
 
+- `telegramCallGuard.ts`: an instance without the telegram connector still builds the client but wraps
+  `callApi` OUTERMOST so every Bot API call rejects with `TelegramDisabledError`, logged once per method.
+- `foreignKeyFallbacks.ts`: what the Telegram side of `bot.ts` does with another platform's conversation —
+  locale default, no group title, and `createTelegramPrimitiveGuard`, which every Telegram I/O primitive calls
+  first and returns early on.
 - `../../utils/linkPreviewSuppression.ts` defaults every outgoing text to NO link preview at the shared
   `callApi` choke point; a caller that sets its own preview option wins.

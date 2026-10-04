@@ -53,7 +53,9 @@ constants in the code; this README keeps what the code cannot say.
   spawned meanwhile lack the agent-facing tools, and a Claude one keeps lacking them (the heal never adds an
   absent server).
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
-  thread bound to the folder).
+  thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session
+  gets `schedule_*`, `send_file_to_user` and `send_messages_to_user`; any other platform sees just
+  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool.
 - The server serves BEFORE sessions re-attach, so a tool that reads session state awaits
   `deps.whenSessionsRestored()`. Boot order is `runSessionBootPhase`: bot MCP first, then reattach and
   restores, then `onSessionsRestored`, then the active-session heals, then the schedule re-arm. A session

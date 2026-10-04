@@ -2,7 +2,8 @@
 
 Every backend implements the `AgentAdapter` seam (`../types.ts`); the bot never
 talks to an agent directly. Each file's header says what it is; `createAdapter.ts`
-is the factory and the late-wiring (DI) hub. This README documents
+is the factory and the late-wiring (DI) hub, `adapterEventRouting.ts` the one gate
+where adapter events meet a conversation of another platform. This README documents
 what is NOT discoverable from the code or public docs: the reverse-engineered stdio
 control protocol behind `claudeJsonStreamAdapter`, then the traps of the other
 backends.
