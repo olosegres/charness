@@ -6,22 +6,22 @@ TelegramCode turns Telegram into a terminal for agentic coding CLIs. It runs on 
 
 ## Project
 
-- [GitHub repository](https://github.com/olosegres/telegramcode): source, issues, and releases (MIT license).
-- [README](https://github.com/olosegres/telegramcode#readme): full feature list, quick start, commands, and troubleshooting.
+- [GitHub repository](https://github.com/olosegres/charness): source, issues, and releases (MIT license).
+- [README](https://github.com/olosegres/charness#readme): full feature list, quick start, commands, and troubleshooting.
 - [npm package](https://www.npmjs.com/package/telegramcode): install with `npm install -g telegramcode` (Node 22+).
-- [DEVELOPMENT.md](https://github.com/olosegres/telegramcode/blob/main/DEVELOPMENT.md): architecture and local development.
+- [DEVELOPMENT.md](https://github.com/olosegres/charness/blob/main/DEVELOPMENT.md): architecture and local development.
 
 ## Key features
 
-- [Two agent backends](https://github.com/olosegres/telegramcode#features): OpenCode (native server API over HTTP+SSE) and Claude Code (tmux and json-stream backends).
-- [One topic per project](https://github.com/olosegres/telegramcode#two-surfaces-group-topics-bot-dm-or-both): forum topics act like terminal tabs, one isolated session each; two topics can share a folder for parallel work.
-- [Voice control](https://github.com/olosegres/telegramcode#features): send a voice note, it is transcribed with Whisper and forwarded to the agent.
-- [Scheduled and self-driving runs](https://github.com/olosegres/telegramcode#scheduler-schedule): `/schedule` arms cron, one-shot, or N-times jobs per topic, and the agent can schedule itself.
-- [Pinned question alerts](https://github.com/olosegres/telegramcode#features): when the agent asks a question the bot pins it, so even a muted topic notifies you once.
-- [Raw terminal](https://github.com/olosegres/telegramcode#raw-terminal-terminal): `/terminal` binds a topic to a real shell in the project folder.
-- [Restart-safe sessions](https://github.com/olosegres/telegramcode#restart-behaviour): sessions survive both a bot restart and an agent-server restart.
-- [Agent-facing MCP tools](https://github.com/olosegres/telegramcode#bot-injected-agent-tools): the agent can send files, images, and video back to you, post multiple messages, and schedule itself.
+- [Two agent backends](https://github.com/olosegres/charness#features): OpenCode (native server API over HTTP+SSE) and Claude Code (tmux and json-stream backends).
+- [One topic per project](https://github.com/olosegres/charness#two-surfaces-group-topics-bot-dm-or-both): forum topics act like terminal tabs, one isolated session each; two topics can share a folder for parallel work.
+- [Voice control](https://github.com/olosegres/charness#features): send a voice note, it is transcribed with Whisper and forwarded to the agent.
+- [Scheduled and self-driving runs](https://github.com/olosegres/charness#scheduler-schedule): `/schedule` arms cron, one-shot, or N-times jobs per topic, and the agent can schedule itself.
+- [Pinned question alerts](https://github.com/olosegres/charness#features): when the agent asks a question the bot pins it, so even a muted topic notifies you once.
+- [Raw terminal](https://github.com/olosegres/charness#raw-terminal-terminal): `/terminal` binds a topic to a real shell in the project folder.
+- [Restart-safe sessions](https://github.com/olosegres/charness#restart-behaviour): sessions survive both a bot restart and an agent-server restart.
+- [Agent-facing MCP tools](https://github.com/olosegres/charness#bot-injected-agent-tools): the agent can send files, images, and video back to you, post multiple messages, and schedule itself.
 
 ## Install
 
-- [Quick Start](https://github.com/olosegres/telegramcode#quick-start): `npm install -g telegramcode`, put your bot token in one `.env`, launch from your projects folder, bind a topic.
+- [Quick Start](https://github.com/olosegres/charness#quick-start): `npm install -g telegramcode`, put your bot token in one `.env`, launch from your projects folder, bind a topic.

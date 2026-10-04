@@ -31,11 +31,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/olosegres/telegramcode.git"
+    "url": "git+https://github.com/olosegres/charness.git"
   },
-  "homepage": "https://github.com/olosegres/telegramcode#readme",
+  "homepage": "https://github.com/olosegres/charness#readme",
   "bugs": {
-    "url": "https://github.com/olosegres/telegramcode/issues"
+    "url": "https://github.com/olosegres/charness/issues"
   },
   "main": "dist/cli.js",
   "bin": {

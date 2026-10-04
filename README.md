@@ -213,8 +213,8 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 Skip the global install and run in containers instead:
 
 ```bash
-git clone https://github.com/olosegres/telegramcode
-cd telegramcode/examples
+git clone https://github.com/olosegres/charness
+cd charness/examples
 cp .env.example .env       # edit values
 docker compose up -d
 ```
@@ -230,7 +230,7 @@ groups, data volumes, opencode ports — see
 To hack on the bot itself:
 
 ```bash
-git clone https://github.com/olosegres/telegramcode && cd telegramcode
+git clone https://github.com/olosegres/charness && cd charness
 yarn install && yarn build
 npm install -g .            # registers the `telegramcode` command
 ```
