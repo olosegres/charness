@@ -99,11 +99,11 @@ describe('the slug inverse', () => {
   });
 
   it('keeps the Telegram names byte-identical and still parses them', () => {
-    const telegramKey = makeTelegramKey(-1001111111111, 9085);
-    assert.equal(buildTmuxSessionName('claude', telegramKey), 'claude--1001111111111-9085');
-    assert.deepEqual(parseTmuxSessionName('claude', 'claude--1001111111111-9085'), telegramKey);
-    assert.equal(resolveJsonStreamSessionDir('/data/dir', telegramKey), '/data/dir/jsonstream/-1001111111111_9085');
-    assert.deepEqual(parseJsonStreamDirName('-1001111111111_9085'), telegramKey);
+    const telegramKey = makeTelegramKey(-1001111111111, 4242);
+    assert.equal(buildTmuxSessionName('claude', telegramKey), 'claude--1001111111111-4242');
+    assert.deepEqual(parseTmuxSessionName('claude', 'claude--1001111111111-4242'), telegramKey);
+    assert.equal(resolveJsonStreamSessionDir('/data/dir', telegramKey), '/data/dir/jsonstream/-1001111111111_4242');
+    assert.deepEqual(parseJsonStreamDirName('-1001111111111_4242'), telegramKey);
   });
 
   it('claims nothing that no codec owns', () => {
@@ -123,7 +123,7 @@ describe('the slug inverse', () => {
     registerSessionKeyCodec(telegramSessionKeyCodec);
     registerSessionKeyCodec(jiraSessionKeyCodec);
     try {
-      assert.deepEqual(tryKeyFromSlug('-1001111111111-9085', '-'), makeTelegramKey(-1001111111111, 9085));
+      assert.deepEqual(tryKeyFromSlug('-1001111111111-4242', '-'), makeTelegramKey(-1001111111111, 4242));
       assert.deepEqual(tryKeyFromSlug('jira-PROJ-PROJ-12', '-'), issueKey);
       assert.equal(tryKeyFromSlug(keyToSlug(makeTestKey('space', 'thread'), '-'), '-'), null);
     } finally {
