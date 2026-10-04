@@ -294,26 +294,6 @@ export function readFileByteRange(filePath: string, startOffset: number, endOffs
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  stdout tail state — offset bookkeeping for the append-only stream-json log
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * @description Tail bookkeeping for ONE session's `stdout.jsonl` (the pattern of
- * `claudeSubagentTail`, adapted to a single file feeding the stream-json line
- * reader). Byte-exact so the offset persisted across bot restarts always lands
- * on a LINE BOUNDARY — the restarted tail resumes on clean JSON, never a torn
- * line:
- *
- *   consumedBytes        — file bytes read + fed to the utf8 decoder
- *   decoderRetainedBytes — bytes the decoder holds back (a multi-byte char split
- *                          at a read boundary; stdout is block-buffered, so
- *                          splits mid-char DO happen with non-ASCII deltas)
- *
- * The line-boundary offset additionally subtracts the line reader's pending
- * partial line ({@link getStdoutLineBoundaryOffset}) — those bytes were consumed
- * but not yet processed, so a restart re-reads exactly them and nothing twice.
- */
 /** Where an adopting bot resumes the stdout tail, and the background-task list
  *  in force at that point (see {@link resolveAdoptedTail}). */
 export interface AdoptedTailStart {
@@ -345,6 +325,26 @@ export function resolveAdoptedTail(
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  stdout tail state — offset bookkeeping for the append-only stream-json log
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @description Tail bookkeeping for ONE session's `stdout.jsonl` (the pattern of
+ * `claudeSubagentTail`, adapted to a single file feeding the stream-json line
+ * reader). Byte-exact so the offset persisted across bot restarts always lands
+ * on a LINE BOUNDARY — the restarted tail resumes on clean JSON, never a torn
+ * line:
+ *
+ *   consumedBytes        — file bytes read + fed to the utf8 decoder
+ *   decoderRetainedBytes — bytes the decoder holds back (a multi-byte char split
+ *                          at a read boundary; stdout is block-buffered, so
+ *                          splits mid-char DO happen with non-ASCII deltas)
+ *
+ * The line-boundary offset additionally subtracts the line reader's pending
+ * partial line ({@link getStdoutLineBoundaryOffset}) — those bytes were consumed
+ * but not yet processed, so a restart re-reads exactly them and nothing twice.
+ */
 export interface StdoutTailState {
   consumedBytes: number;
   decoderRetainedBytes: number;
