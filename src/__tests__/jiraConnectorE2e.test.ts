@@ -40,10 +40,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { FakeJira, fakeJiraSearchRequest, type FakeJiraIssue } from './jiraE2e/fakeJira';
 import {
+  assertMcpListeningOn,
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
   fakeClaudePath,
+  getFreeFixedPort,
   getFreePort,
   getInstanceEnvNames,
   getProcessEnvNames,
@@ -110,6 +112,8 @@ let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
 let charness: IsolatedCharness | null = null;
 let defaultTmuxSessionsBefore: string[] = [];
+/** The bot MCP's port, the same on every start: a re-adopted agent keeps the address of its launch (see {@link assertMcpListeningOn}). */
+let botMcpPort = 0;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -159,10 +163,15 @@ function waitFor(description: string, timeoutMs: number, check: () => boolean): 
   return getCharness().waitFor(description, timeoutMs, check);
 }
 
-/** Start charness the way an isolated instance is started: `run-isolated.sh` with only its env file. */
+/**
+ * Start charness the way an isolated instance is started: `run-isolated.sh` with only its env file.
+ * Ready = the poll started, which the boot does only after the bot MCP is up on its fixed port.
+ */
 async function startCharness(): Promise<void> {
   charness ??= new IsolatedCharness(getLayout());
+  const outputStart = charness.output.length;
   await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(`[jira] polling PROJ every ${pollIntervalSeconds} s`));
+  assertMcpListeningOn(charness.output.slice(outputStart), botMcpPort);
 }
 
 function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBaseUrl: string): void {
@@ -214,7 +223,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
 
     fakeJira = new FakeJira({ aiAccount, credentials: aiCredentials, statuses: [toDo, inProgress] });
     const jiraBaseUrl = await fakeJira.start();
-    writeInstanceFiles({ openCode: await getFreePort(), botMcp: await getFreePort() }, jiraBaseUrl);
+    botMcpPort = await getFreeFixedPort();
+    writeInstanceFiles({ openCode: await getFreePort(), botMcp: botMcpPort }, jiraBaseUrl);
   });
 
   after(async () => {

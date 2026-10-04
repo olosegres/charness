@@ -11,6 +11,7 @@
  * file and chooses the readiness line.
  */
 
+import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { randomBytes, randomInt } from 'crypto';
 import * as fs from 'fs';
@@ -65,6 +66,21 @@ function checkIsPortFree(port: number): Promise<boolean> {
     server.once('error', () => resolve(false));
     server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
   });
+}
+
+/**
+ * @description Assert the boot's output names the bot MCP bound to `port`. A flow
+ * FIXES that port across its restarts because a re-adopted agent keeps the MCP
+ * address of its launch; a boot that finds the port still taken after its retries
+ * (another process grabbed it while the instance was down) falls back to an
+ * ephemeral port, and the agent's answers go to a dead one. Asserted after every
+ * start, that case names itself instead of timing out on the agent's answer.
+ */
+export function assertMcpListeningOn(runOutput: string, port: number): void {
+  assert.ok(
+    runOutput.includes(`MCP server listening on 127.0.0.1:${port}`),
+    `the bot MCP bound its fixed port ${port}; a boot that found it taken fell back to another port, which a re-adopted agent cannot reach`,
+  );
 }
 
 /** A listener holding a port, see {@link holdPort}. */

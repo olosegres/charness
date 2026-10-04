@@ -46,6 +46,7 @@ import { fakeClaudeLogFileNames, type FakeClaudeAnswer, type FakeClaudeTurn } fr
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
+  assertMcpListeningOn,
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
@@ -78,18 +79,6 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'proj';
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
-/**
- * The boot's line naming the port the bot MCP bound. The port is FIXED across the
- * restarts because a re-adopted agent keeps the MCP address of its launch; a
- * boot that finds the port still taken after its retries (another process grabbed
- * it while the instance was down) falls back to an ephemeral port, and the
- * agent's answers go to a dead one. Every start asserts the line, so that case
- * names itself instead of timing out on the agent's answer.
- */
-function getMcpListeningLine(port: number): string {
-  return `MCP server listening on 127.0.0.1:${port}`;
-}
-
 const bootTimeoutMs = 60 * 1000;
 /** A command's reply: a poll round trip and the paced send. */
 const replyTimeoutMs = 20 * 1000;
@@ -105,7 +94,7 @@ let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let defaultTmuxSessionsBefore: string[] = [];
-/** The bot MCP's port, the same on every start (see {@link getMcpListeningLine}). */
+/** The bot MCP's port, the same on every start (see {@link assertMcpListeningOn}). */
 let schedulerMcpPort = 0;
 
 function getLayout(): IsolatedInstanceLayout {
@@ -155,10 +144,7 @@ async function startCharness(): Promise<void> {
   const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
   const outputStart = charness.output.length;
   await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
-  assert.ok(
-    charness.output.slice(outputStart).includes(getMcpListeningLine(schedulerMcpPort)),
-    `the bot MCP bound its fixed port ${schedulerMcpPort}; a boot that found it taken fell back to another port, which a re-adopted agent cannot reach`,
-  );
+  assertMcpListeningOn(charness.output.slice(outputStart), schedulerMcpPort);
 }
 
 /** The `displayPrefs` record of the test topic as persisted — what a restart reads. */
