@@ -1,6 +1,7 @@
 import type { SessionKey } from '../../sessionKey';
 import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink';
-import type { RequestAlertReason, RequestOrigin } from '../../requests/types';
+import type { RequestAlertReason } from '../../requests/types';
+import { emptyRequester, getRequestRequester } from '../../requests/requestGroup';
 import { convertMarkdownToAdf, createCommentBodies, getAdfText, type AdfDocument } from './adf';
 import type { JiraAccount, JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
@@ -159,7 +160,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
   /** Hand the issue back to the requester while it is still the AI's; a warning when that could not happen. */
   async function handBack(issueKey: string, requesterAccountId: string): Promise<string | null> {
-    if (requesterAccountId === '') return 'no requester is known, so the issue stays assigned to the AI account';
+    if (requesterAccountId === emptyRequester) return 'no requester is known, so the issue stays assigned to the AI account';
     try {
       const issue = await client.getIssue(issueKey, ['assignee']);
       // Someone took it meanwhile: they keep it.
@@ -169,10 +170,6 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     } catch (error) {
       return `the issue could not be handed back to the requester (${error instanceof Error ? error.message : String(error)}); it stays assigned to the AI account`;
     }
-  }
-
-  function getRequesterAccountId(origin: RequestOrigin): string {
-    return origin.attributes.requesterAccountId ?? '';
   }
 
   /**
@@ -220,7 +217,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
       if (delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
-        const handBackWarning = await handBack(issueKey, getRequesterAccountId(delivery.origin));
+        const handBackWarning = await handBack(issueKey, getRequestRequester(delivery.origin));
         if (handBackWarning) warnings.push(handBackWarning);
       }
       return warnings.length > 0 ? { ok: true, warning: warnings.join('; ') } : { ok: true };
@@ -230,7 +227,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      const handBackWarning = await handBack(issueKey, getRequesterAccountId(alert.origin));
+      const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
       if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
       // A comment needs no release: nothing is pinned.
       return { ok: true };

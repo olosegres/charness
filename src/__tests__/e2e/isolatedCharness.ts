@@ -20,6 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { fakeClaudePlatformEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
+import type { ClosedRequestRecord } from '../../requests/types';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 export const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
@@ -149,6 +150,11 @@ export function readJsonLines<TRecord>(filePath: string): TRecord[] {
   if (!fs.existsSync(filePath)) return [];
   const completeLines = fs.readFileSync(filePath, 'utf8').split('\n').slice(0, -1);
   return completeLines.filter(Boolean).map((line) => JSON.parse(line));
+}
+
+/** @description The instance's request history (`DATA_DIR/requests.jsonl`): every closed request, in closing order. */
+export function readClosedRequests(layout: IsolatedInstanceLayout): ClosedRequestRecord[] {
+  return readJsonLines<ClosedRequestRecord>(path.join(layout.dataDir, 'requests.jsonl'));
 }
 
 /** The variable NAMES a running process was started with (Linux `/proc`); `null` where `/proc` is not available. */

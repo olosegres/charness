@@ -19,6 +19,7 @@ import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraCh
 import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
 import type { RequestOrigin } from '../requests/types';
+import { buildSupersededRequestsLine } from '../requests/requestHeader';
 
 const aiAccountId = 'ai-account';
 const requester: JiraAccount = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
@@ -123,8 +124,10 @@ describe('JiraInbound', () => {
         requestCount += 1;
         recorded.origins.push(origin);
         recorded.calls.push(`create ${keyToString(key)}`);
-        recorded.storedPrompts.push(createPrompt(`req_${requestCount}`));
-        return { id: `req_${requestCount}` };
+        // The second request of a conversation replaces the first, as the ledger does for one requester (R34).
+        const supersededRequestIds = requestCount === 1 ? [] : [`req_${requestCount - 1}`];
+        recorded.storedPrompts.push(createPrompt(`req_${requestCount}`, supersededRequestIds));
+        return { id: `req_${requestCount}`, ...(supersededRequestIds.length > 0 ? { supersededRequestIds } : {}) };
       },
       postRequest: async (key, requestId, prompt) => {
         recorded.calls.push(`post ${keyToString(key)} ${requestId} (seen=${triggerLog.checkIsSeen(key.thread, '100')})`);
@@ -159,7 +162,7 @@ describe('JiraInbound', () => {
       'post jira:PROJ:PROJ-12 req_1 (seen=false)',
     ]);
     assert.equal(triggerLog.checkIsSeen('PROJ-12', '100'), true, 'recorded after the post');
-    assert.deepEqual(recorded.origins, [{ kind: 'trackerEvent', attributes: { issueKey: 'PROJ-12', triggerId: '100', requesterAccountId: 'requester-account' } }]);
+    assert.deepEqual(recorded.origins, [{ kind: 'trackerEvent', attributes: { issueKey: 'PROJ-12', triggerId: '100', requester: 'requester-account' } }]);
     assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-12 assigned to you by Requester\]/);
     assert.match(recorded.prompts[0], /Link: https:\/\/example\.atlassian\.net\/browse\/PROJ-12/);
     assert.equal(recorded.searches[0].isChangelogExpanded, true);
@@ -198,7 +201,11 @@ describe('JiraInbound', () => {
     });
     searchPages = [{ issues: [reassigned] }];
     assert.deepEqual([...await createInbound().pollOnce()], [['PROJ-12', 'request']]);
+    await flushPosts();
     assert.equal(recorded.origins[1].attributes.triggerId, '110');
+    // R34: the request the ledger replaced is named in the posted prompt, exactly as in the stored one.
+    assert.ok(recorded.prompts[1].includes(buildSupersededRequestsLine(['req_1'])), 'the second prompt names the replaced request');
+    assert.equal(recorded.storedPrompts[1], recorded.prompts[1]);
   });
 
   it('a change made by the AI account itself is recorded and never a request', async () => {
@@ -214,14 +221,14 @@ describe('JiraInbound', () => {
     searchPages = [{ issues: [createIssue('PROJ-14', { histories: [] })] }];
     await createInbound().pollOnce();
     assert.equal(recorded.origins[0].attributes.triggerId, createdTriggerId);
-    assert.equal(recorded.origins[0].attributes.requesterAccountId, 'reporter-account');
+    assert.equal(recorded.origins[0].attributes.requester, 'reporter-account');
   });
 
   it('an automation\'s change hands the request to the reporter', async () => {
     const byApp = createIssue('PROJ-15', { histories: [createHistory('300', 0, [{ field: 'assignee', to: aiAccountId }], { accountId: 'rule', accountType: 'app' })] });
     searchPages = [{ issues: [byApp] }];
     await createInbound().pollOnce();
-    assert.equal(recorded.origins[0].attributes.requesterAccountId, 'reporter-account');
+    assert.equal(recorded.origins[0].attributes.requester, 'reporter-account');
   });
 
   it('an issue outside the allowlist, or no longer matching, is dropped untouched', async () => {
@@ -295,7 +302,7 @@ describe('JiraInbound', () => {
       searchPages = [{ issues: [truncated('PROJ-22', all)] }];
       await createInbound().pollOnce();
       assert.equal(recorded.origins[0].attributes.triggerId, '1220');
-      assert.equal(recorded.origins[0].attributes.requesterAccountId, 'earlier-person');
+      assert.equal(recorded.origins[0].attributes.requester, 'earlier-person');
       assert.equal(getChangelogCalls().length, 3, 'read back until the person was found');
     });
   });

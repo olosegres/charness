@@ -27,7 +27,7 @@ const key = makeJiraKey(issueKey);
 const nowMs = Date.parse('2026-10-03T12:00:00Z');
 /** Two paragraphs never fit one comment; one fits by both counts (R19). */
 const paragraphLength = Math.floor(jiraCommentMarkdownMaxChars * 2 / 3);
-const origin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requesterAccountId: 'requester-account' } };
+const origin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: 'requester-account' } };
 
 interface FakeJira {
   calls: string[];

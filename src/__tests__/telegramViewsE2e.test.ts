@@ -60,6 +60,7 @@ import {
   IsolatedCharness,
   isolatedLaunchEnvNames,
   listTmuxSessions,
+  readClosedRequests as readClosedRequestsOf,
   readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
@@ -174,7 +175,7 @@ async function waitForFakeAnswer(label: string): Promise<FakeClaudeAnswer> {
 
 /** The closed-request history the ledger keeps, oldest first. */
 function readClosedRequests(): ClosedRequestRecord[] {
-  return readJsonLines<ClosedRequestRecord>(path.join(getLayout().dataDir, 'requests.jsonl'));
+  return readClosedRequestsOf(getLayout());
 }
 
 function readPersistedState(): { openRequests?: Record<string, OpenRequestState>; schedules?: Record<string, ScheduleRecord> } & Record<string, unknown> {

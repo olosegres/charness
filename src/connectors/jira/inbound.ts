@@ -1,5 +1,6 @@
 import type { SessionKey } from '../../sessionKey';
-import type { RequestOrigin } from '../../requests/types';
+import type { OpenRequestState, RequestOrigin } from '../../requests/types';
+import { requestRequesterAttribute } from '../../requests/requestGroup';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraIssue } from './client';
 import { makeJiraKey } from './sessionKeyCodec';
 import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
@@ -75,8 +76,15 @@ export interface JiraInboundDeps {
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
   bindConversation: (key: SessionKey, folder: string) => Promise<void>;
-  /** Open the request; `createPrompt` builds its prompt from its id, which the request keeps for a re-post (R21). */
-  createRequest: (key: SessionKey, origin: RequestOrigin, createPrompt: (requestId: string) => string) => Promise<{ id: string }>;
+  /**
+   * Open the request; `createPrompt` builds its prompt — kept by the request for a re-post (R21) — from
+   * its id and the ids of the same requester's open requests it replaced, which the header names (R34).
+   */
+  createRequest: (
+    key: SessionKey,
+    origin: RequestOrigin,
+    createPrompt: (requestId: string, supersededRequestIds: readonly string[]) => string,
+  ) => Promise<Pick<OpenRequestState, 'id' | 'supersededRequestIds'>>;
   /** Post the request's prompt to the issue's session (and start watching its turn). */
   postRequest: (key: SessionKey, requestId: string, prompt: string) => Promise<void>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
@@ -220,18 +228,21 @@ export class JiraInbound {
     const details = await deps.client.getIssue(issue.key, jiraPromptIssueFields);
     const key = makeJiraKey(issue.key);
     await deps.bindConversation(key, project.folder);
-    const createPrompt = (requestId: string): string => buildJiraRequestPrompt({
+    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
       requestId,
       issue: details,
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,
+      supersededRequestIds,
     });
+    // R34: the requester is part of the request's group key — a second person's trigger on the same
+    // issue opens a request of its own instead of superseding the first (`requests/requestGroup.ts`).
     const request = await deps.createRequest(key, {
       kind: 'trackerEvent',
-      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, requesterAccountId: requester?.accountId ?? '' },
+      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? '' },
     }, createPrompt);
-    const prompt = createPrompt(request.id);
+    const prompt = createPrompt(request.id, request.supersededRequestIds ?? []);
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of
     // the poll must not wait for it; until the post settles, the issue is skipped.
     this.postingIssueKeys.add(issue.key);

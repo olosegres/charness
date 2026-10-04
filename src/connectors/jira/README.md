@@ -17,7 +17,12 @@ The `D*` / `R*` / `J*` ids cited in code comments are decisions of the connector
    already seen? (`triggerLog.ts`) → self-authored? → run budget (over it the issue is `parked` with a notice
    and handed back) → fetch the issue → bind the conversation to the project's folder → open a request
    (origin `trackerEvent`) → post, NOT awaited (a busy session may take minutes) → RECORD the trigger once the
-   post has settled, also when it failed (the open request then belongs to the wake-up engine).
+   post has settled, also when it failed (the open request then belongs to the wake-up engine). The origin names
+   the requester under the core's `requester` attribute (`requests/requestGroup.ts`), so a request supersedes an
+   earlier open one only for the same issue AND the same person: two people handing one issue over in turn hold
+   two open requests and each gets their own comment; the first closing answer hands the issue back to its own
+   sender, the second finds it no longer the AI's and leaves the assignee alone. The newer request's prompt
+   header names the request it replaced.
 3. A restart before the post settled leaves the trigger unrecorded, so the next poll opens a fresh request
    (superseding the old one) rather than leaving a request the agent never saw. Only a crash in the instant
    between a finished post and its record posts a trigger twice. An issue with a post in flight is skipped.

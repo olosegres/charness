@@ -71,6 +71,8 @@ export interface JiraRequestPromptInput {
   issueUrl: string;
   trigger: JiraIssueTrigger;
   requester: JiraAccount | null;
+  /** The same requester's earlier requests of the issue this one replaced (R34); the header names them. */
+  supersededRequestIds?: readonly string[];
 }
 
 export function buildJiraRequestPrompt(input: JiraRequestPromptInput): string {
@@ -80,6 +82,7 @@ export function buildJiraRequestPrompt(input: JiraRequestPromptInput): string {
     requestId: input.requestId,
     originDescription: getJiraOriginDescription(issue.key, trigger, statusName),
     isPlainTextHidden: true,
+    supersededRequestIds: input.supersededRequestIds,
   });
   const lines = [
     issueTextNote,

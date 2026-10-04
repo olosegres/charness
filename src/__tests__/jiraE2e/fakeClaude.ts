@@ -52,15 +52,20 @@ import {
  *  - `silent`      — ends EVERY turn without answering (the wake-up rules give up and alert);
  *  - `hang-once`   — starts working on its first turn and never ends it (the
  *    test kills the process), answers in the next turn;
- *  - `progress`    — sends a `progress` note and ends the turn.
+ *  - `progress`    — sends a `progress` note and ends the turn;
+ *  - `finish-together` — the first request of an issue gets a `progress` note
+ *    (it stays open); the turn of a LATER request of the same issue answers
+ *    `final` for every request of the issue still owed one, oldest first,
+ *    itself last — except a request its own header names as replaced, which
+ *    the newer one covers (request/answer core S11, Jira plan R34).
  *
  * Paths come from the environment its launcher script sets:
  * `FAKE_CLAUDE_LOG_DIR` (launches, violations, answers, turns) and
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together'];
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -77,6 +82,15 @@ interface RequestTurnState {
   mode: FakeClaudeMode;
   issueKey: string;
   turnCount: number;
+  /** Epoch ms of the request's first turn: the order `finish-together` answers in. */
+  firstTurnAt: number;
+  /** Set once a closing answer was sent for the request (`finish-together`). */
+  isAnswered?: boolean;
+}
+
+/** A request's state with the request id its file is named after. */
+interface KnownRequest extends RequestTurnState {
+  requestId: string;
 }
 
 interface McpServerConfig {
@@ -141,6 +155,22 @@ function getSessionViolation(argv: readonly string[]): string | null {
 function readRequestState(requestId: string): RequestTurnState | null {
   const statePath = getStatePath(requestId);
   return fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : null;
+}
+
+function writeRequestState(requestId: string, state: RequestTurnState): void {
+  fs.writeFileSync(getStatePath(requestId), JSON.stringify(state));
+}
+
+/** Every request of `issueKey` this fake has seen, oldest first. */
+function listKnownRequests(issueKey: string): KnownRequest[] {
+  return fs.readdirSync(getStateDir())
+    .filter((fileName) => requestIdRe.test(fileName) && fileName.endsWith('.json'))
+    .map((fileName): KnownRequest => {
+      const state: RequestTurnState = JSON.parse(fs.readFileSync(path.join(getStateDir(), fileName), 'utf8'));
+      return { requestId: fileName.slice(0, -'.json'.length), ...state };
+    })
+    .filter((request) => request.issueKey === issueKey)
+    .sort((a, b) => a.firstTurnAt - b.firstTurnAt);
 }
 
 function getMode(text: string): FakeClaudeMode {
@@ -212,9 +242,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0 };
+  const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
-  fs.writeFileSync(getStatePath(requestId), JSON.stringify(state));
+  writeRequestState(requestId, state);
   appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });
 
   emitTurnActivity(sessionId, state.issueKey);
@@ -226,12 +256,30 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'hang-once' && isFirstTurn) {
     await new Promise<never>(() => {});
   }
-  const kind = state.mode === 'progress' ? 'progress' : 'final';
-  const body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${state.turnCount}).`;
   const server = getBotMcpServer(argv);
-  const outcome = server ? await callAnswerRequest(server, { requestId, kind, body }) : 'error: no bot MCP server in --mcp-config';
-  appendJsonLine(fakeClaudeLogFileNames.answers, { requestId, issueKey: state.issueKey, kind, outcome });
-  endTurn(sessionId, body);
+  const answer = async (answeredRequestId: string, kind: string, turnCount: number): Promise<string> => {
+    const body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`;
+    const outcome = server ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body }) : 'error: no bot MCP server in --mcp-config';
+    appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
+    return body;
+  };
+  if (state.mode === 'finish-together') {
+    const owedRequests = listKnownRequests(state.issueKey).filter((request) => request.requestId !== requestId && request.isAnswered !== true);
+    if (owedRequests.length === 0) {
+      endTurn(sessionId, await answer(requestId, 'progress', state.turnCount));
+      return;
+    }
+    for (const { requestId: owedRequestId, ...owedState } of owedRequests) {
+      // A replaced request is covered by this one: a real agent answers only the request in front of it.
+      if (!supersededRequestIds.includes(owedRequestId)) await answer(owedRequestId, 'final', owedState.turnCount);
+      writeRequestState(owedRequestId, { ...owedState, isAnswered: true });
+    }
+    writeRequestState(requestId, { ...state, isAnswered: true });
+    endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
+    return;
+  }
+  const kind = state.mode === 'progress' ? 'progress' : 'final';
+  endTurn(sessionId, await answer(requestId, kind, state.turnCount));
 }
 
 async function main(): Promise<void> {

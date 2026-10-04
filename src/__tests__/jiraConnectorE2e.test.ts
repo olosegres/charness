@@ -17,6 +17,10 @@
  *   → the agent process killed mid-turn: resumed in its own session, answered
  *   → a progress note: commented, the issue stays with the AI
  *   → the self-assigned and the foreign issue: no request, nothing posted
+ *   → two people hand one issue over in turn: two open requests, two answers,
+ *     the issue goes back to the person whose answer closed first (R34)
+ *   → one person hands an issue over twice: the newer request replaces the
+ *     first, one answer, the issue goes back once (R34)
  *   → charness restarted: no request is opened a second time
  *   → every session launch carried the Jira flags (R11); no Telegram call (R6);
  *     every tmux call named the private server, nothing of the instance on the
@@ -54,6 +58,7 @@ import {
   IsolatedCharness,
   isolatedLaunchEnvNames,
   listTmuxSessions,
+  readClosedRequests as readClosedRequestsOf,
   readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
@@ -72,6 +77,8 @@ import {
   type FakeClaudeTurn,
 } from './jiraE2e/fakeClaudeContract';
 import { getAdfText } from '../connectors/jira/adf';
+import { requestRequesterAttribute } from '../requests/requestGroup';
+import type { ClosedRequestRecord } from '../requests/types';
 import { getClaudeMemoryAbove } from '../connectors/jira/config';
 import { notTelegramChatPhrase } from '../connectors/telegram/foreignKeyFallbacks';
 import { foreignKeyAccessorErrorPrefix } from '../connectors/telegram/sessionKeyCodec';
@@ -80,6 +87,8 @@ import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../connecto
 const aiAccount = { accountId: 'ai-account', accountType: 'atlassian', displayName: 'AI' };
 const aiCredentials = { email: 'ai@example.com', apiToken: 'fake-token' };
 const requester = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
+/** A second person of the project, who hands an issue over while the requester's request is still open (R34). */
+const colleague = { accountId: 'colleague-account', accountType: 'atlassian', displayName: 'Colleague' };
 const inProgress = { id: '10001', name: 'In Progress' };
 const toDo = { id: '10000', name: 'To Do' };
 const projectFolder = 'proj';
@@ -103,10 +112,11 @@ const restartPollWaitMs = 3 * pollIntervalSeconds * 1000;
 const flowMarginMs = 60 * 1000;
 /**
  * Every wait the flow can spend, added up — two boots, the answer waits of five
- * steps, the resume, the restart's polls, two stops (the restart's and
- * `after`'s) — so a slow run fails at the step that is late, never at the suite.
+ * steps plus the two of each R34 step, the resume, the restart's polls, two
+ * stops (the restart's and `after`'s) — so a slow run fails at the step that is
+ * late, never at the suite.
  */
-const flowTimeoutMs = 2 * bootTimeoutMs + 5 * answerTimeoutMs + resumeTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 2 * bootTimeoutMs + 9 * answerTimeoutMs + resumeTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -157,6 +167,25 @@ function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
 
 function getCommentTexts(issue: FakeJiraIssue): string[] {
   return issue.comments.map((comment) => getAdfText(comment.body));
+}
+
+function readClosedRequests(): ClosedRequestRecord[] {
+  return readClosedRequestsOf(getLayout());
+}
+
+function getClosedRequest(requestId: string): ClosedRequestRecord | undefined {
+  return readClosedRequests().find((record) => record.id === requestId);
+}
+
+/** The hand-backs Jira received for the issue: every assignee change the connector made. */
+function countAssigneeChanges(issueKey: string): number {
+  return fakeJira.requestLog.filter((request) => request === `PUT /rest/api/3/issue/${issueKey}/assignee`).length;
+}
+
+/** Hand the issue to the AI as `person`: they take it first, as one does in Jira before assigning it on. */
+function handIssueToAi(issueKey: string, person: typeof requester): void {
+  fakeJira.assignIssue(issueKey, person, person);
+  fakeJira.assignIssue(issueKey, aiAccount, person);
 }
 
 function waitFor(description: string, timeoutMs: number, check: () => boolean): Promise<void> {
@@ -257,6 +286,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     createIssue('PROJ-3', 'hang-once');
     createIssue('PROJ-4', 'progress');
     createIssue('PROJ-5', 'answer');
+    createIssue('PROJ-6', 'finish-together');
+    createIssue('PROJ-7', 'finish-together');
     createIssue('OTHER-1', 'answer');
     await startCharness();
     const pid = getCharness().pid;
@@ -341,10 +372,85 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     }
   });
 
+  it('two people hand one issue over in turn: two requests, two answers, handed back to the first answered (R34)', async () => {
+    const issue = fakeJira.getIssue('PROJ-6');
+    fakeJira.assignIssue('PROJ-6', aiAccount, requester);
+    await waitFor('the requester\'s request of PROJ-6 answered with a progress note', answerTimeoutMs, () => getAnswers('PROJ-6').length > 0);
+    const [requesterTurn] = getTurns('PROJ-6');
+    assert.ok(requesterTurn.requestId, 'the requester\'s request reached the agent');
+    assert.deepEqual(getCommentTexts(issue), ['Fake progress answer for PROJ-6 (finish-together, turn 1).']);
+    assert.equal(issue.assignee?.accountId, aiAccount.accountId, 'still the AI\'s: the request is open');
+
+    // While the first request is open, a colleague takes the issue and hands it to the AI again.
+    handIssueToAi('PROJ-6', colleague);
+    // An answer is logged once its tool result came back, i.e. after the comment, the hand-back and the close.
+    await waitFor('both requests of PROJ-6 answered', answerTimeoutMs, () => getAnswers('PROJ-6').length >= 3);
+    const turns = getTurns('PROJ-6');
+    assert.deepEqual(turns.map((turn) => turn.isRequestPrompt), [true, true], 'each hand-over was a request of its own');
+    const colleagueTurn = turns[1];
+    assert.notEqual(colleagueTurn.requestId, requesterTurn.requestId);
+    assert.deepEqual(colleagueTurn.supersededRequestIds, [], 'the colleague\'s request replaced nothing: the requester\'s is not theirs');
+
+    // Both closed by their own final answer — neither replaced the other — and each names its own requester.
+    const requesterRequest = getClosedRequest(requesterTurn.requestId ?? '');
+    const colleagueRequest = getClosedRequest(colleagueTurn.requestId ?? '');
+    assert.equal(requesterRequest?.closeReason, 'final');
+    assert.equal(colleagueRequest?.closeReason, 'final');
+    assert.equal(requesterRequest?.origin.attributes[requestRequesterAttribute], requester.accountId);
+    assert.equal(colleagueRequest?.origin.attributes[requestRequesterAttribute], colleague.accountId);
+
+    // Two answers, two comments; the first closing answer (the requester's, answered first) took the issue back
+    // to its sender, and the colleague's found the issue no longer the AI's and left the assignee alone.
+    assert.deepEqual(getCommentTexts(issue), [
+      'Fake progress answer for PROJ-6 (finish-together, turn 1).',
+      'Fake final answer for PROJ-6 (finish-together, turn 1).',
+      'Fake final answer for PROJ-6 (finish-together, turn 1).',
+    ]);
+    assert.deepEqual(getAnswers('PROJ-6').map((answer) => [answer.requestId, answer.kind]), [
+      [requesterTurn.requestId, 'progress'],
+      [requesterTurn.requestId, 'final'],
+      [colleagueTurn.requestId, 'final'],
+    ]);
+    assert.ok(getAnswers('PROJ-6').every((answer) => answer.outcome.startsWith('Delivered.')), 'every answer was delivered');
+    assert.equal(issue.assignee?.accountId, requester.accountId, 'handed back to the requester, whose answer closed first');
+    assert.equal(countAssigneeChanges('PROJ-6'), 1, 'the colleague\'s answer changed no assignee');
+  });
+
+  it('one person hands an issue over twice: the newer request replaces the first, one answer, handed back once (R34)', async () => {
+    const issue = fakeJira.getIssue('PROJ-7');
+    fakeJira.assignIssue('PROJ-7', aiAccount, requester);
+    await waitFor('the first request of PROJ-7 answered with a progress note', answerTimeoutMs, () => getAnswers('PROJ-7').length > 0);
+    const [firstTurn] = getTurns('PROJ-7');
+    assert.ok(firstTurn.requestId, 'the first request reached the agent');
+
+    handIssueToAi('PROJ-7', requester);
+    await waitFor('the second request of PROJ-7 answered', answerTimeoutMs, () => getAnswers('PROJ-7').length >= 2);
+    const turns = getTurns('PROJ-7');
+    assert.deepEqual(turns.map((turn) => turn.isRequestPrompt), [true, true]);
+    const secondTurn = turns[1];
+    assert.deepEqual(secondTurn.supersededRequestIds, [firstTurn.requestId], 'the second request\'s header names the first as replaced');
+    const firstRequest = getClosedRequest(firstTurn.requestId ?? '');
+    assert.equal(firstRequest?.closeReason, 'superseded');
+    assert.equal(firstRequest?.supersededBy, secondTurn.requestId, 'the history names the request that replaced it');
+    assert.equal(getClosedRequest(secondTurn.requestId ?? '')?.closeReason, 'final');
+
+    // One answer for the person: the agent answered the request in front of it, which covers the replaced one.
+    assert.deepEqual(getAnswers('PROJ-7').map((answer) => [answer.requestId, answer.kind]), [
+      [firstTurn.requestId, 'progress'],
+      [secondTurn.requestId, 'final'],
+    ]);
+    assert.deepEqual(getCommentTexts(issue), [
+      'Fake progress answer for PROJ-7 (finish-together, turn 1).',
+      'Fake final answer for PROJ-7 (finish-together, turn 1).',
+    ]);
+    assert.equal(issue.assignee?.accountId, requester.accountId);
+    assert.equal(countAssigneeChanges('PROJ-7'), 1);
+  });
+
   it('a restart opens no request a second time', async () => {
     const requestPromptCount = (): number => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.isRequestPrompt).length;
     const promptsBefore = requestPromptCount();
-    const commentsBefore = ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5'].map((key) => fakeJira.getIssue(key).comments.length);
+    const commentsBefore = ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length);
     await getCharness().stop();
 
     const searchesBefore = fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
@@ -362,7 +468,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4']) {
       assert.equal(new Set(getTurns(key).map((turn) => turn.requestId)).size, 1, `${key} was one request, from start to end`);
     }
-    assert.deepEqual(['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5'].map((key) => fakeJira.getIssue(key).comments.length), commentsBefore);
+    assert.deepEqual(['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length), commentsBefore);
     assert.equal(fakeJira.getIssue('PROJ-4').assignee?.accountId, aiAccount.accountId, 'PROJ-4 still matches — its trigger was remembered');
   });
 

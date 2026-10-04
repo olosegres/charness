@@ -221,7 +221,7 @@ describe('prepareJiraConnector', () => {
       requestId: 'req_1',
       kind: 'final',
       body: 'Done.',
-      origin: { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-1', triggerId: '100', requesterAccountId: 'requester-account' } },
+      origin: { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-1', triggerId: '100', requester: 'requester-account' } },
       isRequestOpen: true,
     });
     assert.deepEqual(result, { ok: true });

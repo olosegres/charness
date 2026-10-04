@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildJiraRequestPrompt, getJiraOriginDescription, jiraPromptCommentCount, jiraPromptDescriptionMaxChars } from '../connectors/jira/prompt';
+import { buildSupersededRequestsLine } from '../requests/requestHeader';
 import { buildJiraContextPreamble, jiraContextPreambleHeader } from '../connectors/jira/contextPreamble';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
@@ -57,6 +58,19 @@ describe('buildJiraRequestPrompt (D15)', () => {
     assert.match(prompt, /^\[Request req_abc · from: PROJ-12 assigned to you by Requester Person\]\n/);
     assert.match(prompt, /answer_request tool \(requestId "req_abc"\)/);
     assert.match(prompt, /The requester does not see your plain text output/);
+  });
+
+  it('names the requests this one replaced, as the header does (R34); none replaced, no such line', () => {
+    assert.ok(!prompt.includes('It replaces'), 'the prompt of a first request names no replaced request');
+    const replacing = buildJiraRequestPrompt({
+      requestId: 'req_abc',
+      issue: createIssue(),
+      issueUrl: 'https://example.atlassian.net/browse/PROJ-12',
+      trigger,
+      requester,
+      supersededRequestIds: ['req_old1', 'req_old2'],
+    });
+    assert.ok(replacing.includes(buildSupersededRequestsLine(['req_old1', 'req_old2'])));
   });
 
   it('carries key, summary, link, status, requester and the description as plain text, quoted', () => {
