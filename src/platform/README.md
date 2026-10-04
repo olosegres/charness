@@ -35,6 +35,36 @@ implements the other side. No platform library may be imported here (the archite
 - **The command router matches names EXACTLY, case included** (telegraf's own match is case-sensitive). The
   connector recognises its trigger syntax; the core owns dispatch.
 
+## Requests and answers (`../requests/`)
+
+A **request** is the core's unit of "someone is owed an answer": a message in an answers-only Telegram topic,
+a Jira hand-over, a scheduled run. A connector opens it with an **origin** (`kind` plus connector-owned string
+`attributes`) and a prompt; the agent answers through the `answer_request` tool and the platform's `AnswerSink`
+delivers it. Rules every connector relies on:
+
+- **Grouping (`requestGroup.ts`).** A new request supersedes an earlier OPEN one only within the same group:
+  the conversation (`SessionKey`) AND the **requester** — the origin attribute named by
+  `requestRequesterAttribute`. A connector that wants per-person requests puts the sender there (a Telegram
+  user id, a Jira account id); an origin without it reads as the empty requester, so every such request in a
+  conversation shares one group. The newer request's prompt header names the ids it replaced; one answer to it
+  covers them. Two requesters in one conversation hold two open requests, each woken and alerted on its own.
+- **Answer kinds.** `progress` keeps the request open; `question` and `final` close it. An answer to a request
+  that is already closed is still delivered (the agent may be late) but changes nothing — a Jira sink, for
+  one, never hands an issue back for it.
+- **Wake-ups.** A turn that ends with the request still open is reminded; a progress note defers the follow-up;
+  a request nobody has worked on for `REQUEST_BACKSTOP_MINUTES` is re-posted; when the rules give up the sink
+  gets `deliverAlert`, and a later answer or supersede `releaseAlert`.
+
+## Adding a connector
+
+1. A `SessionKey` codec (`sessionKey.ts` registry) for the platform's conversation id, with an exact inverse.
+2. `ConnectorInbound` → normalized events / requests; `ConnectorOutbound` + `AnswerSink`, registered by
+   `key.platform` at boot; `ConnectorCapabilities` so the shared degradation rule applies.
+3. Its name in `CONNECTORS` (`connectorSet.ts`), guards in `cli/connectorGuards.ts` if it needs isolation, and a
+   lazy `import()` so an instance that does not serve it never loads its packages.
+4. A process-level e2e against a fake of the platform (`__tests__/e2e/isolatedCharness.ts` boots the built CLI
+   as an isolated instance; `__tests__/jiraE2e/` is the reference).
+
 ## Boundary status
 
 `__tests__/platformBoundary.test.ts` fails when a module outside `connectors/telegram/` imports the Telegram

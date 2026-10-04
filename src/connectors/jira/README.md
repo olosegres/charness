@@ -6,6 +6,17 @@ conversations with an agent. One issue = one conversation, keyed `jira:<PROJECT>
 which the answer sink posts as comments. The streamed output never reaches the issue (`outbound.ts` drops it).
 The `D*` / `R*` / `J*` ids cited in code comments are decisions of the connector's plan, kept outside this public repo.
 
+## Setup contract (`config.ts`, `configFile.ts`)
+
+`DATA_DIR/jira.json`, strict keys: `site` (`<name>.atlassian.net`), `email`, `apiToken` (normally `${VAR}` from
+the instance's env file), `accountId` (the AI account — the token must belong to it, checked against `/myself`
+at boot), `projects` (key → `{ folder, triggerStatuses }`, the allowlist; status NAMES resolved to ids at boot),
+`pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
+since user settings do not apply), `baseUrl` (loopback only, for the fakes). The adapter is fixed to
+`claude-json-stream`. The instance's env file carries `CONNECTORS=jira`, `DATA_DIR`, `WORK_ROOT`,
+`TMUX_SOCKET_NAME` and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up backstop (tests).
+Operator-facing setup steps: the public `README.md` § "Jira connector".
+
 ## Request flow (`inbound.ts`)
 
 1. Poll: `buildJiraTriggerJql` = project allowlist AND `assignee = currentUser()` AND trigger status ids. Polls

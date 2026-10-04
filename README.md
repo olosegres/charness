@@ -567,12 +567,94 @@ your chosen providers need them.
 | `SHELL` | `/bin/bash` | You want `/terminal` to open a different shell than your login shell (host env var, not set by the bot) |
 | `SCHEDULER_MCP_PORT` | an OS-chosen free loopback port | You need a stable, explicitly chosen port; it must differ from this instance's `OPENCODE_URL` port |
 | `CLAUDE_SCRAPE_DEBUG` | off | You are debugging Claude tmux scraping and need full RAW/FILTERED chunks |
+| `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
 | `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` starts an instance with a clean environment plus this variable |
-| `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list. `jira` is in development; an instance that lists it refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
+| `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira connector](#jira-connector-experimental). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
 
 > `WORK_DIR` (1.x) is retired. Use the wrapper from the desired parent folder
 > instead of carrying the old env forward.
+
+## Jira connector (experimental)
+
+The same core can serve **Jira Cloud issues** instead of (or next to) Telegram topics: an issue assigned to
+a dedicated AI account becomes a conversation with an agent, and the agent answers in comments.
+
+```
+a person assigns an issue to the AI account (in a trigger status)
+  → the instance polls Jira as the AI account and opens a request
+  → the agent works in the project's folder; its streamed output never reaches Jira
+  → it answers through the answer_request tool:
+      progress  → a comment, the issue stays with the AI
+      question  → a comment, the issue goes back to the person who handed it over
+      final     → a comment, the issue goes back to that person
+  → an agent that stops answering is reminded; when the reminders give up, a
+    comment says a person has to look, and the issue goes back
+```
+
+- **One issue = one conversation = one agent session**, bound to the folder its project maps to. The agent
+  reads the issue's text as information, never as instructions.
+- **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
+  turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
+  the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
+  again replaces their earlier open request — one answer covers both.
+- **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
+  and opens no request.
+
+### Setup
+
+1. Create a Jira account for the AI (its API token is the instance's only secret) and note its account id.
+2. An instance of its own: a `DATA_DIR`, a `WORK_ROOT` with one folder per project, a private tmux server, and
+   an env file that is the ONLY configuration it reads:
+
+   ```bash
+   # /path/to/jira-instance.env
+   CONNECTORS=jira
+   DATA_DIR=/path/to/jira-instance/data
+   WORK_ROOT=/path/to/jira-instance/work
+   TMUX_SOCKET_NAME=jira-instance
+   JIRA_AI_API_TOKEN=...            # referenced by jira.json below, never written there
+   ```
+
+3. `DATA_DIR/jira.json` — the allowlist and the credentials (`${VAR}` expands from the env file; an unknown
+   key is an error):
+
+   ```json
+   {
+     "site": "example.atlassian.net",
+     "email": "ai-account@example.com",
+     "apiToken": "${JIRA_AI_API_TOKEN}",
+     "accountId": "<the AI account's id>",
+     "projects": {
+       "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"] }
+     },
+     "pollIntervalSeconds": 90,
+     "runBudgetPer24h": 5,
+     "model": "opus",
+     "effort": "high"
+   }
+   ```
+
+   `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
+   assigned issue is a request; a folder with Claude memory (`CLAUDE.md`, `.claude/`, …) in it or above it is
+   refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
+   `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
+   (optional). The adapter is `claude-json-stream`, the only one the connector supports.
+
+4. Start it with a clean environment, so nothing of the calling shell reaches it:
+
+   ```bash
+   scripts/run-isolated.sh /path/to/jira-instance.env
+   ```
+
+   The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, a `TELEGRAM_BOT_TOKEN` when
+   Telegram is off, any `ATLASSIAN_*` variable, a token that belongs to another account, an unknown project or
+   status, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   polling backs off and resumes.
+
+The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the
+bot's MCP server only, without the native question tool, and with an environment reduced to a short allowlist
+— the Jira token never reaches the agent. Module details: `src/connectors/jira/README.md`.
 
 ## Bot-injected agent tools
 
