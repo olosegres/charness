@@ -16,6 +16,7 @@ import { execFileSync, spawn } from 'child_process';
 import {
   checkIsProcessIdentityCurrent,
   ensureOpenCodeServer,
+  type ExternalProcessIdentity,
   onOpenCodeServerExit,
   openCodeExternalHostEnvName,
   openCodeExternalHostEnvValue,
@@ -29,6 +30,7 @@ import {
 const persistentChildScript = 'setInterval(() => {}, 1000)';
 const processExitPollMs = 25;
 const processExitTimeoutMs = 2_000;
+const fixtureOwnerPollMs = 100;
 const testExternalHostTimeoutMs = 2_000;
 const stallingExternalHostScript = `
 const fs = require('node:fs');
@@ -83,7 +85,19 @@ setTimeout(() => {
   });
 }, 200);
 `;
-const fakeServerScript = `#!/usr/bin/env node
+/**
+ * Fixture servers are hosted outside the test process tree on purpose (that is what the code under test
+ * does), so a test process that dies before its `finally` runs (killed run, timeout) strands them, and the
+ * variants that ignore SIGTERM then live forever. This guard makes a fixture process exit once its owner is gone.
+ */
+const createOwnerGuardScript = (ownerPid: number): string => `setInterval(() => {
+  try {
+    process.kill(${ownerPid}, 0);
+  } catch (error) {
+    if (error.code === 'ESRCH') process.exit(0);
+  }
+}, ${fixtureOwnerPollMs}).unref();`;
+const createFakeServerScript = (ownerPid: number): string => `#!/usr/bin/env node
 const fs = require('node:fs');
 const http = require('node:http');
 const { spawn: spawnChild } = require('node:child_process');
@@ -112,8 +126,11 @@ const checkShouldExitBeforeReady = () => process.env.FAKE_OPENCODE_EXIT_BEFORE_R
 const checkShouldExitAfterHealth = () => process.env.FAKE_OPENCODE_EXIT_AFTER_HEALTH === '1';
 fs.appendFileSync(process.env.FAKE_OPENCODE_SPAWN_LOG, process.pid + '\\n');
 fs.writeFileSync(process.env.FAKE_OPENCODE_PID_FILE, process.pid.toString());
+${createOwnerGuardScript(ownerPid)}
 if (process.env.FAKE_OPENCODE_DESCENDANT_LOG) {
-  const descendant = spawnChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+  const descendant = spawnChild(process.execPath, ['-e', ${JSON.stringify(
+    `${persistentChildScript};${createOwnerGuardScript(ownerPid)}`,
+  )}], {
     stdio: 'ignore',
   });
   fs.appendFileSync(process.env.FAKE_OPENCODE_DESCENDANT_LOG, descendant.pid + '\\n');
@@ -163,6 +180,7 @@ process.on('SIGUSR1', () => {
   });
 });
 `;
+const fakeServerScript = createFakeServerScript(process.pid);
 
 async function getUnusedPort(): Promise<number> {
   const server = createServer();
@@ -455,6 +473,50 @@ test(
       if (fs.existsSync(pidFilePath)) {
         stopTestProcess(Number.parseInt(fs.readFileSync(pidFilePath, 'utf8'), 10));
       }
+      fs.rmSync(testDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'a fixture server exits by itself once the test process that owns it is killed',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-orphan-'));
+    const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
+    const port = await getUnusedPort();
+    const owner = spawn(process.execPath, ['-e', persistentChildScript], { stdio: 'ignore' });
+    let server: ExternalProcessIdentity | undefined;
+
+    try {
+      assert.ok(owner.pid);
+      fs.writeFileSync(fakeBinaryPath, createFakeServerScript(owner.pid), { mode: 0o755 });
+      // The never-ready variant ignores SIGTERM, so only its own guard can end it.
+      server = await startExternallyParentedProcess(
+        fakeBinaryPath,
+        ['serve', '--hostname', '127.0.0.1', '--port', port.toString()],
+        {
+          ...process.env,
+          FAKE_OPENCODE_NEVER_READY: '1',
+          FAKE_OPENCODE_SPAWN_LOG: path.join(testDirectory, 'spawn.log'),
+          FAKE_OPENCODE_PID_FILE: path.join(testDirectory, 'server.pid'),
+        },
+      );
+      assert.equal(checkIsTestProcessAlive(server.pid), true);
+
+      const ownerExit = new Promise<void>((resolve) => owner.once('exit', () => resolve()));
+      owner.kill('SIGKILL');
+      await ownerExit;
+
+      await waitForTestProcessExit(server.pid);
+      assert.equal(
+        checkIsTestProcessAlive(server.pid),
+        false,
+        'a fixture server must not outlive the test process that owns it',
+      );
+    } finally {
+      if (server) stopTestProcess(server.pid);
+      owner.kill('SIGKILL');
       fs.rmSync(testDirectory, { recursive: true, force: true });
     }
   },
