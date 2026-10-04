@@ -218,6 +218,9 @@ export const ukDict: Record<string, string> = {
   'agent.login_url': '🔐 Щоб увійти в Claude, відкрийте це посилання, завершіть вхід і вставте код сюди:\n{url}',
   'agent.login_success': '✅ Вхід у Claude виконано.',
   'agent.login_failed': '⚠️ Не вдалося увійти в Claude. Запустіть /login, щоб повторити.',
+  'login.esc_hint': '/esc — скасувати',
+  'login.waiting_code': '⏳ Чекаю код входу — надішліть код із посилання для входу наступним повідомленням.',
+  'login.cancelled': '✖ Вхід скасовано. Повідомлення знову йдуть агенту.',
   'agent.workingIndicator': '{glyph} працюю…',
   'terminal.ready': '🖥 Термінал готовий у `{subdir}`{argsSuffix}\nКожне повідомлення виконується як команда. /c — Ctrl+C, /up /down — історія, /tab — автодоповнення, /quit — закрити.',
 

@@ -402,6 +402,15 @@ test('model.saved_for_next_start substitutes the {model} name', () => {
   assert.ok(!out.includes('{model}'), `placeholder not substituted: "${out}"`);
 });
 
+test('the pending-login way out exists in every locale: the /esc hint names the command, the waiting and cancelled notices are set', () => {
+  for (const code of ['login.esc_hint', 'login.waiting_code', 'login.cancelled']) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  for (const locale of localeCodes) {
+    assert.ok(getKeyInLang(locale, 'login.esc_hint')?.includes('/esc'), `login.esc_hint in ${locale} does not name /esc`);
+  }
+});
+
 test('file.too_big substitutes the {cap} size', () => {
   const out = t('file.too_big', { cap: 20 });
   assert.ok(out.includes('20'), `expected "20" in "${out}"`);

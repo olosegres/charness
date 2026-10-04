@@ -212,6 +212,9 @@ export const deDict: Record<string, string> = {
   'agent.login_url': '🔐 Um dich bei Claude anzumelden, öffne diesen Link, schließe die Anmeldung ab und füge den Code hier ein:\n{url}',
   'agent.login_success': '✅ Bei Claude angemeldet.',
   'agent.login_failed': '⚠️ Anmeldung bei Claude fehlgeschlagen. Führe /login aus, um es erneut zu versuchen.',
+  'login.esc_hint': '/esc zum Abbrechen',
+  'login.waiting_code': '⏳ Warte auf den Login-Code — füge den Code aus dem Anmeldelink als nächste Nachricht ein.',
+  'login.cancelled': '✖ Anmeldung abgebrochen. Nachrichten gehen wieder an den Agenten.',
   'agent.workingIndicator': '{glyph} arbeite…',
   'terminal.ready': '🖥 Terminal bereit in `{subdir}`{argsSuffix}\nJede Nachricht wird als Befehl ausgeführt. /c — Ctrl+C, /up /down — Verlauf, /tab — Vervollständigung, /quit — schließen.',
 

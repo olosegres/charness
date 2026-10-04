@@ -212,6 +212,9 @@ export const frDict: Record<string, string> = {
   'agent.login_url': '🔐 Pour te connecter à Claude, ouvre ce lien, termine la connexion, puis colle le code ici :\n{url}',
   'agent.login_success': '✅ Connecté à Claude.',
   'agent.login_failed': '⚠️ Échec de la connexion à Claude. Lance /login pour réessayer.',
+  'login.esc_hint': '/esc pour annuler',
+  'login.waiting_code': '⏳ En attente du code de connexion — colle le code du lien de connexion dans ton prochain message.',
+  'login.cancelled': '✖ Connexion annulée. Les messages repartent vers l\'agent.',
   'agent.workingIndicator': '{glyph} travail…',
   'terminal.ready': '🖥 Terminal prêt dans `{subdir}`{argsSuffix}\nChaque message est exécuté comme une commande. /c — Ctrl+C, /up /down — historique, /tab — complétion, /quit — fermer.',
 

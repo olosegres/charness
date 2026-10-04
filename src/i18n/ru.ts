@@ -216,6 +216,9 @@ export const ruDict: Record<string, string> = {
   'agent.login_url': '🔐 Чтобы войти в Claude, откройте эту ссылку, завершите вход и вставьте код сюда:\n{url}',
   'agent.login_success': '✅ Вход в Claude выполнен.',
   'agent.login_failed': '⚠️ Не удалось войти в Claude. Наберите /login, чтобы повторить.',
+  'login.esc_hint': '/esc — отмена',
+  'login.waiting_code': '⏳ Жду код входа — пришлите код из ссылки для входа следующим сообщением.',
+  'login.cancelled': '✖ Вход отменён. Сообщения снова идут агенту.',
   'agent.workingIndicator': '{glyph} работаю…',
   'terminal.ready': '🖥 Терминал готов в `{subdir}`{argsSuffix}\nЛюбое сообщение выполнится как команда. /c — Ctrl+C, /up /down — история, /tab — автодополнение, /quit — закрыть.',
 

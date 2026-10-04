@@ -216,6 +216,9 @@ export const enDict: Record<string, string> = {
   'agent.login_url': '🔐 To sign in to Claude, open this link, complete sign-in, then paste the code back here:\n{url}',
   'agent.login_success': '✅ Signed in to Claude.',
   'agent.login_failed': '⚠️ Claude sign-in failed. Run /login to try again.',
+  'login.esc_hint': '/esc to cancel',
+  'login.waiting_code': '⏳ Waiting for the login code — paste the code from the sign-in link as your next message.',
+  'login.cancelled': '✖ Login cancelled. Messages go to the agent again.',
   'agent.workingIndicator': '{glyph} working…',
   'terminal.ready': '🖥 Terminal ready in `{subdir}`{argsSuffix}\nEvery message runs as a command. /c — Ctrl+C, /up /down — history, /tab — completion, /quit — close.',
 

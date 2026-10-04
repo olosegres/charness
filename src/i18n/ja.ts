@@ -212,6 +212,9 @@ export const jaDict: Record<string, string> = {
   'agent.login_url': '🔐 Claude にサインインするには、このリンクを開いてサインインを完了し、コードをここに貼り付けてください：\n{url}',
   'agent.login_success': '✅ Claude にサインインしました。',
   'agent.login_failed': '⚠️ Claude のサインインに失敗しました。/login を実行して再試行してください。',
+  'login.esc_hint': '/esc でキャンセル',
+  'login.waiting_code': '⏳ ログインコードを待っています。サインインリンクで取得したコードを次のメッセージとして貼り付けてください。',
+  'login.cancelled': '✖ ログインをキャンセルしました。メッセージは再びエージェントに届きます。',
   'agent.workingIndicator': '{glyph} 作業中…',
   'terminal.ready': '🖥 `{subdir}`{argsSuffix} でターミナル準備完了\n各メッセージはコマンドとして実行されます。/c — Ctrl+C、/up /down — 履歴、/tab — 補完、/quit — 閉じる。',
 

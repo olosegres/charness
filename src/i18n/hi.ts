@@ -212,6 +212,9 @@ export const hiDict: Record<string, string> = {
   'agent.login_url': '🔐 Claude में साइन इन करने के लिए यह लिंक खोलें, साइन-इन पूरा करें, फिर कोड यहाँ पेस्ट करें:\n{url}',
   'agent.login_success': '✅ Claude में साइन इन हो गए।',
   'agent.login_failed': '⚠️ Claude साइन-इन विफल। पुनः प्रयास के लिए /login चलाएँ।',
+  'login.esc_hint': '/esc रद्द करने के लिए',
+  'login.waiting_code': '⏳ लॉगिन कोड का इंतज़ार है — साइन-इन लिंक से कोड अगले संदेश में पेस्ट करें।',
+  'login.cancelled': '✖ लॉगिन रद्द किया गया। संदेश फिर से एजेंट को जाएँगे।',
   'agent.workingIndicator': '{glyph} काम कर रहा है…',
   'terminal.ready': '🖥 `{subdir}`{argsSuffix} में टर्मिनल तैयार\nहर संदेश एक कमांड के रूप में चलता है। /c — Ctrl+C, /up /down — इतिहास, /tab — पूर्णता, /quit — बंद।',
 

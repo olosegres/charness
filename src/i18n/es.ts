@@ -212,6 +212,9 @@ export const esDict: Record<string, string> = {
   'agent.login_url': '🔐 Para iniciar sesión en Claude, abre este enlace, completa el inicio de sesión y pega el código aquí:\n{url}',
   'agent.login_success': '✅ Sesión iniciada en Claude.',
   'agent.login_failed': '⚠️ Error al iniciar sesión en Claude. Ejecuta /login para intentarlo de nuevo.',
+  'login.esc_hint': '/esc para cancelar',
+  'login.waiting_code': '⏳ Esperando el código de inicio de sesión: pega el código del enlace como tu próximo mensaje.',
+  'login.cancelled': '✖ Inicio de sesión cancelado. Los mensajes vuelven a ir al agente.',
   'agent.workingIndicator': '{glyph} trabajando…',
   'terminal.ready': '🖥 Terminal listo en `{subdir}`{argsSuffix}\nCada mensaje se ejecuta como un comando. /c — Ctrl+C, /up /down — historial, /tab — autocompletar, /quit — cerrar.',
 

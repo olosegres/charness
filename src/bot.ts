@@ -1956,6 +1956,7 @@ function clearLimitResumeNotice(key: SessionKey): void {
 
 // Out-of-band sign-in drivers (`/login`, `/connect` OAuth): `agentLogin/README.md`.
 const {
+  cancelPendingLogin,
   checkIsAuthLoginAwaitingCode,
   cancelClaudeAuthLogin,
   startClaudeAuthLogin,
@@ -6443,6 +6444,12 @@ command('tab', async (_ctx, key) => {
 });
 
 command(['esc', 'escape'], async (_ctx, key) => {
+  // A pending sign-in (`/login`, `/connect` OAuth) takes priority: the first /esc
+  // only cancels it, so the topic stops waiting for a pasted code.
+  if (cancelPendingLogin(key)) {
+    await replyToThread(key, t('login.cancelled'));
+    return;
+  }
   const adapter = getThreadAdapter(key);
   if (adapter.sendEscape) {
     // The operator interrupted the turn: its open request closes silently.
@@ -6806,11 +6813,12 @@ bot.on(message('text'), async (ctx) => {
 
   // json-stream `/login` has reached the "paste code" stage → the next plain text
   // is the OAuth code. Mirror the /connect secret handling and the tmux login-paste
-  // route: type it into the auth process, delete the message, ack. Gating on the
-  // relayed-URL stage (not merely "a flow exists") keeps a message typed in the
-  // pre-URL boot window from being swallowed/deleted as a code. A slash command
-  // falls through (so /quit, /new, etc. still run and their teardown cancels the
-  // pending login).
+  // route: type it into the auth process, delete the message, ack. A message that
+  // is not a plausible code is answered with the waiting hint (+ `/esc to cancel`),
+  // never forwarded. Gating on the relayed-URL stage (not merely "a flow exists")
+  // keeps a message typed in the pre-URL boot window from being swallowed/deleted
+  // as a code. A slash command falls through (so /quit, /new, etc. still run and
+  // their teardown cancels the pending login; /esc cancels it outright).
   if (checkIsAuthLoginAwaitingCode(key) && !text.startsWith('/')) {
     await submitClaudeAuthLoginCode(key, text, ctx.message.message_id);
     return;
@@ -9697,7 +9705,7 @@ export const COMMANDS_MENU = [
   { command: 'up', description: '⬆️ Arrow Up' },
   { command: 'down', description: '⬇️ Arrow Down' },
   { command: 'tab', description: '⇥ Tab' },
-  { command: 'esc', description: '⎋ Escape (interrupt / dismiss)' },
+  { command: 'esc', description: '⎋ Escape (interrupt / dismiss / cancel a pending login)' },
   { command: 'y', description: '✅ Send "y"' },
   { command: 'n', description: '❌ Send "n"' },
   { command: 'c', description: '🛑 Ctrl+C' },

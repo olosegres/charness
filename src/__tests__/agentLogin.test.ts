@@ -27,6 +27,9 @@ const claudeLoginUrl = 'https://claude.example.test/oauth/authorize?code=true';
 const openCodeLoginUrl = 'https://auth.example.test/authorize?client=opencode';
 const loopbackState = 'st4t3-9d2f';
 const secretMessageId = 901;
+const strayMessageId = 902;
+/** The localized shortcut line under every "paste the code" prompt. */
+const escToCancelHint = '/esc to cancel';
 const stepMs = 50;
 const waitTimeoutMs = 15_000;
 
@@ -161,8 +164,9 @@ describe('agentLogin: the sign-in drivers', () => {
     assert.equal(login.checkIsAuthLoginAwaitingCode(key), false, 'nothing is awaited before the CLI printed its prompt');
     await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
     assert.equal(login.checkIsAuthLoginAwaitingCode(key), true, 'the next plain message is the code');
+    assert.ok(recorded.replies[0].endsWith(escToCancelHint), 'the link message offers /esc as the way out');
 
-    await login.submitClaudeAuthLoginCode(key, ` ${pastedCode} `, secretMessageId);
+    assert.equal(await login.submitClaudeAuthLoginCode(key, ` ${pastedCode} `, secretMessageId), true);
     assert.deepEqual(recorded.deletedMessageIds, [secretMessageId], 'the code message is a single-use secret');
     await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('Signed in to Claude')));
 
@@ -205,7 +209,32 @@ describe('agentLogin: the sign-in drivers', () => {
     const login = createAgentLogin(recorded.ports);
     login.cancelClaudeAuthLogin(key);
     login.cancelOpenCodeOAuthLogin(key);
+    assert.equal(login.cancelPendingLogin(key), false, 'nothing was pending, so /esc keeps its ordinary meaning');
     assert.deepEqual(recorded.replies, []);
+  });
+
+  it('a pending /login does not swallow a stray message: it is answered with the waiting hint, kept and never typed; /esc cancels the flow', async () => {
+    const recorded = createRecordedPorts('{"loggedIn":true}');
+    const login = createAgentLogin(recorded.ports);
+
+    await login.startClaudeAuthLogin(key);
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    const loginPid = Number(readFakeFile('claude.pid'));
+
+    assert.equal(await login.submitClaudeAuthLoginCode(key, 'are you still there? this is not a code', strayMessageId), false);
+    const hint = recorded.replies[recorded.replies.length - 1];
+    assert.match(hint, /Waiting for the login code/);
+    assert.ok(hint.endsWith(escToCancelHint), 'the hint offers /esc');
+    assert.deepEqual(recorded.deletedMessageIds, [], 'a stray message is not a secret and stays');
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), true, 'the flow stays armed');
+    assert.ok(checkIsProcessAlive(loginPid), 'nothing was typed into the CLI');
+
+    assert.equal(login.cancelPendingLogin(key), true, 'a pending login was cancelled');
+    await waitUntil('the sign-in CLI to end', () => !checkIsProcessAlive(loginPid));
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), false);
+    assert.equal(await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId), false, 'a cancelled flow takes no code');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(recorded.replies.length, 2, 'the link and the hint: a cancelled flow never reports');
   });
 
   it('OpenCode OAuth: the link goes out, a stray message is not taken for the code, the code is deleted and typed, a failed exit is reported', async () => {
@@ -215,9 +244,12 @@ describe('agentLogin: the sign-in drivers', () => {
     await login.startOpenCodeOAuthLogin(key, 'openai', 'ChatGPT Pro/Plus (browser)');
     await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(openCodeLoginUrl)));
     assert.equal(login.checkIsOpenCodeOAuthAwaitingReply(key), true, 'a paste flow awaits the code');
+    await waitUntil('the paste prompt', () => recorded.replies.some((reply) => reply.includes('paste the code here')));
+    assert.ok(recorded.replies[recorded.replies.length - 1].endsWith(escToCancelHint), 'the paste prompt offers /esc');
 
     const isStrayConsumed = await login.submitOpenCodeOAuthReply(key, 'not a code, just a sentence', secretMessageId);
     assert.equal(isStrayConsumed, false, 'a message that is neither a link nor a plausible code is never taken for a credential');
+    assert.ok(recorded.replies[recorded.replies.length - 1].endsWith(escToCancelHint), 'the rejection offers /esc');
     assert.deepEqual(recorded.deletedMessageIds, [], 'the stray message stays');
     assert.equal(login.checkIsOpenCodeOAuthAwaitingReply(key), true, 'the flow stays armed');
 
@@ -258,7 +290,7 @@ describe('agentLogin: the sign-in drivers', () => {
     await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(openCodeLoginUrl)));
     const loginPid = Number(readFakeFile('opencode.pid'));
 
-    login.cancelOpenCodeOAuthLogin(key);
+    assert.equal(login.cancelPendingLogin(key), true, 'the shared /esc cancel covers the /connect OAuth flow too');
     await waitUntil('the sign-in CLI to end', () => !checkIsProcessAlive(loginPid));
     assert.equal(login.checkIsOpenCodeOAuthAwaitingReply(key), false);
   });

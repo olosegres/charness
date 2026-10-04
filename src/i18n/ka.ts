@@ -212,6 +212,9 @@ export const kaDict: Record<string, string> = {
   'agent.login_url': '🔐 Claude-ში შესასვლელად გახსენით ეს ბმული, დაასრულეთ შესვლა და ჩასვით კოდი აქ:\n{url}',
   'agent.login_success': '✅ Claude-ში შესვლა შესრულდა.',
   'agent.login_failed': '⚠️ Claude-ში შესვლა ვერ მოხერხდა. ხელახლა საცდელად გაუშვით /login.',
+  'login.esc_hint': '/esc გასაუქმებლად',
+  'login.waiting_code': '⏳ ველოდები შესვლის კოდს — ჩასვით კოდი შესვლის ბმულიდან შემდეგ შეტყობინებად.',
+  'login.cancelled': '✖ შესვლა გაუქმდა. შეტყობინებები ისევ აგენტს მიუვა.',
   'agent.workingIndicator': '{glyph} ვმუშაობ…',
   'terminal.ready': '🖥 ტერმინალი მზადაა `{subdir}`{argsSuffix}-ში\nთითოეული შეტყობინება შესრულდება როგორც ბრძანება. /c — Ctrl+C, /up /down — ისტორია, /tab — შევსება, /quit — დახურვა.',
 

@@ -358,7 +358,9 @@ backends:
 TUI; json-stream (which has no TUI) runs it **out-of-band** — the bot spawns
 `claude auth login` in a pty, posts the sign-in link into the topic, and takes
 your pasted code back (the code message is deleted and a 🔐 confirmation is
-posted).
+posted). While the sign-in waits for the code, a message that is not a code
+is answered with a waiting hint instead of being swallowed; `/esc` cancels
+the pending sign-in (the link message says so).
 
 Both backends drive the same `claude` CLI against the same on-disk
 transcript, so `/claude_mode` switches a live topic seamlessly — the

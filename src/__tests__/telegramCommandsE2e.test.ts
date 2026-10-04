@@ -21,8 +21,10 @@
  *     and the notices while no agent runs
  *   → `/claude` starts the fake agent; `/login` drives the out-of-band sign-in
  *     (`claude auth login` in a pty): the URL out, the pasted code in and its
- *     message deleted, the success notice; a second `/login` is torn down by
- *     `/quit` (its pty ends)
+ *     message deleted, the success notice; a pending `/login` no longer swallows
+ *     the topic: a stray message is answered with a waiting hint, `/esc` cancels the
+ *     sign-in and the next message reaches the agent; a second `/login` is torn
+ *     down by `/quit` (its pty ends)
  *
  * Nothing leaves the machine: the Bot API is on loopback, the agent and its
  * `auth` subcommands are fakes. Everything the test starts is stopped in `after`.
@@ -37,6 +39,7 @@ import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import type { ScheduleRecord } from '../scheduler/types';
+import { fakeClaudeLogFileNames, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -45,6 +48,7 @@ import {
   getFreePort,
   IsolatedCharness,
   listTmuxSessions,
+  readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
@@ -74,6 +78,10 @@ const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + agentStartTimeoutMs 
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
 const fakeLoginUrl = 'https://claude.example.test/oauth/authorize?code=true';
+/** The localized shortcut line under every "paste the code" prompt. */
+const escToCancelHint = '/esc to cancel';
+/** A `KEY-n` label the fake agent records in its turn log — names the prompt sent after a cancelled sign-in. */
+const afterCancelPromptLabel = 'ESC-1';
 
 /**
  * A stand-in for the `claude auth …` subcommands (the agent itself is the standard fake). `auth login` prints the
@@ -154,6 +162,15 @@ function checkIsProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/** The fake agent's turns whose text carried `label`. */
+function getAgentTurns(label: string): FakeClaudeTurn[] {
+  return readJsonLines<FakeClaudeTurn>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.issueKey === label);
+}
+
+function readLoginPid(): number {
+  return Number(fs.readFileSync(path.join(authStateDir, 'login.pid'), 'utf8'));
 }
 
 function removeInstanceSync(): void {
@@ -368,10 +385,30 @@ describe('Telegram commands end to end: built charness, fake Bot API', { timeout
     assert.equal(fs.readFileSync(path.join(authStateDir, 'code.txt'), 'utf8'), pastedLoginCode, 'the code reached the CLI');
   });
 
+  it('a pending /login does not swallow the topic: the link offers /esc, a stray message gets the waiting hint, /esc cancels and the next message reaches the agent', async () => {
+    fs.rmSync(path.join(authStateDir, 'logged-in'), { force: true });
+    const urlMessage = await topic.sendAndAwaitReply('/login', fakeLoginUrl);
+    assert.ok(urlMessage.text.endsWith(escToCancelHint), 'the link message ends with the /esc shortcut');
+    const loginPid = readLoginPid();
+    assert.ok(checkIsProcessAlive(loginPid), 'the sign-in CLI is waiting for the code');
+
+    const strayMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'are you still there? this is not a code');
+    const hint = await topic.waitForMessage('the waiting hint', (message) => message.message_id > strayMessageId && message.text.includes('Waiting for the login code'));
+    assert.ok(hint.text.endsWith(escToCancelHint), 'the hint offers /esc');
+    assert.notEqual(fakeTelegram.getMessage(strayMessageId)?.isDeleted, true, 'a stray message is not a secret and stays');
+    assert.ok(checkIsProcessAlive(loginPid), 'the stray message did not reach the sign-in CLI');
+
+    await topic.sendAndAwaitReply('/esc', 'Login cancelled');
+    await getCharness().waitFor('the sign-in CLI to end', stopTimeoutMs, () => !checkIsProcessAlive(loginPid));
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${afterCancelPromptLabel} [fake:answer] hello again`);
+    await getCharness().waitFor('the prompt to reach the agent', agentStartTimeoutMs, () => getAgentTurns(afterCancelPromptLabel).length > 0);
+  });
+
   it('/quit tears down a pending /login: its pty ends', async () => {
     fs.rmSync(path.join(authStateDir, 'logged-in'), { force: true });
     await topic.sendAndAwaitReply('/login', fakeLoginUrl);
-    const loginPid = Number(fs.readFileSync(path.join(authStateDir, 'login.pid'), 'utf8'));
+    const loginPid = readLoginPid();
     assert.ok(checkIsProcessAlive(loginPid), 'the sign-in CLI is waiting for the code');
 
     fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');

@@ -212,6 +212,9 @@ export const ptDict: Record<string, string> = {
   'agent.login_url': '🔐 Para entrar no Claude, abra este link, conclua o login e cole o código aqui:\n{url}',
   'agent.login_success': '✅ Login no Claude concluído.',
   'agent.login_failed': '⚠️ Falha no login do Claude. Execute /login para tentar novamente.',
+  'login.esc_hint': '/esc para cancelar',
+  'login.waiting_code': '⏳ Aguardando o código de login — cole o código do link de login como sua próxima mensagem.',
+  'login.cancelled': '✖ Login cancelado. As mensagens voltam a ir para o agente.',
   'agent.workingIndicator': '{glyph} a trabalhar…',
   'terminal.ready': '🖥 Terminal pronto em `{subdir}`{argsSuffix}\nCada mensagem executa como um comando. /c — Ctrl+C, /up /down — histórico, /tab — autocompletar, /quit — fechar.',
 

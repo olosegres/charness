@@ -212,6 +212,9 @@ export const zhDict: Record<string, string> = {
   'agent.login_url': '🔐 要登录 Claude，请打开此链接，完成登录，然后把代码粘贴回这里：\n{url}',
   'agent.login_success': '✅ 已登录 Claude。',
   'agent.login_failed': '⚠️ Claude 登录失败。运行 /login 重试。',
+  'login.esc_hint': '/esc 取消',
+  'login.waiting_code': '⏳ 正在等待登录代码——请把登录链接中的代码作为下一条消息粘贴过来。',
+  'login.cancelled': '✖ 登录已取消。消息重新发送给代理。',
   'agent.workingIndicator': '{glyph} 工作中…',
   'terminal.ready': '🖥 终端已就绪，在 `{subdir}`{argsSuffix}\n每条消息作为命令执行。/c — Ctrl+C，/up /down — 历史，/tab — 补全，/quit — 关闭。',
 

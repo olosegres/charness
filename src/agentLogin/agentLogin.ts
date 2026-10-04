@@ -30,7 +30,17 @@ import {
   classifyOpenCodeOAuthReply,
   buildLoopbackCompletionUrl,
   checkIsOpenCodeOAuthSucceeded,
+  checkIsPlausibleOAuthCode,
 } from '../utils/openCodeAuthLogin';
+
+/**
+ * @description Every message that leaves a sign-in flow waiting for pasted input ends with the
+ * localized `/esc to cancel` line — the way out of a pending login (Telegram renders the bare
+ * `/esc` as a tappable command).
+ */
+function appendEscToCancelHint(text: string): string {
+  return `${text}\n${t('login.esc_hint')}`;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  json-stream `/login` — out-of-band OAuth via `claude auth login` in a pty
@@ -235,7 +245,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
         if (url) {
           current.urlRelayed = true;
           clearTimeout(current.timeoutTimer);
-          void replyToThread(key, t('agent.login_url', { url }));
+          void replyToThread(key, appendEscToCancelHint(t('agent.login_url', { url })));
         }
       }
     });
@@ -249,17 +259,27 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    * @description The pending flow's next plain text is the OAuth code: type it into
    * the pty, delete the user's message (the code is a single-use secret), and post
    * the 🔐 ack. The final success/failure notice comes from {@link onAuthLoginExit}.
+   * A message that is not a plausible code (an ordinary sentence) is NOT consumed:
+   * the flow stays armed and the topic is told it is still waiting, with `/esc` as
+   * the way out — a pending login must never silently swallow the topic.
+   * @returns `true` when the message was consumed as the code, `false` when it was
+   *   answered with the waiting hint instead.
    */
   async function submitClaudeAuthLoginCode(
     key: SessionKey,
     code: string,
     messageId: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pending = pendingAuthLogins.get(keyToString(key));
-    if (!pending) return;
+    if (!pending) return false;
+    if (!checkIsPlausibleOAuthCode(code)) {
+      await replyToThread(key, appendEscToCancelHint(t('login.waiting_code')));
+      return false;
+    }
     pending.pty.write(`${code.trim()}\r`);
     await deleteThreadMessage(key, messageId);
     await replyToThread(key, t('agent.login_code_relayed'));
+    return true;
   }
 
   /** No sign-in URL within the window → the OAuth-init call was likely blocked. */
@@ -402,7 +422,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
       }
       if (isPaste) {
         current.awaitingReply = true;
-        void replyToThread(key, t('connect.oauth_paste'));
+        void replyToThread(key, appendEscToCancelHint(t('connect.oauth_paste')));
       } else if (isLoopback) {
         const details = parseOAuthAuthorizeDetails(current.output);
         current.isLoopback = true;
@@ -410,7 +430,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
         current.redirectPath = details.redirectPath;
         current.oauthState = details.state;
         current.awaitingReply = true;
-        void replyToThread(key, t('connect.oauth_loopback'));
+        void replyToThread(key, appendEscToCancelHint(t('connect.oauth_loopback')));
       } else {
         void replyToThread(key, t('connect.oauth_waiting'));
       }
@@ -449,7 +469,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     const reply = classifyOpenCodeOAuthReply(text);
     if (reply === null) {
       // Not a link, not a plausible code → do not consume it as a credential.
-      await replyToThread(key, t('connect.oauth_invalid_reply'));
+      await replyToThread(key, appendEscToCancelHint(t('connect.oauth_invalid_reply')));
       return false;
     }
 
@@ -463,7 +483,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
         state: (reply.kind === 'callback' ? reply.state : null) ?? pending.oauthState,
       });
       if (!completionUrl) {
-        await replyToThread(key, t('connect.oauth_invalid_reply'));
+        await replyToThread(key, appendEscToCancelHint(t('connect.oauth_invalid_reply')));
         return false;
       }
       await deleteThreadMessage(key, messageId);
@@ -530,7 +550,22 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     }
   }
 
+  /**
+   * @description `/esc` while a sign-in waits for pasted input: cancel whichever flow the
+   * thread has (the json-stream `/login`, the `/connect` OAuth) in one shared step — the
+   * caller confirms to the topic. Returns `false` when nothing was pending, so `/esc`
+   * keeps its ordinary meaning (interrupt the agent) in that case.
+   */
+  function cancelPendingLogin(key: SessionKey): boolean {
+    const k = keyToString(key);
+    const hadPending = pendingAuthLogins.has(k) || pendingOpenCodeOAuth.has(k);
+    cancelClaudeAuthLogin(key);
+    cancelOpenCodeOAuthLogin(key);
+    return hadPending;
+  }
+
   return {
+    cancelPendingLogin,
     checkIsAuthLoginAwaitingCode,
     cancelClaudeAuthLogin,
     startClaudeAuthLogin,
