@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkAreRequestsEnabled,
+  checkIsAgentEventShown,
   checkIsStreamShown,
   checkIsTopicView,
   defaultTopicView,
@@ -74,5 +75,21 @@ describe('what each view decides', () => {
     assert.equal(checkAreRequestsEnabled('stream'), false);
     assert.equal(checkAreRequestsEnabled('streamAnswers'), true);
     assert.equal(checkAreRequestsEnabled('answers'), true);
+  });
+});
+
+describe('checkIsAgentEventShown — the answers-only gate (S9)', () => {
+  const streamEvents = ['output', 'status', 'thinking', 'toolResult', 'subagentStatus'] as const;
+
+  it('drops every stream event in answers-only and shows them in the stream views', () => {
+    for (const event of streamEvents) {
+      assert.equal(checkIsAgentEventShown('answers', event), false, `${event} hidden in answers`);
+      assert.equal(checkIsAgentEventShown('stream', event), true, `${event} shown in stream`);
+      assert.equal(checkIsAgentEventShown('streamAnswers', event), true, `${event} shown in streamAnswers`);
+    }
+  });
+
+  it('a native question is shown in EVERY view — hidden, the agent would hang on it', () => {
+    for (const view of topicViewOptions) assert.equal(checkIsAgentEventShown(view, 'question'), true, view);
   });
 });

@@ -234,7 +234,7 @@ import {
   normalizeDisplayVerbosityMode,
 } from './utils/displayVerbosity';
 import { getUniformVerbosityLevel } from './utils/verbosityRender';
-import { checkAreRequestsEnabled, parseTopicView, topicViewArguments, topicViewOptions } from './utils/topicView';
+import { checkAreRequestsEnabled, checkIsAgentEventShown, parseTopicView, topicViewArguments, topicViewOptions, type AgentStreamEvent } from './utils/topicView';
 import { buildTopicRequestHeader, checkShouldOpenTopicRequest, getTopicRequestOrigin, type TopicRequestSource } from './utils/topicRequest';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 import { getVoiceTranscriptionQueue } from './voiceQueue';
@@ -1025,6 +1025,17 @@ function trackTopicRequestTurn(key: SessionKey, opening: TopicRequestOpening): v
 }
 /** What the bot's own limit-wait answer needs (S5); set at boot next to the engine. */
 let requestLimitWaitAnswerDeps: LimitWaitAnswerDeps | null = null;
+
+/**
+ * @description The answers-only gate (plan S9): whether an agent event is
+ * rendered in `key`'s topic. Read per event, so a view switch applies to the
+ * next event; a conversation of another platform has no topic to hide it from
+ * and is never gated here (its events are routed by `dispatchAdapterEvent`).
+ */
+function checkIsAgentEventShownInTopic(key: SessionKey, event: AgentStreamEvent): boolean {
+  if (!checkIsTelegramKey(key)) return true;
+  return checkIsAgentEventShown(state.getDisplayPrefs(key).view, event);
+}
 
 /**
  * @description Resolve the live `DATA_DIR` from the state store. The store
@@ -11820,6 +11831,17 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   markThreadTurnProducedOutput(key);
   noteThreadActivity(key);
 
+  // Answers-only view (S9): the agent's text — sub-agent chunks and progress
+  // bursts included — never reaches the topic; a native question still does (it
+  // falls through to its branch below). A real answer still retires a pinned
+  // logged-out notice: that notice is the bot's own and shows in every view
+  // (same guards as the clearing below — not an error surface, not a sub-agent
+  // chunk, not a spinner burst).
+  if (!checkIsAgentEventShownInTopic(key, meta?.isQuestion ? 'question' : 'output')) {
+    if (!meta?.isSubagent && !checkIsProgressChunk(output) && classifyAgentApiError(output, Date.now()) === null) clearAuthNotice(key);
+    return;
+  }
+
   // Sub-agent chunk (`/subagent full`, S4): render it visibly marked and
   // OUTSIDE the parent reply's edit-in-place continuation chain — it must
   // never become `lastMessageId`/`lastMessageText` or flip `needsNewMessage`
@@ -11976,6 +11998,9 @@ function handleAdapterStatus(key: SessionKey, status: string): void {
  */
 async function handleAgentStatus(key: SessionKey, status: string): Promise<void> {
   if (!status.trim()) return;
+  // Answers-only view (S9): no status / progress frame — the liveness loop's
+  // re-injected frames and the adapter's spinners alike. Typing stays the cue.
+  if (!checkIsAgentEventShownInTopic(key, 'status')) return;
   // While an OpenCode question is pending the agent is BLOCKED waiting for the
   // user, so a status frame ("🔧 question…", tool spinner) shows no forward
   // progress — and it actively harms the layout: a new status message lands
@@ -12208,6 +12233,8 @@ function buildThinkingFrameText(mode: DisplayVerbosityMode, payload: ThinkingEve
  */
 function handleAgentThinking(key: SessionKey, payload: ThinkingEvent): void {
   traceAgentEmit('thinking', key, payload.text);
+  // Answers-only view (S9): no thinking frame, so there is never one to resolve.
+  if (!checkIsAgentEventShownInTopic(key, 'thinking')) return;
   const mode = state.getDisplayPrefs(key).thinking;
   const action = getThinkingEventAction(mode, payload.phase);
 
@@ -12343,6 +12370,8 @@ async function sendThinkingFrame(key: SessionKey, renderedHtml: string): Promise
  */
 function handleAgentToolResult(key: SessionKey, payload: ToolResultEvent): void {
   traceAgentEmit('toolResult', key, payload.output);
+  // Answers-only view (S9): tool results are the agent's stream.
+  if (!checkIsAgentEventShownInTopic(key, 'toolResult')) return;
   const action = getToolResultRenderAction(state.getDisplayPrefs(key).toolResults);
   if (action === 'drop') return;
 
@@ -12736,6 +12765,9 @@ function clearSubagentStatus(key: SessionKey): void {
  * `handleAgentQuestion`).
  */
 function handleSubagentStatus(key: SessionKey, payload: SubagentStatusEvent): void {
+  // Answers-only view (S9): no sub-agent frame; a frame opened before a view
+  // switch mid-turn is closed by its own `active: false` through this gate's exemption below.
+  if (!checkIsAgentEventShownInTopic(key, 'subagentStatus') && payload.active) return;
   const state = getThreadMessageState(key);
   // `subagentStartedAt` is set synchronously when an `open` begins (before its
   // `await`), so a second `active:true` arriving while the first create is still

@@ -21,6 +21,9 @@
  *   → every answer is pinned with a notification and only the latest stays
  *     pinned, across a restart; an agent that never answers gets a pinned alert,
  *     released when the next message supersedes its request
+ *   → in «Answers only» a turn posts nothing but its pinned answer — no text, no
+ *     status, no thinking, no tool result — while the typing indicator still
+ *     runs; back in «Stream + answers» the same turn shows its stream again
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the
  * agent is the fake. Everything the test starts is stopped in `after`.
@@ -74,7 +77,7 @@ const replyTimeoutMs = 20 * 1000;
 const answerTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = 4 * bootTimeoutMs + 14 * replyTimeoutMs + 10 * answerTimeoutMs + 4 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 4 * bootTimeoutMs + 16 * replyTimeoutMs + 12 * answerTimeoutMs + 4 * stopTimeoutMs + flowMarginMs;
 /** How soon after the restart the seeded scheduled run is due. */
 const seededRunDelayMs = 3 * 1000;
 
@@ -445,6 +448,40 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the alert released', replyTimeoutMs, () => getPinKinds(alert.message_id).includes('unpin'));
     await getCharness().waitFor('the silent request closed as superseded', replyTimeoutMs, () =>
       readClosedRequests().find((record) => record.id === turn.requestId)?.closeReason === 'superseded');
+  });
+
+  // ── S9 — answers-only suppression ────────────────────────────────────
+
+  /** How many calls of `method` the fake has seen for the test topic. */
+  function countTopicCalls(method: string): number {
+    return fakeTelegram.listCalls(method).filter((call) => Number(call.payload.message_thread_id) === topicThreadId).length;
+  }
+
+  it('in «Answers only» a turn posts nothing but its pinned answer, while the typing indicator still runs', async () => {
+    await sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
+    const sendsBefore = countTopicCalls('sendMessage');
+    const editsBefore = countTopicCalls('editMessageText');
+    const typingBefore = countTopicCalls('sendChatAction');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-10 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-10');
+    const answer = await waitForTopicMessage('the pinned answer', (message) => message.text.includes('Fake final answer for TOPIC-10'));
+    await getCharness().waitFor('the answer pinned', replyTimeoutMs, () => getPinKinds(answer.message_id).includes('pin'));
+    // The fake streamed a status frame, a thinking block, a tool call with its result and answer text (`emitTurnActivity`)
+    // — none of it was posted or edited into the topic: the only new message is the answer.
+    assert.equal(countTopicCalls('sendMessage') - sendsBefore, 1, 'exactly one new message: the answer');
+    assert.equal(countTopicCalls('editMessageText') - editsBefore, 0, 'no status or thinking frame was edited');
+    assert.ok(listTopicMessages().every((message) => !message.text.includes('Working on TOPIC-10')), 'the agent\'s text stayed out of the topic');
+    assert.ok(countTopicCalls('sendChatAction') > typingBefore, 'the typing indicator still ran during the turn');
+  });
+
+  it('back in «Stream + answers» the same turn shows its stream again, beside the pinned answer', async () => {
+    await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-11 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-11');
+    await waitForTopicMessage('the agent\'s stream text', (message) => message.text.includes('Working on TOPIC-11'));
+    const answer = await waitForTopicMessage('the pinned answer', (message) => message.text.includes('Fake final answer for TOPIC-11'));
+    await getCharness().waitFor('the answer pinned', replyTimeoutMs, () => getPinKinds(answer.message_id).includes('pin'));
   });
 
   it('the instance runs its tmux server in its private TMUX_TMPDIR; nothing of it runs on the default tmux server', () => {

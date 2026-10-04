@@ -55,6 +55,24 @@ export function checkIsStreamShown(view: TopicView): boolean {
   return view !== 'answers';
 }
 
+/**
+ * @name AgentStreamEvent
+ * @description The kinds of agent event the bot renders into a topic. All but
+ * `question` are the agent's STREAM; a native question is kept in every view —
+ * hidden, the agent would hang on it.
+ */
+export type AgentStreamEvent = 'output' | 'question' | 'status' | 'thinking' | 'toolResult' | 'subagentStatus';
+
+/**
+ * @description Whether an agent event is rendered in a topic with `view` (plan
+ * S9): the stream is dropped in the answers-only view, a native question never
+ * is. What is NOT an agent event — the typing indicator, files the agent sends
+ * through the bot MCP, the bot's own notices, the pinned answers — is not gated.
+ */
+export function checkIsAgentEventShown(view: TopicView, event: AgentStreamEvent): boolean {
+  return event === 'question' || checkIsStreamShown(view);
+}
+
 /** @description Whether operator messages and scheduled runs in the topic open requests (and so get wake-ups and pinned answers). */
 export function checkAreRequestsEnabled(view: TopicView): boolean {
   return view !== 'stream';
