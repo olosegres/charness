@@ -5,7 +5,7 @@
  * `opencode auth login -p <id> -m <label>` in a pty out-of-band — the same
  * pattern as the json-stream Claude `/login` flow (`utils/claudeAuthLogin.ts`).
  * These are the parse/decision helpers; the impure pty driving + per-thread
- * state live in `bot.ts`.
+ * state live in `agentLogin/agentLogin.ts`.
  *
  * Two OAuth shapes are handled, auto-detected from the pty output:
  *  - DEVICE flow (openai "ChatGPT Pro/Plus (headless)", github-copilot, …): the
@@ -221,7 +221,7 @@ export function buildConnectMethodButtonLabel(method: OpenCodeAuthMethod): strin
 // bridges it: it relays the sign-in URL, the user pastes the resulting callback
 // URL (or the bare code) back, and the bot replays it against the CLI's local
 // callback server on the host to complete the exchange. These helpers parse the
-// pieces; the fetch + pty state live in `bot.ts`.
+// pieces; the fetch + pty state live in `agentLogin/agentLogin.ts`.
 
 /** Details parsed out of the CLI's `Go to: <authorize-url>` sign-in URL. */
 export interface OAuthAuthorizeDetails {

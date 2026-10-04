@@ -164,7 +164,7 @@ entry. (The old `CLAUDE_JSON_STREAM_THREADS` env gate is RETIRED.)
 
 This backend has no TUI to host Claude's interactive `/login`, so the bot runs it
 out-of-band: `getLoginCommandRoute` (in `utils/claudeAuthLogin.ts`) intercepts
-`/login` on a json-stream thread and `startClaudeAuthLogin` (in `bot.ts`) spawns
+`/login` on a json-stream thread and `startClaudeAuthLogin` (in `agentLogin/agentLogin.ts`) spawns
 `claude auth login --claudeai` in a bot-owned pty (`node-pty`; `ANTHROPIC_API_KEY`
 stripped → subscription login). It relays the sign-in URL to the topic, takes the
 user's pasted code into the pty (message deleted, 🔐 ack — same secret handling as

@@ -75,10 +75,10 @@ test('strips hot ownership controls from every OpenCode child environment', () =
 });
 
 test('OpenCode OAuth uses the stripped child environment at its spawn boundary', () => {
-  const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
-  const functionStart = botSource.indexOf('async function startOpenCodeOAuthLogin');
-  const functionEnd = botSource.indexOf('\nasync function ', functionStart + 1);
-  const functionSource = botSource.slice(functionStart, functionEnd);
+  const loginSource = fs.readFileSync(path.join(__dirname, '..', 'agentLogin', 'agentLogin.ts'), 'utf8');
+  const functionStart = loginSource.indexOf('async function startOpenCodeOAuthLogin');
+  const functionEnd = loginSource.indexOf('\n  async function ', functionStart + 1);
+  const functionSource = loginSource.slice(functionStart, functionEnd);
   assert.ok(functionStart >= 0);
   assert.match(functionSource, /const env:[^=]+ = getOpenCodeChildEnv\(\)/);
   assert.doesNotMatch(functionSource, /const env:[^=]+ = \{ \.\.\.process\.env \}/);

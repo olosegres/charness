@@ -3,8 +3,8 @@
  * flow. The json-stream Claude backend has no TUI to host Claude's interactive
  * `/login`, so the bot drives `claude auth login --claudeai` in a pty and relays
  * it through the topic (URL out -> pasted code in). These are the parse/decision
- * helpers; the impure pty driving + per-thread state live in `bot.ts` (mirrors
- * the `apiErrorRetry.ts` pure-layer / bot.ts-manager split).
+ * helpers; the impure pty driving + per-thread state live in `agentLogin/agentLogin.ts`
+ * (mirrors the `apiErrorRetry.ts` pure-layer / manager split).
  *
  * The success signal is authoritative from `claude auth status --json`
  * (`{"loggedIn": true, ...}`), with the process exit code as the fallback.

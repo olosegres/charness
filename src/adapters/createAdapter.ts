@@ -278,7 +278,7 @@ export function getAvailableAdapters(): Array<{ name: string; label: string }> {
  * The json-stream backend (structured stream-json over an external tmux-hosted
  * process — survives bot restarts). Its `/login` is handled out-of-band by the
  * bot (`claude auth login` in a pty; see `getLoginCommandRoute` +
- * `startClaudeAuthLogin` in `bot.ts`), so it no longer needs the tmux TUI to sign
+ * `startClaudeAuthLogin` in `agentLogin/agentLogin.ts`), so it no longer needs the tmux TUI to sign
  * in. The tmux-scrape backend stays reachable per-thread via `/claude_mode`.
  */
 export function getDefaultClaudeBackendName(): string {
