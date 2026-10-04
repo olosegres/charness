@@ -265,7 +265,7 @@ export const frDict: Record<string, string> = {
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'court',
   'verbosity.mode.full': 'complet',
-  'verbosity.view.stream': 'Flux complet',
+  'verbosity.view.stream': 'Flux seul',
   'verbosity.view.streamAnswers': 'Flux + réponses',
   'verbosity.view.answers': 'Réponses seules',
   'verbosity.view_set_success': '✅ Ce sujet affiche : {view} (dès le prochain message)',

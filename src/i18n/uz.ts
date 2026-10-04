@@ -265,7 +265,7 @@ export const uzDict: Record<string, string> = {
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'qisqa',
   'verbosity.mode.full': "to'liq",
-  'verbosity.view.stream': "To'liq oqim",
+  'verbosity.view.stream': 'Faqat oqim',
   'verbosity.view.streamAnswers': 'Oqim + javoblar',
   'verbosity.view.answers': 'Faqat javoblar',
   'verbosity.view_set_success': "✅ Bu mavzu ko'rsatadi: {view} (keyingi xabardan boshlab)",

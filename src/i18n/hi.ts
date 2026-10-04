@@ -265,7 +265,7 @@ export const hiDict: Record<string, string> = {
   'verbosity.mode.minimal': 'न्यून',
   'verbosity.mode.short': 'संक्षिप्त',
   'verbosity.mode.full': 'पूर्ण',
-  'verbosity.view.stream': 'पूरी स्ट्रीम',
+  'verbosity.view.stream': 'केवल स्ट्रीम',
   'verbosity.view.streamAnswers': 'स्ट्रीम + उत्तर',
   'verbosity.view.answers': 'केवल उत्तर',
   'verbosity.view_set_success': '✅ यह टॉपिक दिखाता है: {view} (अगले संदेश से लागू)',

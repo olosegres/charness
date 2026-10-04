@@ -265,7 +265,7 @@ export const ptDict: Record<string, string> = {
   'verbosity.mode.minimal': 'mínimo',
   'verbosity.mode.short': 'curto',
   'verbosity.mode.full': 'completo',
-  'verbosity.view.stream': 'Stream completo',
+  'verbosity.view.stream': 'Só stream',
   'verbosity.view.streamAnswers': 'Stream + respostas',
   'verbosity.view.answers': 'Só respostas',
   'verbosity.view_set_success': '✅ Este tópico mostra: {view} (a partir da próxima mensagem)',

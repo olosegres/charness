@@ -269,7 +269,7 @@ export const ruDict: Record<string, string> = {
   'verbosity.mode.minimal': 'минимум',
   'verbosity.mode.short': 'кратко',
   'verbosity.mode.full': 'подробно',
-  'verbosity.view.stream': 'Полный поток',
+  'verbosity.view.stream': 'Только поток',
   'verbosity.view.streamAnswers': 'Поток + ответы',
   'verbosity.view.answers': 'Только ответы',
   'verbosity.view_set_success': '✅ Этот топик показывает: {view} (со следующего сообщения)',

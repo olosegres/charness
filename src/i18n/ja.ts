@@ -265,7 +265,7 @@ export const jaDict: Record<string, string> = {
   'verbosity.mode.minimal': '最小',
   'verbosity.mode.short': '短縮',
   'verbosity.mode.full': '詳細',
-  'verbosity.view.stream': '全ストリーム',
+  'verbosity.view.stream': 'ストリームのみ',
   'verbosity.view.streamAnswers': 'ストリーム + 回答',
   'verbosity.view.answers': '回答のみ',
   'verbosity.view_set_success': '✅ このトピックの表示: {view}（次のメッセージから適用）',

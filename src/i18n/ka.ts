@@ -265,7 +265,7 @@ export const kaDict: Record<string, string> = {
   'verbosity.mode.minimal': 'მინიმალური',
   'verbosity.mode.short': 'მოკლე',
   'verbosity.mode.full': 'სრული',
-  'verbosity.view.stream': 'სრული ნაკადი',
+  'verbosity.view.stream': 'მხოლოდ ნაკადი',
   'verbosity.view.streamAnswers': 'ნაკადი + პასუხები',
   'verbosity.view.answers': 'მხოლოდ პასუხები',
   'verbosity.view_set_success': '✅ ეს თემა აჩვენებს: {view} (მოქმედებს შემდეგი შეტყობინებიდან)',

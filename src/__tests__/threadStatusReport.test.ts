@@ -94,7 +94,7 @@ test('unavailable runtime and workdir details render safely', () => {
     effort: null,
     startedAt: null,
     runtime: null,
-    view: 'Full stream',
+    view: 'Stream only',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));
@@ -114,7 +114,7 @@ test('active sessions without runtime support render unavailable runtime details
     effort: null,
     startedAt: null,
     runtime: null,
-    view: 'Full stream',
+    view: 'Stream only',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));

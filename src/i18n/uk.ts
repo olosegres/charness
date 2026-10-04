@@ -271,7 +271,7 @@ export const ukDict: Record<string, string> = {
   'verbosity.mode.minimal': 'мінімум',
   'verbosity.mode.short': 'коротко',
   'verbosity.mode.full': 'докладно',
-  'verbosity.view.stream': 'Повний потік',
+  'verbosity.view.stream': 'Лише потік',
   'verbosity.view.streamAnswers': 'Потік + відповіді',
   'verbosity.view.answers': 'Лише відповіді',
   'verbosity.view_set_success': '✅ Цей топік показує: {view} (з наступного повідомлення)',

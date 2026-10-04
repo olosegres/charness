@@ -269,7 +269,7 @@ export const enDict: Record<string, string> = {
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'short',
   'verbosity.mode.full': 'full',
-  'verbosity.view.stream': 'Full stream',
+  'verbosity.view.stream': 'Stream only',
   'verbosity.view.streamAnswers': 'Stream + answers',
   'verbosity.view.answers': 'Answers only',
   'verbosity.view_set_success': '✅ This topic shows: {view} (applies from the next message)',

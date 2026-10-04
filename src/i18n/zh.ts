@@ -265,7 +265,7 @@ export const zhDict: Record<string, string> = {
   'verbosity.mode.minimal': '最简',
   'verbosity.mode.short': '简短',
   'verbosity.mode.full': '完整',
-  'verbosity.view.stream': '完整流',
+  'verbosity.view.stream': '仅流',
   'verbosity.view.streamAnswers': '流 + 回答',
   'verbosity.view.answers': '仅回答',
   'verbosity.view_set_success': '✅ 本话题显示：{view}（从下一条消息起生效）',

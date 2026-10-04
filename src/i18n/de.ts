@@ -265,7 +265,7 @@ export const deDict: Record<string, string> = {
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'kurz',
   'verbosity.mode.full': 'voll',
-  'verbosity.view.stream': 'Voller Stream',
+  'verbosity.view.stream': 'Nur Stream',
   'verbosity.view.streamAnswers': 'Stream + Antworten',
   'verbosity.view.answers': 'Nur Antworten',
   'verbosity.view_set_success': '✅ Dieses Thema zeigt: {view} (gilt ab der nächsten Nachricht)',

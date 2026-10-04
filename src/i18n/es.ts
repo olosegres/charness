@@ -265,7 +265,7 @@ export const esDict: Record<string, string> = {
   'verbosity.mode.minimal': 'mínimo',
   'verbosity.mode.short': 'corto',
   'verbosity.mode.full': 'completo',
-  'verbosity.view.stream': 'Stream completo',
+  'verbosity.view.stream': 'Solo stream',
   'verbosity.view.streamAnswers': 'Stream + respuestas',
   'verbosity.view.answers': 'Solo respuestas',
   'verbosity.view_set_success': '✅ Este tema muestra: {view} (desde el próximo mensaje)',

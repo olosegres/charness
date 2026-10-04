@@ -264,11 +264,11 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   // ── S6 — the view setting in /verbosity ──────────────────────────────
 
   it('/verbosity shows the detail row and the view row, ✓ on minimal and on the full stream', async () => {
-    const picker = await sendAndAwaitReply('/verbosity', 'view: Full stream');
+    const picker = await sendAndAwaitReply('/verbosity', 'view: Stream only');
     assert.match(picker.text, /detail: minimal/);
     assert.deepEqual(getKeyboardLabels(picker), [
       ['minimal ✓', 'short', 'full'],
-      ['Full stream ✓', 'Stream + answers', 'Answers only'],
+      ['Stream only ✓', 'Stream + answers', 'Answers only'],
     ]);
     assert.deepEqual(getKeyboardData(picker), [
       ['verb_minimal', 'verb_short', 'verb_full'],
@@ -277,26 +277,26 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   });
 
   it('a tap on «Answers only» persists the view, answers the tap and moves the ✓', async () => {
-    const picker = listTopicMessages().find((message) => message.text.includes('view: Full stream'));
+    const picker = listTopicMessages().find((message) => message.text.includes('view: Stream only'));
     assert.ok(picker, 'the picker is in the topic');
     fakeTelegram.pushCallback(picker.message_id, 'view_answers');
     await getCharness().waitFor('the view tap answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.includes('This topic shows: Answers only'));
     await getCharness().waitFor('the picker re-rendered', replyTimeoutMs, () => getKeyboardLabels(picker)[1]?.[2] === 'Answers only ✓');
     assert.deepEqual(getKeyboardLabels(picker), [
       ['minimal ✓', 'short', 'full'],
-      ['Full stream', 'Stream + answers', 'Answers only ✓'],
+      ['Stream only', 'Stream + answers', 'Answers only ✓'],
     ]);
     await getCharness().waitFor('the view persisted', replyTimeoutMs, () => readPersistedTopicPrefs()?.view === 'answers');
   });
 
   it('a detail tap keeps the view row: the picker re-renders both rows', async () => {
-    const picker = listTopicMessages().find((message) => message.text.includes('view: Full stream'));
+    const picker = listTopicMessages().find((message) => message.text.includes('view: Stream only'));
     assert.ok(picker, 'the picker is in the topic');
     fakeTelegram.pushCallback(picker.message_id, 'verb_full');
     await getCharness().waitFor('the detail tap re-rendered', replyTimeoutMs, () => getKeyboardLabels(picker)[0]?.[2] === 'full ✓');
     assert.deepEqual(getKeyboardLabels(picker), [
       ['minimal', 'short', 'full ✓'],
-      ['Full stream', 'Stream + answers', 'Answers only ✓'],
+      ['Stream only', 'Stream + answers', 'Answers only ✓'],
     ]);
   });
 
@@ -313,7 +313,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.match(rejected.text, /Views: stream, stream_answers, answers/);
     // A fresh picker reflects both: the detail set by the earlier tap and the typed view.
     const picker = await sendAndAwaitReply('/verbosity', 'view: Stream + answers');
-    assert.deepEqual(getKeyboardLabels(picker)[1], ['Full stream', 'Stream + answers ✓', 'Answers only']);
+    assert.deepEqual(getKeyboardLabels(picker)[1], ['Stream only', 'Stream + answers ✓', 'Answers only']);
   });
 
   it('a restart keeps the view', async () => {
@@ -353,7 +353,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   });
 
   it('in the full stream no request is opened: the agent gets the bare message and its stream shows', async () => {
-    await sendAndAwaitReply('/verbosity stream', 'This topic shows: Full stream');
+    await sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
     fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-3 [fake:answer]');
     await getCharness().waitFor('the turn for TOPIC-3', answerTimeoutMs, () => getTurns('TOPIC-3').length > 0);
     assert.equal(getTurns('TOPIC-3')[0].requestId, null, 'no request header');
