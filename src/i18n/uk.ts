@@ -79,7 +79,7 @@ export const ukDict: Record<string, string> = {
     '/new — перезапустити сесію (стара → /sessions)\n' +
     '/model /sessions — переключення\n' +
     '/effort — рівень reasoning-effort\n' +
-    '/verbosity — деталізація виводу (розмірковування/інструменти/суб-агенти)\n' +
+    '/verbosity — деталізація виводу і що показує топік (потік / відповіді)\n' +
     '/quit /status /output — контроль\n' +
     '/compact — стиснути контекст агента\n' +
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
@@ -166,6 +166,7 @@ export const ukDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Тредів поки немає.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nТека: {subdir}\nСесія: {session}',
+  'status.thread_view': 'Вигляд: {view}',
   'status.thread_model': 'Модель: {model}',
   'status.thread_effort': 'Зусилля: {effort}',
   'status.thread_started': 'Запущено: {started}',
@@ -263,13 +264,17 @@ export const ukDict: Record<string, string> = {
   'subagent.mode.short': 'коротко',
   'subagent.mode.full': 'докладно',
 
-  'verbosity.choose': '🔊 Поточна деталізація виводу: {current}\nОбери рівень:',
+  'verbosity.choose': '🔊 Вивід — деталізація: {current} · вигляд: {view}\nРяд 1 — деталізація потоку · Ряд 2 — що показує цей топік:',
   'verbosity.set_success': '✅ Деталізація виводу: {mode} (розмірковування, інструменти, суб-агенти)',
-  'verbosity.invalid_mode': '⚠️ Режим `{mode}` недопустимий. Доступні: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` неприпустимо. Рівні деталізації: {valid}. Вигляди: {views}.',
   'verbosity.custom': 'змішаний (розмірковування: {thinking} · інструменти: {toolResults} · суб-агенти: {subagent})',
   'verbosity.mode.minimal': 'мінімум',
   'verbosity.mode.short': 'коротко',
   'verbosity.mode.full': 'докладно',
+  'verbosity.view.stream': 'Повний потік',
+  'verbosity.view.streamAnswers': 'Потік + відповіді',
+  'verbosity.view.answers': 'Лише відповіді',
+  'verbosity.view_set_success': '✅ Цей топік показує: {view} (з наступного повідомлення)',
 
   'model.set_success': '🧠 Модель обрано: {model}',
   'model.saved_for_next_start': 'Модель збережено: {model} — застосується при старті агента.',
@@ -450,6 +455,7 @@ export const ukDict: Record<string, string> = {
   'cb.subagent_error': 'Помилка: {error}',
   'cb.verbosity_set': 'Деталізація виводу: {mode}',
   'cb.verbosity_error': 'Помилка: {error}',
+  'cb.view_set': 'Цей топік показує: {view}',
 
   'session.list_header': 'Сесії для відновлення ({label}):',
   'session.list_footer': 'Надішли 1–{max} щоб відновити · 0 для виходу',

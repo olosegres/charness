@@ -73,7 +73,7 @@ export const frDict: Record<string, string> = {
     '/new — redémarrer la session (l\'ancienne → /sessions)\n' +
     '/model /sessions — basculer\n' +
     '/effort — niveau de reasoning effort\n' +
-    '/verbosity — verbosité de sortie (thinking/tools/sous-agents)\n' +
+    '/verbosity — détail de sortie et ce que le sujet affiche (flux / réponses)\n' +
     '/quit /status /output — contrôle\n' +
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
@@ -160,6 +160,7 @@ export const frDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Aucun fil pour l\'instant.',
   'status.thread_report': 'Statut :\n\nAgent : {agent}\nDossier : {subdir}\nSession : {session}',
+  'status.thread_view': 'Vue : {view}',
   'status.thread_model': 'Modèle : {model}',
   'status.thread_effort': 'Effort : {effort}',
   'status.thread_started': 'Démarré : {started}',
@@ -257,13 +258,17 @@ export const frDict: Record<string, string> = {
   'subagent.mode.short': 'court',
   'subagent.mode.full': 'complet',
 
-  'verbosity.choose': '🔊 Verbosité de sortie actuelle : {current}\nChoisissez un niveau :',
+  'verbosity.choose': '🔊 Sortie — détail : {current} · vue : {view}\nLigne 1 — détail du flux · Ligne 2 — ce que ce sujet affiche :',
   'verbosity.set_success': '✅ Verbosité de sortie : {mode} (thinking, résultats d\'outils, sous-agents)',
-  'verbosity.invalid_mode': '⚠️ Mode `{mode}` invalide. Disponibles : {valid}.',
+  'verbosity.invalid_mode': "⚠️ `{mode}` n'est pas valide. Niveaux de détail : {valid}. Vues : {views}.",
   'verbosity.custom': 'personnalisé (thinking : {thinking} · outils : {toolResults} · sous-agents : {subagent})',
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'court',
   'verbosity.mode.full': 'complet',
+  'verbosity.view.stream': 'Flux complet',
+  'verbosity.view.streamAnswers': 'Flux + réponses',
+  'verbosity.view.answers': 'Réponses seules',
+  'verbosity.view_set_success': '✅ Ce sujet affiche : {view} (dès le prochain message)',
 
   'model.set_success': '🧠 Modèle défini sur : {model}',
   'model.saved_for_next_start': 'Modèle enregistré : {model} — s\'appliquera au prochain démarrage d\'agent.',
@@ -444,6 +449,7 @@ export const frDict: Record<string, string> = {
   'cb.subagent_error': 'Erreur : {error}',
   'cb.verbosity_set': 'Verbosité de sortie : {mode}',
   'cb.verbosity_error': 'Erreur : {error}',
+  'cb.view_set': 'Ce sujet affiche : {view}',
 
   'session.list_header': 'Sessions à reprendre ({label}) :',
   'session.list_footer': 'Envoyez 1–{max} pour reprendre · 0 pour quitter',

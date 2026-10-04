@@ -74,7 +74,7 @@ import {
 } from '../utils/tmuxSessionName';
 import { getEffortStartupKeystroke } from '../utils/effortStartupKeystroke';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
-import { defaultDisplayVerbosityMode } from '../utils/displayVerbosity';
+import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import {
   checkIsSubagentTranscriptName,
   createSubagentTailState,
@@ -3046,13 +3046,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   /** @description Resolve the thread's full display prefs, defaulting every
    * field to `minimal` for any read before the bot wires the reader at boot. */
   private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
-    return (
-      this.displayPrefsReader?.(key) ?? {
-        thinking: defaultDisplayVerbosityMode,
-        toolResults: defaultDisplayVerbosityMode,
-        subagent: defaultDisplayVerbosityMode,
-      }
-    );
+    return this.displayPrefsReader?.(key) ?? getDefaultDisplayPrefs();
   }
 
   /** @description Resolve the thread's `/subagent` mode (consulted by the

@@ -120,6 +120,22 @@ test('recap.missedCountHeader substitutes the {count}', () => {
   assert.ok(!out.includes('{count}'), `placeholder not substituted: "${out}"`);
 });
 
+test('the /verbosity view keys exist in every locale (request/answer plan S6)', () => {
+  for (const code of [
+    'verbosity.view.stream',
+    'verbosity.view.streamAnswers',
+    'verbosity.view.answers',
+    'verbosity.view_set_success',
+    'cb.view_set',
+    'status.thread_view',
+  ]) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  // The picker text names the view and the invalid-argument reply lists the view spellings.
+  assert.ok(enDict['verbosity.choose'].includes('{view}'));
+  assert.ok(enDict['verbosity.invalid_mode'].includes('{views}'));
+});
+
 test('file intake keys exist in every locale', () => {
   assert.ok(checkKeyInAllLangs('file.too_big'), 'file.too_big missing in some locale');
   assert.ok(checkKeyInAllLangs('file.download_failed'), 'file.download_failed missing in some locale');

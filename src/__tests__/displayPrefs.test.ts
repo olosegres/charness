@@ -62,6 +62,7 @@ test('displayPrefs: absent record resolves to the locked default (minimal everyw
     thinking: 'minimal',
     toolResults: 'minimal',
     subagent: 'minimal',
+    view: 'stream',
   });
 });
 
@@ -75,6 +76,7 @@ test('displayPrefs: a set override is stored and resolved back', async () => {
     thinking: 'full',
     toolResults: 'short',
     subagent: 'full',
+    view: 'stream',
   });
 });
 
@@ -88,6 +90,7 @@ test('displayPrefs: only the set field changes — the rest keep their defaults'
     thinking: 'minimal',
     toolResults: 'full',
     subagent: 'minimal',
+    view: 'stream',
   });
 });
 
@@ -115,6 +118,7 @@ test('displayPrefs: a non-default override survives a reload from disk', async (
     thinking: 'short',
     toolResults: 'full',
     subagent: 'minimal',
+    view: 'stream',
   });
 });
 
@@ -148,11 +152,13 @@ test('displayPrefs: legacy persisted names normalize at read time, unknown falls
     thinking: 'full',
     toolResults: 'minimal',
     subagent: 'short',
+    view: 'stream',
   });
   assert.deepEqual(second.getDisplayPrefs(key2), {
     thinking: 'short',
     toolResults: 'minimal',
     subagent: 'minimal',
+    view: 'stream',
   });
 });
 
@@ -197,6 +203,7 @@ test('displayPrefs: resetting the last override drops the record and the map', a
     thinking: 'minimal',
     toolResults: 'minimal',
     subagent: 'minimal',
+    view: 'stream',
   });
 });
 
@@ -207,4 +214,43 @@ test('displayPrefs: setting the default on an absent record is a clean no-op', a
   await store.flush();
   const raw = readRawState();
   assert.equal('displayPrefs' in raw, false, 'must not create a record just to store a default');
+});
+
+// ── the topic view (request/answer plan S6) rides the same record ──
+
+test('displayPrefs: the view survives a reload and leaves the detail prefs alone', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setDisplayPref(key1, 'view', 'answers');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  // Load-bearing: the view is the ONLY field that moved; a sibling topic keeps the default.
+  assert.deepEqual(second.getDisplayPrefs(key1), {
+    thinking: 'minimal',
+    toolResults: 'minimal',
+    subagent: 'minimal',
+    view: 'answers',
+  });
+  assert.equal(second.getDisplayPrefs(key2).view, 'stream');
+});
+
+test('displayPrefs: setting the view back to the full stream clears it on disk, and an unknown value reads as the default', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setDisplayPref(key1, 'view', 'streamAnswers');
+  await store.setDisplayPref(key1, 'view', 'stream');
+  await store.flush();
+  assert.equal('displayPrefs' in readRawState(), false, 'the default view leaves no record');
+
+  await store.setDisplayPref(key1, 'thinking', 'full');
+  await store.flush();
+  const raw = readRawState();
+  (raw.displayPrefs as Record<string, Record<string, string>>)[keyToString(key1)].view = 'everything';
+  writeRawState(raw);
+  const reloaded = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await reloaded.init();
+  assert.equal(reloaded.getDisplayPrefs(key1).view, 'stream', 'a corrupt or future view falls back to the default');
+  assert.equal(reloaded.getDisplayPrefs(key1).thinking, 'full', 'the detail prefs beside it still resolve');
 });

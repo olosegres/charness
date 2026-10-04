@@ -73,7 +73,7 @@ export const jaDict: Record<string, string> = {
     '/new — セッションを再起動（旧 → /sessions）\n' +
     '/model /sessions — 切り替え\n' +
     '/effort — reasoning effort レベル\n' +
-    '/verbosity — 出力の詳細度（thinking/tools/サブエージェント）\n' +
+    '/verbosity — 出力の詳細度とトピックに表示するもの（ストリーム / 回答）\n' +
     '/quit /status /output — 制御\n' +
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
@@ -160,6 +160,7 @@ export const jaDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 まだスレッドがありません。',
   'status.thread_report': 'ステータス:\n\nエージェント: {agent}\nフォルダ: {subdir}\nセッション: {session}',
+  'status.thread_view': '表示: {view}',
   'status.thread_model': 'モデル: {model}',
   'status.thread_effort': '推論の強度: {effort}',
   'status.thread_started': '開始: {started}',
@@ -257,13 +258,17 @@ export const jaDict: Record<string, string> = {
   'subagent.mode.short': '短縮',
   'subagent.mode.full': '詳細',
 
-  'verbosity.choose': '🔊 現在の出力の詳細度: {current}\nレベルを選択:',
+  'verbosity.choose': '🔊 出力 — 詳細度: {current} · 表示: {view}\n1行目 — ストリームの詳細度 · 2行目 — このトピックに表示するもの:',
   'verbosity.set_success': '✅ 出力の詳細度: {mode}（thinking、ツール結果、サブエージェント）',
-  'verbosity.invalid_mode': '⚠️ モード `{mode}` は無効です。利用可能: {valid}。',
+  'verbosity.invalid_mode': '⚠️ `{mode}` は無効です。詳細度: {valid}。表示: {views}。',
   'verbosity.custom': 'カスタム（thinking: {thinking} · ツール: {toolResults} · サブエージェント: {subagent}）',
   'verbosity.mode.minimal': '最小',
   'verbosity.mode.short': '短縮',
   'verbosity.mode.full': '詳細',
+  'verbosity.view.stream': '全ストリーム',
+  'verbosity.view.streamAnswers': 'ストリーム + 回答',
+  'verbosity.view.answers': '回答のみ',
+  'verbosity.view_set_success': '✅ このトピックの表示: {view}（次のメッセージから適用）',
 
   'model.set_success': '🧠 モデルを設定: {model}',
   'model.saved_for_next_start': 'モデルを保存: {model} — 次回エージェント起動時に適用されます。',
@@ -444,6 +449,7 @@ export const jaDict: Record<string, string> = {
   'cb.subagent_error': 'エラー: {error}',
   'cb.verbosity_set': '出力の詳細度: {mode}',
   'cb.verbosity_error': 'エラー: {error}',
+  'cb.view_set': 'このトピックの表示: {view}',
 
   'session.list_header': '再開可能なセッション（{label}）:',
   'session.list_footer': '1–{max} を送信して再開 · 0 で終了',

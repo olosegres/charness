@@ -73,7 +73,7 @@ export const esDict: Record<string, string> = {
     '/new — reiniciar la sesión (la anterior → /sessions)\n' +
     '/model /sessions — cambiar\n' +
     '/effort — nivel de reasoning effort\n' +
-    '/verbosity — verbosidad de salida (thinking/tools/sub-agentes)\n' +
+    '/verbosity — detalle de salida y qué muestra el tema (stream / respuestas)\n' +
     '/quit /status /output — control\n' +
     '/compact — compactar el contexto del agente\n' +
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
@@ -160,6 +160,7 @@ export const esDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Aún no hay hilos.',
   'status.thread_report': 'Estado:\n\nAgente: {agent}\nCarpeta: {subdir}\nSesión: {session}',
+  'status.thread_view': 'Vista: {view}',
   'status.thread_model': 'Modelo: {model}',
   'status.thread_effort': 'Esfuerzo: {effort}',
   'status.thread_started': 'Iniciado: {started}',
@@ -257,13 +258,17 @@ export const esDict: Record<string, string> = {
   'subagent.mode.short': 'corto',
   'subagent.mode.full': 'completo',
 
-  'verbosity.choose': '🔊 Verbosidad de salida actual: {current}\nElige un nivel:',
+  'verbosity.choose': '🔊 Salida — detalle: {current} · vista: {view}\nFila 1 — detalle del stream · Fila 2 — qué muestra este tema:',
   'verbosity.set_success': '✅ Verbosidad de salida: {mode} (thinking, resultados de herramientas, sub-agentes)',
-  'verbosity.invalid_mode': '⚠️ Modo `{mode}` inválido. Disponibles: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` no es válido. Niveles de detalle: {valid}. Vistas: {views}.',
   'verbosity.custom': 'personalizado (thinking: {thinking} · herramientas: {toolResults} · sub-agentes: {subagent})',
   'verbosity.mode.minimal': 'mínimo',
   'verbosity.mode.short': 'corto',
   'verbosity.mode.full': 'completo',
+  'verbosity.view.stream': 'Stream completo',
+  'verbosity.view.streamAnswers': 'Stream + respuestas',
+  'verbosity.view.answers': 'Solo respuestas',
+  'verbosity.view_set_success': '✅ Este tema muestra: {view} (desde el próximo mensaje)',
 
   'model.set_success': '🧠 Modelo establecido: {model}',
   'model.saved_for_next_start': 'Modelo guardado: {model} — se aplicará en el próximo inicio de agente.',
@@ -444,6 +449,7 @@ export const esDict: Record<string, string> = {
   'cb.subagent_error': 'Error: {error}',
   'cb.verbosity_set': 'Verbosidad de salida: {mode}',
   'cb.verbosity_error': 'Error: {error}',
+  'cb.view_set': 'Este tema muestra: {view}',
 
   'session.list_header': 'Sesiones para reanudar ({label}):',
   'session.list_footer': 'Envía 1–{max} para reanudar · 0 para salir',

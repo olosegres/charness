@@ -10,6 +10,8 @@ export interface ThreadStatusReportInput {
   effort: string | null;
   startedAt: string | null;
   runtime: AgentRuntimeInfo | null;
+  /** The topic's view, already localized (`verbosity.view.*`). */
+  view: string;
   /** Instance timezone, already resolved (stored pick, else the host zone). */
   timezone: string;
   /** That zone's current wall clock, e.g. `18:42 (+03:00)`. */
@@ -24,7 +26,7 @@ export interface ThreadStatusReportInput {
  *
  * Model / effort / start date / runtime rows are session properties: they are
  * meaningless once the session stopped, so a stopped thread renders only the
- * header and the bound working directory.
+ * header, the bound working directory, the topic's view and the timezone.
  */
 export function getThreadStatusReport({
   agentLine,
@@ -35,6 +37,7 @@ export function getThreadStatusReport({
   effort,
   startedAt,
   runtime,
+  view,
   timezone,
   timezoneNow,
 }: ThreadStatusReportInput): string {
@@ -46,6 +49,8 @@ export function getThreadStatusReport({
     }),
   ];
   if (workDir !== null) lines.push(t('status.thread_workdir', { workDir }));
+  // A topic property, not a session one (S6): named whether or not an agent runs.
+  lines.push(t('status.thread_view', { view }));
   // Instance-wide, not a session property: it belongs ABOVE the early return so
   // a stopped thread still reports which clock its schedules will fire on.
   lines.push(t('timezone.status', { zone: timezone, now: timezoneNow }));

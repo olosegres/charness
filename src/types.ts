@@ -283,6 +283,17 @@ export interface LimitEpisodeMarker {
 export type DisplayVerbosityMode = 'minimal' | 'short' | 'full';
 
 /**
+ * @description What a Telegram topic SHOWS of the agent's work (request/answer
+ * plan S6), set per topic through `/verbosity` and persisted with the display
+ * prefs. `stream` is today's behaviour (the default); `streamAnswers` adds the
+ * agent's `answer_request` answers, pinned, and turns requests on; `answers`
+ * hides the agent's stream and shows only the pinned answers, the typing
+ * indicator, native questions, files and the bot's own notices. Rules live in
+ * `utils/topicView.ts`.
+ */
+export type TopicView = 'stream' | 'streamAnswers' | 'answers';
+
+/**
  * @description Reader for a thread's FULL resolved display preferences, injected
  * into BOTH adapters at boot (`createAdapter.registerDisplayPrefsReader`, S4).
  * Generalises the former single-pref `SubagentModeReader`: the adapters now need
@@ -332,6 +343,7 @@ export interface ThreadDisplayPrefs {
   thinking?: DisplayVerbosityMode;
   toolResults?: DisplayVerbosityMode;
   subagent?: DisplayVerbosityMode;
+  view?: TopicView;
 }
 
 /**
@@ -344,6 +356,7 @@ export interface ResolvedThreadDisplayPrefs {
   thinking: DisplayVerbosityMode;
   toolResults: DisplayVerbosityMode;
   subagent: DisplayVerbosityMode;
+  view: TopicView;
 }
 
 /**

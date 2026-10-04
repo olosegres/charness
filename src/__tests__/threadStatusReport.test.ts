@@ -44,6 +44,7 @@ test('inactive thread status omits live session metadata', () => {
     effort: 'xhigh',
     startedAt: '2026-08-21T10:00:00Z',
     runtime: { version: '1.0.0', model: 'openai/gpt-test', contextUsedTokens: 10, contextWindowTokens: 100 },
+    view: 'Answers only',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));
@@ -54,6 +55,8 @@ test('inactive thread status omits live session metadata', () => {
   // stopped-session early return, because the thread's SCHEDULES still fire on
   // that clock while no agent is running.
   assert.match(report, /🌍 Timezone: Europe\/Moscow — now 18:42 \(\+03:00\)/);
+  // The view is a topic property (S6): it is named while no agent runs.
+  assert.match(report, /View: Answers only/);
   assert.doesNotMatch(report, /Model:|Effort:|Started:|Runtime version:|Context:/);
 });
 
@@ -67,6 +70,7 @@ test('active thread status renders the observed runtime details', () => {
     effort: 'xhigh',
     startedAt: '2026-08-21T10:00:00Z',
     runtime: { version: '1.0.0', model: 'openai/gpt-test', contextUsedTokens: 10, contextWindowTokens: 100 },
+    view: 'Answers only',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));
@@ -90,6 +94,7 @@ test('unavailable runtime and workdir details render safely', () => {
     effort: null,
     startedAt: null,
     runtime: null,
+    view: 'Full stream',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));
@@ -109,6 +114,7 @@ test('active sessions without runtime support render unavailable runtime details
     effort: null,
     startedAt: null,
     runtime: null,
+    view: 'Full stream',
     timezone: 'Europe/Moscow',
     timezoneNow: '18:42 (+03:00)',
   }));

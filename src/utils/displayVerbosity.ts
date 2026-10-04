@@ -7,7 +7,8 @@
  * `toolResultRender.ts`, `subagentRender.ts`); this module only owns the
  * vocabulary itself, so the three commands can never drift apart again.
  */
-import type { DisplayVerbosityMode } from '../types';
+import type { DisplayVerbosityMode, ResolvedThreadDisplayPrefs } from '../types';
+import { defaultTopicView } from './topicView';
 
 /** Every selectable display-verbosity mode, in picker-button order (quiet →
  * loud). Single source of truth for arg validation and the mode keyboards of
@@ -21,6 +22,20 @@ export const displayVerbosityModeOptions: readonly DisplayVerbosityMode[] = ['mi
  * the bot injects its mode reader at boot.
  */
 export const defaultDisplayVerbosityMode: DisplayVerbosityMode = 'minimal';
+
+/**
+ * @description Every display pref at its locked default — what the adapters
+ * resolve for a read that happens before the bot injects its prefs reader at
+ * boot, and the baseline `state.ts` fills absent persisted fields from.
+ */
+export function getDefaultDisplayPrefs(): ResolvedThreadDisplayPrefs {
+  return {
+    thinking: defaultDisplayVerbosityMode,
+    toolResults: defaultDisplayVerbosityMode,
+    subagent: defaultDisplayVerbosityMode,
+    view: defaultTopicView,
+  };
+}
 
 /**
  * @description Type guard: is `value` one of the {@link DisplayVerbosityMode}

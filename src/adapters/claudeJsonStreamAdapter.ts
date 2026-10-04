@@ -27,6 +27,7 @@ import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
+import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import { t } from '../i18n';
 import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
 import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, defaultEffortLevel } from '../effortLevels';
@@ -326,7 +327,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
-    return this.displayPrefsReader?.(key) ?? { thinking: 'minimal', toolResults: 'minimal', subagent: 'minimal' };
+    return this.displayPrefsReader?.(key) ?? getDefaultDisplayPrefs();
   }
 
   private advanceSeenWatermark(key: SessionKey, watermark: SeenWatermark): void {

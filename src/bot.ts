@@ -33,7 +33,7 @@ import {
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter, claudeJsonStreamAdapterName } from './adapters/claudeJsonStreamAdapter';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OpenCodeQuestion, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, ResolvedThreadDisplayPrefs, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent, TopicView } from './types';
 import type { SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -234,6 +234,7 @@ import {
   normalizeDisplayVerbosityMode,
 } from './utils/displayVerbosity';
 import { getUniformVerbosityLevel } from './utils/verbosityRender';
+import { checkAreRequestsEnabled, parseTopicView, topicViewArguments, topicViewOptions } from './utils/topicView';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 import { getVoiceTranscriptionQueue } from './voiceQueue';
 import {
@@ -639,7 +640,13 @@ const telegramAgent = new https.Agent({
   keepAliveMsecs: 10000,
   family: 4,
 });
-const bot = new Telegraf(ENV.botToken, { telegram: { agent: telegramAgent } });
+// `TELEGRAM_API_ROOT` points the client at another Bot API host — the
+// process-level test's fake on loopback; unset is the real `api.telegram.org`.
+// Telegraf drops the https agent itself for an `http://` root.
+const telegramApiRoot = process.env.TELEGRAM_API_ROOT?.trim();
+const bot = new Telegraf(ENV.botToken, {
+  telegram: { agent: telegramAgent, ...(telegramApiRoot ? { apiRoot: telegramApiRoot } : {}) },
+});
 
 // Decouple the long-polling intake/ACK from per-handler latency: wrap
 // `bot.handleUpdate` so each update is enqueued into its thread's serial queue
@@ -5390,6 +5397,7 @@ command('status', async (_ctx, key) => {
   const timezone = getCurrentTimezone();
   await replyToThread(key, getThreadStatusReport({
     agentLine, subdir, isActive, workDir, model, effort, startedAt, runtime,
+    view: formatTopicView(state.getDisplayPrefs(key).view),
     timezone,
     timezoneNow: formatZoneNow(timezone, Date.now()),
   }));
@@ -7416,6 +7424,43 @@ async function applyVerbosityLevel(key: SessionKey, mode: DisplayVerbosityMode):
   await applySubagentMode(key, mode);
 }
 
+/**
+ * @description Persist the topic's view (request/answer plan S6). It applies
+ * from the next message: nothing in flight is re-rendered. Switching to the
+ * full stream turns requests off for the topic, so its open request closes
+ * silently — nothing wakes it and no alert follows. Shared by the typed form
+ * and the `view_<view>` picker button so the two paths can never diverge.
+ */
+async function applyTopicView(key: SessionKey, view: TopicView): Promise<void> {
+  await state.setDisplayPref(key, 'view', view);
+  if (!checkAreRequestsEnabled(view)) cancelConversationRequest(key);
+}
+
+/** The localized name of a view (`verbosity.view.*`). */
+function formatTopicView(view: TopicView): string {
+  return t(`verbosity.view.${view}`);
+}
+
+/**
+ * @description The `/verbosity` picker: row 1 is the shared detail row
+ * (`verb_<mode>`, ✓ on an exact match only — see {@link formatVerbosityCurrent}),
+ * row 2 the view row (`view_<view>`, ✓ on the topic's view). One builder for the
+ * command and both callback re-renders, so the two rows never drift.
+ */
+function buildVerbosityKeyboard(prefs: ResolvedThreadDisplayPrefs) {
+  const uniformLevel = getUniformVerbosityLevel(prefs);
+  const detailRow = displayVerbosityModeOptions.map((mode) =>
+    Markup.button.callback(
+      mode === uniformLevel ? `${t(`verbosity.mode.${mode}`)} ✓` : t(`verbosity.mode.${mode}`),
+      `verb_${mode}`,
+    ),
+  );
+  const viewRow = topicViewOptions.map((view) =>
+    Markup.button.callback(view === prefs.view ? `${formatTopicView(view)} ✓` : formatTopicView(view), `view_${view}`),
+  );
+  return Markup.inlineKeyboard([detailRow, viewRow]);
+}
+
 command('verbosity', async (_ctx, key, parsed) => {
   const arg = parsed.argsText.toLowerCase();
 
@@ -7423,25 +7468,33 @@ command('verbosity', async (_ctx, key, parsed) => {
     // Normalization keeps the retired names (`detailed`/`brief`/`hide`/
     // `compact`) working as hidden aliases; the reply always names the NEW mode.
     const mode = normalizeDisplayVerbosityMode(arg);
-    if (!mode) {
+    if (mode) {
+      await applyVerbosityLevel(key, mode);
+      await replyToThread(key, t('verbosity.set_success', { mode: t(`verbosity.mode.${mode}`) }));
+      return;
+    }
+    // Not a level: the view vocabulary (`stream|stream_answers|answers`, S6).
+    const view = parseTopicView(arg);
+    if (!view) {
       await replyToThread(key, t('verbosity.invalid_mode', {
         mode: arg,
         valid: displayVerbosityModeOptions.join(', '),
+        views: topicViewOptions.map((option) => topicViewArguments[option]).join(', '),
       }));
       return;
     }
-    await applyVerbosityLevel(key, mode);
-    await replyToThread(key, t('verbosity.set_success', { mode: t(`verbosity.mode.${mode}`) }));
+    await applyTopicView(key, view);
+    await replyToThread(key, t('verbosity.view_set_success', { view: formatTopicView(view) }));
     return;
   }
 
   // No arg: show the current state (exact level, or "custom" with the three
-  // values spelled out) + a button per level.
+  // values spelled out, plus the view) + the two button rows.
   const prefs = state.getDisplayPrefs(key);
   await replyToThread(
     key,
-    t('verbosity.choose', { current: formatVerbosityCurrent(prefs) }),
-    buildDisplayModeKeyboard('verbosity', 'verb', getUniformVerbosityLevel(prefs)),
+    t('verbosity.choose', { current: formatVerbosityCurrent(prefs), view: formatTopicView(prefs.view) }),
+    buildVerbosityKeyboard(prefs),
   );
 });
 
@@ -11266,6 +11319,39 @@ interface DisplayModeCallbackConfig {
   setCbKey: string;
   /** Short tag for the keyboard-re-render warning log. */
   logTag: string;
+  /**
+   * The picker to re-render after the pick; defaults to the shared one-row
+   * keyboard. `/verbosity` renders its two rows (detail + view, S6) instead.
+   */
+  buildKeyboard?: (key: SessionKey, picked: DisplayVerbosityMode) => ReturnType<typeof buildDisplayModeKeyboard>;
+}
+
+/**
+ * @description Re-render a picker message's inline keyboard after a button
+ * press so its ✓ follows the new state (mirrors effort_cb). "Message is not
+ * modified" is the no-change case, not a failure; anything else is logged.
+ */
+async function rerenderPickerKeyboard(
+  ctx: Context,
+  key: SessionKey,
+  keyboard: ReturnType<typeof buildDisplayModeKeyboard>,
+  logTag: string,
+): Promise<void> {
+  const cbMsg = ctx.callbackQuery?.message as Message | undefined;
+  if (!cbMsg) return;
+  try {
+    await enqueueSend(
+      key,
+      () => bot.telegram.editMessageReplyMarkup(
+        getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
+      ),
+    );
+  } catch (e) {
+    const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
+    if (!/message is not modified/i.test(desc)) {
+      console.warn(`[${logTag}] keyboard re-render failed:`, desc || e);
+    }
+  }
 }
 
 /**
@@ -11303,24 +11389,10 @@ async function handleDisplayModeCallback(
   await config.apply(key, picked);
   await ctx.answerCbQuery(t(config.setCbKey, { mode: t(`${config.i18nGroup}.mode.${picked}`) }));
 
-  // Re-render the picker so the `✓` follows the new mode (mirrors effort_cb).
-  const cbMsg = ctx.callbackQuery?.message as Message | undefined;
-  if (cbMsg) {
-    const keyboard = buildDisplayModeKeyboard(config.i18nGroup, config.callbackPrefix, picked);
-    try {
-      await enqueueSend(
-        key,
-        () => bot.telegram.editMessageReplyMarkup(
-          getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
-        ),
-      );
-    } catch (e) {
-      const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-      if (!/message is not modified/i.test(desc)) {
-        console.warn(`[${config.logTag}] keyboard re-render failed:`, desc || e);
-      }
-    }
-  }
+  const keyboard = config.buildKeyboard
+    ? config.buildKeyboard(key, picked)
+    : buildDisplayModeKeyboard(config.i18nGroup, config.callbackPrefix, picked);
+  await rerenderPickerKeyboard(ctx, key, keyboard, config.logTag);
 }
 
 // All four mode callbacks drive both backends (S5 un-gated /thinking). Each is a
@@ -11343,7 +11415,24 @@ bot.action(/^subag_(.+)$/, (ctx) => handleDisplayModeCallback(ctx, {
 bot.action(/^verb_(.+)$/, (ctx) => handleDisplayModeCallback(ctx, {
   i18nGroup: 'verbosity', callbackPrefix: 'verb', isOpenCodeOnly: false,
   apply: applyVerbosityLevel, errorCbKey: 'cb.verbosity_error', setCbKey: 'cb.verbosity_set', logTag: 'verb_cb',
+  // The level was just applied to all three prefs; the view row reads the store.
+  buildKeyboard: (key) => buildVerbosityKeyboard(state.getDisplayPrefs(key)),
 }));
+
+// The `/verbosity` picker's second row (S6): the topic's view. Same shape as the
+// level callbacks — authorise, validate the payload, persist, answer, re-render.
+bot.action(/^view_(.+)$/, async (ctx) => {
+  const key = await authoriseContext(ctx);
+  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const picked = parseTopicView(ctx.match[1]);
+  if (!picked) {
+    await ctx.answerCbQuery(t('cb.verbosity_error', { error: ctx.match[1].slice(0, 50) }));
+    return;
+  }
+  await applyTopicView(key, picked);
+  await ctx.answerCbQuery(t('cb.view_set', { view: formatTopicView(picked) }));
+  await rerenderPickerKeyboard(ctx, key, buildVerbosityKeyboard(state.getDisplayPrefs(key)), 'view_cb');
+});
 
 bot.action(/^agent_(.+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);

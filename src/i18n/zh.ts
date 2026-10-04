@@ -73,7 +73,7 @@ export const zhDict: Record<string, string> = {
     '/new — 重启会话（旧的 → /sessions）\n' +
     '/model /sessions — 切换\n' +
     '/effort — reasoning effort 级别\n' +
-    '/verbosity — 输出详细度（thinking/tools/子代理）\n' +
+    '/verbosity — 输出详细度及话题显示的内容（流 / 回答）\n' +
     '/quit /status /output — 控制\n' +
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
@@ -160,6 +160,7 @@ export const zhDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 暂无话题。',
   'status.thread_report': '状态：\n\n代理：{agent}\n文件夹：{subdir}\n会话：{session}',
+  'status.thread_view': '视图：{view}',
   'status.thread_model': '模型：{model}',
   'status.thread_effort': '推理强度：{effort}',
   'status.thread_started': '启动时间：{started}',
@@ -257,13 +258,17 @@ export const zhDict: Record<string, string> = {
   'subagent.mode.short': '简短',
   'subagent.mode.full': '完整',
 
-  'verbosity.choose': '🔊 当前输出详细度: {current}\n选择级别：',
+  'verbosity.choose': '🔊 输出 — 详细度：{current} · 视图：{view}\n第 1 行 — 流的详细度 · 第 2 行 — 本话题显示的内容：',
   'verbosity.set_success': '✅ 输出详细度: {mode}（thinking、工具结果、子代理）',
-  'verbosity.invalid_mode': '⚠️ 模式 `{mode}` 无效。可用：{valid}。',
+  'verbosity.invalid_mode': '⚠️ `{mode}` 无效。详细度：{valid}。视图：{views}。',
   'verbosity.custom': '自定义（thinking: {thinking} · 工具: {toolResults} · 子代理: {subagent}）',
   'verbosity.mode.minimal': '最简',
   'verbosity.mode.short': '简短',
   'verbosity.mode.full': '完整',
+  'verbosity.view.stream': '完整流',
+  'verbosity.view.streamAnswers': '流 + 回答',
+  'verbosity.view.answers': '仅回答',
+  'verbosity.view_set_success': '✅ 本话题显示：{view}（从下一条消息起生效）',
 
   'model.set_success': '🧠 模型已设为：{model}',
   'model.saved_for_next_start': '模型已保存：{model} — 下次代理启动时应用。',
@@ -444,6 +449,7 @@ export const zhDict: Record<string, string> = {
   'cb.subagent_error': '错误：{error}',
   'cb.verbosity_set': '输出详细度: {mode}',
   'cb.verbosity_error': '错误：{error}',
+  'cb.view_set': '本话题显示：{view}',
 
   'session.list_header': '可恢复的会话（{label}）：',
   'session.list_footer': '发送 1–{max} 恢复 · 0 退出',

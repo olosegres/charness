@@ -77,7 +77,7 @@ export const enDict: Record<string, string> = {
     '/new — restart the session (old one → /sessions)\n' +
     '/model /sessions — switch\n' +
     '/effort — reasoning-effort level\n' +
-    '/verbosity — output verbosity (thinking/tools/sub-agents)\n' +
+    '/verbosity — output detail and what the topic shows (stream / answers)\n' +
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
@@ -164,6 +164,7 @@ export const enDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 No threads yet.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nFolder: {subdir}\nSession: {session}',
+  'status.thread_view': 'View: {view}',
   'status.thread_model': 'Model: {model}',
   'status.thread_effort': 'Effort: {effort}',
   'status.thread_started': 'Started: {started}',
@@ -261,13 +262,17 @@ export const enDict: Record<string, string> = {
   'subagent.mode.short': 'short',
   'subagent.mode.full': 'full',
 
-  'verbosity.choose': '🔊 Current output verbosity: {current}\nPick a level:',
+  'verbosity.choose': '🔊 Verbosity — detail: {current} · view: {view}\nRow 1 — detail of the stream · Row 2 — what this topic shows:',
   'verbosity.set_success': '✅ Output verbosity: {mode} (thinking, tool results, sub-agents)',
-  'verbosity.invalid_mode': '⚠️ Mode `{mode}` is not valid. Available: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` is not valid. Detail levels: {valid}. Views: {views}.',
   'verbosity.custom': 'custom (thinking: {thinking} · tools: {toolResults} · sub-agents: {subagent})',
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'short',
   'verbosity.mode.full': 'full',
+  'verbosity.view.stream': 'Full stream',
+  'verbosity.view.streamAnswers': 'Stream + answers',
+  'verbosity.view.answers': 'Answers only',
+  'verbosity.view_set_success': '✅ This topic shows: {view} (applies from the next message)',
 
   'model.set_success': '🧠 Model set to: {model}',
   'model.saved_for_next_start': 'Model saved: {model} — applies on next agent start.',
@@ -461,6 +466,7 @@ export const enDict: Record<string, string> = {
   'cb.subagent_error': 'Error: {error}',
   'cb.verbosity_set': 'Output verbosity: {mode}',
   'cb.verbosity_error': 'Error: {error}',
+  'cb.view_set': 'This topic shows: {view}',
 
   'session.list_header': 'Sessions to resume ({label}):',
   'session.list_footer': 'Send 1–{max} to resume · 0 to exit',

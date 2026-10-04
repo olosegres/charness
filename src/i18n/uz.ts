@@ -73,7 +73,7 @@ export const uzDict: Record<string, string> = {
     '/new — seansni qayta boshlash (eskisi → /sessions)\n' +
     '/model /sessions — almashtirish\n' +
     '/effort — reasoning effort darajasi\n' +
-    '/verbosity — chiqish batafsilligi (thinking/tools/sub-agentlar)\n' +
+    "/verbosity — chiqish batafsilligi va mavzu nimani ko'rsatadi (oqim / javoblar)\n" +
     '/quit /status /output — boshqaruv\n' +
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
@@ -160,6 +160,7 @@ export const uzDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Hali mavzular yo‘q.',
   'status.thread_report': 'Holat:\n\nAgent: {agent}\nJild: {subdir}\nSessiya: {session}',
+  'status.thread_view': "Ko'rinish: {view}",
   'status.thread_model': 'Model: {model}',
   'status.thread_effort': 'Kuch: {effort}',
   'status.thread_started': 'Boshlangan: {started}',
@@ -257,13 +258,17 @@ export const uzDict: Record<string, string> = {
   'subagent.mode.short': 'qisqa',
   'subagent.mode.full': "to'liq",
 
-  'verbosity.choose': '🔊 Joriy chiqish batafsilligi: {current}\nDarajani tanlang:',
+  'verbosity.choose': "🔊 Chiqish — batafsillik: {current} · ko'rinish: {view}\n1-qator — oqim batafsilligi · 2-qator — bu mavzu nimani ko'rsatadi:",
   'verbosity.set_success': '✅ Chiqish batafsilligi: {mode} (thinking, tool-natijalar, sub-agentlar)',
-  'verbosity.invalid_mode': '⚠️ `{mode}` rejimi yaroqsiz. Mavjud: {valid}.',
+  'verbosity.invalid_mode': "⚠️ `{mode}` noto'g'ri. Batafsillik darajalari: {valid}. Ko'rinishlar: {views}.",
   'verbosity.custom': 'maxsus (thinking: {thinking} · vositalar: {toolResults} · sub-agentlar: {subagent})',
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'qisqa',
   'verbosity.mode.full': "to'liq",
+  'verbosity.view.stream': "To'liq oqim",
+  'verbosity.view.streamAnswers': 'Oqim + javoblar',
+  'verbosity.view.answers': 'Faqat javoblar',
+  'verbosity.view_set_success': "✅ Bu mavzu ko'rsatadi: {view} (keyingi xabardan boshlab)",
 
   'model.set_success': '🧠 Model tanlandi: {model}',
   'model.saved_for_next_start': 'Model saqlandi: {model} — keyingi agent boshlashda qo‘llanadi.',
@@ -444,6 +449,7 @@ export const uzDict: Record<string, string> = {
   'cb.subagent_error': 'Xato: {error}',
   'cb.verbosity_set': 'Chiqish batafsilligi: {mode}',
   'cb.verbosity_error': 'Xato: {error}',
+  'cb.view_set': "Bu mavzu ko'rsatadi: {view}",
 
   'session.list_header': 'Davom ettiriladigan seanslar ({label}):',
   'session.list_footer': 'Davom ettirish 1–{max} · chiqish 0',

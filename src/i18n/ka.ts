@@ -73,7 +73,7 @@ export const kaDict: Record<string, string> = {
     '/new — სესიის გადატვირთვა (ძველი → /sessions)\n' +
     '/model /sessions — გადართვა\n' +
     '/effort — reasoning effort დონე\n' +
-    '/verbosity — გამოტანის დეტალურობა (thinking/tools/ქვე-აგენტები)\n' +
+    '/verbosity — გამოტანის დეტალურობა და რას აჩვენებს თემა (ნაკადი / პასუხები)\n' +
     '/quit /status /output — კონტროლი\n' +
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
@@ -160,6 +160,7 @@ export const kaDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 ჯერ თემები არ არის.',
   'status.thread_report': 'სტატუსი:\n\nაგენტი: {agent}\nსაქაღალდე: {subdir}\nსესია: {session}',
+  'status.thread_view': 'ხედი: {view}',
   'status.thread_model': 'მოდელი: {model}',
   'status.thread_effort': 'ძალისხმევა: {effort}',
   'status.thread_started': 'დაიწყო: {started}',
@@ -257,13 +258,17 @@ export const kaDict: Record<string, string> = {
   'subagent.mode.short': 'მოკლე',
   'subagent.mode.full': 'სრული',
 
-  'verbosity.choose': '🔊 მიმდინარე გამოტანის დეტალურობა: {current}\nაირჩიეთ დონე:',
+  'verbosity.choose': '🔊 გამოტანა — დეტალურობა: {current} · ხედი: {view}\nრიგი 1 — ნაკადის დეტალურობა · რიგი 2 — რას აჩვენებს ეს თემა:',
   'verbosity.set_success': '✅ გამოტანის დეტალურობა: {mode} (thinking, ხელსაწყოს შედეგები, ქვე-აგენტები)',
-  'verbosity.invalid_mode': '⚠️ რეჟიმი `{mode}` არასწორია. ხელმისაწვდომი: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` არასწორია. დეტალურობის დონეები: {valid}. ხედები: {views}.',
   'verbosity.custom': 'მორგინილი (thinking: {thinking} · ხელსაწყოები: {toolResults} · ქვე-აგენტები: {subagent})',
   'verbosity.mode.minimal': 'მინიმალური',
   'verbosity.mode.short': 'მოკლე',
   'verbosity.mode.full': 'სრული',
+  'verbosity.view.stream': 'სრული ნაკადი',
+  'verbosity.view.streamAnswers': 'ნაკადი + პასუხები',
+  'verbosity.view.answers': 'მხოლოდ პასუხები',
+  'verbosity.view_set_success': '✅ ეს თემა აჩვენებს: {view} (მოქმედებს შემდეგი შეტყობინებიდან)',
 
   'model.set_success': '🧠 მოდელი დაყენდა: {model}',
   'model.saved_for_next_start': 'მოდელი შენახულია: {model} — მოქმედებს შემდეგ აგენტის გაშვებაზე.',
@@ -444,6 +449,7 @@ export const kaDict: Record<string, string> = {
   'cb.subagent_error': 'შეცდომა: {error}',
   'cb.verbosity_set': 'გამოტანის დეტალურობა: {mode}',
   'cb.verbosity_error': 'შეცდომა: {error}',
+  'cb.view_set': 'ეს თემა აჩვენებს: {view}',
 
   'session.list_header': 'გასაგრძელებელი სესიები ({label}):',
   'session.list_footer': 'გამოგვიგზავნეთ 1–{max} გასაგრძელებლად · 0 გასასვლელად',

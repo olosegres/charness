@@ -62,6 +62,13 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 - A directory-scoped call re-resolves the topic binding before opening files and again inside the delivery
   queue, refusing a binding that changed meanwhile.
 
+## Testing against a fake Bot API
+
+`TELEGRAM_API_ROOT` points the telegraf client at another Bot API host. The process-level Telegram test
+(`src/__tests__/telegramViewsE2e.test.ts`) runs the built bot against `telegramE2e/fakeTelegram.ts` on
+loopback with a placeholder token; unset, the client talks to `api.telegram.org`. Telegraf drops its https
+agent by itself for an `http://` root.
+
 ## Guards
 
 - `../../utils/linkPreviewSuppression.ts` defaults every outgoing text to NO link preview at the shared

@@ -25,7 +25,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Inbound files** — photos / documents / video / audio sent to a topic are saved and announced to the agent; albums arrive as one prompt
 - **Outbound files** — the agent sends files back to you — a generated chart, a screenshot, a log, a rendered PDF — single files or albums, straight into the topic
 - **Voice input** — Whisper transcription via Groq (preferred) or OpenAI
-- **Display verbosity** — `/verbosity` (plus `/thinking`, `/tool_results`, `/subagent`) per topic: `minimal|short|full`
+- **Display verbosity and view** — `/verbosity` (plus `/thinking`, `/tool_results`, `/subagent`) per topic: detail `minimal|short|full`, and what the topic shows — `stream` (default), `stream_answers` or `answers` (only the agent's pinned answers, no stream)
 - **Time-aware prompts** — `/timestamps on` prepends each forwarded prompt's send time (local-offset ISO), so a days-long session knows what "yesterday" or "2 days ago" means; agent-facing only, per topic
 - **Reply context** — reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text and voice, both agents
 - **Your timezone** — `/timezone Europe/Moscow` once, and schedules fire at your wall-clock time while the agent is told what time it actually is; no server-clock guessing
@@ -281,7 +281,7 @@ actually start an agent or terminal in the folder.
 | `/connect [provider]` | Connect an OpenCode provider (OpenAI by default; for example `/connect openrouter`). Special OAuth methods are shown when available; ordinary catalog providers ask for an API key and delete the key message from Telegram |
 | `/disconnect [provider]` | Remove an OpenCode provider's stored credentials; bare shows a picker of active providers. A provider OpenCode enables from an environment variable (e.g. `OPENROUTER_API_KEY`) stays active after this — the reply says so and points at hiding it in `/model` |
 | `/effort` | Set reasoning effort (per-thread) via inline buttons. Claude: native `/effort` levels (`low…ultracode`). OpenCode: the current model's variants, applied per-prompt. No env configuration |
-| `/verbosity` | Output-verbosity macro (`minimal\|short\|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker |
+| `/verbosity` | Output-verbosity macro (`minimal\|short\|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker. The picker's second row (or `/verbosity stream\|stream_answers\|answers`) sets what the topic SHOWS: the full stream (default), the stream plus the agent's pinned answers, or the pinned answers only; a switch applies from the next message, and `/status` names the view |
 | `/thinking` | Chain-of-thought display: `full` keeps the reasoning, `short` collapses to "💭 thought for Ns", `minimal` keeps only the live working cue |
 | `/tool_results` | Completed tool-call output: `full` whole body, `short` capped (15 lines / 1200 chars), `minimal` transient 🔧 status only |
 | `/subagent` | Sub-agent transcript: status-only with a ticking elapsed counter (`minimal`/`short`), or streamed "🤖 ⤷" chunks (`full`) |

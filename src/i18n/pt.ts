@@ -73,7 +73,7 @@ export const ptDict: Record<string, string> = {
     '/new — reiniciar a sessão (a antiga → /sessions)\n' +
     '/model /sessions — trocar\n' +
     '/effort — nível de reasoning effort\n' +
-    '/verbosity — verbosidade de saída (thinking/tools/sub-agentes)\n' +
+    '/verbosity — detalhe da saída e o que o tópico mostra (stream / respostas)\n' +
     '/quit /status /output — controlo\n' +
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
@@ -160,6 +160,7 @@ export const ptDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Ainda sem tópicos.',
   'status.thread_report': 'Status:\n\nAgente: {agent}\nPasta: {subdir}\nSessão: {session}',
+  'status.thread_view': 'Vista: {view}',
   'status.thread_model': 'Modelo: {model}',
   'status.thread_effort': 'Esforço: {effort}',
   'status.thread_started': 'Iniciado: {started}',
@@ -257,13 +258,17 @@ export const ptDict: Record<string, string> = {
   'subagent.mode.short': 'curto',
   'subagent.mode.full': 'completo',
 
-  'verbosity.choose': '🔊 Verbosidade de saída atual: {current}\nEscolhe um nível:',
+  'verbosity.choose': '🔊 Saída — detalhe: {current} · vista: {view}\nLinha 1 — detalhe do stream · Linha 2 — o que este tópico mostra:',
   'verbosity.set_success': '✅ Verbosidade de saída: {mode} (thinking, resultados de ferramentas, sub-agentes)',
-  'verbosity.invalid_mode': '⚠️ Modo `{mode}` inválido. Disponíveis: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` não é válido. Níveis de detalhe: {valid}. Vistas: {views}.',
   'verbosity.custom': 'personalizado (thinking: {thinking} · ferramentas: {toolResults} · sub-agentes: {subagent})',
   'verbosity.mode.minimal': 'mínimo',
   'verbosity.mode.short': 'curto',
   'verbosity.mode.full': 'completo',
+  'verbosity.view.stream': 'Stream completo',
+  'verbosity.view.streamAnswers': 'Stream + respostas',
+  'verbosity.view.answers': 'Só respostas',
+  'verbosity.view_set_success': '✅ Este tópico mostra: {view} (a partir da próxima mensagem)',
 
   'model.set_success': '🧠 Modelo definido: {model}',
   'model.saved_for_next_start': 'Modelo guardado: {model} — aplica-se no próximo início de agente.',
@@ -444,6 +449,7 @@ export const ptDict: Record<string, string> = {
   'cb.subagent_error': 'Erro: {error}',
   'cb.verbosity_set': 'Verbosidade de saída: {mode}',
   'cb.verbosity_error': 'Erro: {error}',
+  'cb.view_set': 'Este tópico mostra: {view}',
 
   'session.list_header': 'Sessões para retomar ({label}):',
   'session.list_footer': 'Envia 1–{max} para retomar · 0 para sair',

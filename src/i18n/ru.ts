@@ -77,7 +77,7 @@ export const ruDict: Record<string, string> = {
     '/new — перезапустить сессию (старая → /sessions)\n' +
     '/model /sessions — переключение\n' +
     '/effort — уровень reasoning effort\n' +
-    '/verbosity — детализация вывода (размышления/инструменты/суб-агенты)\n' +
+    '/verbosity — детализация вывода и что показывает топик (поток / ответы)\n' +
     '/quit /status /output — контроль\n' +
     '/compact — сжать контекст агента\n' +
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
@@ -164,6 +164,7 @@ export const ruDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Тредов пока нет.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nПапка: {subdir}\nСессия: {session}',
+  'status.thread_view': 'Вид: {view}',
   'status.thread_model': 'Модель: {model}',
   'status.thread_effort': 'Усилие: {effort}',
   'status.thread_started': 'Запущено: {started}',
@@ -261,13 +262,17 @@ export const ruDict: Record<string, string> = {
   'subagent.mode.short': 'кратко',
   'subagent.mode.full': 'подробно',
 
-  'verbosity.choose': '🔊 Текущая детализация вывода: {current}\nВыбери уровень:',
+  'verbosity.choose': '🔊 Вывод — детализация: {current} · вид: {view}\nРяд 1 — детализация потока · Ряд 2 — что показывает этот топик:',
   'verbosity.set_success': '✅ Детализация вывода: {mode} (размышления, инструменты, суб-агенты)',
-  'verbosity.invalid_mode': '⚠️ Режим `{mode}` недопустим. Доступные: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` недопустимо. Уровни детализации: {valid}. Виды: {views}.',
   'verbosity.custom': 'смешанный (размышления: {thinking} · инструменты: {toolResults} · суб-агенты: {subagent})',
   'verbosity.mode.minimal': 'минимум',
   'verbosity.mode.short': 'кратко',
   'verbosity.mode.full': 'подробно',
+  'verbosity.view.stream': 'Полный поток',
+  'verbosity.view.streamAnswers': 'Поток + ответы',
+  'verbosity.view.answers': 'Только ответы',
+  'verbosity.view_set_success': '✅ Этот топик показывает: {view} (со следующего сообщения)',
 
   'model.set_success': '🧠 Модель выбрана: {model}',
   'model.saved_for_next_start': 'Модель сохранена: {model} — применится при старте агента.',
@@ -448,6 +453,7 @@ export const ruDict: Record<string, string> = {
   'cb.subagent_error': 'Ошибка: {error}',
   'cb.verbosity_set': 'Детализация вывода: {mode}',
   'cb.verbosity_error': 'Ошибка: {error}',
+  'cb.view_set': 'Этот топик показывает: {view}',
 
   'session.list_header': 'Сессии для возобновления ({label}):',
   'session.list_footer': 'Отправьте 1–{max} чтобы возобновить · 0 для выхода',

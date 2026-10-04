@@ -5,7 +5,6 @@ import * as os from 'os';
 import { randomBytes } from 'node:crypto';
 import {
   type ApiRetryState,
-  type DisplayVerbosityMode,
   type JsonStreamTailOffset,
   type LimitEpisodeMarker,
   type PendingQuestionState,
@@ -15,6 +14,7 @@ import {
 } from './types';
 import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
+import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import type { ScheduleRecord } from './scheduler/types';
@@ -1759,6 +1759,7 @@ export class StateStore {
       thinking: normalizeDisplayVerbosityMode(stored?.thinking) ?? defaultDisplayVerbosityMode,
       toolResults: normalizeDisplayVerbosityMode(stored?.toolResults) ?? defaultDisplayVerbosityMode,
       subagent: normalizeDisplayVerbosityMode(stored?.subagent) ?? defaultDisplayVerbosityMode,
+      view: parseTopicView(stored?.view) ?? defaultTopicView,
     };
   }
 
@@ -1769,17 +1770,18 @@ export class StateStore {
    * `state.json` — same delete-when-default idiom as {@link setTraceConfig}.
    * Not crash-critical (a rendering preference), so it rides the debounced
    * save loop rather than an immediate `flush()`. Callers pass an
-   * already-normalized {@link DisplayVerbosityMode} — legacy names never reach
-   * the store on the write path.
+   * already-normalized value — legacy names never reach the store on the write
+   * path. The `view` field (S6) rides the same record and the same idiom, with
+   * its own locked default.
    */
-  async setDisplayPref(
+  async setDisplayPref<TField extends keyof ThreadDisplayPrefs>(
     key: SessionKey,
-    field: keyof ThreadDisplayPrefs,
-    value: DisplayVerbosityMode,
+    field: TField,
+    value: NonNullable<ThreadDisplayPrefs[TField]>,
   ): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
-      const isDefault = value === defaultDisplayVerbosityMode;
+      const isDefault = value === (field === 'view' ? defaultTopicView : defaultDisplayVerbosityMode);
 
       const existing = this.state.displayPrefs?.[k];
 

@@ -73,7 +73,7 @@ export const deDict: Record<string, string> = {
     '/new — Session neu starten (alte → /sessions)\n' +
     '/model /sessions — wechseln\n' +
     '/effort — Reasoning-Effort-Stufe\n' +
-    '/verbosity — Ausgabedetaillierung (Thinking/Tools/Sub-Agenten)\n' +
+    '/verbosity — Ausgabedetail und was das Thema zeigt (Stream / Antworten)\n' +
     '/quit /status /output — Steuerung\n' +
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
@@ -160,6 +160,7 @@ export const deDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 Noch keine Threads.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nOrdner: {subdir}\nSitzung: {session}',
+  'status.thread_view': 'Ansicht: {view}',
   'status.thread_model': 'Modell: {model}',
   'status.thread_effort': 'Aufwand: {effort}',
   'status.thread_started': 'Gestartet: {started}',
@@ -257,13 +258,17 @@ export const deDict: Record<string, string> = {
   'subagent.mode.short': 'kurz',
   'subagent.mode.full': 'voll',
 
-  'verbosity.choose': '🔊 Aktuelle Ausgabedetaillierung: {current}\nWähle eine Stufe:',
+  'verbosity.choose': '🔊 Ausgabe — Detail: {current} · Ansicht: {view}\nZeile 1 — Detail des Streams · Zeile 2 — was dieses Thema zeigt:',
   'verbosity.set_success': '✅ Ausgabedetaillierung: {mode} (Thinking, Tool-Ergebnisse, Sub-Agenten)',
-  'verbosity.invalid_mode': '⚠️ Modus `{mode}` ist ungültig. Verfügbar: {valid}.',
+  'verbosity.invalid_mode': '⚠️ `{mode}` ist ungültig. Detailstufen: {valid}. Ansichten: {views}.',
   'verbosity.custom': 'benutzerdefiniert (Thinking: {thinking} · Tools: {toolResults} · Sub-Agenten: {subagent})',
   'verbosity.mode.minimal': 'minimal',
   'verbosity.mode.short': 'kurz',
   'verbosity.mode.full': 'voll',
+  'verbosity.view.stream': 'Voller Stream',
+  'verbosity.view.streamAnswers': 'Stream + Antworten',
+  'verbosity.view.answers': 'Nur Antworten',
+  'verbosity.view_set_success': '✅ Dieses Thema zeigt: {view} (gilt ab der nächsten Nachricht)',
 
   'model.set_success': '🧠 Modell gesetzt auf: {model}',
   'model.saved_for_next_start': 'Modell gespeichert: {model} — wird beim nächsten Agent-Start angewendet.',
@@ -444,6 +449,7 @@ export const deDict: Record<string, string> = {
   'cb.subagent_error': 'Fehler: {error}',
   'cb.verbosity_set': 'Ausgabedetaillierung: {mode}',
   'cb.verbosity_error': 'Fehler: {error}',
+  'cb.view_set': 'Dieses Thema zeigt: {view}',
 
   'session.list_header': 'Sessions zum Fortsetzen ({label}):',
   'session.list_footer': 'Sende 1–{max} zum Fortsetzen · 0 zum Abbrechen',

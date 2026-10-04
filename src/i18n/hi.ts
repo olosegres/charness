@@ -73,7 +73,7 @@ export const hiDict: Record<string, string> = {
     '/new — सत्र पुनः प्रारंभ करें (पुराना → /sessions)\n' +
     '/model /sessions — स्विच\n' +
     '/effort — reasoning effort स्तर\n' +
-    '/verbosity — आउटपुट विस्तार (thinking/tools/सब-एजेंट)\n' +
+    '/verbosity — आउटपुट विस्तार और टॉपिक क्या दिखाता है (स्ट्रीम / उत्तर)\n' +
     '/quit /status /output — नियंत्रण\n' +
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
@@ -160,6 +160,7 @@ export const hiDict: Record<string, string> = {
   'status.global_row': '• `{key}` → `{subdir}` · {agent} · {status}',
   'status.global_empty': '📊 अभी तक कोई थ्रेड नहीं।',
   'status.thread_report': 'स्थिति:\n\nएजेंट: {agent}\nफ़ोल्डर: {subdir}\nसत्र: {session}',
+  'status.thread_view': 'व्यू: {view}',
   'status.thread_model': 'मॉडल: {model}',
   'status.thread_effort': 'प्रयास: {effort}',
   'status.thread_started': 'शुरू हुआ: {started}',
@@ -257,13 +258,17 @@ export const hiDict: Record<string, string> = {
   'subagent.mode.short': 'संक्षिप्त',
   'subagent.mode.full': 'पूर्ण',
 
-  'verbosity.choose': '🔊 वर्तमान आउटपुट विस्तार: {current}\nएक स्तर चुनें:',
+  'verbosity.choose': '🔊 आउटपुट — विस्तार: {current} · व्यू: {view}\nपंक्ति 1 — स्ट्रीम का विस्तार · पंक्ति 2 — यह टॉपिक क्या दिखाता है:',
   'verbosity.set_success': '✅ आउटपुट विस्तार: {mode} (thinking, टूल-परिणाम, सब-एजेंट)',
-  'verbosity.invalid_mode': '⚠️ मोड `{mode}` अमान्य है। उपलब्ध: {valid}।',
+  'verbosity.invalid_mode': '⚠️ `{mode}` मान्य नहीं है। विस्तार स्तर: {valid}। व्यू: {views}।',
   'verbosity.custom': 'कस्टम (thinking: {thinking} · टूल: {toolResults} · सब-एजेंट: {subagent})',
   'verbosity.mode.minimal': 'न्यून',
   'verbosity.mode.short': 'संक्षिप्त',
   'verbosity.mode.full': 'पूर्ण',
+  'verbosity.view.stream': 'पूरी स्ट्रीम',
+  'verbosity.view.streamAnswers': 'स्ट्रीम + उत्तर',
+  'verbosity.view.answers': 'केवल उत्तर',
+  'verbosity.view_set_success': '✅ यह टॉपिक दिखाता है: {view} (अगले संदेश से लागू)',
 
   'model.set_success': '🧠 मॉडल सेट किया गया: {model}',
   'model.saved_for_next_start': 'मॉडल सहेजा गया: {model} — अगली एजेंट शुरुआत पर लागू।',
@@ -444,6 +449,7 @@ export const hiDict: Record<string, string> = {
   'cb.subagent_error': 'त्रुटि: {error}',
   'cb.verbosity_set': 'आउटपुट विस्तार: {mode}',
   'cb.verbosity_error': 'त्रुटि: {error}',
+  'cb.view_set': 'यह टॉपिक दिखाता है: {view}',
 
   'session.list_header': 'पुनः आरंभ करने योग्य सत्र ({label}):',
   'session.list_footer': 'पुनः आरंभ 1–{max} · बाहर निकलने के लिए 0 भेजें',

@@ -38,7 +38,7 @@ import {
   buildDelegatingStatusText,
   getSubagentPartAction,
 } from '../utils/subagentRender';
-import { defaultDisplayVerbosityMode } from '../utils/displayVerbosity';
+import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import { checkIsReplacementTurnMissing, checkIsWedgedTurn } from '../utils/openCodeTurnActivity';
 import {
   checkHasOpenCodeCompactPlugin,
@@ -1568,13 +1568,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /** @description Resolve the thread's full display prefs, defaulting every
    * field to `minimal` for any read before the bot wires the reader at boot. */
   private getDisplayPrefs(key: SessionKey): ResolvedThreadDisplayPrefs {
-    return (
-      this.displayPrefsReader?.(key) ?? {
-        thinking: defaultDisplayVerbosityMode,
-        toolResults: defaultDisplayVerbosityMode,
-        subagent: defaultDisplayVerbosityMode,
-      }
-    );
+    return this.displayPrefsReader?.(key) ?? getDefaultDisplayPrefs();
   }
 
   /** @description Resolve the thread's `/subagent` mode (the only pref the
