@@ -66,10 +66,3 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 
 - `../../utils/linkPreviewSuppression.ts` defaults every outgoing text to NO link preview at the shared
   `callApi` choke point; a caller that sets its own preview option wins.
-
-## Pickers
-
-`callback_data` is capped at 64 BYTES, so pickers carry INDEXES (`timezonePicker.ts`, `languagePicker.ts`).
-Where an index points into a mutable list the list is snapshotted per MESSAGE (an older keyboard stays tappable
-forever), or the identity is baked into the data. A one-shot picker consumes its keyboard (edit into a
-confirmation, drop the markup); a repeatable one re-renders in place.

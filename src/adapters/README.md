@@ -213,8 +213,6 @@ resumable in the other.
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants. Provider auth is NOT
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
-- To prove a per-prompt override applied, read `GET /session/<id>/message`: the stored turns echo
-  `model.variant`.
 
 ## Claude, both backends
 
