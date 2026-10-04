@@ -203,6 +203,8 @@ export const ukDict: Record<string, string> = {
   'agent.no_session': 'Агент не запущений. /claude або /opencode — щоб запустити.',
   'agent.session_ended': '{label}: сесію завершено',
   'agent.stopped': '{label} зупинено',
+  'agent.sleeping_released': 'Сплячу сесію звільнено — наступне повідомлення почне нову.',
+  'agent.resume_failed_fresh': '⚠️ Не вдалося відновити попередню розмову — запущено нову сесію.',
   'agent.exit_signal_sent': 'Надіслано подвійний Ctrl+C — {label} завершує роботу',
   'agent.already_active': '{label} вже працює тут. Надішли повідомлення або /quit.',
   'agent.starting': 'Запускаю {label} у `{subdir}`…',

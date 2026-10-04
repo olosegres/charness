@@ -1,8 +1,8 @@
 /**
- * @description `postToSession` (Jira plan J5, D21): a conversation that keeps
- * one session for good (a Jira issue, D5) has its own session resumed BEFORE a
- * session is ensured, so a session that died between requests is not replaced
- * by a fresh one; without the step (the scheduler) the post is as before.
+ * @description `postToSession` (Jira plan J5, D21): a session is ensured — the
+ * ensure itself resumes a conversation's sleeping session (a Jira issue keeps
+ * one for good, D5; a topic's sleeps after the idle stop, L-D4) — then the
+ * prompt is forwarded; a usage-limit wait holds the prompt before either (R23).
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -28,21 +28,13 @@ function createDeps(calls: string[], overrides: Partial<PostToSessionDeps> = {})
 }
 
 describe('postToSession', () => {
-  it('resumes the conversation\'s own session first, then ensures one and forwards', async () => {
+  it('ensures a session (with the caller\'s fallback adapter), then forwards — one session step, no separate resume', async () => {
     const calls: string[] = [];
-    const deps = createDeps(calls, {
-      resumeSession: async (conversationKey) => {
-        calls.push(`resume ${conversationKey}`);
-      },
-    });
-    assert.deepEqual(await postToSession(deps, 'jira:PROJ:PROJ-1', 'the prompt', 'claude-json-stream'), { ok: true, isHeld: false });
-    assert.deepEqual(calls, ['resume jira:PROJ:PROJ-1', 'ensure jira:PROJ:PROJ-1 claude-json-stream', 'forward jira:PROJ:PROJ-1 the prompt']);
-  });
-
-  it('without a resume step a session is ensured directly', async () => {
-    const calls: string[] = [];
-    assert.deepEqual(await postToSession(createDeps(calls), 'k', 'p'), { ok: true, isHeld: false });
-    assert.deepEqual(calls, ['ensure k -', 'forward k p']);
+    assert.deepEqual(await postToSession(createDeps(calls), 'jira:PROJ:PROJ-1', 'the prompt', 'claude-json-stream'), { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['ensure jira:PROJ:PROJ-1 claude-json-stream', 'forward jira:PROJ:PROJ-1 the prompt']);
+    const bare: string[] = [];
+    assert.deepEqual(await postToSession(createDeps(bare), 'k', 'p'), { ok: true, isHeld: false });
+    assert.deepEqual(bare, ['ensure k -', 'forward k p']);
   });
 
   it('a session that cannot be ensured is never forwarded to', async () => {
@@ -58,9 +50,6 @@ describe('postToSession', () => {
       holdForLimitResume: (conversationKey, text) => {
         calls.push(`hold ${conversationKey} ${text}`);
         return true;
-      },
-      resumeSession: async () => {
-        calls.push('resume');
       },
     });
     assert.deepEqual(await postToSession(deps, 'k', 'p', 'claude-json-stream'), { ok: true, isHeld: true });

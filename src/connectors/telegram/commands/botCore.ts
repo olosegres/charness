@@ -40,4 +40,10 @@ export interface BotCore {
   updatePinnedStatus: (key: SessionKey) => Promise<void>;
   /** Close the topic's open request as cancelled (the conversation was cancelled or ended). */
   cancelConversationRequest: (key: SessionKey) => void;
+  /**
+   * Wake the topic's SLEEPING conversation (process stopped, session kept) before a command that needs a live
+   * agent. The notice to post (a resume that failed and a fresh start), `''` for a silent resume, `null` when
+   * nothing slept.
+   */
+  wakeSleepingSession: (key: SessionKey) => Promise<string | null>;
 }

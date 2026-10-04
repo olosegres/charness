@@ -197,6 +197,8 @@ export const esDict: Record<string, string> = {
   'agent.no_session': 'No hay agente en ejecución. /claude o /opencode para iniciar.',
   'agent.session_ended': '{label}: sesión finalizada',
   'agent.stopped': '{label} detenido',
+  'agent.sleeping_released': 'La sesión dormida se liberó — el próximo mensaje inicia una nueva.',
+  'agent.resume_failed_fresh': '⚠️ No se pudo reanudar la conversación anterior — se inició una sesión nueva.',
   'agent.exit_signal_sent': 'Doble Ctrl+C enviado — {label} saliendo',
   'agent.already_active': '{label} ya está en ejecución aquí. Envía un mensaje o /quit.',
   'agent.starting': 'Iniciando {label} en `{subdir}`…',

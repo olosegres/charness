@@ -150,7 +150,7 @@ function buildCompactOnIdleKeyboard(isEnabled: boolean) {
 export interface CompactionPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
@@ -164,7 +164,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -800,6 +800,10 @@ export function createCompaction(ports: CompactionPorts) {
         await replyToThread(key, t('compact.unsupported_backend', { label: getThreadAdapter(key).label }));
         return;
       }
+
+      // A sleeping conversation is woken first (L-D4): the compaction runs on its own context.
+      const wakeNotice = await wakeSleepingSession(key);
+      if (wakeNotice) await replyToThread(key, wakeNotice);
 
       // EXECUTION goes through the shared seam (which also carries the D3 summary
       // guidance). Dispatching inline here instead was a real defect: only

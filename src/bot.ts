@@ -209,6 +209,7 @@ import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
+import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
 import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
@@ -1722,7 +1723,8 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   entries: apiRetryTimers,
   kicksInFlight: apiRetryKicksInFlight,
   now: () => Date.now(),
-  resumeOwnSession: resumeOwnSessionUnlessStarting,
+  // A sleeping conversation (a tracker issue's for good, D5; a topic's since the idle stop) is RESUMED by the
+  // ensure itself (L-D4) — the kick never starts a fresh session over one that can be resumed.
   ensureSession: (key) => ensureAgentSession(key),
   postTopicNotice: (key, notice) => {
     if (notice.kind === 'noSession') void replyToThread(key, notice.message);
@@ -4333,7 +4335,13 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
  */
 export type EnsureAgentSessionResult =
   | { ok: true; message: string }
-  | { ok: false; reason: 'unbound' | 'no-adapter' | 'start-failed'; message: string };
+  | { ok: false; reason: EnsureAgentSessionFailureReason; message: string };
+
+/**
+ * `unbound` / `no-adapter` / `start-failed` as before; `nothing-to-resume` and
+ * `resume-failed` only for a resume-only caller (no fresh start allowed).
+ */
+export type EnsureAgentSessionFailureReason = 'unbound' | 'no-adapter' | 'start-failed' | 'nothing-to-resume' | 'resume-failed';
 
 /**
  * @name EnsureAgentSessionOptions
@@ -4353,6 +4361,11 @@ export interface EnsureAgentSessionOptions {
   preferredAdapterName?: string;
   fallbackAdapterName?: string;
   args?: string;
+  /**
+   * Resume a sleeping session but never start a fresh one — a wake-up reminder or
+   * a topic's retry has nothing to say to a session that does not know the work.
+   */
+  isResumeOnly?: boolean;
 }
 
 /**
@@ -4382,15 +4395,7 @@ async function ensureAgentSession(
   key: SessionKey,
   options: EnsureAgentSessionOptions = {},
 ): Promise<EnsureAgentSessionResult> {
-  const adapter = getThreadAdapter(key);
-  if (adapter.checkIsActive(key)) return { ok: true, message: '' };
-  if (startupPromptBuffer.checkIsStarting(keyToString(key))) return { ok: true, message: '' };
-
-  if (!state.getBinding(key)) {
-    return { ok: false, reason: 'unbound', message: t('thread.bind_required') };
-  }
-
-  // Resolve which adapter to start. `getThreadAdapterNameRaw` returns the
+  // Resolve which adapter to run. `getThreadAdapterNameRaw` returns the
   // in-memory pick WITHOUT any default fallback, so "no pick yet" stays
   // distinguishable and the chain never silently defaults to a backend. When
   // nothing resolves (bound topic that never picked an agent, no caller
@@ -4399,18 +4404,118 @@ async function ensureAgentSession(
     options.preferredAdapterName ??
     getThreadAdapterNameRaw(key) ??
     state.getAgent(key)?.name ??
-    options.fallbackAdapterName;
-
-  if (!adapterName) {
-    return { ok: false, reason: 'no-adapter', message: t('agent.no_session') };
+    options.fallbackAdapterName ??
+    null;
+  const plan = getEnsureSessionPlan({
+    isActive: getThreadAdapter(key).checkIsActive(key),
+    isStarting: startupPromptBuffer.checkIsStarting(keyToString(key)),
+    hasBinding: state.getBinding(key) !== undefined,
+    adapterName,
+    isClaudeBackend: adapterName !== null && checkIsClaudeBackend(adapterName),
+    persistedIds: state.getAgent(key) ?? null,
+    isResumeOnly: options.isResumeOnly === true,
+  });
+  switch (plan.kind) {
+    case 'ready':
+      return { ok: true, message: '' };
+    case 'unbound':
+      return { ok: false, reason: 'unbound', message: t('thread.bind_required') };
+    case 'noAdapter':
+      return { ok: false, reason: 'no-adapter', message: t('agent.no_session') };
+    case 'nothingToResume':
+      return { ok: false, reason: 'nothing-to-resume', message: t('agent.no_session') };
+    case 'resume': {
+      await switchThreadAdapter(key, plan.adapterName);
+      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '' };
+      if (getResumeFailureAction(options.isResumeOnly === true) === 'fail') {
+        return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
+      }
+      // The previous conversation is lost to this topic: say so in one line, then start fresh.
+      const startMessage = await startAgentSession(key, options.args);
+      const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
+      return getThreadAdapter(key).checkIsActive(key)
+        ? { ok: true, message }
+        : { ok: false, reason: 'start-failed', message };
+    }
+    case 'start': {
+      await switchThreadAdapter(key, plan.adapterName);
+      const message = await startAgentSession(key, options.args);
+      return getThreadAdapter(key).checkIsActive(key)
+        ? { ok: true, message }
+        : { ok: false, reason: 'start-failed', message };
+    }
   }
+}
 
-  await switchThreadAdapter(key, adapterName);
-  const message = await startAgentSession(key, options.args);
-  if (getThreadAdapter(key).checkIsActive(key)) {
-    return { ok: true, message };
+/**
+ * @description The sleeping session's id a conversation would resume, or `null`
+ * when it has none for its adapter (never started, released by `/quit` / `/new`,
+ * or an id of another backend family). The "is there something to wake" probe
+ * behind the prompt handlers and the commands that need a live agent.
+ */
+function getResumableSessionId(key: SessionKey): string | null {
+  const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
+  if (!adapterName) return null;
+  return getPersistedSessionIdForAdapter(state.getAgent(key) ?? null, adapterName, checkIsClaudeBackend(adapterName));
+}
+
+/**
+ * @description Resume a sleeping conversation SILENTLY (L-D4): no "started" notice,
+ * no recap — the next prompt simply continues it. Opens the startup window first so
+ * a message typed meanwhile is buffered and replayed, like a fresh start. The
+ * conversation keeps its compaction latch, its thread-context marker and its
+ * start time: nothing about it changed, only the process is back. Resolves
+ * `false` when the backend refused the id or the process did not come up — the
+ * caller decides between a fresh start and giving up.
+ */
+async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<boolean> {
+  const kStr = keyToString(key);
+  const workDirDecision = getWorkDirStartDecision(key);
+  if (!workDirDecision.ok) return false;
+  const adapter = getThreadAdapter(key);
+  startupPromptBuffer.markStarting(kStr);
+  markNeedsNewMessage(key);
+  try {
+    await adapter.resumeSession(key, workDirDecision.workDir, sessionId);
+    await persistAdapterSessionIds(key, adapter, state);
+    console.log(`[ensure] resumed the sleeping session of ${kStr}`);
+    void replayBufferedPrompts(key);
+    return adapter.checkIsActive(key);
+  } catch (e) {
+    console.warn(`[ensure] could not resume the sleeping session of ${kStr}:`, e instanceof Error ? e.message : e);
+    // A fresh start (if the caller takes one) re-opens its own window; otherwise the held prompts have nowhere to go.
+    startupPromptBuffer.discardPrompts(kStr);
+    return false;
   }
-  return { ok: false, reason: 'start-failed', message };
+}
+
+/**
+ * @description A command that needs a live agent (`/compact`, `/model`, `/effort`)
+ * on a topic whose session sleeps: wake it first. Returns the notice to post
+ * (only when the resume failed and a fresh session took its place), `''` when
+ * nothing was said, `null` when there was nothing to wake.
+ */
+async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
+  if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) === null) return null;
+  return (await ensureAgentSession(key)).message;
+}
+
+/**
+ * @description A prompt (text, voice, file, a re-asked question's answer) arrives
+ * in a topic whose conversation sleeps: resume it so the prompt continues it.
+ * Resolves whether a live session now takes the prompt; `false` when there was
+ * nothing to wake (the caller's idle-topic guidance follows) or the topic is
+ * General / unbound. A failed resume starts fresh and the one-line notice goes
+ * out through `sendNotice` (the topic by default).
+ */
+async function resumeSleepingSessionForPrompt(
+  key: SessionKey,
+  sendNotice: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
+): Promise<boolean> {
+  if (checkIsGeneral(key) || !state.getBinding(key) || getResumableSessionId(key) === null) return false;
+  const ensured = await ensureAgentSession(key);
+  if (ensured.message) await sendNotice(ensured.message);
+  return ensured.ok && getThreadAdapter(key).checkIsActive(key);
 }
 
 /**
@@ -4721,6 +4826,7 @@ const botCore: BotCore = {
   checkIsGeneral,
   updatePinnedStatus,
   cancelConversationRequest,
+  wakeSleepingSession,
 };
 
 const {
@@ -6041,7 +6147,10 @@ async function handleAgentStart(
     await replyToThread(key, t('agent.already_active', { label: adapter.label }));
     return;
   }
-  const msg = await startAgentSession(key, args);
+  // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start.
+  const msg = getResumableSessionId(key) !== null
+    ? (await ensureAgentSession(key, { args })).message
+    : await startAgentSession(key, args);
   if (msg) await replyToThread(key, msg);
 }
 
@@ -6451,6 +6560,12 @@ command(['quit', 'q'], async (_ctx, key) => {
   stopAllAdaptersFor(key, otherAdapters);
 
   if (!primaryActive) {
+    // A sleeping conversation is released for good: the next message starts a fresh one.
+    if (getResumableSessionId(key) !== null) {
+      await state.clearAgentSessionIds(key);
+      await replyToThread(key, t('agent.sleeping_released'));
+      return;
+    }
     await replyToThread(key, 'No agent running');
     return;
   }
@@ -7156,6 +7271,13 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
+  // A sleeping conversation (its process stopped, its session kept) is resumed by
+  // the message itself (L-D4) — the prompt continues the same conversation.
+  if (await resumeSleepingSessionForPrompt(key)) {
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getReplyQuoteBlock(ctx.message));
+    return;
+  }
+
   // Idle thread — guide the user. Three sub-states:
   //   • General → it's never bindable, just point at topical threads.
   //   • Topical without binding → offer the subdir picker (plan §20.6).
@@ -7317,7 +7439,8 @@ async function processVoiceJob(
         return;
       }
     }
-    if (!adapter.checkIsActive(key)) {
+    // A voice prompt wakes a sleeping conversation like a text one does (L-D4).
+    if (!adapter.checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
       if (checkIsGeneral(key)) {
         await replyToThread(key, t('thread.general_no_agent'));
         return;
@@ -7387,6 +7510,8 @@ async function checkFileIntakeGatePassed(
 ): Promise<boolean> {
   const adapter = getThreadAdapter(key);
   if (isStarting || adapter.checkIsActive(key)) return true;
+  // A file sent to a sleeping conversation wakes it (L-D4) and is taken in by the resumed session.
+  if (await resumeSleepingSessionForPrompt(key, sendHint)) return true;
 
   if (checkIsGeneral(key)) {
     await sendHint(t('thread.general_no_agent'));
@@ -8130,8 +8255,12 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const labels = reAskedQuestionOptions.get(keyToString(key));
   const label = labels?.[optIdx];
   if (!label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
+  if (!getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
+    await ctx.answerCbQuery(t('agent.no_session'));
+    return;
+  }
   const adapter = getThreadAdapter(key);
-  if (!adapter.checkIsActive(key)) { await ctx.answerCbQuery(t('agent.no_session')); return; }
   reAskedQuestionOptions.delete(keyToString(key));
   await ctx.answerCbQuery(label);
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
@@ -10658,52 +10787,19 @@ function createAnswerSinks(jiraAnswerSink: AnswerSink | null): AnswerSinks {
 }
 
 /**
- * @description Make sure the conversation has a live session of its OWN: a live
- * one is used as is; a dead one is RESUMED from its persisted session id, so a
- * wake-up reminder — or a Jira issue's next request (D5: one conversation per
- * issue) — reaches the same conversation (a fresh session would not know it).
- * Resolves `false` when there is nothing to resume.
- */
-async function ensureSessionByResume(key: SessionKey): Promise<boolean> {
-  const adapter = getThreadAdapter(key);
-  if (adapter.checkIsActive(key)) return true;
-  const agent = state.getAgent(key);
-  const sessionId = agent?.claudeSessionId ?? agent?.opencodeSessionId;
-  const workDirDecision = getWorkDirStartDecision(key);
-  if (!sessionId || !adapter.resumeSession || !workDirDecision.ok) return false;
-  try {
-    await adapter.resumeSession(key, workDirDecision.workDir, sessionId);
-    await persistAdapterSessionIds(key, adapter, state);
-    return adapter.checkIsActive(key);
-  } catch (e) {
-    console.warn(`[requests] could not resume ${keyToString(key)} for a wake-up:`, e instanceof Error ? e.message : e);
-    return false;
-  }
-}
-
-/**
- * @description A tracker conversation's own session, back before a post into it
- * (D5): a dead one is resumed by its persisted id, never replaced by a fresh one;
- * a start already under way finishes on its own.
- */
-async function resumeOwnSessionUnlessStarting(key: SessionKey): Promise<void> {
-  if (!startupPromptBuffer.checkIsStarting(keyToString(key))) await ensureSessionByResume(key);
-}
-
-/**
- * @description The session a wake-up goes into: the conversation's own, resumed
- * when it died. A tracker request whose prompt never reached the agent — its post
- * failed before any session came up (R28), or the resume failed — gets a session
- * started the way its post starts one: the wake-up carries the whole request, so
- * nothing the new session lacks is lost. A reminder never starts one: a fresh
- * session would not know what it reminds of. A topic's wake-ups are unchanged.
+ * @description The session a wake-up goes into: the conversation's own, resumed by
+ * the ensure when it sleeps (L-D4). A tracker request whose prompt never reached
+ * the agent — its post failed before any session came up (R28), or the resume
+ * failed — gets a session started the way its post starts one: the wake-up
+ * carries the whole request, so nothing the new session lacks is lost. A
+ * reminder never starts one: a fresh session would not know what it reminds of.
+ * A topic's wake-ups only ever resume.
  */
 async function prepareRequestWakeUpSession(key: SessionKey, message: WakeUpMessage, fallbackAdapterName: string | undefined): Promise<boolean> {
-  if (await ensureSessionByResume(key)) return true;
-  if (checkIsTelegramKey(key) || !message.isRequestPrompt) return false;
-  await ensureAgentSession(key, { fallbackAdapterName });
+  const isFreshStartAllowed = !checkIsTelegramKey(key) && message.isRequestPrompt;
+  const ensured = await ensureAgentSession(key, { fallbackAdapterName, isResumeOnly: !isFreshStartAllowed });
   // A start still under way is not ready: a forward now would not reach it — the next retry will.
-  return getThreadAdapter(key).checkIsActive(key);
+  return ensured.ok && getThreadAdapter(key).checkIsActive(key);
 }
 
 /**
@@ -10757,7 +10853,11 @@ function createSessionPostDeps(): PostToSessionDeps {
     },
     ensureSession: async (conversationKey, fallbackAdapterName) => {
       const result = await ensureAgentSession(keyFromString(conversationKey), { fallbackAdapterName });
-      return result.ok ? { ok: true } : { ok: false, reason: result.reason };
+      if (result.ok) return { ok: true };
+      // A post may start fresh, so the resume-only reasons cannot occur here; a resume that failed
+      // continued into a fresh start, whose failure is what a post reports.
+      const reason = result.reason === 'nothing-to-resume' || result.reason === 'resume-failed' ? 'start-failed' : result.reason;
+      return { ok: false, reason };
     },
     forwardPrompt: async (conversationKey, text) => {
       const key = keyFromString(conversationKey);
@@ -11017,17 +11117,17 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
  * after which the wake-up engine watches the turn the request started.
  */
 function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string): Parameters<JiraConnector['start']>[0] {
-  const sessionPostDeps: PostToSessionDeps = {
-    ...createSessionPostDeps(),
-    // D5: one conversation per issue — a session that died between requests is resumed.
-    resumeSession: (conversationKey) => resumeOwnSessionUnlessStarting(keyFromString(conversationKey)),
-  };
+  // D5: one conversation per issue — a session that sleeps between requests is resumed by the ensure (L-D4).
+  const sessionPostDeps = createSessionPostDeps();
   return {
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     postRequest: async (key, requestId, prompt) => {
+      // A request is the issue's "user message" (L-D5): it clears the spent idle-compaction
+      // latch like a topic's message does, or the issue would never compact again.
+      noteThreadUserActivity(key);
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) {
         // R28: retried at about 1, 5 and 15 min, outside the wake-up cap.

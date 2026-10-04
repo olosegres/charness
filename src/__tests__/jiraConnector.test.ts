@@ -269,18 +269,21 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('a retried post of an issue that never had a session starts one with the Jira adapter; a reminder or a topic only resumes (R28)', () => {
     assert.match(startBody, /prepareWakeUpSession: \(key, message\) =>\s*prepareRequestWakeUpSession\(key, message, key\.platform === 'jira' \? jiraConnector\?\.adapterName : undefined\),/);
     const prepare = botSource.slice(botSource.indexOf('async function prepareRequestWakeUpSession('), botSource.indexOf('async function forwardRequestWakeUp('));
-    const resume = prepare.indexOf('if (await ensureSessionByResume(key)) return true;');
-    const onlyTrackerPrompt = prepare.indexOf('if (checkIsTelegramKey(key) || !message.isRequestPrompt) return false;');
-    const start = prepare.indexOf('await ensureAgentSession(key, { fallbackAdapterName });');
-    assert.ok(resume > 0 && onlyTrackerPrompt > resume && start > onlyTrackerPrompt, 'resumed first; started only for a tracker request\'s own prompt');
-    assert.match(prepare, /return getThreadAdapter\(key\)\.checkIsActive\(key\);\n\}/, 'a start still under way is not ready');
+    // L-D4: the one ensure resumes a sleeping session; a fresh start is allowed only for a tracker request's own prompt.
+    assert.ok(prepare.includes("const isFreshStartAllowed = !checkIsTelegramKey(key) && message.isRequestPrompt;"), 'a reminder and a topic only resume');
+    assert.ok(prepare.includes('await ensureAgentSession(key, { fallbackAdapterName, isResumeOnly: !isFreshStartAllowed });'));
+    assert.match(prepare, /return ensured\.ok && getThreadAdapter\(key\)\.checkIsActive\(key\);\n\}/, 'a start still under way is not ready');
   });
 
-  it('an issue\'s next request resumes the issue\'s own session (D5), never a fresh one in its place', () => {
+  it('an issue\'s next request resumes the issue\'s own session (D5) through the shared ensure, and counts as its user message (L-D5)', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    assert.match(deps, /resumeSession: \(conversationKey\) => resumeOwnSessionUnlessStarting\(keyFromString\(conversationKey\)\),/);
-    const helper = botSource.slice(botSource.indexOf('async function resumeOwnSessionUnlessStarting('));
-    assert.match(helper, /^[^]*?if \(!startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)\) await ensureSessionByResume\(key\);/);
+    assert.ok(!deps.includes('resumeSession:'), 'no Jira-only resume path: the ensure resumes a sleeping conversation for every platform');
+    assert.ok(deps.includes('const sessionPostDeps = createSessionPostDeps();'));
+    const postRequest = deps.slice(deps.indexOf('postRequest: async (key, requestId, prompt) => {'));
+    const latchClear = postRequest.indexOf('noteThreadUserActivity(key);');
+    const post = postRequest.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
+    assert.ok(latchClear > 0 && post > latchClear, 'the idle-compaction latch is cleared before the request is posted');
+    assert.ok(!botSource.includes('async function ensureSessionByResume('), 'the separate resume helper is gone');
   });
 
   it('a Jira issue bound to a topic\'s folder is never in that folder\'s `dir:` scope, nor named to the topic as a peer', () => {

@@ -66,8 +66,7 @@ export interface ApiRetryKickDeps {
   /** Threads whose timer fired and whose "continue" nudge is not handed over yet. */
   kicksInFlight: Set<string>;
   now: () => number;
-  /** A tracker issue's own session, back before the nudge (R26). */
-  resumeOwnSession: (key: SessionKey) => Promise<void>;
+  /** A session to nudge: the conversation's own, resumed when it sleeps (R26 for every platform, L-D4). */
   ensureSession: (key: SessionKey) => Promise<ApiRetryEnsureOutcome>;
   postTopicNotice: (key: SessionKey, notice: ApiRetryTopicNotice) => void;
   /** The nudge, or the open request's own prompt the agent never took in (R21). */
@@ -83,9 +82,10 @@ export interface ApiRetryKickDeps {
 /**
  * @description The retry kick (timer callback): make sure a session is up (after
  * an OpenCode `session.error` it still is, so `ensureSession` is a no-op and the
- * nudge lands in the SAME live session — context intact; only a genuinely-dead
- * session is restarted via the thread's last adapter), tell the topic we're
- * resuming, then hand over a neutral "continue" nudge. With no session to resume
+ * nudge lands in the SAME live session — context intact; a sleeping session is
+ * resumed by its id, and only one with nothing to resume is started fresh via the
+ * thread's last adapter), tell the topic we're resuming, then hand over a neutral
+ * "continue" nudge. With no session to resume
  * the topic gets the reason instead and nothing is forwarded.
  *
  * The saved record means ARMED, so once the kick has run its course — the nudge
@@ -124,9 +124,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
   let isNudgeBuffered = false;
 
   try {
-    // R26: a tracker issue keeps one conversation for good (D5) — a fresh session
-    // would not know the work the limit interrupted.
-    if (!checkIsTelegramKey(key)) await deps.resumeOwnSession(key);
+    // R26: the conversation the limit interrupted is the one resumed — the ensure brings a sleeping
+    // session back by its id, for a topic as for a tracker issue (a fresh session would not know the work).
     const ensured = await deps.ensureSession(key);
     if (!ensured.ok) {
       // No session to nudge (unbound, no adapter, a start that failed): a forward would hit a dead adapter, and

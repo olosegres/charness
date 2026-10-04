@@ -287,7 +287,7 @@ actually start an agent or terminal in the folder.
 | `/subagent` | Sub-agent transcript: status-only with a ticking elapsed counter (`minimal`/`short`), or streamed "🤖 ⤷" chunks (`full`) |
 | `/sessions` | List & resume previous sessions in this folder |
 | `/rename_session` | Rename the current live session (OpenCode; Claude transcripts have no title) |
-| `/quit`, `/q` | End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`) |
+| `/quit`, `/q` | End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way |
 | `/new`, `/clear_session` | End the current session and start a fresh one (same adapter) |
 | `/status` | This thread's status: agent, bound folder and resolved workdir; a live session also shows the model it is actually running, effort, start time, runtime version and context use (anything the backend cannot report renders as unknown) |
 | `/output` | Last 500 lines of agent output (sent as at most 5 chunks; the overflow is reported as omitted) |

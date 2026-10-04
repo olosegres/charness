@@ -197,6 +197,8 @@ export const frDict: Record<string, string> = {
   'agent.no_session': 'Aucun agent en cours. /claude ou /opencode pour démarrer.',
   'agent.session_ended': '{label} : session terminée',
   'agent.stopped': '{label} arrêté',
+  'agent.sleeping_released': 'La session en veille a été libérée — le prochain message en démarre une nouvelle.',
+  'agent.resume_failed_fresh': '⚠️ La conversation précédente n\'a pas pu être reprise — une nouvelle session a été démarrée.',
   'agent.exit_signal_sent': 'Double Ctrl+C envoyé — {label} en cours d\'arrêt',
   'agent.already_active': '{label} fonctionne déjà ici. Envoyez un message ou /quit.',
   'agent.starting': 'Démarrage de {label} dans `{subdir}`…',

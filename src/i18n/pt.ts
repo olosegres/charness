@@ -197,6 +197,8 @@ export const ptDict: Record<string, string> = {
   'agent.no_session': 'Sem agente em execução. /claude ou /opencode para iniciar.',
   'agent.session_ended': '{label}: sessão terminada',
   'agent.stopped': '{label} parado',
+  'agent.sleeping_released': 'A sessão adormecida foi liberada — a próxima mensagem inicia uma nova.',
+  'agent.resume_failed_fresh': '⚠️ Não foi possível retomar a conversa anterior — uma nova sessão foi iniciada.',
   'agent.exit_signal_sent': 'Duplo Ctrl+C enviado — {label} a sair',
   'agent.already_active': '{label} já está em execução aqui. Envia uma mensagem ou /quit.',
   'agent.starting': 'A iniciar {label} em `{subdir}`…',

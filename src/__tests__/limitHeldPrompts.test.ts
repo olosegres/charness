@@ -206,7 +206,7 @@ describe('the bot holds and releases them (R23)', () => {
 
   it('the scheduler and the Jira connector post through the same hold', () => {
     assert.match(getFunction('function createSessionPostDeps('), /holdForLimitResume: \(conversationKey, text, heldText\) => holdPromptForLimitResume\(keyFromString\(conversationKey\), text, heldText\),/);
-    assert.match(getFunction('function createJiraSessionDeps('), /\.\.\.createSessionPostDeps\(\),/);
+    assert.match(getFunction('function createJiraSessionDeps('), /const sessionPostDeps = createSessionPostDeps\(\);/);
     assert.match(getFunction('function wireScheduler('), /\.\.\.createSessionPostDeps\(\),/);
   });
 

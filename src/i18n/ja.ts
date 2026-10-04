@@ -197,6 +197,8 @@ export const jaDict: Record<string, string> = {
   'agent.no_session': 'エージェントが実行中ではありません。/claude または /opencode で起動。',
   'agent.session_ended': '{label}: セッション終了',
   'agent.stopped': '{label} 停止',
+  'agent.sleeping_released': '休止中のセッションを解放しました — 次のメッセージで新しいセッションが始まります。',
+  'agent.resume_failed_fresh': '⚠️ 前回の会話を再開できませんでした — 新しいセッションを開始しました。',
   'agent.exit_signal_sent': 'Ctrl+C を2回送信 — {label} が終了中',
   'agent.already_active': '{label} は既にここで実行中です。メッセージを送るか /quit。',
   'agent.starting': '`{subdir}` で {label} を起動中…',

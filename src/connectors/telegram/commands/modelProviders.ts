@@ -314,7 +314,7 @@ function buildEffortKeyboard(levels: readonly string[], current: string | null) 
 export interface ModelProvidersPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'updatePinnedStatus'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'updatePinnedStatus' | 'wakeSleepingSession'
   > {
   awaitingModelSelection: Set<string>;
   awaitingSessionSelection: Set<string>;
@@ -332,7 +332,7 @@ export interface ModelProvidersPorts
  * bot makes at the positions its neighbouring commands and buttons are registered.
  */
 export function createModelProviders(ports: ModelProvidersPorts) {
-  const { awaitingModelSelection, awaitingSessionSelection, awaitingFolderName, threadModelLists, pendingProviderConnects, connectMethodLists, disconnectProviderLists, startOpenCodeOAuthLogin, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, updatePinnedStatus } = ports;
+  const { awaitingModelSelection, awaitingSessionSelection, awaitingFolderName, threadModelLists, pendingProviderConnects, connectMethodLists, disconnectProviderLists, startOpenCodeOAuthLogin, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, updatePinnedStatus, wakeSleepingSession } = ports;
 
   /**
    * @description Single choke point for the four `/model`-set paths (the
@@ -349,6 +349,10 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     key: SessionKey,
     modelId: string,
   ): Promise<{ isOk: boolean; message: string; setModelError: string | null; displayLabel: string }> {
+    // A sleeping conversation is woken first (L-D4), so the pick applies to its live session
+    // instead of the "start the agent first" refusal of an idle backend.
+    const wakeNotice = await wakeSleepingSession(key);
+    if (wakeNotice) await replyToThread(key, wakeNotice);
     const setModelError = adapter.setModel ? await adapter.setModel(key, modelId) : null;
     const displayLabel = adapter.getCurrentModel?.(key) || modelId;
     // Read AFTER the switch: a model that does not offer the level in force
@@ -729,6 +733,8 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       // canonical set, OpenCode against the model's variants) and returns a
       // user-facing notice string on any non-success.
       if (args) {
+        const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
+        if (wakeNotice) await replyToThread(key, wakeNotice);
         const err = await adapter.setEffort(key, args);
         if (err) {
           await replyToThread(key, err);
@@ -940,6 +946,8 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
         return;
       }
+      const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
+      if (wakeNotice) await replyToThread(key, wakeNotice);
       const err = await adapter.setEffort(key, level);
       if (err) { await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) })); return; }
       await ctx.answerCbQuery(t('cb.effort_set', { level }));

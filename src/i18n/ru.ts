@@ -201,6 +201,8 @@ export const ruDict: Record<string, string> = {
   'agent.no_session': 'Агент не запущен. /claude или /opencode — старт.',
   'agent.session_ended': '{label}: сессия завершена',
   'agent.stopped': '{label} остановлен',
+  'agent.sleeping_released': 'Спящая сессия освобождена — следующее сообщение начнёт новую.',
+  'agent.resume_failed_fresh': '⚠️ Не удалось возобновить предыдущий разговор — запущена новая сессия.',
   'agent.exit_signal_sent': 'Послан двойной Ctrl+C — {label} завершает работу',
   'agent.already_active': '{label} уже работает в этом треде. Отправь сообщение или /quit.',
   'agent.starting': 'Запускаю {label} в `{subdir}`…',

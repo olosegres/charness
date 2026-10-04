@@ -97,6 +97,8 @@ export class CommandHarness {
       cancelConversationRequest: (key) => {
         this.cancelledRequestKeys.push(key);
       },
+      // The harness has no sleeping session to wake; a command's wake is a no-op here.
+      wakeSleepingSession: async () => null,
     };
   }
 
@@ -163,5 +165,6 @@ export function createInertBotCore(): BotCore {
     checkIsGeneral: () => false,
     updatePinnedStatus: async () => {},
     cancelConversationRequest: () => {},
+    wakeSleepingSession: async () => null,
   };
 }

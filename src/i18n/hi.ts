@@ -197,6 +197,8 @@ export const hiDict: Record<string, string> = {
   'agent.no_session': 'कोई एजेंट नहीं चल रहा। /claude या /opencode से शुरू करें।',
   'agent.session_ended': '{label}: सत्र समाप्त',
   'agent.stopped': '{label} रुक गया',
+  'agent.sleeping_released': 'सोया हुआ सत्र छोड़ दिया गया — अगला संदेश एक नया सत्र शुरू करेगा।',
+  'agent.resume_failed_fresh': '⚠️ पिछली बातचीत फिर से शुरू नहीं हो सकी — एक नया सत्र शुरू किया गया।',
   'agent.exit_signal_sent': 'दोहरा Ctrl+C भेजा गया — {label} बंद हो रहा है',
   'agent.already_active': '{label} पहले से यहाँ चल रहा है। संदेश भेजें या /quit।',
   'agent.starting': '`{subdir}` में {label} शुरू हो रहा है…',

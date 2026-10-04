@@ -60,9 +60,8 @@ interface World {
   /** The bot's startup buffer — in memory only, so a "restart" empties it. */
   startupBuffer: StartupPromptBuffer;
   continuations: Array<{ key: string; isCountersReset: boolean; isRequestPrompt: boolean }>;
-  ownSessionResumes: string[];
   /** The session steps in the order the kick took them. */
-  sessionSteps: Array<'resumeOwnSession' | 'ensureSession'>;
+  sessionSteps: Array<'ensureSession'>;
   clears: string[];
   ensureOutcome: ApiRetryEnsureOutcome;
   /** Runs while the nudge is being handed over (a recurrence, a user message, a crash). */
@@ -79,10 +78,6 @@ function createKickDeps(): ApiRetryKickDeps {
     entries: world.entries,
     kicksInFlight: world.kicksInFlight,
     now: () => clockMs,
-    resumeOwnSession: async (key) => {
-      world.ownSessionResumes.push(keyToString(key));
-      world.sessionSteps.push('resumeOwnSession');
-    },
     ensureSession: async () => {
       world.sessionSteps.push('ensureSession');
       return world.ensureOutcome;
@@ -157,7 +152,6 @@ beforeEach(() => {
     nudges: [],
     startupBuffer: new StartupPromptBuffer(),
     continuations: [],
-    ownSessionResumes: [],
     sessionSteps: [],
     clears: [],
     ensureOutcome: { ok: true },
@@ -188,12 +182,9 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
         isTelegram ? [{ kind: 'resuming', retryKind: 'usageLimit' }] : [],
         'a tracker issue has no topic to say it in (R6)',
       );
-      assert.deepEqual(world.ownSessionResumes, isTelegram ? [] : [keyString], 'an issue resumes its own session first (R26)');
-      assert.deepEqual(
-        world.sessionSteps,
-        isTelegram ? ['ensureSession'] : ['resumeOwnSession', 'ensureSession'],
-        'resumed by id BEFORE a session would be started fresh',
-      );
+      // R26 for every platform (L-D4): the ONE ensure resumes a sleeping conversation by its id before it
+      // would ever start fresh — a topic no longer gets a fresh session over its sleeping one.
+      assert.deepEqual(world.sessionSteps, ['ensureSession'], 'one session step, for a topic as for an issue');
 
       // The bot restarts: what it saved is all it has.
       const rearmedAfterRestart = boot();
@@ -497,10 +488,12 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.ok(botSource.includes('checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),'));
   });
 
-  it('the session is the thread\'s own: a tracker issue is resumed by id first (R26), then ensured', () => {
-    assert.ok(kickPorts.includes('resumeOwnSession: resumeOwnSessionUnlessStarting,'));
+  it('the session is the thread\'s own for EVERY platform (R26, L-D4): the ensure resumes a sleeping session, no separate resume port', () => {
+    assert.ok(!kickPorts.includes('resumeOwnSession'), 'the tracker-only resume port is gone');
     assert.ok(kickPorts.includes('ensureSession: (key) => ensureAgentSession(key),'));
-    assert.match(getFunction('async function resumeOwnSessionUnlessStarting('), /if \(!startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)\) await ensureSessionByResume\(key\);/);
+    assert.ok(!kickSource.includes('checkIsTelegramKey(key)) await deps.resumeOwnSession'), 'no Telegram exemption from the resume');
+    const ensure = getFunction('async function ensureAgentSession(');
+    assert.ok(ensure.includes("case 'resume': {") && ensure.includes('await resumeSleepingSession(key, plan.sessionId)'), 'the ensure acts on the resume plan');
   });
 
   it('what it hands over is the nudge, or the open request\'s prompt the agent never took in — only for a limit wait (R21)', () => {

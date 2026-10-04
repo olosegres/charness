@@ -197,6 +197,8 @@ export const deDict: Record<string, string> = {
   'agent.no_session': 'Kein Agent läuft. /claude oder /opencode zum Starten.',
   'agent.session_ended': '{label}: Session beendet',
   'agent.stopped': '{label} gestoppt',
+  'agent.sleeping_released': 'Die schlafende Sitzung wurde freigegeben — die nächste Nachricht startet eine neue.',
+  'agent.resume_failed_fresh': '⚠️ Das vorherige Gespräch konnte nicht fortgesetzt werden — eine neue Sitzung wurde gestartet.',
   'agent.exit_signal_sent': 'Doppeltes Ctrl+C gesendet — {label} wird beendet',
   'agent.already_active': '{label} läuft hier bereits. Sende eine Nachricht oder /quit.',
   'agent.starting': 'Starte {label} in `{subdir}`…',

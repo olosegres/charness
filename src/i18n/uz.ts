@@ -197,6 +197,8 @@ export const uzDict: Record<string, string> = {
   'agent.no_session': 'Agent ishlamayapti. /claude yoki /opencode bilan boshlang.',
   'agent.session_ended': '{label}: seans tugadi',
   'agent.stopped': '{label} to‘xtatildi',
+  'agent.sleeping_released': 'Uxlayotgan seans boʻshatildi — keyingi xabar yangisini boshlaydi.',
+  'agent.resume_failed_fresh': '⚠️ Oldingi suhbatni davom ettirib boʻlmadi — yangi seans boshlandi.',
   'agent.exit_signal_sent': 'Ikki marta Ctrl+C yuborildi — {label} chiqmoqda',
   'agent.already_active': '{label} bu yerda allaqachon ishlamoqda. Xabar yuboring yoki /quit.',
   'agent.starting': '`{subdir}` da {label} boshlanmoqda…',

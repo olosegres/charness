@@ -197,6 +197,8 @@ export const zhDict: Record<string, string> = {
   'agent.no_session': '没有运行中的代理。运行 /claude 或 /opencode 启动。',
   'agent.session_ended': '{label}：会话已结束',
   'agent.stopped': '{label} 已停止',
+  'agent.sleeping_released': '休眠会话已释放——下一条消息将开始新的会话。',
+  'agent.resume_failed_fresh': '⚠️ 无法恢复之前的对话——已启动新的会话。',
   'agent.exit_signal_sent': '已发送两次 Ctrl+C — {label} 正在退出',
   'agent.already_active': '{label} 已在此运行。发送消息或 /quit。',
   'agent.starting': '正在 `{subdir}` 中启动 {label}…',

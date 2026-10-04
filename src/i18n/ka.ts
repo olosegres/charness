@@ -197,6 +197,8 @@ export const kaDict: Record<string, string> = {
   'agent.no_session': 'აგენტი არ არის გაშვებული. /claude ან /opencode გასაშვებად.',
   'agent.session_ended': '{label}: სესია დასრულდა',
   'agent.stopped': '{label} გაჩერდა',
+  'agent.sleeping_released': 'მძინარე სესია გათავისუფლდა — შემდეგი შეტყობინება ახალს დაიწყებს.',
+  'agent.resume_failed_fresh': '⚠️ წინა საუბრის გაგრძელება ვერ მოხერხდა — ახალი სესია დაიწყო.',
   'agent.exit_signal_sent': 'ორმაგი Ctrl+C გაგზავნილია — {label} იხურება',
   'agent.already_active': '{label} უკვე მუშაობს აქ. გამოგვიგზავნეთ შეტყობინება ან /quit.',
   'agent.starting': 'გაშვება {label} `{subdir}`-ში…',

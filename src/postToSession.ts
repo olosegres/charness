@@ -1,7 +1,7 @@
 /**
  * @description Post a prompt into a conversation's agent session (Jira connector
- * plan J5, D21): make sure a session is ready — resuming the conversation's own
- * session when the deps can, else starting one if needed — let a
+ * plan J5, D21): make sure a session is ready — the ensure resumes the
+ * conversation's own sleeping session, else starts one if needed — let a
  * BUSY session finish its turn (up to {@link waitIdleTimeoutMs} — live work is
  * never interrupted on purpose; after the bound the forward takes the normal
  * interrupt path), then forward — unless an armed usage-limit wait holds the
@@ -49,15 +49,8 @@ export interface PostToSessionDeps {
   holdForLimitResume?: (conversationKey: string, text: string, heldText?: string) => boolean;
   /** Whether the conversation's agent is mid-turn right now (sync, in-memory probe). */
   checkBusy: (conversationKey: string) => boolean;
-  /**
-   * Optional: bring the conversation's OWN session back when it is not running,
-   * by resuming its persisted id — a tracker issue keeps one conversation for
-   * good (Jira plan D5), so a session that died between requests must not be
-   * replaced by a fresh one. Resolves whether or not it resumed; `ensureSession`
-   * then finds the session live, or starts one when there was nothing to resume.
-   */
-  resumeSession?: (conversationKey: string) => Promise<void>;
-  /** Ensure a session is ready, starting one with `fallbackAdapterName` if needed. */
+  /** Ensure a session is ready: a sleeping one is resumed by its id (a tracker issue keeps one conversation for
+   *  good, Jira plan D5); one with nothing to resume is started with `fallbackAdapterName`. */
   ensureSession: (conversationKey: string, fallbackAdapterName?: string) => Promise<EnsureSessionResult>;
   /** Forward the prompt to the conversation's agent. */
   forwardPrompt: (conversationKey: string, text: string) => Promise<void>;
@@ -94,7 +87,6 @@ export async function postToSession(
   const { heldText } = options;
   // Checked first: no session is started or resumed into a limit.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
-  if (deps.resumeSession) await deps.resumeSession(conversationKey);
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
   if (deps.checkBusy(conversationKey)) await waitForIdle(deps, conversationKey);

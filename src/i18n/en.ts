@@ -201,6 +201,8 @@ export const enDict: Record<string, string> = {
   'agent.no_session': 'No agent running. /claude or /opencode to start.',
   'agent.session_ended': '{label}: session ended',
   'agent.stopped': '{label} stopped',
+  'agent.sleeping_released': 'The sleeping session was released — the next message starts a fresh one.',
+  'agent.resume_failed_fresh': '⚠️ The previous conversation could not be resumed — a fresh session was started.',
   'agent.exit_signal_sent': 'Double Ctrl+C sent — {label} exiting',
   'agent.already_active': '{label} is already running here. Send a message or /quit.',
   'agent.starting': 'Starting {label} in `{subdir}`…',
