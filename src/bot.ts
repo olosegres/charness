@@ -7102,16 +7102,20 @@ const openCodeAdapterName = 'opencode';
  * @description Compose the per-invocation compaction instruction for a thread's
  * backend (D3 summary guidance + the loaded-skills guidance + the optional F2
  * closing section). The general guidance is skipped for OpenCode (baked in its
- * fork prompt) and appended for the Claude backends; the skills guidance rides
- * every backend; the closing-section directive rides only when requested.
+ * fork prompt) and appended for the Claude backends; the skills guidance is
+ * skipped when the backend's own compaction prompt already gets it (an OpenCode
+ * server running the bot's compaction plugin); the closing-section directive
+ * rides only when requested.
  */
-function getCompactionInstruction(
+async function getCompactionInstruction(
   adapter: AgentAdapter,
+  key: ThreadKey,
   opts: { withClosingSection: boolean },
-): string | undefined {
+): Promise<string | undefined> {
   return buildCompactionInstruction({
     bakesSummaryGuidance: adapter.name === openCodeAdapterName,
     summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: (await adapter.checkHasCompactionSkillsHook?.(key)) ?? false,
     skillsGuidance: compactionSkillsGuidance,
     closingSectionInstruction: opts.withClosingSection
       ? t('compact.closingSectionInstruction', {
@@ -7221,7 +7225,7 @@ async function runThreadCompaction(
   // D3: every bot-issued compaction carries the maximally-complete-summary
   // guidance (baked in the OpenCode fork, appended for the Claude backends), plus
   // the F2 closing-section directive when requested.
-  const instruction = getCompactionInstruction(adapter, { withClosingSection: opts.withClosingSection });
+  const instruction = await getCompactionInstruction(adapter, key, { withClosingSection: opts.withClosingSection });
 
   const kStr = keyToString(key);
   threadsCompacting.add(kStr);

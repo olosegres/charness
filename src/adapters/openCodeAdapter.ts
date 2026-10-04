@@ -38,6 +38,7 @@ import {
 } from '../utils/subagentRender';
 import { defaultDisplayVerbosityMode } from '../utils/displayVerbosity';
 import { checkIsReplacementTurnMissing, checkIsWedgedTurn } from '../utils/openCodeTurnActivity';
+import { checkHasOpenCodeCompactPlugin } from '../utils/openCodeCompactPlugin';
 import {
   checkIsSimpleApiMethod,
   checkProviderHasAuthCatalogEntry,
@@ -2768,6 +2769,28 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn(`[OpenCode] context compaction failed:`, reason);
       return { ok: false, error: t('compact.failed', { reason }) };
+    }
+  }
+
+  /**
+   * @description Whether the server serving this thread loaded the bot's
+   * compaction plugin, read from its merged config (`GET /config`, directory
+   * scoped). A server the bot did not start lacks it, and then the bot must keep
+   * sending the skills guidance itself. A read failure answers `false`: the
+   * guidance then appears twice, which beats not at all.
+   */
+  async checkHasCompactionSkillsHook(key: ThreadKey): Promise<boolean> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return false;
+    try {
+      const config = await this.apiRequest<{ plugin?: unknown } | null>(
+        'GET',
+        buildDirectoryScopedPath('/config', session.workDir),
+      );
+      return checkHasOpenCodeCompactPlugin(config?.plugin);
+    } catch (e) {
+      console.warn(`[OpenCode] reading the server config failed:`, e instanceof Error ? e.message : e);
+      return false;
     }
   }
 

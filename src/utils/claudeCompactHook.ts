@@ -45,6 +45,7 @@ export function getHookCompactionInstruction(): string {
   return buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: false,
     skillsGuidance: compactionSkillsGuidance,
   }) ?? '';
 }

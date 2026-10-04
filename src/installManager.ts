@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
+import { prepareOpenCodeCompactPluginEnv } from './utils/openCodeCompactPlugin';
 
 const npmPrefix = (process.env.HOME || '/home/agent') + '/.npm-global';
 
@@ -313,9 +314,13 @@ function getProcessIdentity(pid: number): ExternalProcessIdentity | null {
   return startToken ? { pid, startToken } : null;
 }
 
-export function getDefaultOpenCodeOwnershipFilePath(baseDirectory = process.cwd()): string {
+function resolveAbsoluteDataDir(baseDirectory = process.cwd()): string {
   const dataDirectory = process.env.DATA_DIR || path.join(os.homedir(), '.telegramCode');
-  return path.join(path.resolve(baseDirectory, dataDirectory), '.opencode-server-process');
+  return path.resolve(baseDirectory, dataDirectory);
+}
+
+export function getDefaultOpenCodeOwnershipFilePath(baseDirectory = process.cwd()): string {
+  return path.join(resolveAbsoluteDataDir(baseDirectory), '.opencode-server-process');
 }
 
 function saveOpenCodeServerProcessOwnership(processOwnership: OpenCodeProcessOwnership): void {
@@ -801,6 +806,9 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     // back when it finishes). Without this the whole session is locked for the
     // entire sub-agent run and the topic looks hung.
     OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'true',
+    // The bot's compaction plugin: an overflow compaction, which never gets the
+    // bot's per-invocation instruction, still names the loaded skills.
+    ...prepareOpenCodeCompactPluginEnv(resolveAbsoluteDataDir(), process.env),
   };
   let startupChild: ChildProcess | null = null;
   let startupHostedProcess: OpenCodeProcessOwnership | null = null;

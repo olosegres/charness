@@ -227,6 +227,7 @@ test('buildCompactionInstruction: Claude backends get the D3 + skills guidance, 
   const claude = buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: false,
     skillsGuidance: compactionSkillsGuidance,
     closingSectionInstruction: closing,
   });
@@ -251,6 +252,7 @@ test('buildCompactionInstruction: OpenCode omits the baked D3 guidance but still
     buildCompactionInstruction({
       bakesSummaryGuidance: true,
       summaryGuidance: compactionSummaryGuidance,
+      bakesSkillsGuidance: false,
       skillsGuidance: compactionSkillsGuidance,
       closingSectionInstruction: undefined,
     }),
@@ -259,10 +261,24 @@ test('buildCompactionInstruction: OpenCode omits the baked D3 guidance but still
   const withClosing = buildCompactionInstruction({
     bakesSummaryGuidance: true,
     summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: false,
     skillsGuidance: compactionSkillsGuidance,
     closingSectionInstruction: 'CLOSING',
   });
   assert.equal(withClosing, `${compactionSkillsGuidance}\n\nCLOSING`, 'skills guidance, then the closing section');
+});
+
+test('buildCompactionInstruction: an OpenCode server with the compaction plugin gets neither guidance', () => {
+  // The plugin adds the skills guidance to every compaction prompt and cannot see
+  // this instruction, so sending it here as well would duplicate it.
+  const base = {
+    bakesSummaryGuidance: true,
+    summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: true,
+    skillsGuidance: compactionSkillsGuidance,
+  };
+  assert.equal(buildCompactionInstruction({ ...base, closingSectionInstruction: 'CLOSING' }), 'CLOSING');
+  assert.equal(buildCompactionInstruction(base), undefined);
 });
 
 test('buildCompactionInstruction: nothing to append → undefined', () => {
@@ -270,6 +286,7 @@ test('buildCompactionInstruction: nothing to append → undefined', () => {
     buildCompactionInstruction({
       bakesSummaryGuidance: true,
       summaryGuidance: compactionSummaryGuidance,
+      bakesSkillsGuidance: false,
       skillsGuidance: '  ',
       closingSectionInstruction: '   ',
     }),

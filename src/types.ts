@@ -823,6 +823,17 @@ export interface AgentAdapter extends EventEmitter {
   compactContext?(key: ThreadKey, instruction?: string): Promise<CompactionResult>;
 
   /**
+   * Whether this backend's own compaction prompt already receives the
+   * loaded-skills guidance for this thread's session, so the bot must leave it
+   * out of the `compactContext` instruction. OpenCode: true when the server
+   * loaded the bot's compaction plugin (`utils/openCodeCompactPlugin.ts`), which
+   * cannot see the instruction and so cannot skip a duplicate itself. Optional —
+   * absent means "no", and the Claude backends leave it unset because their
+   * `PreCompact` hook skips a compaction that already carries the guidance.
+   */
+  checkHasCompactionSkillsHook?(key: ThreadKey): Promise<boolean>;
+
+  /**
    * Whether this backend's OWN compaction summary already reaches the topic as
    * ordinary agent output, so the bot must NOT post a second copy of it.
    *
