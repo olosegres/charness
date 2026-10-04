@@ -20,3 +20,13 @@ functions where the handlers used to be registered. A module never imports `bot.
 `view_`. Preferences are per topic (`setDisplayPref`) and never reach the agent. A button tap persists the mode,
 answers the callback and re-renders the picker's keyboard so the ✓ follows; a view with requests off (`stream`)
 closes the topic's open request. `/status` renders the view through `formatTopicView`.
+
+## `reminders.ts`
+
+`/reminders` and its seven buttons (add, hub, close, list page, card, delete, the wizard's own). A reminder is
+bot-LOCAL: nothing reaches an agent, so it works in any topic, General and unbound ones included. The in-flight
+wizards are memory and live in `bot.ts` (`reminderWizards`, passed in) because dropping a topic's wizard is also
+the send-error path's job once the topic is gone. `bot.ts` reaches into the flow from the text and voice
+handlers through `claimReminderTextCapture` (the single-use claim of step 4's wait — two concurrent messages
+must make ONE reminder) and `finishReminderWizard` / `expireReminderWizard`, and from any command through
+`cancelReminderWizard`. The scheduler engine arrives through a getter: it is built after the handlers register.

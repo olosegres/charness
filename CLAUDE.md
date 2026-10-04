@@ -115,7 +115,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `cli.ts`, `cli/` | CLI dispatch: `envLoader.ts` (`.env` / `ENV_FILE`), `hot.ts` + `botEntry.ts` (hot supervisor / worker), `bot.ts` (shared startup) |
 | `bot.ts` | **The bot**: Telegram handlers, every slash command (on the neutral `commandRouter`), output streaming, composition root; ~14k lines. A test cannot import it (module-scope `parseEnv()` exits the process), so logic goes into pure helpers that `bot.ts` wires |
 | `agentLogin/` | `createAgentLogin(ports)`: the out-of-band sign-in drivers — json-stream `/login` and OpenCode `/connect` OAuth, each a pty relayed through the topic. README: contracts |
-| `connectors/telegram/commands/` | Slash commands + buttons decomposed out of `bot.ts`, one `create<Feature>(ports)` per file over the shared `BotCore` ports bag (`displayModes.ts`, …). README: registration-order and ports contract |
+| `connectors/telegram/commands/` | Slash commands + buttons decomposed out of `bot.ts`, one `create<Feature>(ports)` per file over the shared `BotCore` ports bag (`displayModes.ts`, `reminders.ts`, …). README: registration-order and ports contract |
 | `state.ts` | `state.json` persistence (bindings, sessions, prefs, schedules, open requests); `resolveDataDir()` |
 | `sessionKey.ts`, `types.ts` | `SessionKey` + codec registry; shared types incl. the `AgentAdapter` contract |
 | `threadRouting.ts`, `accessControl.ts`, `validation.ts`, `folderName.ts` | Topic → folder binding; who may use the bot (`AdminCache` is the single authority); `/bind` validation (path-traversal/symlink safe, canonical `resolveBoundWorkDir`); new-folder-name gate |
