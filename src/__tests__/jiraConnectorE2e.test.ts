@@ -320,12 +320,11 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await waitFor('PROJ-1 handed back', answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId);
     assert.deepEqual(getCommentTexts(issue), ['Fake final answer for PROJ-1 (answer, turn 1).']);
     assert.ok(issue.comments.every((comment) => comment.author.accountId === aiAccount.accountId));
-    // L-D11: the turn's token accounting is logged from the stream — the live cache check reads these lines.
-    const usageLines = getCharness().output.split('\n').filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix));
-    assert.ok(
-      usageLines.some((line) => line.includes(`cacheRead=${fakeTurnUsage.cache_read_input_tokens} cacheWrite=${fakeTurnUsage.cache_creation_input_tokens}`)),
-      `a usage line with the fake's counts: ${usageLines}`,
-    );
+    // L-D11: the turn's token accounting is logged from the stream — the live cache check reads these lines. The
+    // answer arrives through the MCP before the turn's own `result` frame is tailed, so the line is waited for.
+    const expectedUsage = `cacheRead=${fakeTurnUsage.cache_read_input_tokens} cacheWrite=${fakeTurnUsage.cache_creation_input_tokens}`;
+    const getUsageLines = (): string[] => getCharness().output.split('\n').filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix));
+    await waitFor(`a usage line with the fake's counts (${expectedUsage})`, answerTimeoutMs, () => getUsageLines().some((line) => line.includes(expectedUsage)));
   });
 
   it('a turn that ends without an answer is woken, and the answer follows', async () => {
