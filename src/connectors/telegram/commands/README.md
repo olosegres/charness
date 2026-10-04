@@ -43,3 +43,18 @@ pick only while `awaitingModelSelection` holds the thread, and every numbered pi
 it. A pasted provider key is deleted from the topic as a secret only when it can be a real key; an implausible
 one stays visible and the connect stays armed. The OAuth buttons reach the sign-in driver
 (`../../../agentLogin/`) through the `startOpenCodeOAuthLogin` port.
+
+## `compaction.ts`
+
+`/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`), `/compact_summary` (`csum_on` / `csum_off`;
+read when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), the compact-on-idle
+watchdog with its re-ask, the full-summary post (`postCompactionSummary`) and the deferred compaction the
+`compact_conversation` MCP tool arms. In General a switch is the instance-wide default, in a regular topic that
+topic's override. Execution always goes through
+`runThreadCompaction`: only it marks the topic as compacting, so the summary a compaction produces is never
+counted as a turn (a manual compaction used to push the idle stamp back and be compacted again one window
+later). `bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`, `noteThreadUserActivity`),
+the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rearmThreadIdleTimer`,
+`clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
+`reAskedQuestionOptions` (the re-ask button). The factory must be built BEFORE the module-scope objects that name
+its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
