@@ -1252,6 +1252,20 @@ export function checkNeedsSchedulerMcpReregister(mcpStatus: unknown): boolean {
   return (entry as Record<string, unknown>).status !== 'connected';
 }
 
+/**
+ * Pauses before each retry of a failed scheduler-MCP registration. A server that
+ * was just (re)started can take longer than the request timeout to create a
+ * folder's instance — live, the first POST after a restart timed out at 30 s and
+ * the folder's agent ran without the bot's tools until the next bot boot. After
+ * the last pause the bot stops; the next session start or bot boot tries again.
+ */
+export const schedulerMcpRetryDelaysMs: readonly number[] = [15_000, 60_000, 5 * 60_000, 15 * 60_000];
+
+/** @description The pause before retry number `attempt` (0-based), or `null` once the retries are used up. */
+export function getSchedulerMcpRetryDelayMs(attempt: number): number | null {
+  return schedulerMcpRetryDelaysMs[attempt] ?? null;
+}
+
 export function buildProviderApiAuthPayload(apiKey: string): Record<string, string> {
   return { type: 'api', key: apiKey };
 }
@@ -1437,6 +1451,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * re-registered after the server (and its in-memory MCP table) restarts.
    */
   private registeredSchedulerMcpDirs: Set<string> = new Set();
+
+  /**
+   * Directories whose scheduler-MCP registration failed and is waiting for a
+   * retry: the number of retries already scheduled, and the pending timer (null
+   * while the retry itself runs). Cleared by a registration that succeeds.
+   */
+  private schedulerMcpRetries: Map<string, { attempt: number; timer: NodeJS.Timeout | null }> = new Map();
 
   /**
    * child sessionID → parent sessionID, learned from `session.updated` events.
@@ -3272,8 +3293,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * @description Reconcile ONE directory: read the live `GET /mcp` status and,
    * when `telegramBot` is missing or not `connected`, drop the Set gate and
-   * force a fresh POST. Best-effort — a read/registration error is logged and
-   * swallowed so it never rejects out of {@link reconcileSchedulerMcpForActiveSessions}.
+   * force a fresh POST. Best-effort — a read/registration error is logged,
+   * scheduled for a retry, and swallowed so it never rejects out of
+   * {@link reconcileSchedulerMcpForActiveSessions}.
    */
   private async reconcileSchedulerMcpForDirectory(directory: string): Promise<void> {
     try {
@@ -3281,7 +3303,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         'GET',
         buildDirectoryScopedPath('/mcp', directory),
       );
-      if (!checkNeedsSchedulerMcpReregister(mcpStatus)) return;
+      if (!checkNeedsSchedulerMcpReregister(mcpStatus)) {
+        // A registration that timed out can still have landed on the server.
+        this.clearSchedulerMcpRetry(directory);
+        return;
+      }
       // The live server contradicts the Set gate (stale entry from a prior
       // generation): clear it so the re-POST actually fires.
       this.registeredSchedulerMcpDirs.delete(directory);
@@ -3291,7 +3317,55 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         `[OpenCode] scheduler MCP reconcile failed for ${directory}:`,
         e instanceof Error ? e.message : e,
       );
+      this.scheduleSchedulerMcpRetry(directory);
     }
+  }
+
+  /**
+   * @description Retry a failed scheduler-MCP registration for `directory` after
+   * the next pause of {@link schedulerMcpRetryDelaysMs}. The retry runs the
+   * reconcile rather than a bare POST: a registration that timed out may have
+   * landed after all, and then nothing needs sending. A retry already pending
+   * covers a second failure, and one that fires after the folder's last session
+   * ended does nothing.
+   */
+  private scheduleSchedulerMcpRetry(directory: string): void {
+    const retry = this.schedulerMcpRetries.get(directory) ?? { attempt: 0, timer: null };
+    if (retry.timer) return;
+    const delayMs = getSchedulerMcpRetryDelayMs(retry.attempt);
+    if (delayMs === null) {
+      this.schedulerMcpRetries.delete(directory);
+      console.warn(
+        `[OpenCode] scheduler MCP for ${directory} is still not registered; the next session start or bot boot retries`,
+      );
+      return;
+    }
+    retry.attempt += 1;
+    retry.timer = setTimeout(() => {
+      retry.timer = null;
+      const hasActiveSession = Array.from(this.sessions.values()).some(
+        (session) => session.isActive && session.workDir === directory,
+      );
+      if (!hasActiveSession) {
+        this.schedulerMcpRetries.delete(directory);
+        return;
+      }
+      void this.reconcileSchedulerMcpForDirectory(directory);
+    }, delayMs);
+    retry.timer.unref?.();
+    this.schedulerMcpRetries.set(directory, retry);
+    console.log(
+      `[OpenCode] retrying the scheduler MCP registration for ${directory} in ${Math.round(delayMs / 1000)}s ` +
+        `(${retry.attempt}/${schedulerMcpRetryDelaysMs.length})`,
+    );
+  }
+
+  /** @description Forget `directory`'s pending registration retry: it is registered now. */
+  private clearSchedulerMcpRetry(directory: string): void {
+    const retry = this.schedulerMcpRetries.get(directory);
+    if (!retry) return;
+    if (retry.timer) clearTimeout(retry.timer);
+    this.schedulerMcpRetries.delete(directory);
   }
 
   /**
@@ -3375,8 +3449,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * per directory per server generation — `restartServer` clears the Set so a
    * dir is re-registered after the server's MCP table is wiped. Inert until
    * injection is configured — the builder returns `null` and this no-ops. A
-   * registration FAILURE is logged and swallowed: scheduling tools are an
-   * enhancement, the session must still start.
+   * registration FAILURE is logged, scheduled for a retry, and swallowed:
+   * scheduling tools are an enhancement, the session must still start.
    */
   private async registerSchedulerMcpForDirectory(directory: string): Promise<void> {
     if (this.registeredSchedulerMcpDirs.has(directory)) return;
@@ -3390,12 +3464,14 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         registration,
       );
       this.registeredSchedulerMcpDirs.add(directory);
+      this.clearSchedulerMcpRetry(directory);
       appendDiagLog(`scheduler mcp registered dir=${directory}`);
     } catch (e) {
       console.warn(
         `[OpenCode] scheduler MCP registration failed for ${directory}:`,
         e instanceof Error ? e.message : e,
       );
+      this.scheduleSchedulerMcpRetry(directory);
     }
   }
 

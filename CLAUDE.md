@@ -319,7 +319,12 @@ config/variants, not a per-message API field).
   reads the live `GET /mcp` per active dir and force re-registers any `telegramBot`
   that is missing or not `connected` — opencode does NOT auto-reconnect a remote
   MCP dropped during the bot-restart gap, which otherwise stranded every dir's
-  tools; fire-and-forget so boot never blocks on opencode). The json-stream
+  tools; fire-and-forget so boot never blocks on opencode). A registration or
+  reconcile that FAILS is retried after 15 s, 1 min, 5 min and 15 min
+  (`schedulerMcpRetryDelaysMs`) while the folder still has an active session; each
+  retry reads `GET /mcp` first, because a POST that timed out may have landed.
+  Live, the first POST after a server restart timed out at 30 s and the folder's
+  agent had no `telegramBot` tools until the next bot boot. The json-stream
   Claude side gets the same boot self-heal (`healSchedulerMcpForActiveSessions`
   → the adapter's `healMcpServer`, fire-and-forget per thread, logged only when
   a session was really reconnected or did not answer): a session that SURVIVED

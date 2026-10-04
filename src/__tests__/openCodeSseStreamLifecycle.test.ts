@@ -26,7 +26,12 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { OpenCodeAdapter, checkNeedsSchedulerMcpReregister } from '../adapters/openCodeAdapter';
+import {
+  OpenCodeAdapter,
+  checkNeedsSchedulerMcpReregister,
+  getSchedulerMcpRetryDelayMs,
+  schedulerMcpRetryDelaysMs,
+} from '../adapters/openCodeAdapter';
 import { openCodeCompactPluginFileName } from '../utils/openCodeCompactPlugin';
 import { keyToString, type ThreadKey } from '../types';
 import {
@@ -394,6 +399,126 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
     assert.equal(gets.length, 1, 'a shared folder is reconciled once, not once per thread');
     assert.equal(posts.length, 0, 'a connected dir is not re-registered');
+  });
+});
+
+describe('scheduler MCP registration retry after a failure', () => {
+  const secret = 'a'.repeat(64);
+  const port = 4097;
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+
+  beforeEach(() => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    mock.timers.enable({ apis: ['setTimeout'] });
+    console.log = () => {};
+    console.warn = () => {};
+  });
+  afterEach(() => {
+    mock.timers.reset();
+    resetSchedulerMcpInjection();
+    console.log = originalLog;
+    console.warn = originalWarn;
+  });
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  function createAdapterWithSession() {
+    const adapter = createAdapter();
+    const keyA: ThreadKey = { chatId: -100, threadId: 1 };
+    adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
+    return { adapter, keyA };
+  }
+
+  it('a registration that timed out after a server restart is retried and lands', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string) => {
+      calls.push(method);
+      if (method === 'POST' && calls.filter((call) => call === 'POST').length === 1) {
+        throw new Error('OpenCode request timed out after 30000ms');
+      }
+      if (method === 'GET') return {};
+      return undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+
+    adapter['connectSse'](keyA);
+    await settle();
+    assert.deepEqual(calls, ['POST'], 'the first registration failed');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), false);
+
+    mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
+    await settle();
+    assert.deepEqual(calls, ['POST', 'GET', 'POST'], 'the retry read the live status, then registered');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
+  });
+
+  it('a timed-out registration that landed after all is not sent again', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string) => {
+      calls.push(method);
+      if (method === 'POST') throw new Error('OpenCode request timed out after 30000ms');
+      return { [schedulerMcpServerName]: { status: 'connected' } };
+    }) as OpenCodeAdapter['apiRequest'];
+
+    adapter['connectSse'](keyA);
+    await settle();
+    mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
+    await settle();
+
+    assert.deepEqual(calls, ['POST', 'GET'], 'the server already lists it as connected');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0);
+  });
+
+  it('stops after the last pause while the server keeps failing', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string) => {
+      calls.push(method);
+      throw new Error('server sick');
+    }) as OpenCodeAdapter['apiRequest'];
+
+    adapter['connectSse'](keyA);
+    await settle();
+    for (const delayMs of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(delayMs);
+      await settle();
+    }
+    mock.timers.tick(schedulerMcpRetryDelaysMs[schedulerMcpRetryDelaysMs.length - 1] * 10);
+    await settle();
+
+    assert.deepEqual(calls, ['POST', ...schedulerMcpRetryDelaysMs.map(() => 'GET')]);
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'gave up, nothing armed');
+  });
+
+  it('a retry due after the folder lost its last session does nothing', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string) => {
+      calls.push(method);
+      throw new Error('server sick');
+    }) as OpenCodeAdapter['apiRequest'];
+
+    adapter['connectSse'](keyA);
+    await settle();
+    adapter['sessions'].get(keyToString(keyA))!.isActive = false;
+    mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
+    await settle();
+
+    assert.deepEqual(calls, ['POST']);
+    assert.equal(adapter['schedulerMcpRetries'].size, 0);
+  });
+
+  it('getSchedulerMcpRetryDelayMs walks the pauses, then gives up', () => {
+    assert.deepEqual(
+      schedulerMcpRetryDelaysMs.map((_delay, attempt) => getSchedulerMcpRetryDelayMs(attempt)),
+      [...schedulerMcpRetryDelaysMs],
+    );
+    assert.equal(getSchedulerMcpRetryDelayMs(schedulerMcpRetryDelaysMs.length), null);
   });
 });
 
