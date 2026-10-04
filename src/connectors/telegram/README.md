@@ -62,6 +62,18 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 - A directory-scoped call re-resolves the topic binding before opening files and again inside the delivery
   queue, refusing a binding that changed meanwhile.
 
+## Requests in a topic (`../../requests/`)
+
+- A topic opens requests only in the views with requests on (`/verbosity stream_answers|answers`,
+  `utils/topicView.ts`). They are opened at the USER entry points — text, voice, file, album, `/schedule`, the
+  scheduler's forward — never inside the prompt choke point, which also carries non-requests (the API-retry
+  nudge, wake-up reminders, replays). A slash command forwarded to the agent, and an answer to the agent's own
+  native question, never open one.
+- The request header leads the per-message body (ahead of the reply quote, never in the once-per-change thread
+  preamble) and says the plain text is hidden only in the answers-only view. A prompt buffered behind a session
+  start carries its header from capture time.
+- A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
+
 ## Testing against a fake Bot API
 
 `TELEGRAM_API_ROOT` points the telegraf client at another Bot API host. The process-level Telegram test

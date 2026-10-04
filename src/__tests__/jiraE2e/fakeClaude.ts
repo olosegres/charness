@@ -54,6 +54,8 @@ const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
+/** The request header's line that the requester does not see the agent's plain text (`requests/requestHeader.ts`). */
+const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text';
 /** How much of a stdin line that is not JSON the error message quotes. */
 const skippedLinePreviewChars = 200;
 
@@ -185,15 +187,20 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const requestId = requestIdRe.exec(content)?.[0];
   if (!requestId) {
+    // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, turnCount: 1, pid: process.pid });
+    emitTurnActivity(sessionId, issueKeyRe.exec(content)?.[1] ?? 'unknown');
     endTurn(sessionId, 'Nothing to do.');
     return;
   }
   const isRequestPrompt = content.includes(`[Request ${requestId}`);
+  // The header's line for a requester who never sees the agent's plain text (a Telegram answers-only topic, a tracker).
+  const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const previous = readRequestState(requestId);
   const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0 };
   state.turnCount += 1;
   fs.writeFileSync(getStatePath(requestId), JSON.stringify(state));
-  appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, turnCount: state.turnCount, pid: process.pid });
+  appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, turnCount: state.turnCount, pid: process.pid });
 
   emitTurnActivity(sessionId, state.issueKey);
   const isFirstTurn = state.turnCount === 1;

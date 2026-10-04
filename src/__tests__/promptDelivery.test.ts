@@ -150,8 +150,8 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.equal(botSource.match(/agent\.queued_starting/g)?.length, 1, 'the notice is built in one place');
   });
 
-  it('the text and voice handlers hand a mid-startup prompt to it', () => {
-    assert.match(botSource, /await deliverPromptOrBuffer\(key, text, true\);/);
-    assert.match(botSource, /await deliverPromptOrBuffer\(key, transcript, true\);/);
+  it('the text and voice handlers hand a mid-startup prompt to it, with the request header opened at capture time (S7)', () => {
+    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, true\);/);
+    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{transcript\}`, true\);/);
   });
 });

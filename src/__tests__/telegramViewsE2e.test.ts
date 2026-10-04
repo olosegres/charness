@@ -14,6 +14,10 @@
  *     defaults; a tap on a view button persists it and re-renders the picker
  *   → `/status` names the view; the typed forms set a view and reject a bad one
  *   → charness restarted: the view survives
+ *   → the fake agent started; in «Stream + answers» a message opens a request
+ *     the agent answers through the bot MCP; in «Answers only» the header says
+ *     the plain text is not shown; in the full stream no request is opened; a
+ *     silent turn is woken; `/schedule` and a scheduled run are requests too
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the
  * agent is the fake. Everything the test starts is stopped in `after`.
@@ -27,6 +31,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { fakeClaudeLogFileNames, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
+import type { ScheduleRecord } from '../scheduler/types';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -39,6 +46,7 @@ import {
   IsolatedCharness,
   isolatedLaunchEnvNames,
   listTmuxSessions,
+  readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
@@ -59,9 +67,13 @@ const launchLine = 'Launching Telegraf bot (long polling';
 const bootTimeoutMs = 60 * 1000;
 /** A command's reply: a poll round trip and the paced send. */
 const replyTimeoutMs = 20 * 1000;
+/** A session start, a turn and the agent's answer through the bot MCP — or a silent turn plus its wake-up. */
+const answerTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = 2 * bootTimeoutMs + 10 * replyTimeoutMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 3 * bootTimeoutMs + 12 * replyTimeoutMs + 7 * answerTimeoutMs + 3 * stopTimeoutMs + flowMarginMs;
+/** How soon after the restart the seeded scheduled run is due. */
+const seededRunDelayMs = 3 * 1000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -120,6 +132,34 @@ async function startCharness(): Promise<void> {
 function readPersistedTopicPrefs(): Record<string, string> | undefined {
   const state = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { displayPrefs?: Record<string, Record<string, string>> };
   return state.displayPrefs?.[`${group.id}:${topicThreadId}`];
+}
+
+function readFakeLog<TRecord>(fileName: string): TRecord[] {
+  return readJsonLines<TRecord>(path.join(getLayout().fakeLogDir, fileName));
+}
+
+/** The fake agent's turns whose text carried `label` (the `KEY-n` token of the operator's message). */
+function getTurns(label: string): FakeClaudeTurn[] {
+  return readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === label);
+}
+
+function getAnswers(label: string): FakeClaudeAnswer[] {
+  return readFakeLog<FakeClaudeAnswer>(fakeClaudeLogFileNames.answers).filter((answer) => answer.issueKey === label);
+}
+
+/** Wait for the fake agent's first answer for `label` and resolve it. */
+async function waitForFakeAnswer(label: string): Promise<FakeClaudeAnswer> {
+  await getCharness().waitFor(`the fake agent's answer for ${label}`, answerTimeoutMs, () => getAnswers(label).length > 0);
+  return getAnswers(label)[0];
+}
+
+/** The closed-request history the ledger keeps, oldest first. */
+function readClosedRequests(): ClosedRequestRecord[] {
+  return readJsonLines<ClosedRequestRecord>(path.join(getLayout().dataDir, 'requests.jsonl'));
+}
+
+function readPersistedState(): { openRequests?: Record<string, OpenRequestState>; schedules?: Record<string, ScheduleRecord> } & Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
 }
 
 function removeInstanceSync(): void {
@@ -253,10 +293,97 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await sendAndAwaitReply('/status', 'View: Stream + answers');
   });
 
+  // ── S7 — Telegram request intake ─────────────────────────────────────
+
+  it('/claude starts the fake agent in the topic', async () => {
+    await sendAndAwaitReply('/claude', 'ready in');
+    assert.ok(listTmuxSessions([], getTmuxEnv(getLayout().tmuxTmpDir)).length === 1, 'the agent runs on the instance\'s own tmux server');
+  });
+
+  it('in «Stream + answers» an operator message opens a request; the agent answers it through the bot MCP into the topic', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-1 [fake:answer]');
+    const answer = await waitForFakeAnswer('TOPIC-1');
+    const [turn] = getTurns('TOPIC-1');
+    assert.match(turn.requestId ?? '', /^req_/, 'the prompt carried a request header');
+    assert.equal(turn.isRequestPrompt, true);
+    assert.equal(turn.isPlainTextHidden, false, 'the stream is shown in this view, so the header does not say otherwise');
+    assert.equal(answer.kind, 'final');
+    assert.ok(answer.outcome.startsWith('Delivered'), answer.outcome);
+    await waitForTopicMessage('the answer in the topic', (message) => message.text.includes('Fake final answer for TOPIC-1'));
+    await getCharness().waitFor('the request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
+    const closed = readClosedRequests().find((record) => record.id === turn.requestId);
+    assert.equal(closed?.closeReason, 'final');
+    assert.deepEqual(closed?.origin, { kind: 'message', attributes: { source: 'text' } });
+  });
+
+  it('in «Answers only» the header tells the agent its plain text is not shown', async () => {
+    await sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-2 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-2');
+    assert.equal(getTurns('TOPIC-2')[0].isPlainTextHidden, true);
+  });
+
+  it('in the full stream no request is opened: the agent gets the bare message and its stream shows', async () => {
+    await sendAndAwaitReply('/verbosity stream', 'This topic shows: Full stream');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-3 [fake:answer]');
+    await getCharness().waitFor('the turn for TOPIC-3', answerTimeoutMs, () => getTurns('TOPIC-3').length > 0);
+    assert.equal(getTurns('TOPIC-3')[0].requestId, null, 'no request header');
+    await waitForTopicMessage('the agent\'s stream text', (message) => message.text.includes('Working on TOPIC-3'));
+    assert.deepEqual(getAnswers('TOPIC-3'), [], 'nothing to answer');
+    assert.equal(readPersistedState().openRequests?.[`${group.id}:${topicThreadId}`], undefined, 'no request is open for the topic');
+  });
+
+  it('a turn that ends without an answer is woken, and the answer follows', async () => {
+    await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-4 [fake:silent-once]');
+    await waitForFakeAnswer('TOPIC-4');
+    assert.deepEqual(getTurns('TOPIC-4').map((turn) => turn.isRequestPrompt), [true, false], 'the request, then a reminder');
+    assert.equal(new Set(getTurns('TOPIC-4').map((turn) => turn.requestId)).size, 1, 'one request from start to end');
+  });
+
+  it('/schedule hands the agent a request too', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, '/schedule TOPIC-5 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-5');
+    const [turn] = getTurns('TOPIC-5');
+    assert.equal(turn.isRequestPrompt, true);
+    await getCharness().waitFor('the /schedule request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
+    assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'message', attributes: { source: 'schedule' } });
+  });
+
+  it('a scheduled run fires as a request: the announcement is pinned and the agent answers it', async () => {
+    // Seeded into the store while the bot is down, the way a persisted job re-arms at boot.
+    await getCharness().stop();
+    const persisted = readPersistedState();
+    const dueAt = Date.now() + seededRunDelayMs;
+    const seeded: ScheduleRecord = {
+      id: 'run-topic-6-seeded',
+      threadKey: `${group.id}:${topicThreadId}`,
+      name: 'Run TOPIC-6',
+      spec: { kind: 'once', onceAtIso: new Date(dueAt).toISOString() },
+      prompt: 'TOPIC-6 [fake:answer]',
+      createdBy: 'user',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nextRunAt: dueAt,
+    };
+    persisted.schedules = { ...(persisted.schedules ?? {}), [seeded.id]: seeded };
+    fs.writeFileSync(path.join(getLayout().dataDir, 'state.json'), JSON.stringify(persisted));
+    await startCharness();
+
+    await waitForTopicMessage('the fire announcement', (message) => message.text.includes('Schedule "Run TOPIC-6"'));
+    await waitForFakeAnswer('TOPIC-6');
+    const [turn] = getTurns('TOPIC-6');
+    assert.equal(turn.isRequestPrompt, true);
+    await getCharness().waitFor('the scheduled run\'s request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
+    assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'scheduledRun', attributes: { source: 'scheduledRun' } });
+  });
+
   it('the instance runs its tmux server in its private TMUX_TMPDIR; nothing of it runs on the default tmux server', () => {
     const instance = getLayout();
-    // No agent was started yet, so the instance's server may not exist.
+    // The instance's tmux calls reach the server in its own TMUX_TMPDIR, never the user's default one.
+    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(instance.tmuxTmpDir)), ['default'], 'one tmux server, the instance\'s own');
     const instanceSessions = new Set(listTmuxSessions([], getTmuxEnv(instance.tmuxTmpDir)));
+    assert.ok(instanceSessions.size > 0, 'the agent runs on the instance\'s own tmux server');
     const defaultSessionsNow = listTmuxSessions([]);
     assert.deepEqual(defaultSessionsNow.filter((name) => instanceSessions.has(name)), []);
     assert.deepEqual(defaultSessionsNow.filter((name) => !defaultTmuxSessionsBefore.includes(name) && name.includes(group.id.toString())), []);
