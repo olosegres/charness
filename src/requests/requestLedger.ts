@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { resolveDataDir, type StateStore } from '../state';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
-import { getRequestGroupKey, tryRequestGroupKeyFromString, type RequestGroupKey } from './requestGroup';
+import { emptyRequester, getRequestGroupKey, tryRequestGroupKeyFromString, type RequestGroupKey } from './requestGroup';
 import type {
   ClosedRequestRecord,
   OpenRequestState,
@@ -377,7 +377,11 @@ export class RequestLedger {
    * message of a requester is the one that matters, and the new request names it
    * (and what it had replaced in turn) in `supersededRequestIds`, so one answer
    * covers them all. Another requester's open request in the conversation is
-   * untouched. Resolves only once the new request is DURABLY saved: its id is
+   * untouched. A request WITHOUT a requester (persisted before requesters
+   * existed, or raised by an origin that names none) keeps the old rule: the
+   * conversation's next request supersedes it whoever raised that one — else it
+   * would linger, woken again and again, with nothing left that could close it.
+   * Resolves only once the new request is DURABLY saved: its id is
    * about to reach an agent, and an id the agent was told about but a crash lost
    * would make its answer refused as unknown — a dropped result.
    */
@@ -387,9 +391,13 @@ export class RequestLedger {
     const conversationKey = keyToString(key);
     const group = getRequestGroupKey(key, origin);
     const id = this.createRequestId();
+    const requesterlessGroup: RequestGroupKey = { conversation: key, requester: emptyRequester };
+    const requesterless = group.requester === emptyRequester ? undefined : this.store.getOpenRequest(requesterlessGroup);
     let request: OpenRequestState | null = null;
     await this.store.updateOpenRequest(group, (current) => {
-      const supersededRequestIds = current ? [...(current.supersededRequestIds ?? []), current.id].slice(-supersededRequestIdsMaxLength) : [];
+      const supersededRequestIds = [requesterless, current]
+        .flatMap((replaced) => (replaced ? [...(replaced.supersededRequestIds ?? []), replaced.id] : []))
+        .slice(-supersededRequestIdsMaxLength);
       const prompt = options.createPrompt?.(id, supersededRequestIds);
       if (prompt !== undefined && prompt.length > requestPromptMaxLength) {
         console.warn(`[requests] ${id}: prompt of ${prompt.length} chars not kept (over ${requestPromptMaxLength}); a wake-up sends a reminder instead`);
@@ -410,6 +418,15 @@ export class RequestLedger {
       return created;
     });
     if (!request) throw new Error(`[requests] ${id}: the store did not run the create`);
+    if (requesterless) {
+      // Its own group, so a separate step AFTER the create: a crash between the two
+      // leaves it open for the conversation's next request, never a lost new one.
+      await this.store.updateOpenRequest(requesterlessGroup, (current) => {
+        if (current?.id !== requesterless.id) return current;
+        this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded', supersededBy: id });
+        return undefined;
+      });
+    }
     await this.store.flush();
     this.onRequestCreated?.(key, request);
     return request;

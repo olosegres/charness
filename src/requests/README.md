@@ -16,7 +16,11 @@ Numeric bounds are named constants in the files below; this README says only wha
 - Telegram files operator entry points under the sender's user id and a scheduled run under the
   scheduler's marker (`utils/topicRequest.ts`), so a run never merges with a person's request.
 - The persisted field name is `<conversation key>` + unit separator + URI-encoded requester; a bare
-  conversation key (written before requesters existed) reads as the empty requester.
+  conversation key (written before requesters existed) reads as the empty requester (`emptyRequester`).
+- **A request with the empty requester keeps the old rule**: the conversation's next request supersedes it
+  whoever raised that one (a restart onto this code must not leave such a request lingering with
+  wake-ups). It is closed in a separate step right after the new request is saved — a crash between the
+  two leaves it open for the next request, never a lost new one.
 
 ## Ledger (`requestLedger.ts`)
 

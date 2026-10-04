@@ -19,6 +19,13 @@ import type { RequestOrigin } from './types';
 export const requestRequesterAttribute = 'requester';
 
 /**
+ * The requester of an origin that names none — and of every open request
+ * persisted before requesters existed. The ledger lets the conversation's next
+ * request supersede such a request whoever raised it (`requestLedger.ts`).
+ */
+export const emptyRequester = '';
+
+/**
  * Separates the conversation key from the requester in the persisted group key:
  * the ASCII unit separator, which no `SessionKey` codec produces (keys are
  * printable); the requester is URI-encoded so it can never contain it either.
@@ -36,7 +43,7 @@ export interface RequestGroupKey {
 
 /** @description The requester an origin names, or the empty requester when it names none. */
 export function getRequestRequester(origin: RequestOrigin): string {
-  return origin.attributes[requestRequesterAttribute] ?? '';
+  return origin.attributes[requestRequesterAttribute] ?? emptyRequester;
 }
 
 /** @description The group a request of `origin` in `conversation` belongs to. */
@@ -51,7 +58,7 @@ export function getRequestGroupKey(conversation: SessionKey, origin: RequestOrig
  */
 export function requestGroupKeyToString(group: RequestGroupKey): string {
   const conversationKey = keyToString(group.conversation);
-  return group.requester === '' ? conversationKey : `${conversationKey}${requestGroupSeparator}${encodeURIComponent(group.requester)}`;
+  return group.requester === emptyRequester ? conversationKey : `${conversationKey}${requestGroupSeparator}${encodeURIComponent(group.requester)}`;
 }
 
 /** @description Non-throwing decoder of {@link requestGroupKeyToString}; `null` for a field of an unknown platform. */
@@ -60,6 +67,6 @@ export function tryRequestGroupKeyFromString(serialized: string): RequestGroupKe
   const conversationKey = separatorIndex === -1 ? serialized : serialized.slice(0, separatorIndex);
   const conversation = tryKeyFromString(conversationKey);
   if (!conversation) return null;
-  const requester = separatorIndex === -1 ? '' : decodeURIComponent(serialized.slice(separatorIndex + 1));
+  const requester = separatorIndex === -1 ? emptyRequester : decodeURIComponent(serialized.slice(separatorIndex + 1));
   return { conversation, requester };
 }

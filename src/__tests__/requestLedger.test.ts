@@ -208,6 +208,30 @@ describe('RequestLedger requests', () => {
     assert.equal(ledger.getRequest(first.id)?.isOpen, false);
   });
 
+  it('a request without a requester — one persisted before requesters existed — is superseded by the conversation\'s next request, whoever raised it', async () => {
+    const storeBefore = await createStore();
+    const ledgerBefore = await createLoadedLedger(storeBefore);
+    const legacy = await ledgerBefore.createRequest(topicKey, messageOrigin);
+    await storeBefore.flush();
+    assert.ok(storeBefore.getOpenRequest({ conversation: topicKey, requester: '' }), 'persisted under the bare conversation key');
+
+    const ledger = await createLoadedLedger(await createStore());
+    const operator = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: (id, superseded) => `${id}<${superseded.join(',')}` });
+
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [operator.id], 'the requesterless one is gone');
+    assert.deepEqual(operator.supersededRequestIds, [legacy.id], 'the new request names it');
+    assert.equal(operator.prompt, `${operator.id}<${legacy.id}`, 'the kept prompt was built from the same ids');
+    const closed = ledger.getRequest(legacy.id);
+    assert.equal(closed?.isOpen === false ? closed.request.closeReason : null, 'superseded');
+    assert.equal(closed?.isOpen === false ? closed.request.supersededBy : null, operator.id);
+    assert.deepEqual(readHistory().map((record) => [record.id, record.closeReason, record.supersededBy]), [[legacy.id, 'superseded', operator.id]]);
+
+    // A later request of ANOTHER requester finds nothing requesterless left: the operator's stays open beside it.
+    const colleague = await ledger.createRequest(topicKey, colleagueOrigin);
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [operator.id, colleague.id]);
+    assert.equal(colleague.supersededRequestIds, undefined);
+  });
+
   it('concurrent requests in one conversation leave exactly one open and lose none', async () => {
     const store = await createStore();
     const ledger = await createLoadedLedger(store);
