@@ -613,7 +613,8 @@ a person assigns an issue to the AI account (in a trigger status)
    DATA_DIR=/path/to/jira-instance/data
    WORK_ROOT=/path/to/jira-instance/work
    TMUX_SOCKET_NAME=jira-instance
-   JIRA_AI_API_TOKEN=...            # referenced by jira.json below, never written there
+   OPENCODE_URL=http://localhost:4097   # a port of its own — the default 4096 is refused (other instances use it)
+   JIRA_AI_API_TOKEN=...                # referenced by jira.json below, never written there
    ```
 
 3. `DATA_DIR/jira.json` — the allowlist and the credentials (`${VAR}` expands from the env file; an unknown
@@ -647,9 +648,9 @@ a person assigns an issue to the AI account (in a trigger status)
    scripts/run-isolated.sh /path/to/jira-instance.env
    ```
 
-   The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, a `TELEGRAM_BOT_TOKEN` when
-   Telegram is off, any `ATLASSIAN_*` variable, a token that belongs to another account, an unknown project or
-   status, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
+   port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
+   another account, an unknown project or status, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the

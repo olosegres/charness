@@ -13,8 +13,8 @@ the instance's env file), `accountId` (the AI account — the token must belong 
 at boot), `projects` (key → `{ folder, triggerStatuses }`, the allowlist; status NAMES resolved to ids at boot),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
 since user settings do not apply), `baseUrl` (loopback only, for the fakes). The adapter is fixed to
-`claude-json-stream`. The instance's env file carries `CONNECTORS=jira`, `DATA_DIR`, `WORK_ROOT`,
-`TMUX_SOCKET_NAME` and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up backstop (tests).
+`claude-json-stream` (an explicit `adapter` must name it). The instance's env file carries `CONNECTORS=jira`,
+`DATA_DIR`, `WORK_ROOT`, `TMUX_SOCKET_NAME`, an `OPENCODE_URL` off the default port (R9) and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up backstop (tests).
 Operator-facing setup steps: the public `README.md` § "Jira connector".
 
 ## Request flow (`inbound.ts`)
