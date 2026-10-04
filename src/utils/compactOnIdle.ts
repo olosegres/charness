@@ -212,7 +212,9 @@ export const compactionSummaryGuidance =
 
 /**
  * @description The loaded-skills guidance, sent on EVERY bot-issued compaction
- * to BOTH backends. A skill is loaded on demand mid-session (a tool call whose
+ * to BOTH backends (and, on Claude, added to its own overflow compaction by the
+ * `PreCompact` hook in `claudeCompactHook.ts`, which also matches on this exact
+ * text to skip a compaction that already carries it). A skill is loaded on demand mid-session (a tool call whose
  * result carries its instructions), so — unlike CLAUDE.md / AGENTS.md — nothing
  * reloads it after a compaction: the summary drops its text and the fresh
  * session keeps working without the procedure it was following. Naming the

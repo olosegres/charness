@@ -24,6 +24,7 @@ import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
+import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { t } from '../i18n';
@@ -402,6 +403,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (opts.model) args.push('--model', opts.model);
     if (opts.effort) args.push('--effort', opts.effort);
     args.push(...mcpFlags);
+    // Overflow-triggered compaction gets the bot's summary guidance (see the module).
+    args.push(...prepareClaudeCompactHookFlags(resolveDataDir()));
 
     // Subscription billing: the wrapper runs `env -u ANTHROPIC_API_KEY` (a set
     // key would meter the API). The CLI reads the OAuth login from ~/.claude —

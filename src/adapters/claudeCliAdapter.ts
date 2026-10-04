@@ -27,6 +27,7 @@ import { keyToString } from '../types';
 import { classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
+import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
@@ -3381,12 +3382,15 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     // other two reach Claude through repeated `--mcp-config` flags. The flag
     // values point at tmp files because the bot expands `${VAR}` env-var
     // placeholders itself before handing the config off (plan §13.18, T2).
+    // The `--settings` file carries the PreCompact hook that gives an
+    // overflow-triggered compaction the bot's summary guidance.
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const claudeArgv: string[] = [
       claudePath,
       ...claudePermissionArgs,
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
+      ...prepareClaudeCompactHookFlags(resolveDataDir()),
       ...(args ? [args] : []),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
@@ -4003,6 +4007,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...claudePermissionArgs,
       '--resume', sessionId,
       ...mcpFlagsArr,
+      ...prepareClaudeCompactHookFlags(resolveDataDir()),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
 

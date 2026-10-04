@@ -673,6 +673,7 @@ config/variants, not a per-message API field).
 | `utils/tmuxSessionName.ts` | Pure parameterized tmux session-name codec shared by the tmux backends: `buildTmuxSessionName(prefix, key)` / `parseTmuxSessionName(prefix, name)` — careful negative-chatId + strict per-half regex so a foreign session sharing a prefix is never mis-adopted. Claude binds the `'claude'` prefix via thin wrappers; terminal the `'term'` prefix |
 | `utils/terminalEmitPlan.ts` | Pure helpers behind `terminalAdapter`: `getTerminalEmitPlan(nextOutputFresh)` (fresh→new message, else continuation — one rolling message per command), `buildTerminalNewSessionArgs` (the `tmux new-session` argv: shell-command + `-c workDir` + size flags, no `--session-id`/permission/MCP), and the named constants (`terminalPaneCols` 200, `terminalPaneRows` 50, `terminalTmuxPrefix` `term`, `defaultShell`) |
 | `utils/claudeStreamJson.ts` | Pure stream-json event core for `claudeJsonStreamAdapter`: newline-delimited JSON reader (partial-line buffering across chunks) + classifier mapping `system` / `stream_event` text_delta / `assistant` / `result` / `control_request` / `control_response` (the CLI's reply to a request the BOT wrote — the outer `subtype` verdict plus the optional inner payload, matched by `request_id`) lines to adapter events |
+| `utils/claudeCompactHook.ts` | The `PreCompact` hook that gives Claude's OWN (overflow-triggered) compaction the bot's summary guidance: `getHookCompactionInstruction` (D3 + `compactionSkillsGuidance`, no closing section), `buildPreCompactHookCommand` (a `sh` one-liner that prints the instruction unless the hook's stdin JSON already carries the skills guidance — the bot-issued `/compact <instruction>` case), `buildClaudeCompactHookSettings`, and the one impure `prepareClaudeCompactHookFlags(dataDir)` → `['--settings', DATA_DIR/claude-compact-hook.json]` (one shared file, atomic rewrite on every launch; a write failure returns `[]` and never blocks the start). Wired into all three Claude launch sites (tmux start/resume, json-stream spawn) |
 | `utils/claudeMcpHeal.ts` | The reverse-engineered `mcp_status` / `mcp_reconnect` control-request shapes plus the heal decision, in one tested place: `getMcpServerStatus` (one named server's status out of the status payload) and `decideMcpHeal` (`connected`→`healthy`, `failed`→`reconnect`, `needs-auth`/unknown/`null`→`skip` — a status the bot cannot read is never guessed into a live session), with the round-trip timeout constant. Needed because a session that outlived a bot restart keeps its injected `telegramBot` server latched `failed` and the CLI never retries one |
 | `utils/claudeRuntimeInfo.ts` | Bounded Claude transcript-tail reader for `/status`: parses the newest main-session model usage and version, derives documented context limits, and always closes its file descriptor |
 | `utils/threadStatusReport.ts` | The per-topic `/status` render + model resolution, kept out of `bot.ts` so both are unit-testable (importing `bot.ts` runs its module-scope `parseEnv()`, which exits the process without a bot token): `getThreadStatusReport` (session-only rows are dropped once the session stopped; unknown runtime data degrades to the localised unknown marker) and `getThreadStatusModel` (live adapter value → the runtime's self-reported model → the persisted pick; the middle step is the Claude tmux backend's ONLY model source) |
@@ -787,7 +788,8 @@ OpenCode events / bindings).
     supported" (a shell has no context). `compactContext(key, instruction?)` takes
     an optional instruction that APPENDS to the backend's baked compaction prompt
     (F2's closing section); the tmux backend gets it as `/compact <instruction>`.
-    Automatic (overflow-triggered) compaction is server-side and untouched.
+    Automatic (overflow-triggered) compaction is server-side: the bot does not
+    trigger it, but on Claude it reaches it through the PreCompact hook below.
     **D3 — summary content (EVERY bot-issued compaction, both backends):** the
     summary must be maximally complete (nothing load-bearing dropped) yet capture
     ONLY session-specific nuances (the user's in-session directives + deviations),
@@ -808,6 +810,17 @@ OpenCode events / bindings).
     baked into the fork, so it rides the per-invocation instruction on OpenCode too
     (OpenCode's own auto/overflow compaction does not get it); the F2 closing
     directive always stays last.
+    **Claude's own overflow compaction gets D3 + the skills guidance too**, through
+    a `PreCompact` hook (`utils/claudeCompactHook.ts`). Every bot-launched Claude
+    session (both backends, start AND resume) gets `--settings
+    DATA_DIR/claude-compact-hook.json`, which is merged with the user's settings and
+    never written into them. Claude Code appends a PreCompact hook's stdout to the
+    compaction's custom instructions on every trigger, `auto` included (verified on
+    v2.1.289: an overflow compaction's summary named the loaded skill and said to
+    reload it). The hook prints nothing when the compaction's `custom_instructions`
+    already contain `compactionSkillsGuidance` — a bot-issued `/compact
+    <instruction>` — so the text never reaches the model twice. A session started
+    before this existed has no hook until it is respawned.
     **A bot-issued compaction is NARRATED, never silent.** `runNarratedCompaction`
     (shared by the manual `/compact` and the `compact_conversation` drain) posts the
     `compact.started` notice BEFORE the wait — it used to go out AFTER, so the one
