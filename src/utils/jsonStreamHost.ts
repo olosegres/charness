@@ -30,6 +30,7 @@ import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { setTimeout as sleep } from 'timers/promises';
 import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
+import type { JsonStreamTailOffset } from '../types';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
 import { shellSingleQuote } from './tmuxExec';
 
@@ -313,6 +314,37 @@ export function readFileByteRange(filePath: string, startOffset: number, endOffs
  * partial line ({@link getStdoutLineBoundaryOffset}) — those bytes were consumed
  * but not yet processed, so a restart re-reads exactly them and nothing twice.
  */
+/** Where an adopting bot resumes the stdout tail, and the background-task list
+ *  in force at that point (see {@link resolveAdoptedTail}). */
+export interface AdoptedTailStart {
+  startOffset: number;
+  backgroundTaskIds: string[];
+}
+
+/**
+ * @description Decide where an ADOPT resumes the stdout tail. A persisted offset
+ * is trusted only when it was recorded for the SAME claude session — a foreign /
+ * unknown offset seeds to the current EOF (no backlog flood, the first-migration
+ * case) — and is clamped to the file size (an externally truncated file). The
+ * background-task list persisted with the offset is restored on the same
+ * condition: the frames that built it lie before the offset and will not
+ * replay, so without it an adopted session with a running background task
+ * would read as idle and could be stopped (L-D2).
+ */
+export function resolveAdoptedTail(
+  persistedTail: JsonStreamTailOffset | null,
+  claudeSessionId: string,
+  stdoutSizeBytes: number,
+): AdoptedTailStart {
+  if (persistedTail === null || persistedTail.sessionId !== claudeSessionId) {
+    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [] };
+  }
+  return {
+    startOffset: Math.min(persistedTail.offsetBytes, stdoutSizeBytes),
+    backgroundTaskIds: persistedTail.backgroundTaskIds ?? [],
+  };
+}
+
 export interface StdoutTailState {
   consumedBytes: number;
   decoderRetainedBytes: number;

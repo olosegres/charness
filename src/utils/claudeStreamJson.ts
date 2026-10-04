@@ -73,8 +73,10 @@ export function parseStreamJsonLine(line: string): Record<string, unknown> | nul
  * control-channel handling stay in the adapter; classification stays pure here).
  */
 export type ClaudeStreamAction =
-  /** `system/init` — the session is up (first one carries the authoritative id). */
-  | { kind: 'init'; sessionId: string | null; model: string | null; apiKeySource: string | null }
+  /** `system/init` — the session is up (first one carries the authoritative id).
+   *  `claudeCodeVersion` is the CLI's own version (`claude_code_version`) — the
+   *  auto-stop gate reads it (`utils/claudeCodeVersion.ts`). */
+  | { kind: 'init'; sessionId: string | null; model: string | null; apiKeySource: string | null; claudeCodeVersion: string | null }
   /** A streamed answer-text delta (`content_block_delta` `text_delta`). */
   | { kind: 'textDelta'; text: string; isSubagent: boolean }
   /** A streamed reasoning delta (`content_block_delta` `thinking_delta`). */
@@ -83,8 +85,18 @@ export type ClaudeStreamAction =
   | { kind: 'toolUse'; tool: string; toolUseId: string; isSubagent: boolean }
   /** A `tool_result` fed back in a `user` message → the `toolResult` event. */
   | { kind: 'toolResult'; toolUseId: string; output: string; isSubagent: boolean }
-  /** The turn ended (`result`); `resultText` is the final answer text. */
-  | { kind: 'turnEnd'; isError: boolean; errorText: string | null; resultText: string | null }
+  /** The turn ended (`result`); `resultText` is the final answer text; `usage`
+   *  is the turn's token accounting (`null` when the frame carries none). */
+  | { kind: 'turnEnd'; isError: boolean; errorText: string | null; resultText: string | null; usage: ClaudeTurnUsage | null }
+  /**
+   * `system/background_tasks_changed` — the CLI's CURRENT list of background
+   * tasks (a background Bash / Monitor = `local_bash`, a background sub-agent =
+   * `local_agent`), re-sent whole on every change; an empty list means nothing
+   * runs in the background. A finished task starts its own turn
+   * (`task_notification`). Probed on Claude Code 2.1.287 — older CLIs never emit
+   * it, which is why auto-stop is gated on the version.
+   */
+  | { kind: 'backgroundTasks'; taskIds: string[] }
   /** A control_request off stdout (permission / AskUserQuestion / dialog). */
   | {
       kind: 'controlRequest';
@@ -135,6 +147,49 @@ function checkIsOwnInputEcho(msg: Record<string, unknown>): boolean {
     && msg.origin === undefined;
 }
 
+/**
+ * @description The token accounting of one turn, from `result.usage`. The cache
+ * fields are the cross-process prompt-cache proof: a resumed process whose
+ * `cacheReadTokens` covers the context read the previous process's cache.
+ */
+export interface ClaudeTurnUsage {
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+}
+
+/** Read a non-negative integer field, defaulting an ABSENT field to 0 and
+ *  rejecting any other shape (`null`). */
+function readTokenCount(rec: Record<string, unknown>, key: string): number | null {
+  const value = rec[key];
+  if (value === undefined) return 0;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** Parse `result.usage`; `null` when absent or when any present count is malformed
+ *  (a half-read accounting would mislead the cache check — better no line). */
+function readTurnUsage(usage: unknown): ClaudeTurnUsage | null {
+  if (!checkIsStreamRecord(usage)) return null;
+  const inputTokens = readTokenCount(usage, 'input_tokens');
+  const cacheReadTokens = readTokenCount(usage, 'cache_read_input_tokens');
+  const cacheWriteTokens = readTokenCount(usage, 'cache_creation_input_tokens');
+  const outputTokens = readTokenCount(usage, 'output_tokens');
+  if (inputTokens === null || cacheReadTokens === null || cacheWriteTokens === null || outputTokens === null) return null;
+  return { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens };
+}
+
+/** The `task_id`s of a `background_tasks_changed` frame's `tasks` list; an
+ *  entry without a string id is skipped (it cannot be matched to anything). */
+function readBackgroundTaskIds(tasks: unknown): string[] {
+  if (!Array.isArray(tasks)) return [];
+  const taskIds: string[] = [];
+  for (const task of tasks) {
+    if (checkIsStreamRecord(task) && typeof task.task_id === 'string') taskIds.push(task.task_id);
+  }
+  return taskIds;
+}
+
 /** Read a string field, or null. */
 function readString(rec: Record<string, unknown>, key: string): string | null {
   const value = rec[key];
@@ -170,7 +225,12 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       sessionId: readString(msg, 'session_id'),
       model: readString(msg, 'model'),
       apiKeySource: readString(msg, 'apiKeySource'),
+      claudeCodeVersion: readString(msg, 'claude_code_version'),
     }];
+  }
+
+  if (type === 'system' && msg.subtype === 'background_tasks_changed') {
+    return [{ kind: 'backgroundTasks', taskIds: readBackgroundTaskIds(msg.tasks) }];
   }
 
   if (type === 'system' && msg.subtype === 'status') {
@@ -259,6 +319,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       isError: msg.is_error === true,
       errorText: readString(msg, 'api_error_status') ?? (msg.is_error === true ? (readString(msg, 'result') ?? 'API error') : null),
       resultText: readString(msg, 'result'),
+      usage: readTurnUsage(msg.usage),
     }];
   }
 

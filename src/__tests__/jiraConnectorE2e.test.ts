@@ -69,9 +69,11 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getPollJqlProjectKeys, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import {
   checkHasFlag,
   fakeClaudeLogFileNames,
+  fakeTurnUsage,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
@@ -318,6 +320,12 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await waitFor('PROJ-1 handed back', answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId);
     assert.deepEqual(getCommentTexts(issue), ['Fake final answer for PROJ-1 (answer, turn 1).']);
     assert.ok(issue.comments.every((comment) => comment.author.accountId === aiAccount.accountId));
+    // L-D11: the turn's token accounting is logged from the stream — the live cache check reads these lines.
+    const usageLines = getCharness().output.split('\n').filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix));
+    assert.ok(
+      usageLines.some((line) => line.includes(`cacheRead=${fakeTurnUsage.cache_read_input_tokens} cacheWrite=${fakeTurnUsage.cache_creation_input_tokens}`)),
+      `a usage line with the fake's counts: ${usageLines}`,
+    );
   });
 
   it('a turn that ends without an answer is woken, and the answer follows', async () => {

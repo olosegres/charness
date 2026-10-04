@@ -74,8 +74,15 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
     };
     assert.deepEqual(classify(init), [{
       kind: 'init', sessionId: '6761fcd2-bb5d-4dae-a1a0-deeba28a6bc6',
-      model: 'claude-haiku-4-5-20251001', apiKeySource: 'none',
+      model: 'claude-haiku-4-5-20251001', apiKeySource: 'none', claudeCodeVersion: null,
     }]);
+  });
+
+  it('system/init carries the CLI version (claude_code_version) — the auto-stop gate input (L-D10)', () => {
+    const init = { type: 'system', subtype: 'init', session_id: 'abc', model: 'claude-haiku-4-5-20251001', claude_code_version: '2.1.287' };
+    const [action] = classify(init);
+    assert.equal(action.kind, 'init');
+    assert.equal((action as Extract<ClaudeStreamAction, { kind: 'init' }>).claudeCodeVersion, '2.1.287');
   });
 
   it('content_block_delta text_delta → textDelta (answer stream)', () => {
@@ -179,7 +186,26 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
 
   it('result success → turnEnd with final text, no error', () => {
     const msg = { type: 'result', subtype: 'success', is_error: false, api_error_status: null, result: 'Got it—you prefer tabs.' };
-    assert.deepEqual(classify(msg), [{ kind: 'turnEnd', isError: false, errorText: null, resultText: 'Got it—you prefer tabs.' }]);
+    assert.deepEqual(classify(msg), [{ kind: 'turnEnd', isError: false, errorText: null, resultText: 'Got it—you prefer tabs.', usage: null }]);
+  });
+
+  it('result usage → turnEnd.usage with input / cache read / cache write / output (L-D11; shape from the 2026-10-04 probe)', () => {
+    const msg = {
+      type: 'result', subtype: 'success', is_error: false, result: 'ok',
+      usage: { input_tokens: 3, cache_creation_input_tokens: 1422, cache_read_input_tokens: 24128, output_tokens: 57, server_tool_use: { web_search_requests: 0 } },
+    };
+    const [action] = classify(msg);
+    assert.equal(action.kind, 'turnEnd');
+    assert.deepEqual((action as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, {
+      inputTokens: 3, cacheReadTokens: 24128, cacheWriteTokens: 1422, outputTokens: 57,
+    });
+  });
+
+  it('result usage with an absent cache field counts it as 0; a malformed count drops the whole usage', () => {
+    const noCache = classify({ type: 'result', is_error: false, result: 'ok', usage: { input_tokens: 10, output_tokens: 2 } });
+    assert.deepEqual((noCache[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 2 });
+    const malformed = classify({ type: 'result', is_error: false, result: 'ok', usage: { input_tokens: 'ten', output_tokens: 2 } });
+    assert.equal((malformed[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, null, 'a half-read accounting must not produce a usage line');
   });
 
   it('result error → turnEnd flagged error with error text', () => {
@@ -198,6 +224,28 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
   it('rate_limit_event → rateLimit with type + utilization (subscription window)', () => {
     const msg = { type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.79, isUsingOverage: false } };
     assert.deepEqual(classify(msg), [{ kind: 'rateLimit', rateLimitType: 'seven_day', utilization: 0.79 }]);
+  });
+});
+
+describe('classifyClaudeStreamMessage — background task list (L-D2; probed on 2.1.287)', () => {
+  it('system/background_tasks_changed → backgroundTasks with every task_id (a background Bash and a background sub-agent)', () => {
+    const msg = {
+      type: 'system', subtype: 'background_tasks_changed', session_id: 'abc',
+      tasks: [
+        { task_id: 'b1a2c3d4', task_type: 'local_bash', description: 'sleep 30', status: 'running' },
+        { task_id: 'a9f8e7d6', task_type: 'local_agent', description: 'Explore', status: 'running' },
+      ],
+    };
+    assert.deepEqual(classify(msg), [{ kind: 'backgroundTasks', taskIds: ['b1a2c3d4', 'a9f8e7d6'] }]);
+  });
+
+  it('an empty tasks list → backgroundTasks with no ids (nothing runs in the background)', () => {
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }), [{ kind: 'backgroundTasks', taskIds: [] }]);
+  });
+
+  it('a task without a string task_id is skipped; a missing tasks field reads as empty', () => {
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_type: 'local_bash' }, { task_id: 'ok1' }] }), [{ kind: 'backgroundTasks', taskIds: ['ok1'] }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed' }), [{ kind: 'backgroundTasks', taskIds: [] }]);
   });
 });
 

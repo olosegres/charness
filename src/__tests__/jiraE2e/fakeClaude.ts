@@ -9,8 +9,10 @@ import {
   argvViolationExitCode,
   checkHasFlag,
   fakeClaudeLogFileNames,
+  fakeClaudeCodeVersion,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
+  fakeTurnUsage,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
@@ -257,12 +259,12 @@ function emitTurnActivity(sessionId: string, issueKey: string): void {
 }
 
 function endTurn(sessionId: string, resultText: string): void {
-  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId });
+  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage });
 }
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   fs.writeFileSync(getConversationMarkerPath(sessionId), '');
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [] });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: fakeClaudeCodeVersion });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const requestId = requestIdRe.exec(content)?.[0];
   if (!requestId) {

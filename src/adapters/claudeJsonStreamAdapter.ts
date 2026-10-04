@@ -89,6 +89,7 @@ import {
   readFileByteRange,
   readPidFile,
   readStderrTail,
+  resolveAdoptedTail,
   resolveJsonStreamSessionDir,
   stdoutOversizeWarnBytes,
   waitForPidFile,
@@ -106,6 +107,10 @@ import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './ses
  * would flood Telegram with edits. Mirrors OpenCode's `sseOutputBatchMs` (500).
  */
 const streamOutputBatchMs = 350;
+
+/** Prefix of the per-turn token accounting line (L-D11); the process-level e2e
+ *  and the live cache check read it. */
+export const claudeJsonStreamUsageLogPrefix = '[ClaudeJson] usage ';
 
 /** How long to wait for the `initialize` control-response handshake before
  *  proceeding without the interactive control channel (questions unavailable). */
@@ -260,6 +265,26 @@ interface StreamSession {
    * running turn reaches a point to take it in. See `checkHasUnconsumedInput`.
    */
   unconsumedInputCount: number;
+  /**
+   * The CLI's live background-task list (`system/background_tasks_changed`,
+   * re-sent whole on every change): a background Bash / Monitor / sub-agent the
+   * process is still running between turns. Non-empty = working (L-D2) — a stop
+   * would kill them. Persisted with the tail offset so an adopt restores it.
+   */
+  backgroundTaskIds: Set<string>;
+  /** The CLI version reported on `system/init` (`claude_code_version`); the
+   *  auto-stop gate (L-D10) reads it. `null` until the first init / on an adopt. */
+  claudeCodeVersion: string | null;
+  /**
+   * Set while `onStdout` applies the lines of one chunk. The line reader hands
+   * the WHOLE chunk's lines over at once, so the line-boundary offset already
+   * sits at the chunk's end while later lines are still unapplied: a persist
+   * requested mid-chunk (a `result`'s flush) would record state the unapplied
+   * lines then change (a `background_tasks_changed` after the result) — and the
+   * monotonic guard would refuse the correct write. The persist is deferred to
+   * the end of the chunk instead.
+   */
+  applyingChunk: { isPersistDeferred: boolean } | null;
 }
 
 /**
@@ -481,11 +506,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
+      backgroundTaskIds: new Set(), claudeCodeVersion: null, applyingChunk: null,
     };
     this.sessions.set(keyToString(key), session);
     // A fresh spawn starts a fresh stdout file — reset the persisted tail offset
     // so a later adopt never resumes from a previous run's position.
-    this.jsonStreamTailWriter?.(key, { sessionId, offsetBytes: 0 });
+    this.jsonStreamTailWriter?.(key, buildTailRecord(session, 0));
     this.schedulePoll(session, basePollIntervalMs);
 
     // Initialize handshake: declares the interactive control channel (permission
@@ -621,10 +647,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** Persist the tail's line-boundary offset (monotonic; inert until the
    *  writer is registered — same idiom as the seen-watermark writer). */
   private persistTailOffset(session: StreamSession): void {
+    if (session.applyingChunk) {
+      session.applyingChunk.isPersistDeferred = true;
+      return;
+    }
     const boundary = getStdoutLineBoundaryOffset(session.tail, session.reader.pending);
     if (boundary <= session.lastPersistedTailOffset) return;
     session.lastPersistedTailOffset = boundary;
-    this.jsonStreamTailWriter?.(session.key, { sessionId: session.sessionId, offsetBytes: boundary });
+    this.jsonStreamTailWriter?.(session.key, buildTailRecord(session, boundary));
   }
 
   /**
@@ -743,8 +773,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       return false;
     }
     const size = getFileSize(paths.stdoutFile) ?? 0;
-    const isTailTrusted = persistedTail !== null && persistedTail.sessionId === claudeSessionId;
-    const startOffset = isTailTrusted ? Math.min(persistedTail.offsetBytes, size) : size;
+    const { startOffset, backgroundTaskIds } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
     const session: StreamSession = {
@@ -769,6 +798,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingQuestion: this.readQuestionSidecar(paths),
       apiErrorFired: false, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
+      // The frames that built the list lie before the tail offset (not replayed);
+      // the version arrives on the next turn's `init`.
+      backgroundTaskIds: new Set(backgroundTaskIds), claudeCodeVersion: null, applyingChunk: null,
     };
     if (session.pendingQuestion) {
       // The external process is still blocked on this question — busy, and the
@@ -863,6 +895,27 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   checkHasUnconsumedInput(key: SessionKey): boolean {
     return (this.sessions.get(keyToString(key))?.unconsumedInputCount ?? 0) > 0;
+  }
+
+  /**
+   * @description Whether the process is WORKING and must not be stopped (L-D2):
+   * a running turn, a background task the CLI still runs (background Bash /
+   * Monitor / sub-agent — a stop kills them, and a finished one starts its own
+   * turn), input written but not yet taken in, or a bot-issued compaction in
+   * flight. An unknown / inactive session is not working.
+   */
+  checkIsWorking(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return false;
+    return session.isBusy
+      || session.backgroundTaskIds.size > 0
+      || session.unconsumedInputCount > 0
+      || session.compactionInProgress;
+  }
+
+  /** The CLI version the live process reported on `system/init`, `null` until then (L-D10 gate input). */
+  getClaudeCodeVersion(key: SessionKey): string | null {
+    return this.sessions.get(keyToString(key))?.claudeCodeVersion ?? null;
   }
 
   async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
@@ -1048,7 +1101,20 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   // ─────────────────────────────────────────────────────────────────────────
 
   private onStdout(session: StreamSession, chunk: string): void {
-    for (const line of session.reader.push(chunk)) {
+    const applyingChunk = { isPersistDeferred: false };
+    session.applyingChunk = applyingChunk;
+    try {
+      this.applyStdoutLines(session, session.reader.push(chunk));
+    } finally {
+      session.applyingChunk = null;
+    }
+    // A persist a handler asked for mid-chunk (see `applyingChunk`) runs now,
+    // under the same emit-caught-up gate the drain applies.
+    if (applyingChunk.isPersistDeferred && checkIsEmitCaughtUp(session)) this.persistTailOffset(session);
+  }
+
+  private applyStdoutLines(session: StreamSession, lines: string[]): void {
+    for (const line of lines) {
       const msg = parseStreamJsonLine(line);
       if (!msg) continue;
       for (const action of classifyClaudeStreamMessage(msg)) {
@@ -1171,7 +1237,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         case 'turnEnd': this.handleTurnEnd(session, action); return;
         case 'compactStatus': this.handleCompactStatus(session, action); return;
         case 'compactBoundary': this.handleCompactBoundary(session, action); return;
-        case 'init': if (action.model) session.reportedModel = action.model; return;
+        case 'init': this.handleInit(session, action); return;
+        case 'backgroundTasks': this.handleBackgroundTasks(session, action); return;
         case 'apiRetry': this.maybeEmitApiError(session, action.text); return;
         // A reply to one of OUR control requests is never the compaction turn's
         // output — its awaiter must settle whatever else is running.
@@ -1186,7 +1253,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // it is the only report of what claude actually runs. Without capturing
         // it `/status` and the pinned banner showed no model at all on a default
         // start / resume / adopt (nothing ever set the `--model` pick).
-        if (action.model) session.reportedModel = action.model;
+        this.handleInit(session, action);
+        return;
+      case 'backgroundTasks':
+        this.handleBackgroundTasks(session, action);
         return;
       case 'textDelta':
         // Mid-turn activity marks the session busy: `sendInput` normally set it,
@@ -1239,6 +1309,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         session.isBusy = true;
         return;
     }
+  }
+
+  private handleInit(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'init' }>): void {
+    if (action.model) session.reportedModel = action.model;
+    if (action.claudeCodeVersion) session.claudeCodeVersion = action.claudeCodeVersion;
+  }
+
+  /** Replace the live background-task list with the frame's (it is re-sent
+   *  WHOLE on every change, so no diffing). The tail-offset persist that follows
+   *  this frame's drain carries the new list to `state.json`. */
+  private handleBackgroundTasks(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'backgroundTasks' }>): void {
+    session.backgroundTaskIds = new Set(action.taskIds);
   }
 
   // — compaction (F3) —
@@ -1389,6 +1471,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   // — turn end —
 
   private handleTurnEnd(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'turnEnd' }>): void {
+    // L-D11: every turn's accounting, the compaction turn included — the
+    // cross-process prompt-cache check reads these lines, so they must be real
+    // and repeatable, never reconstructed from a transcript afterwards.
+    if (action.usage) {
+      const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens } = action.usage;
+      console.log(`${claudeJsonStreamUsageLogPrefix}${keyToString(session.key)}: input=${inputTokens} cacheRead=${cacheReadTokens} cacheWrite=${cacheWriteTokens} output=${outputTokens}`);
+    }
     session.isBusy = false;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
@@ -1715,6 +1804,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pending.resolve(null);
     }
   }
+}
+
+/** The tail record persisted for a session at `offsetBytes` — the offset and the
+ *  background-task list in force there travel together (see `JsonStreamTailOffset`). */
+function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStreamTailOffset {
+  return { sessionId: session.sessionId, offsetBytes, backgroundTaskIds: [...session.backgroundTaskIds] };
 }
 
 /**

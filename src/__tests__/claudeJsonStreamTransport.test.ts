@@ -27,7 +27,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter, claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { busyIdleWatchdogMs } from '../utils/jsonStreamBusyWatchdog';
 import {
@@ -94,9 +94,31 @@ function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string) {
     apiErrorFired: false,
     swallowNextAbortError: false,
     lastWatermarkOffset: -1,
+    unconsumedInputCount: 0,
+    compactionInProgress: false,
+    backgroundTaskIds: new Set<string>(),
+    claudeCodeVersion: null,
+    applyingChunk: null,
   };
   adapter['sessions'].set(keyToString(key), session);
   return session;
+}
+
+function buildBackgroundTasksLine(taskIds: string[]): string {
+  return JSON.stringify({ type: 'system', subtype: 'background_tasks_changed', tasks: taskIds.map((taskId) => ({ task_id: taskId, task_type: 'local_bash', status: 'running' })) }) + '\n';
+}
+
+/** Capture `console.log` lines while `run` executes. */
+function captureLog(run: () => void): string[] {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+  try {
+    run();
+  } finally {
+    console.log = originalLog;
+  }
+  return lines;
 }
 
 const resultLine =
@@ -146,7 +168,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.equal(adapter['sessions'].size, 0, 'the session is deregistered');
     assert.equal(fs.existsSync(dir), false, 'the host dir is removed');
     // The tail offset persisted at the line boundary (== the whole result line).
-    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine) }]);
+    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [] }]);
   });
 
   it('an explicit stop converges through the same finalize but emits stopped', async () => {
@@ -183,9 +205,86 @@ describe('json-stream external transport — exit detection', () => {
     adapter['flushAnswer'](session, false);
     assert.deepEqual(
       tailWrites,
-      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine) }],
+      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [] }],
       'the flush releases the boundary at the consumed line',
     );
+  });
+
+  it('tracks the background-task list from the stream and persists it with the tail offset (L1)', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-tasks-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+
+    assert.equal(adapter.checkIsWorking(key), false, 'an idle session with no tasks is not working');
+    const twoTasks = resultLine + buildBackgroundTasksLine(['b1', 'a2']);
+    fs.writeFileSync(session.paths.stdoutFile, twoTasks);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual([...session.backgroundTaskIds], ['b1', 'a2']);
+    assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'] },
+      'the list rides along with the offset so an adopt restores it');
+
+    // The list is re-sent WHOLE: a frame naming one task replaces, not merges.
+    const oneTask = twoTasks + buildBackgroundTasksLine(['a2']);
+    fs.writeFileSync(session.paths.stdoutFile, oneTask);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual([...session.backgroundTaskIds], ['a2']);
+
+    const noTasks = oneTask + buildBackgroundTasksLine([]);
+    fs.writeFileSync(session.paths.stdoutFile, noTasks);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual([...session.backgroundTaskIds], []);
+    assert.equal(adapter.checkIsWorking(key), false, 'an empty list means nothing runs');
+    assert.deepEqual(tailWrites.at(-1)?.backgroundTaskIds, []);
+  });
+
+  it('checkIsWorking: a busy turn, unconsumed input, or a compaction in flight each count as working; an unknown key does not', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-working-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    assert.equal(adapter.checkIsWorking(makeTelegramKey(-100999777, 56)), false, 'no session → not working');
+
+    session.isBusy = true;
+    assert.equal(adapter.checkIsWorking(key), true, 'a running turn');
+    session.isBusy = false;
+
+    session.unconsumedInputCount = 1;
+    assert.equal(adapter.checkIsWorking(key), true, 'a prompt not yet taken in');
+    session.unconsumedInputCount = 0;
+
+    session.compactionInProgress = true;
+    assert.equal(adapter.checkIsWorking(key), true, 'a compaction in flight');
+    session.compactionInProgress = false;
+
+    assert.equal(adapter.checkIsWorking(key), false);
+    session.isActive = false;
+    session.isBusy = true;
+    assert.equal(adapter.checkIsWorking(key), false, 'an inactive session is never working');
+  });
+
+  it('logs every result\'s token accounting (L-D11) and captures the CLI version from init (L-D10)', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-usage-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    assert.equal(adapter.getClaudeCodeVersion(key), null, 'unknown until the first init');
+
+    const initLine = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-transport', model: 'fake-model', claude_code_version: '2.1.287' }) + '\n';
+    const usageResultLine = JSON.stringify({
+      type: 'result', is_error: false, result: 'done',
+      usage: { input_tokens: 3, cache_creation_input_tokens: 1422, cache_read_input_tokens: 24128, output_tokens: 57 },
+    }) + '\n';
+    const lines = captureLog(() => adapter['onStdout'](session, initLine + usageResultLine));
+
+    assert.equal(adapter.getClaudeCodeVersion(key), '2.1.287');
+    const usageLines = lines.filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix));
+    assert.equal(usageLines.length, 1, `exactly one usage line per result: ${lines}`);
+    assert.ok(usageLines[0].includes('input=3 cacheRead=24128 cacheWrite=1422 output=57'), usageLines[0]);
+
+    // A result without usage logs nothing — no fabricated zeros.
+    const silent = captureLog(() => adapter['onStdout'](session, resultLine));
+    assert.deepEqual(silent.filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix)), []);
   });
 
   it('reconstructs isBusy from replayed events (adopt has no sendInput)', () => {

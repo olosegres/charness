@@ -10,7 +10,11 @@ import { agentEnvironmentNames } from '../../utils/agentEnvironment';
 export const argvViolationExitCode = 3;
 /** What the real CLI exits with when it refuses a `--resume` / `--session-id` it cannot serve. */
 export const sessionViolationExitCode = 1;
-export const fakeClaudeVersion = '2.1.287 (Claude Code)';
+/** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
+export const fakeClaudeCodeVersion = '2.1.287';
+export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
+/** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
+export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 1301, cache_read_input_tokens: 24601, output_tokens: 43 } as const;
 export const fakeClaudeLogFileNames = {
   launches: 'launches.jsonl',
   violations: 'violations.jsonl',

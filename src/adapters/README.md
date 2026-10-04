@@ -58,7 +58,17 @@ Newline-delimited JSON, one object per line, parsed in
 - `stream_event` — `event.type:"content_block_delta"` with
   `event.delta.type:"text_delta"` = live token deltas.
 - `assistant` — the settled text of the turn.
-- `result` — turn end (usage, cost, `session_id`).
+- `result` — turn end (usage, cost, `session_id`). The adapter logs every
+  turn's `usage` as `[ClaudeJson] usage <key>: input=… cacheRead=… cacheWrite=…
+  output=…` — the cross-process prompt-cache proof.
+- `system` `subtype:"background_tasks_changed"` — the CLI's CURRENT list of
+  background tasks (`tasks[].task_id`; a background Bash / Monitor is
+  `local_bash`, a background sub-agent `local_agent`), re-sent whole on every
+  change, empty when nothing runs. The adapter keeps it per session (persisted
+  with the tail offset, restored on adopt) and `checkIsWorking` reports a
+  non-empty list as working: a stop would kill those tasks. Reported from
+  Claude Code 2.1.287 on (`init.claude_code_version`;
+  `utils/claudeCodeVersion.ts` is the gate).
 
 ### Multi-turn — one long-lived process
 

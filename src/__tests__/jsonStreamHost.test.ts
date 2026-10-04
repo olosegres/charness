@@ -28,6 +28,7 @@ import * as path from 'path';
 
 import {
   buildJsonStreamTmuxSessionName,
+  resolveAdoptedTail,
   buildWrapperScript,
   createStdoutTailState,
   decodeStdoutTailChunk,
@@ -135,6 +136,24 @@ describe('openFifoWriterNonBlocking (real fifo)', () => {
     fs.closeSync(fd);
     // Writer death must not kill the holder (the isolation property itself).
     assert.equal(holder.exitCode, null, 'holder survives the writer closing');
+  });
+});
+
+describe('resolveAdoptedTail — where an adopt resumes, and the background tasks in force there', () => {
+  it('a trusted record (same session) restores its offset AND its background-task list', () => {
+    assert.deepEqual(
+      resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, backgroundTaskIds: ['b1', 'a2'] }, 'sess-1', 500),
+      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'] },
+    );
+  });
+
+  it('a record of another session (or none) seeds to EOF with no tasks — no backlog flood, no inherited list', () => {
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [] });
+    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [] });
+  });
+
+  it('clamps the offset to the file size; a record written before the list was tracked reads as no tasks', () => {
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [] });
   });
 });
 

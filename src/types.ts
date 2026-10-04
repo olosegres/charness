@@ -72,6 +72,13 @@ export type SeenWatermarkWriter = (key: SessionKey, watermark: SeenWatermark) =>
 export interface JsonStreamTailOffset {
   sessionId: string;
   offsetBytes: number;
+  /**
+   * The CLI's background-task list as of `offsetBytes` (`task_id`s of the last
+   * `background_tasks_changed` frame before it). Frames before the offset are
+   * not replayed on adopt, so the list rides along with the offset; a row
+   * written before the list was tracked has none, which reads as "no tasks".
+   */
+  backgroundTaskIds?: string[];
 }
 
 /**
