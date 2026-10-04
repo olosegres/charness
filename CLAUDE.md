@@ -113,7 +113,7 @@ per-backend controls are optional methods the bot checks before calling.
 | Path | What it is |
 |------|------------|
 | `cli.ts`, `cli/` | CLI dispatch: `envLoader.ts` (`.env` / `ENV_FILE`), `hot.ts` + `botEntry.ts` (hot supervisor / worker), `bot.ts` (shared startup) |
-| `bot.ts` | **The bot**: Telegram handlers, every slash command (on the neutral `commandRouter`), output streaming, composition root; ~14k lines. A test cannot import it (module-scope `parseEnv()` exits the process), so logic goes into pure helpers that `bot.ts` wires |
+| `bot.ts` | **The bot**: Telegram handlers, every slash command (on the neutral `commandRouter`), output streaming, composition root; ~11k lines (feature slices are moving out into the modules below). A test cannot import it (module-scope `parseEnv()` exits the process), so logic goes into pure helpers that `bot.ts` wires |
 | `agentLogin/` | `createAgentLogin(ports)`: the out-of-band sign-in drivers — json-stream `/login` and OpenCode `/connect` OAuth, each a pty relayed through the topic. README: contracts |
 | `connectors/telegram/commands/` | Slash commands + buttons decomposed out of `bot.ts`, one `create<Feature>(ports)` per file over the shared `BotCore` ports bag (`displayModes.ts`, `reminders.ts`, `modelProviders.ts`, `compaction.ts`, `autoContinueLimits.ts`, …). README: registration-order and ports contract |
 | `state.ts` | `state.json` persistence (bindings, sessions, prefs, schedules, open requests); `resolveDataDir()` |
