@@ -9,6 +9,7 @@ import {
   argvViolationExitCode,
   checkHasFlag,
   fakeClaudeLogFileNames,
+  fakeClaudePlatformEnvName,
   fakeClaudeVersion,
   getFlagValues,
   getForeignAgentEnvNames,
@@ -18,20 +19,27 @@ import {
 } from './fakeClaudeContract';
 
 /**
- * @description A stand-in for the `claude` CLI in the process-level tests
- * (request/answer plan S6–S9), started by charness through `CLAUDE_BIN` in its
- * private tmux server. It:
+ * @description A stand-in for the `claude` CLI in the process-level tests (Jira
+ * connector plan J7, R6, R11; request/answer plan S6–S9), started by charness
+ * through `CLAUDE_BIN` in its private tmux server. It:
  *
- *  - records every launch's argv;
+ *  - for a Jira session (`FAKE_CLAUDE_PLATFORM=jira` from its launcher) refuses a
+ *    session launch whose environment holds anything but the agent allowlist
+ *    (R32) — an instance variable such as the tracker token;
+ *  - records every launch's argv and, for a Jira session launch, REFUSES to run
+ *    (a violation line and a non-zero exit) without the flags a
+ *    Jira session must carry — on every launch path, a fresh `--session-id` and
+ *    a `--resume` alike (R11); a Telegram topic's session carries neither;
  *  - like the real CLI, refuses a `--resume` of a conversation it never held and
  *    a `--session-id` already in use (a conversation exists once its first
  *    message arrived), so a resume by the wrong id cannot pass for the right one;
  *  - speaks the stream-json protocol: the `initialize` control handshake,
  *    `system/init`, the `--replay-user-messages` echo, `result` at a turn's end;
- *  - in every turn streams what a real turn does: a `system/status` frame
+ *  - in every turn streams what a real turn does (R6): a `system/status` frame
  *    (dropped by the classifier, as the real one is), a thinking block, and a
  *    tool call with its result — the call is what makes the adapter emit its
- *    `status` event;
+ *    `status` event — so a stream event of a Jira conversation that reached
+ *    Telegram would show;
  *  - answers through `answer_request` over the bot MCP named in its
  *    `--mcp-config`, as a scripted mode in the issue's summary says.
  *
@@ -163,7 +171,7 @@ async function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArg
   }
 }
 
-/** What a real turn streams before its answer — a `system/status` frame, a thinking block, a tool call and its result. */
+/** R6: what a real turn streams before its answer — a `system/status` frame, a thinking block, a tool call and its result. */
 function emitTurnActivity(sessionId: string, issueKey: string): void {
   writeStdout({ type: 'system', subtype: 'status', status: 'requesting', session_id: sessionId });
   writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: `Looking at ${issueKey}.` } } });
@@ -235,20 +243,22 @@ async function main(): Promise<void> {
     process.stdout.write(`${fakeClaudeVersion}\n`);
     return;
   }
-  const missingFlags = requiredJiraSessionFlags.filter((flag) => !checkHasFlag(argv, flag));
-  if (missingFlags.length > 0) {
-    const reason = `missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}`;
-    appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
-    process.stderr.write(`fake claude: ${reason}\n`);
-    process.exit(argvViolationExitCode);
-  }
-  // R32: an agent of a tracker conversation starts with the allowlist only — no instance variable, no secret.
-  const foreignEnvNames = getForeignAgentEnvNames(Object.keys(process.env));
-  if (foreignEnvNames.length > 0) {
-    const reason = `environment carries ${foreignEnvNames.join(', ')}`;
-    appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
-    process.stderr.write(`fake claude: ${reason}\n`);
-    process.exit(argvViolationExitCode);
+  if (process.env[fakeClaudePlatformEnvName] === 'jira') {
+    const missingFlags = requiredJiraSessionFlags.filter((flag) => !checkHasFlag(argv, flag));
+    if (missingFlags.length > 0) {
+      const reason = `missing ${missingFlags.map((flag) => flag.join(' ')).join(', ')}`;
+      appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
+      process.stderr.write(`fake claude: ${reason}\n`);
+      process.exit(argvViolationExitCode);
+    }
+    // R32: an agent of a tracker conversation starts with the allowlist only — no instance variable, no secret.
+    const foreignEnvNames = getForeignAgentEnvNames(Object.keys(process.env));
+    if (foreignEnvNames.length > 0) {
+      const reason = `environment carries ${foreignEnvNames.join(', ')}`;
+      appendJsonLine(fakeClaudeLogFileNames.violations, { reason, argv });
+      process.stderr.write(`fake claude: ${reason}\n`);
+      process.exit(argvViolationExitCode);
+    }
   }
   const sessionViolation = getSessionViolation(argv);
   if (sessionViolation !== null) {

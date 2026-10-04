@@ -1,7 +1,7 @@
 /**
  * @description The Telegram views end to end, at PROCESS level (request/answer
  * plan S6–S9): the BUILT charness, started the way an isolated instance is
- * started (`scripts/run-isolated.sh` with its own HOME config), serving Telegram
+ * started (`scripts/run-isolated.sh` with its own env file), serving Telegram
  * only, against a fake Bot API on loopback (`telegramE2e/fakeTelegram.ts`) and
  * a fake `claude` (`jiraE2e/fakeClaude.ts`, via `CLAUDE_BIN`) that answers
  * through the real bot MCP. The test plays the operator in one forum topic.
@@ -219,15 +219,17 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
 
     fakeTelegram = new FakeTelegram({ botUser, operator, admins: [colleague], group });
     const apiRoot = await fakeTelegram.start();
-    const claudeBin = writeFakeClaudeLauncher(layout);
+    const claudeBin = writeFakeClaudeLauncher(layout, null);
     schedulerMcpPort = await getFreeFixedPort();
     writeInstanceEnvFile(layout, {
+      CONNECTORS: 'telegram',
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
       ALLOWED_GROUP_ID: group.id.toString(),
       CHAT_MODE: 'group',
       DATA_DIR: layout.dataDir,
       WORK_ROOT: layout.workRoot,
+      TMUX_SOCKET_NAME: layout.tmuxSocketName,
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: claudeBin,
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
@@ -254,7 +256,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     }
     const envNames = getInstanceEnvNames(instance);
     assert.ok(envNames.includes('TELEGRAM_API_ROOT'), 'the Bot API is the fake');
-    for (const name of ['TMUX_TMPDIR', 'DATA_DIR', 'WORK_ROOT', 'CLAUDE_BIN']) assert.ok(envNames.includes(name), `${name} is set`);
+    for (const name of ['TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'DATA_DIR', 'WORK_ROOT', 'CLAUDE_BIN']) assert.ok(envNames.includes(name), `${name} is set`);
   });
 
   it('boots Telegram-only against the fake Bot API, started with nothing but run-isolated.sh\'s variables', async () => {
@@ -339,7 +341,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
 
   it('/claude starts the fake agent in the topic', async () => {
     await sendAndAwaitReply('/claude', 'ready in');
-    assert.ok(listTmuxSessions([], getTmuxEnv(getLayout().tmuxTmpDir)).length === 1, 'the agent runs on the instance\'s own tmux server');
+    assert.ok(listTmuxSessions(['-L', getLayout().tmuxSocketName], getTmuxEnv(getLayout().tmuxTmpDir)).length === 1, 'the agent runs on the private server');
   });
 
   it('in «Stream + answers» an operator message opens a request; the agent answers it through the bot MCP into the topic', async () => {
@@ -597,12 +599,12 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the answer pinned', replyTimeoutMs, () => getPinKinds(answer.message_id).includes('pin'));
   });
 
-  it('the instance runs its tmux server in its private TMUX_TMPDIR; nothing of it runs on the default tmux server', () => {
+  it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
     const instance = getLayout();
-    // The instance's tmux calls reach the server in its own TMUX_TMPDIR, never the user's default one.
-    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(instance.tmuxTmpDir)), ['default'], 'one tmux server, the instance\'s own');
-    const instanceSessions = new Set(listTmuxSessions([], getTmuxEnv(instance.tmuxTmpDir)));
-    assert.ok(instanceSessions.size > 0, 'the agent runs on the instance\'s own tmux server');
+    // A call without `-L` would have started (or reached) a `default` server beside the named one.
+    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(instance.tmuxTmpDir)), [instance.tmuxSocketName], 'one tmux server, the named one');
+    const instanceSessions = new Set(listTmuxSessions(['-L', instance.tmuxSocketName], getTmuxEnv(instance.tmuxTmpDir)));
+    assert.ok(instanceSessions.size > 0, 'the agent runs on the private server');
     const defaultSessionsNow = listTmuxSessions([]);
     assert.deepEqual(defaultSessionsNow.filter((name) => instanceSessions.has(name)), []);
     assert.deepEqual(defaultSessionsNow.filter((name) => !defaultTmuxSessionsBefore.includes(name) && name.includes(group.id.toString())), []);

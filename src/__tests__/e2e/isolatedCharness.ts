@@ -1,23 +1,24 @@
 /**
  * @description What the process-level tests share to run the BUILT charness as
- * an ISOLATED instance (request/answer plan S6–S9): a temp layout with its
- * own HOME, DATA_DIR, WORK_ROOT and a private tmux server in a private
- * TMUX_TMPDIR; the fake `claude` launcher; the instance started through
- * `scripts/run-isolated.sh` with nothing but its own HOME config; read-only
+ * an ISOLATED instance (Jira connector plan J7, request/answer plan S6–S9): a
+ * temp layout with its own HOME, DATA_DIR, WORK_ROOT and a private tmux server
+ * in a private TMUX_TMPDIR; the fake `claude` launcher; the instance started
+ * through `scripts/run-isolated.sh` with nothing but its env file; read-only
  * tmux listings; and the synchronous sweep that ends everything the instance
  * started — also from `process.on('exit')`, where nothing asynchronous runs.
  *
- * Nothing here knows which flow a test runs: the test writes the instance's
- * env file and chooses the readiness line.
+ * Nothing here knows which connector a test serves: the test writes the env
+ * file and chooses the readiness line.
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import { randomInt } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { fakeClaudePlatformEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 export const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
@@ -26,7 +27,7 @@ export const fakeClaudePath = path.join(__dirname, '..', 'jiraE2e', 'fakeClaude.
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 /** The only variables `run-isolated.sh` passes to the instance. */
-export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM'];
+export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
 
 const waitStepMs = 250;
 /** How much of charness's output a failed wait quotes. */
@@ -144,9 +145,8 @@ export function getProcessEnvNames(pid: number): string[] | null {
 /**
  * @name IsolatedInstanceLayout
  * @description The instance's temp folder and what lives in it. Every path is
- * outside the user's HOME; the tmux server is private (its own TMUX_TMPDIR).
- * The env file is the instance's global config under its own HOME, which is
- * what the env loader reads.
+ * outside the user's HOME; the tmux server is private (its own socket name in
+ * its own TMUX_TMPDIR).
  */
 export interface IsolatedInstanceLayout {
   testRoot: string;
@@ -156,6 +156,7 @@ export interface IsolatedInstanceLayout {
   fakeLogDir: string;
   envFile: string;
   tmuxTmpDir: string;
+  tmuxSocketName: string;
   /** A private PATH: the running `node`, the fake `claude`, the system tools — no other agent binary. */
   binDir: string;
 }
@@ -172,11 +173,12 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
     dataDir: path.join(testRoot, 'data'),
     workRoot: path.join(testRoot, 'work'),
     fakeLogDir: path.join(testRoot, 'fake-claude-log'),
-    envFile: path.join(testRoot, 'home', '.config', 'telegramcode', '.env'),
+    envFile: path.join(testRoot, 'instance.env'),
     tmuxTmpDir: path.join(testRoot, 'tmux'),
+    tmuxSocketName: `${prefix}${randomBytes(4).toString('hex')}`,
     binDir: path.join(testRoot, 'bin'),
   };
-  for (const dir of [layout.instanceHome, path.dirname(layout.envFile), layout.dataDir, layout.fakeLogDir, layout.binDir, ...projectFolders.map((folder) => path.join(layout.workRoot, folder))]) {
+  for (const dir of [layout.instanceHome, layout.dataDir, layout.fakeLogDir, layout.binDir, ...projectFolders.map((folder) => path.join(layout.workRoot, folder))]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   fs.mkdirSync(layout.tmuxTmpDir, { mode: 0o700 });
@@ -195,8 +197,12 @@ export function getIsolatedPath(layout: IsolatedInstanceLayout): string {
   return [layout.binDir, '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter);
 }
 
-/** @description Write the fake `claude` launcher into the layout's bin folder and resolve its path. */
-export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout): string {
+/**
+ * @description Write the fake `claude` launcher into the layout's bin folder and
+ * resolve its path. `platform` tells the fake which contract to enforce (the
+ * Jira flags and the R32 environment for `jira`; none for a Telegram session).
+ */
+export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform: FakeClaudePlatform | null): string {
   const fakeStateDir = path.join(layout.testRoot, 'fake-claude-state');
   fs.mkdirSync(fakeStateDir);
   const claudeBin = path.join(layout.binDir, 'claude');
@@ -204,6 +210,7 @@ export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout): string 
     '#!/bin/sh',
     `export FAKE_CLAUDE_LOG_DIR='${layout.fakeLogDir}'`,
     `export FAKE_CLAUDE_STATE_DIR='${fakeStateDir}'`,
+    ...(platform === null ? [] : [`export ${fakeClaudePlatformEnvName}='${platform}'`]),
     `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudePath}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
@@ -222,7 +229,7 @@ export function getInstanceEnvNames(layout: IsolatedInstanceLayout): string[] {
 
 /**
  * @description One charness process started the way an isolated instance is
- * started: `run-isolated.sh` with only its HOME config. Everything it prints
+ * started: `run-isolated.sh` with only its env file. Everything it prints
  * (stdout and stderr, across restarts) accumulates in `output`.
  */
 export class IsolatedCharness {
@@ -244,7 +251,7 @@ export class IsolatedCharness {
    */
   async start(timeoutMs: number, checkIsReady: (runOutput: string) => boolean): Promise<void> {
     const outputStart = this.output.length;
-    const child = spawn(runIsolatedPath, [], {
+    const child = spawn(runIsolatedPath, [this.layout.envFile], {
       // run-isolated.sh passes on only these; HOME is the instance's own temp home.
       env: {
         HOME: this.layout.instanceHome,
@@ -302,15 +309,24 @@ export class IsolatedCharness {
  * @description Stop everything the instance started, SYNCHRONOUSLY — so it also
  * runs from `process.on('exit')` after a signal or an uncaught failure, where
  * nothing asynchronous runs any more: charness (killed outright), the instance's
- * own tmux server (which ends the fake agents in it) and the temp folder.
- * Only the instance's server: the `default` socket inside its private
- * TMUX_TMPDIR, never the user's.
+ * own tmux servers (which ends the fake agents in them) and the temp folder.
+ * Only the instance's servers: its named one and any default server a broken
+ * `-L` guard started — both in its private TMUX_TMPDIR, never the user's; a
+ * broken TMUX_TMPDIR hand-over would have put the named one in tmux's own
+ * default folder (`/tmp`).
  */
 export function removeIsolatedInstanceSync(layout: IsolatedInstanceLayout | null, charness: IsolatedCharness | null): void {
   charness?.killSync();
   if (!layout) return;
   // Every kill names its socket by FULL PATH (`-S`), which tmux never swaps for the server `$TMUX` names.
-  spawnSync('tmux', ['-S', path.join(getTmuxSocketDir(layout.tmuxTmpDir), 'default'), 'kill-server'], { env: getTmuxEnv(null) });
+  for (const socketPath of [
+    path.join(getTmuxSocketDir(layout.tmuxTmpDir), layout.tmuxSocketName),
+    path.join(getTmuxSocketDir(layout.tmuxTmpDir), 'default'),
+    path.join(getTmuxSocketDir('/tmp'), layout.tmuxSocketName),
+  ]) {
+    spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
+  }
+  fs.rmSync(path.join(getTmuxSocketDir('/tmp'), layout.tmuxSocketName), { force: true });
   fs.rmSync(layout.testRoot, { recursive: true, force: true });
 }
 

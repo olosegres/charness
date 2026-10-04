@@ -1,8 +1,8 @@
 /**
  * @description What the fake `claude` (`fakeClaude.ts`) and the process-level
- * tests agree on: the files it logs to and its exit code when it refuses a
- * session. Kept apart from the executable script, which starts running when it
- * is loaded.
+ * Jira test agree on: the files it logs to, the flags it insists on, its exit
+ * code on a missing flag, the environment it accepts. Kept apart from the
+ * executable script, which starts running when it is loaded.
  */
 
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
@@ -27,6 +27,15 @@ export const requiredJiraSessionFlags: ReadonlyArray<readonly string[]> = [
 
 /** What the fake's own launcher script exports: where it logs and keeps its state. */
 export const fakeClaudeOwnEnvPrefix = 'FAKE_CLAUDE_';
+/**
+ * The platform whose session contract the fake enforces, set by its launcher:
+ * `jira` insists on the Jira flags and the R32 environment on every session
+ * launch; unset (a Telegram topic's session) enforces neither — a topic's
+ * session inherits the tmux server's environment and carries no tracker flags.
+ */
+export const fakeClaudePlatformEnvName = 'FAKE_CLAUDE_PLATFORM';
+export type FakeClaudePlatform = 'jira';
+
 /**
  * @name FakeClaudeTurn
  * @description One line of the fake's `turns.jsonl`: the request the turn
