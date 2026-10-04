@@ -211,23 +211,40 @@ export const compactionSummaryGuidance =
   'Make the summary MAXIMALLY COMPLETE: preserve every detail needed to continue the work from a clean session with no memory of this conversation — never drop load-bearing information (decisions, constraints, file paths, commands, error strings, identifiers, active tasks, delegated-work state) for brevity. Capture only SESSION-SPECIFIC working nuances: the user\'s in-session directives and any deviations from the standard process. Do NOT restate the standard instructions that auto-load at session start (for example CLAUDE.md / AGENTS.md / rules files) — they reload automatically on the fresh session, so duplicating them only wastes the summary. Keep the conversational directives, active exceptions, and delegated-work state; drop the static rulebook.';
 
 /**
+ * @description The loaded-skills guidance, sent on EVERY bot-issued compaction
+ * to BOTH backends. A skill is loaded on demand mid-session (a tool call whose
+ * result carries its instructions), so — unlike CLAUDE.md / AGENTS.md — nothing
+ * reloads it after a compaction: the summary drops its text and the fresh
+ * session keeps working without the procedure it was following. Naming the
+ * skills and saying in plain words that they must be loaded again is the only
+ * way the continuing session learns to re-invoke them. Not baked into the
+ * OpenCode fork, so unlike {@link compactionSummaryGuidance} it rides the
+ * per-invocation instruction there too.
+ */
+export const compactionSkillsGuidance =
+  'List every skill that was loaded (invoked) during this session by its exact name, and state explicitly, in plain words, that the continuing session MUST load each of these skills again and follow it before resuming the work: a skill\'s instructions are not carried over by this summary, so without reloading them the fresh session works without them. If no skill was loaded, omit this.';
+
+/**
  * @description Compose the per-invocation compaction instruction the bot passes
- * to a backend (D3 + F2 closing section). The general summary guidance is
- * appended ONLY when the backend does NOT already bake it into its own prompt —
- * OpenCode bakes it in the fork (`bakesSummaryGuidance: true`) so re-sending it
- * would duplicate the text, whereas the Claude backends have no bot-controlled
- * prompt and must receive it every time. The F2 closing-section directive
- * (per-locale, may carry a language directive) is appended when present. Returns
- * `undefined` when nothing needs appending, keeping a plain `/compact`
- * byte-identical to before for OpenCode.
+ * to a backend (D3 + loaded skills + F2 closing section). The general summary
+ * guidance is appended ONLY when the backend does NOT already bake it into its
+ * own prompt — OpenCode bakes it in the fork (`bakesSummaryGuidance: true`) so
+ * re-sending it would duplicate the text, whereas the Claude backends have no
+ * bot-controlled prompt and must receive it every time. The skills guidance is
+ * baked nowhere, so it rides every backend. The F2 closing-section directive
+ * (per-locale, may carry a language directive) is appended LAST when present,
+ * because it tells the model to write nothing after its end marker.
  */
 export function buildCompactionInstruction(input: {
   bakesSummaryGuidance: boolean;
   summaryGuidance: string;
+  skillsGuidance: string;
   closingSectionInstruction?: string;
 }): string | undefined {
   const parts: string[] = [];
   if (!input.bakesSummaryGuidance) parts.push(input.summaryGuidance);
+  const skills = input.skillsGuidance.trim();
+  if (skills) parts.push(skills);
   const closing = input.closingSectionInstruction?.trim();
   if (closing) parts.push(closing);
   return parts.length > 0 ? parts.join('\n\n') : undefined;

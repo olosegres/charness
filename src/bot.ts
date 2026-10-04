@@ -350,6 +350,7 @@ import {
   checkIsBusyForRealTurn,
   buildCompactionInstruction,
   compactionSummaryGuidance,
+  compactionSkillsGuidance,
   extractCompactionClosingSection,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
@@ -7099,11 +7100,10 @@ const openCodeAdapterName = 'opencode';
 
 /**
  * @description Compose the per-invocation compaction instruction for a thread's
- * backend (D3 summary guidance + the optional F2 closing section). The general
- * guidance is skipped for OpenCode (baked in its fork prompt) and appended for
- * the Claude backends; the closing-section directive rides only when requested.
- * Returns `undefined` when nothing needs appending — a plain `/compact` stays
- * byte-identical for OpenCode.
+ * backend (D3 summary guidance + the loaded-skills guidance + the optional F2
+ * closing section). The general guidance is skipped for OpenCode (baked in its
+ * fork prompt) and appended for the Claude backends; the skills guidance rides
+ * every backend; the closing-section directive rides only when requested.
  */
 function getCompactionInstruction(
   adapter: AgentAdapter,
@@ -7112,6 +7112,7 @@ function getCompactionInstruction(
   return buildCompactionInstruction({
     bakesSummaryGuidance: adapter.name === openCodeAdapterName,
     summaryGuidance: compactionSummaryGuidance,
+    skillsGuidance: compactionSkillsGuidance,
     closingSectionInstruction: opts.withClosingSection
       ? t('compact.closingSectionInstruction', {
           startMarker: compactionClosingStartMarker,
