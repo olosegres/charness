@@ -40,9 +40,11 @@ export type DiscreteMessageItem =
  * @description `undeliveredCount` on success counts the messages that were
  * attempted but did not land (a partial delivery stays `ok`), so a caller can
  * tell a partial delivery from a full one without parsing `summary`.
+ * `sentMessageIds` are the TEXT messages that landed, in order — what a caller
+ * pins or edits afterwards (an answer's pin, S8); attachments are not listed.
  */
 export type SendMessagesToThreadResult =
-  | { ok: true; summary: string; undeliveredCount: number }
+  | { ok: true; summary: string; undeliveredCount: number; sentMessageIds: number[] }
   | { ok: false; error: string }
   | { ok: false; kind: 'deliveryUnknown'; error: string };
 
@@ -80,11 +82,12 @@ export interface SendMessagesToThreadDeps<TTarget> {
   /** Map the scope-resolved thread key string to the concrete send target. */
   resolveTarget(threadKey: string): { ok: true; target: TTarget } | { ok: false; error: string };
   /**
-   * Send ONE already-split chunk as its own permanent message; resolves `true`
-   * when it landed. The caller wires this to the bot's paced HTML-with-plain
-   * -fallback send so ordering / rate-limiting / `/clear` tracking are reused.
+   * Send ONE already-split chunk as its own permanent message; resolves the sent
+   * message id, `null` when it did not land. The caller wires this to the bot's
+   * paced HTML-with-plain-fallback send so ordering / rate-limiting / `/clear`
+   * tracking are reused.
    */
-  sendChunk(target: TTarget, chunk: string, signal?: AbortSignal): Promise<boolean>;
+  sendChunk(target: TTarget, chunk: string, signal?: AbortSignal): Promise<number | null>;
   /**
    * Deliver ONE attachment via the SAME reusable file-send pipeline behind
    * `send_file_to_user` (path-safety, media classification, album/size rules,
@@ -201,6 +204,7 @@ export function createSendMessagesToThread<TTarget>(
 
     let attempted = 0;
     let landed = 0;
+    const sentMessageIds: number[] = [];
     const attachmentErrors: string[] = [];
     for (const item of normalized) {
       if (signal?.aborted) return buildCancelledResult(landed);
@@ -248,7 +252,10 @@ export function createSendMessagesToThread<TTarget>(
       const chunks = deps.splitMessage(item.text, deps.maxMessageLength, deps.measureRendered);
       for (const chunk of chunks) {
         attempted += 1;
-        if (await deps.sendChunk(target, chunk, signal)) landed += 1;
+        const messageId = await deps.sendChunk(target, chunk, signal);
+        if (messageId === null) continue;
+        landed += 1;
+        sentMessageIds.push(messageId);
       }
     }
 
@@ -268,6 +275,6 @@ export function createSendMessagesToThread<TTarget>(
         ? `Delivered ${formatMessageCount(landed)} to the topic.`
         : `Delivered ${landed} of ${attempted} messages to the topic (${attempted - landed} failed to send).`) +
       attachmentErrorSuffix;
-    return { ok: true, summary, undeliveredCount: attempted - landed };
+    return { ok: true, summary, undeliveredCount: attempted - landed, sentMessageIds };
   };
 }

@@ -57,7 +57,7 @@ function createService(
       recorder.targets.push(target);
       recorder.sent.push(chunk);
       recorder.events.push(`text:${chunk}`);
-      return true;
+      return recorder.sent.length;
     },
     sendFiles: defaultSendFiles,
     splitMessage,
@@ -106,10 +106,11 @@ test('singular summary for a single delivered message', async () => {
   const { service } = createService();
   const result = await service('-100:1', { messages: ['solo'] });
   assert.equal(result.ok && result.summary, 'Delivered 1 message to the topic.');
+  assert.deepEqual(result.ok && result.sentMessageIds, [1], 'the sent id comes back for the caller to pin or edit');
 });
 
 test('total send failure returns an error, not a false success', async () => {
-  const { service } = createService({ sendChunk: async () => false });
+  const { service } = createService({ sendChunk: async () => null });
   const result = await service('-100:1', { messages: ['a', 'b'] });
   assert.equal(result.ok, false);
   assert.match(!result.ok ? result.error : '', /Failed to deliver any message/);
@@ -121,13 +122,14 @@ test('partial send failure stays ok but reports the landed/attempted split', asy
     // First message lands, second fails.
     sendChunk: async () => {
       calls += 1;
-      return calls === 1;
+      return calls === 1 ? calls : null;
     },
   });
   const result = await service('-100:1', { messages: ['a', 'b'] });
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.summary, 'Delivered 1 of 2 messages to the topic (1 failed to send).');
   assert.equal(result.ok && result.undeliveredCount, 1);
+  assert.deepEqual(result.ok && result.sentMessageIds, [1], 'only the message that landed is listed');
 });
 
 test('a target-resolution failure short-circuits before any send', async () => {
@@ -159,7 +161,7 @@ test('cancellation between messages stops further delivery', async () => {
       recorder.sent.push(chunk);
       // Abort right after the first message lands; the loop must stop before the second.
       controller.abort();
-      return true;
+      return recorder.sent.length;
     },
     sendFiles: async (threadKey, options) => {
       recorder.fileCalls.push({ threadKey, options });
@@ -388,7 +390,7 @@ test('cancellation stops a following attachment send', async () => {
   const { service, recorder } = createService({
     sendChunk: async () => {
       controller.abort();
-      return true;
+      return 1;
     },
   });
   const result = await service('-100:1', {

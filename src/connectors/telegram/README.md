@@ -73,6 +73,11 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   preamble) and says the plain text is hidden only in the answers-only view. A prompt buffered behind a session
   start carries its header from capture time.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
+- **Answers are pinned** (`answerSink.ts`): every delivered `answer_request` answer is pinned WITH a
+  notification; only the latest answer of a topic stays pinned — the previous one is unpinned silently (its
+  message stays), and the record of the pinned answer is persisted (`state.json` `answerPins`) so a restart
+  does not leave two pinned. A failed pin changes nothing. Native question pins and scheduled-run pins are
+  separate records.
 
 ## Testing against a fake Bot API
 

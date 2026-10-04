@@ -38,6 +38,7 @@ import {
  * Modes (`[fake:<mode>]` in the request's text), counted per request across launches:
  *  - `answer`      — answers `final` at once;
  *  - `silent-once` — ends its first turn without answering, answers the next;
+ *  - `silent`      — ends EVERY turn without answering (the wake-up rules give up and alert);
  *  - `hang-once`   — starts working on its first turn and never ends it (the
  *    test kills the process), answers in the next turn;
  *  - `progress`    — sends a `progress` note and ends the turn.
@@ -47,8 +48,8 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'hang-once' | 'progress';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'hang-once', 'progress'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress'];
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -204,7 +205,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
 
   emitTurnActivity(sessionId, state.issueKey);
   const isFirstTurn = state.turnCount === 1;
-  if (state.mode === 'silent-once' && isFirstTurn) {
+  if (state.mode === 'silent' || (state.mode === 'silent-once' && isFirstTurn)) {
     endTurn(sessionId, 'Thinking about it.');
     return;
   }

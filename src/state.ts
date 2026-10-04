@@ -417,6 +417,13 @@ export interface StateV1 {
    */
   openRequests?: Record<string, OpenRequestState>;
   /**
+   * Per conversation (serialized {@link SessionKey}), the message id of the
+   * LATEST pinned `answer_request` answer (request/answer plan S8): a new answer
+   * unpins it and takes its place, so a topic never keeps two answers pinned —
+   * across restarts too. Optional, dropped when empty.
+   */
+  answerPins?: Record<string, number>;
+  /**
    * Alerts of CLOSED requests that are not released yet (Telegram: still
    * pinned), keyed by request id. A request that closes while it holds an alert
    * lands here in the same save as its close, and leaves only once the release
@@ -949,8 +956,9 @@ export class StateStore {
       delete this.state.agents[k];
       delete this.state.messages[k];
       // The thread is gone (unbind / deleted topic) → so is anything a boot
-      // recovery could resume for it.
+      // recovery could resume for it, and the record of its pinned answer.
       this.dropLimitEpisodeRecovered(k);
+      this.dropAnswerPin(k);
       this.scheduleSave();
     });
   }
@@ -2113,6 +2121,39 @@ export class StateStore {
     delete this.state.unreleasedRequestAlerts[requestId];
     if (Object.keys(this.state.unreleasedRequestAlerts).length === 0) delete this.state.unreleasedRequestAlerts;
     this.scheduleSave();
+  }
+
+  // ── pinned answers (S8) ──
+
+  /** @description The message id of the latest pinned answer in `key`'s conversation, or `undefined`. */
+  getAnswerPinMessageId(key: SessionKey): number | undefined {
+    return this.state.answerPins?.[keyToString(key)];
+  }
+
+  /**
+   * @description Remember (or with `null` forget) the latest pinned answer of
+   * `key`'s conversation. Rides the debounced save: a lost write leaves one extra
+   * pinned answer behind, never a wrong unpin.
+   */
+  async setAnswerPinMessageId(key: SessionKey, messageId: number | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (messageId === null) {
+        if (!this.dropAnswerPin(k)) return;
+      } else {
+        if (this.state.answerPins?.[k] === messageId) return;
+        (this.state.answerPins ??= {})[k] = messageId;
+      }
+      this.scheduleSave();
+    });
+  }
+
+  /** Forget a conversation's pinned answer; the map goes with its last entry. `false` when there was none. */
+  private dropAnswerPin(k: string): boolean {
+    if (this.state.answerPins?.[k] === undefined) return false;
+    delete this.state.answerPins[k];
+    if (Object.keys(this.state.answerPins).length === 0) delete this.state.answerPins;
+    return true;
   }
 
   // ── handled limit episodes (boot-recovery marker) ──

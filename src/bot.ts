@@ -13864,10 +13864,7 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
       return { ok: false, error: `invalid threadKey "${threadKeyStr}"` };
     }
   },
-  sendChunk: async (key, chunk) => {
-    const id = await replyChunkWithFallback(key, renderAgentHtml(chunk), chunk);
-    return id !== null;
-  },
+  sendChunk: (key, chunk) => replyChunkWithFallback(key, renderAgentHtml(chunk), chunk),
   // Reuse the SAME secure file-send pipeline as `send_file_to_user` for an
   // attachment item — no second pipeline, no duplicated path-safety.
   sendFiles: sendFilesToThread,
@@ -13901,9 +13898,11 @@ function createAnswerSinks(): AnswerSinks {
       sendMessages: sendMessagesToThread,
       postAlert: (key, requestId, reason) =>
         withThreadLocale(key, () => replyToThread(key, t(requestAlertTextKeys[reason], { requestId }))),
-      // The alert must notify: the operator runs topics muted and a pin is what pierces that.
+      // An answer's pin and the alert's pin must notify: the operator runs topics muted and a pin is what pierces that.
       pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
       unpinMessage: (key, messageId) => unpinMessageQuiet(key, messageId),
+      getAnswerPinMessageId: (key) => state.getAnswerPinMessageId(key),
+      setAnswerPinMessageId: (key, messageId) => state.setAnswerPinMessageId(key, messageId),
     })],
   ]);
 }

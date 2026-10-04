@@ -18,6 +18,9 @@
  *     the agent answers through the bot MCP; in «Answers only» the header says
  *     the plain text is not shown; in the full stream no request is opened; a
  *     silent turn is woken; `/schedule` and a scheduled run are requests too
+ *   → every answer is pinned with a notification and only the latest stays
+ *     pinned, across a restart; an agent that never answers gets a pinned alert,
+ *     released when the next message supersedes its request
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the
  * agent is the fake. Everything the test starts is stopped in `after`.
@@ -71,7 +74,7 @@ const replyTimeoutMs = 20 * 1000;
 const answerTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = 3 * bootTimeoutMs + 12 * replyTimeoutMs + 7 * answerTimeoutMs + 3 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 4 * bootTimeoutMs + 14 * replyTimeoutMs + 10 * answerTimeoutMs + 4 * stopTimeoutMs + flowMarginMs;
 /** How soon after the restart the seeded scheduled run is due. */
 const seededRunDelayMs = 3 * 1000;
 
@@ -376,6 +379,72 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.equal(turn.isRequestPrompt, true);
     await getCharness().waitFor('the scheduled run\'s request closed', replyTimeoutMs, () => readClosedRequests().some((record) => record.id === turn.requestId));
     assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'scheduledRun', attributes: { source: 'scheduledRun' } });
+  });
+
+  // ── S8 — pinned answer delivery ──────────────────────────────────────
+
+  /** The bot message in the topic whose text contains `text`. */
+  function findTopicMessage(text: string): FakeTelegramMessage {
+    const message = listTopicMessages().find((candidate) => candidate.text.includes(text));
+    assert.ok(message, `a topic message with "${text}"`);
+    return message;
+  }
+
+  /** The pin events of `messageId`, in order (`pin` / `unpin`). */
+  function getPinKinds(messageId: number): string[] {
+    return fakeTelegram.pinEvents.filter((event) => event.messageId === messageId).map((event) => event.kind);
+  }
+
+  it('every answer so far was pinned with a notification, and only the latest answer is still pinned', async () => {
+    const answerTexts = ['TOPIC-1', 'TOPIC-2', 'TOPIC-4', 'TOPIC-5', 'TOPIC-6'].map((label) => `Fake final answer for ${label}`);
+    const answerIds = answerTexts.map((text) => findTopicMessage(text).message_id);
+    await getCharness().waitFor('the latest answer pinned', replyTimeoutMs, () => fakeTelegram.listPinnedMessageIds().includes(answerIds[answerIds.length - 1]));
+    for (const messageId of answerIds) {
+      const pin = fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && event.messageId === messageId);
+      assert.ok(pin, `answer ${messageId} was pinned`);
+      assert.equal(pin.isSilent, false, 'an answer pin notifies the muted topic');
+    }
+    // The earlier answers were released in order; the last one still holds the pin.
+    for (const messageId of answerIds.slice(0, -1)) assert.deepEqual(getPinKinds(messageId), ['pin', 'unpin'], `answer ${messageId}`);
+    assert.deepEqual(getPinKinds(answerIds[answerIds.length - 1]), ['pin']);
+    const pinnedAnswers = fakeTelegram.listPinnedMessageIds().filter((messageId) => answerIds.includes(messageId));
+    assert.deepEqual(pinnedAnswers, [answerIds[answerIds.length - 1]]);
+  });
+
+  it('the status banner and the scheduled run\'s announcement keep their own pins', () => {
+    const banner = fakeTelegram.pinEvents[0];
+    assert.deepEqual(getPinKinds(banner.messageId), ['pin'], 'the banner pin was never touched');
+    const announcement = findTopicMessage('Schedule "Run TOPIC-6"');
+    assert.deepEqual(getPinKinds(announcement.message_id), ['pin'], 'the scheduled run\'s pin is a separate record');
+  });
+
+  it('after a restart the next answer still unpins the one pinned before it', async () => {
+    const latestBefore = findTopicMessage('Fake final answer for TOPIC-6').message_id;
+    await getCharness().stop();
+    await startCharness();
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-7 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-7');
+    const answer = await waitForTopicMessage('the answer after the restart', (message) => message.text.includes('Fake final answer for TOPIC-7'));
+    await getCharness().waitFor('the pin moved to the new answer', replyTimeoutMs, () =>
+      getPinKinds(answer.message_id).includes('pin') && getPinKinds(latestBefore).includes('unpin'));
+    assert.ok(!fakeTelegram.listPinnedMessageIds().includes(latestBefore));
+  });
+
+  it('an agent that never answers gets a pinned alert; the next message supersedes the request and releases the alert', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-8 [fake:silent]');
+    // Two silent turns in a row: the request's own, then the reminder's.
+    await getCharness().waitFor('two silent turns', answerTimeoutMs, () => getTurns('TOPIC-8').length >= 2);
+    const [turn] = getTurns('TOPIC-8');
+    const alert = await waitForTopicMessage('the alert', (message) => message.text.includes(`Request ${turn.requestId} got no answer`));
+    await getCharness().waitFor('the alert pinned', replyTimeoutMs, () => getPinKinds(alert.message_id).includes('pin'));
+    assert.equal(fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && event.messageId === alert.message_id)?.isSilent, false, 'the alert notifies');
+    assert.deepEqual(getAnswers('TOPIC-8'), [], 'nothing was answered');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-9 [fake:answer]');
+    await waitForFakeAnswer('TOPIC-9');
+    await getCharness().waitFor('the alert released', replyTimeoutMs, () => getPinKinds(alert.message_id).includes('unpin'));
+    await getCharness().waitFor('the silent request closed as superseded', replyTimeoutMs, () =>
+      readClosedRequests().find((record) => record.id === turn.requestId)?.closeReason === 'superseded');
   });
 
   it('the instance runs its tmux server in its private TMUX_TMPDIR; nothing of it runs on the default tmux server', () => {
