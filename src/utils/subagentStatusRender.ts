@@ -102,7 +102,7 @@ export function checkShouldSendSubagentStatus(nextText: string, lastText: string
  * burst of same-second refreshes can enqueue AT MOST ONE edit instead of
  * stacking hundreds of identical closures.
  *
- * The bug this closes (live 2026-08-07, topic 61130): OpenCode streams frequent
+ * The bug this closes (live 2026-08-07): OpenCode streams frequent
  * `message.part.updated` events for a live parent `task` part, so the bot got a
  * high-frequency run of `subagentStatus{active:true}` refreshes. The plain S1
  * dedup compared against the last text that REACHED Telegram, which only updates

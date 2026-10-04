@@ -29,7 +29,7 @@ import type { AgentAdapter, ReattachRecap, SeenWatermark } from '../types';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
+const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 const workDir = '/work/ws-setup';
 const sessionId = 'sess-1';
 const head: SeenWatermark = { sessionId, claudeTranscriptOffset: 2_603_805 };

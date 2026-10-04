@@ -1,7 +1,7 @@
 /**
  * @description A bot-issued abort must not surface as "OpenCode error: Aborted".
  *
- * Live repro (test topic 9085, 2026-08-14): cancelling a pending question sends
+ * Live repro (2026-08-14): cancelling a pending question sends
  * `POST /session/:id/abort` (the SIGINT), whose `session.error` "Aborted" used
  * to relay a bogus "OpenCode error: Aborted" — the OpenCode-side twin of the
  * json-stream "Claude error: API error" (both are the abort WE issued, not a

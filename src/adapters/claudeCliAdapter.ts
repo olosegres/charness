@@ -308,8 +308,8 @@ interface ClaudeSession {
    * Last known pane size (`<width>x<height>`, e.g. `300x50`) from the per-poll
    * `#{pane_width}x#{pane_height}` query; `null` until the first successful
    * read. A CHANGE means tmux re-wrapped the whole scrollback (an interactive
-   * `tmux attach`/detach resizes the window — live incident 2026-07-02, topic
-   * 39933) and the poll's giant line-SET diff is repaint, not output. See
+   * `tmux attach`/detach resizes the window — live incident 2026-07-02)
+   * and the poll's giant line-SET diff is repaint, not output. See
    * {@link getPaneResizeGuardDecision}.
    */
   lastPaneSize: string | null;
@@ -355,7 +355,7 @@ const claudePath = resolveClaudeBinary();
  * `--dangerously-skip-permissions` only sets bypass as the INITIAL mode and
  * suppresses the "enter bypass?" confirm — it is NOT a runtime lock (shift+tab
  * cycles bypass → auto → default). A live session ended up in a prompting,
- * non-bypass mode despite the flag (thread 15812, 2026-06-12); the bot never
+ * non-bypass mode despite the flag (live 2026-06-12); the bot never
  * sends shift+tab itself, so the drift comes from Claude's own mode state, not
  * the bot. `--permission-mode bypassPermissions` is the documented per-session
  * override (verified present in v2.1.175 `--help`); passing it on every launch
@@ -648,8 +648,8 @@ const QUESTION_CHROME_REGEX =
  * The "Notes: press n to add notes" affordance the side-by-side
  * AskUserQuestion layout renders under the preview pane. Terminal-only (a
  * Telegram user cannot press `n`), so it is question chrome on the scrape
- * side AND dropped on the output side. ANCHORED whole-line (live leak msg
- * 23990, 2026-06-10: it reached Telegram as naked text when the selector
+ * side AND dropped on the output side. ANCHORED whole-line (live leak
+ * 2026-06-10: it reached Telegram as naked text when the selector
  * frame fell through to the plain-output path) — prose merely mentioning the
  * phrase mid-sentence must survive.
  */
@@ -704,7 +704,7 @@ const QUESTION_BOX_EDGE_REGEX = /[╭╮╰╯]/;
  *
  * An option line is CUT at the first of these glyphs and only the left part
  * is parsed — covers sharp AND rounded corner families plus double-line
- * variants defensively (live bug #9, msg 23990 2026-06-10: unparsed preview
+ * variants defensively (live bug #9, 2026-06-10: unparsed preview
  * fragments polluted the labels / broke extraction and the question reached
  * Telegram with ZERO options). Single-column frames carry none of these
  * glyphs on option lines after {@link stripQuestionBoxBorder}, so the cut is
@@ -721,7 +721,7 @@ const PREVIEW_PANE_FRAGMENT_REGEX = new RegExp(`^[${PREVIEW_BOX_GLYPH_CLASS}]`);
  * bold→`*…*` conversion trims the span, yielding `❯ 1.*winston*` — no space
  * after the dot, so {@link QUESTION_OPTION_REGEX} missed the line, the cursor
  * was "gone", and the whole frame fell through to the plain-output path (the
- * live zero-options leak, msg 23990 2026-06-10). Normalised back to
+ * live zero-options leak 2026-06-10). Normalised back to
  * `❯ 1. winston`. ANCHORED start-to-end: the whole remainder after `N.` must
  * be ONE `*…*` span, so prose like `1.5 *important* note` can never match.
  */
@@ -1075,7 +1075,7 @@ export interface ClaudeSurvey {
  * Claude following the instructions…") — the old exact-header match never
  * fired, the undetected survey sat on the pane and SWALLOWED the Enter of the
  * next forwarded prompt: the text stranded unsubmitted in the TUI input box
- * and the topic looked hung for hours (live 2026-07-02, topic 39933).
+ * and the topic looked hung for hours (live 2026-07-02).
  */
 const CLAUDE_SURVEY_HEADER_REGEX =
   /^\s*[●⏺]?\s*(How is Claude doing this session\?|How well is Claude following the instructions you gave earlier in this conversation\?)(\s*\(optional\))?\s*$/;
@@ -1264,7 +1264,7 @@ export function getClaudeReplyRoute(input: {
  * marker anywhere in the full pane false-fired whenever this repo's OWN source
  * or docs (which quote the marker) rendered in a Claude TUI working on
  * TelegramCode — the bot then ate the user's next message as a one-time login
- * code (live 2026-06-25, topic 434). Anchoring to the tail excludes scrollback
+ * code (live 2026-06-25). Anchoring to the tail excludes scrollback
  * mentions while still catching a genuine login row.
  */
 const loginPasteTailLineCount = 10;
@@ -1475,7 +1475,7 @@ export function checkHasContentAfterLastSharpTable(content: string): boolean {
     // shortcut hints like `/rc` in Claude v2.1.201) is TUI footer chrome, never
     // transcript content. A real prose line after the table appears ABOVE the
     // input box, so once the scan reaches it, stop — nothing below is content.
-    // WHY this is the real fix (live 2026-07-04, topic 9085): the `/rc` corner
+    // WHY this is the real fix (live 2026-07-04): the `/rc` corner
     // hint is not matched by any chrome predicate, so the scan ran PAST the input
     // box and counted it as "content after the table" → `hasContentAfterTable`
     // stayed true through the whole render → RULE 2 emitted every byte-stable
@@ -1556,7 +1556,7 @@ export function getTableStabilizationDecision(input: {
   // prose (the caller masks the prose out of this tick to keep ordering). BUT
   // only once the WIDTH has settled (`sameBlock`): a table still re-flowing wider
   // WHILE trailing prose is already on the pane must NOT ship an intermediate
-  // width (live flood 2026-07-04, topic 434 — each width shipped as its own
+  // width (live flood 2026-07-04 — each width shipped as its own
   // message). A changed (wider) block falls through to HOLD and re-checks next
   // poll; idle (RULE 3) and the safety cap still emit a final width.
   if (hasContentAfterTable && sameBlock) {
@@ -1602,7 +1602,7 @@ function checkIsClaudeBodyStatusLine(line: string): boolean {
  * (genuine stdout / diff / file content) and the status/summary lines that
  * must stay PLAIN. A {@link TRANSIENT_TICK_RE} tick (`Running…`/`Waiting…`)
  * followed by ANY real output line in the SAME body is stale — superseded by
- * the output the bot captured one frame later (the msg-20718 case) — so it is
+ * the output the bot captured one frame later (the live case) — so it is
  * DROPPED, not even kept plain. Other status/summary lines are kept and
  * returned in `plain` (emitted after the fence). Genuine content goes to
  * `fenced` untouched.
@@ -1936,7 +1936,7 @@ export function stripTuiElementsWithContext(
     // and post-thinking trailers. These shapes used to slip through
     // `checkIsStatusOutput` (adapter side) and `checkIsProgressChunk`
     // (bot side) when they appeared mixed with real output in a single
-    // poll diff (msg 1853, 1855, 1863 in the debug session).
+    // poll diff (the live debug session).
     if (SPINNER_TICK_RE.test(line)) continue;
     if (POST_THINKING_TRAILER_RE.test(line.trim())) continue;
     // S2 (render-flood 2026-07-04): a leading star-burst activity title with NO
@@ -1964,7 +1964,7 @@ export function stripTuiElementsWithContext(
     // Interactive question UI: side-by-side AskUserQuestion chrome — the
     // "Notes: press n…" affordance and the unnumbered "Chat about this"
     // meta-row leaked as naked text when a selector frame fell through to
-    // this path (live msg 23990, 2026-06-10). Both regexes are anchored
+    // this path (live 2026-06-10). Both regexes are anchored
     // whole-line, so prose containing the phrases survives.
     if (QUESTION_NOTES_HINT_REGEX.test(line)) continue;
     if (QUESTION_CHAT_ABOUT_REGEX.test(line)) continue;
@@ -2581,7 +2581,7 @@ function normalizeEchoText(text: string): string {
  * TUI and Claude echoes it back in the pane; when that echo carries NO `❯`
  * (a wrapped continuation row, the `[Telegram thread context]` preamble, or the
  * tail of a long voice transcript) the shape gate misses it and it leaks into
- * the topic as a ghost "bot message" (live 2026-06-28, topic 39933).
+ * the topic as a ghost "bot message" (live 2026-06-28).
  *
  * A cleaned frame is the user's own echo when EITHER:
  *  - it carries the deterministic thread-context preamble signature (the
@@ -2596,7 +2596,7 @@ function normalizeEchoText(text: string): string {
  * prompt and then adds an answer is NOT a substring of the prompt and is kept.
  * The caller additionally gates this on a short post-forward time window.
  *
- * WIDENED (live 2026-07-06, topic 9085): the poll can catch the just-submitted
+ * WIDENED (live 2026-07-06): the poll can catch the just-submitted
  * echo's wrapped row GLUED to the new turn's first spinner tick in ONE frame
  * (`<echo row>\n\n* Twisting…`). The glued chrome is not part of the forwarded
  * text, so whole-frame containment failed and the row leaked as a permanent
@@ -2767,8 +2767,8 @@ const CLAUDE_LIMIT_ROW_SHAPE_RE = /\b(?:reached|exceeded|resets|resetting|try ag
  * line (the agent grepping the bot's own logs/source, or a `gh`/`npm` "not
  * logged in" line) would fire case (c) if we matched the phrase anywhere. So (c)
  * — and (d), for the same reason — anchor the phrase to the row START: a real
- * error row leads with it; a quote embeds it after other text (live 2026-07-03,
- * topic 434). The returned line is fed VERBATIM to
+ * error row leads with it; a quote embeds it after other text (live 2026-07-03).
+ * The returned line is fed VERBATIM to
  * {@link classifyAgentApiError}. Exported for unit testing without a live tmux
  * pane.
  */
@@ -4211,7 +4211,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // S1: seed the raw baseline too so the first poll after adoption — which
       // captures the same idle pane — skips the redundant `cleanOutput`.
       session.lastRawCapture = initialRaw;
-      // Seed the relay window too (live incident 2026-06-24, thread 434): the
+      // Seed the relay window too (live incident 2026-06-24): the
       // baseline above suppresses re-appearing PROSE, but a SETTLED table already
       // on the pane is deduped ONLY at the BLOCK level (`emitStabilizedTable`).
       // Without this seed the window is empty, so the first post-adopt poll
@@ -4274,7 +4274,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       return;
     }
 
-    // Pane-RESIZE guard (live incident 2026-07-02, topic 39933): an
+    // Pane-RESIZE guard (live incident 2026-07-02): an
     // interactive `tmux attach` resizes the window to the client terminal (and
     // detach restores the `-x/-y` default); tmux re-wraps the WHOLE scrollback
     // at the new width, so the line-SET diff below would see ~every line as
@@ -4744,7 +4744,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // flow — scanning `content` re-fired `apiError('auth')` on every poll, so
       // the recovery clear (first real output) and this re-fire oscillated:
       // re-pinning "logged out, run /login" AFTER a successful login and burying
-      // the real answer (live 2026-07-03, topic 434). The line-SET pane diff
+      // the real answer (live 2026-07-03). The line-SET pane diff
       // (getNewPaneContent) puts the row in `newPart` only on its FIRST
       // appearance → one fire per genuine logout episode. The resume-seed caller
       // passes the full pane AS newPart, so an adopted logged-out session still

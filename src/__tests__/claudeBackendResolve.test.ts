@@ -82,7 +82,7 @@ test('resolveClaudeBackendName: a non-Claude pick falls to the json-stream defau
   assert.equal(resolveClaudeBackendName(k), claudeJsonStreamAdapterName);
 });
 
-// ── /claude_mode decision (live bug 2026-07-06, topic 9085) ─────────────────
+// ── /claude_mode decision (live bug 2026-07-06) ─────────────────
 //
 // Historic shape: under the retired env-forced default, a NO-pick thread's
 // threadAdapterName could DISAGREE with the EFFECTIVE Claude backend (what

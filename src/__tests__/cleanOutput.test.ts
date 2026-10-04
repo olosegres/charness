@@ -111,7 +111,7 @@ test('convertAnsiToMarkdown: malformed OSC 8 (missing closer) is left alone — 
 });
 
 test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (BEL)', () => {
-  // The exact byte sequence Claude emitted in msg 1874:
+  // The exact byte sequence Claude emitted in a live capture:
   // `Create(<OSC8 START>file:///.../IDEAS.md<BEL>IDEAS.md<OSC8 END>)`.
   const input =
     '● Create(\x1b]8;id=1a2p0b6;file:///home/user/src/telegramCode/IDEAS.md\x07IDEAS.md\x1b]8;;\x07)';
@@ -131,7 +131,7 @@ test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (BEL)', () => {
 });
 
 test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (ST)', () => {
-  // The actual byte sequence captured from claude--1001111111111-434
+  // The actual byte sequence captured from a live claude
   // tmux pane during V3 re-verification — uses ESC\ as terminator.
   const input =
     '● Write(\x1b]8;id=133ki5c;file:///home/user/src/telegramCode/agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b\\agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b]8;;\x1b\\)';
@@ -155,12 +155,12 @@ test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (ST)', () => {
 // also guards against a-z-only byte assumptions in any future tighter
 // regex variant.
 const POST_THINKING_VERBS = [
-  'Cooked',       // msg 1855, 1863
-  'Cogitated',    // msg 1873
-  'Crunched',     // msg 1869
-  'Baked',        // msg 1837
-  'Churned',      // msg 1897 — V3 iteration 1
-  'Sautéed',      // msg 1909 — V3 iteration 2 (non-ASCII verb)
+  'Cooked',
+  'Cogitated',
+  'Crunched',
+  'Baked',
+  'Churned',      // V3 iteration 1
+  'Sautéed',      // V3 iteration 2 (non-ASCII verb)
   'Pondered',
   'Mused',
   'Crystallized',
@@ -216,7 +216,7 @@ test('stripTuiElements: does NOT drop active spinner "✻ Cogitating… (3s · �
 // ─── N1.b — mid-block spinner-tick line drop ───────────────────────────
 
 test('stripTuiElements: drops "✽ Doing… (4s · ↓ 14 tokens)" tick inside a chunk', () => {
-  // The exact mixed-chunk shape from msg 1853: tool header + Running
+  // The exact mixed-chunk shape from a live capture: tool header + Running
   // tick that should NOT survive.
   const input =
     '● Bash(git log)\n  ⎿  Running…\n✽ Doing… (4s · ↓ 14 tokens)';
@@ -237,7 +237,7 @@ test('stripTuiElements: drops sub-minute tick "· Working… (7s · ↓ 222 toke
 });
 
 test('stripTuiElements: drops a "(sub-agent)"-suffixed tick inside a chunk', () => {
-  // 2026-06-11 live leak (msg 26645): while a Task sub-agent runs the tick
+  // 2026-06-11 live leak: while a Task sub-agent runs the tick
   // carries a parenthesised suffix inside the activity title ("Fixing
   // relations add flow (sub-agent)…"). The old paren-free `[^()]` title part
   // of SPINNER_TICK_RE let those ticks ride into the permanent tool-output
@@ -285,7 +285,7 @@ test('stripTuiElements: keeps real prose that contains "(5s)"', () => {
 // ─── Echo of a multi-line user prompt must not leak as agent output ────
 
 test('stripTuiElements: drops the whole echoed multi-line prompt block', () => {
-  // Live capture (claude--1001111111111-434): a submitted multi-line prompt
+  // Live capture: a submitted multi-line prompt
   // renders as `❯ <first line>` + space-indented continuation. The old code
   // dropped only the `❯` line, so the continuation (incl. ``` fences) leaked
   // as a phantom message duplicating the user's own prompt. Only the trailing
@@ -425,7 +425,7 @@ test('checkIsStatusOutput: a lone `NN +` diff gutter is PERMANENT output, not st
 // ─── checkIsStatusOutput — bullet-led / filler-separated real prose is NOT status ───
 
 test('checkIsStatusOutput: a bullet-led short answer "● DONE" / "⏺ DONE" is real content', () => {
-  // Live bug 2026-06-24 (topics 434 + 9085): the answer bullet `●`/`⏺` was lumped
+  // Live bug 2026-06-24: the answer bullet `●`/`⏺` was lumped
   // into the same glyph class as the liveness spinner `✻✽✶✢`, so a fully short
   // answer like `● DONE` read as a glyph-led status frame and vanished entirely.
   // The answer bullet followed by text is ALWAYS content, regardless of length.
@@ -552,12 +552,12 @@ test('checkIsInputEchoFrame: frame with a ❯ first line but a ● tool line lat
 const forwardedWithPreamble = [
   '[Telegram thread context]',
   'topic: "Telegram code testing" | group: "ExampleGroup"',
-  'thread: -1001111111111:9085 | folder: telegramCode',
+  'thread: -1001111111111:4242 | folder: telegramCode',
   '',
   'please summarise the relay module and list its exports',
 ].join('\n');
 
-test('checkIsForwardedEcho: a preamble echo (no ❯, msg 39952 shape) is an echo', () => {
+test('checkIsForwardedEcho: a preamble echo (no ❯, live shape) is an echo', () => {
   // The whole preamble + prompt echoed back with no ❯ — the leak from the incident.
   assert.equal(checkIsForwardedEcho(forwardedWithPreamble, forwardedWithPreamble), true);
 });
@@ -570,13 +570,13 @@ test('checkIsForwardedEcho: just the preamble header line is an echo (split acro
 
 test('checkIsForwardedEcho: the thread/folder preamble line alone is a contained slice', () => {
   assert.equal(
-    checkIsForwardedEcho('thread: -1001111111111:9085 | folder: telegramCode', forwardedWithPreamble),
+    checkIsForwardedEcho('thread: -1001111111111:4242 | folder: telegramCode', forwardedWithPreamble),
     true,
   );
 });
 
 test('checkIsForwardedEcho: a voice-transcript tail (suffix of the forwarded text) is an echo', () => {
-  // msg 39963: the bot relayed the TAIL of a forwarded voice transcription.
+  // Live case: the bot relayed the TAIL of a forwarded voice transcription.
   const forwarded = 'check the build, run the tests, and then commit the change for me please';
   const tail = 'and then commit the change for me please';
   assert.equal(checkIsForwardedEcho(tail, forwarded), true);
@@ -613,7 +613,7 @@ test('checkIsForwardedEcho: case/whitespace drift in the echo still matches', ()
 
 // ─── S1 widen — echo row GLUED to a transient spinner tick (live 2026-07-06) ──
 //
-// Topic 9085, msg 48092: the poll caught the just-submitted echo's wrapped
+// Live case: the poll caught the just-submitted echo's wrapped
 // continuation row TOGETHER with the new turn's first spinner tick in ONE frame:
 //   "<wrapped echo row>\n\n* Twisting…"
 // The glued chrome is not part of the forwarded text, so whole-frame containment
@@ -699,7 +699,7 @@ test('checkIsForwardedEcho: an answer that mentions a DIFFERENT timestamp is NOT
 // corner. Right-aligned, it scrapes as a line whose only content is `/rc`
 // (heavy leading whitespace); the diff relayed it as a 3-char status frame
 // (`sendMessage "/rc"`, then `✽ /rc · 0:01` via lastActivityText — live
-// 2026-07-06, topic 9085, msg 48085). Whole-line-anchored: prose that merely
+// 2026-07-06). Whole-line-anchored: prose that merely
 // mentions `/rc` inline is untouched.
 
 test('checkIsClaudeChromeLine: a standalone /rc corner hint is chrome (bare + right-aligned)', () => {

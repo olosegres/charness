@@ -63,7 +63,7 @@ describe('OpenCode provider connect helpers', () => {
 });
 
 describe('OpenCodeAdapter.connectProvider', () => {
-  const key: SessionKey = makeTelegramKey(-100, 9085);
+  const key: SessionKey = makeTelegramKey(-100, 4242);
 
   it('checks provider auth support then PUTs the API-key auth payload', async () => {
     const { adapter, calls } = createConnectAdapter({

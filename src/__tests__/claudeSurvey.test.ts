@@ -113,7 +113,7 @@ test('a single-option row is not enough (needs ≥2)', () => {
 });
 
 // ── The NEW survey wording (Claude Code ≥2.1.19x) ──
-// Captured live (2026-07-02, topic 39933): same shape, reworded header. While
+// Captured live (2026-07-02): same shape, reworded header. While
 // UNDETECTED the survey sat on the pane and swallowed the Enter of the next
 // forwarded prompt — the text stranded unsubmitted in the TUI input box and the
 // topic looked hung for hours. The detector accepts a CLOSED alternation of the
@@ -391,7 +391,7 @@ test('stripSurveyChromeLines: keeps real agent prose interleaved with the survey
 });
 
 test('checkIsClaudeLoginPaste keys off the live bottom input row, not the marker in scrollback', () => {
-  // Regression (live 2026-06-25, topic 434): the marker phrase is quoted in this
+  // Regression (live 2026-06-25): the marker phrase is quoted in this
   // repo's OWN source + CLAUDE.md. When a Claude TUI working on TelegramCode
   // rendered that code/doc, a whole-pane match false-fired and the bot ate the
   // user's next message as a one-time login code. The detector must look only at

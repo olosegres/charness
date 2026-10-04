@@ -449,7 +449,7 @@ test('table reflow: table-only answer emits at IDLE, not on byte-stability', () 
 });
 
 test('table reflow: WIDTH re-flow with trailing prose ALREADY present emits only the settled width once (S4)', () => {
-  // The topic-434 shape: prose sits BELOW the table the whole time, and Claude
+  // The live shape: prose sits BELOW the table the whole time, and Claude
   // re-flows the table WIDER as cells stream in. RULE 2 (prose-after → emit) used
   // to fire on every width → a flood of widening copies. It now holds until the
   // width is byte-stable, so only the settled width ships, once.
@@ -524,7 +524,7 @@ test('checkHasContentAfterLastSharpTable: a real prose line after the table IS c
 });
 
 test('checkHasContentAfterLastSharpTable: TUI corner hints BELOW the input box are NOT content (S4, the /rc leak)', () => {
-  // Live root cause 2026-07-04, topic 9085: Claude v2.1.201 draws right-aligned
+  // Live root cause 2026-07-04: Claude v2.1.201 draws right-aligned
   // corner hints (`/rc`, `You've used N% of your weekly limit …`, token counts)
   // BELOW the `❯` input box. None match a chrome predicate, so the after-table
   // scan ran past the input box and counted `/rc` as "content after the table" →
@@ -570,7 +570,7 @@ test('getLastSharpTableBlock: returns the LAST table when two are present', () =
 // ─── S0: adopt seeds the relay window so a settled table does NOT re-emit ─────
 
 // A pane carrying a SETTLED sharp table (border rows + tiny cells, all under the
-// 16-char per-line gate) plus a long prose line — the shape thread 434 held at
+// 16-char per-line gate) plus a long prose line — the shape a live thread held at
 // restart. Before the seed, the fresh window knows neither; after the seed, both
 // the whole table block AND the long prose line must be recognised, so the first
 // post-adopt poll's table re-emit is suppressed and prose is not re-relayed.
@@ -680,7 +680,7 @@ test('getTableStabilizationDecision: emits when real content follows a SETTLED t
 });
 
 test('getTableStabilizationDecision: a WIDTH re-flow with trailing prose HOLDS until the width settles (S4)', () => {
-  // Live flood 2026-07-04, topic 434: a table re-flowing wider WHILE trailing
+  // Live flood 2026-07-04: a table re-flowing wider WHILE trailing
   // prose is already on the pane fired RULE 2 on EVERY width → one message per
   // width. RULE 2 now also requires the block to be byte-stable since last poll.
   const proseAfterBusy = { hasContentAfterTable: true, isTurnIdle: false } as const;

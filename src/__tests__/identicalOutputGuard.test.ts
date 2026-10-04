@@ -30,8 +30,8 @@ import {
 /** A LARGE block (≥ min chars) — the only kind the guard acts on. */
 const largeBlock = 'X'.repeat(identicalOutputMinChars + 50);
 const otherLargeBlock = 'Y'.repeat(identicalOutputMinChars + 50);
-const threadA = '-100:9085';
-const threadB = '-100:1487';
+const threadA = '-100:4242';
+const threadB = '-100:2345';
 
 // ─── stateful guard (the wiring contract) ────────────────────────────────────
 

@@ -3,7 +3,7 @@
  * extracted from `bot.ts` so the streaming-append decision is unit-testable
  * without booting Telegraf.
  *
- * Live repro 2026-06-05 (topic "overview app 1"): OpenCode emits a long reply
+ * Live repro 2026-06-05: OpenCode emits a long reply
  * as incremental tails, and the bot edited the SAME message with only the
  * newest batch each flush — every edit replaced everything before it, so the
  * user could read only the last tail. The fix: a continuation tail is

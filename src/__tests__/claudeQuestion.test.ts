@@ -176,7 +176,7 @@ test('AskUserQuestion box: signature stable as the cursor moves across the separ
 //     label as `❯ 1.*winston*` (NO space after the dot), so the option regex
 //     missed it, no cursor was found, extraction returned null and the frame
 //     leaked half-eaten through the plain-output chrome filter — the live
-//     zero-options message (msg 23990).
+//     zero-options message.
 const buildSideBySideFrame = (optionLines: string[]) =>
   [
     ' ☐ Logger',
@@ -305,7 +305,7 @@ test('a sharp-cornered table with "N." rows is NOT a question (no cursor, no foo
 
 // The output-path guard: if a selector frame ever falls through to the plain
 // OUTPUT path again (e.g. mid-paint), the side-by-side chrome must not leak
-// as naked text — that was the visible half of live msg 23990.
+// as naked text — that was the visible half of the live leak.
 test('stripTuiElements drops the side-by-side question chrome lines', () => {
   const stripped = stripTuiElements(sideBySideCursorOn1);
   assert.doesNotMatch(stripped, /Notes: press n to add notes/);
@@ -445,7 +445,7 @@ test('free-form text is NOT a control reply → breaks out of the selector', () 
 // description, a blank line, then `Do you want to proceed?` + options. The
 // header walk used to stop at that blank line, so Telegram got only
 // `Do you want to proceed?` and the user couldn't tell WHAT was being approved
-// (live thread 15812 "overview 2", 2026-06-12). The walk must span the blank
+// (live 2026-06-12). The walk must span the blank
 // and climb to the `────` divider.
 const bashPermissionPrompt = [
   '────────────────────────────────────────────────────────────────────────────',

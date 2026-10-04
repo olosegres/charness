@@ -2,7 +2,7 @@
  * @description An ABANDONED OpenCode question must be CLOSED on the server, not
  * just hidden in Telegram — otherwise `restoreOpenQuestion` (`GET /question` on
  * every reattach) keeps re-finding it and re-posting the stale question after a
- * restart (the live bug, topic 688, 2026-07-01).
+ * restart (the live bug, 2026-07-01).
  *
  * Two seams are guarded here:
  *

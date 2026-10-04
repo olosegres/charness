@@ -73,7 +73,7 @@ describe('formatResumeContext', () => {
 
   it('strips the forwarded thread-context preamble from user turns (service glue is not user speech)', () => {
     const storedPrompt =
-      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100123:9085 | folder: someProject\n\nwhat folder are you in?';
+      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100123:4242 | folder: someProject\n\nwhat folder are you in?';
     const turns: RecentTurn[] = [
       { role: 'user', text: storedPrompt },
       // An assistant turn that happens to QUOTE the marker must stay intact.

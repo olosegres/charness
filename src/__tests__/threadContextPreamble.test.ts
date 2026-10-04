@@ -23,7 +23,7 @@ import {
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
+const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 
 test('buildThreadContextPreamble: renders all four fields when known', () => {
   const preamble = buildThreadContextPreamble({
@@ -38,7 +38,7 @@ test('buildThreadContextPreamble: renders all four fields when known', () => {
     [
       threadContextPreambleHeader,
       'topic: "Fix login bug" | group: "ExampleGroup"',
-      'thread: -1001111111111:9085 | folder: someProject',
+      'thread: -1001111111111:4242 | folder: someProject',
     ].join('\n'),
   );
 });
@@ -52,7 +52,7 @@ test('buildThreadContextPreamble: omits the topic name when unknown but keeps th
 
   assert.ok(!preamble.includes('topic:'), 'no topic line when name is unknown');
   assert.ok(preamble.includes('group: "ExampleGroup"'), 'group still shown');
-  assert.ok(preamble.includes('thread: -1001111111111:9085 | folder: someProject'));
+  assert.ok(preamble.includes('thread: -1001111111111:4242 | folder: someProject'));
 });
 
 test('buildThreadContextPreamble: drops the whole identity line when neither topic nor group is known', () => {
@@ -60,7 +60,7 @@ test('buildThreadContextPreamble: drops the whole identity line when neither top
 
   assert.equal(
     preamble,
-    [threadContextPreambleHeader, 'thread: -1001111111111:9085 | folder: someProject'].join('\n'),
+    [threadContextPreambleHeader, 'thread: -1001111111111:4242 | folder: someProject'].join('\n'),
     'only header + thread/folder line for a legacy topic in a not-yet-cached group',
   );
 });
@@ -115,7 +115,7 @@ test('buildThreadContextPreamble: carries the timezone on the thread line when s
     preamble,
     [
       threadContextPreambleHeader,
-      'thread: -1001111111111:9085 | folder: someProject | timezone: Europe/Moscow',
+      'thread: -1001111111111:4242 | folder: someProject | timezone: Europe/Moscow',
     ].join('\n'),
   );
 });

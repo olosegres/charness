@@ -17,7 +17,7 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 // Temp dirs live under the project-local ./agent/tmp (never /tmp — no access).
 const tmpBase = path.join(process.cwd(), 'agent', 'tmp', 'botFileStorage-test');
 
-const key: SessionKey = makeTelegramKey(-100123, 9085);
+const key: SessionKey = makeTelegramKey(-100123, 4242);
 
 async function makeDataDir(): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(tmpBase, 'data-'));
@@ -43,7 +43,7 @@ describe('botFileStorage', () => {
 
   it('resolveThreadFilesDir is under <dataDir>/files and never contains a colon', () => {
     const dir = resolveThreadFilesDir('/data', key);
-    assert.equal(dir, path.join('/data', 'files', '-100123_9085'));
+    assert.equal(dir, path.join('/data', 'files', '-100123_4242'));
     assert.ok(!dir.includes(':'));
   });
 

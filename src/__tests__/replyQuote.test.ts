@@ -32,7 +32,7 @@ function makeSource(overrides: Partial<ReplyQuoteSource> = {}): ReplyQuoteSource
   return {
     replyText: 'X did Y',
     replyMessageId: 42,
-    topicRootId: 9085,
+    topicRootId: 4242,
     isServiceMessage: false,
     fromBot: false,
     ...overrides,
@@ -70,7 +70,7 @@ test('extractReplyQuote: whitespace-only candidates are skipped, next non-empty 
 });
 
 test('extractReplyQuote: topic-root reply (replyMessageId === topicRootId) → null', () => {
-  const quote = extractReplyQuote(makeSource({ replyMessageId: 9085, topicRootId: 9085 }));
+  const quote = extractReplyQuote(makeSource({ replyMessageId: 4242, topicRootId: 4242 }));
   assert.equal(quote, null);
 });
 

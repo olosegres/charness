@@ -318,7 +318,7 @@ test('stripTuiElementsWithContext: a thinking chunk does not open a tool kind', 
 // ─── S1 — CLI status / summary lines never fenced (drop stale transients) ──
 
 test('stripTuiElements: a stale "Running…" transient is DROPPED, only real stdout fenced', () => {
-  // The msg-20718 case: a fast command captured in one frame, the transient
+  // The live case: a fast command captured in one frame, the transient
   // "Running…" tick still painted above the real stdout. It must be dropped
   // entirely (not even kept plain) so only the genuine output stays fenced.
   const input = ['  ⎿  Running…', '     removed old hygiene plan'].join('\n');

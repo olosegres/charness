@@ -593,7 +593,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // child batchers: the offset means "everything before here has LEFT the
     // adapter", so text still waiting in a 350ms batch must hold it back —
     // otherwise a reload in that window skips the batched text on replay
-    // (live seam-loss 2026-07-05 on topic 9085: lines 216–221 were consumed
+    // (live seam-loss 2026-07-05: lines 216–221 were consumed
     // into the batch, the offset moved past them, and the kill dropped them).
     // A deferred persist happens in `flushAnswer` / the child flush, right
     // after the batched text is emitted.

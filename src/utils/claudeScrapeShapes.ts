@@ -68,12 +68,12 @@ export const SPINNER_TICK_RE =
  * @description Post-thinking trailer line that Claude's TUI prints
  * AFTER it has finished thinking (just before resuming the prompt
  * area). Examples observed in the live ExampleGroup debug session:
- *   `✻ Cooked for 27s`        (msg 1855, 1863)
- *   `✻ Cogitated for 20s`     (msg 1873)
- *   `✻ Crunched for 7s`       (msg 1869)
- *   `✻ Baked for 10s`         (msg 1837)
- *   `✻ Churned for 20s`       (msg 1897 — V3 iteration 1, 2026-05-28)
- *   `✻ Sautéed for 20s`       (msg 1909 — V3 iteration 2, 2026-05-28)
+ *   `✻ Cooked for 27s`
+ *   `✻ Cogitated for 20s`
+ *   `✻ Crunched for 7s`
+ *   `✻ Baked for 10s`
+ *   `✻ Churned for 20s`       (V3 iteration 1, 2026-05-28)
+ *   `✻ Sautéed for 20s`       (V3 iteration 2, 2026-05-28)
  *
  * Plan §2026-05-28 tg-output-readability / S3 (N1.a). The trailer
  * carries zero novel info — the same time was already streaming in
@@ -252,7 +252,7 @@ export const DIFF_CHANGE_GUTTER_RE = /^\s*\d+\s+\+/;
  * paints on the footer row (`/rc`). Right-aligned at the pane edge, it can
  * scrape as a line whose ONLY content is the hint token (heavy leading
  * whitespace) — the line-set diff then relayed it as a 3-char status frame
- * (`sendMessage "/rc"`, `✽ /rc · 0:01`; live 2026-07-06, topic 9085). Anchored
+ * (`sendMessage "/rc"`, `✽ /rc · 0:01`; live 2026-07-06). Anchored
  * to the WHOLE line being nothing but the literal hint, so prose that merely
  * mentions `/rc` inline is never matched. Closed shape — if a future version
  * paints a different corner hint, WIDEN the alternation (keep `/rc`), don't

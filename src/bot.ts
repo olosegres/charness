@@ -1125,7 +1125,7 @@ interface ThreadMessageState {
    * a burst of same-second refreshes from stacking identical `editMessageText`
    * closures into the per-thread FIFO while the pacer drains them one every 2s —
    * that backlog head-of-line-blocked the agent's own answer and hung the topic
-   * (live 2026-08-07, topic 61130; earlier 400-churn variant 2026-08-03). `null`
+   * (live 2026-08-07; earlier 400-churn variant 2026-08-03). `null`
    * on open / post-clear so the first real edit always lands.
    */
   lastSubagentText: string | null;
@@ -4211,8 +4211,8 @@ const shutdownOutputFlushMaxMs = shutdownDrainMaxMs + 1000;
 
 /**
  * @description Flush every thread's not-yet-delivered agent output at graceful
- * shutdown, so a hot-reload restart can't swallow it (live 2026-07-05, topic
- * 434: already-emitted answer chunks died in the send pipeline with the
+ * shutdown, so a hot-reload restart can't swallow it (live 2026-07-05):
+ * already-emitted answer chunks died in the send pipeline with the
  * process and were never re-sent). Two buffers drain, in order:
  *
  *  [A] per-thread COALESCE state — the group/baseline `q.pendingOutput`
@@ -11820,8 +11820,8 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // below the question, the repost-to-bottom then moves the QUESTION below it,
   // trapping the frame ABOVE the (multi-)question stack. Its id becomes
   // `statusMessageId`, so every post-answer frame edits that stranded message far
-  // above the answers instead of a fresh one at the bottom (live 2026-08-14,
-  // topic 218). Drop the frame + clear any parked text; a fresh status resumes
+  // above the answers instead of a fresh one at the bottom (live 2026-08-14).
+  // Drop the frame + clear any parked text; a fresh status resumes
   // below the answered questions once the question resolves (`statusMessageId`
   // was nulled by `handleAgentQuestion`'s `deleteStatusMessage`, so the first
   // post-clear frame creates a new bottom-most message). No-op for Claude/
@@ -12463,7 +12463,7 @@ async function refreshSubagentStatus(key: SessionKey): Promise<void> {
   // what keep a burst of same-second `subagentStatus{active:true}` refreshes from
   // stacking hundreds of identical `editMessageText` closures into the per-thread
   // FIFO — that backlog drained one every 2s and head-of-line-blocked the agent's
-  // own answer, hanging the topic (live 2026-08-07, topic 61130).
+  // own answer, hanging the topic (live 2026-08-07).
   if (!checkShouldEnqueueSubagentStatus({
     nextText: text,
     lastEnqueuedText: state.lastSubagentText,

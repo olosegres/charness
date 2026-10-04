@@ -2,7 +2,7 @@
  * @description Wiring guard — the free-form question-cancel path posts EXACTLY
  * ONE cancellation notice.
  *
- * Live report (thread 15812, json-stream Claude): typing a free-form message
+ * Live report (json-stream Claude): typing a free-form message
  * while a question was pending surfaced THREE messages about the same thing:
  *   1. the question bubble relabelled to "❌ Question cancelled: <header>"
  *      (an in-place edit — `agent.question_cancelled_msg_label`),

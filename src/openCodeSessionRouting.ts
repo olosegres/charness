@@ -217,7 +217,7 @@ export function updateSessionLineage(
  * OLDEST INSERTION first (a Map preserves insertion order). A long-lived
  * subagent that keeps streaming but never re-emits its `parentID` would, after
  * `maxEntries` newer links land, be evicted mid-turn and its remaining events
- * would drop "no owner" (the ~9 min gap proven live for a child of thread 688).
+ * would drop "no owner" (the ~9 min gap proven live for a child).
  * Re-inserting a USED link (delete + set — a plain `set` on an existing key does
  * NOT reorder a JS Map) moves it to the tail, so the entries doing real routing
  * work are evicted LAST. The cap is untouched; only the victim choice changes

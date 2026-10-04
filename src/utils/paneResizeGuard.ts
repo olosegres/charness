@@ -1,7 +1,7 @@
 /**
  * @description Pure decision logic for the Claude scrape pane-RESIZE guard.
  *
- * WHY it exists (live incident 2026-07-02, topic 39933): an interactive
+ * WHY it exists (live incident 2026-07-02): an interactive
  * `tmux attach` from a normal-width terminal resizes the tmux window to the
  * client's size (and back to the `-x/-y` default on detach). tmux re-wraps the
  * WHOLE scrollback at the new width, so every physical line becomes a

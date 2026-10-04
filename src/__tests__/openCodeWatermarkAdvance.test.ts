@@ -4,7 +4,7 @@
  * turn-end idle. The bot relays every completed assistant message live, so the
  * watermark must track each finished parent id — otherwise a mid-turn restart
  * re-counts the whole in-flight multi-message turn as a false "⚠️ missed N" (live
- * 2026-07-04, topic 218). A CHILD (sub-agent) message finishing must NEVER
+ * 2026-07-04). A CHILD (sub-agent) message finishing must NEVER
  * advance the watermark (its id would poison the parent's `[watermark, …)`
  * window).
  *

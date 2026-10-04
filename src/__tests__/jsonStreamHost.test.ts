@@ -46,13 +46,13 @@ import {
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const key: SessionKey = makeTelegramKey(-1001111111111, 9085);
+const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 
 describe('json-stream host layout codecs', () => {
   it('session dir is DATA_DIR/jsonstream/<chatId>_<threadId> and parses back', () => {
     const dir = resolveJsonStreamSessionDir('/data/dir', key);
-    assert.equal(dir, '/data/dir/jsonstream/-1001111111111_9085');
-    assert.deepEqual(parseJsonStreamDirName('-1001111111111_9085'), key);
+    assert.equal(dir, '/data/dir/jsonstream/-1001111111111_4242');
+    assert.deepEqual(parseJsonStreamDirName('-1001111111111_4242'), key);
   });
 
   it('rejects foreign dir names (janitor must never sweep by a mis-parse)', () => {
@@ -64,10 +64,10 @@ describe('json-stream host layout codecs', () => {
 
   it('tmux name binds the cjson prefix and round-trips negative chat ids', () => {
     const name = buildJsonStreamTmuxSessionName(key);
-    assert.equal(name, 'cjson--1001111111111-9085');
+    assert.equal(name, 'cjson--1001111111111-4242');
     assert.deepEqual(parseJsonStreamTmuxSessionName(name), key);
     // The scrape backend's names must never parse as ours (no adopt cross-talk).
-    assert.equal(parseJsonStreamTmuxSessionName('claude--1001111111111-9085'), null);
+    assert.equal(parseJsonStreamTmuxSessionName('claude--1001111111111-4242'), null);
   });
 });
 

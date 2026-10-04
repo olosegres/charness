@@ -46,7 +46,7 @@ test('idleCompactMs is 55 minutes', () => {
 
 /** Placeholder thread keys (the repo is public — never a real chat/topic id). */
 const threadKeyA = '-1001111111111:57';
-const threadKeyB = '-1001111111111:218';
+const threadKeyB = '-1001111111111:234';
 const now = 1_800_000_000_000;
 
 /** 3h idle — comfortably past the 55-min window, i.e. overdue. */
@@ -148,7 +148,7 @@ test('getIdleCompactionArmDecision: the overdue stagger is deterministic per thr
 test('getIdleCompactionArmDecision: overdue threads are spread, not bunched', () => {
   // The point of the stagger: the boot reattach adopts every live session at once,
   // so a shared delay would start every compaction turn in the same instant.
-  const keys = [threadKeyA, threadKeyB, '-1001111111111:1487', '-1001111111111:1', '-1002222222222:57'];
+  const keys = [threadKeyA, threadKeyB, '-1001111111111:2345', '-1001111111111:1', '-1002222222222:57'];
   const delays = keys.map(
     (threadKeyString) =>
       getIdleCompactionArmDecision({ threadKeyString, lastActivityAt: overdueLastActivityAt, now }).delayMs,

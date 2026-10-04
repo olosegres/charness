@@ -24,7 +24,7 @@ import {
 describe('getSessionTitleLine — strip service wrappers, collapse to one line', () => {
   it('strips the [Telegram thread context] preamble, keeps the real prompt', () => {
     const raw =
-      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100:434 | folder: telegramCode\n\nрефактори session picker';
+      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100:123 | folder: telegramCode\n\nрефактори session picker';
     assert.equal(getSessionTitleLine(raw), 'рефактори session picker');
   });
 
@@ -37,7 +37,7 @@ describe('getSessionTitleLine — strip service wrappers, collapse to one line',
 
   it('strips the preamble even when a scheduled marker is nested inside it', () => {
     const raw =
-      '[Telegram thread context]\nthread: -100:434 | folder: x\n\n[Scheduled run "Job"]\ndo the thing';
+      '[Telegram thread context]\nthread: -100:123 | folder: x\n\n[Scheduled run "Job"]\ndo the thing';
     assert.equal(getSessionTitleLine(raw), 'do the thing');
   });
 

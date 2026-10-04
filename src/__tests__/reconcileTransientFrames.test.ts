@@ -28,8 +28,8 @@ import { reconcileTransientFrames, type ReconcileTransientFramesDeps } from '../
 import { keyToString, type SessionKey } from '../sessionKey';
 import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const keyA: SessionKey = makeTelegramKey(-1001111111111, 9085);
-const keyB: SessionKey = makeTelegramKey(-1001111111111, 434);
+const keyA: SessionKey = makeTelegramKey(-1001111111111, 4242);
+const keyB: SessionKey = makeTelegramKey(-1001111111111, 123);
 
 function makeDeps(): {
   deps: ReconcileTransientFramesDeps;

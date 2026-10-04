@@ -54,7 +54,7 @@ function createDisconnectAdapter(activeProvidersAfterDelete: string[]): {
 }
 
 describe('OpenCodeAdapter.disconnectProvider', () => {
-  const key: SessionKey = makeTelegramKey(-100, 9085);
+  const key: SessionKey = makeTelegramKey(-100, 4242);
 
   it('DELETEs the provider auth route and reports a clean disconnect', async () => {
     const { adapter, calls } = createDisconnectAdapter(['anthropic']);

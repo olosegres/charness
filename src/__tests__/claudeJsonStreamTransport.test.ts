@@ -165,7 +165,7 @@ describe('json-stream external transport — exit detection', () => {
   });
 
   it('holds the tail offset back while answer text sits in the batch, releases it on flush', () => {
-    // Live seam-loss repro (2026-07-05, topic 9085): lines consumed into the
+    // Live seam-loss repro (2026-07-05): lines consumed into the
     // 350ms answer batch died with the killed bot while the persisted offset
     // had already moved past them — the adopting bot skipped them on replay
     // ("216–221 missing"). The offset must persist only once the batched text
@@ -272,7 +272,7 @@ describe('json-stream interrupt-aborted turn — no bogus "Claude error" surface
   afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
 
   it('swallows the abort error result that an interrupt WE issued produced', () => {
-    // Repro (live thread 15812): cancelling a pending question sends a SIGINT,
+    // Live repro: cancelling a pending question sends a SIGINT,
     // whose aborted-turn `result{is_error}` used to relay "Claude error: API
     // error" as a third bogus message on top of the two cancel notices.
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-abort-swallow-'));

@@ -64,7 +64,7 @@ test('classify: auth / logged-out strings → auth (surfaced, never retried)', (
 });
 
 test('classify: REAL scraped Claude logged-out lines → auth', () => {
-  // The exact TUI renders reported live 2026-07-01 (topic 434): the bare
+  // The exact TUI renders reported live 2026-07-01: the bare
   // "Not logged in" line, and the mixed "…/login · API Error: 401 …" render.
   assert.deepEqual(
     classifyAgentApiError('⎿  Not logged in · Please run /login', fixedNow),

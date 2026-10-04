@@ -13,7 +13,7 @@ import {
 } from '../threadContextPreamble';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const threadKey = makeTelegramKey(-1001111111111, 9085);
+const threadKey = makeTelegramKey(-1001111111111, 4242);
 
 // ── checkIsMeaningfulPrompt ──────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ test('checkIsPlaceholderTitle: opencode untitled placeholder is overwritable', (
 });
 
 test('checkIsPlaceholderTitle: legacy bot title is overwritable', () => {
-  assert.equal(checkIsPlaceholderTitle('Telegram session -1001111111111:9085'), true);
+  assert.equal(checkIsPlaceholderTitle('Telegram session -1001111111111:4242'), true);
 });
 
 test('checkIsPlaceholderTitle: missing / empty title counts as placeholder', () => {

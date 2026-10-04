@@ -2441,7 +2441,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     // Persist the choice unconditionally: a session started later replays the
     // saved pref via `restoreSavedModel`, so picking a model before `/opencode`
-    // is no longer lost (the "My health" bug).
+    // is no longer lost (the "No active session" bug).
     saveModelPref(key, label);
 
     const session = this.sessions.get(keyToString(key));

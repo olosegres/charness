@@ -58,8 +58,8 @@ const POSITIVE_LINES: ReadonlyArray<string> = [
   // Hours-long session tick.
   '· Reviewing the adapter contract… (1h 2m 3s · ↑ 49.0k tokens)',
   // Parenthesised suffix INSIDE the activity title: the TUI appends
-  // "(sub-agent)" while a Task sub-agent runs (live flood repro 2026-06-11,
-  // topic 15812 — the old `[^()]` text part rejected these ticks, so every
+  // "(sub-agent)" while a Task sub-agent runs (live flood repro 2026-06-11 —
+  // the old `[^()]` text part rejected these ticks, so every
   // poll diff landed as a new permanent message for an hour).
   '✽ Fixing relations add flow (sub-agent)… (59m 35s · ↓ 134.5k tokens)',
   // A task title can carry its own parens too — same widening covers it.

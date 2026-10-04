@@ -68,7 +68,7 @@ test('NEGATIVE: prose with "API Error:" quoted mid-line (not at start, no ⎿) �
 // row starting with `⎿` that merely QUOTES an auth phrase deeper in the line must
 // NOT fire — case (c) anchors the phrase to the row start. These are the exact
 // live samples the agent tripped while grepping the bot's own logs/source in
-// topic 434 (2026-07-03).
+// a live topic (2026-07-03).
 test('NEGATIVE: a `⎿` tool-result row QUOTING the auth phrase deeper in the line → null', () => {
   // grep of the console log printing an old detection line under a Bash `⎿`.
   const grepEcho =
@@ -105,7 +105,7 @@ test('end-to-end: a detected `⎿ … 429` row classifies to transient', () => {
   assert.deepEqual(classifyAgentApiError(line, fixedNow), { kind: 'transient' });
 });
 
-// Regression for the topic-434 re-pin loop (live 2026-07-03): the logged-out
+// Regression for the re-pin loop (live 2026-07-03): the logged-out
 // `⎿ … /login` row lingers in the pane scrollback long after the user re-logs
 // in. `handleAutoLifecycle` must detect it on the NEW pane delta, so the row
 // fires `apiError('auth')` ONCE (first render) — not on every later redraw,

@@ -1,6 +1,6 @@
 /**
  * @description Unit coverage for the pane-RESIZE scrape guard
- * (`utils/paneResizeGuard.ts`) — live incident 2026-07-02, topic 39933: an
+ * (`utils/paneResizeGuard.ts`) — live incident 2026-07-02: an
  * interactive `tmux attach` resized the pane, tmux re-wrapped the whole
  * scrollback, and the line-SET diff relayed ragged fragments of OLD
  * conversation into the topic on every width flap. The guard must swallow the

@@ -125,7 +125,7 @@ test('collapseProgressChunk: mixed flood → latest task frame + latest spinner 
 // title while a Task sub-agent runs. The old paren-free `[^()]` title part
 // of PROGRESS_LINE_RE rejected those ticks, so every redraw of this exact
 // shape was misrouted as substantive output — one new Telegram message per
-// poll tick for an hour (topic 15812).
+// poll tick for an hour.
 
 const SUBAGENT_SUFFIX_FLOOD = [
   '✽ Fixing relations add flow (sub-agent)… (59m 35s · ↓ 134.5k tokens)',

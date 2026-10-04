@@ -19,9 +19,9 @@ test('tmuxSessionName: build/parse round-trips a positive key', () => {
 });
 
 test('tmuxSessionName: round-trips a negative (forum supergroup) chatId', () => {
-  const key = makeTelegramKey(-1001111111111, 434);
+  const key = makeTelegramKey(-1001111111111, 123);
   const name = buildTmuxSessionName('term', key);
-  assert.equal(name, 'term--1001111111111-434');
+  assert.equal(name, 'term--1001111111111-123');
   assert.deepEqual(parseTmuxSessionName('term', name), key);
 });
 

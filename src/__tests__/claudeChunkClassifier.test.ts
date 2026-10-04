@@ -271,7 +271,7 @@ test('a genuine ⎿ stdout line (not a tool-header) under an open tool is toolBo
 // ─── orphan ⎿ tool result (header consumed by a prior poll's line-SET diff) ──
 
 test('S1: an orphan ⎿ result (no open kind) → toolBody, NOT prose (minimal must fold it)', () => {
-  // The real-world leak (thread -1001111111111:434): the `⏺ Bash(…)` header was
+  // The real-world leak: the `⏺ Bash(…)` header was
   // dropped by the per-poll line-SET diff, an interleaved prose sentence nulled
   // the cross-poll tool context, so the slow `⎿` output arrived header-less with
   // toolKind === null. Pre-fix it fell to Prose → router always keeps → leaked

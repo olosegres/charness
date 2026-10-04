@@ -356,7 +356,7 @@ export type ClaudeModeAction =
  *    path uses, so the "already" answer and the picker's ✓ can never disagree
  *    with what `/claude` would really do.
  *
- * The live bug this fixes (2026-07-06, topic 9085): a legacy env override
+ * The live bug this fixes (2026-07-06): a legacy env override
  * forced the thread default to `'claude'`, so a NO-pick thread had
  * `threadAdapterName === 'claude'` and `/claude_mode tmux` compared against
  * that fallback and replied "already tmux-scrape" WITHOUT persisting — while

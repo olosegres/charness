@@ -3,7 +3,7 @@
  * work with NO live session, so a model picked BEFORE `/opencode` is persisted
  * and applied at next start instead of failing "No active session".
  *
- * Bug (live-caught 2026-06-05, thread "My health"): user bound a folder, chose
+ * Bug (live-caught 2026-06-05): user bound a folder, chose
  * OpenCode (no session yet), ran `/model` → replied "19" → bot answered
  * "Error: No active session". Root cause: the old `setModel` hard-failed
  * `if (!session?.isActive) return 'No active session'` before persisting.

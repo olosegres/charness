@@ -247,7 +247,7 @@ export function createRecentRelayWindow(maxLines: number = relayWindowMaxLines):
  * of content ALREADY ON the pane is recognised as already-relayed on the very
  * first poll — never re-emitted.
  *
- * WHY (live incident 2026-06-24, thread 434): on adopt/re-attach the bot already
+ * WHY (live incident 2026-06-24): on adopt/re-attach the bot already
  * seeds the pane-diff baseline (`lastContent`), which suppresses re-appearing
  * PROSE. But a SETTLED table already on the pane is deduped ONLY at the BLOCK
  * level ({@link RecentRelayWindow.checkBlockAlreadyRelayed} in

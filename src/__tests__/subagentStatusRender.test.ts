@@ -96,7 +96,7 @@ describe('checkShouldSendSubagentStatus — S1 dedup gate', () => {
   });
 });
 
-describe('checkShouldEnqueueSubagentStatus — coalescing gate (live 2026-08-07, topic 61130)', () => {
+describe('checkShouldEnqueueSubagentStatus — coalescing gate (live 2026-08-07)', () => {
   const text = '🤖 sub-agent: X · 3:54';
 
   it('an edit already in flight → false (never stack a second onto the FIFO)', () => {
