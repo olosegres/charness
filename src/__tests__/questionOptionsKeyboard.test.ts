@@ -18,16 +18,12 @@
  *   • one button per row, so buttons stay aligned with the numbered body lines;
  *   • the keyboard lands under `reply_markup`, without disturbing `parse_mode`.
  *
- * `./reattachRecapPost.testSetup` is imported FIRST — the shared, side-effect-
- * only shim that sets `bot.ts`'s boot-time env before the module evaluates.
- *
  * Test case: N/A — TelegramCode has no Jira tracker.
  */
-import './reattachRecapPost.testSetup';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { buildKeyboardExtra, buildQuestionOptionsKeyboard } from '../bot';
+import { buildKeyboardExtra, buildQuestionOptionsKeyboard } from '../connectors/telegram/questionKeyboards';
 import { telegramCapabilities } from '../connectors/telegram/outbound';
 import type { OpenCodeQuestion } from '../types';
 

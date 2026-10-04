@@ -1,8 +1,8 @@
 /**
  * Shared, side-effect-only boot-env shim for the suites that import `../bot`:
  * `reattachRecapPost`, `reconcileTransientFrames`, `routedCommandTrigger`,
- * `routedCommandDelivery`, `questionOptionsKeyboard`. (Named after its first
- * consumer; kept rather than renamed so the import paths stay stable.)
+ * `routedCommandDelivery`. (Named after its first consumer; kept rather than renamed so the import paths
+ * stay stable.)
  *
  * `bot.ts` validates the boot environment at MODULE-IMPORT time (`parseEnv()`
  * runs as a top-level `const`, `process.exit(1)` on a missing `BOT_TOKEN`).
