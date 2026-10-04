@@ -673,7 +673,7 @@ config/variants, not a per-message API field).
 | `utils/tmuxSessionName.ts` | Pure parameterized tmux session-name codec shared by the tmux backends: `buildTmuxSessionName(prefix, key)` / `parseTmuxSessionName(prefix, name)` — careful negative-chatId + strict per-half regex so a foreign session sharing a prefix is never mis-adopted. Claude binds the `'claude'` prefix via thin wrappers; terminal the `'term'` prefix |
 | `utils/terminalEmitPlan.ts` | Pure helpers behind `terminalAdapter`: `getTerminalEmitPlan(nextOutputFresh)` (fresh→new message, else continuation — one rolling message per command), `buildTerminalNewSessionArgs` (the `tmux new-session` argv: shell-command + `-c workDir` + size flags, no `--session-id`/permission/MCP), and the named constants (`terminalPaneCols` 200, `terminalPaneRows` 50, `terminalTmuxPrefix` `term`, `defaultShell`) |
 | `utils/claudeStreamJson.ts` | Pure stream-json event core for `claudeJsonStreamAdapter`: newline-delimited JSON reader (partial-line buffering across chunks) + classifier mapping `system` / `stream_event` text_delta / `assistant` / `result` / `control_request` / `control_response` (the CLI's reply to a request the BOT wrote — the outer `subtype` verdict plus the optional inner payload, matched by `request_id`) lines to adapter events |
-| `utils/openCodeCompactPlugin.ts` | The OpenCode plugin that gives OpenCode's OWN (overflow-triggered) compaction the loaded-skills guidance: `getOpenCodeCompactPluginContext` (the guidance, prefixed so it stays inside the summary), `buildOpenCodeCompactPluginSource` (a v1 plugin — `default` export with `id` + `server`, no named export the legacy loader would call), `buildOpenCodeConfigContentWithPlugin` (adds the plugin to an existing `OPENCODE_CONFIG_CONTENT`, `null` for one it cannot parse), `checkHasOpenCodeCompactPlugin` (find it in a `GET /config` plugin list, by file name), and the one impure `prepareOpenCodeCompactPluginEnv(dataDir, env)` → `{OPENCODE_CONFIG_CONTENT}` (atomic rewrite of `DATA_DIR/telegramcode-compaction-plugin.mjs`; any failure returns `{}` and never blocks the server start). Wired into `installManager.ts`'s server spawn; the OpenCode adapter's `checkHasCompactionSkillsHook` reads the detection |
+| `utils/openCodeCompactPlugin.ts` | The OpenCode plugin that gives OpenCode's OWN (overflow-triggered) compaction the loaded-skills guidance: `getOpenCodeCompactPluginContext` (the guidance, prefixed so it stays inside the summary), `buildOpenCodeCompactPluginSource` (a v1 plugin — `default` export with `id` + `server`, no named export the legacy loader would call), `resolveOpenCodeGlobalPluginDir` (XDG config home, as OpenCode resolves it), `checkHasOpenCodeCompactPlugin` (find it in a `GET /config` plugin list, by file name), `getCompactPluginActivation` (`loaded` / `recreate` / `busy` for one directory instance — any non-idle or unreadable session status blocks a recreate), and the one impure `installOpenCodeCompactPlugin()` (idempotent atomic install into the global plugin folder; `'failed'` never throws). Called before every server spawn (`installManager.ts`) and by the OpenCode adapter's boot step `activateCompactionPluginForActiveSessions`; `checkHasCompactionSkillsHook` reads the detection |
 | `utils/claudeCompactHook.ts` | The `PreCompact` hook that gives Claude's OWN (overflow-triggered) compaction the bot's summary guidance: `getHookCompactionInstruction` (D3 + `compactionSkillsGuidance`, no closing section), `buildPreCompactHookCommand` (a `sh` one-liner that prints the instruction unless the hook's stdin JSON already carries the skills guidance — the bot-issued `/compact <instruction>` case), `buildClaudeCompactHookSettings`, and the one impure `prepareClaudeCompactHookFlags(dataDir)` → `['--settings', DATA_DIR/claude-compact-hook.json]` (one shared file, atomic rewrite on every launch; a write failure returns `[]` and never blocks the start). Wired into all three Claude launch sites (tmux start/resume, json-stream spawn) |
 | `utils/claudeMcpHeal.ts` | The reverse-engineered `mcp_status` / `mcp_reconnect` control-request shapes plus the heal decision, in one tested place: `getMcpServerStatus` (one named server's status out of the status payload) and `decideMcpHeal` (`connected`→`healthy`, `failed`→`reconnect`, `needs-auth`/unknown/`null`→`skip` — a status the bot cannot read is never guessed into a live session), with the round-trip timeout constant. Needed because a session that outlived a bot restart keeps its injected `telegramBot` server latched `failed` and the CLI never retries one |
 | `utils/claudeRuntimeInfo.ts` | Bounded Claude transcript-tail reader for `/status`: parses the newest main-session model usage and version, derives documented context limits, and always closes its file descriptor |
@@ -813,18 +813,27 @@ OpenCode events / bindings).
     (below), and rides the per-invocation instruction only on a server without it.
     The F2 closing directive always stays last in the instruction.
     **OpenCode's own overflow compaction gets the skills guidance through a
-    plugin** (`utils/openCodeCompactPlugin.ts`). Every `opencode serve` the bot
-    starts gets `OPENCODE_CONFIG_CONTENT` naming a generated
-    `DATA_DIR/telegramcode-compaction-plugin.mjs` (rewritten on every server start;
-    OpenCode merges that config source with the user's, so their plugins stay
-    loaded). The plugin's `experimental.session.compacting` hook pushes the
-    guidance into `output.context`, which OpenCode appends to the prompt of EVERY
-    compaction — manual and overflow — after the bot's instruction, which is why
-    its text says the skills list belongs INSIDE the summary. The hook cannot see
-    the bot's instruction, so the bot drops the skills guidance from its own
-    instruction when the server has the plugin (`checkHasCompactionSkillsHook` →
-    `GET /config` plugin list → `bakesSkillsGuidance`), and keeps it for a server
-    it did not start. A running server picks the plugin up only on its next start.
+    plugin** (`utils/openCodeCompactPlugin.ts`) the bot installs into OpenCode's
+    GLOBAL plugin folder (`$XDG_CONFIG_HOME/opencode/plugins/telegramcode-compaction.js`
+    — one bot-owned file, rewritten only when its content changed; the user's
+    `opencode.json` is never touched), so every OpenCode on the account loads it:
+    bot-started, adopted, or run by hand. Its `experimental.session.compacting`
+    hook pushes the guidance into `output.context`, which OpenCode appends to the
+    prompt of EVERY compaction — manual and overflow — after the bot's instruction,
+    which is why its text says the skills list belongs INSIDE the summary. The hook
+    cannot see the bot's instruction, so the bot drops the skills guidance from its
+    own instruction when the directory's instance has the plugin
+    (`checkHasCompactionSkillsHook` → `GET /config` plugin list →
+    `bakesSkillsGuidance`), and keeps it otherwise. OpenCode reads plugins ONCE per
+    directory instance, so an instance created before the file existed never loads
+    it by itself: installed before every server spawn (`installManager.ts`) and, at
+    every bot boot, `activateCompactionPluginForActiveSessions` recreates each
+    active directory's instance that lacks it (`POST /instance/dispose` — no server
+    restart, sessions stay on disk) — only when every session there is idle
+    (`getCompactPluginActivation`; a busy one waits for the next boot). Recreating
+    drops the directory's runtime MCP registrations, so the boot runs it BEFORE
+    `reconcileSchedulerMcpForActiveSessions`, which restores `telegramBot`.
+    `opencode-pty`'s terminals survive it (its manager is module-level state).
     **Claude's own overflow compaction gets D3 + the skills guidance too**, through
     a `PreCompact` hook (`utils/claudeCompactHook.ts`). Every bot-launched Claude
     session (both backends, start AND resume) gets `--settings

@@ -13706,7 +13706,14 @@ export async function startBot(): Promise<void> {
     // status and force-refresh any directory that is not `connected`.
     // Fire-and-forget (like the register call it replaced): boot must not block
     // on opencode HTTP round-trips before `bot.launch()` (self-heal runs async).
-    getAdapter('opencode').reconcileSchedulerMcpForActiveSessions?.()?.catch((e) =>
+    // The compaction-plugin step goes FIRST: recreating a directory instance so
+    // it loads the plugin drops that directory's MCP registration, which this
+    // same reconcile then restores.
+    const openCodeAdapter = getAdapter('opencode');
+    void (async () => {
+      await openCodeAdapter.activateCompactionPluginForActiveSessions?.();
+      await openCodeAdapter.reconcileSchedulerMcpForActiveSessions?.();
+    })().catch((e) =>
       console.warn('[scheduler] MCP reconcile failed:', e instanceof Error ? e.message : e),
     );
     // Same class of self-heal on the Claude side: a json-stream session that

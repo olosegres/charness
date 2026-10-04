@@ -23,7 +23,11 @@
 
 import { describe, it, afterEach, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { OpenCodeAdapter, checkNeedsSchedulerMcpReregister } from '../adapters/openCodeAdapter';
+import { openCodeCompactPluginFileName } from '../utils/openCodeCompactPlugin';
 import { keyToString, type ThreadKey } from '../types';
 import {
   configureSchedulerMcpInjection,
@@ -390,6 +394,81 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
     assert.equal(gets.length, 1, 'a shared folder is reconciled once, not once per thread');
     assert.equal(posts.length, 0, 'a connected dir is not re-registered');
+  });
+});
+
+describe('compaction plugin activation at boot', () => {
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  let configHome = '';
+  beforeEach(() => {
+    // The activation installs the plugin into OpenCode's global plugin folder,
+    // resolved from XDG_CONFIG_HOME — point it at a throwaway dir.
+    configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-plugin-activation-'));
+    process.env.XDG_CONFIG_HOME = configHome;
+  });
+  afterEach(() => {
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    fs.rmSync(configHome, { recursive: true, force: true });
+  });
+
+  function stubServer(adapter: OpenCodeAdapter, byDir: Record<string, { plugin: string[]; status: unknown }>) {
+    const posts: string[] = [];
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      const directory = decodeURIComponent(new URL(url, 'http://x').searchParams.get('directory') ?? '');
+      if (method === 'GET' && url.startsWith('/config?')) return { plugin: byDir[directory].plugin };
+      if (method === 'GET' && url.startsWith('/session/status?')) return byDir[directory].status;
+      if (method === 'POST') posts.push(url);
+      return true;
+    }) as OpenCodeAdapter['apiRequest'];
+    return posts;
+  }
+
+  it('installs the plugin and recreates only the idle directory that lacks it', async () => {
+    const adapter = createAdapter();
+    const idleDir = '/work/idle';
+    const busyDir = '/work/busy';
+    const loadedDir = '/work/loaded';
+    adapter['sessions'].set('-100:1', makeSession({ chatId: -100, threadId: 1 }, 'ses_1', idleDir));
+    adapter['sessions'].set('-100:2', makeSession({ chatId: -100, threadId: 2 }, 'ses_2', busyDir));
+    adapter['sessions'].set('-100:3', makeSession({ chatId: -100, threadId: 3 }, 'ses_3', loadedDir));
+    adapter['registeredSchedulerMcpDirs'].add(idleDir);
+    adapter['registeredSchedulerMcpDirs'].add(busyDir);
+    const posts = stubServer(adapter, {
+      [idleDir]: { plugin: ['opencode-pty'], status: {} },
+      [busyDir]: { plugin: ['opencode-pty'], status: { ses_2: { type: 'busy' } } },
+      [loadedDir]: {
+        plugin: [`file://${configHome}/opencode/plugins/${openCodeCompactPluginFileName}`],
+        status: {},
+      },
+    });
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await adapter.activateCompactionPluginForActiveSessions();
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.ok(
+      fs.existsSync(path.join(configHome, 'opencode', 'plugins', openCodeCompactPluginFileName)),
+      'plugin installed into the global plugin folder',
+    );
+    assert.deepEqual(posts, [`/instance/dispose?directory=${encodeURIComponent(idleDir)}`]);
+    assert.equal(
+      adapter['registeredSchedulerMcpDirs'].has(idleDir),
+      false,
+      'the recreated directory lost its MCP registration, so the reconcile must re-POST it',
+    );
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(busyDir), true, 'an untouched directory keeps its gate');
+  });
+
+  it('does nothing — not even the install — without an active session', async () => {
+    const adapter = createAdapter();
+    const posts = stubServer(adapter, {});
+    await adapter.activateCompactionPluginForActiveSessions();
+    assert.deepEqual(posts, []);
+    assert.equal(fs.existsSync(path.join(configHome, 'opencode')), false);
   });
 });
 

@@ -38,7 +38,11 @@ import {
 } from '../utils/subagentRender';
 import { defaultDisplayVerbosityMode } from '../utils/displayVerbosity';
 import { checkIsReplacementTurnMissing, checkIsWedgedTurn } from '../utils/openCodeTurnActivity';
-import { checkHasOpenCodeCompactPlugin } from '../utils/openCodeCompactPlugin';
+import {
+  checkHasOpenCodeCompactPlugin,
+  getCompactPluginActivation,
+  installOpenCodeCompactPlugin,
+} from '../utils/openCodeCompactPlugin';
 import {
   checkIsSimpleApiMethod,
   checkProviderHasAuthCatalogEntry,
@@ -2773,11 +2777,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * @description Whether the server serving this thread loaded the bot's
+   * @description Whether this thread's directory instance loaded the bot's
    * compaction plugin, read from its merged config (`GET /config`, directory
-   * scoped). A server the bot did not start lacks it, and then the bot must keep
-   * sending the skills guidance itself. A read failure answers `false`: the
-   * guidance then appears twice, which beats not at all.
+   * scoped). An instance created before the plugin was installed lacks it until
+   * it is recreated, and then the bot must keep sending the skills guidance
+   * itself. A read failure answers `false`: the guidance then appears twice,
+   * which beats not at all.
    */
   async checkHasCompactionSkillsHook(key: ThreadKey): Promise<boolean> {
     const session = this.sessions.get(keyToString(key));
@@ -3207,6 +3212,61 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     await Promise.allSettled(
       Array.from(directories, (directory) => this.reconcileSchedulerMcpForDirectory(directory)),
     );
+  }
+
+  /**
+   * @description Boot step that makes every active directory's instance load the
+   * bot's compaction plugin. OpenCode reads plugins once per directory instance,
+   * so an instance created before the plugin file existed (a server that outlived
+   * the bot, actagent's included) never gets it on its own. Installs the file,
+   * then per directory (de-duped, concurrently) recreates the instance when it
+   * lacks the plugin and nothing in it is running. A recreated directory loses
+   * its runtime `telegramBot` registration, so its Set gate is dropped here and
+   * the boot caller reconciles the MCP right after.
+   */
+  async activateCompactionPluginForActiveSessions(): Promise<void> {
+    const directories = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.isActive) directories.add(session.workDir);
+    }
+    if (directories.size === 0) return;
+    if (installOpenCodeCompactPlugin() === 'failed') return;
+    await Promise.allSettled(
+      Array.from(directories, (directory) => this.activateCompactionPluginForDirectory(directory)),
+    );
+  }
+
+  /**
+   * @description One directory of {@link activateCompactionPluginForActiveSessions}:
+   * read its instance's plugin list and session status, and recreate it
+   * (`POST /instance/dispose`) only when the plugin is missing and every session
+   * is idle. Best-effort — errors are logged and swallowed.
+   */
+  private async activateCompactionPluginForDirectory(directory: string): Promise<void> {
+    try {
+      const config = await this.apiRequest<{ plugin?: unknown } | null>(
+        'GET',
+        buildDirectoryScopedPath('/config', directory),
+      );
+      const sessionStatus = await this.apiRequest<unknown>(
+        'GET',
+        buildDirectoryScopedPath('/session/status', directory),
+      );
+      const activation = getCompactPluginActivation({ pluginSpecs: config?.plugin, sessionStatus });
+      if (activation === 'loaded') return;
+      if (activation === 'busy') {
+        console.log(`[OpenCode] compaction plugin not loaded in ${directory} yet; it is busy, the next boot retries`);
+        return;
+      }
+      await this.apiRequest('POST', buildDirectoryScopedPath('/instance/dispose', directory));
+      this.registeredSchedulerMcpDirs.delete(directory);
+      console.log(`[OpenCode] recreated the ${directory} instance so it loads the compaction plugin`);
+    } catch (e) {
+      console.warn(
+        `[OpenCode] compaction plugin activation failed for ${directory}:`,
+        e instanceof Error ? e.message : e,
+      );
+    }
   }
 
   /**

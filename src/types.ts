@@ -751,6 +751,16 @@ export interface AgentAdapter extends EventEmitter {
   reconcileSchedulerMcpForActiveSessions?(): Promise<void>;
 
   /**
+   * Make every active OpenCode directory's instance load the bot's compaction
+   * plugin (`utils/openCodeCompactPlugin.ts`): install the plugin file, then
+   * recreate each IDLE directory instance that predates it. Recreating drops the
+   * directory's runtime MCP registrations, so the boot caller must run
+   * {@link reconcileSchedulerMcpForActiveSessions} AFTER this resolves. Best-effort,
+   * never rejects; a busy directory is left for the next boot.
+   */
+  activateCompactionPluginForActiveSessions?(): Promise<void>;
+
+  /**
    * Heal the bot-owned MCP server `serverName` INSIDE one live session: read the
    * status the backend holds for it and reconnect it when it reports `failed`.
    * The Claude-side counterpart of {@link reconcileSchedulerMcpForActiveSessions}
