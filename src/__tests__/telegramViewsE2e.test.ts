@@ -36,7 +36,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { fakeClaudeLogFileNames, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
@@ -452,9 +452,19 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
 
   // ── S9 — answers-only suppression ────────────────────────────────────
 
+  /**
+   * The topic a Bot API call addressed: its own `message_thread_id`, or — for an
+   * edit, which names only the message — the thread of the message it edits.
+   * Filtering edits by `message_thread_id` would count none and prove nothing.
+   */
+  function getCallThreadId(call: FakeTelegramCall): number | undefined {
+    if (call.payload.message_thread_id !== undefined) return Number(call.payload.message_thread_id);
+    return fakeTelegram.getMessage(Number(call.payload.message_id))?.message_thread_id;
+  }
+
   /** How many calls of `method` the fake has seen for the test topic. */
   function countTopicCalls(method: string): number {
-    return fakeTelegram.listCalls(method).filter((call) => Number(call.payload.message_thread_id) === topicThreadId).length;
+    return fakeTelegram.listCalls(method).filter((call) => getCallThreadId(call) === topicThreadId).length;
   }
 
   it('in «Answers only» a turn posts nothing but its pinned answer, while the typing indicator still runs', async () => {
