@@ -1,6 +1,6 @@
 import type { SessionKey } from '../../sessionKey';
 import type { OpenRequestState, RequestOrigin } from '../../requests/types';
-import { requestRequesterAttribute } from '../../requests/requestGroup';
+import { emptyRequester, requestRequesterAttribute } from '../../requests/requestGroup';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraIssue } from './client';
 import { makeJiraKey } from './sessionKeyCodec';
 import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
@@ -240,7 +240,7 @@ export class JiraInbound {
     // issue opens a request of its own instead of superseding the first (`requests/requestGroup.ts`).
     const request = await deps.createRequest(key, {
       kind: 'trackerEvent',
-      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? '' },
+      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? emptyRequester },
     }, createPrompt);
     const prompt = createPrompt(request.id, request.supersededRequestIds ?? []);
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of

@@ -241,7 +241,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         console.warn(`[jira] ${issueKey}: park notice not posted: ${getNothingPostedError(posted.failure)}`);
         return;
       }
-      const handBackWarning = await handBack(issueKey, requester?.accountId ?? '');
+      const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
       if (handBackWarning) console.warn(`[jira] ${issueKey}: park: ${handBackWarning}`);
     },
   };
