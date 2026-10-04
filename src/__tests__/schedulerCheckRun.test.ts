@@ -21,19 +21,36 @@ import {
   getOutputTail,
   runCheckCommand,
 } from '../scheduler/checkRun';
+import { checkIsPidAlive } from '../utils/jsonStreamHost';
+
+/**
+ * How long a process that has already closed its output may still be visible to
+ * `kill(pid, 0)`: the kernel finishes its teardown and the orphan reaper collects
+ * it in milliseconds, while a process the group signal missed stays for its full
+ * `sleep 30`. Generous so a loaded machine cannot make the two look alike.
+ */
+const processGoneWaitMs = 5000;
+const processGonePollMs = 10;
 
 function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'check-run-')));
   return run(dir).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
 }
 
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+/**
+ * Whether `pid` disappears within {@link processGoneWaitMs}. A single
+ * `kill(pid, 0)` is not enough: the runner resolves once every holder of the
+ * shell's output pipe closed it, and a child closes its pipe INSIDE its exit path,
+ * before the kernel has finished tearing it down and the reaper has collected it —
+ * under load that window is wide enough for one probe to still see the process.
+ */
+async function waitUntilProcessGone(pid: number): Promise<boolean> {
+  const deadline = Date.now() + processGoneWaitMs;
+  while (checkIsPidAlive(pid)) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, processGonePollMs));
   }
+  return true;
 }
 
 test('runCheckCommand: exit 0 in the given folder passes', async () => {
@@ -76,7 +93,7 @@ test('runCheckCommand: a timeout stops the whole process group, background child
     assert.equal(checkIsCheckPassing(result), false);
     assert.equal(describeCheckFailure(result, 1), 'timeout 1s');
     const backgroundPid = Number(fs.readFileSync(pidFile, 'utf-8'));
-    assert.equal(checkIsProcessAlive(backgroundPid), false, 'the background sleep was stopped with the group');
+    assert.equal(await waitUntilProcessGone(backgroundPid), true, 'the background sleep was stopped with the group');
   });
 });
 
