@@ -1,6 +1,7 @@
 import type { AnswerSink } from '../../platform/answerSink';
 import type { RequestAlertReason } from '../../requests/types';
 import { keyToString, type SessionKey } from '../../sessionKey';
+import { KeyLock } from '../../state';
 import type { SendMessagesToThread } from '../../utils/messageSendService';
 
 /**
@@ -17,7 +18,7 @@ export interface TelegramAnswerSinkDeps {
   pinMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   unpinMessage: (key: SessionKey, messageId: number) => Promise<void>;
   getAnswerPinMessageId: (key: SessionKey) => number | undefined;
-  setAnswerPinMessageId: (key: SessionKey, messageId: number | null) => Promise<void>;
+  setAnswerPinMessageId: (key: SessionKey, messageId: number) => Promise<void>;
 }
 
 /**
@@ -36,20 +37,27 @@ export interface TelegramAnswerSinkDeps {
  * leaves the previous record as it is — nothing was replaced. Native question
  * pins and scheduled-run pins are separate records and never touched here. Of a
  * split answer the FIRST message is pinned: the notification previews its start.
+ * The pin hand-over is serialized per conversation: two answers delivered at once
+ * (parallel `answer_request` calls) would otherwise both read the same previous
+ * pin and leave the earlier of them pinned for good.
  *
  * The wake-up alert (core S4) is a bot message naming the request, PINNED with a
  * notification and unpinned when that request closes. Its message id is the
  * alert handle.
  */
 export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSink {
-  async function pinLatestAnswer(key: SessionKey, messageId: number): Promise<void> {
-    const previousMessageId = deps.getAnswerPinMessageId(key);
-    if (previousMessageId === messageId) return;
-    const isPinned = await deps.pinMessage(key, messageId);
-    if (!isPinned) return;
-    // The new pin is up; the previous answer leaves the pinned bar quietly.
-    if (previousMessageId !== undefined) await deps.unpinMessage(key, previousMessageId);
-    await deps.setAnswerPinMessageId(key, messageId);
+  const answerPinLock = new KeyLock();
+
+  function pinLatestAnswer(key: SessionKey, messageId: number): Promise<void> {
+    return answerPinLock.withLock(keyToString(key), async () => {
+      const previousMessageId = deps.getAnswerPinMessageId(key);
+      if (previousMessageId === messageId) return;
+      const isPinned = await deps.pinMessage(key, messageId);
+      if (!isPinned) return;
+      // The new pin is up; the previous answer leaves the pinned bar quietly.
+      if (previousMessageId !== undefined) await deps.unpinMessage(key, previousMessageId);
+      await deps.setAnswerPinMessageId(key, messageId);
+    });
   }
 
   return {

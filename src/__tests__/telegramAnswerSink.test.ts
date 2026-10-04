@@ -35,13 +35,15 @@ function createDeps(overrides: Partial<TelegramAnswerSinkDeps>): TelegramAnswerS
 
 /**
  * A recording pin store plus pin/unpin primitives: what the sink pinned and unpinned, in order, and the
- * remembered latest answer. `isPinAccepted` false makes every pin fail, as a lost `can_pin_messages` would.
+ * remembered latest answer. `isPinAccepted` false makes every pin fail, as a lost `can_pin_messages` would;
+ * `isPinRoundTrip` makes a pin take a tick, as the real Bot API call does.
  */
-function createPinRecorder(initialPinnedId?: number, isPinAccepted = true) {
+function createPinRecorder(initialPinnedId?: number, isPinAccepted = true, isPinRoundTrip = false) {
   const events: string[] = [];
   let remembered = initialPinnedId;
   const deps: Partial<TelegramAnswerSinkDeps> = {
     pinMessage: async (_key, messageId) => {
+      if (isPinRoundTrip) await new Promise<void>((resolve) => setImmediate(resolve));
       events.push(`pin ${messageId}`);
       return isPinAccepted;
     },
@@ -51,7 +53,7 @@ function createPinRecorder(initialPinnedId?: number, isPinAccepted = true) {
     getAnswerPinMessageId: () => remembered,
     setAnswerPinMessageId: async (_key, messageId) => {
       events.push(`remember ${messageId}`);
-      remembered = messageId ?? undefined;
+      remembered = messageId;
     },
   };
   return { deps, events, getRemembered: () => remembered };
@@ -119,6 +121,20 @@ describe('createTelegramAnswerSink', () => {
     assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true }, 'the answer itself landed');
     assert.deepEqual(pins.events, ['pin 101']);
     assert.equal(pins.getRemembered(), 77);
+  });
+
+  it('two answers delivered at once hand the pin over in turn, so only the later one stays pinned', async () => {
+    // Without serialization both answers read "nothing pinned yet" during the pin's round trip.
+    const pins = createPinRecorder(undefined, true, true);
+    let nextMessageId = 101;
+    const sink = createTelegramAnswerSink(createDeps({
+      sendMessages: async () => ({ ok: true, summary: 'Delivered 1 message.', undeliveredCount: 0, sentMessageIds: [nextMessageId++] }),
+      ...pins.deps,
+    }));
+
+    await Promise.all([sink.deliverAnswer(topicKey, delivery), sink.deliverAnswer(topicKey, delivery)]);
+    assert.deepEqual(pins.events, ['pin 101', 'remember 101', 'pin 102', 'unpin 101', 'remember 102']);
+    assert.equal(pins.getRemembered(), 102);
   });
 
   it('an answer whose text sends all failed pins nothing; a failed send never touches the pins', async () => {

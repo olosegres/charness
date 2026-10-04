@@ -1015,7 +1015,7 @@ test('takeMessageIds atomically hands off tracked plus additional IDs while pres
 
 // ── pinned answers (request/answer plan S8) ──
 
-test('answerPins: the latest pinned answer is remembered per conversation, survives a reload, and null forgets it', async () => {
+test('answerPins: the latest pinned answer is remembered per conversation and survives a reload', async () => {
   const key1: SessionKey = makeTelegramKey(-1001234567890, 42);
   const key2: SessionKey = makeTelegramKey(-1001234567890, 43);
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
@@ -1029,21 +1029,17 @@ test('answerPins: the latest pinned answer is remembered per conversation, survi
   await reloaded.init();
   assert.equal(reloaded.getAnswerPinMessageId(key1), 501, 'an answer after a restart still knows which one to unpin');
   assert.equal(reloaded.getAnswerPinMessageId(key2), 777, 'per conversation');
-
-  await reloaded.setAnswerPinMessageId(key1, null);
-  await reloaded.setAnswerPinMessageId(key2, null);
-  await reloaded.flush();
-  assert.equal(reloaded.getAnswerPinMessageId(key1), undefined);
-  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
-  assert.equal('answerPins' in raw, false, 'an empty map leaves a clean state file');
 });
 
-test('answerPins: leaving the folder drops the record of the pinned answer', async () => {
+test('answerPins: leaving the folder drops the record of the pinned answer; the map goes with its last entry', async () => {
   const key: SessionKey = makeTelegramKey(-1001234567890, 42);
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
   await store.setBinding(key, 'proj');
   await store.setAnswerPinMessageId(key, 501);
   await store.removeBinding(key);
+  await store.flush();
   assert.equal(store.getAnswerPinMessageId(key), undefined);
+  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
+  assert.equal('answerPins' in raw, false, 'an empty map leaves a clean state file');
 });

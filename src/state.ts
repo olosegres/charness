@@ -486,6 +486,12 @@ const MESSAGE_ID_RING_CAP = 500;
 const schedulerMcpSecretByteLength = 32;
 
 /**
+ * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
+ * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
+ */
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'openRequests';
+
+/**
  * @description Promise-chain per-key lock. The map holds the tail of each
  * key's queue; new callers attach to the tail and append themselves. Errors
  * in one task don't poison followers — the chain only carries scheduling,
@@ -958,7 +964,7 @@ export class StateStore {
       // The thread is gone (unbind / deleted topic) → so is anything a boot
       // recovery could resume for it, and the record of its pinned answer.
       this.dropLimitEpisodeRecovered(k);
-      this.dropAnswerPin(k);
+      this.dropOptionalMapEntry('answerPins', k);
       this.scheduleSave();
     });
   }
@@ -2090,9 +2096,7 @@ export class StateStore {
       const next = mutate(current);
       if (next === current) return;
       if (next === undefined) {
-        if (!this.state.openRequests) return;
-        delete this.state.openRequests[k];
-        if (Object.keys(this.state.openRequests).length === 0) delete this.state.openRequests;
+        if (!this.dropOptionalMapEntry('openRequests', k)) return;
       } else {
         (this.state.openRequests ??= {})[k] = next;
       }
@@ -2131,28 +2135,29 @@ export class StateStore {
   }
 
   /**
-   * @description Remember (or with `null` forget) the latest pinned answer of
-   * `key`'s conversation. Rides the debounced save: a lost write leaves one extra
-   * pinned answer behind, never a wrong unpin.
+   * @description Remember the latest pinned answer of `key`'s conversation; the
+   * record goes away with the thread's binding. Rides the debounced save: a lost
+   * write leaves one extra pinned answer behind, never a wrong unpin.
    */
-  async setAnswerPinMessageId(key: SessionKey, messageId: number | null): Promise<void> {
+  async setAnswerPinMessageId(key: SessionKey, messageId: number): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
-      if (messageId === null) {
-        if (!this.dropAnswerPin(k)) return;
-      } else {
-        if (this.state.answerPins?.[k] === messageId) return;
-        (this.state.answerPins ??= {})[k] = messageId;
-      }
+      if (this.state.answerPins?.[k] === messageId) return;
+      (this.state.answerPins ??= {})[k] = messageId;
       this.scheduleSave();
     });
   }
 
-  /** Forget a conversation's pinned answer; the map goes with its last entry. `false` when there was none. */
-  private dropAnswerPin(k: string): boolean {
-    if (this.state.answerPins?.[k] === undefined) return false;
-    delete this.state.answerPins[k];
-    if (Object.keys(this.state.answerPins).length === 0) delete this.state.answerPins;
+  /**
+   * Drop `k` from one of the optional per-conversation maps, and the map itself
+   * with its last entry (an idle bot leaves a clean `state.json`). `false` when
+   * there was no entry. Caller must hold the key lock.
+   */
+  private dropOptionalMapEntry(field: OptionalConversationMapField, k: string): boolean {
+    const map = this.state[field];
+    if (map?.[k] === undefined) return false;
+    delete map[k];
+    if (Object.keys(map).length === 0) delete this.state[field];
     return true;
   }
 
@@ -2188,12 +2193,7 @@ export class StateStore {
    * whether anything changed. Caller must hold the key lock.
    */
   private dropLimitEpisodeRecovered(keyStr: string): boolean {
-    if (!this.state.limitEpisodesRecovered?.[keyStr]) return false;
-    delete this.state.limitEpisodesRecovered[keyStr];
-    if (Object.keys(this.state.limitEpisodesRecovered).length === 0) {
-      delete this.state.limitEpisodesRecovered;
-    }
-    return true;
+    return this.dropOptionalMapEntry('limitEpisodesRecovered', keyStr);
   }
 
   // ── transient status-frame ids (restart cleanup) ──
