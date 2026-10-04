@@ -66,6 +66,8 @@ import {
   getForeignAgentEnvNames,
   getLaunchSessionId,
   requiredJiraSessionFlags,
+  type FakeClaudeAnswer,
+  type FakeClaudeTurn,
 } from './jiraE2e/fakeClaudeContract';
 import { getAdfText } from '../connectors/jira/adf';
 import { getClaudeMemoryAbove } from '../connectors/jira/config';
@@ -128,14 +130,6 @@ function readFakeLog<TRecord>(fileName: string): TRecord[] {
   return readJsonLines<TRecord>(path.join(getLayout().fakeLogDir, fileName));
 }
 
-interface FakeTurn {
-  requestId: string;
-  issueKey: string;
-  isRequestPrompt: boolean;
-  turnCount: number;
-  pid: number;
-}
-
 interface FakeLaunch {
   argv: string[];
   isSessionLaunch: boolean;
@@ -144,20 +138,12 @@ interface FakeLaunch {
   home: string;
 }
 
-interface FakeAnswer {
-  requestId: string;
-  issueKey: string;
-  kind: string;
-  /** The tool result the agent got back; `error: …` when `answer_request` refused. */
-  outcome: string;
+function getTurns(issueKey: string): FakeClaudeTurn[] {
+  return readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === issueKey);
 }
 
-function getTurns(issueKey: string): FakeTurn[] {
-  return readFakeLog<FakeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === issueKey);
-}
-
-function getAnswers(issueKey: string): FakeAnswer[] {
-  return readFakeLog<FakeAnswer>(fakeClaudeLogFileNames.answers).filter((answer) => answer.issueKey === issueKey);
+function getAnswers(issueKey: string): FakeClaudeAnswer[] {
+  return readFakeLog<FakeClaudeAnswer>(fakeClaudeLogFileNames.answers).filter((answer) => answer.issueKey === issueKey);
 }
 
 /** The last session launch the process `pid` was started by. */
@@ -346,7 +332,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
   });
 
   it('a restart opens no request a second time', async () => {
-    const requestPromptCount = (): number => readFakeLog<FakeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.isRequestPrompt).length;
+    const requestPromptCount = (): number => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.isRequestPrompt).length;
     const promptsBefore = requestPromptCount();
     const commentsBefore = ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5'].map((key) => fakeJira.getIssue(key).comments.length);
     await getCharness().stop();
