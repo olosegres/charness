@@ -12,6 +12,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import { randomInt } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -32,6 +33,7 @@ const waitStepMs = 250;
 const outputTailChars = 4000;
 const stopTimeoutMs = 20 * 1000;
 
+/** An OS-chosen free port — from the EPHEMERAL range, the one every outgoing connection on the host is given too. */
 export async function getFreePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -39,6 +41,47 @@ export async function getFreePort(): Promise<number> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   if (address === null || typeof address === 'string') throw new Error('no TCP port was assigned');
   return address.port;
+}
+
+/** Where Linux starts handing ports to outgoing connections when `ip_local_port_range` cannot be read (the kernel default). */
+const defaultEphemeralPortFloor = 32768;
+/** The fixed ports are drawn from [this, the ephemeral floor): above the well-known services, below every client socket. */
+const fixedPortRangeStart = 20000;
+const fixedPortProbeAttempts = 50;
+
+function getEphemeralPortFloor(): number {
+  try {
+    const floor = Number(fs.readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/)[0]);
+    return Number.isInteger(floor) && floor > fixedPortRangeStart ? floor : defaultEphemeralPortFloor;
+  } catch {
+    return defaultEphemeralPortFloor;
+  }
+}
+
+function checkIsPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
+  });
+}
+
+/**
+ * @description A free port the instance must bind on EVERY start — the bot MCP's:
+ * a re-adopted agent keeps the MCP address of its launch, so a restart that
+ * finds the port taken (the bot then falls back to an ephemeral one) leaves the
+ * agent answering into a dead port. {@link getFreePort}'s ports are ephemeral,
+ * which is exactly what any outgoing connection on the host is given while the
+ * instance is down; this one lies below that range, where only another listener
+ * could collide.
+ */
+export async function getFreeFixedPort(): Promise<number> {
+  const ephemeralPortFloor = getEphemeralPortFloor();
+  for (let attempt = 0; attempt < fixedPortProbeAttempts; attempt += 1) {
+    const port = randomInt(fixedPortRangeStart, ephemeralPortFloor);
+    if (await checkIsPortFree(port)) return port;
+  }
+  throw new Error(`no free port below the ephemeral range after ${fixedPortProbeAttempts} tries`);
 }
 
 /**

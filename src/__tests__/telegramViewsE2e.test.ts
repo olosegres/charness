@@ -44,6 +44,7 @@ import {
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
+  getFreeFixedPort,
   getFreePort,
   getInstanceEnvNames,
   getProcessEnvNames,
@@ -69,6 +70,17 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'proj';
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
+/**
+ * The boot's line naming the port the bot MCP bound. The port is FIXED across the
+ * restarts because a re-adopted agent keeps the MCP address of its launch; a
+ * boot that finds the port taken (another process grabbed it while the instance
+ * was down) falls back to an ephemeral port, and the agent's answers go to a
+ * dead one. Every start asserts the line, so that case names itself instead of
+ * timing out on the agent's answer.
+ */
+function getMcpListeningLine(port: number): string {
+  return `MCP server listening on 127.0.0.1:${port}`;
+}
 
 const bootTimeoutMs = 60 * 1000;
 /** A command's reply: a poll round trip and the paced send. */
@@ -85,6 +97,8 @@ let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let defaultTmuxSessionsBefore: string[] = [];
+/** The bot MCP's port, the same on every start (see {@link getMcpListeningLine}). */
+let schedulerMcpPort = 0;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -127,11 +141,16 @@ function getKeyboardData(message: FakeTelegramMessage): string[][] {
   return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.map((button) => button.callback_data));
 }
 
-/** Ready = the boot reached its launch AND this run's polling reached the fake. */
+/** Ready = the boot reached its launch AND this run's polling reached the fake, with the bot MCP on its fixed port. */
 async function startCharness(): Promise<void> {
   charness ??= new IsolatedCharness(getLayout());
   const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
+  const outputStart = charness.output.length;
   await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+  assert.ok(
+    charness.output.slice(outputStart).includes(getMcpListeningLine(schedulerMcpPort)),
+    `the bot MCP bound its fixed port ${schedulerMcpPort}; a boot that found it taken fell back to another port, which a re-adopted agent cannot reach`,
+  );
 }
 
 /** The `displayPrefs` record of the test topic as persisted — what a restart reads. */
@@ -185,6 +204,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     const apiRoot = await fakeTelegram.start();
     const claudeBin = writeFakeClaudeLauncher(layout);
+    schedulerMcpPort = await getFreeFixedPort();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
@@ -196,7 +216,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
       CLAUDE_BIN: claudeBin,
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
-      SCHEDULER_MCP_PORT: (await getFreePort()).toString(),
+      SCHEDULER_MCP_PORT: schedulerMcpPort.toString(),
     });
   });
 
