@@ -1,6 +1,9 @@
 import { Markup, type Context } from 'telegraf';
 import type { InlineKeyboardMarkup, Message } from 'telegraf/typings/core/types/typegram';
 import { getThreadAdapter } from '../../../adapters/createAdapter';
+// Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
+// compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
+import { openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
@@ -36,15 +39,6 @@ const compactCommandText = '/compact';
 /** `adapter.name` of the raw-shell backend (see the `terminal` adapter). */
 const terminalAdapterName = 'terminal';
 
-/**
- * `adapter.name` of the OpenCode backend. Used only to decide whether the D3
- * maximally-complete-summary guidance must ride the per-invocation compaction
- * instruction: OpenCode bakes that guidance into its fork compaction prompt (so
- * it also covers auto/overflow compaction the bot can't reach), so the bot must
- * NOT re-append it there; every other (Claude) backend has no bot-controlled
- * prompt and needs it every time. See {@link getCompactionInstruction}.
- */
-const openCodeAdapterName = 'opencode';
 
 /**
  * @description Compose the per-invocation compaction instruction for a thread's

@@ -32,7 +32,7 @@ import {
   getClaudeModeAction,
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName } from './adapters/adapterNames';
+import { claudeJsonStreamAdapterName, openCodeAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
@@ -1955,7 +1955,7 @@ async function surfaceLoggedOutNotice(key: SessionKey): Promise<void> {
   authNoticePinnedMessageId.set(k, pinnedNoticePendingSentinel);
 
   const messageKey =
-    getThreadAdapterNameRaw(key) === 'opencode' ? 'apiRetry.loggedOutOpenCode' : 'apiRetry.loggedOutClaude';
+    getThreadAdapterNameRaw(key) === openCodeAdapterName ? 'apiRetry.loggedOutOpenCode' : 'apiRetry.loggedOutClaude';
   const id = await replyToThread(key, t(messageKey));
   if (id === null) {
     // Send failed — release the reservation so a later error can retry surfacing.
@@ -4172,7 +4172,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // when switching between tmux-scrape and json-stream — the new backend resumes
   // the SAME conversation (`/claude_mode` live switch).
   if (checkIsClaudeBackend(newName) && agent.claudeSessionId) next.claudeSessionId = agent.claudeSessionId;
-  if (newName === 'opencode' && agent.opencodeSessionId) next.opencodeSessionId = agent.opencodeSessionId;
+  if (newName === openCodeAdapterName && agent.opencodeSessionId) next.opencodeSessionId = agent.opencodeSessionId;
   // Overwrite by removing the row first; setAgent then writes only the
   // fields we kept.
   await state.removeAgent(key);
@@ -8602,7 +8602,7 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
  */
 function checkAdapterSupportsDraftStreaming(key: SessionKey): boolean {
   const name = getThreadAdapterNameRaw(key);
-  return name === 'opencode' || name === 'claude' || name === claudeJsonStreamAdapterName;
+  return name === openCodeAdapterName || name === 'claude' || name === claudeJsonStreamAdapterName;
 }
 
 /**

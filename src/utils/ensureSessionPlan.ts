@@ -9,6 +9,8 @@
  * acts on this plan, so no path can start a fresh conversation over a sleeping one.
  */
 
+import { openCodeAdapterName } from '../adapters/adapterNames';
+
 /** The persisted ids a conversation's agent row carries (one per backend family). */
 export interface PersistedSessionIds {
   claudeSessionId?: string;
@@ -55,7 +57,7 @@ export function getPersistedSessionIdForAdapter(
 ): string | null {
   if (!persistedIds) return null;
   if (isClaudeBackend) return persistedIds.claudeSessionId ?? null;
-  if (adapterName === 'opencode') return persistedIds.opencodeSessionId ?? null;
+  if (adapterName === openCodeAdapterName) return persistedIds.opencodeSessionId ?? null;
   return null;
 }
 

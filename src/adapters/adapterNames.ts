@@ -7,3 +7,6 @@
 
 /** The Claude Code backend driven over `--input-format/--output-format stream-json`. */
 export const claudeJsonStreamAdapterName = 'claude-json-stream';
+
+/** The OpenCode backend (a local HTTP server). */
+export const openCodeAdapterName = 'opencode';
