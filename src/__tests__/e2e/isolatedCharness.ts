@@ -84,12 +84,35 @@ export function checkIsIsolatedInstanceOwnerAlive(owner: IsolatedInstanceOwner):
   return owner.startTicks === null || startTicks === owner.startTicks;
 }
 
-/** @description The owner file of a layout root; `null` when the root carries none (not a layout, or not yet written). */
+/** The socket name tmux gives its default server — an owner file naming it could only be corrupt or foreign. */
+const tmuxDefaultSocketName = 'default';
+
+/**
+ * @description Whether an owner record read from disk names an instance of its
+ * own layout: the record is what decides which tmux servers get killed, so one
+ * that names a tmux dir outside the layout root or the default socket name
+ * (the user's own server) is refused, whatever wrote it.
+ */
+function checkIsIsolatedInstanceOwnerOfRoot(owner: IsolatedInstanceOwner, testRoot: string): boolean {
+  return Number.isInteger(owner.pid)
+    && (owner.startTicks === null || Number.isInteger(owner.startTicks))
+    && typeof owner.tmuxTmpDir === 'string'
+    && typeof owner.tmuxSocketName === 'string'
+    && owner.tmuxSocketName !== tmuxDefaultSocketName
+    && path.resolve(owner.tmuxTmpDir).startsWith(`${testRoot}${path.sep}`);
+}
+
+/**
+ * @description The owner file of a layout root; `null` when the root carries none
+ * (not a layout, or not yet written) or one that does not describe an instance
+ * inside that root (see {@link checkIsIsolatedInstanceOwnerOfRoot}).
+ */
 export function readIsolatedInstanceOwner(testRoot: string): IsolatedInstanceOwner | null {
   const ownerPath = path.join(testRoot, isolatedInstanceOwnerFileName);
   if (!fs.existsSync(ownerPath)) return null;
   try {
-    return JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+    const owner: IsolatedInstanceOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+    return checkIsIsolatedInstanceOwnerOfRoot(owner, testRoot) ? owner : null;
   } catch {
     return null;
   }
@@ -99,7 +122,7 @@ export function readIsolatedInstanceOwner(testRoot: string): IsolatedInstanceOwn
 function listInstanceTmuxSocketPaths(tmuxTmpDir: string, tmuxSocketName: string): string[] {
   return [
     path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName),
-    path.join(getTmuxSocketDir(tmuxTmpDir), 'default'),
+    path.join(getTmuxSocketDir(tmuxTmpDir), tmuxDefaultSocketName),
     path.join(getTmuxSocketDir('/tmp'), tmuxSocketName),
   ];
 }

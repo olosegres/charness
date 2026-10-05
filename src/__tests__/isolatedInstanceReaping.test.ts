@@ -24,6 +24,7 @@ import {
   isolatedInstanceOwnerFileName,
   listTmuxSessions,
   reapDeadIsolatedInstances,
+  readIsolatedInstanceOwner,
   removeIsolatedInstanceSync,
   type IsolatedInstanceLayout,
   type IsolatedInstanceOwner,
@@ -38,14 +39,21 @@ const tsxLoaderPath = path.join(__dirname, '..', '..', 'node_modules', 'tsx', 'd
 
 const createdRoots: string[] = [];
 
+/** The start time of this test process — `/proc` is required here, so a reused-pid case can be built from it. */
+function getOwnStartTicks(): number {
+  const startTicks = getProcessStartTicks(process.pid);
+  assert.ok(startTicks !== null, 'this test reads start times from /proc');
+  return startTicks;
+}
+
 /** A stale layout as a crashed run leaves it: its folder, its tmux dir, its owner file — and a running private server. */
-function createStaleLayout(owner: Omit<IsolatedInstanceOwner, 'tmuxTmpDir' | 'tmuxSocketName'>, isServerStarted: boolean): { testRoot: string; socketPath: string } {
+function createStaleLayout(owner: Omit<IsolatedInstanceOwner, 'tmuxTmpDir' | 'tmuxSocketName'> & Partial<IsolatedInstanceOwner>, isServerStarted: boolean): { testRoot: string; socketPath: string } {
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   createdRoots.push(testRoot);
   const tmuxTmpDir = path.join(testRoot, 'tmux');
   fs.mkdirSync(tmuxTmpDir, { mode: 0o700 });
   const tmuxSocketName = `${prefix}stale`;
-  const ownerRecord: IsolatedInstanceOwner = { ...owner, tmuxTmpDir, tmuxSocketName };
+  const ownerRecord: IsolatedInstanceOwner = { tmuxTmpDir, tmuxSocketName, ...owner };
   fs.writeFileSync(path.join(testRoot, isolatedInstanceOwnerFileName), JSON.stringify(ownerRecord));
   const socketPath = path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName);
   if (isServerStarted) {
@@ -84,7 +92,7 @@ describe('a private tmux server of a process-level test never outlives the test'
     const exited = spawnSync('true');
     assert.ok(exited.pid, 'the short-lived process ran');
     const dead = createStaleLayout({ pid: exited.pid, startTicks: 1 }, true);
-    const live = createStaleLayout({ pid: process.pid, startTicks: getProcessStartTicks(process.pid) }, false);
+    const live = createStaleLayout({ pid: process.pid, startTicks: getOwnStartTicks() }, false);
 
     const reaped = reapDeadIsolatedInstances(prefix);
 
@@ -95,9 +103,20 @@ describe('a private tmux server of a process-level test never outlives the test'
   });
 
   it('a layout owned by a reused pid (same pid, another start time) counts as dead', () => {
-    const stale = createStaleLayout({ pid: process.pid, startTicks: getProcessStartTicks(process.pid) - 1 }, false);
+    const stale = createStaleLayout({ pid: process.pid, startTicks: getOwnStartTicks() - 1 }, false);
     assert.deepEqual(reapDeadIsolatedInstances(prefix), [stale.testRoot]);
     assert.ok(!fs.existsSync(stale.testRoot));
+  });
+
+  it('an owner file naming the user\'s default server, or a tmux dir outside its layout, is read as no owner at all', () => {
+    // Asserted on the READ alone, never through the sweep: with the record check broken, a sweep over these
+    // records would kill the user's own default server — the very thing the check exists to make impossible.
+    const defaultServer = createStaleLayout({ pid: process.pid, startTicks: getOwnStartTicks(), tmuxSocketName: 'default' }, false);
+    const foreignDir = createStaleLayout({ pid: process.pid, startTicks: getOwnStartTicks(), tmuxTmpDir: '/tmp' }, false);
+    const intact = createStaleLayout({ pid: process.pid, startTicks: getOwnStartTicks() }, false);
+    assert.equal(readIsolatedInstanceOwner(defaultServer.testRoot), null);
+    assert.equal(readIsolatedInstanceOwner(foreignDir.testRoot), null);
+    assert.equal(readIsolatedInstanceOwner(intact.testRoot)?.tmuxSocketName, `${prefix}stale`);
   });
 
   it('a run killed outright (SIGKILL, no exit handler runs) still loses its private tmux server: the detached reaper ends it', async () => {
