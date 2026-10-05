@@ -447,6 +447,7 @@ export const kaDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude ბექენდი: {label} — მოქმედებს შემდეგ გაშვებაზე.',
   'claudeMode.switched_resumed': '⚙️ გადართულია {label}-ზე — იგივე საუბარი გაგრძელდა.',
   'claudeMode.switched_fresh': '⚙️ გადართულია {label}-ზე — ახალი სესია დაიწყო.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn-ს სჭირდება Claude Code {min} ან უფრო ახალი — ეს საუბარი ბოლოს {version}-ზე მუშაობდა. ბექენდი არ შეცვლილა.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'შეცდომა: {error}',
   'cb.toolresults_set': 'ხელსაწყოს შედეგები: {mode}',

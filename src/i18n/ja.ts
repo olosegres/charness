@@ -447,6 +447,7 @@ export const jaDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude バックエンド: {label} — 次回起動時に適用されます。',
   'claudeMode.switched_resumed': '⚙️ {label} に切り替え — 同じ会話を再開しました。',
   'claudeMode.switched_fresh': '⚙️ {label} に切り替え — 新しいセッションを開始しました。',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn には Claude Code {min} 以降が必要です — この会話は最後に {version} で動いていました。バックエンドは変更されていません。',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'エラー: {error}',
   'cb.toolresults_set': 'ツール結果: {mode}',

@@ -447,6 +447,7 @@ export const uzDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude backend: {label} — keyingi boshlashda qo‘llanadi.',
   'claudeMode.switched_resumed': '⚙️ {label} ga almashtirildi — bir xil suhbat davom etdi.',
   'claudeMode.switched_fresh': '⚙️ {label} ga almashtirildi — yangi seans boshlandi.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn uchun Claude Code {min} yoki yangiroq kerak — bu suhbat oxirgi marta {version} da ishladi. Backend oʻzgartirilmadi.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'Xato: {error}',
   'cb.toolresults_set': 'Tool-natijalar: {mode}',

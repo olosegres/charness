@@ -447,6 +447,7 @@ export const frDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Backend Claude : {label} — s\'appliquera au prochain démarrage.',
   'claudeMode.switched_resumed': '⚙️ Basculé vers {label} — même conversation reprise.',
   'claudeMode.switched_fresh': '⚙️ Basculé vers {label} — nouvelle session démarrée.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn nécessite Claude Code {min} ou plus récent — cette conversation tournait sur {version}. Le backend n\'a pas été changé.',
   'cb.thinking_set': 'Thinking : {mode}',
   'cb.thinking_error': 'Erreur : {error}',
   'cb.toolresults_set': 'Résultats d\'outils : {mode}',

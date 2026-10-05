@@ -210,7 +210,7 @@ import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
-import { minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
+import { checkIsPerTurnSwitchRefused, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
 import { getAgentIdleMs } from './utils/compactOnIdle';
@@ -4251,6 +4251,34 @@ export function getStartReadyMessage(
 let botMcpToolDigestReader: ((platform: PlatformId) => string) | null = null;
 
 /**
+ * @description The conversation's last known Claude Code version (L-D10): the one
+ * its live json-stream process reported, else the one persisted with its tail
+ * record by an earlier process; `null` when none ever reported one.
+ */
+function getLastKnownClaudeCodeVersion(key: SessionKey): string | null {
+  for (const name of [claudeJsonStreamAdapterName, claudePerTurnAdapterName]) {
+    const adapter = getAdapter(name);
+    if (adapter instanceof ClaudeJsonStreamAdapter && adapter.checkIsActive(key)) {
+      const liveVersion = adapter.getClaudeCodeVersion(key);
+      if (liveVersion !== null) return liveVersion;
+    }
+  }
+  return state.getAgent(key)?.jsonStreamTail?.claudeCodeVersion ?? null;
+}
+
+/**
+ * @description The per-turn lifecycle refused for this conversation (L-D10,
+ * narrowed): its last known Claude Code version is below the gate. `null` when
+ * the switch is allowed — unknown version included. One log line per refusal.
+ */
+function getPerTurnRefusal(key: SessionKey): { version: string } | null {
+  const version = getLastKnownClaudeCodeVersion(key);
+  if (!checkIsPerTurnSwitchRefused(version) || version === null) return null;
+  console.log(`[lifecycle] ${keyToString(key)}: per-turn refused — Claude Code ${version} is below ${minAutoStopClaudeCodeVersion}`);
+  return { version };
+}
+
+/**
  * @description Persist what a (re)started session needs for the next boot: the
  * backend session id and adapter name, and — for a json-stream process, which
  * is adopted across restarts with the tool list it got at THIS start — the
@@ -4477,12 +4505,17 @@ async function ensureAgentSessionNow(
   // distinguishable and the chain never silently defaults to a backend. When
   // nothing resolves (bound topic that never picked an agent, no caller
   // fallback) we REFUSE — the user must start/pick an agent first.
-  const adapterName =
+  const resolvedAdapterName =
     options.preferredAdapterName ??
     getThreadAdapterNameRaw(key) ??
     state.getAgent(key)?.name ??
     options.fallbackAdapterName ??
     null;
+  // L-D10: a session start or resume on the per-turn lifecycle for a conversation whose last known CLI is
+  // below the gate runs the idle lifecycle instead (a Jira session's `jira.json` pick included).
+  const adapterName = resolvedAdapterName === claudePerTurnAdapterName && getPerTurnRefusal(key) !== null
+    ? claudeJsonStreamAdapterName
+    : resolvedAdapterName;
   const plan = getEnsureSessionPlan({
     isActive: getThreadAdapter(key).checkIsActive(key),
     isStarting: startupPromptBuffer.checkIsStarting(keyToString(key)),
@@ -6361,6 +6394,10 @@ function buildClaudeModeKeyboard(current: string) {
  */
 async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
   const label = getClaudeBackendLabel(target);
+  if (target === claudePerTurnAdapterName) {
+    const refusal = getPerTurnRefusal(key);
+    if (refusal) return t('claudeMode.perTurn_refused', { version: refusal.version, min: minAutoStopClaudeCodeVersion });
+  }
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
 

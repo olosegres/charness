@@ -447,6 +447,7 @@ export const hiDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude बैकएंड: {label} — अगली शुरुआत पर लागू।',
   'claudeMode.switched_resumed': '⚙️ {label} पर स्विच — वही बातचीत जारी।',
   'claudeMode.switched_fresh': '⚙️ {label} पर स्विच — नया सत्र शुरू।',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn के लिए Claude Code {min} या नया चाहिए — यह बातचीत आख़िरी बार {version} पर चली। बैकएंड नहीं बदला गया।',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'त्रुटि: {error}',
   'cb.toolresults_set': 'टूल-परिणाम: {mode}',

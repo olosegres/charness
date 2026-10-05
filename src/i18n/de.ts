@@ -447,6 +447,7 @@ export const deDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude-Backend: {label} — wird beim nächsten Start angewendet.',
   'claudeMode.switched_resumed': '⚙️ Gewechselt zu {label} — derselbe Dialog fortgesetzt.',
   'claudeMode.switched_fresh': '⚙️ Gewechselt zu {label} — neue Session gestartet.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn braucht Claude Code {min} oder neuer — dieses Gespräch lief zuletzt mit {version}. Das Backend wurde nicht geändert.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'Fehler: {error}',
   'cb.toolresults_set': 'Tool-Ergebnisse: {mode}',

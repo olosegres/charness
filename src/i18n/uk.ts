@@ -453,6 +453,7 @@ export const ukDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Бекенд Claude: {label} — застосується при наступному старті.',
   'claudeMode.switched_resumed': '⚙️ Переключено на {label} — той самий діалог продовжено.',
   'claudeMode.switched_fresh': '⚙️ Переключено на {label} — почато нову сесію.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn потребує Claude Code {min} або новішого — ця розмова востаннє йшла на {version}. Бекенд не змінено.',
   'cb.thinking_set': 'Розмірковування: {mode}',
   'cb.thinking_error': 'Помилка: {error}',
   'cb.toolresults_set': 'Результати інструментів: {mode}',

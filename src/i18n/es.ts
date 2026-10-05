@@ -447,6 +447,7 @@ export const esDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Backend de Claude: {label} — se aplicará en el próximo inicio.',
   'claudeMode.switched_resumed': '⚙️ Cambiado a {label} — misma conversación reanudada.',
   'claudeMode.switched_fresh': '⚙️ Cambiado a {label} — nueva sesión iniciada.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn necesita Claude Code {min} o más reciente — esta conversación usó {version} por última vez. El backend no se cambió.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'Error: {error}',
   'cb.toolresults_set': 'Resultados de herramientas: {mode}',

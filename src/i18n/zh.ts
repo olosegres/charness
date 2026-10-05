@@ -447,6 +447,7 @@ export const zhDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude 后端: {label} — 下次启动时应用。',
   'claudeMode.switched_resumed': '⚙️ 已切换到 {label} — 同一对话已恢复。',
   'claudeMode.switched_fresh': '⚙️ 已切换到 {label} — 已开始新会话。',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn 需要 Claude Code {min} 或更新版本——此对话上次运行的是 {version}。后端未更改。',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': '错误：{error}',
   'cb.toolresults_set': '工具结果: {mode}',

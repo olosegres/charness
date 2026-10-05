@@ -43,3 +43,14 @@ export function checkIsClaudeAutoStopSupported(version: string | null): boolean 
   const comparison = compareClaudeCodeVersions(version, minAutoStopClaudeCodeVersion);
   return comparison !== null && comparison >= 0;
 }
+
+/**
+ * @description Whether a switch of a conversation to the per-turn lifecycle is
+ * REFUSED (L-D10, narrowed): only when its last known Claude Code version — from
+ * the live process or the persisted tail record — is below the gate. An unknown
+ * version allows the switch: the refusal is only decidable once a version is
+ * known, and the stop gate keeps an unknown or old process alive anyway.
+ */
+export function checkIsPerTurnSwitchRefused(lastKnownVersion: string | null): boolean {
+  return lastKnownVersion !== null && !checkIsClaudeAutoStopSupported(lastKnownVersion);
+}

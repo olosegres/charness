@@ -464,6 +464,7 @@ export const enDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Claude backend: {label} — applies on next start.',
   'claudeMode.switched_resumed': '⚙️ Switched to {label} — same conversation resumed.',
   'claudeMode.switched_fresh': '⚙️ Switched to {label} — started a fresh session.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn needs Claude Code {min} or newer — this conversation last ran {version}. The backend was not changed.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'Error: {error}',
   'cb.toolresults_set': 'Tool results: {mode}',

@@ -451,6 +451,7 @@ export const ruDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Бэкенд Claude: {label} — применится при следующем старте.',
   'claudeMode.switched_resumed': '⚙️ Переключено на {label} — тот же диалог продолжен.',
   'claudeMode.switched_fresh': '⚙️ Переключено на {label} — начата свежая сессия.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn требует Claude Code {min} или новее — этот разговор последний раз шёл на {version}. Бэкенд не изменён.',
   'cb.thinking_set': 'Размышления: {mode}',
   'cb.thinking_error': 'Ошибка: {error}',
   'cb.toolresults_set': 'Результаты инструментов: {mode}',

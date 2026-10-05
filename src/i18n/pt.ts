@@ -447,6 +447,7 @@ export const ptDict: Record<string, string> = {
   'claudeMode.set_idle': '⚙️ Backend do Claude: {label} — aplica-se no próximo início.',
   'claudeMode.switched_resumed': '⚙️ Trocado para {label} — mesma conversa retomada.',
   'claudeMode.switched_fresh': '⚙️ Trocado para {label} — nova sessão iniciada.',
+  'claudeMode.perTurn_refused': '⚠️ Per-turn precisa do Claude Code {min} ou mais novo — esta conversa rodou por último em {version}. O backend não foi alterado.',
   'cb.thinking_set': 'Thinking: {mode}',
   'cb.thinking_error': 'Erro: {error}',
   'cb.toolresults_set': 'Resultados de ferramentas: {mode}',
