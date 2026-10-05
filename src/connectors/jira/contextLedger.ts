@@ -114,6 +114,18 @@ export class JiraContextLedger {
     this.save(issueKey, state);
   }
 
+  /**
+   * @description The conversation's agent lost its context (a fresh session, a completed compaction, C6): nothing
+   * counts as sent any more, and a build made before is dropped at its commit — its generation is gone.
+   */
+  reset(issueKey: string): void {
+    const state = this.getState(issueKey);
+    state.generation += 1;
+    state.sent = {};
+    state.pending = {};
+    this.save(issueKey, state);
+  }
+
   private getState(issueKey: string): ContextState {
     const cached = this.states.get(issueKey);
     if (cached) return cached;

@@ -225,6 +225,22 @@ describe('prepareJiraConnector', () => {
     assert.deepEqual(Object.keys(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1').sent).sort(), ['attachments', 'description', 'fields', 'hierarchy', 'links']);
   });
 
+  it('C6: a context reset of an issue forgets what its conversation was told, on disk, and says so in the log', async () => {
+    writeConfig();
+    connector = await prepare();
+    await startAndWaitForPrompt();
+    const key = makeJiraKey('PROJ-1');
+    connector.onPromptSettled(key, 'req_1', 'takenIn');
+    const logs = mock.method(console, 'log', () => {});
+    try {
+      connector.onContextReset(key, 'compaction (auto)');
+      assert.ok(logs.mock.calls.some((call) => String(call.arguments[0]) === '[jira] PROJ-1: its context was reset (compaction (auto)); the next prompt carries the whole issue'));
+    } finally {
+      logs.mock.restore();
+    }
+    assert.deepEqual(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1'), { generation: 1, sent: {} });
+  });
+
   describe('extraFields (C11)', () => {
     const extraFieldProjects = { PROJ: { folder: 'proj-work', triggerStatuses: ['To Do'], extraFields: ['customfield_10042', 'customfield_99999'] } };
 
@@ -373,7 +389,17 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('C4: the request ledger tells the connector of the conversation what became of each prompt', () => {
     assert.match(startBody, /onPromptSettled: \(key, requestId, outcome\) => connectorConversationHooks\.get\(key\.platform\)\?\.onPromptSettled\(key, requestId, outcome\),/);
     assert.ok(startBody.indexOf('const connectorConversationHooks = createConnectorConversationHooks(jiraConnector);') < startBody.indexOf('const requestLedger = new RequestLedger({'));
-    assert.match(botSource, /if \(jiraConnector\) hooks\.set\('jira', \{ onPromptSettled: \(key, requestId, outcome\) => jiraConnector\.onPromptSettled\(key, requestId, outcome\) \}\);/);
+    assert.match(botSource, /hooks\.set\('jira', \{\s*onPromptSettled: \(key, requestId, outcome\) => jiraConnector\.onPromptSettled\(key, requestId, outcome\),/);
+  });
+
+  it('C6: a fresh session start and every completed compaction reset the conversation\'s context — an idle stop, a resume or a restart does not', () => {
+    const start = botSource.slice(botSource.indexOf('async function startAgentSession('), botSource.indexOf('async function startAgentSession(') + 3000);
+    assert.match(start, /clearThreadContextMarker\(key\);\n(?:\s*\/\/[^\n]*\n)*\s*noteConversationContextReset\(key, 'fresh session'\);/, 'at the start, right after the preamble marker');
+    assert.match(startBody, /onContextCompacted: \(key, trigger\) => dispatchAdapterEvent\(key, 'contextCompacted', \(\) => noteConversationContextReset\(key, `compaction \(\$\{trigger \?\? 'bot'\}\)`\)\),/);
+    assert.match(botSource, /onContextReset: \(key, reason\) => jiraConnector\.onContextReset\(key, reason\),/);
+    assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 2, 'only the start and the compaction reset');
+    const resume = botSource.slice(botSource.indexOf('async function resumeSleepingSession('), botSource.indexOf('async function resumeSleepingSession(') + 3000);
+    assert.ok(!resume.includes('noteConversationContextReset'), 'a resume continues the conversation');
   });
 
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {

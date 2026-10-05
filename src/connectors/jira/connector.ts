@@ -42,6 +42,8 @@ export interface JiraConnector {
    * sent to the issue's conversation; dropped → it never does.
    */
   onPromptSettled(key: SessionKey, requestId: string, outcome: RequestPromptOutcome): void;
+  /** The issue's agent lost what it was told (a fresh session, a completed compaction): the next prompt is whole (C6). */
+  onContextReset(key: SessionKey, reason: string): void;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -218,6 +220,10 @@ export async function prepareJiraConnector(context: {
       // A Jira conversation's thread IS its issue key.
       if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);
       else contextLedger.drop(key.thread, requestId);
+    },
+    onContextReset: (key, reason) => {
+      contextLedger.reset(key.thread);
+      console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);
     },
     start: (deps) => {
       if (isStarted) return;

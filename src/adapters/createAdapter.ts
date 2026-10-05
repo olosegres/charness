@@ -68,6 +68,8 @@ type SubagentStatusHandler = (key: SessionKey, payload: SubagentStatusEvent) => 
 type ApiErrorHandler = (key: SessionKey, error: AgentApiErrorClass) => void;
 type SessionKeyHandler = (key: SessionKey) => void;
 type ErrorHandler = (key: SessionKey, error: Error) => void;
+/** `trigger` — the CLI's own word for what started the compaction (`manual`, `auto`), when it gave one. */
+type ContextCompactedHandler = (key: SessionKey, trigger: string | null) => void;
 
 let onOutput: OutputHandler | null = null;
 let onStatus: StatusHandler | null = null;
@@ -83,6 +85,7 @@ let onStarted: SessionKeyHandler | null = null;
 let onStopped: SessionKeyHandler | null = null;
 let onSuspended: SessionKeyHandler | null = null;
 let onTurnEnded: SessionKeyHandler | null = null;
+let onContextCompacted: ContextCompactedHandler | null = null;
 let onError: ErrorHandler | null = null;
 
 /** Per-thread display-prefs reader for BOTH adapters — same late-wiring idiom
@@ -190,6 +193,7 @@ function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onStopped) adapter.on('stopped', onStopped);
   if (onSuspended) adapter.on('suspended', onSuspended);
   if (onTurnEnded) adapter.on('turnEnded', onTurnEnded);
+  if (onContextCompacted) adapter.on('contextCompacted', onContextCompacted);
   // Always register error handler to prevent ERR_UNHANDLED_ERROR crash.
   adapter.on('error', (key: SessionKey, error: Error) => {
     if (onError) {
@@ -219,6 +223,7 @@ export function registerAdapterEventHandlers(handlers: {
   onStopped?: SessionKeyHandler;
   onSuspended?: SessionKeyHandler;
   onTurnEnded?: SessionKeyHandler;
+  onContextCompacted?: ContextCompactedHandler;
   onError?: ErrorHandler;
 }): void {
   onOutput = handlers.onOutput;
@@ -235,6 +240,7 @@ export function registerAdapterEventHandlers(handlers: {
   onStopped = handlers.onStopped ?? null;
   onSuspended = handlers.onSuspended ?? null;
   onTurnEnded = handlers.onTurnEnded ?? null;
+  onContextCompacted = handlers.onContextCompacted ?? null;
   onError = handlers.onError ?? null;
 
   // Wire to already-created instances

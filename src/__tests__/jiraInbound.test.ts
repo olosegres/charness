@@ -517,6 +517,16 @@ describe('JiraInbound', () => {
       assert.ok(recorded.prompts[1].includes('First report.'));
     });
 
+    it('C6: after a reset — a fresh session started, a compaction completed — the next prompt is whole, even when its own post found the session already running', async () => {
+      await handOver(1);
+      contextLedger.commit(issueKey, 'req_1');
+      contextLedger.reset(issueKey);
+      isNextSessionFresh = false;
+      await handOver(2);
+      assert.equal(recorded.prompts[1], recorded.storedPrompts[1]);
+      assert.ok(recorded.prompts[1].includes('First report.'));
+    });
+
     it('C7: the agent\'s own answer comment is not sent back to it', async () => {
       await handOver(1);
       contextLedger.commit(issueKey, 'req_1');

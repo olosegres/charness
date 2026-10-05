@@ -42,6 +42,8 @@ const expectedJiraRoutes: Record<AdapterEventName, 'telegramHandler' | 'requestS
   suspended: 'nothing',
   // The per-turn stop applies to an issue's conversation too; the handler posts nothing.
   turnEnded: 'telegramHandler',
+  // A completed compaction resets what an issue's conversation was told: the handler only tells its connector (C6).
+  contextCompacted: 'telegramHandler',
   error: 'requestSideHandler',
 };
 

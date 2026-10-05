@@ -617,7 +617,7 @@ a person assigns an issue to the AI account (in a trigger status)
   that would not fit the prompt, is written whole to a file in the conversation's folder under `DATA_DIR/files`
   and the prompt says where. A later hand-over to the same conversation carries only what changed since the
   agent's last prompt (new and edited comments, deleted ones named, the rest listed as unchanged); a fresh
-  session gets the whole issue again.
+  session, or one whose context was compacted, gets the whole issue again.
 - **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
   turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over

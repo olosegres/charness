@@ -134,6 +134,10 @@ another platform's state.
   or a close by the request's own `question` / `final` answer; a superseded or cancelled request's build is
   dropped, and a build older than the last committed one never rolls the sent-set back. When in doubt a block
   is sent twice, never lost.
+- What resets it (the issue's generation goes up, nothing counts as sent, waiting builds are dropped): a fresh
+  session start (`startAgentSession`, at its start — a request whose post found that start under way still gets
+  the whole issue), and every completed compaction (the adapter's `contextCompacted`: bot-issued or the CLI's own
+  overflow compaction). Not an idle stop, a resume, a restart or a hot reload: the conversation survives them.
 
 ## Comment content (`adf.ts`, `prompt.ts`)
 

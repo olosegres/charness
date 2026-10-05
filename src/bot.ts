@@ -4353,6 +4353,9 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // Fresh session — the agent's context is empty, so the next prompt must
   // re-carry the thread-context preamble. Forget the last-injected marker.
   clearThreadContextMarker(key);
+  // Here, at the start (C6): a request whose ensure finds this start under way builds its prompt against an
+  // empty sent-set, so it carries the whole issue even though its own ensure did not start anything.
+  noteConversationContextReset(key, 'fresh session');
   const adapter = getThreadAdapter(key);
 
   // Boot loader. A self-greeting agent (Claude) prints its banner shortly — keep
@@ -10989,13 +10992,33 @@ const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
 interface ConnectorConversationHooks {
   /** The request ledger's word on a request's prompt (Jira prompt context C4). */
   onPromptSettled: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
+  /** The conversation's agent lost what it was told: a fresh session started, or a compaction completed (C6). */
+  onContextReset: (key: SessionKey, reason: string) => void;
 }
 
 /** The conversation hooks of the platforms this process serves that have any. */
 function createConnectorConversationHooks(jiraConnector: JiraConnector | null): ReadonlyMap<PlatformId, ConnectorConversationHooks> {
   const hooks = new Map<PlatformId, ConnectorConversationHooks>();
-  if (jiraConnector) hooks.set('jira', { onPromptSettled: (key, requestId, outcome) => jiraConnector.onPromptSettled(key, requestId, outcome) });
+  if (jiraConnector) {
+    hooks.set('jira', {
+      onPromptSettled: (key, requestId, outcome) => jiraConnector.onPromptSettled(key, requestId, outcome),
+      onContextReset: (key, reason) => jiraConnector.onContextReset(key, reason),
+    });
+  }
   return hooks;
+}
+
+/** Built at boot, once the connectors are prepared; empty until then (and for a Telegram-only instance). */
+let connectorConversationHooks: ReadonlyMap<PlatformId, ConnectorConversationHooks> = new Map();
+
+/**
+ * @description Tell the conversation's connector its agent's context is gone (C6):
+ * a fresh session, or a completed compaction. NOT an idle stop, a resume or a
+ * restart — the conversation survives those. Distinct from
+ * {@link clearThreadContextMarker}, which a stop clears too.
+ */
+function noteConversationContextReset(key: SessionKey, reason: string): void {
+  connectorConversationHooks.get(key.platform)?.onContextReset(key, reason);
 }
 
 /**
@@ -11427,7 +11450,7 @@ export async function startBot(): Promise<void> {
   //     The answer sinks are built here, once: `answer_request`, the wake-up
   //     alerts and the release of an alert when its request closes all share them.
   const answerSinks = createAnswerSinks(jiraConnector?.answerSink ?? null);
-  const connectorConversationHooks = createConnectorConversationHooks(jiraConnector);
+  connectorConversationHooks = createConnectorConversationHooks(jiraConnector);
   const requestLedger = new RequestLedger({
     store: state,
     releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
@@ -11560,6 +11583,7 @@ export async function startBot(): Promise<void> {
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
+    onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),

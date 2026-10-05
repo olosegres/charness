@@ -113,4 +113,26 @@ describe('JiraContextLedger', () => {
     ledger.recordBuild('../../escape', 'req_1', 0, sentA);
     assert.deepEqual(fs.readdirSync(path.join(dataDir, jiraContextDirName)), ['______escape.json']);
   });
+
+  it('C6: a reset — nothing counts as sent, and a build made before it is dropped at its commit', () => {
+    ledger.recordBuild(issueKey, 'req_1', 0, sentA);
+    ledger.commit(issueKey, 'req_1');
+    ledger.recordBuild(issueKey, 'req_2', 0, sentB);
+    ledger.reset(issueKey);
+    assert.deepEqual(ledger.getSnapshot(issueKey), { generation: 1, sent: {} });
+    ledger.commit(issueKey, 'req_2');
+    assert.deepEqual(ledger.getSnapshot(issueKey).sent, {}, 'the build was for a context that is gone');
+    ledger.recordBuild(issueKey, 'req_3', 1, sentB);
+    ledger.commit(issueKey, 'req_3');
+    assert.deepEqual(ledger.getSnapshot(issueKey).sent, sentB, 'a build of the new generation counts');
+    assert.equal(JiraContextLedger.createForDataDir(dataDir).getSnapshot(issueKey).generation, 1, 'the reset is kept on disk');
+  });
+
+  it('C6: a build read before a reset but committed after it, with the old generation, never counts', () => {
+    const before = ledger.getSnapshot(issueKey);
+    ledger.reset(issueKey);
+    ledger.recordBuild(issueKey, 'req_1', before.generation, sentA);
+    ledger.commit(issueKey, 'req_1');
+    assert.deepEqual(ledger.getSnapshot(issueKey).sent, {});
+  });
 });
