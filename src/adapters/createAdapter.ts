@@ -360,9 +360,11 @@ export function resolveClaudeBackendName(key: SessionKey): string {
 
 /**
  * @description Parse a `/claude_mode <arg>` backend argument into an adapter
- * name: the json-stream aliases, the tmux-scrape aliases, or `null` for
- * anything else (incl. the bare command → picker). One place for the alias
- * vocabulary so the command handler stays declarative.
+ * name: the json-stream aliases (`json`, `jsonstream`, `json-stream`, `stream`),
+ * the per-turn aliases (`perturn`, `per-turn`, `oneshot`), the tmux-scrape
+ * aliases (`tmux`, `scrape`, `terminal`, `classic`), or `null` for anything else
+ * (incl. the bare command → picker). One place for the alias vocabulary so the
+ * command handler stays declarative.
  */
 export function parseClaudeBackendArg(arg: string): string | null {
   if (['json', 'jsonstream', 'json-stream', 'stream'].includes(arg)) return claudeJsonStreamAdapterName;

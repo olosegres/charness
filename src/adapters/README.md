@@ -221,8 +221,9 @@ flow is reused verbatim; `answerQuestion` / `rejectQuestion` emit the matching
 This is the **DEFAULT** Claude backend (`getDefaultClaudeBackendName` /
 `resolveClaudeBackendName`): ▶️ Claude / `/claude` open it unless the thread
 explicitly picked another. `/claude_mode` switches a topic between the three
-Claude backends on the fly — `json-stream` (aliases `json`, `stream`),
-`per-turn` (`perturn`, `oneshot`), `tmux` (`scrape`, `classic`) — the pick
+Claude backends on the fly — json-stream (`json`, `jsonstream`, `json-stream`,
+`stream`), per-turn (`perturn`, `per-turn`, `oneshot`), tmux-scrape (`tmux`,
+`scrape`, `terminal`, `classic`; `parseClaudeBackendArg`) — the pick
 persists as the thread's adapter name and the switch RESUMES the same
 conversation (see "Shared session store"; `switchThreadAdapter` keeps
 `claudeSessionId` for all three; `checkIsSameConversationSwitch`). The two
