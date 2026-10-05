@@ -22,9 +22,12 @@ same core serves a second surface — Jira issues (`CONNECTORS=jira`) — throug
 
 **Core mental model — the bot is a proxy/relay.** Most commands are *forwarded* to the agent:
 
-- **Claude Code, two backends** (they share the on-disk transcript; `/claude_mode` switches a topic between
+- **Claude Code, three backends** (they share the on-disk transcript; `/claude_mode` switches a topic between
   them). `claude-json-stream` (DEFAULT) drives `claude -p` over stream-json as an EXTERNAL tmux-hosted process
-  (FIFO stdin, tailed `stdout.jsonl`). `claude` (tmux-scrape) drives the interactive TUI with
+  (FIFO stdin, tailed `stdout.jsonl`), stopped at the idle mark (`AGENT_IDLE_MINUTES`, 55 min); `claude-per-turn`
+  is the same host stopped after every turn. A stopped conversation SLEEPS (id kept) and the next trigger resumes
+  it through `ensureAgentSession`; a process is never stopped while it works (`checkIsWorking`), and only a CLI
+  ≥ 2.1.287 is auto-stopped (`claudeCodeVersion.ts`). `claude` (tmux-scrape) drives the interactive TUI with
   `tmux send-keys` and scrapes it with adaptive `capture-pane` polling (300 ms while the pane changes, backing
   off to 1.5 s). `CLAUDE_SCRAPE_DEBUG=1` logs raw/filtered scrape chunks.
 - **OpenCode** — a local HTTP server: prompts POST to `/session/:id/prompt_async` (with a

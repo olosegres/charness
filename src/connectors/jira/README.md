@@ -12,9 +12,13 @@ The `D*` / `R*` / `J*` ids cited in code comments are decisions of the connector
 the instance's env file), `accountId` (the AI account — the token must belong to it, checked against `/myself`
 at boot), `projects` (key → `{ folder, triggerStatuses }`, the allowlist; status NAMES resolved to ids at boot),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
-since user settings do not apply), `baseUrl` (loopback only, for the fakes). The adapter is fixed to
-`claude-json-stream` (an explicit `adapter` must name it). The instance's env file carries `CONNECTORS=jira`,
-`DATA_DIR`, `WORK_ROOT`, `TMUX_SOCKET_NAME`, an `OPENCODE_URL` off the default port (R9) and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up backstop (tests).
+since user settings do not apply), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
+(the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; refused
+at the session start — the idle lifecycle runs instead — when the issue's last known Claude Code is below
+2.1.287, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
+resumes it. The instance's env file carries `CONNECTORS=jira`, `DATA_DIR`, `WORK_ROOT`, `TMUX_SOCKET_NAME`, an
+`OPENCODE_URL` off the default port (R9) and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up
+backstop and `AGENT_IDLE_MINUTES` the idle mark (tests).
 Operator-facing setup steps: the public `README.md` § "Jira connector".
 
 ## Request flow (`inbound.ts`)
@@ -60,8 +64,9 @@ another platform's state.
   add the name to that allowlist — a missing one fails SILENTLY.
 - **Project memory still loads from the working folder and every parent**, so `jira.json` refuses a folder with
   Claude memory in it or above it (`getClaudeMemoryAbove`) — which rules out anything under HOME or inside a
-  repository. The adapter must be `claude-json-stream` (tmux Claude's trust dialog would hold the session;
-  OpenCode cannot be isolated yet), and the OpenCode URL needs a port of its own.
+  repository. The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
+  trust dialog would hold the session; OpenCode cannot be isolated yet), and the OpenCode URL needs a port of
+  its own.
 - `config.ts`: an unknown key is an error; `${VAR}` placeholders expand from the env file; every message names
   the field (and an unset placeholder's variable), never a value.
 - Lazy load: Jira code loads through a dynamic `import()` only when the connector is on, and nothing

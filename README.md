@@ -17,7 +17,8 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Simple setup & management** — install the CLI, put your bot token in one `.env`, bind a topic to a folder, and run; everything after is managed from Telegram — no dashboards
 - **Multi-thread / topic** — one topic per directory with your agent; two topics can share one folder for parallel work — run almost unlimited agents in parallel
 - **Two chat surfaces** — forum-group topics and the owner's bot DM, both served at once by default, with tabs on either
-- **Agent backends** — OpenCode (native server API over HTTP+SSE) and Claude Code (two backends — tmux and json-stream)
+- **Agent backends** — OpenCode (native server API over HTTP+SSE) and Claude Code (three backends — json-stream, per-turn and tmux)
+- **Sleeping agents** — a Claude json-stream topic's process is stopped when idle (or after every turn in per-turn mode) and the next message resumes the same conversation by itself, prompt cache still warm
 - **Raw terminal** — `/terminal` binds a topic to a real `$SHELL` in the project folder
 - **Notifications** — when the agent asks a question, the bot pins that message so even a muted topic notifies you: the pin pierces mute, giving exactly one notification per question (unpinned once you answer)
 - **Scheduled & self-driving runs** — `/schedule` arms cron / one-shot / N-times jobs per topic, and the agent can schedule *itself* via injected MCP tools: nightly reviews, recurring reports, a "finish this tomorrow at 9" hand-off. Each job fires as a fresh session with your prompt; restart-safe, with one catch-up for a run missed while the bot was down
@@ -276,7 +277,7 @@ actually start an agent or terminal in the folder.
 |---|---|
 | `/claude`, `/opencode`, `/oc` | Start agent in this topic's bound folder |
 | `/terminal` | Open a raw `$SHELL` in the bound folder — see [Raw terminal](#raw-terminal-terminal) |
-| `/claude_mode` | Switch this topic's Claude backend (tmux-scrape ⇄ json-stream); bare shows a picker — see [Claude Code backends](#claude-code-backends-claude_mode) |
+| `/claude_mode` | Switch this topic's Claude backend (json-stream ⇄ per-turn ⇄ tmux-scrape); bare shows a picker — see [Claude Code backends](#claude-code-backends-claude_mode) |
 | `/model` | Switch model through a two-level picker: providers, then that provider's models (10 per page). Each provider row has a 🙈 to hide it from the picker (bot-wide, persisted; 👁 brings it back) — `/model <provider/model>` still reaches a hidden provider. If OpenCode is waiting on an old provider's retry, the next prompt interrupts that wait and starts with the selected model instead of sitting queued behind it |
 | `/connect [provider]` | Connect an OpenCode provider (OpenAI by default; for example `/connect openrouter`). Special OAuth methods are shown when available; ordinary catalog providers ask for an API key and delete the key message from Telegram |
 | `/disconnect [provider]` | Remove an OpenCode provider's stored credentials; bare shows a picker of active providers. A provider OpenCode enables from an environment variable (e.g. `OPENROUTER_API_KEY`) stays active after this — the reply says so and points at hiding it in `/model` |
@@ -299,7 +300,7 @@ actually start an agent or terminal in the folder.
 | `/clear_messages` | Delete bot messages in this topic (up to 48h, Telegram limit) |
 | `/clear` | Forwarded to the agent (Claude wipes context; OpenCode plain text) — not a bot command anymore. Also purges the topic's file-intake dir |
 | `/compact` | Compact the agent's context — a real, confirmed compaction on OpenCode and on the default (stream) Claude backend; the tmux Claude backend has the literal command forwarded (its TUI compacts); terminal: not supported |
-| `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. On by default. The bot posts a short notice + a "where we stopped" recap after each idle compaction. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction |
+| `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. The bot posts a short notice + a "where we stopped" recap after each idle compaction. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so) |
 | `/auto_continue_limits` | Toggle waiting out a usage / session limit and resuming this topic by itself (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. On by default. While a resume is waiting the picker also offers «⏭ Skip once» — drop that one resume without turning the mode off |
 | `/bind` | Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons |
 | `/mcp` | List MCP servers active for this thread |
@@ -344,15 +345,29 @@ explicit command opens a shell.
 
 ## Claude Code backends (`/claude_mode`)
 
-"Claude Code" in a topic is one user-facing choice with two interchangeable
+"Claude Code" in a topic is one user-facing choice with three interchangeable
 backends:
 
 - **json-stream** (`/claude_mode json`) — `claude -p` in stream-json mode as
   an external tmux-hosted process emitting structured events. Cleaner
   output, and it survives bot restarts (the bot re-adopts the process and
-  replays what was produced during the downtime). The **default**.
+  replays what was produced during the downtime). After ~55 min idle
+  (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
+  compaction when `/compact_on_idle` allows one. The **default**.
+- **per-turn** (`/claude_mode per-turn`) — the same host, stopped right
+  after every answer. Nothing is lost: the conversation sleeps and your next
+  message resumes it. Needs Claude Code 2.1.287 or newer; the switch is
+  refused when the topic's last known version is older.
 - **tmux-scrape** (`/claude_mode tmux`) — the classic TUI driven by
-  keystrokes inside tmux; output is scraped from the pane.
+  keystrokes inside tmux; output is scraped from the pane. Never stopped
+  automatically.
+
+A stopped json-stream conversation **sleeps**: `/status` says so, and the next
+message, file, voice note, `/compact`, `/model` or `/effort` resumes it by
+itself — same session, prompt cache still warm, no "started" notice. A
+process is never stopped while it works (a running turn, a background task,
+a message not yet taken in). Only `/quit`, `/new` and leaving the folder end
+the conversation.
 
 `/login` works on both backends. tmux-scrape hosts the sign-in inside its
 TUI; json-stream (which has no TUI) runs it **out-of-band** — the bot spawns
@@ -362,12 +377,12 @@ posted). While the sign-in waits for the code, a message that is not a code
 is answered with a waiting hint instead of being swallowed; `/esc` cancels
 the pending sign-in (the link message says so).
 
-Both backends drive the same `claude` CLI against the same on-disk
+All three drive the same `claude` CLI against the same on-disk
 transcript, so `/claude_mode` switches a live topic seamlessly — the
 conversation resumes on the other backend. The pick persists per topic
-(▶️ Claude and `/claude` reopen it). Billing note: the json-stream backend
-strips `ANTHROPIC_API_KEY` from the agent's env, so usage bills to your
-Claude subscription rather than an API key.
+(▶️ Claude and `/claude` reopen it; on a sleeping topic they resume it).
+Billing note: the json-stream backends strip `ANTHROPIC_API_KEY` from the
+agent's env, so usage bills to your Claude subscription rather than an API key.
 
 ## Scheduler (`/schedule`)
 
@@ -642,7 +657,9 @@ a person assigns an issue to the AI account (in a trigger status)
    assigned issue is a request; a folder with Claude memory (`CLAUDE.md`, `.claude/`, …) in it or above it is
    refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
-   (optional). The adapter is `claude-json-stream`, the only one the connector supports.
+   (optional). `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
+   idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
+   requests and the next request resumes it.
 
 4. Start it with a clean environment, so nothing of the calling shell reaches it:
 
@@ -805,7 +822,11 @@ On boot the bot:
      never kills it: the bot adopts it and replays the downtime tail
      from the persisted offset — an in-flight turn is delivered
      end-to-end, and a pending interactive question is restored from its
-     on-disk sidecar.
+     on-disk sidecar. A topic whose process is gone (stopped at the idle
+     mark, or after its turn in per-turn mode) is NOT restarted at boot:
+     it sleeps, and your next message resumes it. An adopted process
+     started under an earlier bot build keeps that build's bot tools, so it
+     is stopped once idle and resumed with the current ones.
    - **OpenCode** threads re-resume their stored session ids over the
      shared SSE stream. `opencode serve` itself is reconciled: a dead
      server is auto-restarted and the sessions restored (the in-flight

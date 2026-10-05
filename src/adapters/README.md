@@ -70,9 +70,9 @@ Newline-delimited JSON, one object per line, parsed in
   Claude Code 2.1.287 on (`init.claude_code_version`;
   `utils/claudeCodeVersion.ts` is the gate).
 
-### Multi-turn — one long-lived process
+### Multi-turn — one process per conversation, two lifecycles
 
-ONE process per topic. Feed each user turn as a line on stdin:
+ONE process per conversation at a time. Feed each user turn as a line on stdin:
 
 ```
 {"type":"user","message":{"role":"user","content":"…"}}
@@ -81,6 +81,50 @@ ONE process per topic. Feed each user turn as a line on stdin:
 The process stays alive between turns and exits ONLY when stdin closes (a single
 message + EOF makes it answer once and exit — that is not multi-turn).
 `--replay-user-messages` echoes each input back as an ack.
+
+The SAME adapter class runs under two lifecycles (plan
+2026-10-04-claude-process-lifecycle), one adapter instance each, both using the
+same tmux name and host dir per conversation:
+
+- `claude-json-stream` (`lifecycle: 'idle'`, the default) — the process stays
+  between turns and is STOPPED at the idle mark (55 min, `AGENT_IDLE_MINUTES`),
+  right after the idle compaction when it applies (L-D1: whether or not it ran).
+- `claude-per-turn` (`lifecycle: 'perTurn'`) — the process is stopped right
+  after EVERY turn, by the bot on the adapter's `turnEnded` event (emitted after
+  each terminal `result`), unless a deferred compaction is armed or the process
+  still works. stdin is never closed while a task runs: EOF kills background
+  tasks ~5 s later (probe 2026-10-04).
+
+A stopped conversation SLEEPS: its session id stays persisted and the next
+trigger (a message, a Jira request, a limit resume, a wake-up, a schedule, a
+command that needs a live agent) resumes it through the bot's one choke point,
+`ensureAgentSession` — `--resume <id>`, silently, with the startup window open
+so a prompt typed meanwhile is buffered and replayed. A resume minutes later
+still reads the prompt cache (measured: a new process resuming after 50 min idle
+read 24 k cached tokens; after 70 min the session's own cache was gone — hence
+the 55-minute mark). A resume that fails starts a fresh session and the topic
+gets one line. `/quit`, `/new` and leaving the folder release the id.
+
+**Working (L-D2).** A process is never stopped while it works: a running turn
+(`checkIsBusy`), or `checkHasBackgroundWork` — the CLI's live background-task
+list (`system/background_tasks_changed`, `tasks[].task_id`; a background Bash
+or Monitor is `local_bash`, a background sub-agent `local_agent`; re-sent whole
+on every change, empty when nothing runs), input written but not yet echoed, a
+bot-issued compaction in flight. The two halves are read apart by the idle fire:
+a pending interactive question excuses the turn (D1: reject, compact, re-ask)
+but never a background task. A finished background task starts a turn of its
+own (`task_notification`), which re-arms the idle timer. The list rides the tail
+record (below) so an adopt restores it.
+
+**Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on
+(`system/init` `claude_code_version`, persisted with the tail record), so a
+process whose version is unknown or older is never auto-stopped (one log line),
+and a switch to `claude-per-turn` is refused for a conversation whose last known
+version — the live process's, else the persisted one — is below the gate; an
+unknown version allows the switch. `utils/claudeCodeVersion.ts` holds the gate.
+
+Every `result` logs `[ClaudeJson] usage <key>: input=… cacheRead=… cacheWrite=…
+output=…` (L-D11) — the cross-process cache check reads these lines.
 
 ### Process hosting — external tmux + FIFO + file tail (restart isolation)
 
@@ -176,14 +220,19 @@ flow is reused verbatim; `answerQuestion` / `rejectQuestion` emit the matching
 
 This is the **DEFAULT** Claude backend (`getDefaultClaudeBackendName` /
 `resolveClaudeBackendName`): ▶️ Claude / `/claude` open it unless the thread
-explicitly picked tmux. `/claude_mode` switches a topic between the two backends
-on the fly — the pick persists as the thread's adapter name and the switch
-RESUMES the same conversation (see "Shared session store";
-`switchThreadAdapter` keeps `claudeSessionId` for both backends). A reattach
+explicitly picked another. `/claude_mode` switches a topic between the three
+Claude backends on the fly — `json-stream` (aliases `json`, `stream`),
+`per-turn` (`perturn`, `oneshot`), `tmux` (`scrape`, `classic`) — the pick
+persists as the thread's adapter name and the switch RESUMES the same
+conversation (see "Shared session store"; `switchThreadAdapter` keeps
+`claudeSessionId` for all three; `checkIsSameConversationSwitch`). The two
+json-stream lifecycles share one stop-in-flight map, so a switch between them
+never races its own `tmux kill-session` under the shared name. A reattach
 guard stops a json-stream thread from re-adopting a stale tmux-`claude` session
-at boot. `hiddenAdapterNames` (in `createAdapter.ts`) keeps it out of the generic
-`/start` agent list — it is reached via the default + `/claude_mode`, not a start
-entry. (The old `CLAUDE_JSON_STREAM_THREADS` env gate is RETIRED.)
+at boot. `hiddenAdapterNames` (in `createAdapter.ts`) keeps both json-stream
+names out of the generic `/start` agent list — they are reached via the
+default + `/claude_mode`, not a start entry. (The old `CLAUDE_JSON_STREAM_THREADS`
+env gate is RETIRED.)
 
 ## `/login` — out-of-band (no TUI)
 
@@ -239,7 +288,7 @@ resumable in the other.
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants. Provider auth is NOT
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
 
-## Claude, both backends
+## Claude, every backend
 
 - **Effort.** Claude persists `/effort` GLOBALLY in its own settings, so a fresh TUI would inherit another
   topic's level. On every fresh spawn the tmux adapter arms the thread's stored level (`pendingEffortReapply`)
