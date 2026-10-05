@@ -7,6 +7,14 @@
  * tmux listings; and the synchronous sweep that ends everything the instance
  * started — also from `process.on('exit')`, where nothing asynchronous runs.
  *
+ * A SIGKILL of the test's process group runs no `exit` handler at all, and the
+ * private tmux server (a daemon in a session of its own) survives it — one such
+ * kill left a server and five fake agents running for hours. Two guards, both
+ * keyed on the owner file a layout carries (the test's pid and start time):
+ * a detached reaper (`isolatedInstanceReaper.ts`) ends the instance once its
+ * owner is gone, and every new layout first reaps the dead instances of its own
+ * prefix left in the temp dir (`reapDeadIsolatedInstances`).
+ *
  * Nothing here knows which connector a test serves: the test writes the env
  * file and chooses the readiness line.
  */
@@ -27,6 +35,118 @@ export const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
 const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 export const fakeClaudePath = path.join(__dirname, '..', 'jiraE2e', 'fakeClaude.ts');
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
+
+/** The file in a layout's root naming the test process that owns it. */
+export const isolatedInstanceOwnerFileName = 'owner.json';
+
+/**
+ * @name IsolatedInstanceOwner
+ * @description Who owns a layout: the test process's pid and its start time in
+ * clock ticks since boot (Linux `/proc/<pid>/stat`), which tells a reused pid
+ * from the owner; plus where its tmux servers live, so a reaper that found
+ * only this file can still end them.
+ */
+export interface IsolatedInstanceOwner {
+  pid: number;
+  startTicks: number | null;
+  tmuxTmpDir: string;
+  tmuxSocketName: string;
+}
+
+/** `/proc/<pid>/stat` fields start after the parenthesised command name; `starttime` is field 22 of the whole line. */
+const procStatStartTimeFieldIndex = 22;
+const procStatFieldsBeforeCommandEnd = 2;
+
+/** @description A process's start time in clock ticks since boot (field 22 of `/proc/<pid>/stat`); `null` without `/proc` or for a gone pid. */
+export function getProcessStartTicks(pid: number): number | null {
+  const statPath = `/proc/${pid}/stat`;
+  if (!fs.existsSync(statPath)) return null;
+  const stat = fs.readFileSync(statPath, 'utf8');
+  const afterCommand = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/);
+  const startTicks = Number(afterCommand[procStatStartTimeFieldIndex - procStatFieldsBeforeCommandEnd - 1]);
+  return Number.isInteger(startTicks) ? startTicks : null;
+}
+
+/** @description Whether the owning process still runs — the same process, not another one under a reused pid. */
+export function checkIsIsolatedInstanceOwnerAlive(owner: IsolatedInstanceOwner): boolean {
+  const startTicks = getProcessStartTicks(owner.pid);
+  if (startTicks === null) {
+    // Without /proc nothing can be proven: a pid that answers a signal probe is taken as alive.
+    if (fs.existsSync('/proc/self')) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return owner.startTicks === null || startTicks === owner.startTicks;
+}
+
+/** @description The owner file of a layout root; `null` when the root carries none (not a layout, or not yet written). */
+export function readIsolatedInstanceOwner(testRoot: string): IsolatedInstanceOwner | null {
+  const ownerPath = path.join(testRoot, isolatedInstanceOwnerFileName);
+  if (!fs.existsSync(ownerPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** The socket paths of every tmux server an instance may have started — see {@link removeIsolatedInstanceSync}. */
+function listInstanceTmuxSocketPaths(tmuxTmpDir: string, tmuxSocketName: string): string[] {
+  return [
+    path.join(getTmuxSocketDir(tmuxTmpDir), tmuxSocketName),
+    path.join(getTmuxSocketDir(tmuxTmpDir), 'default'),
+    path.join(getTmuxSocketDir('/tmp'), tmuxSocketName),
+  ];
+}
+
+/** Kill the instance's own tmux servers (which ends the agents in them) and remove its folder. */
+function killInstanceTmuxServersAndFolderSync(testRoot: string, tmuxTmpDir: string, tmuxSocketName: string): void {
+  // Every kill names its socket by FULL PATH (`-S`), which tmux never swaps for the server `$TMUX` names.
+  for (const socketPath of listInstanceTmuxSocketPaths(tmuxTmpDir, tmuxSocketName)) {
+    spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
+  }
+  fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
+  fs.rmSync(testRoot, { recursive: true, force: true });
+}
+
+/** @description End an instance whose owner is gone: its tmux servers and its folder (the reaper's and the sweep's step). */
+export function removeDeadIsolatedInstanceSync(testRoot: string, owner: IsolatedInstanceOwner): void {
+  killInstanceTmuxServersAndFolderSync(testRoot, owner.tmuxTmpDir, owner.tmuxSocketName);
+}
+
+/**
+ * @description Reap every layout of `prefix` in the temp dir whose owning test
+ * process is provably gone — its servers and folder — and return their roots.
+ * A layout whose owner still runs (another worker of the same suite, or a run
+ * in progress) is left alone, as is a folder without an owner file.
+ */
+export function reapDeadIsolatedInstances(prefix: string): string[] {
+  const reaped: string[] = [];
+  for (const entry of fs.readdirSync(os.tmpdir(), { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    const testRoot = path.join(os.tmpdir(), entry.name);
+    const owner = readIsolatedInstanceOwner(testRoot);
+    if (owner === null || checkIsIsolatedInstanceOwnerAlive(owner)) continue;
+    removeDeadIsolatedInstanceSync(testRoot, owner);
+    reaped.push(testRoot);
+  }
+  return reaped;
+}
+
+/** Start the detached reaper of `layout` in a session of its own; it needs nothing from this process to go on. */
+function startIsolatedInstanceReaper(layout: IsolatedInstanceLayout): void {
+  const reaper = spawn(process.execPath, ['--import', pathToFileURL(tsxLoaderPath).href, reaperPath, layout.testRoot], {
+    detached: true,
+    stdio: 'ignore',
+    env: { HOME: process.env.HOME ?? '', PATH: process.env.PATH ?? '' },
+  });
+  reaper.unref();
+}
 
 /** The only variables `run-isolated.sh` passes to the instance. */
 export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
@@ -185,9 +305,12 @@ export interface IsolatedInstanceLayout {
 
 /**
  * @description Create the layout under the OS temp dir. `prefix` names the
- * test (`charness-j7-`); `projectFolders` are created under WORK_ROOT.
+ * test (`charness-j7-`); `projectFolders` are created under WORK_ROOT. Dead
+ * instances of the same prefix left by a killed earlier run are reaped first;
+ * the new layout gets an owner file and its own detached reaper.
  */
 export function createIsolatedInstanceLayout(prefix: string, projectFolders: readonly string[]): IsolatedInstanceLayout {
+  for (const reapedRoot of reapDeadIsolatedInstances(prefix)) console.log(`[isolated] reaped a dead earlier instance: ${reapedRoot}`);
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const layout: IsolatedInstanceLayout = {
     testRoot,
@@ -206,6 +329,9 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
   fs.mkdirSync(layout.tmuxTmpDir, { mode: 0o700 });
   // The running node under its own name, so the instance's PATH needs no other folder that could hold an agent binary.
   fs.symlinkSync(process.execPath, path.join(layout.binDir, 'node'));
+  const owner: IsolatedInstanceOwner = { pid: process.pid, startTicks: getProcessStartTicks(process.pid), tmuxTmpDir: layout.tmuxTmpDir, tmuxSocketName: layout.tmuxSocketName };
+  fs.writeFileSync(path.join(testRoot, isolatedInstanceOwnerFileName), JSON.stringify(owner));
+  startIsolatedInstanceReaper(layout);
   return layout;
 }
 
@@ -340,16 +466,8 @@ export class IsolatedCharness {
 export function removeIsolatedInstanceSync(layout: IsolatedInstanceLayout | null, charness: IsolatedCharness | null): void {
   charness?.killSync();
   if (!layout) return;
-  // Every kill names its socket by FULL PATH (`-S`), which tmux never swaps for the server `$TMUX` names.
-  for (const socketPath of [
-    path.join(getTmuxSocketDir(layout.tmuxTmpDir), layout.tmuxSocketName),
-    path.join(getTmuxSocketDir(layout.tmuxTmpDir), 'default'),
-    path.join(getTmuxSocketDir('/tmp'), layout.tmuxSocketName),
-  ]) {
-    spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
-  }
-  fs.rmSync(path.join(getTmuxSocketDir('/tmp'), layout.tmuxSocketName), { force: true });
-  fs.rmSync(layout.testRoot, { recursive: true, force: true });
+  // The folder's removal is also what ends the layout's detached reaper.
+  killInstanceTmuxServersAndFolderSync(layout.testRoot, layout.tmuxTmpDir, layout.tmuxSocketName);
 }
 
 /** A signal ends the run through `exit`, whose handler cleans up (a signal's default action would skip it). */
