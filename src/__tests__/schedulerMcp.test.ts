@@ -172,17 +172,19 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram'), telegram);
   });
 
-  it('changes when a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
+  it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
     const base = [
       { name: 'answer_request', title: 'Answer a request', description: 'Send your answer', inputKeys: ['body', 'kind', 'requestId'] },
       { name: 'compact_conversation', title: 'Compact', description: 'Compact this conversation', inputKeys: ['reason'] },
     ];
-    const digest = buildBotMcpToolDigest(base);
-    assert.equal(buildBotMcpToolDigest([base[1], base[0]]), digest, 'order-independent');
-    assert.notEqual(buildBotMcpToolDigest([...base, { name: 'schedule_list', title: 'List', description: 'List', inputKeys: [] }]), digest, 'a tool added');
-    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], name: 'answer' }, base[1]]), digest, 'a tool renamed');
-    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], description: 'Send your answer, please' }, base[1]]), digest, 'a description changed');
-    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], inputKeys: ['body', 'kind'] }, base[1]]), digest, 'a parameter dropped');
+    const instructions = 'Use these tools.';
+    const digest = buildBotMcpToolDigest(instructions, base);
+    assert.equal(buildBotMcpToolDigest(instructions, [base[1], base[0]]), digest, 'order-independent');
+    assert.notEqual(buildBotMcpToolDigest(instructions, [...base, { name: 'schedule_list', title: 'List', description: 'List', inputKeys: [] }]), digest, 'a tool added');
+    assert.notEqual(buildBotMcpToolDigest(instructions, [{ ...base[0], name: 'answer' }, base[1]]), digest, 'a tool renamed');
+    assert.notEqual(buildBotMcpToolDigest(instructions, [{ ...base[0], description: 'Send your answer, please' }, base[1]]), digest, 'a description changed');
+    assert.notEqual(buildBotMcpToolDigest(instructions, [{ ...base[0], inputKeys: ['body', 'kind'] }, base[1]]), digest, 'a parameter dropped');
+    assert.notEqual(buildBotMcpToolDigest('Use these tools, please.', base), digest, 'the connect-time instructions changed');
   });
 });
 

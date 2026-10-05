@@ -4278,7 +4278,12 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: AgentAdapter): voi
       return;
     }
     console.log(`[reattach] ${kStr}: stopping the adopted process with the stale tool list; the next trigger resumes it with the current tools`);
-    void suspendThreadSession(key).catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
+    void suspendThreadSession(key)
+      .then(() => {
+        // The suspend declines when a turn began between the look and the transition: look again.
+        if (adapter.checkIsActive(key)) setTimeout(tick, adoptedToolListRefreshPollMs).unref?.();
+      })
+      .catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
   };
   tick();
 }

@@ -1,7 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { AnySchema, ZodRawShapeCompat } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CancelledNotificationSchema,
@@ -358,8 +359,25 @@ export interface SchedulerMcpHandle {
   getToolDigest(platform: PlatformId | null): string;
 }
 
-/** What the tool registrars need of an {@link McpServer}: the registration call alone. */
-type ToolRegistrar = Pick<McpServer, 'registerTool'>;
+/** The parts of a tool definition an MCP client sees at connect, as {@link McpServer.registerTool} takes them. */
+interface ToolRegistration<InputArgs extends ZodRawShapeCompat | AnySchema | undefined> {
+  title?: string;
+  description?: string;
+  inputSchema?: InputArgs;
+}
+
+/**
+ * What the tool registrars need of an {@link McpServer}: the registration call
+ * alone, its result unused — so a recorder that only notes the definition (the
+ * digest) satisfies it next to the real server.
+ */
+interface ToolRegistrar {
+  registerTool<InputArgs extends ZodRawShapeCompat | AnySchema | undefined = undefined>(
+    name: string,
+    config: ToolRegistration<InputArgs>,
+    callback: ToolCallback<InputArgs>,
+  ): void;
+}
 
 /** The parts of a tool definition an MCP client sees — what {@link getBotMcpToolDigest} hashes. */
 export interface BotMcpToolDefinition {
@@ -371,17 +389,18 @@ export interface BotMcpToolDefinition {
 }
 
 /**
- * @description Hash the tool definitions a client would list — a stable id of
- * "the tools this bot build offers a session of one platform". Lifecycle plan L4:
+ * @description Hash what a client caches when it connects — the server
+ * instructions and the tool definitions it would list — into a stable id of
+ * "what this bot build offers a session of one platform". Lifecycle plan L4:
  * persisted when a json-stream process starts and compared when the process is
  * adopted after a bot restart, since the stateless server cannot tell a running
- * client that its tool list changed.
+ * client that any of it changed.
  */
-export function buildBotMcpToolDigest(definitions: readonly BotMcpToolDefinition[]): string {
+export function buildBotMcpToolDigest(instructions: string, definitions: readonly BotMcpToolDefinition[]): string {
   const canonical = [...definitions]
     .sort((left, right) => left.name.localeCompare(right.name))
     .map(({ name, title, description, inputKeys }) => ({ name, title: title ?? '', description: description ?? '', inputKeys }));
-  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+  return createHash('sha256').update(JSON.stringify({ instructions, tools: canonical })).digest('hex');
 }
 
 /** A scope of no conversation: only the digest registers against it, and the digest never runs a handler. */
@@ -396,13 +415,12 @@ const digestScope: SchedulerScope = { kind: 'dir', directory: '' };
 export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId | null): string {
   const definitions: BotMcpToolDefinition[] = [];
   const recorder: ToolRegistrar = {
-    registerTool: ((name: string, config: { title?: string; description?: string; inputSchema?: Record<string, unknown> }) => {
+    registerTool: (name, config) => {
       definitions.push({ name, title: config.title, description: config.description, inputKeys: Object.keys(config.inputSchema ?? {}).sort() });
-      return undefined as never;
-    }) as McpServer['registerTool'],
+    },
   };
   registerBotTools(recorder, deps, digestScope, platform, undefined);
-  return buildBotMcpToolDigest(definitions);
+  return buildBotMcpToolDigest(buildMcpServerInstructions(platform), definitions);
 }
 
 /**
