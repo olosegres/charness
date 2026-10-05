@@ -674,7 +674,9 @@ a person assigns an issue to the AI account (in a trigger status)
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the
 bot's MCP server only, without the native question tool, and with an environment reduced to a short allowlist
-— the Jira token never reaches the agent. Module details: `src/connectors/jira/README.md`.
+— the Jira token is not in the agent's environment. The agent still runs as the instance's OS user and can read
+the instance's env file and `DATA_DIR`, so run the instance under an OS user that holds nothing else, with an AI
+account that sees only the allowlisted projects. Module details: `src/connectors/jira/README.md`.
 
 ## Bot-injected agent tools
 

@@ -60,8 +60,12 @@ another platform's state.
   skills), `--strict-mcp-config`, `--disallowedTools AskUserQuestion` (a tracker has no surface for a native
   question; the agent asks through `answer_request` kind `question`), and an environment built from an
   allowlist (`utils/agentEnvironment.ts`) minus anything the instance's `ENV_FILE` set, so the tracker token
-  never reaches the agent. A deployment that needs `CLAUDE_CONFIG_DIR`, a proxy or `NODE_EXTRA_CA_CERTS` must
-  add the name to that allowlist — a missing one fails SILENTLY.
+  is not in the agent's ENVIRONMENT. That is all it guarantees: the agent runs as the instance's own OS user
+  with `--dangerously-skip-permissions`, so it can still read the `ENV_FILE` (which holds the token) and the
+  `DATA_DIR` (including the bot MCP's signing secret in `state.json`). Run a Jira instance under an OS user
+  that holds nothing else, with an AI account that sees only the allowlisted projects. A deployment that
+  needs `CLAUDE_CONFIG_DIR`, a proxy or `NODE_EXTRA_CA_CERTS` must add the name to that allowlist — a missing
+  one fails SILENTLY.
 - **Project memory still loads from the working folder and every parent**, so `jira.json` refuses a folder with
   Claude memory in it or above it (`getClaudeMemoryAbove`) — which rules out anything under HOME or inside a
   repository. The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
