@@ -185,6 +185,22 @@ export function checkIsBusyForRealTurn(input: {
   return input.isBusy && !input.hasPendingQuestion;
 }
 
+/**
+ * @description Whether the process is WORKING at the idle fire (L-D2): a real
+ * running turn ({@link checkIsBusyForRealTurn} — a pending question excuses the
+ * turn, D1) OR background work the question never excuses (a background task,
+ * input not yet taken in, a compaction in flight). The two are read apart so a
+ * question pending over a running background task still reads as working: the
+ * D1 reject-compact-re-ask would otherwise end in a stop that kills the task.
+ */
+export function checkIsWorkingAtIdle(input: {
+  isBusy: boolean;
+  hasPendingQuestion: boolean;
+  hasBackgroundWork: boolean;
+}): boolean {
+  return checkIsBusyForRealTurn(input) || input.hasBackgroundWork;
+}
+
 /** What the idle timer does when it fires: the compaction half and the stop half, each with its reasons. */
 export interface IdleFireDecision {
   /** Run the idle compaction (D1/D2). */

@@ -26,7 +26,7 @@ import {
   formatTokenCount,
   type IdleCompactionArmKind,
   getIdleCompactionArmDecision,
-  checkIsBusyForRealTurn,
+  checkIsWorkingAtIdle,
   getIdleFireDecision,
 } from '../../../utils/compactOnIdle';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
@@ -497,17 +497,20 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Whether the topic's process is WORKING right now (L-D2): a real
-   * running turn, a background task, input not yet taken in or a compaction in
-   * flight — read from the adapter's own probe where it has one, else from busy. A
-   * pending interactive question makes the session report busy, but it is
-   * idle-WAITING, not running a turn — D1 treats that as a FIRE condition (reject +
-   * compact + re-ask), so it is excluded. A genuinely running turn still blocks.
+   * @description Whether the topic's process is WORKING right now (L-D2). The
+   * turn and the background work are read APART: a pending interactive question
+   * makes the session report busy, but it is idle-WAITING, not running a turn —
+   * D1 treats that as a FIRE condition (reject + compact + re-ask), so the
+   * question excuses the turn alone. It never excuses a background task, input
+   * not yet taken in or a compaction in flight: with those the process is working
+   * whatever the question says, and is neither compacted nor stopped.
    */
   function checkIsThreadWorking(key: SessionKey, adapter: AgentAdapter): boolean {
-    const hasPendingQuestion = pendingQuestions.has(keyToString(key));
-    const isBusy = adapter.checkIsWorking?.(key) ?? adapter.checkIsBusy?.(key) ?? false;
-    return checkIsBusyForRealTurn({ isBusy, hasPendingQuestion });
+    return checkIsWorkingAtIdle({
+      isBusy: adapter.checkIsBusy?.(key) ?? false,
+      hasPendingQuestion: pendingQuestions.has(keyToString(key)),
+      hasBackgroundWork: adapter.checkHasBackgroundWork?.(key) ?? false,
+    });
   }
 
   /**

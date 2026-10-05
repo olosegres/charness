@@ -17,6 +17,7 @@ import {
   getAgentIdleMs,
   getIdleFireDecision,
   checkIsBusyForRealTurn,
+  checkIsWorkingAtIdle,
   buildCompactionInstruction,
   compactionSummaryGuidance,
   compactionSkillsGuidance,
@@ -245,6 +246,19 @@ test('checkIsBusyForRealTurn: a pending question is NOT a real-turn busy (D1 fir
   assert.equal(checkIsBusyForRealTurn({ isBusy: true, hasPendingQuestion: false }), true);
   assert.equal(checkIsBusyForRealTurn({ isBusy: false, hasPendingQuestion: true }), false);
   assert.equal(checkIsBusyForRealTurn({ isBusy: false, hasPendingQuestion: false }), false);
+});
+
+test('checkIsWorkingAtIdle: a pending question excuses the turn alone — over a background task the process is working (L-D2)', () => {
+  // The L3 review case: question pending AND a background task running. The old probe masked the
+  // whole adapter "working" reading behind the question and would compact, re-ask, then stop — killing the task.
+  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: true }), true);
+  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: false }), false, 'the question alone: idle-waiting (D1 fires)');
+  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: false, hasBackgroundWork: false }), true, 'a real turn');
+  assert.equal(checkIsWorkingAtIdle({ isBusy: false, hasPendingQuestion: false, hasBackgroundWork: true }), true, 'a background task between turns');
+  assert.equal(checkIsWorkingAtIdle({ isBusy: false, hasPendingQuestion: false, hasBackgroundWork: false }), false);
+  const decision = getIdleFireDecision({ ...fireBase, isWorking: checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: true }) });
+  assert.equal(decision.shouldCompact, false);
+  assert.equal(decision.shouldSuspend, false, 'never stopped: the stop would kill the task');
 });
 
 test('a pending question at idle still fires (D1): it is not "working"', () => {

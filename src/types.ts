@@ -701,6 +701,16 @@ export interface AgentAdapter extends EventEmitter {
   checkIsWorking?(key: SessionKey): boolean;
 
   /**
+   * The part of "working" that is NOT the running turn: a background task the
+   * process still runs, input written but not yet taken in, a compaction in
+   * flight. Read apart from `checkIsBusy` by the idle fire, which excuses a busy
+   * turn that only waits on an interactive question (D1) but never this — with a
+   * question pending AND a background task running, the process is working (L-D2).
+   * Optional, like `checkIsWorking`.
+   */
+  checkHasBackgroundWork?(key: SessionKey): boolean;
+
+  /**
    * Re-register the bot-owned scheduler MCP for active OpenCode directories,
    * for a listener that became available after those sessions connected. Boot
    * no longer needs it: the listener is bound before sessions are re-attached,

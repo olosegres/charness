@@ -969,8 +969,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   checkIsWorking(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
-    return session.isBusy
-      || session.backgroundTaskIds.size > 0
+    return session.isBusy || this.checkHasBackgroundWork(key);
+  }
+
+  /** Background tasks, input not yet taken in, a compaction in flight — "working" minus the turn (L-D2). */
+  checkHasBackgroundWork(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return false;
+    return session.backgroundTaskIds.size > 0
       || session.unconsumedInputCount > 0
       || session.compactionInProgress;
   }

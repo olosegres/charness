@@ -245,6 +245,8 @@ describe('json-stream external transport — exit detection', () => {
     adapter['drainStdoutTail'](session);
     assert.deepEqual([...session.backgroundTaskIds], ['b1', 'a2']);
     assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
+    assert.equal(adapter.checkHasBackgroundWork(key), true, 'reported apart from the turn, so a pending question cannot excuse it');
+    assert.equal(adapter.checkIsBusy(key), false, 'no turn runs');
     assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [] },
       'the list rides along with the offset so an adopt restores it');
 
