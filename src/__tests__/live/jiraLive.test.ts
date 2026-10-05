@@ -14,6 +14,12 @@
  *                                       refuses a jira.json that points anywhere else)
  *   JIRA_LIVE_REQUESTER_STORAGE_STATE   a Playwright login state of the REQUESTER account on that
  *                                       site (R33: the requester acts only through its browser)
+ *   JIRA_LIVE_LONG_IDLE_MINUTES         optional: how long the run sleeps before the cross-process
+ *                                       cache measurement (lifecycle plan L6 step 5, ~50); unset →
+ *                                       that step is skipped
+ *
+ * The instance env file must also set `AGENT_IDLE_MINUTES` (a few minutes): the
+ * lifecycle steps wait for the idle compaction and stop at that mark.
  *
  * The AI account's token is used by this test only against the configured site:
  * to prove it belongs to the AI account, for the AI assigning an issue to itself,
@@ -39,8 +45,19 @@
  *   → long answer: comments in order; the size limit Jira enforces probed (R19)
  *   → question: a question comment, the issue back; the requester's reply and
  *     re-assignment bring a final answer that uses the reply
- *   → charness restarted: no request opened again
+ *   → lifecycle (plan L6 step 1): the answered issue idles — its session is
+ *     compacted in its own process (the context sizes logged; live Claude Code
+ *     reports the summary call's tokens nowhere) and the process stopped; the
+ *     next hand-over resumes the same conversation in a new process, the answer
+ *     uses the earlier context, the resumed turn reads it from the cache
+ *   → charness restarted (new sessions now `claude-per-turn`): no request opened again
  *   → the killed agent's request still answered
+ *   → lifecycle (L6 step 2): a per-turn issue — the process is gone right after
+ *     its answer; a hand-over a minute later runs a new process that resumes the
+ *     conversation and reads the first process's context from the cache
+ *   → lifecycle (L6 step 5, when `JIRA_LIVE_LONG_IDLE_MINUTES` is set): the
+ *     sleeping per-turn session's idle compaction, then a resume that long after
+ *     it — the cache read against the cache creation is reported
  *   → every Jira session's MCP servers: only the bot's own (R8)
  *   → the self-assigned issue: no request, nothing posted
  *   end: charness stopped, its private tmux server removed, the issues moved to a
@@ -68,6 +85,8 @@ import { makeJiraKey } from '../../connectors/jira/sessionKeyCodec';
 import { getJiraConfigPath } from '../../connectors/jira/configFile';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../../utils/jsonStreamHost';
 import { keyToString } from '../../sessionKey';
+import { claudeJsonStreamUsageLogPrefix } from '../../adapters/claudeJsonStreamAdapter';
+import { claudePerTurnAdapterName } from '../../adapters/adapterNames';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../../connectors/telegram/telegramCallGuard';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
 import { buildSupersededRequestsLine } from '../../requests/requestHeader';
@@ -75,6 +94,7 @@ import { buildSupersededRequestsLine } from '../../requests/requestHeader';
 const liveEnvFile = process.env.JIRA_LIVE_ENV_FILE;
 const liveSite = process.env.JIRA_LIVE_SITE;
 const requesterStorageState = process.env.JIRA_LIVE_REQUESTER_STORAGE_STATE;
+const longIdleMinutes = process.env.JIRA_LIVE_LONG_IDLE_MINUTES === undefined ? null : Number(process.env.JIRA_LIVE_LONG_IDLE_MINUTES);
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const cliPath = path.join(repoRoot, 'dist', 'cli.js');
@@ -83,7 +103,10 @@ const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 /** The only variables `run-isolated.sh` passes to the instance. */
 const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
 /** What a Jira-only instance's env file must set. */
-const requiredInstanceEnvNames = ['CONNECTORS', 'DATA_DIR', 'WORK_ROOT', 'TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'REQUEST_BACKSTOP_MINUTES'];
+const agentIdleMinutesEnvName = 'AGENT_IDLE_MINUTES';
+const requiredInstanceEnvNames = ['CONNECTORS', 'DATA_DIR', 'WORK_ROOT', 'TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'REQUEST_BACKSTOP_MINUTES', agentIdleMinutesEnvName];
+/** The idle mark a live run may use: the waits below are sized from it, and the whole flow must fit the timeout. */
+const agentIdleMinutesMax = 5;
 const telegramTokenEnvName = 'TELEGRAM_BOT_TOKEN';
 const atlassianEnvPrefix = 'ATLASSIAN_';
 /** The bot's own MCP server — the only one a Jira session may load (R8). */
@@ -98,7 +121,13 @@ const stopTimeoutMs = 30 * 1000;
 const waitStepMs = 3000;
 /** Polls happen at once on start, then one interval apart: two and a half intervals hold two polls. */
 const restartPollIntervals = 2.5;
-const flowTimeoutMs = 60 * 60 * 1000;
+/** The idle mark, the compaction turn and the stop, with room for a real compaction turn. */
+const idleStopMarginMs = 4 * 60 * 1000;
+/** A per-turn stop follows the turn's `result` frame, tailed right after the answer landed through the MCP. */
+const perTurnStopTimeoutMs = 60 * 1000;
+/** L6 step 2: the per-turn hand-overs are "a minute apart" — the second one waits this long after the first stop. */
+const perTurnHandOverGapMs = 60 * 1000;
+const flowTimeoutMs = (60 + (longIdleMinutes ?? 0) + 10) * 60 * 1000;
 const outputTailChars = 4000;
 
 /** R19 probe sizes: Jira's documented comment limit is 32 767 characters; each probe lands on one side of it by one count only. */
@@ -145,8 +174,14 @@ function getRepeatScenarioText(token: string): string {
   ].join('\n');
 }
 
+/** L6 step 2: the per-turn issue's deliverable, told apart from every other answer by its token. */
+const perTurnToken = createAskToken('TURN');
+/** A hand-over that can only be answered from the conversation's earlier context (a resume, never a fresh session). */
+const recallAskText = 'Reply with a final answer whose text is exactly the text of your earlier final answer in this issue, nothing else.';
+
 const scenarioTexts = {
   final: 'Reply with a final answer whose text is exactly: PONG',
+  perTurn: `Reply with a final answer whose text is exactly: ${perTurnToken}`,
   question: [
     'Before doing anything else, ask the requester which colour they prefer, as a question answer, and end your turn.',
     'Once they have answered in a comment, reply with a final answer whose text is exactly that colour in upper case, nothing else.',
@@ -165,8 +200,8 @@ const scenarioTexts = {
 } as const;
 type Scenario = keyof typeof scenarioTexts;
 const answeredScenarios: readonly Scenario[] = ['final', 'question', 'progress', 'killed', 'long'];
-/** Every scenario whose issue gets an agent session: the batch above, plus the two handed over twice (R34). */
-const sessionScenarios: readonly Scenario[] = [...answeredScenarios, 'repeatAdd', 'repeatSame'];
+/** Every scenario whose issue gets an agent session: the batch above, the two handed over twice (R34), the per-turn one (L6). */
+const sessionScenarios: readonly Scenario[] = [...answeredScenarios, 'repeatAdd', 'repeatSame', 'perTurn'];
 const questionReply = 'Blue';
 
 let instanceEnv: Record<string, string> = {};
@@ -180,6 +215,14 @@ let runLogPath: string;
 let charness: ChildProcess | null = null;
 let charnessOutput = '';
 let defaultTmuxSessionsBefore: string[] | null = null;
+/** The instance's jira.json as found: the per-turn switch (L6 step 2) rewrites it and the run puts it back. */
+let jiraConfigOriginalText: string | null = null;
+/**
+ * Every `system/init` frame seen in an issue session's stream, by issue key and process: a stopped
+ * process takes its stream files with it (an idle stop removes the host dir), so the R8 check reads
+ * what the polls collected while the processes were alive, not the files at the end.
+ */
+const seenInitsByProcess = new Map<string, { issueKey: string; inits: StreamLine[] }>();
 const issueKeys = new Map<Scenario | 'self' | 'probe', string>();
 
 function getIssueKey(scenario: Scenario | 'self' | 'probe'): string {
@@ -227,6 +270,7 @@ function removeInstanceSync(): void {
   if (charness && charness.exitCode === null && charness.signalCode === null) charness.kill('SIGKILL');
   charness = null;
   killInstanceTmuxServer();
+  restoreJiraConfigSync();
 }
 
 /** A signal ends the run through `exit`, whose handler cleans up (a signal's default action would skip it). */
@@ -267,6 +311,7 @@ function expandFromInstanceEnv(value: object): object {
 async function waitFor(description: string, timeoutMs: number, check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await check())) {
+    recordSessionInits();
     if (charness && charness.exitCode !== null) throw new Error(`charness exited with ${charness.exitCode} while waiting for ${description}`);
     if (Date.now() > deadline) {
       throw new Error(`timed out waiting for ${description}; charness output tail:\n${charnessOutput.slice(-outputTailChars)}`);
@@ -368,6 +413,95 @@ function readStreamLines(issueKey: string): StreamLine[] {
       return [];
     }
   });
+}
+
+/** Collect the `system/init` frames of every live issue session (see `seenInitsByProcess`); called by each wait's poll. */
+function recordSessionInits(): void {
+  for (const issueKey of issueKeys.values()) {
+    const { pidFile } = getSessionPaths(issueKey);
+    if (!fs.existsSync(pidFile)) continue;
+    const inits = readStreamLines(issueKey).filter((line) => line.type === 'system' && line.subtype === 'init');
+    if (inits.length > 0) seenInitsByProcess.set(`${issueKey}:${fs.readFileSync(pidFile, 'utf8').trim()}`, { issueKey, inits });
+  }
+}
+
+function getSeenInits(issueKey: string): StreamLine[] {
+  return [...seenInitsByProcess.values()].filter((entry) => entry.issueKey === issueKey).flatMap((entry) => entry.inits);
+}
+
+/** @name TurnUsage @description One `[ClaudeJson] usage` line of an issue's conversation (L-D11), in token counts. */
+interface TurnUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}
+
+/** The usage lines charness logged for an issue's conversation so far, oldest first — one per turn, the compaction turn included. */
+function getUsageRecords(issueKey: string): TurnUsage[] {
+  const linePrefix = `${claudeJsonStreamUsageLogPrefix}${keyToString(makeJiraKey(issueKey))}: `;
+  return charnessOutput.split('\n').filter((line) => line.startsWith(linePrefix)).map((line) => {
+    const match = /input=(\d+) cacheRead=(\d+) cacheWrite=(\d+) output=(\d+)/.exec(line.slice(linePrefix.length));
+    if (!match) throw new Error(`a usage line of ${issueKey} has an unexpected shape: ${line}`);
+    return { input: Number(match[1]), cacheRead: Number(match[2]), cacheWrite: Number(match[3]), output: Number(match[4]) };
+  });
+}
+
+function formatUsage(usage: TurnUsage): string {
+  return `input=${usage.input} cacheRead=${usage.cacheRead} cacheWrite=${usage.cacheWrite} output=${usage.output}`;
+}
+
+/**
+ * The usage lines of an issue's conversation once at least `count` are there: an answer lands through the
+ * MCP before the turn's own `result` frame is tailed, so a line of the turn just answered is waited for.
+ */
+async function waitForUsageRecords(issueKey: string, count: number): Promise<TurnUsage[]> {
+  await waitFor(`${count} usage line(s) of ${issueKey}`, answerTimeoutMs, () => getUsageRecords(issueKey).length >= count);
+  return getUsageRecords(issueKey);
+}
+
+/** @name LoggedCompaction @description The context sizes (tokens) a compaction of the issue's conversation logged. */
+interface LoggedCompaction {
+  preTokens: number;
+  postTokens: number;
+}
+
+/** Every compaction charness logged for the issue's conversation, oldest first. */
+function getCompactions(issueKey: string): LoggedCompaction[] {
+  const linePrefix = `[ClaudeJson] compacted ${keyToString(makeJiraKey(issueKey))} (`;
+  return charnessOutput.split('\n').filter((line) => line.startsWith(linePrefix)).map((line) => {
+    const match = /^pre=(\d+) post=(\d+)\)/.exec(line.slice(linePrefix.length));
+    if (!match) throw new Error(`a compaction line of ${issueKey} has no counts: ${line}`);
+    return { preTokens: Number(match[1]), postTokens: Number(match[2]) };
+  });
+}
+
+/** How many times the bot logged the given line for the issue's conversation (`<prefix> <key><suffix>`). */
+function countConversationLogLines(issueKey: string, prefix: string, suffix: string): number {
+  const text = `${prefix} ${keyToString(makeJiraKey(issueKey))}${suffix}`;
+  return charnessOutput.split('\n').filter((line) => line.startsWith(text)).length;
+}
+
+function countIdleStops(issueKey: string): number {
+  return countConversationLogLines(issueKey, '[compact-on-idle]', ' process stopped; the session sleeps');
+}
+
+function countSleepingResumes(issueKey: string): number {
+  return countConversationLogLines(issueKey, '[ensure] resumed the sleeping session of', '');
+}
+
+/** Rewrite the instance's jira.json adapter for the sessions started from the next boot; the original text is kept for the restore. */
+function switchJiraConfigAdapter(adapter: string): void {
+  const configPath = getJiraConfigPath(dataDir);
+  if (jiraConfigOriginalText === null) jiraConfigOriginalText = fs.readFileSync(configPath, 'utf8');
+  const parsed: object = JSON.parse(jiraConfigOriginalText);
+  fs.writeFileSync(configPath, `${JSON.stringify({ ...parsed, adapter }, null, 2)}\n`);
+}
+
+function restoreJiraConfigSync(): void {
+  if (jiraConfigOriginalText === null) return;
+  fs.writeFileSync(getJiraConfigPath(dataDir), jiraConfigOriginalText);
+  jiraConfigOriginalText = null;
 }
 
 function getAgentPid(issueKey: string): number | null {
@@ -480,6 +614,10 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     assert.ok(!envNames.includes(telegramTokenEnvName), 'no bot token');
     assert.deepEqual(envNames.filter((name) => name.startsWith(atlassianEnvPrefix)), [], 'no Atlassian variables');
     assert.notEqual(instanceEnv.TMUX_SOCKET_NAME, 'default', 'a private tmux server');
+    const agentIdleMinutes = Number(instanceEnv[agentIdleMinutesEnvName]);
+    assert.ok(agentIdleMinutes > 0 && agentIdleMinutes <= agentIdleMinutesMax, `${agentIdleMinutesEnvName} is a few minutes (got ${instanceEnv[agentIdleMinutesEnvName]})`);
+    if (longIdleMinutes !== null) assert.ok(longIdleMinutes > agentIdleMinutes, 'the long idle wait lies beyond the idle mark');
+    report(`idle mark ${agentIdleMinutes} min; long idle wait ${longIdleMinutes === null ? 'skipped' : `${longIdleMinutes} min`}`);
     assert.ok(path.isAbsolute(instanceEnv.TMUX_TMPDIR) && !instanceEnv.TMUX_TMPDIR.startsWith(os.tmpdir()), 'TMUX_TMPDIR is a folder of the instance\'s own');
     const realHome = fs.realpathSync(os.homedir());
     for (const dir of [dataDir, instanceEnv.WORK_ROOT, instanceEnv.TMUX_TMPDIR]) {
@@ -676,10 +814,60 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`question ${issueKey}: comment ${getAiComments(state)[0].id} "${getAiComments(state)[0].text}"`);
   });
 
+  /** The idle window of the instance plus the margin for the compaction turn and the stop. */
+  function getIdleStopTimeoutMs(): number {
+    return Number(instanceEnv[agentIdleMinutesEnvName]) * 60 * 1000 + idleStopMarginMs;
+  }
+
+  /**
+   * The cache check (L-D11) of a turn that resumed a conversation: a turn that found its conversation in the
+   * prompt cache reads far more than it writes — the shared prefix and the earlier turns come from the cache,
+   * only the new messages are written. A broken cross-process cache shows the other way round: a write of
+   * the whole prefix with a small read.
+   */
+  function assertResumedTurnReadsCache(label: string, usage: TurnUsage): void {
+    assert.ok(usage.cacheRead > 0, `${label}: the resumed turn read from the cache (${formatUsage(usage)})`);
+    assert.ok(usage.cacheRead > usage.cacheWrite, `${label}: the resumed turn read more than it wrote (${formatUsage(usage)})`);
+  }
+
+  it('lifecycle (L6 step 1): the answered issue idles — compacted in its own process, then the process stopped; both turns\' counts are logged', async () => {
+    const issueKey = getIssueKey('final');
+    const [answerUsage] = await waitForUsageRecords(issueKey, 1);
+    await waitFor(`${issueKey}'s process stopped at the idle mark`, getIdleStopTimeoutMs(), () => countIdleStops(issueKey) === 1);
+    assert.equal(getAgentPid(issueKey), null, 'no process for the sleeping conversation');
+    assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] session', ' exited unexpectedly'), 0, 'an idle stop is not an unexpected exit');
+    const [compaction] = getCompactions(issueKey);
+    assert.ok(compaction, 'the compaction logged its context sizes');
+    assert.ok(compaction.postTokens < compaction.preTokens, `the context shrank (pre=${compaction.preTokens} post=${compaction.postTokens})`);
+    // The compaction turn's `result` is logged like every other (L-D11); live Claude Code reports the summary
+    // call's tokens nowhere (an all-zero usage, no assistant frame), so the line only proves the turn ended.
+    const [, compactionUsage] = await waitForUsageRecords(issueKey, 2);
+    report(`L6/1 idle ${issueKey}: answer turn ${formatUsage(answerUsage)}; compaction pre=${compaction.preTokens} post=${compaction.postTokens}, its result's usage ${formatUsage(compactionUsage)}; process stopped`);
+  });
+
+  it('lifecycle (L6 step 1): the next hand-over resumes the sleeping conversation in a new process; the answer uses the earlier context and reads it from the cache', async () => {
+    const issueKey = getIssueKey('final');
+    await getRequester().addComment(issueKey, recallAskText);
+    await getRequester().assignIssue(issueKey, config.accountId);
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
+    const recalled = getAiComments(state).at(-1);
+    assert.ok(recalled && /PONG/.test(recalled.text), `the resumed answer carries the earlier context (got "${recalled?.text}")`);
+    assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
+    assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] spawn', ' session='), 2, 'a second process');
+    assert.ok(charnessOutput.split('\n').some((line) => line.startsWith(`[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`) && line.includes(' resume=true ')), 'the second process resumed the conversation');
+    await waitFor('the second request in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).length >= 2);
+    assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['final', 'final']);
+    const usages = await waitForUsageRecords(issueKey, 3);
+    assertResumedTurnReadsCache('L6/1', usages[2]);
+    report(`L6/1 resume ${issueKey}: comment ${recalled.id} "${recalled.text}"; resumed turn ${formatUsage(usages[2])}`);
+  });
+
   it('a restart opens no request again', async () => {
     const commentsBefore = new Map<string, number>();
     for (const issueKey of issueKeys.values()) commentsBefore.set(issueKey, (await getRequester().getIssueState(issueKey)).comments.length);
     await stopCharness();
+    // From this boot, NEW Jira sessions run per turn (L6 step 2); the adopted and sleeping ones keep their lifecycle.
+    switchJiraConfigAdapter(claudePerTurnAdapterName);
     const outputStart = await startCharness();
     await new Promise((resolve) => setTimeout(resolve, restartPollIntervals * config.pollIntervalMs));
     const decisionsAfterRestart = getPolledDecisions(charnessOutput.slice(outputStart));
@@ -711,9 +899,55 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`killed ${issueKey}: comment(s) ${getAiComments(state).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}; ${initCount} session init(s)`);
   });
 
+  it('lifecycle (L6 step 2): per-turn — the process is gone right after the answer; a hand-over a minute later resumes the conversation in a new process that reads the first one\'s context from the cache', async () => {
+    const issueKey = getIssueKey('perTurn');
+    await getRequester().assignIssue(issueKey, config.accountId);
+    const firstState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => comment.text.includes(perTurnToken)));
+    assert.equal(getAiComments(firstState).length, 1, 'one answer');
+    await waitFor(`${issueKey}'s process stopped right after its turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 1);
+    assert.equal(getAgentPid(issueKey), null, 'no process between the turns');
+    assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] session', ' exited unexpectedly'), 0, 'a per-turn stop is not an unexpected exit');
+    const [firstUsage] = await waitForUsageRecords(issueKey, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, perTurnHandOverGapMs));
+    await getRequester().addComment(issueKey, recallAskText);
+    await getRequester().assignIssue(issueKey, config.accountId);
+    const secondState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
+    const recalled = getAiComments(secondState).at(-1);
+    assert.ok(recalled && recalled.text.includes(perTurnToken), `the second process answered from the first one's context (got "${recalled?.text}")`);
+    assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
+    await waitFor(`${issueKey}'s second process stopped too`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 2);
+    assert.equal(getAgentPid(issueKey), null, 'no process after the second turn either');
+    const usages = await waitForUsageRecords(issueKey, 2);
+    assertResumedTurnReadsCache('L6/2', usages[1]);
+    report(`L6/2 per-turn ${issueKey}: turn 1 ${formatUsage(firstUsage)}; turn 2 (new process, ${perTurnHandOverGapMs / 1000} s later) ${formatUsage(usages[1])}; comments ${getAiComments(secondState).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
+  });
+
+  it('lifecycle (L6 step 5): the sleeping per-turn session is compacted at the idle mark; a resume long after it still reads from the cache', { skip: longIdleMinutes === null ? 'set JIRA_LIVE_LONG_IDLE_MINUTES to run' : false }, async () => {
+    const issueKey = getIssueKey('perTurn');
+    await waitFor(`${issueKey}'s sleeping session compacted at the idle mark`, getIdleStopTimeoutMs(), () => getCompactions(issueKey).length === 1 && countIdleStops(issueKey) === 3);
+    assert.equal(countConversationLogLines(issueKey, '[compact-on-idle]', ' sleeping per-turn session resumed for its compaction'), 1, 'the compaction resumed the sleeping session (L-D7)');
+    const compactedAt = Date.now();
+    const usagesAtCompaction = await waitForUsageRecords(issueKey, 3);
+    const [compaction] = getCompactions(issueKey);
+    report(`L6/5 ${issueKey}: compaction pre=${compaction.preTokens} post=${compaction.postTokens}, its result's usage ${formatUsage(usagesAtCompaction[2])}; sleeping ${longIdleMinutes} min`);
+
+    await new Promise((resolve) => setTimeout(resolve, compactedAt + (longIdleMinutes ?? 0) * 60 * 1000 - Date.now()));
+    await getRequester().addComment(issueKey, recallAskText);
+    await getRequester().assignIssue(issueKey, config.accountId);
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 3);
+    const recalled = getAiComments(state).at(-1);
+    assert.ok(recalled && recalled.text.includes(perTurnToken), `the answer still carries the first turn's context (got "${recalled?.text}")`);
+    await waitFor(`${issueKey}'s process stopped after the late turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 4);
+    const usages = await waitForUsageRecords(issueKey, 4);
+    assertResumedTurnReadsCache(`L6/5 (${longIdleMinutes} min)`, usages[3]);
+    report(`L6/5 ${issueKey}: resume ${longIdleMinutes} min after the compaction turn: ${formatUsage(usages[3])}`);
+  });
+
   it('every Jira session loaded only the bot\'s MCP server (R8)', () => {
+    recordSessionInits();
     for (const scenario of sessionScenarios) {
-      const inits = readStreamLines(getIssueKey(scenario)).filter((line) => line.type === 'system' && line.subtype === 'init');
+      const inits = getSeenInits(getIssueKey(scenario));
       assert.ok(inits.length > 0, `${scenario}: a session init was read`);
       for (const init of inits) {
         assert.deepEqual((init.mcp_servers ?? []).map((server) => server.name), [botMcpServerName], `${scenario}: only the bot MCP`);

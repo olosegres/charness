@@ -401,7 +401,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await waitFor('PROJ-1\'s session compacted at the idle mark', idleStopTimeoutMs, () => compactions().some((compaction) => compaction.sessionId === sessionId));
     assert.equal(compactions().find((compaction) => compaction.sessionId === sessionId)?.pid, firstTurn.pid, 'compacted in the same process');
     await waitFor('PROJ-1\'s process stopped after the compaction', idleStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
-    assert.ok(getCharness().output.includes(`[compact-on-idle] jira:PROJ:PROJ-1 process stopped; the session sleeps`), 'the stop is logged');
+    // The process dies at the stop's SIGTERM; the bot logs the stop only once its own teardown (the tmux kill) converged.
+    await waitFor('the stop logged', idleStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-1 process stopped; the session sleeps'));
     assert.ok(!getCharness().output.includes('[ClaudeJson] session jira:PROJ:PROJ-1 exited unexpectedly'), 'an idle stop is not an unexpected exit');
 
     // PROJ-8 answered but left a background task running: its process is working and stays (L-D2).
@@ -626,7 +627,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
     assert.ok(sessionId, 'PROJ-10\'s launch named its conversation');
     await waitFor('PROJ-10\'s process stopped right after its turn', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
-    assert.ok(getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-10 process stopped; the session sleeps'), 'the per-turn stop is the idle stop\'s teardown');
+    // The per-turn stop is the idle stop's teardown; its line follows the bot's own tmux kill, after the process is gone.
+    await waitFor('the per-turn stop logged', perTurnStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-10 process stopped; the session sleeps'));
     assert.ok(!getCharness().output.includes('[ClaudeJson] session jira:PROJ:PROJ-10 exited unexpectedly'));
 
     handIssueToAi('PROJ-10', requester);
