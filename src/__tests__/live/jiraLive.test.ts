@@ -26,6 +26,8 @@
  *   → boot: Jira-only, nothing but run-isolated.sh's variables; the poll's JQL
  *     names only the allowlisted project
  *   → the requester assigns five issues to the AI; the AI assigns one to itself
+ *   → R34: the requester hands one more issue over twice while its agent still
+ *     works: the first request superseded, one answer whose header names it
  *   → the agents hold no instance variable (R32)
  *   → one agent killed mid-turn
  *   → final: a comment by the AI, the issue back with the requester, closed `final`
@@ -63,6 +65,7 @@ import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../../ut
 import { keyToString } from '../../sessionKey';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../../connectors/telegram/telegramCallGuard';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
+import { buildSupersededRequestsLine } from '../../requests/requestHeader';
 
 const liveEnvFile = process.env.JIRA_LIVE_ENV_FILE;
 const liveSite = process.env.JIRA_LIVE_SITE;
@@ -109,6 +112,8 @@ function getWaitCommand(seconds: number): string {
 const waitCommandMarker = 'time.sleep(';
 const progressWaitSeconds = 45;
 const killedWaitSeconds = 120;
+/** Long enough for a poll to pick the second hand-over up while the agent still waits on the first request. */
+const repeatWaitSeconds = 90;
 
 const scenarioTexts = {
   final: 'Reply with a final answer whose text is exactly: PONG',
@@ -123,11 +128,19 @@ const scenarioTexts = {
     '3. Send a final answer whose text is exactly: FINISHED',
   ].join('\n'),
   killed: `Run this shell command in the foreground and wait for it to finish (it takes two minutes): \`${getWaitCommand(killedWaitSeconds)}\`. Then send a final answer whose text is exactly: SLEPT`,
+  repeat: [
+    'Do these steps in order:',
+    '1. Send a progress answer whose text is exactly: TAKEN',
+    `2. Run this shell command in the foreground and wait for it: \`${getWaitCommand(repeatWaitSeconds)}\``,
+    '3. Send a final answer whose text is exactly: AGAIN',
+  ].join('\n'),
   long: `Send a final answer that is a Markdown bullet list of the numbers 1 to ${longAnswerItemCount} in order, one list item per number, written as \`- item 1\`, \`- item 2\`, … \`- item ${longAnswerItemCount}\`, and nothing else.`,
   idle: 'Test data of a live run; there is nothing to do here.',
 } as const;
 type Scenario = keyof typeof scenarioTexts;
 const answeredScenarios: readonly Scenario[] = ['final', 'question', 'progress', 'killed', 'long'];
+/** Every scenario whose issue gets an agent session: the batch above, plus the one handed over twice (R34). */
+const sessionScenarios: readonly Scenario[] = [...answeredScenarios, 'repeat'];
 const questionReply = 'Blue';
 
 let instanceEnv: Record<string, string> = {};
@@ -289,7 +302,15 @@ interface StreamLine {
   subtype?: string;
   mcp_servers?: Array<{ name: string; status: string }>;
   /** A user line's content may be a plain string. */
-  message?: { content?: string | Array<{ type?: string; name?: string; input?: { command?: string } }> };
+  message?: { content?: string | Array<{ type?: string; text?: string; name?: string; input?: { command?: string } }> };
+}
+
+/** The texts of the user turns an issue session's agent received so far (the request prompts and the wake-ups). */
+function getUserTurnTexts(issueKey: string): string[] {
+  return readStreamLines(issueKey).filter((line) => line.type === 'user').map((line) => {
+    const content = line.message?.content;
+    return typeof content === 'string' ? content : (content ?? []).map((block) => block.text ?? '').join('');
+  });
 }
 
 /** The shell commands an issue session's agent has started so far. */
@@ -324,6 +345,7 @@ interface ClosedRequestLine {
   id: string;
   conversationKey: string;
   closeReason: string;
+  supersededBy?: string;
 }
 
 function getClosedRequests(issueKey: string): ClosedRequestLine[] {
@@ -453,7 +475,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
 
   it('the requester assigns five issues to the AI and the AI assigns one to itself: five requests, one ignored', async () => {
     const runMarker = path.basename(runLogPath, '.log');
-    for (const scenario of [...answeredScenarios, 'self', 'probe'] as const) {
+    for (const scenario of [...sessionScenarios, 'self', 'probe'] as const) {
       const text = scenario === 'self' || scenario === 'probe' ? scenarioTexts.idle : scenarioTexts[scenario];
       issueKeys.set(scenario, await getRequester().createIssue(projectKey, `[charness ${runMarker}] ${scenario}`, text));
     }
@@ -528,6 +550,29 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`progress ${issueKey}: ${getAiComments(state).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
   });
 
+  it('R34: the requester hands one issue over twice; the first request is superseded, one answer, whose header names it, hands the issue back', async () => {
+    const issueKey = getIssueKey('repeat');
+    await getRequester().assignIssue(issueKey, config.accountId);
+    await waitFor('the first request\'s progress note', answerTimeoutMs, async () =>
+      getAiComments(await getRequester().getIssueState(issueKey)).some((comment) => /TAKEN/.test(comment.text)));
+    // The agent now waits in its shell command: the requester takes the issue back and hands it over again, as one does in Jira.
+    await getRequester().assignIssue(issueKey, getRequester().accountId);
+    await getRequester().assignIssue(issueKey, config.accountId);
+    await waitFor('the first request superseded in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).some((record) => record.closeReason === 'superseded'));
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => /AGAIN/.test(comment.text)));
+    await waitFor('the second request in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).length >= 2);
+    const [superseded, final] = getClosedRequests(issueKey);
+    assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['superseded', 'final'], 'the first replaced, the second answered');
+    assert.equal(superseded.supersededBy, final.id, 'the history names the request that replaced it');
+    const secondPrompt = getUserTurnTexts(issueKey).find((text) => text.includes(`[Request ${final.id}`));
+    assert.ok(secondPrompt, 'the second request reached the agent');
+    assert.ok(secondPrompt.includes(buildSupersededRequestsLine([superseded.id])), 'its header names the replaced request');
+    const comments = getAiComments(state);
+    // Reported before the count is judged: a second final answer is the finding this step exists to catch.
+    report(`R34 ${issueKey}: ${superseded.id} superseded by ${final.id}; comments ${comments.map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
+    assert.equal(comments.filter((comment) => /AGAIN/.test(comment.text)).length, 1, 'one final answer for both requests');
+  });
+
   it('long answer: its comments arrive in order, each within both size counts; the count Jira enforces is probed (R19)', async () => {
     const issueKey = getIssueKey('long');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > 0);
@@ -599,7 +644,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
   });
 
   it('every Jira session loaded only the bot\'s MCP server (R8)', () => {
-    for (const scenario of answeredScenarios) {
+    for (const scenario of sessionScenarios) {
       const inits = readStreamLines(getIssueKey(scenario)).filter((line) => line.type === 'system' && line.subtype === 'init');
       assert.ok(inits.length > 0, `${scenario}: a session init was read`);
       for (const init of inits) {
