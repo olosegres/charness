@@ -10,6 +10,7 @@ import {
   checkHasFlag,
   fakeClaudeLogFileNames,
   fakeClaudeCodeVersion,
+  fakeClaudeCodeVersionOverrideFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
   fakeTurnUsage,
@@ -186,6 +187,12 @@ function getStatePath(requestId: string): string {
   return path.join(getStateDir(), `${requestId}.json`);
 }
 
+/** The CLI version this launch reports on `init`: the override file's content while a test keeps one, else the fake's own. */
+function getReportedClaudeCodeVersion(): string {
+  const overridePath = path.join(getStateDir(), fakeClaudeCodeVersionOverrideFileName);
+  return fs.existsSync(overridePath) ? fs.readFileSync(overridePath, 'utf8').trim() : fakeClaudeCodeVersion;
+}
+
 /** Marks a conversation as held — the real CLI's on-disk transcript, written once its first message arrives. */
 function getConversationMarkerPath(sessionId: string): string {
   return path.join(getStateDir(), `session-${sessionId}`);
@@ -279,7 +286,7 @@ function endTurn(sessionId: string, resultText: string): void {
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
 function runCompactionTurn(sessionId: string): void {
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: fakeClaudeCodeVersion });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
@@ -289,7 +296,7 @@ function runCompactionTurn(sessionId: string): void {
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   fs.writeFileSync(getConversationMarkerPath(sessionId), '');
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: fakeClaudeCodeVersion });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const requestId = requestIdRe.exec(content)?.[0];
   if (!requestId) {

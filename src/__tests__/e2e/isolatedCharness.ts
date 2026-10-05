@@ -319,6 +319,8 @@ export interface IsolatedInstanceLayout {
   dataDir: string;
   workRoot: string;
   fakeLogDir: string;
+  /** The fake `claude`'s own state: held conversations, request files, the CLI-version override a test may write. */
+  fakeStateDir: string;
   envFile: string;
   tmuxTmpDir: string;
   tmuxSocketName: string;
@@ -341,12 +343,13 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
     dataDir: path.join(testRoot, 'data'),
     workRoot: path.join(testRoot, 'work'),
     fakeLogDir: path.join(testRoot, 'fake-claude-log'),
+    fakeStateDir: path.join(testRoot, 'fake-claude-state'),
     envFile: path.join(testRoot, 'instance.env'),
     tmuxTmpDir: path.join(testRoot, 'tmux'),
     tmuxSocketName: `${prefix}${randomBytes(4).toString('hex')}`,
     binDir: path.join(testRoot, 'bin'),
   };
-  for (const dir of [layout.instanceHome, layout.dataDir, layout.fakeLogDir, layout.binDir, ...projectFolders.map((folder) => path.join(layout.workRoot, folder))]) {
+  for (const dir of [layout.instanceHome, layout.dataDir, layout.fakeLogDir, layout.fakeStateDir, layout.binDir, ...projectFolders.map((folder) => path.join(layout.workRoot, folder))]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   fs.mkdirSync(layout.tmuxTmpDir, { mode: 0o700 });
@@ -374,13 +377,11 @@ export function getIsolatedPath(layout: IsolatedInstanceLayout): string {
  * Jira flags and the R32 environment for `jira`; none for a Telegram session).
  */
 export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform: FakeClaudePlatform | null): string {
-  const fakeStateDir = path.join(layout.testRoot, 'fake-claude-state');
-  fs.mkdirSync(fakeStateDir);
   const claudeBin = path.join(layout.binDir, 'claude');
   fs.writeFileSync(claudeBin, [
     '#!/bin/sh',
     `export FAKE_CLAUDE_LOG_DIR='${layout.fakeLogDir}'`,
-    `export FAKE_CLAUDE_STATE_DIR='${fakeStateDir}'`,
+    `export FAKE_CLAUDE_STATE_DIR='${layout.fakeStateDir}'`,
     ...(platform === null ? [] : [`export ${fakeClaudePlatformEnvName}='${platform}'`]),
     `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudePath}' "$@"`,
     '',

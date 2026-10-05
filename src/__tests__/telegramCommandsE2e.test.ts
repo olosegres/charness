@@ -25,7 +25,9 @@
  *     the topic: a stray message is answered with a waiting hint, `/esc` cancels the
  *     sign-in and the next message reaches the agent; a second `/login` is torn
  *     down by `/quit` (its pty ends)
- *   → `/claude_mode`: the picker's third option (per-turn, lifecycle plan L5), a
+ *   → `/claude_mode`: a conversation whose CLI is below the lifecycle gate is
+ *     refused the per-turn backend (L-D10) by the picker's tap and by the typed
+ *     argument alike; the picker's third option (per-turn, lifecycle plan L5), a
  *     tap persists it, `/claude` opens it, a message runs one turn and the
  *     process is stopped right after its result, the next message resumes the
  *     same conversation in a new process
@@ -43,7 +45,7 @@ import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import type { ScheduleRecord } from '../scheduler/types';
-import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -77,7 +79,7 @@ const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 3 * agentStartTimeoutMs + stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 4 * agentStartTimeoutMs + stopTimeoutMs + flowMarginMs;
 
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
@@ -91,6 +93,11 @@ const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
 /** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
 const perTurnStopTimeoutMs = 15 * 1000;
 const perTurnAdapterName = 'claude-per-turn';
+/** The last Claude Code version WITHOUT the background-task list: a conversation that ran on it is refused per-turn (L-D10). */
+const belowGateClaudeCodeVersion = '2.1.286';
+/** The prompt that makes the old-version process report its version (the fake reports it on the first turn's `init`). */
+const belowGatePromptLabel = 'OLD-1';
+const minAutoStopClaudeCodeVersion = '2.1.287';
 
 /**
  * A stand-in for the `claude auth …` subcommands (the agent itself is the standard fake). `auth login` prints the
@@ -163,12 +170,23 @@ interface FakeLaunch {
   pid: number;
 }
 
-/** The last session launch the process `pid` was started by. */
-function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
-  return readJsonLines<FakeLaunch>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch && launch.pid === pid).at(-1);
+function getSessionLaunches(): FakeLaunch[] {
+  return readJsonLines<FakeLaunch>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch);
 }
 
-function readPersistedState(): { schedules?: Record<string, ScheduleRecord>; displayPrefs?: Record<string, Record<string, string>>; agents?: Record<string, { name?: string; claudeSessionId?: string }> } {
+/** The last session launch the process `pid` was started by. */
+function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
+  return getSessionLaunches().filter((launch) => launch.pid === pid).at(-1);
+}
+
+/** The slice of the bot's `state.json` the steps read. */
+interface PersistedStateSlice {
+  schedules?: Record<string, ScheduleRecord>;
+  displayPrefs?: Record<string, Record<string, string>>;
+  agents?: Record<string, { name?: string; claudeSessionId?: string; jsonStreamTail?: { claudeCodeVersion?: string } }>;
+}
+
+function readPersistedState(): PersistedStateSlice {
   return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
 }
 
@@ -437,6 +455,38 @@ describe('Telegram commands end to end: built charness, fake Bot API', { timeout
   });
 
   // ── /claude_mode: the per-turn lifecycle (L5) ────────────────────────
+
+  it('a conversation whose CLI is below the gate is refused the per-turn backend — by the tap and by the typed argument (L-D10)', async () => {
+    const versionOverridePath = path.join(getLayout().fakeStateDir, fakeClaudeCodeVersionOverrideFileName);
+    fs.writeFileSync(versionOverridePath, belowGateClaudeCodeVersion);
+    try {
+      await topic.sendAndAwaitReply('/claude', 'ready in');
+      fakeTelegram.pushOperatorMessage(topicThreadId, `${belowGatePromptLabel} [fake:answer] a turn on the old CLI`);
+      await getCharness().waitFor('the prompt to reach the old-version agent', agentStartTimeoutMs, () => getAgentTurns(belowGatePromptLabel).length === 1);
+      await getCharness().waitFor('the old CLI version known to the bot', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.jsonStreamTail?.claudeCodeVersion === belowGateClaudeCodeVersion);
+      const oldProcessPid = getSessionLaunches().at(-1)?.pid;
+      assert.ok(oldProcessPid, 'the old-version process was launched');
+
+      const picker = await topic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
+      await topic.tapAndAwaitAnswer(picker, `ccmode_${perTurnAdapterName}`);
+      const tapRefusal = await topic.waitForMessage('the tap refused', (message) => message.text.includes('Per-turn needs Claude Code'));
+      assert.match(tapRefusal.text, new RegExp(`${minAutoStopClaudeCodeVersion} or newer — this conversation last ran ${belowGateClaudeCodeVersion}`));
+      assert.match(tapRefusal.text, /The backend was not changed/);
+
+      const typedRefusal = await topic.sendAndAwaitReply('/claude_mode perturn', 'Per-turn needs Claude Code');
+      assert.match(typedRefusal.text, /The backend was not changed/);
+
+      assert.equal(readPersistedState().agents?.[threadKeyString]?.name, 'claude-json-stream', 'the pick stayed on the idle lifecycle');
+      assert.ok(checkIsProcessAlive(oldProcessPid), 'the running process was neither stopped nor replaced');
+      assert.equal(getSessionLaunches().at(-1)?.pid, oldProcessPid, 'no new process was started by the refused switches');
+      assert.ok(getCharness().output.includes(`[lifecycle] ${threadKeyString}: per-turn refused — Claude Code ${belowGateClaudeCodeVersion} is below ${minAutoStopClaudeCodeVersion}`));
+
+      await topic.sendAndAwaitReply('/quit', 'stopped');
+      await getCharness().waitFor('the old-version process to end', stopTimeoutMs, () => !checkIsProcessAlive(oldProcessPid));
+    } finally {
+      fs.rmSync(versionOverridePath, { force: true });
+    }
+  });
 
   it('/claude_mode shows the third option; a tap persists the per-turn backend for the topic', async () => {
     const picker = await topic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');

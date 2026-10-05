@@ -13,6 +13,11 @@ export const sessionViolationExitCode = 1;
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
+/**
+ * A file in the fake's state dir whose content replaces {@link fakeClaudeCodeVersion} on every `system/init` while
+ * it exists — a test puts an older CLI behind a conversation (the L-D10 per-turn refusal) without a second fake.
+ */
+export const fakeClaudeCodeVersionOverrideFileName = 'claude-code-version';
 /** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
 export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 1301, cache_read_input_tokens: 24601, output_tokens: 43 } as const;
 export const fakeClaudeLogFileNames = {
