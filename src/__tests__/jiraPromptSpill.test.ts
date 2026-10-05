@@ -151,6 +151,21 @@ describe('fitBlocksToPrompt (C8)', () => {
     assert.ok(fitted.blocks.every((block) => block.spilledTo === undefined || fs.existsSync(block.spilledTo)));
   });
 
+  it('when even the stubs cannot fit, the comments collapse at once — a few measurements, not one pass per comment', async () => {
+    const comments = Array.from({ length: 600 }, (_, index) => createTestComment(`${index + 1}`, index % 60, `comment number ${index + 1} ${getText(300, 'z')}`));
+    let measureCount = 0;
+    const fitted = await fitBlocksToPrompt({
+      blocks: buildIssueBlocks(createIssueContext({ comments }), [], testAiAccountId),
+      textDir,
+      measure: (candidate) => {
+        measureCount += 1;
+        return measure(candidate);
+      },
+    });
+    assert.ok(fitted.commentsFile);
+    assert.ok(measureCount <= 10, `${measureCount} measurements`);
+  });
+
   it('a long comment keeps its own file even when the comments collapse into one', async () => {
     const comments = [
       createTestComment('1', 0, getText(jiraCommentSpillMinChars + 1, 'L')),

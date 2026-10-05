@@ -66,12 +66,20 @@ function checkIsLongComment(block: IssueBlock): boolean {
   return block.kind === 'comment' && block.fullText.length > jiraCommentSpillMinChars;
 }
 
-/** The biggest block still in the prompt whose stub is smaller than itself, or `null` when none would shrink. */
-function getLargestSpillableIndex(blocks: readonly IssueBlock[], textDir: string): number | null {
+/** Would the block shrink as a stub? A tiny one would not. */
+function checkIsSpillable(block: IssueBlock, textDir: string): boolean {
+  return block.spilledTo === undefined && getIssueBlockText(block).length > getIssueBlockText(getSpilledBlock(block, textDir)).length;
+}
+
+/**
+ * The biggest block still in the prompt whose stub is smaller than itself, or `null` when none would shrink.
+ * `isCommentsCollapsed`: the comments are in one file, so only the other blocks are still printed.
+ */
+function getLargestSpillableIndex(blocks: readonly IssueBlock[], textDir: string, isCommentsCollapsed: boolean): number | null {
   let largestIndex: number | null = null;
   let largestChars = 0;
   blocks.forEach((block, index) => {
-    if (block.spilledTo !== undefined) return;
+    if (block.spilledTo !== undefined || (isCommentsCollapsed && block.kind === 'comment')) return;
     const chars = getIssueBlockText(block).length;
     const stubChars = getIssueBlockText(getSpilledBlock(block, textDir)).length;
     if (chars > stubChars && chars > largestChars) {
@@ -117,19 +125,20 @@ export interface FitBlocksInput {
 export async function fitBlocksToPrompt(input: FitBlocksInput): Promise<FittedBlocks> {
   const { textDir, measure } = input;
   const longCommentsSpilled = input.blocks.map((block) => (checkIsLongComment(block) ? getSpilledBlock(block, textDir) : block));
+  // When every block as a stub still does not fit (hundreds of comments), the comments go to one file at once —
+  // not after a pass per comment. Their own stubs would point at files nobody wrote, so the comment blocks stay
+  // as they were, except the long ones, which have their files.
+  const allStubbed = longCommentsSpilled.map((block) => (checkIsSpillable(block, textDir) ? getSpilledBlock(block, textDir) : block));
+  const commentsFile = measure({ blocks: allStubbed, commentsFile: null }) > jiraPromptMaxChars
+    ? getCommentsFile(input.blocks.filter((block) => block.kind === 'comment'), textDir)
+    : null;
   let working = longCommentsSpilled;
-  while (measure({ blocks: working, commentsFile: null }) > jiraPromptMaxChars) {
-    const largestIndex = getLargestSpillableIndex(working, textDir);
+  while (measure({ blocks: working, commentsFile }) > jiraPromptMaxChars) {
+    const largestIndex = getLargestSpillableIndex(working, textDir, commentsFile !== null);
     if (largestIndex === null) break;
     working = working.map((block, index) => (index === largestIndex ? getSpilledBlock(block, textDir) : block));
   }
-  let fitted: FittedBlocks = { blocks: working, commentsFile: null };
-  if (measure(fitted) > jiraPromptMaxChars) {
-    // Every block is a stub and they still do not fit: the comments go to one file. Their own stubs would
-    // point at files nobody wrote, so they stay as they were, except the long ones, which have their files.
-    const blocks = working.map((block, index) => (block.kind === 'comment' ? longCommentsSpilled[index] : block));
-    fitted = { blocks, commentsFile: getCommentsFile(input.blocks.filter((block) => block.kind === 'comment'), textDir) };
-  }
+  const fitted: FittedBlocks = { blocks: working, commentsFile };
   const files = [
     ...fitted.blocks.flatMap((block) => (block.spilledTo === undefined ? [] : [{ path: block.spilledTo, text: block.fullText }])),
     ...(fitted.commentsFile ? [{ path: fitted.commentsFile.path, text: fitted.commentsFile.text }] : []),

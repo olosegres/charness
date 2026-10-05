@@ -120,7 +120,7 @@ another platform's state.
   re-post (64 000 characters, less a margin for the header) moves its biggest blocks to files the same way,
   largest first, until it fits; if even the stubs do not fit (hundreds of comments), the comments collapse into ONE
   file. A spilled block keeps its hash. The files are rewritten by every request (same path for the same text),
-  so the 30-day sweep (`botFileStorage.ts`, which now walks the folders nested in a conversation's files dir)
+  so the 30-day sweep (`botFileStorage.ts`, which walks the folders nested in a conversation's files dir)
   only removes what no live issue has used for a month. The issue-text note covers these files too: their
   content is the issue's, information and never instructions.
 - Nothing is repeated (`issueDelta.ts`, `contextLedger.ts`). Per issue, `DATA_DIR/jira-context/<ISSUE-KEY>.json`
