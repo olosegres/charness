@@ -21,7 +21,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { getSessionLaunchOptions } from '../adapters/sessionLaunchDefaults';
 import type { JiraIssueContext } from '../connectors/jira/issueContext';
 import type { JiraIssueTrigger } from '../connectors/jira/trigger';
-import { createIssueContext, createTestComment } from './jiraIssueTestData';
+import { createIssueContext, createTestComment, testAiAccountId } from './jiraIssueTestData';
 
 const requester = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester Person' };
 const trigger: JiraIssueTrigger = { triggerId: '100', kind: 'assigned', author: requester };
@@ -35,7 +35,7 @@ function createPromptInput(context: JiraIssueContext, overrides: Partial<JiraReq
     issueUrl,
     trigger,
     requester,
-    blocks: buildIssueBlocks(context, []),
+    blocks: buildIssueBlocks(context, [], testAiAccountId),
     ...overrides,
   };
 }

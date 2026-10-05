@@ -40,6 +40,15 @@ export interface RequestOrigin {
 export type RequestCloseReason = 'final' | 'question' | 'superseded' | 'cancelled';
 
 /**
+ * @name RequestPromptOutcome
+ * @description What became of a request's prompt (Jira prompt context C4).
+ *  - `takenIn` — the agent took it in: `isPromptTakenIn` was set, or the request
+ *    was closed by its own `question` / `final` answer.
+ *  - `dropped` — the request closed otherwise (superseded, cancelled) before that.
+ */
+export type RequestPromptOutcome = 'takenIn' | 'dropped';
+
+/**
  * @name OpenRequestState
  * @description An open request as persisted in `state.json` `openRequests`
  * (keyed by its serialized request group, `requestGroup.ts`). The wake-up fields are

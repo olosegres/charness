@@ -13,6 +13,7 @@ import type {
   RequestOrigin,
   RequestOriginKind,
   UnreleasedRequestAlert,
+  RequestPromptOutcome,
 } from './types';
 
 /**
@@ -108,6 +109,12 @@ export interface RequestLedgerDeps {
    * during a usage-limit wait about that wait. Must not throw.
    */
   onRequestCreated?: (key: SessionKey, request: OpenRequestState) => void;
+  /**
+   * Told once what became of a request's prompt (`RequestPromptOutcome`), after the change is saved — so a
+   * connector can count what the prompt carried as sent only once the agent took it in. Every writer of
+   * `isPromptTakenIn` and every close goes through the ledger, so none is missed. Must not throw.
+   */
+  onPromptSettled?: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -209,6 +216,7 @@ export class RequestLedger {
   private readonly closedIndexMaxSize: number;
   private readonly releaseAlert: ((alert: UnreleasedRequestAlert) => Promise<void>) | undefined;
   private readonly onRequestCreated: ((key: SessionKey, request: OpenRequestState) => void) | undefined;
+  private readonly onPromptSettled: ((key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void) | undefined;
   /** Request ids whose alert release is under way, so two paths never release one twice at once. */
   private readonly alertReleasesInFlight = new Set<string>();
   /** Insertion order = close order, so the first key is always the oldest. */
@@ -227,6 +235,7 @@ export class RequestLedger {
     this.closedIndexMaxSize = deps.closedIndexMaxSize ?? closedRequestIndexMaxSize;
     this.releaseAlert = deps.releaseAlert;
     this.onRequestCreated = deps.onRequestCreated;
+    this.onPromptSettled = deps.onPromptSettled;
   }
 
   /**
@@ -305,6 +314,16 @@ export class RequestLedger {
       const id = `${requestIdPrefix}${randomBytes(requestIdRandomByteLength).toString('base64url')}`;
       if (!openIds.has(id) && !this.closedById.has(id)) return id;
     }
+  }
+
+  /** A close settles the prompt unless it was already taken in: by its own answer it was, otherwise it was dropped. */
+  private getCloseOutcome(closing: ClosedRequestRecord): RequestPromptOutcome | null {
+    if (closing.isPromptTakenIn === true) return null;
+    return closing.closeReason === 'final' || closing.closeReason === 'question' ? 'takenIn' : 'dropped';
+  }
+
+  private notePromptSettled(key: SessionKey, settled: ReadonlyArray<{ requestId: string; outcome: RequestPromptOutcome }>): void {
+    for (const { requestId, outcome } of settled) this.onPromptSettled?.(key, requestId, outcome);
   }
 
   private appendClosed(closing: ClosedRequestRecord): void {
@@ -394,6 +413,13 @@ export class RequestLedger {
     const requesterlessGroup: RequestGroupKey = { conversation: key, requester: emptyRequester };
     const requesterless = group.requester === emptyRequester ? undefined : this.store.getOpenRequest(requesterlessGroup);
     let request: OpenRequestState | null = null;
+    const settled: Array<{ requestId: string; outcome: RequestPromptOutcome }> = [];
+    const closeSuperseded = (current: OpenRequestState): void => {
+      const record: ClosedRequestRecord = { ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded', supersededBy: id };
+      this.appendClosed(record);
+      const outcome = this.getCloseOutcome(record);
+      if (outcome) settled.push({ requestId: record.id, outcome });
+    };
     await this.store.updateOpenRequest(group, (current) => {
       const supersededRequestIds = [requesterless, current]
         .flatMap((replaced) => (replaced ? [...(replaced.supersededRequestIds ?? []), replaced.id] : []))
@@ -413,7 +439,7 @@ export class RequestLedger {
         ...(prompt !== undefined && prompt.length <= requestPromptMaxLength ? { prompt } : {}),
         ...(supersededRequestIds.length > 0 ? { supersededRequestIds } : {}),
       };
-      if (current) this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded', supersededBy: id });
+      if (current) closeSuperseded(current);
       request = created;
       return created;
     });
@@ -423,11 +449,12 @@ export class RequestLedger {
       // leaves it open for the conversation's next request, never a lost new one.
       await this.store.updateOpenRequest(requesterlessGroup, (current) => {
         if (current?.id !== requesterless.id) return current;
-        this.appendClosed({ ...current, conversationKey, closedAt: createdAt, closeReason: 'superseded', supersededBy: id });
+        closeSuperseded(current);
         return undefined;
       });
     }
     await this.store.flush();
+    this.notePromptSettled(key, settled);
     this.onRequestCreated?.(key, request);
     return request;
   }
@@ -486,12 +513,15 @@ export class RequestLedger {
     const entry = this.getOpenEntryById(id);
     if (!entry) return null;
     let updated: OpenRequestState | null = null;
+    let isTakenInNow = false;
     await this.store.updateOpenRequest(entry.group, (current) => {
       if (current?.id !== id) return current;
       const next: OpenRequestState = { ...current, ...(typeof update === 'function' ? update(current) : update) };
+      isTakenInNow = current.isPromptTakenIn !== true && next.isPromptTakenIn === true;
       updated = next;
       return next;
     });
+    if (isTakenInNow) this.notePromptSettled(entry.key, [{ requestId: id, outcome: 'takenIn' }]);
     return updated;
   }
 
@@ -512,6 +542,8 @@ export class RequestLedger {
       closed = record;
       return undefined;
     });
+    const outcome = closed ? this.getCloseOutcome(closed) : null;
+    if (outcome) this.notePromptSettled(entry.key, [{ requestId: id, outcome }]);
     return closed;
   }
 }

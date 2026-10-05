@@ -323,7 +323,7 @@ import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
-import type { OpenRequestState, RequestAlertReason } from './requests/types';
+import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -4424,7 +4424,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
  * that threw (`start-failed`); `message` carries the matching localized text.
  */
 export type EnsureAgentSessionResult =
-  | { ok: true; message: string }
+  | { ok: true; message: string; isFresh: boolean }
   | { ok: false; reason: EnsureAgentSessionFailureReason; message: string };
 
 /**
@@ -4529,7 +4529,7 @@ async function ensureAgentSessionNow(
   });
   switch (plan.kind) {
     case 'ready':
-      return { ok: true, message: '' };
+      return { ok: true, message: '', isFresh: false };
     case 'unbound':
       return { ok: false, reason: 'unbound', message: t('thread.bind_required') };
     case 'noAdapter':
@@ -4538,7 +4538,7 @@ async function ensureAgentSessionNow(
       return { ok: false, reason: 'nothing-to-resume', message: t('agent.no_session') };
     case 'resume': {
       await switchThreadAdapter(key, plan.adapterName);
-      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '' };
+      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '', isFresh: false };
       if (getResumeFailureAction(options.isResumeOnly === true) === 'fail') {
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
@@ -4546,14 +4546,14 @@ async function ensureAgentSessionNow(
       const startMessage = await startAgentSession(key, options.args);
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
       return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message }
+        ? { ok: true, message, isFresh: true }
         : { ok: false, reason: 'start-failed', message };
     }
     case 'start': {
       await switchThreadAdapter(key, plan.adapterName);
       const message = await startAgentSession(key, options.args);
       return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message }
+        ? { ok: true, message, isFresh: true }
         : { ok: false, reason: 'start-failed', message };
     }
   }
@@ -10982,6 +10982,23 @@ const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
 };
 
 /**
+ * @name ConnectorConversationHooks
+ * @description What a connector is told about its own conversations by the core,
+ * routed by `key.platform` (the core never parses a key). Telegram needs none.
+ */
+interface ConnectorConversationHooks {
+  /** The request ledger's word on a request's prompt (Jira prompt context C4). */
+  onPromptSettled: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
+}
+
+/** The conversation hooks of the platforms this process serves that have any. */
+function createConnectorConversationHooks(jiraConnector: JiraConnector | null): ReadonlyMap<PlatformId, ConnectorConversationHooks> {
+  const hooks = new Map<PlatformId, ConnectorConversationHooks>();
+  if (jiraConnector) hooks.set('jira', { onPromptSettled: (key, requestId, outcome) => jiraConnector.onPromptSettled(key, requestId, outcome) });
+  return hooks;
+}
+
+/**
  * @description Build the answer sinks of the platforms this process serves.
  * Built once at boot and shared by `answer_request`, the wake-up alerts and the
  * alert release on close, so all three speak to the same sink.
@@ -11071,7 +11088,7 @@ function createSessionPostDeps(): PostToSessionDeps {
     },
     ensureSession: async (conversationKey, fallbackAdapterName) => {
       const result = await ensureAgentSession(keyFromString(conversationKey), { fallbackAdapterName });
-      if (result.ok) return { ok: true };
+      if (result.ok) return { ok: true, isFresh: result.isFresh };
       // A post may start fresh, so the resume-only reasons cannot occur here; a resume that failed
       // continued into a fresh start, whose failure is what a post reports.
       const reason = result.reason === 'nothing-to-resume' || result.reason === 'resume-failed' ? 'start-failed' : result.reason;
@@ -11410,10 +11427,13 @@ export async function startBot(): Promise<void> {
   //     The answer sinks are built here, once: `answer_request`, the wake-up
   //     alerts and the release of an alert when its request closes all share them.
   const answerSinks = createAnswerSinks(jiraConnector?.answerSink ?? null);
+  const connectorConversationHooks = createConnectorConversationHooks(jiraConnector);
   const requestLedger = new RequestLedger({
     store: state,
     releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
     onRequestCreated: (key) => announceLimitWaitToNewRequest(key),
+    // C4: a connector counts what a prompt carried as sent only once its agent took it in.
+    onPromptSettled: (key, requestId, outcome) => connectorConversationHooks.get(key.platform)?.onPromptSettled(key, requestId, outcome),
   });
   await requestLedger.load();
   topicRequestLedger = requestLedger;

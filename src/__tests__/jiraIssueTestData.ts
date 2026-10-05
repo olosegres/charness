@@ -8,6 +8,8 @@ import type { JiraIssueContext } from '../connectors/jira/issueContext';
  */
 
 export const testCommentAuthor = { accountId: 'ann', displayName: 'Ann Author' };
+/** The AI account the test issues are worked by; its comments are the agent's own (C7). */
+export const testAiAccountId = 'ai-account';
 
 export function createIssueContext(options: {
   fields?: Partial<JiraIssue['fields']>;

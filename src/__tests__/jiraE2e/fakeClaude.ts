@@ -235,9 +235,14 @@ function listKnownRequests(issueKey: string): KnownRequest[] {
     .sort((a, b) => a.firstTurnAt - b.firstTurnAt);
 }
 
-function getMode(text: string): FakeClaudeMode {
+/**
+ * The mode the request's text names; a text that names none (a delta prompt leaves the unchanged summary out,
+ * prompt context S4) keeps the mode the issue's earlier requests had — the conversation remembers it, as a
+ * real agent's context does.
+ */
+function getMode(text: string, issueKey: string): FakeClaudeMode {
   const named = modeRe.exec(text)?.[1];
-  return fakeModes.find((mode) => mode === named) ?? 'answer';
+  return fakeModes.find((mode) => mode === named) ?? listKnownRequests(issueKey)[0]?.mode ?? 'answer';
 }
 
 /** The bot MCP server: the `http` entry of the `--mcp-config` files. */
@@ -315,7 +320,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0, firstTurnAt: Date.now() };
+  const issueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+  const state: RequestTurnState = previous ?? { mode: getMode(content, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
   writeRequestState(requestId, state);
   appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });

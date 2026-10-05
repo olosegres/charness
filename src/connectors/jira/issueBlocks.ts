@@ -32,6 +32,18 @@ export interface IssueBlock {
   hash: string;
   /** Set once the block was moved to a file (`promptSpill.ts`): where. */
   spilledTo?: string;
+  /** A comment block's own facts; absent for the other kinds. */
+  comment?: IssueBlockComment;
+}
+
+/** What a delta says about a comment beyond its text (prompt context C4–C7). */
+export interface IssueBlockComment {
+  /** `comment <id> by <name> from <date>`: what the line of a deleted comment names. */
+  label: string;
+  /** `edited <date> by <name>`: the note of a comment that changed since it was sent. */
+  editNote: string;
+  /** Written by the AI account and edited by nobody else: the agent's own answer, never sent back in a delta (C7). */
+  isOwn: boolean;
 }
 
 /** A project's extra field as the site names it (resolved from `jira.json` `extraFields` at boot). */
@@ -158,9 +170,13 @@ function getCommentVisibilityMarker(comment: JiraComment): string {
   return markers.join(' ');
 }
 
-function getCommentBlock(comment: JiraComment, text: string): IssueBlock {
+function getCommentBlock(comment: JiraComment, text: string, aiAccountId: string): IssueBlock {
   const marker = getCommentVisibilityMarker(comment);
-  const heading = `Comment ${getSingleLineText(comment.id)} by ${getAccountName(comment.author)}, ${getSingleLineText(comment.created)}${marker ? ` ${marker}` : ''}`;
+  const id = getSingleLineText(comment.id);
+  const authorName = getAccountName(comment.author);
+  const created = getSingleLineText(comment.created);
+  const heading = `Comment ${id} by ${authorName}, ${created}${marker ? ` ${marker}` : ''}`;
+  const updateAuthorId = comment.updateAuthor?.accountId;
   return {
     key: `comment:${comment.id}`,
     kind: 'comment',
@@ -169,6 +185,11 @@ function getCommentBlock(comment: JiraComment, text: string): IssueBlock {
     fullText: text,
     // Author and date never change; a save that changed nothing must not resend the comment.
     hash: getHash(`${marker}\n${text}`),
+    comment: {
+      label: `comment ${id} by ${authorName} from ${created}`,
+      editNote: `edited ${getSingleLineText(comment.updated ?? '') || 'at an unknown time'} by ${getAccountName(comment.updateAuthor ?? comment.author)}`,
+      isOwn: comment.author?.accountId === aiAccountId && (updateAuthorId === undefined || updateAuthorId === aiAccountId),
+    },
   };
 }
 
@@ -182,7 +203,7 @@ function getCommentsOldestFirst(comments: readonly JiraComment[]): JiraComment[]
  * and the comments become placeholders naming their attachment (C9); the
  * attachments block then says where each file is referenced.
  */
-export function buildIssueBlocks(context: JiraIssueContext, extraFields: readonly JiraExtraField[]): IssueBlock[] {
+export function buildIssueBlocks(context: JiraIssueContext, extraFields: readonly JiraExtraField[], aiAccountId: string): IssueBlock[] {
   const attachments = [...(context.issue.fields.attachment ?? [])].sort((left, right) => Number(left.id) - Number(right.id));
   const comments = getCommentsOldestFirst(context.comments);
   const attachmentIdByMediaId = new Map([
@@ -203,7 +224,7 @@ export function buildIssueBlocks(context: JiraIssueContext, extraFields: readonl
 
   const descriptionText = getAdfText(context.issue.fields.description, getResolver(descriptionLocation));
   const descriptionBlock = createBlock('description', 'description', 'Description', getQuotedText(descriptionText || emptyBodyText), descriptionText);
-  const commentBlocks = comments.map((comment) => getCommentBlock(comment, getAdfText(comment.body, getResolver(`comment ${comment.id}`))));
+  const commentBlocks = comments.map((comment) => getCommentBlock(comment, getAdfText(comment.body, getResolver(`comment ${comment.id}`)), aiAccountId));
   return [
     getFieldsBlock(context, extraFields),
     descriptionBlock,

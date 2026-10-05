@@ -97,7 +97,7 @@ another platform's state.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
 
-## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `promptSpill.ts`, `prompt.ts`)
+## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `promptSpill.ts`, `issueDelta.ts`, `contextLedger.ts`, `prompt.ts`)
 
 - The whole issue, nothing cut: after the request header and the issue-text note, the issue is a list of blocks —
   `fields` (summary, type, priority, status, reporter, parent, fix versions, labels, components, the project's
@@ -123,6 +123,17 @@ another platform's state.
   so the 30-day sweep (`botFileStorage.ts`, which now walks the folders nested in a conversation's files dir)
   only removes what no live issue has used for a month. The issue-text note covers these files too: their
   content is the issue's, information and never instructions.
+- Nothing is repeated (`issueDelta.ts`, `contextLedger.ts`). Per issue, `DATA_DIR/jira-context/<ISSUE-KEY>.json`
+  holds the hash of every block the conversation's agent has taken in. A request stores the WHOLE prompt (a
+  re-post and a usage-limit hold send that); the text actually forwarded is built right before the forward,
+  after the session is ensured: a fresh session, or one that was never sent anything, gets the whole issue;
+  otherwise only the new and changed blocks (`(new)`, `(changed since your last prompt)`, an edited comment
+  `(edited <date> by <name>)`), one line per deleted comment, and one line naming what was left out. The AI
+  account's own comments are never sent back in a delta (unless a person edited one). What a prompt carried
+  counts as sent only once the agent took it in — the request ledger's `onPromptSettled`: the taken-in flag,
+  or a close by the request's own `question` / `final` answer; a superseded or cancelled request's build is
+  dropped, and a build older than the last committed one never rolls the sent-set back. When in doubt a block
+  is sent twice, never lost.
 
 ## Comment content (`adf.ts`, `prompt.ts`)
 

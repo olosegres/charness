@@ -7,7 +7,10 @@ import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
 import { buildIssueBlocks, type JiraExtraField } from './issueBlocks';
 import { fetchJiraIssueContext } from './issueContext';
-import { buildJiraRequestPrompt } from './prompt';
+import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from './prompt';
+import { getIssueDelta } from './issueDelta';
+import type { JiraContextLedger } from './contextLedger';
+import type { SessionPromptText } from '../../postToSession';
 import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
 
 /**
@@ -92,8 +95,14 @@ export interface JiraInboundDeps {
     origin: RequestOrigin,
     createPrompt: (requestId: string, supersededRequestIds: readonly string[]) => string,
   ) => Promise<Pick<OpenRequestState, 'id' | 'supersededRequestIds'>>;
-  /** Post the request's prompt to the issue's session (and start watching its turn). */
-  postRequest: (key: SessionKey, requestId: string, prompt: string) => Promise<void>;
+  /**
+   * Post the request's prompt to the issue's session (and start watching its turn): `fullText` is the whole
+   * issue (the request keeps it for a re-post, a hold keeps it); `buildText` runs right before the forward and
+   * makes the delta for a session that already knows the issue (C5).
+   */
+  postRequest: (key: SessionKey, requestId: string, prompt: SessionPromptText) => Promise<void>;
+  /** What each issue's conversation was already told (C4). */
+  contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild'>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
   parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
 }
@@ -233,7 +242,7 @@ export class JiraInbound {
     const { deps } = this;
     // Fetched before the request opens: a request is never left without its prompt.
     const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id));
-    const blocks = buildIssueBlocks(context, project.extraFields);
+    const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId);
     const key = makeJiraKey(issue.key);
     const promptInput = {
       issueKey: issue.key,
@@ -261,7 +270,20 @@ export class JiraInbound {
       kind: 'trackerEvent',
       attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? emptyRequester },
     }, createPrompt);
-    const prompt = createPrompt(request.id, request.supersededRequestIds ?? []);
+    const supersededRequestIds = request.supersededRequestIds ?? [];
+    const fullText = createPrompt(request.id, supersededRequestIds);
+    const prompt: SessionPromptText = {
+      fullText,
+      // C5: built only once the post knows whether the session is fresh — right before the forward.
+      buildText: ({ isFresh }) => {
+        const snapshot = deps.contextLedger.getSnapshot(issue.key);
+        const isWhole = isFresh || Object.keys(snapshot.sent).length === 0;
+        const delta = getIssueDelta(fitted.blocks, isWhole ? {} : snapshot.sent);
+        // Counted as sent only once the agent takes it in (C4): the connector commits it then.
+        deps.contextLedger.recordBuild(issue.key, request.id, snapshot.generation, delta.sent);
+        return isWhole ? fullText : buildJiraDeltaPrompt({ ...promptInput, requestId: request.id, supersededRequestIds, delta });
+      },
+    };
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of
     // the poll must not wait for it; until the post settles, the issue is skipped.
     this.postingIssueKeys.add(issue.key);
@@ -276,7 +298,7 @@ export class JiraInbound {
    * A record that cannot be written is still remembered for this process, so the
    * posted request is never posted again before a restart. Never rejects.
    */
-  private async postAndRecord(key: SessionKey, requestId: string, prompt: string, record: JiraTriggerRecord): Promise<void> {
+  private async postAndRecord(key: SessionKey, requestId: string, prompt: SessionPromptText, record: JiraTriggerRecord): Promise<void> {
     try {
       await this.deps.postRequest(key, requestId, prompt);
     } catch (error) {

@@ -15,6 +15,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { buildJiraTriggerJql, getJiraRetryDelayMs, jiraChangelogPageSize, JiraInbound, jiraRetryBackoffCapMs, type JiraInboundDeps, type JiraProjectTrigger } from '../connectors/jira/inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
+import { JiraContextLedger } from '../connectors/jira/contextLedger';
+import { createTestComment } from './jiraIssueTestData';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraComment, type JiraIssue, type JiraRemoteLink, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { jiraCommentSpillMinChars, jiraPromptMaxChars } from '../connectors/jira/promptSpill';
@@ -80,6 +82,9 @@ describe('JiraInbound', () => {
   let triggerLog: JiraTriggerLog;
   let requestCount = 0;
   let isPostFailing = false;
+  let contextLedger: JiraContextLedger;
+  /** What the session post tells the prompt builder: a session that was just started knows nothing of the issue. */
+  let isNextSessionFresh = false;
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
@@ -89,6 +94,8 @@ describe('JiraInbound', () => {
     triggerLog = await createLoadedTriggerLog();
     requestCount = 0;
     isPostFailing = false;
+    contextLedger = JiraContextLedger.createForDataDir(dataDir);
+    isNextSessionFresh = false;
   });
   afterEach(() => {
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -151,9 +158,11 @@ describe('JiraInbound', () => {
       },
       postRequest: async (key, requestId, prompt) => {
         recorded.calls.push(`post ${keyToString(key)} ${requestId} (seen=${triggerLog.checkIsSeen(key.thread, '100')})`);
-        recorded.prompts.push(prompt);
+        // As the session post does: the text is built right before the forward, told whether the session is fresh.
+        recorded.prompts.push(prompt.buildText({ isFresh: isNextSessionFresh }));
         if (isPostFailing) throw new Error('session start failed');
       },
+      contextLedger,
       parkIssue: async (issueKey, parkedRequester) => {
         recorded.calls.push(`park ${issueKey}`);
         recorded.parked.push({ issueKey, requester: parkedRequester });
@@ -435,6 +444,101 @@ describe('JiraInbound', () => {
       assert.equal(recorded.issueReads[0].expand, 'renderedFields');
       assert.ok(recorded.prompts[0].includes('Acceptance criteria: The export must finish in 5 s'));
       assert.ok(!recorded.prompts[0].includes('Story points'), 'a field without a value is left out');
+    });
+  });
+
+  describe('nothing is repeated: the delta (C4, C5, C7)', () => {
+    const issueKey = 'PROJ-60';
+    let comments: JiraComment[] = [];
+    let description = 'The export fails.';
+    let triggerHistories: JiraChangelogHistory[] = [];
+
+    /** One issue the poll finds with the current trigger, comments and description. */
+    function createDeltaInbound(): JiraInbound {
+      return createInbound({
+        runBudgetPer24h: 10,
+        client: {
+          searchIssues: async () => ({ issues: [createIssue(issueKey, { histories: triggerHistories })], isLast: true }),
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async () => {
+            const base = createIssue(issueKey);
+            return { ...base, fields: { ...base.fields, description: convertMarkdownToAdf(description) } };
+          },
+          getComments: async () => comments,
+          getRemoteLinks: async () => [],
+        },
+      });
+    }
+
+    /** A new hand-over of the issue: a newer assignment in its changelog, so the poll opens the next request. */
+    async function handOver(minute: number): Promise<void> {
+      triggerHistories = [...triggerHistories, createHistory(`${100 + minute}`, minute, [{ field: 'assignee', to: aiAccountId }])];
+      await createDeltaInbound().pollOnce();
+      await flushPosts();
+    }
+
+    beforeEach(() => {
+      comments = [createTestComment('1', 0, 'First report.')];
+      description = 'The export fails.';
+      triggerHistories = [];
+    });
+
+    it('after the agent took the first prompt in, the next one carries only what changed; the request still keeps the whole issue', async () => {
+      await handOver(1);
+      assert.ok(recorded.prompts[0].includes('Comments (1, oldest first):'), 'the first prompt is whole');
+      contextLedger.commit(issueKey, 'req_1');
+      comments = [...comments, createTestComment('2', 5, 'Still fails on Monday.')];
+      description = 'The export fails on Mondays.';
+      await handOver(2);
+      const delta = recorded.prompts[1];
+      assert.ok(delta.includes(`Jira issue ${issueKey} — what changed since your last prompt:`), delta);
+      assert.ok(delta.includes('Description (changed since your last prompt):\n> The export fails on Mondays.'));
+      assert.ok(delta.includes('Comment 2 by Ann Author, 2026-10-05T10:05:00.000+0000 (new):\n> Still fails on Monday.'));
+      assert.ok(!delta.includes('First report.'), 'a comment already taken in is not repeated');
+      assert.ok(delta.includes('Unchanged since your last prompt: fields, hierarchy, links, attachments, 1 comment.'));
+      assert.match(delta, /^\[Request req_2 · from: PROJ-60 assigned to you by Requester\]/);
+      assert.ok(recorded.storedPrompts[1].includes('First report.') && recorded.storedPrompts[1].includes('Comments (2, oldest first):'), 'a re-post sends the whole issue');
+    });
+
+    it('a prompt the agent never took in counts for nothing: the next one is whole again', async () => {
+      await handOver(1);
+      comments = [...comments, createTestComment('2', 5, 'More.')];
+      await handOver(2);
+      assert.ok(recorded.prompts[1].includes('Comments (2, oldest first):') && recorded.prompts[1].includes('First report.'));
+      assert.ok(!recorded.prompts[1].includes('what changed since your last prompt'));
+    });
+
+    it('a session that turned out fresh gets the whole issue, whatever was sent before', async () => {
+      await handOver(1);
+      contextLedger.commit(issueKey, 'req_1');
+      isNextSessionFresh = true;
+      await handOver(2);
+      assert.equal(recorded.prompts[1], recorded.storedPrompts[1]);
+      assert.ok(recorded.prompts[1].includes('First report.'));
+    });
+
+    it('C7: the agent\'s own answer comment is not sent back to it', async () => {
+      await handOver(1);
+      contextLedger.commit(issueKey, 'req_1');
+      comments = [...comments, createTestComment('2', 5, 'Fixed it, see the branch.', { author: { accountId: aiAccountId, displayName: 'AI' } }), createTestComment('3', 6, 'Thanks, one more thing.')];
+      await handOver(2);
+      const delta = recorded.prompts[1];
+      assert.ok(!delta.includes('Fixed it, see the branch.'), delta);
+      assert.ok(delta.includes('> Thanks, one more thing.'));
+      assert.ok(delta.includes('Unchanged since your last prompt: fields, description, hierarchy, links, attachments, 2 comments.'));
+    });
+
+    it('a deleted comment is named once, then forgotten', async () => {
+      comments = [createTestComment('1', 0, 'First report.'), createTestComment('2', 1, 'Wrong issue, sorry.')];
+      await handOver(1);
+      contextLedger.commit(issueKey, 'req_1');
+      comments = [comments[0]];
+      await handOver(2);
+      assert.ok(recorded.prompts[1].includes('comment 2 by Ann Author from 2026-10-05T10:01:00.000+0000 was deleted'));
+      contextLedger.commit(issueKey, 'req_2');
+      await handOver(3);
+      assert.ok(!recorded.prompts[2].includes('was deleted'));
+      assert.ok(recorded.prompts[2].includes('Nothing in the issue changed since your last prompt.'));
     });
   });
 

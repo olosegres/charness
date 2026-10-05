@@ -48,22 +48,23 @@
  *   → lifecycle (plan L6 step 1): the answered issue idles — its session is
  *     compacted in its own process (the context sizes and the compaction's
  *     counts logged) and the process stopped; the next hand-over resumes the
- *     same conversation in a new process and the answer carries a code word
- *     that only the earlier context holds (it was given in a comment the prompt
- *     no longer quotes); the resumed turn's usage is recorded as a measurement
+ *     same conversation in a new process and the answer reveals the secret word
+ *     the agent picked in its first turn — the issue holds only the word's
+ *     SHA-256, so only the earlier context can give it; the resumed turn's usage
+ *     is recorded as a measurement
  *   → charness restarted (new sessions now `claude-per-turn`): no request opened again
  *   → the killed agent's request still answered
  *   → lifecycle (L6 step 2): a per-turn issue — the process is gone right after
  *     its answer; a hand-over a minute later runs a new process that resumes the
- *     conversation (the code word again) and writes only a small fraction of
+ *     conversation (the secret word again) and writes only a small fraction of
  *     what the first process wrote: the first process's context came from the
  *     cache
  *   → lifecycle (L6 step 5, when `JIRA_LIVE_LONG_IDLE_MINUTES` is set): the
  *     sleeping per-turn session's idle compaction, then a resume that long after
- *     it — the code word again; the usage is recorded as a measurement
+ *     it — the secret word again; the usage is recorded as a measurement
  *   → decoy: with the per-turn issue's stored session id released (charness
  *     stopped, the repo's own state store), the same hand-over starts a FRESH
- *     session that cannot give the code word — the recall checks above are
+ *     session that cannot reveal the word, though its prompt holds the digest — the recall checks above are
  *     load-bearing
  *   → every Jira session's MCP servers: only the bot's own (R8)
  *   → the self-assigned issue: no request, nothing posted
@@ -76,7 +77,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -192,23 +193,27 @@ function getRepeatScenarioText(token: string): string {
 }
 
 /**
- * L6: the code word of the issues whose conversation is resumed. It is given in the issue's FIRST comment,
- * never in the description. A resumed conversation's prompt carries only what changed since its last one
- * (prompt-context plan S4: a comment already sent is not sent again), so a later hand-over asking for the
- * code word can be answered only from the conversation's earlier context — a fresh session, whose prompt is
- * the whole issue, would see it, and the decoy step proves the recall is not read off a prompt.
+ * L6: the recall of the issues whose conversation is resumed is a HASH COMMITMENT. In its first turn the agent
+ * picks a secret word of its own, keeps it out of the issue and out of every file, and posts only the word's
+ * SHA-256. A later hand-over asks for the word, and the run checks sha256(answer) against the posted digest.
+ * Every prompt may carry the whole issue — a fresh session's does, the agent's own digest comment included —
+ * yet no prompt holds the word: only the conversation's earlier context does, so a matching word proves the
+ * recall came from it, and the decoy (a fresh session) cannot produce one.
  */
-const codeWordTokens = { final: createAskToken('CODE'), perTurn: createAskToken('CODE') } as const;
-const codeWordAskText = 'Reply with a final answer whose text is exactly the code word given in the first comment of this issue, nothing else.';
-const recallAskText = 'Reply with a final answer whose text is exactly the code word you were given earlier in this issue, nothing else. If you were never given one, reply with a final answer whose text is exactly: UNKNOWN';
-/** What a session that never saw the code word is told to answer. */
-const unknownCodeWordAnswer = 'UNKNOWN';
-const fillerCommentText = 'Filler comment of the live run, nothing to do here.';
-/** Comments added before the ask, so the hand-over's new comments are more than the ask alone. */
-const recallFillerCommentCount = 3;
+const secretWordAskText = [
+  'Pick a secret word yourself: 16 random letters and digits.',
+  'Never write it into this issue, into a file or into an answer, and keep it in any summary of this conversation.',
+  'Compute its SHA-256 with this shell command, your word in place of WORD: `printf %s WORD | sha256sum`.',
+  'Send a final answer whose text is exactly the 64-character hex digest it printed, nothing else.',
+].join(' ');
+const recallAskText = 'Reply with a final answer whose text is exactly the secret word you picked earlier in this issue (your earlier answer is its SHA-256), nothing else. If you never picked one, reply with a final answer whose text is exactly: UNKNOWN';
+/** What a session that never picked the word is told to answer. */
+const unknownSecretWordAnswer = 'UNKNOWN';
+/** A SHA-256 as `sha256sum` prints it. */
+const sha256HexRe = /^[0-9a-f]{64}$/;
 
-function getCodeWordCommentText(token: string): string {
-  return `The code word for this issue is: ${token}`;
+function getSha256Hex(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 /**
@@ -220,8 +225,8 @@ function getCodeWordCommentText(token: string): string {
 const resumedTurnCacheWriteMaxShare = 0.5;
 
 const scenarioTexts = {
-  final: codeWordAskText,
-  perTurn: codeWordAskText,
+  final: secretWordAskText,
+  perTurn: secretWordAskText,
   question: [
     'Before doing anything else, ask the requester which colour they prefer, as a question answer, and end your turn.',
     'Once they have answered in a comment, reply with a final answer whose text is exactly that colour in upper case, nothing else.',
@@ -264,6 +269,8 @@ let jiraConfigOriginalText: string | null = null;
  */
 const seenInitsByProcess = new Map<string, { issueKey: string; inits: StreamLine[] }>();
 const issueKeys = new Map<Scenario | 'self' | 'probe', string>();
+/** The SHA-256 each recall scenario's first answer posted: the commitment to its secret word. */
+const committedDigests = new Map<'final' | 'perTurn', string>();
 
 function getIssueKey(scenario: Scenario | 'self' | 'probe'): string {
   const issueKey = issueKeys.get(scenario);
@@ -694,7 +701,6 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       issueKeys.set(scenario, await getRequester().createIssue(projectKey, `[charness ${runMarker}] ${scenario}`, text));
     }
     report(`created: ${[...issueKeys].map(([scenario, issueKey]) => `${scenario}=${issueKey}`).join(', ')}`);
-    for (const scenario of ['final', 'perTurn'] as const) await getRequester().addComment(getIssueKey(scenario), getCodeWordCommentText(codeWordTokens[scenario]));
     for (const scenario of answeredScenarios) await getRequester().assignIssue(getIssueKey(scenario), config.accountId);
     await aiClient.assignIssue(getIssueKey('self'), config.accountId);
 
@@ -741,8 +747,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
 
   it('final: the answer is a comment by the AI, the issue goes back to the requester, the request closes `final`', async () => {
     const issueKey = getIssueKey('final');
-    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => comment.text.includes(codeWordTokens.final)));
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => sha256HexRe.test(comment.text.trim())));
     assert.equal(getAiComments(state).length, 1, 'one comment');
+    committedDigests.set('final', getAiComments(state)[0].text.trim());
     await waitFor('the request in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).length > 0);
     assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['final']);
     report(`final ${issueKey}: comment ${getAiComments(state)[0].id} "${getAiComments(state)[0].text}"`);
@@ -866,18 +873,27 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       `${label}: the resumed process wrote a small fraction of the first one's cache (first ${formatUsage(firstTurn)}; resumed ${formatUsage(resumedTurn)})`);
   }
 
+  /** The digest the scenario's first answer posted: the commitment its recall is checked against. */
+  function getCommittedDigest(scenario: 'final' | 'perTurn'): string {
+    const digest = committedDigests.get(scenario);
+    assert.ok(digest, `${scenario}: its first answer posted a digest`);
+    return digest;
+  }
+
+  /** Did the answer reveal the word whose digest the scenario's first answer posted? */
+  function checkRevealsCommittedWord(scenario: 'final' | 'perTurn', answerText: string | undefined): boolean {
+    return answerText !== undefined && getSha256Hex(answerText.trim()) === getCommittedDigest(scenario);
+  }
+
   /**
-   * Hand the issue over asking for its code word, after `recallFillerCommentCount` fillers and the ask.
-   * Asserts the premise — none of the comments added for this hand-over holds the code word — so the
-   * recall cannot pass through the comments the resumed prompt carries.
+   * Hand the issue over asking for the secret word. Asserts the premise first — nothing written on the issue
+   * (description, comments) is the word — so a matching answer cannot have come from any prompt.
    */
   async function handOverWithRecallAsk(scenario: 'final' | 'perTurn'): Promise<void> {
     const issueKey = getIssueKey(scenario);
-    for (let index = 0; index < recallFillerCommentCount; index += 1) await getRequester().addComment(issueKey, fillerCommentText);
     await getRequester().addComment(issueKey, recallAskText);
-    const addedComments = (await getRequester().getIssueState(issueKey)).comments.slice(-(recallFillerCommentCount + 1));
-    assert.equal(addedComments.length, recallFillerCommentCount + 1, `${issueKey}: the added comments are all there`);
-    assert.ok(addedComments.every((comment) => !comment.text.includes(codeWordTokens[scenario])), `${issueKey}: no comment added for this hand-over holds the code word`);
+    const texts = [scenarioTexts[scenario], ...(await getRequester().getIssueState(issueKey)).comments.map((comment) => comment.text)];
+    assert.ok(texts.every((text) => text.split(/\s+/).every((word) => !checkRevealsCommittedWord(scenario, word))), `${issueKey}: the secret word is written nowhere on the issue`);
     await getRequester().assignIssue(issueKey, config.accountId);
   }
 
@@ -906,12 +922,12 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`L6/1 idle ${issueKey}: answer turn ${formatUsage(answerUsage)}; compaction pre=${compaction.preTokens} post=${compaction.postTokens}, its turn ${formatUsage(compactionUsage)}; process stopped`);
   });
 
-  it('lifecycle (L6 step 1): the next hand-over resumes the sleeping conversation in a new process; the answer gives the code word only the earlier context holds', async () => {
+  it('lifecycle (L6 step 1): the next hand-over resumes the sleeping conversation in a new process; the answer reveals the secret word only the earlier context holds', async () => {
     const issueKey = getIssueKey('final');
     await handOverWithRecallAsk('final');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
     const recalled = getAiComments(state).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.final), `the resumed answer gives the code word (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('final', recalled.text), `the resumed answer reveals the word of the posted digest (got "${recalled?.text}")`);
     assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
     assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] spawn', ' session='), 2, 'a second process');
     assert.ok(charnessOutput.split('\n').some((line) => line.startsWith(`[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`) && line.includes(' resume=true ')), 'the second process resumed the conversation');
@@ -962,8 +978,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
   it('lifecycle (L6 step 2): per-turn — the process is gone right after the answer; a hand-over a minute later resumes the conversation in a new process that finds the first one\'s context in the cache', async () => {
     const issueKey = getIssueKey('perTurn');
     await getRequester().assignIssue(issueKey, config.accountId);
-    const firstState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => comment.text.includes(codeWordTokens.perTurn)));
+    const firstState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => sha256HexRe.test(comment.text.trim())));
     assert.equal(getAiComments(firstState).length, 1, 'one answer');
+    committedDigests.set('perTurn', getAiComments(firstState)[0].text.trim());
     await waitFor(`${issueKey}'s process stopped right after its turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 1);
     assert.equal(getAgentPid(issueKey), null, 'no process between the turns');
     assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] session', ' exited unexpectedly'), 0, 'a per-turn stop is not an unexpected exit');
@@ -973,7 +990,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const secondState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
     const recalled = getAiComments(secondState).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.perTurn), `the second process gives the code word from the first one's context (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('perTurn', recalled.text), `the second process reveals the word of the first one's digest (got "${recalled?.text}")`);
     assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
     await waitFor(`${issueKey}'s second process stopped too`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 2);
     assert.equal(getAgentPid(issueKey), null, 'no process after the second turn either');
@@ -982,7 +999,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`L6/2 per-turn ${issueKey}: turn 1 ${formatUsage(firstUsage)}; turn 2 (new process, ${perTurnHandOverGapMs / 1000} s later) ${formatUsage(usages[1])}; comments ${getAiComments(secondState).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
   });
 
-  it('lifecycle (L6 step 5): the sleeping per-turn session is compacted at the idle mark; a resume long after it still gives the code word', { skip: longIdleMinutes === null ? `set ${longIdleMinutesEnvName} to run` : false }, async () => {
+  it('lifecycle (L6 step 5): the sleeping per-turn session is compacted at the idle mark; a resume long after it still reveals the secret word', { skip: longIdleMinutes === null ? `set ${longIdleMinutesEnvName} to run` : false }, async () => {
     const issueKey = getIssueKey('perTurn');
     await waitFor(`${issueKey}'s sleeping session compacted at the idle mark`, getIdleStopTimeoutMs(), () => getCompactions(issueKey).length === 1 && countIdleStops(issueKey) === 3);
     assert.equal(countConversationLogLines(issueKey, '[compact-on-idle]', ' sleeping per-turn session resumed for its compaction'), 1, 'the compaction resumed the sleeping session (L-D7)');
@@ -995,14 +1012,14 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 3);
     const recalled = getAiComments(state).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.perTurn), `the answer still gives the code word from the first turn's context (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('perTurn', recalled.text), `the answer still reveals the word of the first turn's digest (got "${recalled?.text}")`);
     await waitFor(`${issueKey}'s process stopped after the late turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 4);
     // A measurement for the plan's table, not a cache proof (a resume after a compaction rewrites the compacted prefix).
     const usages = await waitForUsageRecords(issueKey, 4);
     report(`L6/5 ${issueKey}: resume ${longIdleMinutes} min after the compaction turn: ${formatUsage(usages[3])}`);
   });
 
-  it('decoy: with the stored session id released, the same hand-over starts a fresh session that cannot give the code word — the recall checks are load-bearing', async () => {
+  it('decoy: with the stored session id released, the same hand-over starts a fresh session that cannot reveal the secret word — the recall checks are load-bearing', async () => {
     const issueKey = getIssueKey('perTurn');
     const aiCommentsBefore = getAiComments(await getRequester().getIssueState(issueKey)).length;
     await stopCharness();
@@ -1011,11 +1028,11 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > aiCommentsBefore);
     const answer = getAiComments(state).at(-1);
-    assert.ok(answer && !answer.text.includes(codeWordTokens.perTurn), `a fresh session cannot give the code word (got "${answer?.text}")`);
+    assert.ok(answer && !checkRevealsCommittedWord('perTurn', answer.text), `a fresh session cannot reveal the word, though its prompt holds the digest (got "${answer?.text}")`);
     const bootOutput = charnessOutput.slice(outputStart);
     assert.ok(!bootOutput.includes(`[ensure] resumed the sleeping session of ${keyToString(makeJiraKey(issueKey))}`), 'nothing was resumed');
     assert.ok(bootOutput.split('\n').some((line) => line.startsWith(`[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`) && line.includes(' resume=false ')), 'the hand-over started a fresh session');
-    report(`decoy ${issueKey}: fresh session answered ${answer.id} "${answer.text}" (expected ${unknownCodeWordAnswer} or anything without the code word)`);
+    report(`decoy ${issueKey}: fresh session answered ${answer.id} "${answer.text}" (expected ${unknownSecretWordAnswer} or any word that does not match the digest)`);
   });
 
   it('every Jira session loaded only the bot\'s MCP server (R8)', () => {

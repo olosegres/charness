@@ -20,6 +20,7 @@ import { keyToString } from '../sessionKey';
 import { resolveThreadFilesDir } from '../botFileStorage';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { jiraCommentSpillMinChars } from '../connectors/jira/promptSpill';
+import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const aiAccountId = 'ai-account';
@@ -158,7 +159,7 @@ describe('prepareJiraConnector', () => {
     connector?.start({
       bindConversation: async () => {},
       createRequest: async () => ({ id: 'req_1' }),
-      postRequest: async (_key, _requestId, prompt) => resolve(prompt),
+      postRequest: async (_key, _requestId, prompt) => resolve(prompt.buildText({ isFresh: true })),
     });
   });
 
@@ -173,7 +174,7 @@ describe('prepareJiraConnector', () => {
           assert.equal(`${keyToString(key)} ${folder}`, 'jira:PROJ:PROJ-1 proj-work');
         },
         createRequest: async () => ({ id: 'req_1' }),
-        postRequest: async (key, requestId, prompt) => resolve(`${keyToString(key)} ${requestId} ${prompt.split('\n')[0]}`),
+        postRequest: async (key, requestId, prompt) => resolve(`${keyToString(key)} ${requestId} ${prompt.fullText.split('\n')[0]}`),
       });
     });
     assert.equal(await posted, 'jira:PROJ:PROJ-1 req_1 [Request req_1 · from: PROJ-1 assigned to you by someone]');
@@ -202,6 +203,26 @@ describe('prepareJiraConnector', () => {
     assert.ok(spillPath, prompt);
     assert.equal(path.dirname(spillPath), path.join(resolveThreadFilesDir(dataDir, makeJiraKey('PROJ-1')), 'jira', 'text'));
     assert.equal(fs.readFileSync(spillPath, 'utf8'), longText);
+  });
+
+  it('C4: the ledger\'s word on a prompt reaches the issue\'s sent-state — taken in counts it as sent, dropped never does', async () => {
+    writeConfig();
+    connector = await prepare();
+    await startAndWaitForPrompt();
+    const key = makeJiraKey('PROJ-1');
+    const sentKeys = (): string[] => Object.keys(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1').sent);
+    assert.deepEqual(sentKeys(), [], 'built and posted, not yet taken in');
+    connector.onPromptSettled(key, 'req_1', 'dropped');
+    connector.onPromptSettled(key, 'req_1', 'takenIn');
+    assert.deepEqual(sentKeys(), [], 'a dropped build is gone');
+  });
+
+  it('C4: a prompt taken in counts as sent, on disk', async () => {
+    writeConfig();
+    connector = await prepare();
+    await startAndWaitForPrompt();
+    connector.onPromptSettled(makeJiraKey('PROJ-1'), 'req_1', 'takenIn');
+    assert.deepEqual(Object.keys(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1').sent).sort(), ['attachments', 'description', 'fields', 'hierarchy', 'links']);
   });
 
   describe('extraFields (C11)', () => {
@@ -347,6 +368,20 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const post = deps.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
     const watch = deps.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });');
     assert.ok(post > 0 && watch > post);
+  });
+
+  it('C4: the request ledger tells the connector of the conversation what became of each prompt', () => {
+    assert.match(startBody, /onPromptSettled: \(key, requestId, outcome\) => connectorConversationHooks\.get\(key\.platform\)\?\.onPromptSettled\(key, requestId, outcome\),/);
+    assert.ok(startBody.indexOf('const connectorConversationHooks = createConnectorConversationHooks(jiraConnector);') < startBody.indexOf('const requestLedger = new RequestLedger({'));
+    assert.match(botSource, /if \(jiraConnector\) hooks\.set\('jira', \{ onPromptSettled: \(key, requestId, outcome\) => jiraConnector\.onPromptSettled\(key, requestId, outcome\) \}\);/);
+  });
+
+  it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {
+    const ensure = botSource.slice(botSource.indexOf('async function ensureAgentSessionNow('), botSource.indexOf('function getResumableSessionId('));
+    assert.match(ensure, /case 'ready':\s*return \{ ok: true, message: '', isFresh: false \};/);
+    assert.match(ensure, /if \(await resumeSleepingSession\(key, plan\.sessionId\)\) return \{ ok: true, message: '', isFresh: false \};/);
+    assert.equal((ensure.match(/\? \{ ok: true, message, isFresh: true \}/g) ?? []).length, 2, 'both starts are fresh');
+    assert.match(botSource, /if \(result\.ok\) return \{ ok: true, isFresh: result\.isFresh \};/);
   });
 
   it('a post that failed is handed to the wake-up engine\'s retries before the failure is reported (R28)', () => {

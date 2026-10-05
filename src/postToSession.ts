@@ -32,7 +32,20 @@ export const waitIdleTimeoutMs = 10 * 60 * 1000;
  */
 export type EnsureSessionFailureReason = 'unbound' | 'no-adapter' | 'start-failed';
 
-export type EnsureSessionResult = { ok: true } | { ok: false; reason: EnsureSessionFailureReason };
+/** `isFresh` — the ensure started a NEW conversation (a start, or a resume that failed and fell back to one). */
+export type EnsureSessionResult = { ok: true; isFresh: boolean } | { ok: false; reason: EnsureSessionFailureReason };
+
+/**
+ * @name SessionPromptText
+ * @description A prompt whose text depends on the session it lands in (Jira prompt
+ * context C5): `buildText` runs right before the forward — after the ensure, the
+ * wait for idle and the second limit check — and is told whether the session is
+ * fresh; `fullText` is what stands on its own (a hold keeps it, a re-post sends it).
+ */
+export interface SessionPromptText {
+  fullText: string;
+  buildText: (context: { isFresh: boolean }) => string;
+}
 
 /**
  * @name PostToSessionDeps
@@ -79,12 +92,13 @@ async function waitForIdle(deps: PostToSessionDeps, conversationKey: string): Pr
 export async function postToSession(
   deps: PostToSessionDeps,
   conversationKey: string,
-  text: string,
+  prompt: string | SessionPromptText,
   fallbackAdapterName?: string,
   options: { heldText?: string } = {},
 ): Promise<PostToSessionResult> {
   // What is held is read only once the wait is over: a caller may say when it was due (R27).
   const { heldText } = options;
+  const text = typeof prompt === 'string' ? prompt : prompt.fullText;
   // Checked first: no session is started or resumed into a limit.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
@@ -93,7 +107,7 @@ export async function postToSession(
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   try {
-    await deps.forwardPrompt(conversationKey, text);
+    await deps.forwardPrompt(conversationKey, typeof prompt === 'string' ? prompt : prompt.buildText({ isFresh: session.isFresh }));
   } catch (error) {
     return { ok: false, reason: 'forward-failed', error: error instanceof Error ? error.message : String(error) };
   }

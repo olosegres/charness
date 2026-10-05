@@ -5,6 +5,9 @@ import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
+import { JiraContextLedger } from './contextLedger';
+import type { SessionKey } from '../../sessionKey';
+import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
 import { sleep } from '../../utils';
 
@@ -34,6 +37,11 @@ export interface JiraConnector {
   launchDefaults: { model: string; effort: string };
   /** Where answers, alerts and park notices go: comments on the issue (J6). */
   answerSink: JiraAnswerSink;
+  /**
+   * What became of a request's prompt (the request ledger's event, C4): taken in → what it carried counts as
+   * sent to the issue's conversation; dropped → it never does.
+   */
+  onPromptSettled(key: SessionKey, requestId: string, outcome: RequestPromptOutcome): void;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -150,6 +158,7 @@ export async function prepareJiraConnector(context: {
   const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
   await unconfirmedPosts.load();
 
+  const contextLedger = JiraContextLedger.createForDataDir(context.dataDir);
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
@@ -176,6 +185,7 @@ export async function prepareJiraConnector(context: {
       projects,
       runBudgetPer24h: config.runBudgetPer24h,
       pollIntervalMs: config.pollIntervalMs,
+      contextLedger,
       getSpillDir: (key) => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName, jiraSpillDirName),
       triggerLog,
       now: () => Date.now(),
@@ -204,6 +214,11 @@ export async function prepareJiraConnector(context: {
     adapterName: config.adapter,
     launchDefaults: { model: config.model, effort: config.effort },
     answerSink,
+    onPromptSettled: (key, requestId, outcome) => {
+      // A Jira conversation's thread IS its issue key.
+      if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);
+      else contextLedger.drop(key.thread, requestId);
+    },
     start: (deps) => {
       if (isStarted) return;
       isStarted = true;
