@@ -299,6 +299,7 @@ export function readFileByteRange(filePath: string, startOffset: number, endOffs
 export interface AdoptedTailStart {
   startOffset: number;
   backgroundTaskIds: string[];
+  isTurnInFlight: boolean;
 }
 
 /**
@@ -309,7 +310,9 @@ export interface AdoptedTailStart {
  * background-task list persisted with the offset is restored on the same
  * condition: the frames that built it lie before the offset and will not
  * replay, so without it an adopted session with a running background task
- * would read as idle and could be stopped (L-D2).
+ * would read as idle and could be stopped (L-D2). The turn-in-flight flag is
+ * restored the same way — a turn in a long, silent tool call leaves no frame
+ * after the offset either.
  */
 export function resolveAdoptedTail(
   persistedTail: JsonStreamTailOffset | null,
@@ -317,11 +320,12 @@ export function resolveAdoptedTail(
   stdoutSizeBytes: number,
 ): AdoptedTailStart {
   if (persistedTail === null || persistedTail.sessionId !== claudeSessionId) {
-    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [] };
+    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [], isTurnInFlight: false };
   }
   return {
     startOffset: Math.min(persistedTail.offsetBytes, stdoutSizeBytes),
     backgroundTaskIds: persistedTail.backgroundTaskIds ?? [],
+    isTurnInFlight: persistedTail.isTurnInFlight ?? false,
   };
 }
 

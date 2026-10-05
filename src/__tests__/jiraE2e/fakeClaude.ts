@@ -54,6 +54,8 @@ import {
  *  - `silent`      — ends EVERY turn without answering (the wake-up rules give up and alert);
  *  - `hang-once`   — starts working on its first turn and never ends it (the
  *    test kills the process), answers in the next turn;
+ *  - `slow-once`   — its first turn works in SILENCE (a long tool call: no frame)
+ *    for 45 s, then answers; later turns answer at once;
  *  - `progress`    — sends a `progress` note and ends the turn;
  *  - `finish-together` — the first request of an issue gets a `progress` note
  *    (it stays open); the turn of a LATER request of the same issue answers
@@ -82,10 +84,12 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together', 'answer-after-queued', 'background'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
+/** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
+const slowTurnMs = 45_000;
 /** The literal slash command the bot writes as a user turn to compact the session. */
 const compactCommandText = '/compact';
 /** The `task_id` of the background task a `background` turn leaves running (never ends: the test kills the process). */
@@ -313,6 +317,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   if (state.mode === 'hang-once' && isFirstTurn) {
     await new Promise<never>(() => {});
+  }
+  if (state.mode === 'slow-once' && isFirstTurn) {
+    await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));
   }
   const server = getBotMcpServer(argv);
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {

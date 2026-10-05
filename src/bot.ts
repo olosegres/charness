@@ -4266,10 +4266,14 @@ async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Prom
  * @description An adopted json-stream process whose tool list is stale (L4) is
  * stopped at its next idle point: now when idle, else once it stops working —
  * polled, since the bot gets no "turn ended" event it can hang this on. The next
- * trigger resumes the conversation with the current tools.
+ * trigger resumes the conversation with the current tools. The first look waits
+ * for the adopt's replay: until the tail has consumed what stdout held at the
+ * adopt, the live state is the persisted one plus nothing, and a turn that ended
+ * or began during the downtime would be misread.
  */
-function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: AgentAdapter): void {
+function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter): void {
   const kStr = keyToString(key);
+  void adapter.whenAdoptReplayed(key).then(() => tick());
   const tick = (): void => {
     if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
     if (adapter.checkIsWorking?.(key)) {
@@ -4285,7 +4289,6 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: AgentAdapter): voi
       })
       .catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
   };
-  tick();
 }
 
 /** How often an adopted, stale-tool-list process that is still working is re-checked for idleness (L4). */
@@ -10402,6 +10405,8 @@ async function reattachExistingSessions(
               isWorking: claudeJsonAdapter.checkIsWorking(key),
             });
             if (refresh !== 'fresh') {
+              // Read from the persisted state (the turn-in-flight flag, the task list); the stop itself
+              // looks again once the downtime frames have replayed.
               console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list (${refresh === 'stopNow' ? 'idle: stopped now' : 'working: stopped once idle'})`);
               stopAdoptedSessionWhenIdle(key, claudeJsonAdapter);
             }

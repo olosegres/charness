@@ -99,6 +99,12 @@ function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {
     apiErrorFired: false,
     swallowNextAbortError: false,
     lastWatermarkOffset: -1,
+    unconsumedInputCount: 0,
+    backgroundTaskIds: new Set<string>(),
+    claudeCodeVersion: null,
+    applyingChunk: null,
+    adoptCatchUpOffset: null,
+    adoptCatchUpResolvers: [],
   };
   adapter['sessions'].set(keyToString(key), session);
   return session;

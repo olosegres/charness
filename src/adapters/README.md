@@ -101,6 +101,10 @@ restarts — every hot reload — never touch it. Per-thread host dir
   line-boundary byte offset persists in `state.json` (`agents[key].jsonStreamTail`)
   but only once batched answer text has actually been EMITTED — an offset past
   un-emitted text would skip it on replay (live seam-loss 2026-07-05).
+  The record also carries the background-task list and a turn-in-flight flag
+  as of that offset (written on every advance and on each user turn), so an
+  adopt restores a working state the frames before the offset built — a long,
+  silent tool call leaves nothing after it to rebuild from (L-D2).
 - `stderr.log` — passive; read only for spawn-fail / unexpected-exit
   diagnostics. `pid` / `exitcode` — written by the wrapper; the poll tick's
   exit detection (pid-alive + exitcode file) routes into the normal

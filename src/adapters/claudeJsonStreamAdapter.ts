@@ -287,6 +287,14 @@ interface StreamSession {
    * the end of the chunk instead.
    */
   applyingChunk: { isPersistDeferred: boolean } | null;
+  /**
+   * An ADOPTED session's stdout size at the adopt (`null` otherwise, or once
+   * reached): the tail must consume up to here before the session's live state
+   * (busy, tasks, input) is trustworthy — see {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}.
+   */
+  adoptCatchUpOffset: number | null;
+  /** Waiters of {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}, settled when the catch-up offset is reached or the session ends. */
+  adoptCatchUpResolvers: Array<() => void>;
 }
 
 /**
@@ -509,6 +517,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingQuestion: null, apiErrorFired: false, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       backgroundTaskIds: new Set(), claudeCodeVersion: null, applyingChunk: null,
+      adoptCatchUpOffset: null, adoptCatchUpResolvers: [],
     };
     this.sessions.set(keyToString(key), session);
     // A fresh spawn starts a fresh stdout file — reset the persisted tail offset
@@ -567,6 +576,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       this.finalizeExternalExit(session, exitCode ?? readExitCodeFile(session.paths.exitCodeFile));
       return;
     }
+    this.settleAdoptCatchUp(session, false);
     // Backstop: a busy session gone silent with nothing in flight lost its
     // terminal `result` — clear the stuck flag so the typing indicator can't hang.
     this.maybeClearBusyOnIdle(session);
@@ -674,6 +684,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.clearTimers(session);
     session.isActive = false;
     this.sessions.delete(keyToString(key));
+    this.settleAdoptCatchUp(session, true);
     this.closeFifo(session);
     const stderrTail = session.isStopping ? '' : readStderrTail(session.paths.stderrFile);
     void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
@@ -779,7 +790,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       return false;
     }
     const size = getFileSize(paths.stdoutFile) ?? 0;
-    const { startOffset, backgroundTaskIds } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
+    const { startOffset, backgroundTaskIds, isTurnInFlight } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
     const session: StreamSession = {
@@ -790,9 +801,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: startOffset,
       reader: new ClaudeStreamLineReader(),
-      // isBusy=false: the replayed/live events reconstruct it (deltas/toolUse
-      // set it, `result` clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
+      // isBusy starts from the PERSISTED turn-in-flight flag: a turn in a long, silent
+      // tool call leaves no frame after the tail offset to rebuild it from. The
+      // replayed/live events then keep it right (deltas/toolUse set it, `result`
+      // clears it) — see `applyAction`.
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: null, reportedModel: null, effort: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -807,6 +820,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The frames that built the list lie before the tail offset (not replayed);
       // the version arrives on the next turn's `init`.
       backgroundTaskIds: new Set(backgroundTaskIds), claudeCodeVersion: null, applyingChunk: null,
+      // Nothing to catch up on when the tail already sits at EOF.
+      adoptCatchUpOffset: startOffset < size ? size : null, adoptCatchUpResolvers: [],
     };
     if (session.pendingQuestion) {
       // The external process is still blocked on this question — busy, and the
@@ -818,6 +833,29 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.schedulePoll(session, basePollIntervalMs);
     this.emit('started', key);
     return true;
+  }
+
+  /**
+   * @description Resolves once an ADOPTED session's tail has consumed what its
+   * stdout held at the adopt — the replayed frames have rebuilt the live state
+   * (busy, tasks, input) — or once the session is gone. Immediate for a session
+   * that was not adopted or whose tail already sat at EOF. The stale-tool-list
+   * stop (L4) looks only after this: a look before it would read a turn in flight
+   * as idle.
+   */
+  whenAdoptReplayed(key: SessionKey): Promise<void> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session || session.adoptCatchUpOffset === null) return Promise.resolve();
+    return new Promise((resolve) => { session.adoptCatchUpResolvers.push(resolve); });
+  }
+
+  /** Settle the adopt catch-up once the tail consumed up to the adopt-time EOF (or the session ended). */
+  private settleAdoptCatchUp(session: StreamSession, isSessionGone: boolean): void {
+    if (session.adoptCatchUpOffset === null) return;
+    if (!isSessionGone && session.tail.consumedBytes < session.adoptCatchUpOffset) return;
+    session.adoptCatchUpOffset = null;
+    const resolvers = session.adoptCatchUpResolvers.splice(0);
+    for (const resolve of resolvers) resolve();
   }
 
   /** Restore a pending question persisted by a previous bot life (see
@@ -1064,6 +1102,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // sat idle for minutes (busy=false, clock stale) would trip the watchdog on
     // its very next poll — before claude has a chance to emit the first token.
     session.lastStdoutActivityAt = Date.now();
+    // The turn in flight is persisted at once (same offset, flipped flag): a restart
+    // during a long, silent tool call finds no frame after the offset to rebuild it.
+    this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
     this.writeUserMessage(session, input);
   }
 
@@ -1829,7 +1870,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 /** The tail record persisted for a session at `offsetBytes` — the offset and the
  *  background-task list in force there travel together (see `JsonStreamTailOffset`). */
 function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStreamTailOffset {
-  return { sessionId: session.sessionId, offsetBytes, backgroundTaskIds: [...session.backgroundTaskIds] };
+  return { sessionId: session.sessionId, offsetBytes, backgroundTaskIds: [...session.backgroundTaskIds], isTurnInFlight: session.isBusy };
 }
 
 /**

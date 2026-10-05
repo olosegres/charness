@@ -79,6 +79,13 @@ export interface JsonStreamTailOffset {
    * written before the list was tracked has none, which reads as "no tasks".
    */
   backgroundTaskIds?: string[];
+  /**
+   * Whether a turn was in flight as of `offsetBytes` — set when a user turn is
+   * written, cleared by its `result`. Restored on adopt so a process in a long,
+   * silent tool call across a restart (no frame after the offset to rebuild it
+   * from) still reads as working (L-D2) and is never stopped mid-turn.
+   */
+  isTurnInFlight?: boolean;
 }
 
 /**

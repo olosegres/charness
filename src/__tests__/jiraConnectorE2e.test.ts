@@ -125,7 +125,7 @@ const flowMarginMs = 60 * 1000;
  * stops (the restart's and `after`'s) — so a slow run fails at the step that is
  * late, never at the suite.
  */
-const flowTimeoutMs = 2 * bootTimeoutMs + 13 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 2 * bootTimeoutMs + 17 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -327,6 +327,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     createIssue('PROJ-6', 'finish-together');
     createIssue('PROJ-7', 'answer-after-queued');
     createIssue('PROJ-8', 'background');
+    createIssue('PROJ-9', 'slow-once');
     createIssue('OTHER-1', 'answer');
     await startCharness();
     const pid = getCharness().pid;
@@ -547,13 +548,19 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(idleAdoptedSessionId && checkIsProcessAlive(idleAdoptedTurn.pid), 'PROJ-2\'s process is alive going into the restart');
     const [workingAdoptedTurn] = getTurns('PROJ-8');
     assert.ok(checkIsProcessAlive(workingAdoptedTurn.pid), 'PROJ-8\'s process (a background task) is alive going into the restart');
+    // PROJ-9's first turn works in silence for longer than the restart takes: its process is adopted MID-TURN.
+    handIssueToAi('PROJ-9', requester);
+    await waitFor('PROJ-9\'s slow turn under way', answerTimeoutMs, () => getTurns('PROJ-9').length === 1);
+    const [midTurnAdoptedTurn] = getTurns('PROJ-9');
+    const midTurnSessionId = getLaunchSessionId(getSessionLaunchOf(midTurnAdoptedTurn.pid)?.argv ?? []);
+    assert.ok(midTurnSessionId && fakeJira.getIssue('PROJ-9').comments.length === 0, 'PROJ-9 has not answered yet');
 
     const requestPromptCount = (): number => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.isRequestPrompt).length;
     const promptsBefore = requestPromptCount();
     const commentsBefore = ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length);
     await getCharness().stop();
     // A bot upgrade that changed the tools: the digests the two live processes were started with no longer match.
-    markToolDigestStale(['jira:PROJ:PROJ-2', 'jira:PROJ:PROJ-8']);
+    markToolDigestStale(['jira:PROJ:PROJ-2', 'jira:PROJ:PROJ-8', 'jira:PROJ:PROJ-9']);
 
     const searchesBefore = fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
     const outputBeforeRestart = getCharness().output.length;
@@ -565,6 +572,14 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-8: adopted with a stale tool list (working: stopped once idle)'));
     await waitFor('PROJ-2\'s stale process stopped right after the adopt', answerTimeoutMs, () => !checkIsProcessAlive(idleAdoptedTurn.pid));
     assert.ok(checkIsProcessAlive(workingAdoptedTurn.pid), 'PROJ-8 keeps working: its background task is never killed');
+    // A stale process adopted MID-TURN (no frame since the persisted tail: a long tool call) is kept until its result (L-D2).
+    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: adopted with a stale tool list (working: stopped once idle)'), 'the turn in flight was seen at the adopt');
+    assert.ok(checkIsProcessAlive(midTurnAdoptedTurn.pid), 'PROJ-9\'s process survives the adopt mid-turn');
+    assert.equal(fakeJira.getIssue('PROJ-9').comments.length, 0, 'still working');
+    await waitFor('PROJ-9 answered by the adopted process', 2 * answerTimeoutMs, () => fakeJira.getIssue('PROJ-9').comments.length > 0);
+    assert.equal(getTurns('PROJ-9').length, 1, 'answered by the turn that was in flight, in the adopted process');
+    await waitFor('PROJ-9\'s stale process stopped once its turn ended', answerTimeoutMs, () => !checkIsProcessAlive(midTurnAdoptedTurn.pid));
+    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: stopping the adopted process with the stale tool list'));
     // Two polls after the restart: the first one decided every issue again.
     await waitFor('two polls after the restart', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);
@@ -574,7 +589,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(requestPromptCount(), promptsBefore, 'no request prompt was posted again');
     // One request per issue. Its PROMPT may reach the agent twice: a request whose taking-in was not yet
     // seen when the agent died is re-posted to the resumed session (R21) — same request, not a second one.
-    for (const key of ['PROJ-3', 'PROJ-4', 'PROJ-8']) {
+    for (const key of ['PROJ-3', 'PROJ-4', 'PROJ-8', 'PROJ-9']) {
       assert.equal(new Set(getTurns(key).map((turn) => turn.requestId)).size, 1, `${key} was one request, from start to end`);
     }
     assert.equal(new Set(getTurns('PROJ-1').map((turn) => turn.requestId)).size, 2, 'PROJ-1: its first request and the hand-over after the idle stop, no third');

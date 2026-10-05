@@ -100,6 +100,8 @@ function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string) {
     backgroundTaskIds: new Set<string>(),
     claudeCodeVersion: null,
     applyingChunk: null,
+    adoptCatchUpOffset: null,
+    adoptCatchUpResolvers: [],
   };
   adapter['sessions'].set(keyToString(key), session);
   return session;
@@ -169,7 +171,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.equal(adapter['sessions'].size, 0, 'the session is deregistered');
     assert.equal(fs.existsSync(dir), false, 'the host dir is removed');
     // The tail offset persisted at the line boundary (== the whole result line).
-    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [] }]);
+    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false }]);
   });
 
   it('an explicit stop converges through the same finalize but emits stopped', async () => {
@@ -223,7 +225,8 @@ describe('json-stream external transport — exit detection', () => {
     adapter['flushAnswer'](session, false);
     assert.deepEqual(
       tailWrites,
-      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [] }],
+      // The delta marked a turn in flight: the record says so, for an adopt in a later silent stretch.
+      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [], isTurnInFlight: true }],
       'the flush releases the boundary at the consumed line',
     );
   });
@@ -241,7 +244,7 @@ describe('json-stream external transport — exit detection', () => {
     adapter['drainStdoutTail'](session);
     assert.deepEqual([...session.backgroundTaskIds], ['b1', 'a2']);
     assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'] },
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false },
       'the list rides along with the offset so an adopt restores it');
 
     // The list is re-sent WHOLE: a frame naming one task replaces, not merges.
@@ -303,6 +306,56 @@ describe('json-stream external transport — exit detection', () => {
     // A result without usage logs nothing — no fabricated zeros.
     const silent = captureLog(() => adapter['onStdout'](session, resultLine));
     assert.deepEqual(silent.filter((line) => line.startsWith(claudeJsonStreamUsageLogPrefix)), []);
+  });
+
+  it('persists the turn in flight with the tail record: set when a turn is written, cleared by its result (L4 rework)', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-turnflag-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+    const originalError = console.error;
+    console.error = () => {}; // the fixture's fifo fd is invalid: the write itself is not under test
+    try {
+      adapter.sendInput(key, 'do the long thing');
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: 0, backgroundTaskIds: [], isTurnInFlight: true },
+      'written at once, at the current offset: a restart in a silent tool call finds no frame to rebuild it from');
+
+    fs.writeFileSync(session.paths.stdoutFile, resultLine);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false });
+  });
+
+  it('whenAdoptReplayed: settles once the tail consumed the adopt-time EOF, at once when nothing was behind, and when the session ends', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-catchup-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    await adapter.whenAdoptReplayed(key); // not adopted: immediate
+    await adapter.whenAdoptReplayed(makeTelegramKey(-100999777, 56)); // unknown key: immediate
+
+    // Adopted with two lines behind the tail: the second drain reaches the adopt-time EOF.
+    const behind = textDeltaLine + resultLine;
+    fs.writeFileSync(session.paths.stdoutFile, behind);
+    session.adoptCatchUpOffset = Buffer.byteLength(behind);
+    let isSettled = false;
+    const replayed = adapter.whenAdoptReplayed(key).then(() => { isSettled = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(isSettled, false, 'nothing consumed yet');
+    adapter['pollTailTick'](session);
+    await replayed;
+    assert.equal(session.adoptCatchUpOffset, null, 'caught up: the state rebuilt by the replay is trustworthy now');
+    assert.equal(session.isBusy, false, 'the replayed result cleared the turn');
+
+    // A waiter never hangs on a session that ends first.
+    const ending = createSessionInDir(adapter, fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-catchup-end-')));
+    ending.adoptCatchUpOffset = 10_000;
+    const waiter = adapter.whenAdoptReplayed(key);
+    await adapter['stopSessionInternal'](key);
+    await waiter;
+    fs.rmSync(ending.paths.dir, { recursive: true, force: true });
   });
 
   it('reconstructs isBusy from replayed events (adopt has no sendInput)', () => {
