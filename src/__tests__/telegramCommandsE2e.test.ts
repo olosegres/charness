@@ -25,6 +25,10 @@
  *     the topic: a stray message is answered with a waiting hint, `/esc` cancels the
  *     sign-in and the next message reaches the agent; a second `/login` is torn
  *     down by `/quit` (its pty ends)
+ *   → `/claude_mode`: the picker's third option (per-turn, lifecycle plan L5), a
+ *     tap persists it, `/claude` opens it, a message runs one turn and the
+ *     process is stopped right after its result, the next message resumes the
+ *     same conversation in a new process
  *
  * Nothing leaves the machine: the Bot API is on loopback, the agent and its
  * `auth` subcommands are fakes. Everything the test starts is stopped in `after`.
@@ -39,7 +43,7 @@ import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import type { ScheduleRecord } from '../scheduler/types';
-import { fakeClaudeLogFileNames, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -73,7 +77,7 @@ const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + agentStartTimeoutMs + stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 3 * agentStartTimeoutMs + stopTimeoutMs + flowMarginMs;
 
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
@@ -82,6 +86,11 @@ const fakeLoginUrl = 'https://claude.example.test/oauth/authorize?code=true';
 const escToCancelHint = '/esc to cancel';
 /** A `KEY-n` label the fake agent records in its turn log — names the prompt sent after a cancelled sign-in. */
 const afterCancelPromptLabel = 'ESC-1';
+/** The two prompts of the per-turn steps (L5): the first runs in a fresh process, the second in a resumed one. */
+const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
+/** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
+const perTurnStopTimeoutMs = 15 * 1000;
+const perTurnAdapterName = 'claude-per-turn';
 
 /**
  * A stand-in for the `claude auth …` subcommands (the agent itself is the standard fake). `auth login` prints the
@@ -147,7 +156,19 @@ function writeClaudeLauncherWithAuth(instance: IsolatedInstanceLayout): string {
   return launcherPath;
 }
 
-function readPersistedState(): { schedules?: Record<string, ScheduleRecord>; displayPrefs?: Record<string, Record<string, string>> } {
+/** A launch the fake agent recorded (`launches.jsonl`): its argv and pid. */
+interface FakeLaunch {
+  argv: string[];
+  isSessionLaunch: boolean;
+  pid: number;
+}
+
+/** The last session launch the process `pid` was started by. */
+function getSessionLaunchOf(pid: number): FakeLaunch | undefined {
+  return readJsonLines<FakeLaunch>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch && launch.pid === pid).at(-1);
+}
+
+function readPersistedState(): { schedules?: Record<string, ScheduleRecord>; displayPrefs?: Record<string, Record<string, string>>; agents?: Record<string, { name?: string; claudeSessionId?: string }> } {
   return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
 }
 
@@ -413,5 +434,42 @@ describe('Telegram commands end to end: built charness, fake Bot API', { timeout
 
     fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
     await getCharness().waitFor('the sign-in CLI to end', stopTimeoutMs, () => !checkIsProcessAlive(loginPid));
+  });
+
+  // ── /claude_mode: the per-turn lifecycle (L5) ────────────────────────
+
+  it('/claude_mode shows the third option; a tap persists the per-turn backend for the topic', async () => {
+    const picker = await topic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
+    assert.deepEqual(topic.getKeyboardData(picker), [['ccmode_claude-json-stream'], [`ccmode_${perTurnAdapterName}`], ['ccmode_claude']], 'three backends, per-turn in the middle');
+    assert.ok(topic.getKeyboardLabels(picker).flat().some((label) => label.includes('Per-turn')), 'the option is labelled');
+
+    const answer = await topic.tapAndAwaitAnswer(picker, `ccmode_${perTurnAdapterName}`);
+    assert.match(answer, /Switching/);
+    await topic.waitForMessage('the pick recorded for the next start', (message) => message.text.includes('Per-turn') && message.text.includes('applies on next start'));
+    await getCharness().waitFor('the per-turn backend persisted', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.name === perTurnAdapterName);
+  });
+
+  it('a message runs one turn on the per-turn backend and the process is stopped right after its result', async () => {
+    await topic.sendAndAwaitReply('/claude', 'ready in');
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnPromptLabels[0]} [fake:answer] first per-turn prompt`);
+    await getCharness().waitFor('the first prompt to reach the agent', agentStartTimeoutMs, () => getAgentTurns(perTurnPromptLabels[0]).length === 1);
+    const [firstTurn] = getAgentTurns(perTurnPromptLabels[0]);
+    await getCharness().waitFor('the process stopped right after its result', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
+    assert.ok(getCharness().output.includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`), 'the per-turn stop is the idle stop\'s teardown');
+    assert.ok(!getCharness().output.includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
+    assert.ok(readPersistedState().agents?.[threadKeyString]?.claudeSessionId, 'the session id is kept: the conversation sleeps');
+  });
+
+  it('the next message resumes the sleeping conversation in a new process, which is stopped again after its turn', async () => {
+    const [firstTurn] = getAgentTurns(perTurnPromptLabels[0]);
+    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
+    assert.ok(sessionId, 'the first launch named its conversation');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnPromptLabels[1]} [fake:answer] second per-turn prompt`);
+    await getCharness().waitFor('the second prompt to reach a resumed agent', agentStartTimeoutMs, () => getAgentTurns(perTurnPromptLabels[1]).length === 1);
+    const [secondTurn] = getAgentTurns(perTurnPromptLabels[1]);
+    assert.notEqual(secondTurn.pid, firstTurn.pid, 'a new process per turn');
+    assert.deepEqual(getFlagValues(getSessionLaunchOf(secondTurn.pid)?.argv ?? [], '--resume'), [sessionId], 'the same conversation, resumed');
+    await getCharness().waitFor('the second process stopped after its turn', perTurnStopTimeoutMs, () => !checkIsProcessAlive(secondTurn.pid));
   });
 });
