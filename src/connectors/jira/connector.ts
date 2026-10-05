@@ -1,7 +1,7 @@
 import * as path from 'path';
-import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient } from './client';
+import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
 import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
-import { loadJiraConfig, resolveTriggerStatusIds, type JiraConfig } from './config';
+import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
@@ -30,7 +30,7 @@ export interface JiraConnector {
   /** The backend Jira sessions run on (D16, R14). */
   adapterName: JiraConfig['adapter'];
   /** `jira.json`'s model and effort for new sessions (R15). */
-  launchDefaults: { model: string | null; effort: string | null };
+  launchDefaults: { model: string; effort: string };
   /** Where answers, alerts and park notices go: comments on the issue (J6). */
   answerSink: JiraAnswerSink;
   /** Start polling (the session side is ready: the boot restored the sessions). */
@@ -51,11 +51,13 @@ export function checkIsTransientJiraFailure(error: Error): boolean {
 
 /**
  * @name JiraSetupCheck
- * @description `ready` — every project resolved; `refused` — the setup itself is
- * wrong (every reason); `unreachable` — Jira did not answer well enough to tell.
+ * @description `ready` — every project resolved (`unknownExtraFieldIds`: per
+ * project, the `extraFields` ids the site does not list); `refused` — the setup
+ * itself is wrong (every reason); `unreachable` — Jira did not answer well
+ * enough to tell.
  */
 type JiraSetupCheck =
-  | { kind: 'ready'; projects: ReadonlyMap<string, JiraProjectTrigger> }
+  | { kind: 'ready'; projects: ReadonlyMap<string, JiraProjectTrigger>; unknownExtraFieldIds: ReadonlyMap<string, string[]> }
   | { kind: 'refused'; reasons: string[] }
   | { kind: 'unreachable'; detail: string };
 
@@ -70,13 +72,15 @@ async function settle<T>(lookup: Promise<T>): Promise<SettledLookup<T>> {
   }
 }
 
-/** What the setup check reads from Jira: the token's account, every project's statuses. */
+/** What the setup check reads from Jira: the token's account, every project's statuses, the site's fields when any project names extra ones. */
 async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<JiraSetupCheck> {
   const projectEntries = [...config.projects];
+  const hasExtraFields = projectEntries.some(([, project]) => project.extraFieldIds.length > 0);
   // Independent lookups, made together; one project's failure does not hide the others' problems.
-  const [myself, statusLookups] = await Promise.all([
+  const [myself, statusLookups, fieldsLookup] = await Promise.all([
     settle(client.getMyself()),
     Promise.all(projectEntries.map(([projectKey]) => settle(client.getProjectStatuses(projectKey)))),
+    hasExtraFields ? settle(client.getFields()) : null,
   ]);
   const reasons: string[] = [];
   const transientDetails: string[] = [];
@@ -85,7 +89,10 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
   };
   if (!myself.ok) noteFailure(myself.error);
   else if (myself.value.accountId !== config.accountId) reasons.push('jira.json accountId is not the account its apiToken belongs to');
+  if (fieldsLookup && !fieldsLookup.ok) noteFailure(fieldsLookup.error);
+  const fieldDefinitions: readonly JiraFieldDefinition[] = fieldsLookup?.ok ? fieldsLookup.value : [];
   const projects = new Map<string, JiraProjectTrigger>();
+  const unknownExtraFieldIds = new Map<string, string[]>();
   projectEntries.forEach(([projectKey, project], index) => {
     const lookup = statusLookups[index];
     if (!lookup.ok) {
@@ -93,12 +100,17 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
       return;
     }
     const resolved = resolveTriggerStatusIds(projectKey, project.triggerStatusNames, lookup.value);
-    if (resolved.ok) projects.set(projectKey, { folder: project.folder, triggerStatusIds: new Set(resolved.statusIds) });
-    else reasons.push(resolved.error);
+    if (!resolved.ok) {
+      reasons.push(resolved.error);
+      return;
+    }
+    const { extraFields, unknownFieldIds } = resolveExtraFields(project.extraFieldIds, fieldDefinitions);
+    if (unknownFieldIds.length > 0) unknownExtraFieldIds.set(projectKey, unknownFieldIds);
+    projects.set(projectKey, { folder: project.folder, triggerStatusIds: new Set(resolved.statusIds), extraFields });
   });
   if (reasons.length > 0) return { kind: 'refused', reasons };
   if (transientDetails.length > 0) return { kind: 'unreachable', detail: transientDetails.join('; ') };
-  return { kind: 'ready', projects };
+  return { kind: 'ready', projects, unknownExtraFieldIds };
 }
 
 /** The start-of-polling log line that carries the poll's JQL. */
@@ -145,7 +157,12 @@ export async function prepareJiraConnector(context: {
   let setupRetryTimer: NodeJS.Timeout | null = null;
   let isStarted = false;
 
-  const startPolling = (deps: JiraConnectorSessionDeps, projects: ReadonlyMap<string, JiraProjectTrigger>): void => {
+  const startPolling = (deps: JiraConnectorSessionDeps, ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
+    const { projects, unknownExtraFieldIds } = ready;
+    // Once per start: this runs only for the check that came out ready.
+    for (const [projectKey, fieldIds] of unknownExtraFieldIds) {
+      console.warn(`[jira] ${projectKey}: extraFields the site does not list are left out of every prompt: ${fieldIds.join(', ')}`);
+    }
     inbound = new JiraInbound({
       ...deps,
       client,
@@ -170,7 +187,7 @@ export async function prepareJiraConnector(context: {
     setupRetryTimer = setTimeout(() => {
       void checkJiraSetup(client, config).then((check) => {
         if (!isStarted) return;
-        if (check.kind === 'ready') startPolling(deps, check.projects);
+        if (check.kind === 'ready') startPolling(deps, check);
         else if (check.kind === 'refused') for (const reason of check.reasons) console.error(`[jira] polling NOT started: ${reason}`);
         else retrySetupCheck(deps, failureCount + 1);
       });
@@ -184,7 +201,7 @@ export async function prepareJiraConnector(context: {
     start: (deps) => {
       if (isStarted) return;
       isStarted = true;
-      if (firstCheck.kind === 'ready') startPolling(deps, firstCheck.projects);
+      if (firstCheck.kind === 'ready') startPolling(deps, firstCheck);
       else retrySetupCheck(deps, 0);
     },
     stop: () => {

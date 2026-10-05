@@ -15,7 +15,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { buildJiraTriggerJql, getJiraRetryDelayMs, jiraChangelogPageSize, JiraInbound, jiraRetryBackoffCapMs, type JiraInboundDeps, type JiraProjectTrigger } from '../connectors/jira/inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
-import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraIssue, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
+import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraComment, type JiraIssue, type JiraRemoteLink, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
+import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
 import type { RequestOrigin } from '../requests/types';
@@ -27,9 +28,14 @@ const reporter: JiraAccount = { accountId: 'reporter-account', accountType: 'atl
 const nowMs = Date.parse('2026-10-03T12:00:00Z');
 /** Lets a post that was not awaited settle and record its trigger. */
 const flushPosts = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+/** The two reads of an issue's context that a poll-loop test has no use for. */
+const emptyIssueContext: Pick<JiraInboundDeps['client'], 'getComments' | 'getRemoteLinks'> = {
+  getComments: async () => [],
+  getRemoteLinks: async () => [],
+};
 const projects: ReadonlyMap<string, JiraProjectTrigger> = new Map([
-  ['PROJ', { folder: 'proj-work', triggerStatusIds: new Set(['10001']) }],
-  ['OPS', { folder: 'ops-work', triggerStatusIds: new Set(['20001']) }],
+  ['PROJ', { folder: 'proj-work', triggerStatusIds: new Set(['10001']), extraFields: [] }],
+  ['OPS', { folder: 'ops-work', triggerStatusIds: new Set(['20001']), extraFields: [] }],
 ]);
 
 function createHistory(id: string, minute: number, items: JiraChangelogHistory['items'], author: JiraAccount = requester): JiraChangelogHistory {
@@ -55,6 +61,8 @@ function createIssue(issueKey: string, options: { histories?: JiraChangelogHisto
 interface Recorded {
   calls: string[];
   searches: JiraSearchRequest[];
+  /** The `fields` and `expand` of every issue read. */
+  issueReads: Array<{ fields: string[]; expand: string | undefined }>;
   origins: RequestOrigin[];
   prompts: string[];
   /** What each request was opened with, to keep for a re-post (R21). */
@@ -73,7 +81,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], origins: [], prompts: [], storedPrompts: [], parked: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -105,9 +113,18 @@ describe('JiraInbound', () => {
           const values = all.slice(startAt, startAt + maxResults);
           return { startAt, maxResults, total: all.length, isLast: startAt + values.length >= all.length, values };
         },
-        getIssue: async (issueKey) => {
+        getIssue: async (issueKey, fields, expand) => {
           recorded.calls.push(`getIssue ${issueKey}`);
+          recorded.issueReads.push({ fields, expand });
           return createIssue(issueKey);
+        },
+        getComments: async (issueKey) => {
+          recorded.calls.push(`getComments ${issueKey}`);
+          return [];
+        },
+        getRemoteLinks: async (issueKey) => {
+          recorded.calls.push(`getRemoteLinks ${issueKey}`);
+          return [];
         },
       },
       aiAccountId,
@@ -157,6 +174,8 @@ describe('JiraInbound', () => {
     assert.deepEqual(recorded.calls, [
       'search',
       'getIssue PROJ-12',
+      'getComments PROJ-12',
+      'getRemoteLinks PROJ-12',
       'bind jira:PROJ:PROJ-12 proj-work',
       'create jira:PROJ:PROJ-12',
       'post jira:PROJ:PROJ-12 req_1 (seen=false)',
@@ -253,6 +272,132 @@ describe('JiraInbound', () => {
     assert.deepEqual([...decisions], [['PROJ-18', 'parked'], ['PROJ-19', 'request']]);
     assert.deepEqual(recorded.parked, [{ issueKey: 'PROJ-18', requester }]);
     assert.equal(triggerLog.checkIsSeen('PROJ-18', '100'), true, 'a parked trigger is not parked again');
+  });
+
+  describe('the whole issue reaches the prompt (C1, C2)', () => {
+    const labelledIssue = (issueKey: string, fields: Partial<JiraIssue['fields']> = {}): JiraIssue => {
+      const base = createIssue(issueKey);
+      return { ...base, fields: { ...base.fields, description: convertMarkdownToAdf('The export fails.'), ...fields } };
+    };
+    const createComment = (id: string, day: number, markdown: string): JiraComment => ({
+      id,
+      author: { accountId: `author-${id}`, displayName: `Author ${id}` },
+      created: `2026-10-0${day}T10:00:00.000+0000`,
+      body: convertMarkdownToAdf(markdown),
+    });
+
+    /** A client over one issue: the poll finds it, `getIssue` answers with `issue`, a children search answers with the pages. */
+    function createContextClient(options: { issue: JiraIssue; comments?: JiraComment[]; remoteLinks?: JiraRemoteLink[]; childPages?: JiraSearchResult[] }): JiraInboundDeps['client'] {
+      let childPageIndex = 0;
+      return {
+        searchIssues: async (search) => {
+          recorded.searches.push(search);
+          if (search.jql.startsWith('project in')) return { issues: [createIssue(options.issue.key)], isLast: true };
+          return options.childPages?.[childPageIndex++] ?? { issues: [], isLast: true };
+        },
+        getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+        getIssue: async (_issueKey, fields, expand) => {
+          recorded.issueReads.push({ fields, expand });
+          return options.issue;
+        },
+        getComments: async () => options.comments ?? [],
+        getRemoteLinks: async () => options.remoteLinks ?? [],
+      };
+    }
+
+    it('EVERY comment, oldest first — not the last three — with the fields, links and remote links', async () => {
+      const issue = labelledIssue('PROJ-40', {
+        issuetype: { name: 'Bug', hierarchyLevel: 0 },
+        priority: { name: 'High' },
+        labels: ['backend', 'export'],
+        fixVersions: [{ name: '1.2' }],
+        components: [{ name: 'Exporter' }],
+        issuelinks: [{ type: { inward: 'is blocked by', outward: 'blocks' }, outwardIssue: { key: 'PROJ-41', fields: { summary: 'Release', status: { name: 'To Do' } } } }],
+      });
+      const comments = [5, 1, 4, 2, 3, 6].map((day) => createComment(`${day}`, day, `comment ${day}`));
+      const inbound = createInbound({
+        client: createContextClient({ issue, comments, remoteLinks: [{ object: { url: 'https://example.com/spec', title: 'Spec' } }] }),
+      });
+      await inbound.pollOnce();
+      await flushPosts();
+      const posted = recorded.prompts[0];
+      assert.ok(posted.includes('Comments (6, oldest first):'), posted);
+      const positions = [1, 2, 3, 4, 5, 6].map((day) => posted.indexOf(`> comment ${day}`));
+      assert.ok(positions.every((position, index) => position > 0 && (index === 0 || position > positions[index - 1])), positions.join(','));
+      for (const line of [
+        'Type: Bug', 'Priority: High', 'Labels: backend, export', 'Fix versions: 1.2', 'Components: Exporter',
+        '- blocks PROJ-41 "Release" (To Do)', '- web link: "Spec" https://example.com/spec', '> The export fails.',
+      ]) assert.ok(posted.includes(line), line);
+      assert.ok(!posted.includes('Latest comments'));
+    });
+
+    it('an epic: its children are searched by `parent`, page after page to the end, and all listed', async () => {
+      const epic = labelledIssue('PROJ-42', { issuetype: { name: 'Epic', hierarchyLevel: 1 } });
+      const child = (key: string): JiraIssue => ({ id: key, key, fields: { summary: `Child ${key}`, status: { id: '1', name: 'In Progress' } } });
+      const inbound = createInbound({
+        client: createContextClient({
+          issue: epic,
+          childPages: [{ issues: [child('PROJ-43'), child('PROJ-44')], nextPageToken: 'more' }, { issues: [child('PROJ-45')], isLast: true }],
+        }),
+      });
+      await inbound.pollOnce();
+      await flushPosts();
+      const childSearches = recorded.searches.filter((search) => !search.jql.startsWith('project in'));
+      assert.deepEqual(childSearches.map((search) => [search.jql, search.nextPageToken]), [
+        ['parent = "PROJ-42" ORDER BY created ASC', undefined],
+        ['parent = "PROJ-42" ORDER BY created ASC', 'more'],
+      ]);
+      assert.ok(recorded.prompts[0].includes('Child issues (3):\n- PROJ-43 "Child PROJ-43" (In Progress)\n- PROJ-44 "Child PROJ-44" (In Progress)\n- PROJ-45 "Child PROJ-45" (In Progress)'));
+    });
+
+    it('a standard issue lists its sub-tasks and searches for nothing', async () => {
+      const issue = labelledIssue('PROJ-46', {
+        issuetype: { name: 'Task', hierarchyLevel: 0 },
+        subtasks: [{ key: 'PROJ-47', fields: { summary: 'Write it', status: { name: 'Done' } } }],
+      });
+      await createInbound({ client: createContextClient({ issue }) }).pollOnce();
+      await flushPosts();
+      assert.deepEqual(recorded.searches.filter((search) => !search.jql.startsWith('project in')), []);
+      assert.ok(recorded.prompts[0].includes('Sub-tasks (1):\n- PROJ-47 "Write it" (Done)'));
+    });
+
+    it('an issue whose comments cannot be read opens no request: the poll tries it again, and the others go on', async () => {
+      const client = createContextClient({ issue: labelledIssue('PROJ-49') });
+      let attempts = 0;
+      const inbound = createInbound({
+        client: {
+          ...client,
+          getComments: async () => {
+            attempts += 1;
+            throw new Error('Jira 503');
+          },
+        },
+      });
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-49', 'failed']]);
+      await flushPosts();
+      assert.equal(requestCount, 0, 'a request is never opened without its whole prompt');
+      assert.equal(triggerLog.checkIsSeen('PROJ-49', '100'), false, 'its trigger stays unseen, so the next poll retries');
+      assert.equal(attempts, 1);
+    });
+
+    it('the project\'s extra fields are asked for with the standard ones, expanded for the media mapping, and rendered by their site name', async () => {
+      const issue = labelledIssue('PROJ-48', { issuetype: { name: 'Task', hierarchyLevel: 0 } });
+      issue.customFields = { customfield_10042: 'The export must finish in 5 s', customfield_10043: null };
+      const extraProjects: ReadonlyMap<string, JiraProjectTrigger> = new Map([
+        ['PROJ', {
+          folder: 'proj-work',
+          triggerStatusIds: new Set(['10001']),
+          extraFields: [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'customfield_10043', name: 'Story points' }],
+        }],
+      ]);
+      await createInbound({ projects: extraProjects, client: createContextClient({ issue }) }).pollOnce();
+      await flushPosts();
+      assert.equal(recorded.issueReads.length, 1);
+      assert.ok(recorded.issueReads[0].fields.includes('customfield_10042') && recorded.issueReads[0].fields.includes('description'));
+      assert.equal(recorded.issueReads[0].expand, 'renderedFields');
+      assert.ok(recorded.prompts[0].includes('Acceptance criteria: The export must finish in 5 s'));
+      assert.ok(!recorded.prompts[0].includes('Story points'), 'a field without a value is left out');
+    });
   });
 
   describe('a changelog the search cut short', () => {
@@ -393,6 +538,7 @@ describe('JiraInbound', () => {
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
           getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
         },
       });
       inbound.start();
@@ -416,6 +562,7 @@ describe('JiraInbound', () => {
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
           getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
         },
       });
       flaky.start();
@@ -440,6 +587,7 @@ describe('JiraInbound', () => {
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
           getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
         },
       });
       recovering.start();
@@ -460,6 +608,7 @@ describe('JiraInbound', () => {
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
           getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
         },
       });
       refused.start();
@@ -477,6 +626,7 @@ describe('JiraInbound', () => {
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
           getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
         },
       });
       flaky.start();

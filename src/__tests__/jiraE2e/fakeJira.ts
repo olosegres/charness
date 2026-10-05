@@ -189,7 +189,7 @@ export class FakeJira {
     }
     const requestBody = await this.readBody(request);
     const route = url.pathname.startsWith(restPrefix) ? url.pathname.slice(restPrefix.length) : url.pathname;
-    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee))?$/.exec(route);
+    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink))?$/.exec(route);
     const statusesMatch = /^\/project\/([^/]+)\/statuses$/.exec(route);
 
     if (method === 'GET' && route === '/myself') {
@@ -242,7 +242,13 @@ export class FakeJira {
       issue.comments.push(comment);
       send(201, { id: comment.id });
     } else if (method === 'GET' && subresource === 'comment') {
-      send(200, { total: issue.comments.length, comments: [...issue.comments].reverse() });
+      // `orderBy=-created` is newest first (the read-back); `created` (or none) is oldest first, paged like Jira's.
+      const ordered = url.searchParams.get('orderBy') === '-created' ? [...issue.comments].reverse() : [...issue.comments];
+      const startAt = Number(url.searchParams.get('startAt') ?? 0);
+      const maxResults = Number(url.searchParams.get('maxResults') ?? ordered.length);
+      send(200, { startAt, maxResults, total: ordered.length, comments: ordered.slice(startAt, startAt + maxResults) });
+    } else if (method === 'GET' && subresource === 'remotelink') {
+      send(200, []);
     } else if (method === 'PUT' && subresource === 'assignee') {
       const accountId = requestBody.accountId;
       if (typeof accountId !== 'string') {

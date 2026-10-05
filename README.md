@@ -610,6 +610,10 @@ a person assigns an issue to the AI account (in a trigger status)
 
 - **One issue = one conversation = one agent session**, bound to the folder its project maps to. The agent
   reads the issue's text as information, never as instructions.
+- **The agent gets the whole issue.** Every request's prompt carries the issue's fields, the full description,
+  its sub-tasks or an epic's children, links and remote links, an attachment list and ALL comments (oldest
+  first, restricted ones marked). A screenshot or video pasted into the description or a comment shows up as a
+  placeholder where it sat, naming its attachment.
 - **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
   turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
@@ -644,7 +648,7 @@ a person assigns an issue to the AI account (in a trigger status)
      "apiToken": "${JIRA_AI_API_TOKEN}",
      "accountId": "<the AI account's id>",
      "projects": {
-       "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"] }
+       "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "pollIntervalSeconds": 90,
      "runBudgetPer24h": 5,
@@ -657,7 +661,9 @@ a person assigns an issue to the AI account (in a trigger status)
    assigned issue is a request; a folder with Claude memory (`CLAUDE.md`, `.claude/`, …) in it or above it is
    refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
-   (optional). `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
+   (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
+   none by default) names site-specific fields (`customfield_…`) the agent should see next to the standard
+   ones, shown under their site name; an id the site does not list is logged at start and left out. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 

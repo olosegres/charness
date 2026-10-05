@@ -5,7 +5,9 @@ import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraCl
 import { makeJiraKey } from './sessionKeyCodec';
 import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
-import { buildJiraRequestPrompt, jiraPromptIssueFields } from './prompt';
+import { buildIssueBlocks, type JiraExtraField } from './issueBlocks';
+import { fetchJiraIssueContext } from './issueContext';
+import { buildJiraRequestPrompt } from './prompt';
 
 /**
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
@@ -47,6 +49,8 @@ export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator'];
 export interface JiraProjectTrigger {
   folder: string;
   triggerStatusIds: ReadonlySet<string>;
+  /** The project's `extraFields` the site knows, named (an unknown id was dropped at boot). */
+  extraFields: readonly JiraExtraField[];
 }
 
 /**
@@ -65,7 +69,7 @@ export type JiraIssueDecision = 'notAllowed' | 'notMatching' | 'posting' | 'seen
 const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen']);
 
 export interface JiraInboundDeps {
-  client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue'>;
+  client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue' | 'getComments' | 'getRemoteLinks'>;
   aiAccountId: string;
   /** `https://<site>` (or the test-only loopback base) — issue links are `<siteUrl>/browse/<KEY>`. */
   siteUrl: string;
@@ -225,12 +229,15 @@ export class JiraInbound {
   ): Promise<JiraIssueDecision> {
     const { deps } = this;
     // Fetched before the request opens: a request is never left without its prompt.
-    const details = await deps.client.getIssue(issue.key, jiraPromptIssueFields);
+    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id));
+    const blocks = buildIssueBlocks(context, project.extraFields);
     const key = makeJiraKey(issue.key);
     await deps.bindConversation(key, project.folder);
     const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
       requestId,
-      issue: details,
+      issueKey: issue.key,
+      statusName: context.issue.fields.status?.name,
+      blocks,
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,

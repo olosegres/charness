@@ -90,7 +90,6 @@ import { createJiraClient, type JiraClient } from '../../connectors/jira/client'
 import { jiraCommentAdfMaxChars, jiraCommentMarkdownMaxChars, type AdfDocument } from '../../connectors/jira/adf';
 import { makeJiraKey } from '../../connectors/jira/sessionKeyCodec';
 import { getJiraConfigPath } from '../../connectors/jira/configFile';
-import { jiraPromptCommentCount } from '../../connectors/jira/prompt';
 import { StateStore } from '../../state';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../../utils/jsonStreamHost';
 import { keyToString } from '../../sessionKey';
@@ -194,9 +193,10 @@ function getRepeatScenarioText(token: string): string {
 
 /**
  * L6: the code word of the issues whose conversation is resumed. It is given in the issue's FIRST comment,
- * never in the description, so that filler comments can push it (and the agent's answer) out of the
- * `jiraPromptCommentCount` comments the request prompt quotes: a later hand-over asking for it can be
- * answered only from the conversation's earlier context — a fresh session cannot see it.
+ * never in the description. A resumed conversation's prompt carries only what changed since its last one
+ * (prompt-context plan S4: a comment already sent is not sent again), so a later hand-over asking for the
+ * code word can be answered only from the conversation's earlier context — a fresh session, whose prompt is
+ * the whole issue, would see it, and the decoy step proves the recall is not read off a prompt.
  */
 const codeWordTokens = { final: createAskToken('CODE'), perTurn: createAskToken('CODE') } as const;
 const codeWordAskText = 'Reply with a final answer whose text is exactly the code word given in the first comment of this issue, nothing else.';
@@ -204,6 +204,8 @@ const recallAskText = 'Reply with a final answer whose text is exactly the code 
 /** What a session that never saw the code word is told to answer. */
 const unknownCodeWordAnswer = 'UNKNOWN';
 const fillerCommentText = 'Filler comment of the live run, nothing to do here.';
+/** Comments added before the ask, so the hand-over's new comments are more than the ask alone. */
+const recallFillerCommentCount = 3;
 
 function getCodeWordCommentText(token: string): string {
   return `The code word for this issue is: ${token}`;
@@ -865,17 +867,17 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
   }
 
   /**
-   * Hand the issue over asking for its code word, with the comments the prompt would quote first pushed out
-   * of the quoted window: `jiraPromptCommentCount` fillers, then the ask. Asserts the premise — none of the
-   * comments the prompt quotes holds the code word — so the recall cannot pass through the prompt.
+   * Hand the issue over asking for its code word, after `recallFillerCommentCount` fillers and the ask.
+   * Asserts the premise — none of the comments added for this hand-over holds the code word — so the
+   * recall cannot pass through the comments the resumed prompt carries.
    */
   async function handOverWithRecallAsk(scenario: 'final' | 'perTurn'): Promise<void> {
     const issueKey = getIssueKey(scenario);
-    for (let index = 0; index < jiraPromptCommentCount; index += 1) await getRequester().addComment(issueKey, fillerCommentText);
+    for (let index = 0; index < recallFillerCommentCount; index += 1) await getRequester().addComment(issueKey, fillerCommentText);
     await getRequester().addComment(issueKey, recallAskText);
-    const quotedComments = (await getRequester().getIssueState(issueKey)).comments.slice(-jiraPromptCommentCount);
-    assert.equal(quotedComments.length, jiraPromptCommentCount, `${issueKey}: the quoted window is full`);
-    assert.ok(quotedComments.every((comment) => !comment.text.includes(codeWordTokens[scenario])), `${issueKey}: no comment the prompt quotes holds the code word`);
+    const addedComments = (await getRequester().getIssueState(issueKey)).comments.slice(-(recallFillerCommentCount + 1));
+    assert.equal(addedComments.length, recallFillerCommentCount + 1, `${issueKey}: the added comments are all there`);
+    assert.ok(addedComments.every((comment) => !comment.text.includes(codeWordTokens[scenario])), `${issueKey}: no comment added for this hand-over holds the code word`);
     await getRequester().assignIssue(issueKey, config.accountId);
   }
 

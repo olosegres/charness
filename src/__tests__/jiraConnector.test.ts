@@ -6,7 +6,7 @@
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
 
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -30,6 +30,11 @@ let myselfFailures = { count: 0, status: 503 };
 /** Status of the project-statuses lookup; 200 serves the statuses. */
 let projectStatusesStatus = 200;
 const requestPaths: string[] = [];
+/** The site's fields (`GET /field`) and the custom values the issue returns. */
+let siteFields: Array<{ id: string; name: string }> = [];
+let issueCustomFields: Record<string, string> = {};
+/** Status of the field list; 200 serves `siteFields`. */
+let fieldsStatus = 200;
 
 function sendJson(response: http.ServerResponse, body: object): void {
   response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -76,7 +81,15 @@ describe('prepareJiraConnector', () => {
         }
         if (url === '/rest/api/3/project/PROJ/statuses') return sendJson(response, [{ statuses: [{ id: '10001', name: 'To Do' }, { id: '3', name: 'Done' }] }]);
         if (url === '/rest/api/3/search/jql') return sendJson(response, { issues: [issue], isLast: true });
-        if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, issue);
+        if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, { ...issue, fields: { ...issue.fields, ...issueCustomFields } });
+        if (url.startsWith('/rest/api/3/issue/PROJ-1/comment?')) return sendJson(response, { total: 0, comments: [] });
+        if (url === '/rest/api/3/issue/PROJ-1/remotelink') return sendJson(response, []);
+        if (url === '/rest/api/3/field' && fieldsStatus !== 200) {
+          response.writeHead(fieldsStatus, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ errorMessages: ['bad field request'] }));
+          return;
+        }
+        if (url === '/rest/api/3/field') return sendJson(response, siteFields);
         if (request.method === 'POST' && url === '/rest/api/3/issue/PROJ-1/comment') {
           response.writeHead(201, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ id: '20001' }));
@@ -107,6 +120,9 @@ describe('prepareJiraConnector', () => {
     myselfAccountId = aiAccountId;
     myselfFailures = { count: 0, status: 503 };
     projectStatusesStatus = 200;
+    siteFields = [];
+    issueCustomFields = {};
+    fieldsStatus = 200;
     requestPaths.length = 0;
   });
   afterEach(() => {
@@ -151,6 +167,60 @@ describe('prepareJiraConnector', () => {
     // The trigger is recorded once the post settled.
     await new Promise((resolve) => setImmediate(resolve));
     assert.ok(fs.existsSync(path.join(dataDir, 'jira-triggers.jsonl')), 'the trigger was recorded');
+  });
+
+  it('C14: a jira.json with neither model nor effort launches its sessions on opus with high effort', async () => {
+    writeConfig({ model: undefined, effort: undefined });
+    connector = await prepare();
+    assert.deepEqual(connector.launchDefaults, { model: 'opus', effort: 'high' });
+    connector.stop();
+    writeConfig({ model: 'sonnet', effort: undefined });
+    connector = await prepare();
+    assert.deepEqual(connector.launchDefaults, { model: 'sonnet', effort: 'high' });
+  });
+
+  describe('extraFields (C11)', () => {
+    const extraFieldProjects = { PROJ: { folder: 'proj-work', triggerStatuses: ['To Do'], extraFields: ['customfield_10042', 'customfield_99999'] } };
+    const startAndWaitForPrompt = (): Promise<string> => new Promise<string>((resolve) => {
+      connector?.start({
+        bindConversation: async () => {},
+        createRequest: async () => ({ id: 'req_1' }),
+        postRequest: async (_key, _requestId, prompt) => resolve(prompt),
+      });
+    });
+
+    it('a known id is asked for and shown under the site\'s name; an unknown one is logged ONCE at start and never shown', async () => {
+      writeConfig({ projects: extraFieldProjects });
+      siteFields = [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'summary', name: 'Summary' }];
+      issueCustomFields = { customfield_10042: 'must pass in CI', customfield_99999: 'a value the site never listed' };
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        connector = await prepare();
+        const prompt = await startAndWaitForPrompt();
+        assert.ok(prompt.includes('Acceptance criteria: must pass in CI'), prompt);
+        assert.ok(!prompt.includes('a value the site never listed'), 'an id the site does not list is rendered absent');
+        const fieldWarnings = warnings.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('extraFields'));
+        assert.deepEqual(fieldWarnings, ['[jira] PROJ: extraFields the site does not list are left out of every prompt: customfield_99999']);
+      } finally {
+        warnings.mock.restore();
+      }
+      assert.equal(requestPaths.filter((requestPath) => requestPath === 'GET /rest/api/3/field').length, 1, 'the site\'s fields were listed once, at start');
+    });
+
+    it('without extraFields the site\'s fields are never listed', async () => {
+      writeConfig();
+      connector = await prepare();
+      const prompt = await startAndWaitForPrompt();
+      assert.ok(prompt.includes('Fields:\nSummary: Do it\nStatus: To Do'), prompt);
+      assert.ok(!requestPaths.includes('GET /rest/api/3/field'));
+    });
+
+    it('a site that refuses to list its fields stops the start, naming the call', async () => {
+      writeConfig({ projects: extraFieldProjects });
+      fieldsStatus = 400;
+      await assert.rejects(prepare(), (error: Error) =>
+        error instanceof JiraConnectorStartError && /GET \/rest\/api\/3\/field failed with 400/.test(error.reasons.join('\n')));
+    });
   });
 
   it('a token of another account and an unknown trigger status stop the start, with both reasons', async () => {

@@ -3,6 +3,7 @@ import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink
 import type { RequestAlertReason } from '../../requests/types';
 import { emptyRequester, getRequestRequester } from '../../requests/requestGroup';
 import { convertMarkdownToAdf, createCommentBodies, getAdfText, type AdfDocument } from './adf';
+import { getSingleLineText } from './promptText';
 import type { JiraAccount, JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
 
@@ -83,7 +84,7 @@ interface CommentsPosted {
 
 /** A comment's text as the read-back compares it: its plain text, whitespace collapsed. */
 function getComparableText(body: Parameters<typeof getAdfText>[0]): string {
-  return getAdfText(body).replace(/\s+/g, ' ').trim();
+  return getSingleLineText(getAdfText(body));
 }
 
 /** The start of a comment's text, for the agent to find in its own answer. */

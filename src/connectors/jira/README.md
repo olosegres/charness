@@ -4,15 +4,18 @@ A `jira` instance (`CONNECTORS` lists `jira`) turns issues assigned to a dedicat
 conversations with an agent. One issue = one conversation, keyed `jira:<PROJECT>:<ISSUE-KEY>`
 (`sessionKeyCodec.ts`). The agent hears nothing but the request; it talks back only through `answer_request`,
 which the answer sink posts as comments. The streamed output never reaches the issue (`outbound.ts` drops it).
-The `D*` / `R*` / `J*` ids cited in code comments are decisions of the connector's plan, kept outside this public repo.
+The `D*` / `R*` / `J*` / `C*` ids cited in code comments are decisions of the connector's plans, kept outside this public repo.
 
 ## Setup contract (`config.ts`, `configFile.ts`)
 
 `DATA_DIR/jira.json`, strict keys: `site` (`<name>.atlassian.net`), `email`, `apiToken` (normally `${VAR}` from
 the instance's env file), `accountId` (the AI account — the token must belong to it, checked against `/myself`
-at boot), `projects` (key → `{ folder, triggerStatuses }`, the allowlist; status NAMES resolved to ids at boot),
+at boot), `projects` (key → `{ folder, triggerStatuses, extraFields? }`, the allowlist; status NAMES resolved to
+ids at boot; `extraFields` = site-specific field ids like `customfield_10042` that the prompt shows under their
+site name — none by default, and an id the site does not list is logged once at boot and left out),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
-since user settings do not apply), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
+since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
+`baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
 (the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; when the
 issue's last known Claude Code is below 2.1.287 the pick is kept but that session runs without the per-turn stop —
 an old process is never auto-stopped — until a newer CLI reports in, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
@@ -30,7 +33,8 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
    status → trigger detected (`trigger.ts`: the NEWEST changelog entry that assigned the issue or moved it into
    a trigger status, else the creation; changelog pages are read newest first, only as far as needed) →
    already seen? (`triggerLog.ts`) → self-authored? → run budget (over it the issue is `parked` with a notice
-   and handed back) → fetch the issue → bind the conversation to the project's folder → open a request
+   and handed back) → fetch the issue's context (`issueContext.ts`: the issue with its fields and the project's
+   `extraFields`, ALL its comments page by page, its remote links, an epic's children by `parent = KEY`) → bind the conversation to the project's folder → open a request
    (origin `trackerEvent`) → post, NOT awaited (a busy session may take minutes) → RECORD the trigger once the
    post has settled, also when it failed (the open request then belongs to the wake-up engine). The origin names
    the requester under the core's `requester` attribute (`requests/requestGroup.ts`), so a request supersedes an
@@ -93,6 +97,24 @@ another platform's state.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
 
+## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `prompt.ts`)
+
+- The whole issue, nothing cut: after the request header and the issue-text note, the issue is a list of blocks —
+  `fields` (summary, type, priority, status, reporter, parent, fix versions, labels, components, the project's
+  `extraFields`), `description`, `hierarchy` (sub-tasks, or an epic's children), `links` (issue links and remote
+  links), `attachments` (one line each: id, name, type, size, author, date, where it is used), then EVERY comment
+  oldest first. The comments come from the comments endpoint (the issue's own `comment` field holds at most 100).
+- A restricted comment is marked `[restricted to <role or group>]`, a Service Management internal note
+  `[internal]`. Each block carries a sha256 of what it says (a comment's covers its text and marker only, so a
+  save that changed nothing leaves it alone).
+- A pasted screenshot, video or file becomes a placeholder where it sat — `[image: shot.png — attachment 10234]`.
+  The media id in the ADF is not the attachment id, so the attachment is found from what Jira records: the media
+  id inside a renamed stored filename (`<name> (<media id>).<ext>`, which Jira uses when the name was taken),
+  else the filename equal to the node's `alt` (all ids listed when several share it), and for an inline file —
+  which has no `alt` — the rendered HTML (`renderedBody` of a comment, `renderedFields` of the description),
+  which links the media id to its attachment exactly. No match reads `attachment unknown`; nothing is guessed.
+  The recorded shapes are the fixture `__tests__/fixtures/jiraMediaAdf.json`.
+
 ## Comment content (`adf.ts`, `prompt.ts`)
 
 - The agent's Markdown becomes ADF. HTML stays literal text (every `<` that opens no autolink is swapped for a
@@ -107,6 +129,7 @@ another platform's state.
 
 ## Tests
 
-`jiraConfig.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
+`jiraConfig.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
+`jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
 real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` and `fakeClaude.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set.

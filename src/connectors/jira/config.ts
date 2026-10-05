@@ -8,7 +8,8 @@ import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStrea
 import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
-import type { JiraProjectStatus } from './client';
+import { jiraCustomFieldIdPrefix, type JiraFieldDefinition, type JiraProjectStatus } from './client';
+import type { JiraExtraField } from './issueBlocks';
 
 /**
  * @description The Jira connector's configuration (Jira connector plan J4,
@@ -23,6 +24,9 @@ export const jiraPollIntervalMaxSeconds = 600;
 export const jiraPollIntervalDefaultSeconds = 90;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
+/** What a Jira session runs on when `jira.json` names neither (C14); either key still overrides its own default. */
+export const jiraDefaultModel = 'opus';
+export const jiraDefaultEffort: ClaudeEffortLevel = 'high';
 
 /** The backend a Jira session runs on by default (D16, R14); `claude-per-turn` is the other allowed one (L-D12). */
 const jiraAdapterName = claudeJsonStreamAdapterName;
@@ -40,6 +44,9 @@ const refusedAdapterReasons: ReadonlyMap<string, string> = new Map([
  * instructions into the session — under HOME that is the operator's own setup.
  */
 export const claudeMemoryMarkerNames = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude'] as const;
+
+/** A site-specific field's id, the only kind `extraFields` can name (the standard ones are always in the prompt). */
+const customFieldIdRe = new RegExp(`^${jiraCustomFieldIdPrefix}\\d+$`);
 
 /** A model name as `claude --model` takes it (`opus`, `claude-opus-5-5`, `opus[1m]`). */
 const claudeModelRe = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/;
@@ -62,6 +69,8 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const projectSchema = z.strictObject({
   folder: z.string().min(1),
   triggerStatuses: z.array(z.string().min(1)).min(1),
+  // Fields beyond the standard ones the prompt shows, by id (`customfield_10042`); none by default (C11).
+  extraFields: z.array(z.string().regex(customFieldIdRe, `must be a site-specific field id like ${jiraCustomFieldIdPrefix}10042`)).optional(),
 });
 
 const rawConfigSchema = z.strictObject({
@@ -85,6 +94,8 @@ export interface JiraProjectConfig {
   folder: string;
   /** Status NAMES that make an assigned issue a request; resolved to ids at boot (D11). */
   triggerStatusNames: string[];
+  /** Ids of the extra fields the prompt shows; resolved to names at boot, an unknown one dropped. */
+  extraFieldIds: string[];
 }
 
 /** @name JiraConfig @description The validated configuration. */
@@ -100,10 +111,10 @@ export interface JiraConfig {
   pollIntervalMs: number;
   runBudgetPer24h: number;
   adapter: JiraAdapterName;
-  /** The sessions' model; absent → Claude's default. */
-  model: string | null;
-  /** The sessions' reasoning effort; absent → the bot's default. */
-  effort: ClaudeEffortLevel | null;
+  /** The sessions' model; absent from `jira.json` → {@link jiraDefaultModel}. */
+  model: string;
+  /** The sessions' reasoning effort; absent from `jira.json` → {@link jiraDefaultEffort}. */
+  effort: ClaudeEffortLevel;
 }
 
 export type JiraConfigResult = { ok: true; config: JiraConfig } | { ok: false; errors: string[] };
@@ -227,7 +238,7 @@ export function validateJiraConfig(
       errors.push(`jira.json projects.${projectKey}.folder: Claude would load ${memory.markerName} found ${where} — pick a folder outside HOME and any repository`);
       continue;
     }
-    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses });
+    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses, extraFieldIds: [...new Set(project.extraFields ?? [])] });
   }
 
   if (errors.length > 0) return { ok: false, errors };
@@ -243,8 +254,8 @@ export function validateJiraConfig(
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
-      model: raw.model ?? null,
-      effort: raw.effort ?? null,
+      model: raw.model ?? jiraDefaultModel,
+      effort: raw.effort ?? jiraDefaultEffort,
     },
   };
 }
@@ -294,4 +305,24 @@ export function resolveTriggerStatusIds(
   }
   const statusIds = statusNames.flatMap((name) => idsByName.get(name.toLowerCase()) ?? []);
   return { ok: true, statusIds: [...new Set(statusIds)] };
+}
+
+/**
+ * @description Name a project's `extraFields` ids from the site's field list. An
+ * id the site does not list is `unknown`: the connector logs it once at boot and
+ * leaves it out of every prompt (C11) — a typo must not stop the whole instance.
+ */
+export function resolveExtraFields(
+  extraFieldIds: readonly string[],
+  fieldDefinitions: readonly JiraFieldDefinition[],
+): { extraFields: JiraExtraField[]; unknownFieldIds: string[] } {
+  const nameById = new Map(fieldDefinitions.map((definition) => [definition.id, definition.name]));
+  const extraFields: JiraExtraField[] = [];
+  const unknownFieldIds: string[] = [];
+  for (const id of extraFieldIds) {
+    const name = nameById.get(id);
+    if (name === undefined) unknownFieldIds.push(id);
+    else extraFields.push({ id, name });
+  }
+  return { extraFields, unknownFieldIds };
 }

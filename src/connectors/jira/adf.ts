@@ -31,7 +31,8 @@ export interface AdfDocument {
   content: AdfNode[];
 }
 
-const attributeValueSchema: z.ZodType<AdfAttributeValue> = z.lazy(() =>
+/** Any JSON value — an ADF attribute, and the raw value of a Jira field the connector does not model. */
+export const attributeValueSchema: z.ZodType<AdfAttributeValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),
@@ -192,7 +193,7 @@ const blockNodeTypes = new Set([
 const itemPrefix = '- ';
 const maxConsecutiveNewlines = 2;
 
-function getStringAttribute(node: AdfNode | AdfMark, name: string): string | null {
+export function getStringAttribute(node: AdfNode | AdfMark, name: string): string | null {
   const value = node.attrs?.[name];
   return typeof value === 'string' ? value : null;
 }
@@ -205,8 +206,14 @@ function getTextNodeText(node: AdfNode): string {
   return href && href !== text ? `${text} (${href})` : text;
 }
 
+/**
+ * What a media node (`media` in a `mediaSingle` / `mediaGroup`, or a `mediaInline`) stands for in the text.
+ * The caller supplies it: only it knows the issue's attachments.
+ */
+export type AdfMediaResolver = (node: AdfNode) => string;
+
 /** The inline text a leaf node stands for. */
-function getLeafText(node: AdfNode): string {
+function getLeafText(node: AdfNode, resolveMedia: AdfMediaResolver | undefined): string {
   switch (node.type) {
     case 'text':
       return getTextNodeText(node);
@@ -222,17 +229,23 @@ function getLeafText(node: AdfNode): string {
       return getStringAttribute(node, 'url') ?? '';
     case 'status':
       return getStringAttribute(node, 'text') ?? '';
+    case 'media':
+    case 'mediaInline':
+      return resolveMedia?.(node) ?? '';
     default:
       return '';
   }
 }
 
-function getNodeText(node: AdfNode): string {
+function getNodeText(node: AdfNode, resolveMedia: AdfMediaResolver | undefined): string {
+  const children = node.content ?? [];
   // A row's cells hold paragraphs, each ending its own line: trimmed, the row stays one line.
-  const inner = node.type === 'tableRow'
-    ? (node.content ?? []).map((cell) => getNodeText(cell).trim()).join(' | ')
-    : (node.content ?? []).map(getNodeText).join('');
-  const text = node.content ? inner : getLeafText(node);
+  // A group's files sit side by side: a space keeps their placeholders apart.
+  let inner: string;
+  if (node.type === 'tableRow') inner = children.map((cell) => getNodeText(cell, resolveMedia).trim()).join(' | ');
+  else if (node.type === 'mediaGroup') inner = children.map((file) => getNodeText(file, resolveMedia)).join(' ');
+  else inner = children.map((child) => getNodeText(child, resolveMedia)).join('');
+  const text = node.content ? inner : getLeafText(node, resolveMedia);
   if (node.type === 'listItem' || node.type === 'taskItem') return `${itemPrefix}${text.trim()}\n`;
   return blockNodeTypes.has(node.type) ? `${text}\n` : text;
 }
@@ -240,11 +253,12 @@ function getNodeText(node: AdfNode): string {
 /**
  * @description An ADF document (or node) as plain text for the agent's prompt:
  * one line per block, list items as `- …`, mentions by their display text,
- * cards by their URL, a link as `text (address)`. Other formatting is dropped.
+ * cards by their URL, a link as `text (address)`, a media node by what
+ * `resolveMedia` says (nothing without one). Other formatting is dropped.
  */
-export function getAdfText(node: AdfNode | AdfDocument | null | undefined): string {
+export function getAdfText(node: AdfNode | AdfDocument | null | undefined, resolveMedia?: AdfMediaResolver): string {
   if (!node) return '';
-  return getNodeText(node)
+  return getNodeText(node, resolveMedia)
     .replace(new RegExp(`\\n{${maxConsecutiveNewlines + 1},}`, 'g'), '\n'.repeat(maxConsecutiveNewlines))
     .trim();
 }
