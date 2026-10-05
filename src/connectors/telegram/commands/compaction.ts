@@ -7,7 +7,7 @@ import { openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
-import { getTelegramChatId } from '../sessionKeyCodec';
+import { checkIsTelegramKey, getTelegramChatId } from '../sessionKeyCodec';
 import { enqueueSend } from '../../../rateLimiter';
 import { t } from '../../../i18n';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
@@ -27,7 +27,7 @@ import {
   type IdleCompactionArmKind,
   getIdleCompactionArmDecision,
   checkIsBusyForRealTurn,
-  checkShouldFireIdleCompaction,
+  getIdleFireDecision,
 } from '../../../utils/compactOnIdle';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
@@ -150,6 +150,15 @@ export interface CompactionPorts
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
   pendingQuestions: Map<string, PendingQuestionState>;
   clearPendingQuestion: (key: SessionKey) => void;
+  /** The idle window in force (`AGENT_IDLE_MINUTES` or the 55-minute default; L-D9). */
+  idleWindowMs: number;
+  /** Whether a usage-limit wait is armed for the topic — no compaction turn then (L-D6). */
+  checkIsLimitWaitArmed: (key: SessionKey) => boolean;
+  /**
+   * Stop the topic's process, the session kept resumable (the idle stop, L3) — the bot's own orchestration:
+   * one transition per key, a prompt arriving meanwhile buffered and the session resumed for it.
+   */
+  suspendThreadSession: (key: SessionKey) => Promise<void>;
 }
 
 /**
@@ -158,7 +167,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -216,7 +225,7 @@ export function createCompaction(ports: CompactionPorts) {
     // S3: `threadsCompacting` is set FIRST, so the loader's very first keep-alive
     // check already sees the compaction and cannot self-stop on a topic that is
     // otherwise idle (which is exactly what a compacting OpenCode session looks like).
-    startTypingLoader(key);
+    if (checkIsTelegramKey(key)) startTypingLoader(key); // a tracker issue has no topic to show typing in (R6)
     try {
       if (route === 'forwardToAgent') {
         // tmux Claude: its TUI parses `/compact [instruction]` natively. Best-effort —
@@ -392,12 +401,17 @@ export function createCompaction(ports: CompactionPorts) {
   /**
    * Shared arming core behind {@link noteThreadActivity} and
    * {@link rearmThreadIdleTimer} — one body so the two entry points can only differ
-   * in whether they count as activity. Arms only when the feature is enabled for the
-   * thread, an agent session is active, no compaction is in flight, AND the
-   * user-latch is NOT spent (D2): once an idle-compaction has fired this user-active
-   * period the thread stays latched — agent output resets nothing, and only a
-   * genuine USER message (via {@link noteThreadUserActivity}) clears the latch. That
-   * latch, being persisted, is also what stops a restart from re-firing.
+   * in whether they count as activity. Arms when an agent session is active and no
+   * compaction is in flight. On a backend that is STOPPED at the idle mark
+   * (`suspendSession`, L3) the timer is armed regardless of the compaction toggle
+   * and the user-latch: the stop happens either way (L-D1), and the fire decides
+   * the compaction. On any other backend the timer exists for the compaction
+   * alone, so it is armed only when the feature is enabled for the thread AND the
+   * user-latch is NOT spent (D2): once an idle-compaction has fired this
+   * user-active period the thread stays latched — agent output resets nothing, and
+   * only a genuine USER message (via {@link noteThreadUserActivity}) clears the
+   * latch. That latch, being persisted, is also what stops a restart from
+   * re-firing.
    */
   function armThreadIdleTimer(key: SessionKey, opts: { isRealActivity: boolean }): void {
     const kStr = keyToString(key);
@@ -409,8 +423,10 @@ export function createCompaction(ports: CompactionPorts) {
       clearTimeout(compactionState.idleTimer);
       compactionState.idleTimer = null;
     }
-    if (!getState().checkIsCompactOnIdleEnabled(key)) return;
-    if (!getThreadAdapter(key).checkIsActive(key)) return;
+    const adapter = getThreadAdapter(key);
+    const isSuspendable = typeof adapter.suspendSession === 'function';
+    if (!isSuspendable && !getState().checkIsCompactOnIdleEnabled(key)) return;
+    if (!adapter.checkIsActive(key)) return;
     const now = Date.now();
     // Stamp AFTER the enabled/active guards (a disabled or session-less topic has no
     // countdown to measure) but BEFORE the latch guard: a latched thread still has
@@ -418,9 +434,9 @@ export function createCompaction(ports: CompactionPorts) {
     if (opts.isRealActivity) getState().noteCompactIdleActivity(key, now);
     // D2: a spent latch means idle-compaction already fired this user-active period
     // — do NOT re-arm until a genuine USER message clears the latch.
-    if (getState().checkIsCompactIdleLatched(key)) return;
+    if (!isSuspendable && getState().checkIsCompactIdleLatched(key)) return;
     const { lastActivityAt } = getState().getCompactIdleTracking(key);
-    const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now });
+    const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now, idleWindowMs });
     if (!opts.isRealActivity) {
       // Session-start / re-adopt only (once per thread per boot, or per manual start) —
       // was the other blind spot: nothing showed whether an adopted thread got re-armed
@@ -480,43 +496,69 @@ export function createCompaction(ports: CompactionPorts) {
     reAskedQuestionOptions.delete(kStr);
   }
 
-  /** The F2 idle timer fired: re-check the guard, then compact once (D1/D2). */
+  /**
+   * @description Whether the topic's process is WORKING right now (L-D2): a real
+   * running turn, a background task, input not yet taken in or a compaction in
+   * flight — read from the adapter's own probe where it has one, else from busy. A
+   * pending interactive question makes the session report busy, but it is
+   * idle-WAITING, not running a turn — D1 treats that as a FIRE condition (reject +
+   * compact + re-ask), so it is excluded. A genuinely running turn still blocks.
+   */
+  function checkIsThreadWorking(key: SessionKey, adapter: AgentAdapter): boolean {
+    const hasPendingQuestion = pendingQuestions.has(keyToString(key));
+    const isBusy = adapter.checkIsWorking?.(key) ?? adapter.checkIsBusy?.(key) ?? false;
+    return checkIsBusyForRealTurn({ isBusy, hasPendingQuestion });
+  }
+
+  /**
+   * @description The idle timer fired (F2 + lifecycle plan L3): nothing while the
+   * process works; else compact once when the guard allows (D1/D2, L-D6), then — on
+   * a backend that can be suspended — stop the process, the session kept resumable
+   * (L-D1: whether or not the compaction ran). The stop re-checks "working" after
+   * the compaction: a prompt taken in meanwhile keeps the process.
+   */
   async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     const adapter = getThreadAdapter(key);
-    const isEnabled = getState().checkIsCompactOnIdleEnabled(key);
-    const isSessionActive = adapter.checkIsActive(key);
-    // A pending interactive question makes the session report busy, but it is
-    // idle-WAITING, not running a turn — D1 treats that as a FIRE condition (reject
-    // + compact + re-ask), so exclude it from the "busy" the guard blocks on. A
-    // genuinely running turn still blocks.
-    const hasPendingQuestion = pendingQuestions.has(kStr);
-    const isBusy = adapter.checkIsBusy?.(key) ?? false;
-    const isBusyForRealTurn = checkIsBusyForRealTurn({ isBusy, hasPendingQuestion });
-    const isLatched = getState().checkIsCompactIdleLatched(key);
     // Both instants come from the store, so a restart no longer erases the evidence
     // that this session has an un-compacted turn (the bug: two in-memory zeros made
     // `0 > 0` false, and D2's no-reschedule rule then left the feature dead).
     const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
-    const hasCompletedTurnSinceCompaction = lastTurnEndAt > lastCompactionAt;
-
-    if (!checkShouldFireIdleCompaction({ isEnabled, isSessionActive, isBusyForRealTurn, isLatched, hasCompletedTurnSinceCompaction })) {
-      // Log WHICH condition blocked it: this branch is the feature's blind spot —
+    const decision = getIdleFireDecision({
+      isSessionActive: adapter.checkIsActive(key),
+      isWorking: checkIsThreadWorking(key, adapter),
+      isEnabled: getState().checkIsCompactOnIdleEnabled(key),
+      isLatched: getState().checkIsCompactIdleLatched(key),
+      hasCompletedTurnSinceCompaction: lastTurnEndAt > lastCompactionAt,
+      isLimitWaitArmed: checkIsLimitWaitArmed(key),
+      canSuspend: typeof adapter.suspendSession === 'function',
+    });
+    if (decision.shouldCompact) {
+      await runIdleCompaction(key, adapter);
+    } else {
+      // Log WHICH condition blocked it: this branch was the feature's blind spot —
       // it returned silently, which is why nothing in any log showed the watchdog
       // was even trying. At most once per armed timer, so it cannot flood.
-      const blockers = [
-        !isEnabled && 'disabled',
-        !isSessionActive && 'no active session',
-        isBusyForRealTurn && 'busy with a real turn',
-        isLatched && 'latched (D2)',
-        !hasCompletedTurnSinceCompaction && 'nothing to compress',
-      ].filter((blocker): blocker is string => typeof blocker === 'string');
-      console.log(`[compact-on-idle] ${kStr} timer fired but skipped: ${blockers.join(', ')}`);
+      console.log(`[compact-on-idle] ${kStr} timer fired but the compaction is skipped: ${decision.compactionSkipReasons.join(', ')}`);
+    }
+    if (!decision.shouldSuspend) {
       // D2: no reschedule. A real running turn will emit output that resets the
       // timer via `noteThreadActivity`; every other miss re-arms only on the next
       // genuine USER message (which clears the latch).
+      console.log(`[compact-on-idle] ${kStr} process kept: ${decision.suspendSkipReasons.join(', ')}`);
       return;
     }
+    if (!adapter.checkIsActive(key) || checkIsThreadWorking(key, adapter)) {
+      console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire`);
+      return;
+    }
+    await suspendThreadSession(key);
+  }
+
+  /** The idle compaction itself (D1/D2): latch, stamp, re-ask a pending question after it, post the outcome. */
+  async function runIdleCompaction(key: SessionKey, adapter: AgentAdapter): Promise<void> {
+    const kStr = keyToString(key);
+    const hasPendingQuestion = pendingQuestions.has(kStr);
 
     // D2: latch the thread the instant the fire is decided (BEFORE any output) and
     // persist it, so a bot restart can't re-fire and no second compaction runs this
@@ -613,6 +655,8 @@ export function createCompaction(ports: CompactionPorts) {
         ].join('\n\n')
       : null;
 
+    // A tracker issue has no topic to narrate into (R6): the compaction and the stop stay silent there.
+    if (!checkIsTelegramKey(key)) return;
     const plan = buildIdleCompactionNoticeParts({ ...parts, questionText });
     if (plan.notice) await replyToThread(key, plan.notice);
     if (plan.summary) await postCompactionSummary(key, plan.summary);

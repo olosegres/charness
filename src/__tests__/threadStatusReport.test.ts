@@ -34,11 +34,33 @@ import * as path from 'path';
 import { getThreadStatusModel, getThreadStatusReport } from '../utils/threadStatusReport';
 import { runWithLocale } from '../i18n';
 
+test('a sleeping thread (no process, session kept) says so instead of "stopped" (L3)', () => {
+  const base = {
+    agentLine: 'Claude Code (stream) (claude-json-stream)',
+    subdir: 'project',
+    isActive: false,
+    isSleeping: false,
+    workDir: '/work/project',
+    model: null,
+    effort: null,
+    startedAt: null,
+    runtime: null,
+    view: 'default',
+    timezone: 'UTC',
+    timezoneNow: '12:00',
+  };
+  const sleeping = runWithLocale('en', () => getThreadStatusReport({ ...base, isSleeping: true }));
+  assert.match(sleeping, /Session: sleeping — resumes on the next message/);
+  const stopped = runWithLocale('en', () => getThreadStatusReport({ ...base, isSleeping: false }));
+  assert.match(stopped, /Session: stopped/);
+});
+
 test('inactive thread status omits live session metadata', () => {
   const report = runWithLocale('en', () => getThreadStatusReport({
     agentLine: 'OpenCode (opencode)',
     subdir: 'project',
     isActive: false,
+    isSleeping: false,
     workDir: '/work/project',
     model: 'openai/gpt-test',
     effort: 'xhigh',
@@ -65,6 +87,7 @@ test('active thread status renders the observed runtime details', () => {
     agentLine: 'OpenCode (opencode)',
     subdir: 'project',
     isActive: true,
+    isSleeping: false,
     workDir: '/work/project',
     model: 'openai/gpt-test',
     effort: 'xhigh',
@@ -89,6 +112,7 @@ test('unavailable runtime and workdir details render safely', () => {
     agentLine: 'Claude (claude)',
     subdir: 'project',
     isActive: true,
+    isSleeping: false,
     workDir: '(unavailable)',
     model: null,
     effort: null,
@@ -109,6 +133,7 @@ test('active sessions without runtime support render unavailable runtime details
     agentLine: 'Terminal (terminal)',
     subdir: 'project',
     isActive: true,
+    isSleeping: false,
     workDir: '/work/project',
     model: null,
     effort: null,

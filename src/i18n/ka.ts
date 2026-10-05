@@ -166,6 +166,7 @@ export const kaDict: Record<string, string> = {
   'status.thread_started': 'დაიწყო: {started}',
   'status.thread_running': 'მუშაობს',
   'status.thread_stopped': 'გაჩერებული',
+  'status.thread_sleeping': 'სძინავს — შემდეგი შეტყობინებით განახლდება',
   'status.thread_no_agent': 'არცერთი (გაუშვით /claude ან /opencode)',
   'status.thread_no_binding': '(მიბმის გარეშე — WORK_ROOT)',
   'status.thread_workdir': 'სამუშაო საქაღალდე: {workDir}',

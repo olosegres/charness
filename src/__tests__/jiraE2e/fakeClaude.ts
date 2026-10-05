@@ -65,20 +65,31 @@ import {
  *    user message is queued on stdin (at most `queuedMessageWaitMaxMs`), answers
  *    `final` and ends; the queued message then runs as the next turn. A turn
  *    whose header names requests this one replaced answers with a short pointer
- *    to the answer above instead of the result again (the header's rule).
+ *    to the answer above instead of the result again (the header's rule);
+ *  - `background`  — answers `final`, then reports a background task that never
+ *    ends (`system/background_tasks_changed`), so the process is WORKING between
+ *    turns and the idle stop must keep it (lifecycle plan L-D2).
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
+ *
+ * A `/compact` user turn is answered like the real CLI's: a `compact_status`
+ * success, a `compact_boundary` with token counts and a `result` — logged to
+ * `compactions.jsonl` with the session it compacted.
  *
  * Paths come from the environment its launcher script sets:
  * `FAKE_CLAUDE_LOG_DIR` (launches, violations, answers, turns) and
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together' | 'answer-after-queued';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together', 'answer-after-queued'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together', 'answer-after-queued', 'background'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
+/** The literal slash command the bot writes as a user turn to compact the session. */
+const compactCommandText = '/compact';
+/** The `task_id` of the background task a `background` turn leaves running (never ends: the test kills the process). */
+const backgroundTaskId = 'fake-background-task';
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -262,6 +273,16 @@ function endTurn(sessionId: string, resultText: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage });
 }
 
+/** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
+function runCompactionTurn(sessionId: string): void {
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: fakeClaudeCodeVersion });
+  writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
+  writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
+  writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
+  appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid });
+  endTurn(sessionId, 'Compacted.');
+}
+
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   fs.writeFileSync(getConversationMarkerPath(sessionId), '');
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: fakeClaudeCodeVersion });
@@ -327,6 +348,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const kind = state.mode === 'progress' ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
+  if (state.mode === 'background') {
+    // Reported AFTER the result, as the CLI does for a task the turn left running.
+    writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: backgroundTaskId, task_type: 'local_bash', description: 'sleep', status: 'running' }] });
+  }
 }
 
 async function main(): Promise<void> {
@@ -381,6 +406,11 @@ async function main(): Promise<void> {
     }
     if (frame.type !== 'user' || typeof frame.message?.content !== 'string') return;
     const content = frame.message.content;
+    // `/compact`, or `/compact <the bot's summary guidance>` (D3) — the real CLI parses either.
+    if (content.trim() === compactCommandText || content.startsWith(`${compactCommandText} `)) {
+      turnChain = turnChain.then(() => runCompactionTurn(sessionId));
+      return;
+    }
     notifyUserMessageQueued();
     turnChain = turnChain.then(() => runTurn(argv, sessionId, content)).catch((error: Error) => {
       process.stderr.write(`fake claude: turn failed: ${error.stack ?? error.message}\n`);

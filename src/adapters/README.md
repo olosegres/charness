@@ -116,7 +116,10 @@ pipeline, in-flight turn delivered end-to-end, no recap posted); a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
 a thread whose process died falls back to the old dead-process `--resume`
 reopen (the only path that posts a recap). Explicit stop = SIGTERM + tmux
-kill + host-dir removal. The wrapper runs `env -u ANTHROPIC_API_KEY`, keeping
+kill + host-dir removal. The IDLE stop (`suspendSession`, lifecycle plan L3) is
+the same teardown converging on `suspended` instead of `stopped`: the session
+id stays persisted and the next trigger resumes the conversation; the bot never
+suspends a process that `checkIsWorking` reports as working. The wrapper runs `env -u ANTHROPIC_API_KEY`, keeping
 subscription billing under tmux. tmux is therefore REQUIRED for BOTH Claude
 backends.
 

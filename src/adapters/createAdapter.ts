@@ -80,6 +80,7 @@ let onQuestionGone: SessionKeyHandler | null = null;
 let onClosed: SessionKeyHandler | null = null;
 let onStarted: SessionKeyHandler | null = null;
 let onStopped: SessionKeyHandler | null = null;
+let onSuspended: SessionKeyHandler | null = null;
 let onError: ErrorHandler | null = null;
 
 /** Per-thread display-prefs reader for BOTH adapters — same late-wiring idiom
@@ -185,6 +186,7 @@ function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onClosed) adapter.on('closed', onClosed);
   if (onStarted) adapter.on('started', onStarted);
   if (onStopped) adapter.on('stopped', onStopped);
+  if (onSuspended) adapter.on('suspended', onSuspended);
   // Always register error handler to prevent ERR_UNHANDLED_ERROR crash.
   adapter.on('error', (key: SessionKey, error: Error) => {
     if (onError) {
@@ -212,6 +214,7 @@ export function registerAdapterEventHandlers(handlers: {
   onClosed: SessionKeyHandler;
   onStarted?: SessionKeyHandler;
   onStopped?: SessionKeyHandler;
+  onSuspended?: SessionKeyHandler;
   onError?: ErrorHandler;
 }): void {
   onOutput = handlers.onOutput;
@@ -226,6 +229,7 @@ export function registerAdapterEventHandlers(handlers: {
   onClosed = handlers.onClosed;
   onStarted = handlers.onStarted ?? null;
   onStopped = handlers.onStopped ?? null;
+  onSuspended = handlers.onSuspended ?? null;
   onError = handlers.onError ?? null;
 
   // Wire to already-created instances

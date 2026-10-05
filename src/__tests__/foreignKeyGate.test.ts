@@ -38,6 +38,8 @@ const expectedJiraRoutes: Record<AdapterEventName, 'telegramHandler' | 'requestS
   closed: 'requestSideHandler',
   started: 'nothing',
   stopped: 'requestSideHandler',
+  // An idle stop keeps the session, its retry and its compaction state: nothing request-side to drop.
+  suspended: 'nothing',
   error: 'requestSideHandler',
 };
 

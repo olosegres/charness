@@ -166,6 +166,7 @@ export const hiDict: Record<string, string> = {
   'status.thread_started': 'शुरू हुआ: {started}',
   'status.thread_running': 'चल रहा है',
   'status.thread_stopped': 'रुका हुआ',
+  'status.thread_sleeping': 'सो रहा है — अगले संदेश पर फिर से शुरू होगा',
   'status.thread_no_agent': 'कोई नहीं (/claude या /opencode शुरू करें)',
   'status.thread_no_binding': '(कोई बाइंडिंग नहीं — WORK_ROOT)',
   'status.thread_workdir': 'कार्य निर्देशिका: {workDir}',

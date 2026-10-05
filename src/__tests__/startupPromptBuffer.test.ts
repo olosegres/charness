@@ -204,3 +204,22 @@ test('a settle callback that throws is logged and never breaks the replay or the
   }
   assert.deepEqual(forwarded, ['first', 'second']);
 });
+
+test('L3: closing the window keeps its prompts for the next window — the idle stop holds a prompt, the resume replays it', async () => {
+  const buffer = new StartupPromptBuffer();
+  buffer.markStarting('t');
+  assert.equal(buffer.checkHasPrompts('t'), false);
+  buffer.addPrompt('t', 'arrived while the process stopped');
+  assert.equal(buffer.checkHasPrompts('t'), true);
+
+  buffer.closeWindow('t');
+  assert.equal(buffer.checkIsStarting('t'), false, 'the stop\'s window is closed');
+  assert.equal(buffer.checkHasPrompts('t'), true, 'the prompt was NOT dropped with it');
+
+  // The resume opens its own window and replays what the stop held.
+  buffer.markStarting('t');
+  const forwarded: string[] = [];
+  await buffer.replayPrompts('t', { isSessionActive: true, forward: async (text) => { forwarded.push(text); } });
+  assert.deepEqual(forwarded, ['arrived while the process stopped']);
+  assert.equal(buffer.checkHasPrompts('t'), false);
+});

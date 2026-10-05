@@ -492,7 +492,9 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.ok(!kickPorts.includes('resumeOwnSession'), 'the tracker-only resume port is gone');
     assert.ok(kickPorts.includes('ensureSession: (key) => ensureAgentSession(key),'));
     assert.ok(!kickSource.includes('checkIsTelegramKey(key)) await deps.resumeOwnSession'), 'no Telegram exemption from the resume');
-    const ensure = getFunction('async function ensureAgentSession(');
+    // One transition per key (L3): the ensure queues itself, and its body acts on the resume plan.
+    assert.ok(getFunction('async function ensureAgentSession(').includes('sessionTransitions.run(keyToString(key), () => ensureAgentSessionNow(key, options))'));
+    const ensure = getFunction('async function ensureAgentSessionNow(');
     assert.ok(ensure.includes("case 'resume': {") && ensure.includes('await resumeSleepingSession(key, plan.sessionId)'), 'the ensure acts on the resume plan');
   });
 

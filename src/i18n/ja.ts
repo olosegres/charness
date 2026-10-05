@@ -166,6 +166,7 @@ export const jaDict: Record<string, string> = {
   'status.thread_started': '開始: {started}',
   'status.thread_running': '実行中',
   'status.thread_stopped': '停止',
+  'status.thread_sleeping': '休止中 — 次のメッセージで再開',
   'status.thread_no_agent': 'なし（/claude または /opencode で開始）',
   'status.thread_no_binding': '（バインドなし — WORK_ROOT）',
   'status.thread_workdir': '作業ディレクトリ: {workDir}',

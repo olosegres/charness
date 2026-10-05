@@ -577,6 +577,7 @@ export type CompactionResult =
  * - 'apiError' (key: SessionKey, error: AgentApiErrorClass) — provider-side API error at the proxy boundary (auto-retry trigger; only when {@link AgentApiErrorClass} classification matched)
  * - 'started'  (key: SessionKey)                  — session is up and ready
  * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
+ * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)
  * - 'error'    (key: SessionKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
  *
@@ -617,6 +618,15 @@ export interface AgentAdapter extends EventEmitter {
    */
   startSession(key: SessionKey, workDir: string, args?: string, sessionId?: string): Promise<void>;
   stopSession(key: SessionKey): void;
+
+  /**
+   * @description Stop the process but keep the session RESUMABLE (lifecycle plan
+   * L3): the next trigger resumes the conversation by its persisted id. Converges
+   * on `suspended`, never `stopped`. Optional: only a backend whose process can be
+   * stopped without losing the conversation (json-stream Claude) offers it; the
+   * tmux TUI and OpenCode are never auto-stopped (L-D8).
+   */
+  suspendSession?(key: SessionKey): Promise<void>;
   checkIsActive(key: SessionKey): boolean;
 
   /**
@@ -663,6 +673,17 @@ export interface AgentAdapter extends EventEmitter {
    * prompt behind that turn and the earlier turn's busy already satisfies it.
    */
   checkHasUnconsumedInput?(key: SessionKey): boolean;
+
+  /**
+   * Whether the process is WORKING and must not be stopped (lifecycle plan L-D2):
+   * a running turn, a background task it still runs (a background Bash / Monitor /
+   * sub-agent — a stop would kill them), input written but not yet taken in, or a
+   * compaction in flight. Optional: a backend without the signal omits it and the
+   * idle stop falls back to `checkIsBusy`.
+   *  - **Claude json-stream** — busy, or the CLI's `background_tasks_changed` list
+   *    is non-empty, or an input echo is outstanding, or a bot-issued `/compact` runs.
+   */
+  checkIsWorking?(key: SessionKey): boolean;
 
   /**
    * Re-register the bot-owned scheduler MCP for active OpenCode directories,

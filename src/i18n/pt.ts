@@ -166,6 +166,7 @@ export const ptDict: Record<string, string> = {
   'status.thread_started': 'Iniciado: {started}',
   'status.thread_running': 'em execução',
   'status.thread_stopped': 'parado',
+  'status.thread_sleeping': 'adormecida — retoma na próxima mensagem',
   'status.thread_no_agent': 'nenhum (inicie /claude ou /opencode)',
   'status.thread_no_binding': '(sem vínculo — WORK_ROOT)',
   'status.thread_workdir': 'Diretório de trabalho: {workDir}',

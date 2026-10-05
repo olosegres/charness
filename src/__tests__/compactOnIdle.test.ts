@@ -14,7 +14,8 @@ import {
   compactIdleOverdueMinDelayMs,
   compactIdleOverdueSpreadMs,
   resolveCompactOnIdleEnabled,
-  checkShouldFireIdleCompaction,
+  getAgentIdleMs,
+  getIdleFireDecision,
   checkIsBusyForRealTurn,
   buildCompactionInstruction,
   compactionSummaryGuidance,
@@ -29,13 +30,15 @@ import {
   compactionClosingEndMarker,
 } from '../utils/compactOnIdle';
 
-/** The all-conditions-met base for the idle-fire guard (D1/D2). */
+/** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
 const fireBase = {
-  isEnabled: true,
   isSessionActive: true,
-  isBusyForRealTurn: false,
+  isWorking: false,
+  isEnabled: true,
   isLatched: false,
   hasCompletedTurnSinceCompaction: true,
+  isLimitWaitArmed: false,
+  canSuspend: true,
 } as const;
 
 test('idleCompactMs is 55 minutes', () => {
@@ -182,28 +185,57 @@ test('resolveCompactOnIdleEnabled: a per-thread override always wins over the de
   assert.equal(resolveCompactOnIdleEnabled(false, true), true);
 });
 
-test('checkShouldFireIdleCompaction: fires only when enabled+active+idle+unlatched+has-turn', () => {
-  assert.equal(checkShouldFireIdleCompaction({ ...fireBase }), true);
+test('getAgentIdleMs: the default window, or the AGENT_IDLE_MINUTES override (L-D9); junk keeps the default', () => {
+  assert.equal(getAgentIdleMs(undefined), idleCompactMs);
+  assert.equal(getAgentIdleMs(''), idleCompactMs);
+  assert.equal(getAgentIdleMs('1'), 60 * 1000);
+  assert.equal(getAgentIdleMs('0.5'), 30 * 1000);
+  assert.equal(getAgentIdleMs('0'), idleCompactMs);
+  assert.equal(getAgentIdleMs('-3'), idleCompactMs);
+  assert.equal(getAgentIdleMs('soon'), idleCompactMs);
 });
 
-test('checkShouldFireIdleCompaction: every negated condition blocks the fire', () => {
-  assert.equal(checkShouldFireIdleCompaction({ ...fireBase, isEnabled: false }), false);
-  assert.equal(checkShouldFireIdleCompaction({ ...fireBase, isSessionActive: false }), false);
-  assert.equal(
-    checkShouldFireIdleCompaction({ ...fireBase, isBusyForRealTurn: true }),
-    false,
-    'a session running a real turn is never compacted',
-  );
-  assert.equal(
-    checkShouldFireIdleCompaction({ ...fireBase, isLatched: true }),
-    false,
-    'D2: a spent latch fires at most once per user-active period',
-  );
-  assert.equal(
-    checkShouldFireIdleCompaction({ ...fireBase, hasCompletedTurnSinceCompaction: false }),
-    false,
-    'nothing to compress → skip',
-  );
+test('getIdleCompactionArmDecision: the override window is the one armed and the one the remainder is measured against', () => {
+  const idleWindowMs = 60 * 1000;
+  assert.deepEqual(getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: 0, now, idleWindowMs }), { delayMs: idleWindowMs, kind: 'fullWindow' });
+  assert.deepEqual(getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: now - 20_000, now, idleWindowMs }), { delayMs: 40_000, kind: 'remainder' });
+  assert.equal(getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: now - 90_000, now, idleWindowMs }).kind, 'overdue');
+});
+
+test('getIdleFireDecision: idle, enabled, unlatched, with a turn to compress, no limit wait → compact AND stop (L-D1)', () => {
+  assert.deepEqual(getIdleFireDecision({ ...fireBase }), { shouldCompact: true, compactionSkipReasons: [], shouldSuspend: true, suspendSkipReasons: [] });
+});
+
+test('getIdleFireDecision: no session or WORKING (L-D2) → nothing happens, neither compaction nor stop', () => {
+  for (const input of [{ ...fireBase, isSessionActive: false }, { ...fireBase, isWorking: true }]) {
+    const decision = getIdleFireDecision(input);
+    assert.equal(decision.shouldCompact, false);
+    assert.equal(decision.shouldSuspend, false, 'a working process is never stopped');
+    assert.deepEqual(decision.suspendSkipReasons, decision.compactionSkipReasons);
+  }
+  assert.deepEqual(getIdleFireDecision({ ...fireBase, isWorking: true }).suspendSkipReasons, ['working']);
+});
+
+test('getIdleFireDecision: each compaction guard skips the compaction but the stop still happens (L-D1, L-D6)', () => {
+  const cases: Array<[Partial<typeof fireBase>, string]> = [
+    [{ isEnabled: false }, 'disabled'],
+    [{ isLatched: true }, 'latched (D2)'],
+    [{ hasCompletedTurnSinceCompaction: false }, 'nothing to compress'],
+    [{ isLimitWaitArmed: true }, 'a usage-limit wait is armed (L-D6)'],
+  ];
+  for (const [override, reason] of cases) {
+    const decision = getIdleFireDecision({ ...fireBase, ...override });
+    assert.equal(decision.shouldCompact, false, reason);
+    assert.deepEqual(decision.compactionSkipReasons, [reason]);
+    assert.equal(decision.shouldSuspend, true, `${reason}: the stop happens regardless`);
+  }
+});
+
+test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {
+  const decision = getIdleFireDecision({ ...fireBase, canSuspend: false });
+  assert.equal(decision.shouldCompact, true);
+  assert.equal(decision.shouldSuspend, false);
+  assert.deepEqual(decision.suspendSkipReasons, ['the backend is not suspended']);
 });
 
 test('checkIsBusyForRealTurn: a pending question is NOT a real-turn busy (D1 fires)', () => {
@@ -215,11 +247,11 @@ test('checkIsBusyForRealTurn: a pending question is NOT a real-turn busy (D1 fir
   assert.equal(checkIsBusyForRealTurn({ isBusy: false, hasPendingQuestion: false }), false);
 });
 
-test('checkShouldFireIdleCompaction: a pending question at idle still fires (D1)', () => {
-  // A question pending → checkIsBusyForRealTurn is false → the guard fires so the
+test('a pending question at idle still fires (D1): it is not "working"', () => {
+  // A question pending → checkIsBusyForRealTurn is false → the decision fires so the
   // watchdog can reject + compact + re-ask.
-  const isBusyForRealTurn = checkIsBusyForRealTurn({ isBusy: true, hasPendingQuestion: true });
-  assert.equal(checkShouldFireIdleCompaction({ ...fireBase, isBusyForRealTurn }), true);
+  const isWorking = checkIsBusyForRealTurn({ isBusy: true, hasPendingQuestion: true });
+  assert.equal(getIdleFireDecision({ ...fireBase, isWorking }).shouldCompact, true);
 });
 
 test('buildCompactionInstruction: Claude backends get the D3 + skills guidance, closing last', () => {

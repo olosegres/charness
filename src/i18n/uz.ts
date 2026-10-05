@@ -166,6 +166,7 @@ export const uzDict: Record<string, string> = {
   'status.thread_started': 'Boshlangan: {started}',
   'status.thread_running': 'ishlamoqda',
   'status.thread_stopped': 'to‘xtatilgan',
+  'status.thread_sleeping': 'uxlamoqda — keyingi xabar bilan davom etadi',
   'status.thread_no_agent': 'yo‘q (/claude yoki /opencode ni ishga tushiring)',
   'status.thread_no_binding': '(bog‘lanish yo‘q — WORK_ROOT)',
   'status.thread_workdir': 'Ishchi jild: {workDir}',

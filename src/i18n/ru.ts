@@ -170,6 +170,7 @@ export const ruDict: Record<string, string> = {
   'status.thread_started': 'Запущено: {started}',
   'status.thread_running': 'работает',
   'status.thread_stopped': 'остановлена',
+  'status.thread_sleeping': 'спит — продолжится со следующим сообщением',
   'status.thread_no_agent': 'нет (запустите /claude или /opencode)',
   'status.thread_no_binding': '(нет привязки — WORK_ROOT)',
   'status.thread_workdir': 'Рабочая папка: {workDir}',

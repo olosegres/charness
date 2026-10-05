@@ -5,6 +5,8 @@ export interface ThreadStatusReportInput {
   agentLine: string;
   subdir: string;
   isActive: boolean;
+  /** No live process, but the session is kept: the next message resumes it (lifecycle plan L3). */
+  isSleeping: boolean;
   workDir: string | null;
   model: string | null;
   effort: string | null;
@@ -32,6 +34,7 @@ export function getThreadStatusReport({
   agentLine,
   subdir,
   isActive,
+  isSleeping,
   workDir,
   model,
   effort,
@@ -45,7 +48,7 @@ export function getThreadStatusReport({
     t('status.thread_report', {
       agent: agentLine,
       subdir,
-      session: isActive ? t('status.thread_running') : t('status.thread_stopped'),
+      session: isActive ? t('status.thread_running') : isSleeping ? t('status.thread_sleeping') : t('status.thread_stopped'),
     }),
   ];
   if (workDir !== null) lines.push(t('status.thread_workdir', { workDir }));

@@ -25,6 +25,7 @@ export const adapterEventNames = [
   'closed',
   'started',
   'stopped',
+  'suspended',
   'error',
 ] as const;
 
@@ -56,6 +57,8 @@ export const foreignKeyEventRoutes = {
   // Drop the retry, compaction and preamble state a gone session leaves behind.
   closed: 'requestSide',
   stopped: 'requestSide',
+  // An idle stop keeps the session, its retry and its compaction state: only Telegram frames to clean up.
+  suspended: 'none',
   started: 'none',
   // Logged; there is no topic to post it to.
   error: 'requestSide',

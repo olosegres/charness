@@ -45,6 +45,9 @@ describe('compaction: the compaction flow over its ports', () => {
       forwardPromptToAgent: async () => {},
       pendingQuestions: new Map(),
       clearPendingQuestion: () => {},
+      idleWindowMs: 55 * 60 * 1000,
+      checkIsLimitWaitArmed: () => false,
+      suspendThreadSession: async () => {},
     });
     compaction.registerCompactionCommands();
     compaction.registerCompactionCallbacks();

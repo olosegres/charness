@@ -66,6 +66,7 @@ function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string) {
     reader: new ClaudeStreamLineReader(),
     isActive: true,
     isStopping: false,
+    isSuspending: false,
     isRespawning: false,
     isBusy: false,
     lastStdoutActivityAt: Date.now(),
@@ -184,6 +185,23 @@ describe('json-stream external transport — exit detection', () => {
     assert.deepEqual(events, ['stopped'], 'explicit stop must not read as an unexpected close');
     assert.equal(adapter['sessions'].size, 0);
     assert.equal(fs.existsSync(dir), false, 'the host dir is removed on stop');
+  });
+
+  it('a suspend converges through the same finalize but emits suspended — the session is kept resumable by the bot (L3)', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-suspend-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    createSessionInDir(adapter, dir);
+
+    const events: string[] = [];
+    adapter.on('stopped', () => events.push('stopped'));
+    adapter.on('suspended', () => events.push('suspended'));
+    adapter.on('closed', () => events.push('closed'));
+    await adapter.suspendSession(key);
+
+    assert.deepEqual(events, ['suspended'], 'an idle stop must never read as an explicit stop or an unexpected close');
+    assert.equal(adapter['sessions'].size, 0, 'the process bookkeeping is gone');
+    assert.equal(adapter.checkIsActive(key), false);
+    assert.equal(fs.existsSync(dir), false, 'the host dir is removed like on a stop (L-D13)');
   });
 
   it('holds the tail offset back while answer text sits in the batch, releases it on flush', () => {

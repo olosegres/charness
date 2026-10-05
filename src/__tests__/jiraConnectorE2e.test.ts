@@ -103,12 +103,16 @@ const instanceTokenEnvName = 'CHARNESS_JIRA_AI_API_TOKEN';
 const pollIntervalSeconds = 10;
 /** The shortest useful one, so the killed agent's request is taken up by the first sweep after it. */
 const backstopMinutes = '0.1';
+/** The idle mark (lifecycle plan L3): an answered issue's process is compacted and stopped this long after its last activity. */
+const idleMinutes = '0.5';
 
 const bootTimeoutMs = 60 * 1000;
 /** A poll, a session start and a turn, with room to spare. */
 const answerTimeoutMs = 60 * 1000;
 /** The backstop window plus the wake-up engine's one-minute sweep, twice over. */
 const resumeTimeoutMs = 3 * 60 * 1000;
+/** The idle window, the compaction turn and the stop, with room to spare. */
+const idleStopTimeoutMs = 2 * 60 * 1000;
 /** The grace the shared instance helper gives a stop before killing. */
 const stopTimeoutMs = 20 * 1000;
 /** The restart step waits for this many polls. */
@@ -121,7 +125,7 @@ const flowMarginMs = 60 * 1000;
  * stops (the restart's and `after`'s) — so a slow run fails at the step that is
  * late, never at the suite.
  */
-const flowTimeoutMs = 2 * bootTimeoutMs + 9 * answerTimeoutMs + resumeTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 2 * bootTimeoutMs + 10 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -155,6 +159,22 @@ interface FakeLaunch {
   pid: number;
   envNames: string[];
   home: string;
+}
+
+/** A `/compact` turn the fake ran, with the session it compacted (`compactions.jsonl`). */
+interface FakeCompaction {
+  sessionId: string;
+  pid: number;
+}
+
+/** Signal 0 probes the pid without touching it: alive (or not ours) → true, gone → `ESRCH`. */
+function checkIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+  }
 }
 
 function getTurns(issueKey: string): FakeClaudeTurn[] {
@@ -232,6 +252,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     OPENCODE_URL: `http://127.0.0.1:${ports.openCode}`,
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
+    AGENT_IDLE_MINUTES: idleMinutes,
     [instanceTokenEnvName]: aiCredentials.apiToken,
   });
 }
@@ -293,6 +314,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     createIssue('PROJ-5', 'answer');
     createIssue('PROJ-6', 'finish-together');
     createIssue('PROJ-7', 'answer-after-queued');
+    createIssue('PROJ-8', 'background');
     createIssue('OTHER-1', 'answer');
     await startCharness();
     const pid = getCharness().pid;
@@ -303,15 +325,15 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
   });
 
   it('the requester assigns the issues: each in-scope one becomes one request', async () => {
-    for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'OTHER-1']) fakeJira.assignIssue(key, aiAccount, requester);
+    for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8', 'OTHER-1']) fakeJira.assignIssue(key, aiAccount, requester);
     fakeJira.assignIssue('PROJ-5', aiAccount, aiAccount);
     // The polls also name each request they open — what the restart step reads back.
     await waitFor('the first turn of every in-scope issue, and its request in the poll log', answerTimeoutMs, () =>
-      ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'].every((key) => getTurns(key).length > 0 && getPolledRequestIssueKeys(getCharness().output).includes(key)));
-    for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4']) {
+      ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8'].every((key) => getTurns(key).length > 0 && getPolledRequestIssueKeys(getCharness().output).includes(key)));
+    for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8']) {
       assert.equal(getTurns(key)[0].isRequestPrompt, true, `${key}'s first turn is its request prompt`);
     }
-    assert.deepEqual([...getPolledRequestIssueKeys(getCharness().output)].sort(), ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'], 'one request each');
+    assert.deepEqual([...getPolledRequestIssueKeys(getCharness().output)].sort(), ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8'], 'one request each');
     assert.ok(listTmuxSessions(['-L', getLayout().tmuxSocketName], getInstanceTmuxEnv()).length >= 4, 'the agents run on the private server');
   });
 
@@ -344,6 +366,37 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(!answer.outcome.startsWith('error:'), answer.outcome);
     assert.deepEqual(getCommentTexts(issue), ['Fake progress answer for PROJ-4 (progress, turn 1).']);
     assert.equal(issue.assignee?.accountId, aiAccount.accountId);
+  });
+
+  it('an answered issue idles: compacted, its process stopped, the next hand-over resumes the same conversation; a background task keeps its process (L3)', async () => {
+    const [firstTurn] = getTurns('PROJ-1');
+    const firstLaunch = getSessionLaunchOf(firstTurn.pid);
+    const sessionId = getLaunchSessionId(firstLaunch?.argv ?? []);
+    assert.ok(sessionId, 'PROJ-1\'s first launch named its conversation');
+    const compactions = (): FakeCompaction[] => readFakeLog<FakeCompaction>(fakeClaudeLogFileNames.compactions);
+    await waitFor('PROJ-1\'s session compacted at the idle mark', idleStopTimeoutMs, () => compactions().some((compaction) => compaction.sessionId === sessionId));
+    assert.equal(compactions().find((compaction) => compaction.sessionId === sessionId)?.pid, firstTurn.pid, 'compacted in the same process');
+    await waitFor('PROJ-1\'s process stopped after the compaction', idleStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
+    assert.ok(getCharness().output.includes(`[compact-on-idle] jira:PROJ:PROJ-1 process stopped; the session sleeps`), 'the stop is logged');
+    assert.ok(!getCharness().output.includes('[ClaudeJson] session jira:PROJ:PROJ-1 exited unexpectedly'), 'an idle stop is not an unexpected exit');
+
+    // PROJ-8 answered but left a background task running: its process is working and stays (L-D2).
+    const [backgroundTurn] = getTurns('PROJ-8');
+    assert.ok(backgroundTurn, 'PROJ-8 reached its agent');
+    assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), ['Fake final answer for PROJ-8 (background, turn 1).']);
+    assert.ok(checkIsProcessAlive(backgroundTurn.pid), 'a process with a background task is never stopped');
+    assert.ok(getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-8 process kept: working'), 'the idle fire saw it working');
+
+    // The next hand-over resumes PROJ-1's own conversation in a new process.
+    const commentsBefore = fakeJira.getIssue('PROJ-1').comments.length;
+    handIssueToAi('PROJ-1', requester);
+    await waitFor('PROJ-1 answered again', answerTimeoutMs, () => fakeJira.getIssue('PROJ-1').comments.length > commentsBefore);
+    const turns = getTurns('PROJ-1');
+    assert.equal(turns.length, 2, 'one more turn');
+    assert.notEqual(turns[1].pid, firstTurn.pid, 'answered by a new process');
+    const resumedLaunch = getSessionLaunchOf(turns[1].pid);
+    assert.deepEqual(getFlagValues(resumedLaunch?.argv ?? [], '--resume'), [sessionId], 'the new process resumed the same conversation');
+    assert.equal(fakeJira.getIssue('PROJ-1').assignee?.accountId, requester.accountId, 'handed back again');
   });
 
   it('the agent killed mid-turn: its own session is resumed and the request is still answered', async () => {
@@ -490,9 +543,10 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(requestPromptCount(), promptsBefore, 'no request prompt was posted again');
     // One request per issue. Its PROMPT may reach the agent twice: a request whose taking-in was not yet
     // seen when the agent died is re-posted to the resumed session (R21) — same request, not a second one.
-    for (const key of ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4']) {
+    for (const key of ['PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8']) {
       assert.equal(new Set(getTurns(key).map((turn) => turn.requestId)).size, 1, `${key} was one request, from start to end`);
     }
+    assert.equal(new Set(getTurns('PROJ-1').map((turn) => turn.requestId)).size, 2, 'PROJ-1: its first request and the hand-over after the idle stop, no third');
     assert.deepEqual(['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length), commentsBefore);
     assert.equal(fakeJira.getIssue('PROJ-4').assignee?.accountId, aiAccount.accountId, 'PROJ-4 still matches — its trigger was remembered');
   });

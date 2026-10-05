@@ -182,6 +182,8 @@ interface StreamSession {
   isActive: boolean;
   /** True between an explicit stop and process exit → emit `stopped` not `closed`. */
   isStopping: boolean;
+  /** True when the stop is a SUSPEND (idle stop, the session kept resumable) → emit `suspended`, not `stopped`. */
+  isSuspending: boolean;
   /** True while re-spawning for a model/effort change → suppress closed/stopped. */
   isRespawning: boolean;
   /** True from a user turn sent until its `result` → drives `checkIsBusy`. */
@@ -495,7 +497,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -677,7 +679,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     try { fs.rmSync(session.paths.dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     cleanupMcpTempFiles({ key, dataDir: resolveDataDir() });
-    if (session.isStopping) {
+    if (session.isSuspending) {
+      // The session id stays persisted: the next trigger resumes the conversation (L3).
+      console.log(`[ClaudeJson] session ${keyToString(key)} suspended (code=${exitCode})`);
+      this.emit('suspended', key);
+    } else if (session.isStopping) {
       console.log(`[ClaudeJson] session ${keyToString(key)} stopped (code=${exitCode})`);
       this.emit('stopped', key);
     } else {
@@ -786,7 +792,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reader: new ClaudeStreamLineReader(),
       // isBusy=false: the replayed/live events reconstruct it (deltas/toolUse
       // set it, `result` clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: null, reportedModel: null, effort: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -858,25 +864,39 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     void this.stopSessionInternal(key);
   }
 
-  private async stopSessionInternal(key: SessionKey): Promise<void> {
+  /**
+   * @description Stop the process but KEEP the session resumable (lifecycle plan
+   * L3): the same teardown as a stop (SIGTERM, tmux kill, host dir removed —
+   * L-D13), converging on `suspended` instead of `stopped`, so the bot keeps the
+   * persisted id and the retry / compaction state the stop would drop. The caller
+   * checks `checkIsWorking` first — a suspend kills a background task like any
+   * stop. Joins a stop already in flight.
+   */
+  async suspendSession(key: SessionKey): Promise<void> {
+    await this.stopSessionInternal(key, { isSuspend: true });
+  }
+
+  private async stopSessionInternal(key: SessionKey, options: { isSuspend: boolean } = { isSuspend: false }): Promise<void> {
     const k = keyToString(key);
     const inFlight = this.stopsInFlight.get(k);
     if (inFlight) return inFlight; // join the running stop instead of racing it
     const session = this.sessions.get(k);
     if (!session) return;
-    const stopPromise = this.performStop(session).finally(() => { this.stopsInFlight.delete(k); });
+    const stopPromise = this.performStop(session, options).finally(() => { this.stopsInFlight.delete(k); });
     this.stopsInFlight.set(k, stopPromise);
     return stopPromise;
   }
 
   /** Explicit stop = hard-kill the EXTERNAL process (released sessions are
    *  never adopted — locked decision): SIGTERM the pid, kill the tmux session,
-   *  then converge through {@link finalizeExternalExit} (dir removal + `stopped`). */
-  private async performStop(session: StreamSession): Promise<void> {
+   *  then converge through {@link finalizeExternalExit} (dir removal + `stopped`,
+   *  or `suspended` for an idle stop that keeps the session resumable). */
+  private async performStop(session: StreamSession, options: { isSuspend: boolean }): Promise<void> {
     // Reject a pending question server-side before teardown so the model's
     // AskUserQuestion turn is unblocked (deny), mirroring OpenCode's reject.
     this.rejectQuestion(session.key);
     session.isStopping = true;
+    session.isSuspending = options.isSuspend;
     // Let the reject (and any queued frame) reach the FIFO before the kill.
     await session.stdinWriteChain.catch(() => { /* already logged */ });
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }

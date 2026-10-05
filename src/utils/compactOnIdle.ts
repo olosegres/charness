@@ -12,12 +12,27 @@ import type { CompactCommandRoute } from './compactCommandRoute';
 import { resolveDefaultOnThreadToggle } from './threadToggle';
 
 /**
- * Idle interval before an untouched, idle agent session is auto-compacted (F2).
- * Chosen to fire just inside the ~1h Anthropic extended prompt-cache window, so
- * the compaction reads the still-warm cached prefix cheaply. No env override in
- * v1 — a locked plan decision.
+ * Idle interval before an untouched, idle agent session is auto-compacted (F2)
+ * and, on a backend that can be suspended, stopped (lifecycle plan L3). Chosen
+ * to fire just inside the ~1h Anthropic extended prompt-cache window, so the
+ * compaction reads the still-warm cached prefix cheaply and a resume minutes
+ * later still finds the cache. `AGENT_IDLE_MINUTES` overrides it for a test or
+ * live-test instance only (L-D9) — see {@link getAgentIdleMs}.
  */
 export const idleCompactMs = 55 * 60 * 1000;
+
+const msPerMinute = 60 * 1000;
+
+/**
+ * @description The idle window, honouring the `AGENT_IDLE_MINUTES` override (a
+ * test needs minutes, not an hour; same pattern as `REQUEST_BACKSTOP_MINUTES`).
+ * A missing, non-numeric or non-positive value keeps {@link idleCompactMs}.
+ */
+export function getAgentIdleMs(overrideMinutes: string | undefined): number {
+  if (overrideMinutes === undefined || overrideMinutes.trim() === '') return idleCompactMs;
+  const minutes = Number(overrideMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * msPerMinute : idleCompactMs;
+}
 
 /**
  * Floor delay for an OVERDUE arm (the thread has been idle longer than
@@ -114,12 +129,15 @@ export function getIdleCompactionArmDecision(input: {
   threadKeyString: string;
   lastActivityAt: number;
   now: number;
+  /** The idle window in force ({@link getAgentIdleMs}); the default is {@link idleCompactMs}. */
+  idleWindowMs?: number;
 }): IdleCompactionArmDecision {
-  if (input.lastActivityAt <= 0) return { delayMs: idleCompactMs, kind: 'fullWindow' };
-  const remainingMs = idleCompactMs - (input.now - input.lastActivityAt);
+  const idleWindowMs = input.idleWindowMs ?? idleCompactMs;
+  if (input.lastActivityAt <= 0) return { delayMs: idleWindowMs, kind: 'fullWindow' };
+  const remainingMs = idleWindowMs - (input.now - input.lastActivityAt);
   // Clamped: a backward clock step makes `lastActivityAt` future-dated, and the
   // remainder must never exceed the window it is a remainder of.
-  if (remainingMs > 0) return { delayMs: Math.min(remainingMs, idleCompactMs), kind: 'remainder' };
+  if (remainingMs > 0) return { delayMs: Math.min(remainingMs, idleWindowMs), kind: 'remainder' };
   return {
     delayMs: compactIdleOverdueMinDelayMs + (getStableHash(input.threadKeyString) % compactIdleOverdueSpreadMs),
     kind: 'overdue',
@@ -170,31 +188,64 @@ export function checkIsBusyForRealTurn(input: {
   return input.isBusy && !input.hasPendingQuestion;
 }
 
+/** What the idle timer does when it fires: the compaction half and the stop half, each with its reasons. */
+export interface IdleFireDecision {
+  /** Run the idle compaction (D1/D2). */
+  shouldCompact: boolean;
+  /** Why the compaction is skipped — logged, since a silent skip was the feature's blind spot. */
+  compactionSkipReasons: string[];
+  /** Stop the process afterwards, the session kept resumable (L-D1). */
+  shouldSuspend: boolean;
+  /** Why the process stays. */
+  suspendSkipReasons: string[];
+}
+
 /**
- * @description The idle-fire guard, re-checked at the moment the idle timer
- * fires: compact only when the feature is enabled for the thread, a session is
- * actually active, it is NOT busy for a real running turn (a pending question is
- * NOT such a reason — see {@link checkIsBusyForRealTurn}; D1), the per-thread
- * user-latch is NOT already spent (D2 — after a fire it stays latched until the
- * next genuine USER message re-arms it, so idle compaction runs at most once per
- * user-active period), AND at least one agent turn has completed since the last
- * compaction (otherwise there is nothing new to compress and we skip silently —
- * a locked plan decision).
+ * @description The idle-fire decision, taken the moment the idle timer fires
+ * (lifecycle plan L3). Nothing happens to a session that is not there or is
+ * WORKING (L-D2: a real running turn, a background task, input not yet taken in,
+ * a compaction in flight — a pending interactive question is NOT work, see
+ * {@link checkIsBusyForRealTurn}; D1); the next activity re-arms the timer.
+ *
+ * The compaction runs only when the feature is enabled for the thread, the
+ * per-thread user-latch is NOT already spent (D2 — after a fire it stays latched
+ * until the next genuine USER message re-arms it, so idle compaction runs at most
+ * once per user-active period), at least one agent turn has completed since the
+ * last compaction (otherwise there is nothing new to compress), and no
+ * usage-limit wait is armed (L-D6: a compaction turn would hit the limit).
+ *
+ * The STOP happens whether or not the compaction runs (L-D1: a resume restores
+ * the full history, so a stopped process loses nothing) — on a backend that can
+ * be suspended; the tmux TUI and OpenCode stay (L-D8).
  */
-export function checkShouldFireIdleCompaction(input: {
-  isEnabled: boolean;
+export function getIdleFireDecision(input: {
   isSessionActive: boolean;
-  isBusyForRealTurn: boolean;
+  isWorking: boolean;
+  isEnabled: boolean;
   isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
-}): boolean {
-  return (
-    input.isEnabled &&
-    input.isSessionActive &&
-    !input.isBusyForRealTurn &&
-    !input.isLatched &&
-    input.hasCompletedTurnSinceCompaction
-  );
+  isLimitWaitArmed: boolean;
+  canSuspend: boolean;
+}): IdleFireDecision {
+  const notIdleReasons = [
+    !input.isSessionActive && 'no active session',
+    input.isWorking && 'working',
+  ].filter((reason): reason is string => typeof reason === 'string');
+  if (notIdleReasons.length > 0) {
+    return { shouldCompact: false, compactionSkipReasons: notIdleReasons, shouldSuspend: false, suspendSkipReasons: notIdleReasons };
+  }
+  const compactionSkipReasons = [
+    !input.isEnabled && 'disabled',
+    input.isLatched && 'latched (D2)',
+    !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
+    input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
+  ].filter((reason): reason is string => typeof reason === 'string');
+  return {
+    shouldCompact: compactionSkipReasons.length === 0,
+    compactionSkipReasons,
+    shouldSuspend: input.canSuspend,
+    suspendSkipReasons: input.canSuspend ? [] : ['the backend is not suspended'],
+  };
 }
 
 /**

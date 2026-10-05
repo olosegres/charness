@@ -172,6 +172,7 @@ export const ukDict: Record<string, string> = {
   'status.thread_started': 'Запущено: {started}',
   'status.thread_running': 'працює',
   'status.thread_stopped': 'зупинено',
+  'status.thread_sleeping': 'спить — продовжиться з наступним повідомленням',
   'status.thread_no_agent': 'немає (запустіть /claude або /opencode)',
   'status.thread_no_binding': '(без прив\'язки — WORK_ROOT)',
   'status.thread_workdir': 'Робоча тека: {workDir}',

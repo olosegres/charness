@@ -16,6 +16,8 @@ export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
 /** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
 export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 1301, cache_read_input_tokens: 24601, output_tokens: 43 } as const;
 export const fakeClaudeLogFileNames = {
+  /** One record per `/compact` turn the fake ran: `{ sessionId, pid }`. */
+  compactions: 'compactions.jsonl',
   launches: 'launches.jsonl',
   violations: 'violations.jsonl',
   answers: 'answers.jsonl',

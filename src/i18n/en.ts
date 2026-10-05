@@ -170,6 +170,7 @@ export const enDict: Record<string, string> = {
   'status.thread_started': 'Started: {started}',
   'status.thread_running': 'running',
   'status.thread_stopped': 'stopped',
+  'status.thread_sleeping': 'sleeping — resumes on the next message',
   'status.thread_no_agent': 'none (start /claude or /opencode)',
   'status.thread_no_binding': '(no binding — WORK_ROOT)',
   'status.thread_workdir': 'Working directory: {workDir}',

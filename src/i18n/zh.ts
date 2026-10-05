@@ -166,6 +166,7 @@ export const zhDict: Record<string, string> = {
   'status.thread_started': '启动时间：{started}',
   'status.thread_running': '运行中',
   'status.thread_stopped': '已停止',
+  'status.thread_sleeping': '休眠中——下一条消息时恢复',
   'status.thread_no_agent': '无（启动 /claude 或 /opencode）',
   'status.thread_no_binding': '（无绑定 — WORK_ROOT）',
   'status.thread_workdir': '工作目录：{workDir}',

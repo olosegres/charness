@@ -166,6 +166,7 @@ export const esDict: Record<string, string> = {
   'status.thread_started': 'Iniciado: {started}',
   'status.thread_running': 'en ejecución',
   'status.thread_stopped': 'detenido',
+  'status.thread_sleeping': 'dormida — se reanuda con el próximo mensaje',
   'status.thread_no_agent': 'ninguno (inicia /claude o /opencode)',
   'status.thread_no_binding': '(sin vínculo — WORK_ROOT)',
   'status.thread_workdir': 'Directorio de trabajo: {workDir}',

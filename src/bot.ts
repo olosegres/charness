@@ -210,6 +210,8 @@ import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
+import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
+import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
 import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
@@ -4395,6 +4397,21 @@ async function ensureAgentSession(
   key: SessionKey,
   options: EnsureAgentSessionOptions = {},
 ): Promise<EnsureAgentSessionResult> {
+  // One transition per key: a second trigger waits for the first and finds the session live; a trigger
+  // during the idle stop waits for it, then resumes (L2 review, L3).
+  return sessionTransitions.run(keyToString(key), () => ensureAgentSessionNow(key, options));
+}
+
+/**
+ * Starts, resumes and idle stops of one conversation run one after another — see
+ * {@link ensureAgentSession} and {@link suspendThreadSession}.
+ */
+const sessionTransitions = new KeyedTransitionQueue();
+
+async function ensureAgentSessionNow(
+  key: SessionKey,
+  options: EnsureAgentSessionOptions,
+): Promise<EnsureAgentSessionResult> {
   // Resolve which adapter to run. `getThreadAdapterNameRaw` returns the
   // in-memory pick WITHOUT any default fallback, so "no pick yet" stays
   // distinguishable and the chain never silently defaults to a backend. When
@@ -4498,6 +4515,33 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
 async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
   if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) === null) return null;
   return (await ensureAgentSession(key)).message;
+}
+
+/**
+ * @description The idle stop (lifecycle plan L3): stop the topic's process, the
+ * session kept resumable. Runs as the key's one transition, so no resume races it.
+ * The startup window is held open while the process stops, so a prompt arriving
+ * meanwhile is buffered instead of written to a dying process; once the process
+ * is gone the window closes WITHOUT dropping those prompts, and if any wait the
+ * session is resumed for them at once (its own window replays them). The
+ * "working" check is repeated inside the transition: a turn may have started
+ * while the fire waited its turn in the queue.
+ */
+async function suspendThreadSession(key: SessionKey): Promise<void> {
+  const adapter = getThreadAdapter(key);
+  if (!adapter.suspendSession) return;
+  const kStr = keyToString(key);
+  await sessionTransitions.run(kStr, async () => {
+    if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
+    startupPromptBuffer.markStarting(kStr);
+    try {
+      await adapter.suspendSession!(key);
+      console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
+    } finally {
+      startupPromptBuffer.closeWindow(kStr);
+    }
+  });
+  if (startupPromptBuffer.checkHasPrompts(kStr)) await ensureAgentSession(key);
 }
 
 /**
@@ -4847,6 +4891,9 @@ const {
   forwardPromptToAgent,
   pendingQuestions,
   clearPendingQuestion,
+  idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
+  checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
+  suspendThreadSession,
 });
 
 /**
@@ -5065,7 +5112,7 @@ command('status', async (_ctx, key) => {
   }
   const timezone = getCurrentTimezone();
   await replyToThread(key, getThreadStatusReport({
-    agentLine, subdir, isActive, workDir, model, effort, startedAt, runtime,
+    agentLine, subdir, isActive, isSleeping: !isActive && getResumableSessionId(key) !== null, workDir, model, effort, startedAt, runtime,
     view: formatTopicView(state.getDisplayPrefs(key).view),
     timezone,
     timezoneNow: formatZoneNow(timezone, Date.now()),
@@ -9903,6 +9950,25 @@ function handleAgentStopped(key: SessionKey): void {
   updatePinnedStatus(key).catch(() => {});
 }
 
+/**
+ * @description `suspended` from the adapter — the idle stop (L3): the process is
+ * gone, the conversation stays. The frame cleanup of {@link handleAgentStopped}
+ * WITHOUT what a real end drops: the armed retry (a limit wait resumes the
+ * sleeping session itself, L-D6), the compaction state (its instants describe the
+ * context the resume restores), the thread-context marker (the conversation still
+ * has the preamble) and the open request (its wake-ups resume the session).
+ * Posts nothing — `/status` says the agent sleeps.
+ */
+function handleAgentSuspended(key: SessionKey): void {
+  clearThreadQueues(key);
+  stopClaudeLiveness(key);
+  deleteStatusMessage(key).catch(() => {});
+  clearThinkingMessage(key);
+  clearSubagentStatus(key);
+  clearPendingQuestion(key);
+  updatePinnedStatus(key).catch(() => {});
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Startup orchestration — state init, re-attach, setMyCommands, launch
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -11306,7 +11372,13 @@ export async function startBot(): Promise<void> {
     onOutput: (key, output, meta) => dispatchAdapterEvent(key, 'output', () => {
       noteTurnOutput(key);
       void withThreadLocale(key, () => handleAgentOutput(key, output, meta));
-    }, () => noteTurnOutput(key)),
+    }, () => {
+      noteTurnOutput(key);
+      // An issue's turn produced output: something to compress, and the idle countdown restarts (L3) —
+      // the same two stamps the Telegram handler makes before it renders.
+      markThreadTurnProducedOutput(key);
+      noteThreadActivity(key);
+    }),
     onStatus: (key, status) => dispatchAdapterEvent(key, 'status', () => withThreadLocale(key, () => handleAdapterStatus(key, status))),
     onQuestion: (key, question) => dispatchAdapterEvent(key, 'question', () => withThreadLocale(key, () => handleAgentQuestion(key, question))),
     onThinking: (key, payload) => dispatchAdapterEvent(key, 'thinking', () => withThreadLocale(key, () => handleAgentThinking(key, payload))),
@@ -11318,6 +11390,7 @@ export async function startBot(): Promise<void> {
     onClosed: (key) => dispatchAdapterEvent(key, 'closed', () => withThreadLocale(key, () => handleAgentClosed(key)), () => clearForeignSessionState(key)),
     onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key))),
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
+    onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),

@@ -166,6 +166,7 @@ export const frDict: Record<string, string> = {
   'status.thread_started': 'Démarré : {started}',
   'status.thread_running': 'en cours',
   'status.thread_stopped': 'arrêté',
+  'status.thread_sleeping': 'en veille — reprend au prochain message',
   'status.thread_no_agent': 'aucun (lancez /claude ou /opencode)',
   'status.thread_no_binding': '(aucun lien — WORK_ROOT)',
   'status.thread_workdir': 'Répertoire de travail : {workDir}',

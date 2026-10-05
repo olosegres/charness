@@ -166,6 +166,7 @@ export const deDict: Record<string, string> = {
   'status.thread_started': 'Gestartet: {started}',
   'status.thread_running': 'läuft',
   'status.thread_stopped': 'gestoppt',
+  'status.thread_sleeping': 'schläft — wird mit der nächsten Nachricht fortgesetzt',
   'status.thread_no_agent': 'keiner (starte /claude oder /opencode)',
   'status.thread_no_binding': '(keine Bindung — WORK_ROOT)',
   'status.thread_workdir': 'Arbeitsverzeichnis: {workDir}',

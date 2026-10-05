@@ -71,6 +71,21 @@ export class StartupPromptBuffer {
     return this.startingThreads.has(threadId);
   }
 
+  /** Whether the thread holds prompts that wait for a session. */
+  checkHasPrompts(threadId: string): boolean {
+    return (this.bufferedPrompts.get(threadId)?.length ?? 0) > 0;
+  }
+
+  /**
+   * End the window WITHOUT settling what it holds: the prompts stay for the
+   * next window — the idle stop opens one so a prompt arriving while the process
+   * stops is kept, and the resume that follows opens its own and replays them.
+   */
+  closeWindow(threadId: string): void {
+    this.startingThreads.delete(threadId);
+    this.ackedThreads.delete(threadId);
+  }
+
   /**
    * Buffer one prompt for a starting thread.
    * @param onSettled Told once how the prompt's wait ended ({@link BufferedPromptOutcome}).
