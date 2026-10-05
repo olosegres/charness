@@ -80,7 +80,8 @@ export function getTopicRequestOrigin(intake: TopicRequestIntake): RequestOrigin
 
 /**
  * @description The header that rides the request's prompt. In the answers-only
- * view the agent is told its plain text is not shown; in the stream views it is.
+ * view the agent is told its plain text and thinking are not shown; in the stream
+ * views they are.
  * `supersededRequestIds` are the requester's still-open requests this one
  * replaced — the header asks for only what this one adds.
  */

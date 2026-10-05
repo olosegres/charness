@@ -77,8 +77,8 @@ describe('buildTopicRequestHeader', () => {
     assert.ok(header.endsWith('\n\n'));
   });
 
-  it('tells the agent its plain text is not shown ONLY in the answers-only view', () => {
-    const hiddenLine = /does not see your plain text/;
+  it('tells the agent its plain text and thinking are not shown ONLY in the answers-only view', () => {
+    const hiddenLine = /does not see your plain text output or your thinking/;
     assert.match(buildTopicRequestHeader('req_abc', 'text', 'answers'), hiddenLine);
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'), hiddenLine);
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'stream'), hiddenLine);

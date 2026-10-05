@@ -70,7 +70,8 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   nudge, wake-up reminders, replays). A slash command forwarded to the agent, and an answer to the agent's own
   native question, never open one.
 - The request header leads the per-message body (ahead of the reply quote, never in the once-per-change thread
-  preamble) and says the plain text is hidden only in the answers-only view. A prompt buffered behind a session
+  preamble) and says the plain text and the thinking are hidden only in the answers-only view (the line is
+  per prompt, so it stays true when the view is switched mid-conversation). A prompt buffered behind a session
   start carries its header from capture time.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's

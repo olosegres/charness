@@ -54,10 +54,10 @@ describe('buildJiraRequestPrompt (D15)', () => {
     requester,
   });
 
-  it('opens with the request header naming the id, the origin and that plain output is unseen', () => {
+  it('opens with the request header naming the id, the origin and that plain output and thinking are unseen', () => {
     assert.match(prompt, /^\[Request req_abc · from: PROJ-12 assigned to you by Requester Person\]\n/);
     assert.match(prompt, /answer_request tool \(requestId "req_abc"\)/);
-    assert.match(prompt, /The requester does not see your plain text output/);
+    assert.match(prompt, /The requester does not see your plain text output or your thinking/);
   });
 
   it('names the requests this one replaced, as the header does (R34); none replaced, no such line', () => {

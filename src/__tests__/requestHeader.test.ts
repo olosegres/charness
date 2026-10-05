@@ -38,17 +38,17 @@ describe('buildRequestHeader', () => {
     });
     assert.ok(header.startsWith('[Request req_AbCd1234 · from: a message in this topic]\n'));
     assert.match(header, /answer_request tool \(requestId "req_AbCd1234"\)/);
-    assert.doesNotMatch(header, /does not see your plain text/);
+    assert.doesNotMatch(header, /does not see your plain text|your thinking/);
     assert.ok(header.endsWith('\n\n'));
   });
 
-  it('warns that plain text is not shown when the requester cannot see it', () => {
+  it('warns that plain text and thinking are not shown when the requester cannot see them', () => {
     const header = buildRequestHeader({
       requestId: 'req_AbCd1234',
       originDescription: 'PROJ-123 assigned to you',
       isPlainTextHidden: true,
     });
-    assert.match(header, /does not see your plain text output/);
+    assert.match(header, /does not see your plain text output or your thinking — only what you send through answer_request reaches them\./);
   });
 
   it('names the replaced requests and asks for only what this one adds, honest in both timings', () => {

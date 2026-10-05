@@ -103,8 +103,8 @@ const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
-/** The request header's line that the requester does not see the agent's plain text (`requests/requestHeader.ts`). */
-const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text';
+/** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
+const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
 /** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
 const supersededRequestsLineRe = /It replaces the same requester's earlier requests? ((?:req_[A-Za-z0-9_-]+(?:, )?)+)\. If you already answered/;
 /** How much of a stdin line that is not JSON the error message quotes. */
