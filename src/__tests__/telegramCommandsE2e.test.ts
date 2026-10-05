@@ -79,7 +79,7 @@ const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
 const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 4 * agentStartTimeoutMs + stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 6 * agentStartTimeoutMs + 2 * stopTimeoutMs + flowMarginMs;
 
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
@@ -90,6 +90,8 @@ const escToCancelHint = '/esc to cancel';
 const afterCancelPromptLabel = 'ESC-1';
 /** The two prompts of the per-turn steps (L5): the first runs in a fresh process, the second in a resumed one. */
 const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
+/** The prompts of the per-turn pick on an OLD CLI: a fresh start whose process must survive its turn, then a resume through the ensure that must keep the pick. */
+const perTurnOldCliPromptLabels = ['PT-0', 'PT-3'] as const;
 /** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
 const perTurnStopTimeoutMs = 15 * 1000;
 const perTurnAdapterName = 'claude-per-turn';
@@ -499,14 +501,55 @@ describe('Telegram commands end to end: built charness, fake Bot API', { timeout
     await getCharness().waitFor('the per-turn backend persisted', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.name === perTurnAdapterName);
   });
 
+  it('a per-turn pick started on an old CLI keeps the pick and runs the session without the per-turn stop; a newer CLI returns to per-turn by itself (L-D10)', async () => {
+    const versionOverridePath = path.join(getLayout().fakeStateDir, fakeClaudeCodeVersionOverrideFileName);
+    fs.writeFileSync(versionOverridePath, belowGateClaudeCodeVersion);
+    const outputBefore = getCharness().output.length;
+    try {
+      await topic.sendAndAwaitReply('/claude', 'ready in');
+      fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnOldCliPromptLabels[0]} [fake:answer] a per-turn prompt on the old CLI`);
+      await getCharness().waitFor('the prompt to reach the old-version agent', agentStartTimeoutMs, () => getAgentTurns(perTurnOldCliPromptLabels[0]).length === 1);
+      const [turn] = getAgentTurns(perTurnOldCliPromptLabels[0]);
+      const sessionId = getLaunchSessionId(getSessionLaunchOf(turn.pid)?.argv ?? []);
+      await getCharness().waitFor('the old CLI version known to the bot', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.jsonStreamTail?.claudeCodeVersion === belowGateClaudeCodeVersion);
+      // The per-turn stop would have taken the process well inside this window on a supported CLI.
+      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
+      assert.ok(checkIsProcessAlive(turn.pid), 'an old CLI is never auto-stopped: the process survives its turn');
+      const sinceStart = (): string => getCharness().output.slice(outputBefore);
+      assert.ok(!sinceStart().includes(`[compact-on-idle] ${threadKeyString} process stopped`), 'no stop');
+      assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString} is not auto-stopped: Claude Code ${minAutoStopClaudeCodeVersion} or newer is needed`), 'the stop gate said why, once');
+
+      // The process dies on its own (the session id is kept): the next message resumes the conversation THROUGH the
+      // ensure, where a refused per-turn pick must stay the pick and run this session without the per-turn stop.
+      process.kill(turn.pid, 'SIGKILL');
+      await topic.waitForMessage('the session-ended notice', (message) => message.text.includes('session ended'));
+      fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnOldCliPromptLabels[1]} [fake:answer] resumed on the old CLI`);
+      await getCharness().waitFor('the prompt to reach a resumed old-version agent', agentStartTimeoutMs, () => getAgentTurns(perTurnOldCliPromptLabels[1]).length === 1);
+      const [resumedTurn] = getAgentTurns(perTurnOldCliPromptLabels[1]);
+      assert.deepEqual(getFlagValues(getSessionLaunchOf(resumedTurn.pid)?.argv ?? [], '--resume'), [sessionId], 'the same conversation, resumed');
+      assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: per-turn refused — Claude Code ${belowGateClaudeCodeVersion} is below ${minAutoStopClaudeCodeVersion}`));
+      assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: the per-turn pick is kept; this session runs without the per-turn stop`));
+      assert.equal(readPersistedState().agents?.[threadKeyString]?.name, perTurnAdapterName, 'the per-turn pick is kept — not rewritten to the idle lifecycle');
+      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
+      assert.ok(checkIsProcessAlive(resumedTurn.pid), 'the resumed old-CLI process survives its turn too');
+
+      await topic.sendAndAwaitReply('/quit', 'stopped');
+      await getCharness().waitFor('the old-version process to end', stopTimeoutMs, () => !checkIsProcessAlive(resumedTurn.pid));
+    } finally {
+      fs.rmSync(versionOverridePath, { force: true });
+    }
+  });
+
   it('a message runs one turn on the per-turn backend and the process is stopped right after its result', async () => {
+    // From here: the previous step killed an old-CLI process on purpose, which IS an unexpected exit.
+    const outputBefore = getCharness().output.length;
     await topic.sendAndAwaitReply('/claude', 'ready in');
     fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnPromptLabels[0]} [fake:answer] first per-turn prompt`);
     await getCharness().waitFor('the first prompt to reach the agent', agentStartTimeoutMs, () => getAgentTurns(perTurnPromptLabels[0]).length === 1);
     const [firstTurn] = getAgentTurns(perTurnPromptLabels[0]);
     await getCharness().waitFor('the process stopped right after its result', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
     assert.ok(getCharness().output.includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`), 'the per-turn stop is the idle stop\'s teardown');
-    assert.ok(!getCharness().output.includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
+    assert.ok(!getCharness().output.slice(outputBefore).includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
     assert.ok(readPersistedState().agents?.[threadKeyString]?.claudeSessionId, 'the session id is kept: the conversation sleeps');
   });
 

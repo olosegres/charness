@@ -13,7 +13,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsClaudeAutoStopSupported, checkIsPerTurnSwitchRefused, compareClaudeCodeVersions, minAutoStopClaudeCodeVersion } from '../utils/claudeCodeVersion';
+import { checkIsClaudeAutoStopSupported, compareClaudeCodeVersions, getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from '../utils/claudeCodeVersion';
 
 describe('compareClaudeCodeVersions', () => {
   it('compares numerically per component', () => {
@@ -46,18 +46,18 @@ describe('checkIsClaudeAutoStopSupported (L-D10)', () => {
   });
 });
 
-describe('checkIsPerTurnSwitchRefused (L-D10, narrowed)', () => {
-  it('refuses the per-turn lifecycle for a conversation whose last known CLI is below the gate', () => {
-    assert.equal(checkIsPerTurnSwitchRefused('2.1.286'), true);
-    assert.equal(checkIsPerTurnSwitchRefused('2.1.201'), true);
+describe('getPerTurnRefusedVersion (L-D10, narrowed)', () => {
+  it('refuses the per-turn lifecycle for a conversation whose last known CLI is below the gate — and names that version', () => {
+    assert.equal(getPerTurnRefusedVersion('2.1.286'), '2.1.286');
+    assert.equal(getPerTurnRefusedVersion('2.1.201'), '2.1.201');
   });
 
   it('allows it when the version is unknown — the refusal is only decidable once a version is known', () => {
-    assert.equal(checkIsPerTurnSwitchRefused(null), false);
+    assert.equal(getPerTurnRefusedVersion(null), null);
   });
 
   it('allows it from the gate version on', () => {
-    assert.equal(checkIsPerTurnSwitchRefused(minAutoStopClaudeCodeVersion), false);
-    assert.equal(checkIsPerTurnSwitchRefused('2.2.0'), false);
+    assert.equal(getPerTurnRefusedVersion(minAutoStopClaudeCodeVersion), null);
+    assert.equal(getPerTurnRefusedVersion('2.2.0'), null);
   });
 });

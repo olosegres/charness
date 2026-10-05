@@ -210,7 +210,7 @@ import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
-import { checkIsPerTurnSwitchRefused, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
+import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
 import { getAgentIdleMs } from './utils/compactOnIdle';
@@ -4272,8 +4272,8 @@ function getLastKnownClaudeCodeVersion(key: SessionKey): string | null {
  * the switch is allowed — unknown version included. One log line per refusal.
  */
 function getPerTurnRefusal(key: SessionKey): { version: string } | null {
-  const version = getLastKnownClaudeCodeVersion(key);
-  if (!checkIsPerTurnSwitchRefused(version) || version === null) return null;
+  const version = getPerTurnRefusedVersion(getLastKnownClaudeCodeVersion(key));
+  if (version === null) return null;
   console.log(`[lifecycle] ${keyToString(key)}: per-turn refused — Claude Code ${version} is below ${minAutoStopClaudeCodeVersion}`);
   return { version };
 }
@@ -4505,17 +4505,19 @@ async function ensureAgentSessionNow(
   // distinguishable and the chain never silently defaults to a backend. When
   // nothing resolves (bound topic that never picked an agent, no caller
   // fallback) we REFUSE — the user must start/pick an agent first.
-  const resolvedAdapterName =
+  const adapterName =
     options.preferredAdapterName ??
     getThreadAdapterNameRaw(key) ??
     state.getAgent(key)?.name ??
     options.fallbackAdapterName ??
     null;
-  // L-D10: a session start or resume on the per-turn lifecycle for a conversation whose last known CLI is
-  // below the gate runs the idle lifecycle instead (a Jira session's `jira.json` pick included).
-  const adapterName = resolvedAdapterName === claudePerTurnAdapterName && getPerTurnRefusal(key) !== null
-    ? claudeJsonStreamAdapterName
-    : resolvedAdapterName;
+  // L-D10: a session start or resume on the per-turn pick for a conversation whose last known CLI is below
+  // the gate keeps the PICK (a Jira `jira.json` pick included) and runs this one session without the per-turn
+  // stop — the stop gate refuses every auto-stop of an old process, which is the idle lifecycle on that CLI.
+  // After a CLI upgrade the next process reports a newer version and the per-turn stops return by themselves.
+  if (adapterName === claudePerTurnAdapterName && getPerTurnRefusal(key) !== null) {
+    console.log(`[lifecycle] ${keyToString(key)}: the per-turn pick is kept; this session runs without the per-turn stop`);
+  }
   const plan = getEnsureSessionPlan({
     isActive: getThreadAdapter(key).checkIsActive(key),
     isStarting: startupPromptBuffer.checkIsStarting(keyToString(key)),
