@@ -57,15 +57,26 @@ import {
  *    (it stays open); the turn of a LATER request of the same issue answers
  *    `final` for every request of the issue still owed one, oldest first,
  *    itself last — except a request its own header names as replaced, which
- *    the newer one covers (request/answer core S11, Jira plan R34).
+ *    the newer one covers (request/answer core S11, Jira plan R34);
+ *  - `answer-after-queued` — the real Claude Code timing of a message written
+ *    mid-turn: the first turn sends a `progress` note, then HOLDS until another
+ *    user message is queued on stdin (at most `queuedMessageWaitMaxMs`), answers
+ *    `final` and ends; the queued message then runs as the next turn. A turn
+ *    whose header names requests this one replaced answers with a short pointer
+ *    to the answer above instead of the result again (the header's rule).
+ *
+ * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
+ * that turn: turns run one at a time, in arrival order.
  *
  * Paths come from the environment its launcher script sets:
  * `FAKE_CLAUDE_LOG_DIR` (launches, violations, answers, turns) and
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'progress' | 'finish-together' | 'answer-after-queued';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'progress', 'finish-together', 'answer-after-queued'];
+/** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
+const queuedMessageWaitMaxMs = 40 * 1000;
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -77,6 +88,30 @@ const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text';
 const supersededRequestsLineRe = /It replaces the same requester's earlier requests? ((?:req_[A-Za-z0-9_-]+(?:, )?)+)\. If you already answered/;
 /** How much of a stdin line that is not JSON the error message quotes. */
 const skippedLinePreviewChars = 200;
+
+/** Resolved when a user message is queued on stdin while a turn runs (`answer-after-queued`). */
+let queuedUserMessageWaiters: Array<() => void> = [];
+
+function notifyUserMessageQueued(): void {
+  const waiters = queuedUserMessageWaiters;
+  queuedUserMessageWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+/** Wait until a user message is queued behind the running turn, or `queuedMessageWaitMaxMs` passed. */
+function waitForQueuedUserMessage(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      queuedUserMessageWaiters = queuedUserMessageWaiters.filter((waiter) => waiter !== onQueued);
+      resolve();
+    }, queuedMessageWaitMaxMs);
+    const onQueued = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    queuedUserMessageWaiters.push(onQueued);
+  });
+}
 
 interface RequestTurnState {
   mode: FakeClaudeMode;
@@ -257,12 +292,22 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await new Promise<never>(() => {});
   }
   const server = getBotMcpServer(argv);
-  const answer = async (answeredRequestId: string, kind: string, turnCount: number): Promise<string> => {
-    const body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`;
+  const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body }) : 'error: no bot MCP server in --mcp-config';
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
   };
+  if (state.mode === 'answer-after-queued') {
+    if (supersededRequestIds.length > 0) {
+      // The header's rule: the replaced requests were answered in the turn before — a pointer, not the result again.
+      endTurn(sessionId, await answer(requestId, 'final', state.turnCount, `Answered above for ${state.issueKey} (covers ${supersededRequestIds.join(', ')}).`));
+      return;
+    }
+    await answer(requestId, 'progress', state.turnCount);
+    await waitForQueuedUserMessage();
+    endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
+    return;
+  }
   if (state.mode === 'finish-together') {
     const owedRequests = listKnownRequests(state.issueKey).filter((request) => request.requestId !== requestId && request.isAnswered !== true);
     if (owedRequests.length === 0) {
@@ -334,6 +379,7 @@ async function main(): Promise<void> {
     }
     if (frame.type !== 'user' || typeof frame.message?.content !== 'string') return;
     const content = frame.message.content;
+    notifyUserMessageQueued();
     turnChain = turnChain.then(() => runTurn(argv, sessionId, content)).catch((error: Error) => {
       process.stderr.write(`fake claude: turn failed: ${error.stack ?? error.message}\n`);
       endTurn(sessionId, 'The turn failed.');

@@ -19,8 +19,11 @@
  *   → the self-assigned and the foreign issue: no request, nothing posted
  *   → two people hand one issue over in turn: two open requests, two answers,
  *     the issue goes back to the person whose answer closed first (R34)
- *   → one person hands an issue over twice: the newer request replaces the
- *     first, one answer, the issue goes back once (R34)
+ *   → one person hands an issue over twice while the agent is mid-turn: the
+ *     newer request replaces the first; the agent (Claude Code's timing: a
+ *     message written mid-turn is read only after the turn ends) answers the
+ *     first, then reads the second prompt — its header names the replaced one —
+ *     and answers a short pointer; the issue goes back once (R34)
  *   → charness restarted: no request is opened a second time
  *   → every session launch carried the Jira flags (R11); no Telegram call (R6);
  *     every tmux call named the private server, nothing of the instance on the
@@ -287,7 +290,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     createIssue('PROJ-4', 'progress');
     createIssue('PROJ-5', 'answer');
     createIssue('PROJ-6', 'finish-together');
-    createIssue('PROJ-7', 'finish-together');
+    createIssue('PROJ-7', 'answer-after-queued');
     createIssue('OTHER-1', 'answer');
     await startCharness();
     const pid = getCharness().pid;
@@ -416,15 +419,17 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(countAssigneeChanges('PROJ-6'), 1, 'the colleague\'s answer changed no assignee');
   });
 
-  it('one person hands an issue over twice: the newer request replaces the first, one answer, handed back once (R34)', async () => {
+  it('one person hands an issue over twice while the agent is mid-turn: the first request is answered, the second gets a pointer, handed back once (R34)', async () => {
     const issue = fakeJira.getIssue('PROJ-7');
     fakeJira.assignIssue('PROJ-7', aiAccount, requester);
     await waitFor('the first request of PROJ-7 answered with a progress note', answerTimeoutMs, () => getAnswers('PROJ-7').length > 0);
     const [firstTurn] = getTurns('PROJ-7');
     assert.ok(firstTurn.requestId, 'the first request reached the agent');
+    assert.equal(getTurns('PROJ-7').length, 1, 'the agent still holds its first turn');
 
+    // The agent is mid-turn: the second hand-over's prompt is queued and read only after that turn ends.
     handIssueToAi('PROJ-7', requester);
-    await waitFor('the second request of PROJ-7 answered', answerTimeoutMs, () => getAnswers('PROJ-7').length >= 2);
+    await waitFor('both requests of PROJ-7 answered', answerTimeoutMs, () => getAnswers('PROJ-7').length >= 3);
     const turns = getTurns('PROJ-7');
     assert.deepEqual(turns.map((turn) => turn.isRequestPrompt), [true, true]);
     const secondTurn = turns[1];
@@ -434,17 +439,24 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(firstRequest?.supersededBy, secondTurn.requestId, 'the history names the request that replaced it');
     assert.equal(getClosedRequest(secondTurn.requestId ?? '')?.closeReason, 'final');
 
-    // One answer for the person: the agent answered the request in front of it, which covers the replaced one.
-    assert.deepEqual(getAnswers('PROJ-7').map((answer) => [answer.requestId, answer.kind]), [
+    // In this order: the first request's final answer is delivered to the already superseded request (content is
+    // never dropped) and its tool result points at the queued prompt; that prompt's answer is then a pointer.
+    const answers = getAnswers('PROJ-7');
+    assert.deepEqual(answers.map((answer) => [answer.requestId, answer.kind]), [
       [firstTurn.requestId, 'progress'],
+      [firstTurn.requestId, 'final'],
       [secondTurn.requestId, 'final'],
     ]);
+    assert.match(answers[1].outcome, new RegExp(`^Delivered\\. Request ${firstTurn.requestId} was already closed \\(superseded by request ${secondTurn.requestId} from the same requester; its prompt follows`));
+    assert.match(answers[2].outcome, /^Delivered\. Request req_[A-Za-z0-9_-]+ is now closed \(final\)/);
     assert.deepEqual(getCommentTexts(issue), [
-      'Fake progress answer for PROJ-7 (finish-together, turn 1).',
-      'Fake final answer for PROJ-7 (finish-together, turn 1).',
+      'Fake progress answer for PROJ-7 (answer-after-queued, turn 1).',
+      'Fake final answer for PROJ-7 (answer-after-queued, turn 1).',
+      `Answered above for PROJ-7 (covers ${firstTurn.requestId}).`,
     ]);
+    // The superseded request's answer hands nothing back; the second request's final answer does, once.
     assert.equal(issue.assignee?.accountId, requester.accountId);
-    assert.equal(countAssigneeChanges('PROJ-7'), 1);
+    assert.equal(countAssigneeChanges('PROJ-7'), 1, 'handed back by the second answer only');
   });
 
   it('a restart opens no request a second time', async () => {
