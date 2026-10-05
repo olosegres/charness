@@ -7417,30 +7417,33 @@ async function processVoiceJob(
       return;
     }
 
-    const adapter = getThreadAdapter(key);
-    if (!adapter.checkIsActive(key)) {
+    if (!getThreadAdapter(key).checkIsActive(key)) {
       const startMatch = checkIsStartAgentPhrase(transcript);
       if (startMatch.isMatch && startMatch.adapterName) {
         if (checkIsGeneral(key)) {
           await replyToThread(key, t('error.start_in_general'));
           return;
         }
-        if (!state.getBinding(key)) {
+        // Same choke point as the text trigger (L-D4): a sleeping conversation is
+        // woken, never replaced by a fresh start; `unbound` keeps the folder picker.
+        const result = await ensureAgentSession(key, {
+          preferredAdapterName: startMatch.adapterName,
+          args: startMatch.args,
+        });
+        if (!result.ok && result.reason === 'unbound') {
           const subdirs = listAvailableSubdirs(ENV.workRoot);
           const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
           await replyToThread(key, t('thread.no_binding'), extra);
           return;
         }
-        await switchThreadAdapter(key, startMatch.adapterName);
         // Empty for a self-greeting agent (Claude self-announces) — the typing
         // loader covers the gap; show a notice only when there's ready text.
-        const msg = await startAgentSession(key, startMatch.args);
-        if (msg) await replyToThread(key, msg);
+        if (result.message) await replyToThread(key, result.message);
         return;
       }
     }
     // A voice prompt wakes a sleeping conversation like a text one does (L-D4).
-    if (!adapter.checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
+    if (!getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
       if (checkIsGeneral(key)) {
         await replyToThread(key, t('thread.general_no_agent'));
         return;
@@ -7460,7 +7463,8 @@ async function processVoiceJob(
     // CANCELS it (a transcript is free-form prose, never a bare digit) and is
     // delivered as a fresh prompt — closing the gap where voice queued behind a
     // blocked question-turn and the user got no reply.
-    await deliverActivePrompt(key, adapter, transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
+    // Read AFTER the wake: the resume may have switched the thread's adapter.
+    await deliverActivePrompt(key, getThreadAdapter(key), transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
   } catch (err) {
     console.error('[Bot] Voice handling error:', err);
     await replyToThread(key, 'Error processing voice message');

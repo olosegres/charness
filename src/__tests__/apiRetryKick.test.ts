@@ -496,6 +496,13 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.ok(ensure.includes("case 'resume': {") && ensure.includes('await resumeSleepingSession(key, plan.sessionId)'), 'the ensure acts on the resume plan');
   });
 
+  it('a spoken "start claude" goes through the same ensure as the typed one (L-D4): a sleeping conversation is woken, never replaced', () => {
+    const voiceJob = getFunction('async function processVoiceJob(');
+    assert.ok(voiceJob.includes('preferredAdapterName: startMatch.adapterName,'), 'the matched adapter is the ensure\'s preferred pick');
+    assert.ok(!voiceJob.includes('startAgentSession(key, startMatch.args)'), 'no direct fresh start over a sleeping session');
+    assert.ok(voiceJob.includes('await deliverActivePrompt(key, getThreadAdapter(key), transcript'), 'the adapter is read after the wake');
+  });
+
   it('what it hands over is the nudge, or the open request\'s prompt the agent never took in — only for a limit wait (R21)', () => {
     assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompt: retryKind === 'usageLimit'\n\s*\? joinPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
     assert.ok(kickPorts.includes('await requestWakeUpEngine?.trackContinuationTurn(key, options);'));
