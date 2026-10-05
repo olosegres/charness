@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The GLOBAL hidden-provider list behind the `/model` picker's
  * 🙈 / 👁 buttons. It is the only lever that works for a provider OpenCode

@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description Unit tests for {@link ../utils/reminderScheduleText} — THE shared
  * localized rendering of a reminder's schedule and next run.

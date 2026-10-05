@@ -5,7 +5,7 @@
  * test exercises the real runHot wiring without touching Telegram, OpenCode, or
  * the running development service.
  *
- * Test case: N/A - TelegramCode has no Jira tracker.
+ * Test case: N/A - Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

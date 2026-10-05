@@ -82,7 +82,7 @@ export const esDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gestionar vínculo',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const esDict: Record<string, string> = {
     'no se pueden leer los derechos del bot — getChatMember falló',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Lista de comprobación:\n' +
     '1️⃣ Hazme admin del grupo con derechos:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const esDict: Record<string, string> = {
   'pair.not_paired': 'grupo aún no emparejado (modo pairing)',
   'pair.dm': "ℹ️ /pair no es necesario en modo DM — el bot sirve tu chat privado.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

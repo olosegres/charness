@@ -86,7 +86,7 @@ export const ruDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
     '/bind — управление binding',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -112,7 +112,7 @@ export const ruDict: Record<string, string> = {
     'не могу прочитать права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Готовность к работе:\n' +
     '1️⃣ Сделай меня админом группы с правами:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -154,7 +154,7 @@ export const ruDict: Record<string, string> = {
   'pair.not_paired': 'группа ещё не привязана (режим pairing)',
   'pair.dm': 'ℹ️ /pair не нужен в режиме DM — бот работает в твоём личном чате.',
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

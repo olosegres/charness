@@ -10,7 +10,7 @@
  * a file `deliveryUnknown` terminates the batch without inviting a retry.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
 import { test } from 'node:test';

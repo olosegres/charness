@@ -82,7 +82,7 @@ export const frDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
     '/bind — gérer la liaison',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const frDict: Record<string, string> = {
     'impossible de lire les droits du bot — getChatMember échoué',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Checklist de mise en service :\n' +
     '1️⃣ Faites de moi un admin de groupe avec les droits :\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const frDict: Record<string, string> = {
   'pair.not_paired': 'groupe non encore apparié (mode pairing)',
   'pair.dm': "ℹ️ /pair n'est pas nécessaire en mode DM — le bot sert votre chat privé.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node : {node}\n' +
     'tmux : {tmux}\n' +
     'claude : {claude}\n' +

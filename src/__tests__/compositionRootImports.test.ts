@@ -7,7 +7,7 @@
  * composition root, the CLI's startup, is pinned here and every other production module is policed.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';

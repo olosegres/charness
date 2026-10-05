@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The schedule re-base that runs when the operator changes the
  * instance timezone (`scheduler/timezoneRecompute.ts`).

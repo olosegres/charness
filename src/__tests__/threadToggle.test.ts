@@ -11,7 +11,7 @@
  * General «Disable» is persisted as an explicit `false`, and treating that as
  * "never set" would silently re-enable the setting on the next boot.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

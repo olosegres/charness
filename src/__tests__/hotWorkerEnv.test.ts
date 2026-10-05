@@ -4,11 +4,11 @@
  *
  * The load-bearing concern: in hot mode the worker inherits cwd = projectRoot
  * (nodemon's cwd), so without this injection it would default WORK_ROOT to the
- * TelegramCode checkout and `/bind` would list the wrong folders. These tests
+ * Charness checkout and `/bind` would list the wrong folders. These tests
  * pin that the operator's launch dir is propagated, while an explicit
  * WORK_ROOT override still wins and unrelated env is untouched.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

@@ -19,7 +19,7 @@
  * session, the topic, the request ledger) is recorded fakes.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';

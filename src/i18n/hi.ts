@@ -82,7 +82,7 @@ export const hiDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
     '/bind — बाइंडिंग प्रबंधित करें',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const hiDict: Record<string, string> = {
     'Bot के अधिकार नहीं पढ़ सकते — getChatMember विफल',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'तैयारी चेकलिस्ट:\n' +
     '1️⃣ मुझे ग्रुप एडमिन बनाएँ अधिकारों के साथ:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const hiDict: Record<string, string> = {
   'pair.not_paired': 'ग्रुप अभी तक जोड़ा नहीं गया (पेयरिंग मोड)',
   'pair.dm': "ℹ️ DM मोड में /pair की आवश्यकता नहीं — Bot आपकी निजी चैट सेवा देता है।",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

@@ -19,7 +19,7 @@
  * Private members are reached via runtime bracket access (tests are
  * type-stripped by tsx), same pattern as claudeJsonStreamWatermarkAdvance.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

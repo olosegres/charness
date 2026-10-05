@@ -11361,7 +11361,7 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
 export async function startBot(): Promise<void> {
   console.log('');
   console.log('=================================');
-  console.log('  TelegramCode Bot (multi-thread) starting...');
+  console.log('  Charness Bot (multi-thread) starting...');
   console.log('=================================');
   console.log('Access:           forum-group admins/creator (live, cached)');
   console.log(`Work root:        ${ENV.workRoot}`);

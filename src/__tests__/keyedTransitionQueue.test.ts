@@ -5,7 +5,7 @@
  * the idle stop waits for it; a transition that throws never blocks the next;
  * different keys do not wait for each other.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

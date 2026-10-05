@@ -16,7 +16,7 @@
  *   - Global config dir resolution: `~/.config/telegramcode` preferred, the
  *     legacy `~/.config/telegram-code` read as a fallback (first existing wins)
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test, beforeEach, afterEach } from 'node:test';

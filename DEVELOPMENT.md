@@ -1,6 +1,6 @@
 # Development
 
-Architecture and local-development notes for TelegramCode. User-facing setup
+Architecture and local-development notes for Charness. User-facing setup
 lives in the [README](README.md); [`CLAUDE.md`](CLAUDE.md) is the short
 project map for agents, and each module's behavior is documented next to the
 code (`src/<module>/README.md`).

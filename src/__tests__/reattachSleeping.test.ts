@@ -5,7 +5,7 @@
  * downtime recap read from the transcript — and an adopted process is checked
  * against the persisted tool digest. The process-level proof is J7's restart.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

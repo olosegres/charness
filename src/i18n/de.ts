@@ -82,7 +82,7 @@ export const deDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
     '/bind — Verknüpfung verwalten',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const deDict: Record<string, string> = {
     'Bot-Rechte nicht lesbar — getChatMember fehlgeschlagen',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Checkliste für den Einsatz:\n' +
     '1️⃣ Mach mich zum Gruppen-Admin mit Rechten:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const deDict: Record<string, string> = {
   'pair.not_paired': 'Gruppe noch nicht verknüpft (Pairing-Modus)',
   'pair.dm': "ℹ️ /pair ist im DM-Modus nicht nötig — der Bot bedient deinen privaten Chat.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

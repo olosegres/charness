@@ -15,7 +15,7 @@
  * pending text / active send) vetoes it. So it truncates a leak, never a
  * legitimately long turn (a long silent Bash/Task tool keeps the adapter busy).
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

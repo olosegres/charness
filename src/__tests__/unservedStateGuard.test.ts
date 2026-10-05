@@ -4,7 +4,7 @@
  * from a real state store, counted per platform and kind, never naming a key.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

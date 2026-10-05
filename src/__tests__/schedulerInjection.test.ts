@@ -15,7 +15,7 @@
  * just "a string is present".
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

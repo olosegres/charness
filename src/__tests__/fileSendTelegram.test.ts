@@ -4,7 +4,7 @@
  * media-group homogeneity, and extracting sent message ids for tracking.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';

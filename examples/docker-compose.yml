@@ -1,4 +1,4 @@
-# Two-instance docker-compose for TelegramCode 2.0 (forum supergroup mode).
+# Two-instance docker-compose for Charness 2.0 (forum supergroup mode).
 #
 # Pet vs. work: two completely independent bots running on the same host,
 # isolated by:

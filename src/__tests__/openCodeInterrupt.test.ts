@@ -521,7 +521,7 @@ test('a stale retry after the old idle cannot suppress wedge recovery for the re
  * Time is advanced with `node:test` mock timers, the same way the SSE stall
  * watchdog and the output-debounce tests drive their timers.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 describe('the post-provider-retry replacement start is bounded', () => {
   beforeEach(() => {

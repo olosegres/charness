@@ -8,7 +8,7 @@
  * Load-bearing: the compare is NUMERIC per component (a string compare would
  * rank `2.1.300` below `2.1.287`), and `null` is never "supported".
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

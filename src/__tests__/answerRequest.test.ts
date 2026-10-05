@@ -5,7 +5,7 @@
  * out-of-scope refusal, failed delivery, and the wait for the ledger load.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

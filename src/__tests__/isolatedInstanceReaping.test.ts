@@ -7,7 +7,7 @@
  * dead earlier instance of the same prefix (and only such: a live one is kept).
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The decision half of the `/model` picker and `/disconnect`
  * wiring (`commands/modelProviders.ts` and the `/` menu) — the parts that are

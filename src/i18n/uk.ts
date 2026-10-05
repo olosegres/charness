@@ -88,7 +88,7 @@ export const ukDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
     '/bind — керування прив\'язкою',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -114,7 +114,7 @@ export const ukDict: Record<string, string> = {
     'не можу прочитати права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Чеклист готовності до роботи:\n' +
     '1️⃣ Зроби мене адміністратором групи з правами:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -156,7 +156,7 @@ export const ukDict: Record<string, string> = {
   'pair.not_paired': 'групу ще не прив\'язано (режим pairing)',
   'pair.dm': 'ℹ️ /pair не потрібен у режимі DM — бот обслуговує твій приватний чат.',
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

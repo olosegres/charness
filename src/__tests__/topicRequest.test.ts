@@ -10,7 +10,7 @@
  * answered, or forwards `/compact` as work the agent owes an answer to.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

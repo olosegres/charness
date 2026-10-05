@@ -9,7 +9,7 @@
  * backend family is persisted (an id of another family is never resumed on the
  * wrong backend), and resume-only must never yield `start`.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

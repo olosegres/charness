@@ -3,8 +3,9 @@
   "version": "2.0.3",
   "license": "MIT",
   "author": "Sergei Solo",
-  "description": "Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
+  "description": "Charness (formerly TelegramCode): Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
   "keywords": [
+    "charness",
     "telegram-bot",
     "telegram",
     "opencode",

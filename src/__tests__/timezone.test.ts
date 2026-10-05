@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The instance timezone core: validation, canonicalization, the
  * picker's zone catalog, wall-clock formatting, and the process apply.

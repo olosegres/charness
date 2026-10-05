@@ -4,7 +4,7 @@
  * missing one → stale, stopped now when idle, else once it stops working (never
  * while it works, L-D2).
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';

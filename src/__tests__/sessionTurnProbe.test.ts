@@ -4,7 +4,7 @@
  * end" input it reads off the bot's state and the adapter.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

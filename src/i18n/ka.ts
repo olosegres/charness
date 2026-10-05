@@ -82,7 +82,7 @@ export const kaDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
     '/bind — კავშირის მართვა',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const kaDict: Record<string, string> = {
     'Bot-ის უფლებების წაკითხვა ვერ ხერხდება — getChatMember ვერ შედგა',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'მზადყოფის ჩეკლისტი:\n' +
     '1️⃣ გამახლეთ ჯგუფის ადმინად უფლებებით:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const kaDict: Record<string, string> = {
   'pair.not_paired': 'ჯგუფი ჯერ არ არის დაკავშირებული (დაკავშირების რეჟიმი)',
   'pair.dm': "ℹ️ DM რეჟიმში /pair არ არის საჭირო — Bot ემსახურება თქვენს პირად ჩატს.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

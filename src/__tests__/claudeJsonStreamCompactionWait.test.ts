@@ -29,7 +29,7 @@
  * are type-stripped by tsx), same pattern as `claudeJsonStreamMcpHeal`. Stdin is
  * a plain file rather than a FIFO, so no `claude` process is involved.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it, afterEach } from 'node:test';

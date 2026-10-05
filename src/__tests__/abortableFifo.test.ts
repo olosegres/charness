@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { AbortableFifo } from '../utils/abortableFifo';
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 test('AbortableFifo resolves live waiters in arrival order and reports its size', async () => {
   const fifo = new AbortableFifo();

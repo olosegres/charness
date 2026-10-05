@@ -7,7 +7,7 @@
  * 2.1.287: echoed ~5 s after it was written, then merged into that turn).
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

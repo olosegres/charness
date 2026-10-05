@@ -10,7 +10,7 @@
  *     off closes the topic's open request.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

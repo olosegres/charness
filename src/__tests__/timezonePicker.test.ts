@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The two-level `/timezone` picker: the region keyboard, a
  * region's paginated zone pages, the `✓` placement, and the INDEX-based

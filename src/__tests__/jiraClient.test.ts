@@ -6,7 +6,7 @@
  * comment POST never: it would post the answer twice), 401/403 never repeat.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

@@ -5,7 +5,7 @@
  * Every case runs a FRESH child with the setup preloaded and a private `TMPDIR`: this test's own
  * process already has the setup loaded, and its dir cannot be observed from the inside.
  *
- * Test case: N/A - TelegramCode has no Jira tracker.
+ * Test case: N/A - Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

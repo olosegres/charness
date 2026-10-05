@@ -15,7 +15,7 @@
  * `afterEach`.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { test, beforeEach, afterEach } from 'node:test';
 import * as assert from 'node:assert/strict';

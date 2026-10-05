@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description The generic pagination core shared by the `/bind` folder picker
  * and the `/model` model picker. `paginateBindList` is now a thin wrapper over

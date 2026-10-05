@@ -82,7 +82,7 @@ export const zhDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
     '/bind — 管理绑定',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const zhDict: Record<string, string> = {
     '无法读取 bot 权限 — getChatMember 失败',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     '就绪清单：\n' +
     '1️⃣ 将我设为群组管理员，权限包括：\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const zhDict: Record<string, string> = {
   'pair.not_paired': '群组尚未配对（配对模式）',
   'pair.dm': "ℹ️ DM 模式下不需要 /pair — bot 服务于你的私聊。",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

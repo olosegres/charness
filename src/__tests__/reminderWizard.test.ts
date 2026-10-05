@@ -1,5 +1,5 @@
 /**
- * Test case: N/A — TelegramCode has no Jira tracker
+ * Test case: N/A — Charness has no Jira tracker
  *
  * @description Unit tests for {@link ../utils/reminderWizard} — the pure core of
  * the `/reminders` button wizard: step transitions, the stale-tap guard, the

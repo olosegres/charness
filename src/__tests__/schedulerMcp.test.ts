@@ -22,7 +22,7 @@
  * MP4/media-group routing fails the round-trip.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
 import { beforeEach, afterEach, describe, it, mock } from 'node:test';

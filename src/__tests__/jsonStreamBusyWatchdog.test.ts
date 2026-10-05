@@ -13,7 +13,7 @@
  * question) is never truncated. Silence — not wall-clock since turn start — is
  * the trigger.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

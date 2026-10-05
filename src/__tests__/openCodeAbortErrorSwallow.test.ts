@@ -31,7 +31,7 @@
  * The adapter's private members are reached via runtime bracket access (tests
  * are type-stripped by tsx), same pattern as the other openCode adapter tests.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

@@ -2,7 +2,7 @@
  * @description Regression coverage for the IPv4-first startup fix shared by
  * the public CLI and internal hot worker entry.
  *
- * Test case: N/A - TelegramCode has no Jira tracker.
+ * Test case: N/A - Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

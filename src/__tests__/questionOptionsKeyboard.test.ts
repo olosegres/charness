@@ -18,7 +18,7 @@
  *   • one button per row, so buttons stay aligned with the numbered body lines;
  *   • the keyboard lands under `reply_markup`, without disturbing `parse_mode`.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';

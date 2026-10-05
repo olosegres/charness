@@ -82,7 +82,7 @@ export const jaDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
     '/bind — バインドを管理',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const jaDict: Record<string, string> = {
     'Bot の権限を読めません — getChatMember が失敗しました',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     '稼働準備チェックリスト:\n' +
     '1️⃣ 私をグループ管理者にしてください。権限:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const jaDict: Record<string, string> = {
   'pair.not_paired': 'グループはまだペアリングされていません（ペアリングモード）',
   'pair.dm': "ℹ️ DM モードでは /pair は不要です — Bot はあなたのプライベートチャットを提供します。",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

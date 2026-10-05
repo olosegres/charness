@@ -24,7 +24,7 @@
  * rather than `bot.ts`: importing the bot module runs its module-scope
  * `parseEnv()`, which exits the process when `TELEGRAM_BOT_TOKEN` is unset.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

@@ -3,7 +3,7 @@
  * workers. The one-shot host must exit before startup returns, leaving the
  * server alive but no longer parented by the replaceable worker process.
  *
- * Test case: N/A - TelegramCode has no Jira tracker.
+ * Test case: N/A - Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';

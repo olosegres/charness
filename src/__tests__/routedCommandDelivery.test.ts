@@ -19,7 +19,7 @@
  * `./reattachRecapPost.testSetup` is imported FIRST — the shared, side-effect-
  * only shim that sets `bot.ts`'s boot-time env before the module evaluates.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 import './reattachRecapPost.testSetup';
 import { test } from 'node:test';

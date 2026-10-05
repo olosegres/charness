@@ -1,4 +1,4 @@
-# TelegramCode — agent guide
+# Charness — agent guide
 
 > **Keep this file a short map. Module behaviour goes to the module's `README.md`; do not add per-change notes here.**
 
@@ -9,9 +9,10 @@
 > **Terminology:** when the user says "чат"/"chat" they mean a **topic** (forum thread), NOT the whole
 > supergroup. Read every such request as per-topic.
 
-> **Naming:** the product in prose is **TelegramCode**; the npm package and the CLI command are lowercase
-> **`telegramcode`** (legacy `telegramCode` bin alias kept; `DATA_DIR` default `~/.telegramCode` deliberately
-> unrenamed).
+> **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is
+> `olosegres/charness`). The npm package and the CLI command keep the old name, lowercase **`telegramcode`**
+> (legacy `telegramCode` bin alias kept), and so do the `~/.config/telegramcode` config dir, the `DATA_DIR`
+> default `~/.telegramCode` and the `TELEGRAMCODE_*` env vars.
 
 ## What this project is
 

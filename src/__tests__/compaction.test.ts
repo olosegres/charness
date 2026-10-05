@@ -11,7 +11,7 @@
  *     output paths call are harmless on such a topic.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

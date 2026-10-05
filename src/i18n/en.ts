@@ -86,7 +86,7 @@ export const enDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
     '/bind — manage binding',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -112,7 +112,7 @@ export const enDict: Record<string, string> = {
     'cannot read bot rights — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Ready-to-work checklist:\n' +
     '1️⃣ Make me a group admin with rights:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -154,7 +154,7 @@ export const enDict: Record<string, string> = {
   'pair.not_paired': 'group not paired yet (pairing mode)',
   'pair.dm': "ℹ️ /pair isn't needed in DM mode — the bot serves your private chat.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

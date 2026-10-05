@@ -3,7 +3,7 @@
  * a usage-limit reset on another day names its date.
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

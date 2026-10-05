@@ -82,7 +82,7 @@ export const uzDict: Record<string, string> = {
     '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
     '/bind — bog‘lanishni boshqarish',
 
-  'doctor.header': '🔍 *TelegramCode Doctor*',
+  'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
@@ -108,7 +108,7 @@ export const uzDict: Record<string, string> = {
     'Bot huquqlarini o‘qib bo‘lmadi — getChatMember muvaffaqiyatsiz',
 
   'onboarding.welcome':
-    '👋 *TelegramCode Bot 2.0*\n\n' +
+    '👋 *Charness 2.0*\n\n' +
     'Tayyorgarlik ro‘yxati:\n' +
     '1️⃣ Meni guruh admini qiling, huquqlar:\n' +
     '   • Manage Topics, Delete Messages, Pin Messages\n' +
@@ -150,7 +150,7 @@ export const uzDict: Record<string, string> = {
   'pair.not_paired': 'guruh hali bog‘lanmagan (pairing rejimi)',
   'pair.dm': "ℹ️ DM rejimida /pair kerak emas — Bot sizning shaxsiy chattingizga xizmat qiladi.",
   'version.report':
-    '*TelegramCode {bot}*\n' +
+    '*Charness {bot}*\n' +
     'Node: {node}\n' +
     'tmux: {tmux}\n' +
     'claude: {claude}\n' +

@@ -283,7 +283,7 @@ export async function prepareHotOpenCodeServer(
  * In hot mode the supervisor runs `nodemon` with cwd = projectRoot (it must,
  * to watch `dist/`), and the worker (`node dist/cli/botEntry.js`) inherits that
  * cwd. Left alone the worker would default `WORK_ROOT` to `process.cwd()` =
- * the project checkout, so `/bind` would list folders inside the TelegramCode
+ * the project checkout, so `/bind` would list folders inside the Charness
  * checkout instead of the operator's projects parent. We hand the worker the real
  * launch dir as `WORK_ROOT` so it binds against where the wrapper was started.
  *

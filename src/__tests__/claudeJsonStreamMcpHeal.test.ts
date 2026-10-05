@@ -24,7 +24,7 @@
  * is a plain file here instead of a FIFO, so the exact frames written can be
  * read back; no `claude` process is involved.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it, afterEach } from 'node:test';

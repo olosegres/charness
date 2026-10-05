@@ -1,10 +1,14 @@
+<h1 align="center">Charness</h1>
+
+<p align="center"><em>formerly TelegramCode</em></p>
+
 <h2 align="center">Telegram bot/group as a terminal for OpenCode, Claude Code — every thread like a terminal tab + scheduling, voice control</h2>
 
 <p align="center">
-  <img src="docs/images/hero-v2.png" alt="TelegramCode — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
+  <img src="docs/images/hero-v2.png" alt="Charness — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
 </p>
 
-TelegramCode turns Telegram into a terminal for running agentic CLIs. Open as
+Charness turns Telegram into a terminal for running agentic CLIs. Open as
 many tabs as you need — even two on the same project for parallel work — and
 drive the agents from your phone or tablet, voice messages included.
 
@@ -81,9 +85,11 @@ from your projects folder, bind a topic to an agent.
 npm install -g telegramcode      # needs Node ≥ 22.12
 ```
 
-This registers the `telegramcode` command. Prefer containers, or want two isolated instances on one
-host? Use [Run with Docker](#run-with-docker) instead — every other step is the
-same. To hack on the bot itself, see [Run from source](#run-from-source).
+This registers the `telegramcode` command (the npm package and the command
+keep the project's former name). Prefer containers, or want two isolated
+instances on one host? Use [Run with Docker](#run-with-docker) instead — every
+other step is the same. To hack on the bot itself, see
+[Run from source](#run-from-source).
 
 ### 2. Create the bot
 
@@ -736,7 +742,7 @@ project's `.mcp.json`; inspect what's active in a thread with `/mcp`.)
 
 Third-party OpenCode MCP servers, including a separate `telegram-mcp`, belong to
 the OpenCode configuration of the Linux user that runs the bot. They are not
-injected by TelegramCode; run `opencode mcp list` as that user to verify them.
+injected by Charness; run `opencode mcp list` as that user to verify them.
 
 ## Two instances on one host
 

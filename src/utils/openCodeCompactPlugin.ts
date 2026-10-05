@@ -57,7 +57,7 @@ export function getOpenCodeCompactPluginContext(): string {
 /** @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). */
 export function buildOpenCodeCompactPluginSource(context: string): string {
   return [
-    '// Installed by TelegramCode, which rewrites it when its content changes. Do not edit.',
+    '// Installed by Charness, which rewrites it when its content changes. Do not edit.',
     `const context = ${JSON.stringify(context)};`,
     'export default {',
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,

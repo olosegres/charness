@@ -74,7 +74,7 @@ describe('checkIsWedgedTurn', () => {
  * DID start restarts a healthy conversation, and not reporting restores the
  * permanent hang.
  *
- * Test case: N/A — TelegramCode has no Jira tracker.
+ * Test case: N/A — Charness has no Jira tracker.
  */
 describe('checkIsReplacementTurnMissing', () => {
   it('flags a replacement prompt whose turn never started (the permanent hang)', () => {
