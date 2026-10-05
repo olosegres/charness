@@ -612,6 +612,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     console.warn(`[ClaudeJson] busy-idle watchdog: ${keyToString(session.key)} idle ${busyIdleWatchdogMs}ms with nothing in flight — clearing stuck busy (missed terminal result?)`);
     session.isBusy = false;
     this.finishReasoning(session);
+    // The record must not keep saying "turn in flight": an adopt would restore the cleared flag.
+    this.jsonStreamTailWriter?.(session.key, buildTailRecord(session, session.lastPersistedTailOffset));
   }
 
   /**
@@ -790,7 +792,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       return false;
     }
     const size = getFileSize(paths.stdoutFile) ?? 0;
-    const { startOffset, backgroundTaskIds, isTurnInFlight } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
+    const { startOffset, backgroundTaskIds, isTurnInFlight, outstandingToolUseIds } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
     const session: StreamSession = {
@@ -806,7 +808,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
       isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputCount: 0,
-      lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
+      // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
+      // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
+      lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
       model: null, reportedModel: null, effort: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
@@ -1867,10 +1871,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 }
 
-/** The tail record persisted for a session at `offsetBytes` — the offset and the
- *  background-task list in force there travel together (see `JsonStreamTailOffset`). */
+/** The tail record persisted for a session at `offsetBytes` — the offset and the working
+ *  state in force there (task list, turn in flight, outstanding tools) travel together
+ *  (see `JsonStreamTailOffset`). */
 function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStreamTailOffset {
-  return { sessionId: session.sessionId, offsetBytes, backgroundTaskIds: [...session.backgroundTaskIds], isTurnInFlight: session.isBusy };
+  return {
+    sessionId: session.sessionId,
+    offsetBytes,
+    backgroundTaskIds: [...session.backgroundTaskIds],
+    isTurnInFlight: session.isBusy,
+    outstandingToolUseIds: [...session.outstandingToolUseIds],
+  };
 }
 
 /**

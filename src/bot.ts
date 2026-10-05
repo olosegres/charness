@@ -4273,7 +4273,6 @@ async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Prom
  */
 function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter): void {
   const kStr = keyToString(key);
-  void adapter.whenAdoptReplayed(key).then(() => tick());
   const tick = (): void => {
     if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
     if (adapter.checkIsWorking?.(key)) {
@@ -4289,6 +4288,7 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAd
       })
       .catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
   };
+  void adapter.whenAdoptReplayed(key).then(tick);
 }
 
 /** How often an adopted, stale-tool-list process that is still working is re-checked for idleness (L4). */

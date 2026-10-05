@@ -143,22 +143,26 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   it('a trusted record (same session) restores its offset AND its background-task list', () => {
     assert.deepEqual(
       resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, backgroundTaskIds: ['b1', 'a2'] }, 'sess-1', 500),
-      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false },
+      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [] },
     );
   });
 
   it('a record of another session (or none) seeds to EOF with no tasks — no backlog flood, no inherited list', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false });
-    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
+    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
   });
 
-  it('restores the turn-in-flight flag of a trusted record; a foreign record never implies a turn', () => {
-    assert.equal(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, isTurnInFlight: true }, 'sess-1', 500).isTurnInFlight, true);
-    assert.equal(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, isTurnInFlight: true }, 'sess-1', 500).isTurnInFlight, false);
+  it('restores the turn in flight and its outstanding tools from a trusted record; a foreign record never implies a turn', () => {
+    const trusted = resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, isTurnInFlight: true, outstandingToolUseIds: ['toolu_1'] }, 'sess-1', 500);
+    assert.equal(trusted.isTurnInFlight, true);
+    assert.deepEqual(trusted.outstandingToolUseIds, ['toolu_1'], 'the tool in flight rides along: it vetoes the busy-idle watchdog');
+    const foreign = resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, isTurnInFlight: true, outstandingToolUseIds: ['toolu_1'] }, 'sess-1', 500);
+    assert.equal(foreign.isTurnInFlight, false);
+    assert.deepEqual(foreign.outstandingToolUseIds, []);
   });
 
   it('clamps the offset to the file size; a record written before the list was tracked reads as no tasks', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
   });
 });
 

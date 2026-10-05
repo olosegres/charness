@@ -86,6 +86,14 @@ export interface JsonStreamTailOffset {
    * from) still reads as working (L-D2) and is never stopped mid-turn.
    */
   isTurnInFlight?: boolean;
+  /**
+   * The tool calls in flight as of `offsetBytes` (`tool_use` ids whose
+   * `tool_result` had not returned). Restored on adopt with the flag above:
+   * an outstanding tool is what vetoes the busy-idle watchdog, so without it a
+   * restored turn in a long, silent tool call would be declared idle after the
+   * watchdog's silence window and stopped mid-call after all.
+   */
+  outstandingToolUseIds?: string[];
 }
 
 /**

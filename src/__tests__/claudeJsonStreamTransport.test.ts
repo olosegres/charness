@@ -33,6 +33,7 @@ import { busyIdleWatchdogMs } from '../utils/jsonStreamBusyWatchdog';
 import {
   createStdoutTailState,
   getJsonStreamSessionPaths,
+  resolveAdoptedTail,
 } from '../utils/jsonStreamHost';
 import { type JsonStreamTailOffset } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
@@ -171,7 +172,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.equal(adapter['sessions'].size, 0, 'the session is deregistered');
     assert.equal(fs.existsSync(dir), false, 'the host dir is removed');
     // The tail offset persisted at the line boundary (== the whole result line).
-    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false }]);
+    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] }]);
   });
 
   it('an explicit stop converges through the same finalize but emits stopped', async () => {
@@ -226,7 +227,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.deepEqual(
       tailWrites,
       // The delta marked a turn in flight: the record says so, for an adopt in a later silent stretch.
-      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [], isTurnInFlight: true }],
+      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [] }],
       'the flush releases the boundary at the consumed line',
     );
   });
@@ -244,7 +245,7 @@ describe('json-stream external transport — exit detection', () => {
     adapter['drainStdoutTail'](session);
     assert.deepEqual([...session.backgroundTaskIds], ['b1', 'a2']);
     assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false },
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [] },
       'the list rides along with the offset so an adopt restores it');
 
     // The list is re-sent WHOLE: a frame naming one task replaces, not merges.
@@ -321,12 +322,12 @@ describe('json-stream external transport — exit detection', () => {
     } finally {
       console.error = originalError;
     }
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: 0, backgroundTaskIds: [], isTurnInFlight: true },
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: 0, backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [] },
       'written at once, at the current offset: a restart in a silent tool call finds no frame to rebuild it from');
 
     fs.writeFileSync(session.paths.stdoutFile, resultLine);
     adapter['drainStdoutTail'](session);
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false });
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
   });
 
   it('whenAdoptReplayed: settles once the tail consumed the adopt-time EOF, at once when nothing was behind, and when the session ends', async () => {
@@ -422,6 +423,45 @@ describe('json-stream idle watchdog — the stuck-busy / hung-typing backstop', 
     session.lastStdoutActivityAt = Date.now() - busyIdleWatchdogMs - 1000;
     adapter['maybeClearBusyOnIdle'](session);
     assert.equal(session.isBusy, false, 'with no tool outstanding the stuck busy clears');
+  });
+
+  it('the tail record carries the outstanding tools, so an adopt restores the watchdog veto (L4 rework)', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wd-record-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+    fs.writeFileSync(session.paths.stdoutFile, toolUseLine);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(toolUseLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: ['toolu_1'] },
+      'the long silent Bash is in the record: nothing after this offset will replay it');
+
+    // An adopt seeded from that record (busy, one tool in flight, no frame since): silent past the
+    // threshold, the watchdog must not declare the turn over — the stale-tool stop would kill it mid-call.
+    const adopted = createSessionInDir(adapter, fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wd-adopted-')));
+    const restored = resolveAdoptedTail(tailWrites.at(-1) ?? null, adopted.sessionId, Buffer.byteLength(toolUseLine));
+    adopted.isBusy = restored.isTurnInFlight;
+    adopted.outstandingToolUseIds = new Set(restored.outstandingToolUseIds);
+    adopted.lastStdoutActivityAt = Date.now() - busyIdleWatchdogMs - 1000;
+    adapter['maybeClearBusyOnIdle'](adopted);
+    assert.equal(adopted.isBusy, true, 'the restored outstanding tool vetoes the clear');
+    fs.rmSync(adopted.paths.dir, { recursive: true, force: true });
+
+    // The tool returns: the record drops it, and a later watchdog clear is persisted too (an adopt
+    // must not restore a turn the watchdog already declared over).
+    fs.appendFileSync(session.paths.stdoutFile, toolResultLine);
+    adapter['drainStdoutTail'](session);
+    assert.deepEqual(tailWrites.at(-1)?.outstandingToolUseIds, []);
+    assert.equal(tailWrites.at(-1)?.isTurnInFlight, true);
+    session.lastStdoutActivityAt = Date.now() - busyIdleWatchdogMs - 1000;
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      adapter['maybeClearBusyOnIdle'](session);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(tailWrites.at(-1)?.isTurnInFlight, false, 'the watchdog clear reaches the record');
   });
 
   it('an explicit interrupt clears isBusy immediately (an aborted turn may emit no result)', () => {
