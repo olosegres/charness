@@ -37,6 +37,14 @@ describe('reattach: json-stream (L4)', () => {
     assert.ok(reattachJsonStream.includes("if (agent.name === claudePerTurnAdapterName) rearmThreadIdleTimer(key);"), 'a sleeping per-turn session with a compaction due gets its timer at boot (L-D7)');
   });
 
+  it('the adopted-process poll gives up when the CLI version is unknown or too old (L-D10): no 5 s "stopping" loop', () => {
+    const stopAdopted = botSource.slice(botSource.indexOf('function stopAdoptedSessionWhenIdle('), botSource.indexOf('const adoptedToolListRefreshPollMs'));
+    const gateAt = stopAdopted.indexOf('if (!adapter.checkIsAutoStopSupported(key)) {');
+    const stopLogAt = stopAdopted.indexOf('stopping the adopted process (${reason})');
+    assert.ok(gateAt > 0 && stopLogAt > gateAt, 'the gate precedes the "stopping" line and the suspend it announces');
+    assert.ok(stopAdopted.includes('the adopted process is kept (${reason})'));
+  });
+
   it('every json-stream (re)start persists the digest of the tools it connected to', () => {
     const persist = botSource.slice(botSource.indexOf('async function persistSessionStart('), botSource.indexOf('\n}\n', botSource.indexOf('async function persistSessionStart(')));
     assert.ok(persist.includes('await persistAdapterSessionIds(key, adapter, state);'));

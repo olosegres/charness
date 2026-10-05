@@ -575,7 +575,12 @@ export function createCompaction(ports: CompactionPorts) {
       console.log(`[compact-on-idle] ${kStr} process kept: ${decision.suspendSkipReasons.join(', ')}`);
       return;
     }
-    if (!adapter.checkIsActive(key) || checkIsThreadWorking(key, adapter)) {
+    // A per-turn session is stopped by its own `turnEnded` as the compaction turn ends (L5): nothing left to stop.
+    if (!adapter.checkIsActive(key)) {
+      console.log(`[compact-on-idle] ${kStr} process already stopped during the idle fire`);
+      return;
+    }
+    if (checkIsThreadWorking(key, adapter)) {
       console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire`);
       return;
     }

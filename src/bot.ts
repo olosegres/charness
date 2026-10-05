@@ -4281,6 +4281,13 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAd
       timer.unref?.();
       return;
     }
+    // L-D10: a record written before the version was persisted (or an old CLI) cannot be auto-stopped —
+    // the suspend would decline on every poll. Stop looking: a later turn's `init` reports the version,
+    // and the lifecycle's own stop (the idle timer, the per-turn `turnEnded`) takes over from there.
+    if (!adapter.checkIsAutoStopSupported(key)) {
+      console.log(`[reattach] ${kStr}: the adopted process is kept (${reason}): its Claude Code version is unknown or too old for the auto-stop; its own lifecycle stop takes over once a turn reports it`);
+      return;
+    }
     console.log(`[reattach] ${kStr}: stopping the adopted process (${reason}); the next trigger resumes it`);
     void suspendThreadSession(key)
       .then(() => {
