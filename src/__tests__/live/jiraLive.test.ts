@@ -26,8 +26,12 @@
  *   → boot: Jira-only, nothing but run-isolated.sh's variables; the poll's JQL
  *     names only the allowlisted project
  *   → the requester assigns five issues to the AI; the AI assigns one to itself
- *   → R34: the requester hands one more issue over twice while its agent still
- *     works: the first request superseded, one answer whose header names it
+ *   → R34: the requester hands an issue over twice while its agent still works
+ *     (Claude Code reads the second prompt only after the running turn ends):
+ *     the first request superseded and answered in full, the second — whose
+ *     header names the first — answered with only what the second hand-over
+ *     added (a new ask in a comment), or with a short pointer when it added
+ *     nothing; the issue handed back once. Two issues, one per variant
  *   → the agents hold no instance variable (R32)
  *   → one agent killed mid-turn
  *   → final: a comment by the AI, the issue back with the requester, closed `final`
@@ -48,6 +52,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -114,6 +119,31 @@ const progressWaitSeconds = 45;
 const killedWaitSeconds = 120;
 /** Long enough for a poll to pick the second hand-over up while the agent still waits on the first request. */
 const repeatWaitSeconds = 90;
+/** A token no answer could carry by chance: the R34 asks are told apart by these, one per ask. */
+function createAskToken(prefix: string): string {
+  return `${prefix}-${randomBytes(3).toString('hex').toUpperCase()}`;
+}
+/** R34: the deliverable of the first hand-over, per variant, and the extra ask the second hand-over adds. */
+const repeatTokens = {
+  repeatAdd: createAskToken('FIRST'),
+  repeatSame: createAskToken('FIRST'),
+  extraAsk: createAskToken('EXTRA'),
+} as const;
+/**
+ * R34: an answer that only points at the one above stays short; the real "not a redo" proof is that the
+ * second turn ran none of the task's steps again. Sonnet's pointer recaps the steps in a paragraph (432
+ * chars seen live), so the cap leaves room for that and still excludes a repeated deliverable of any size.
+ */
+const pointerAnswerMaxChars = 800;
+
+function getRepeatScenarioText(token: string): string {
+  return [
+    'Do these steps in order:',
+    '1. Send a progress answer whose text is exactly: TAKEN',
+    `2. Run this shell command in the foreground and wait for it: \`${getWaitCommand(repeatWaitSeconds)}\``,
+    `3. Send a final answer whose text is exactly: ${token}`,
+  ].join('\n');
+}
 
 const scenarioTexts = {
   final: 'Reply with a final answer whose text is exactly: PONG',
@@ -128,19 +158,15 @@ const scenarioTexts = {
     '3. Send a final answer whose text is exactly: FINISHED',
   ].join('\n'),
   killed: `Run this shell command in the foreground and wait for it to finish (it takes two minutes): \`${getWaitCommand(killedWaitSeconds)}\`. Then send a final answer whose text is exactly: SLEPT`,
-  repeat: [
-    'Do these steps in order:',
-    '1. Send a progress answer whose text is exactly: TAKEN',
-    `2. Run this shell command in the foreground and wait for it: \`${getWaitCommand(repeatWaitSeconds)}\``,
-    '3. Send a final answer whose text is exactly: AGAIN',
-  ].join('\n'),
+  repeatAdd: getRepeatScenarioText(repeatTokens.repeatAdd),
+  repeatSame: getRepeatScenarioText(repeatTokens.repeatSame),
   long: `Send a final answer that is a Markdown bullet list of the numbers 1 to ${longAnswerItemCount} in order, one list item per number, written as \`- item 1\`, \`- item 2\`, … \`- item ${longAnswerItemCount}\`, and nothing else.`,
   idle: 'Test data of a live run; there is nothing to do here.',
 } as const;
 type Scenario = keyof typeof scenarioTexts;
 const answeredScenarios: readonly Scenario[] = ['final', 'question', 'progress', 'killed', 'long'];
-/** Every scenario whose issue gets an agent session: the batch above, plus the one handed over twice (R34). */
-const sessionScenarios: readonly Scenario[] = [...answeredScenarios, 'repeat'];
+/** Every scenario whose issue gets an agent session: the batch above, plus the two handed over twice (R34). */
+const sessionScenarios: readonly Scenario[] = [...answeredScenarios, 'repeatAdd', 'repeatSame'];
 const questionReply = 'Blue';
 
 let instanceEnv: Record<string, string> = {};
@@ -313,11 +339,17 @@ function getUserTurnTexts(issueKey: string): string[] {
   });
 }
 
-/** The shell commands an issue session's agent has started so far. */
-function getStartedCommands(issueKey: string): string[] {
+/** The shell commands an issue session's agent has started so far — after the prompt of `afterRequestId` only, when given. */
+function getStartedCommands(issueKey: string, afterRequestId?: string): string[] {
+  let isAfterPrompt = afterRequestId === undefined;
   return readStreamLines(issueKey).flatMap((line) => {
     const content = line.message?.content;
-    return Array.isArray(content) ? content.flatMap((block) => (block.type === 'tool_use' && block.input?.command ? [block.input.command] : [])) : [];
+    if (typeof content === 'string') {
+      if (afterRequestId !== undefined && content.includes(`[Request ${afterRequestId}`)) isAfterPrompt = true;
+      return [];
+    }
+    if (!isAfterPrompt || !Array.isArray(content)) return [];
+    return content.flatMap((block) => (block.type === 'tool_use' && block.input?.command ? [block.input.command] : []));
   });
 }
 
@@ -550,27 +582,59 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`progress ${issueKey}: ${getAiComments(state).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
   });
 
-  it('R34: the requester hands one issue over twice; the first request is superseded, one answer, whose header names it, hands the issue back', async () => {
-    const issueKey = getIssueKey('repeat');
+  /**
+   * R34, in Claude Code's timing: the requester hands the issue over again while the agent waits in its
+   * shell command, so the second prompt is queued and read only after the first request was answered in
+   * full. `extraAsk` is the comment the requester adds before the second hand-over (`null`: nothing new).
+   * Returns the AI's comments once the second answer landed and the issue is back with the requester.
+   */
+  async function runRepeatVariant(scenario: 'repeatAdd' | 'repeatSame', extraAsk: string | null): Promise<LiveComment[]> {
+    const issueKey = getIssueKey(scenario);
+    const firstToken = repeatTokens[scenario];
     await getRequester().assignIssue(issueKey, config.accountId);
-    await waitFor('the first request\'s progress note', answerTimeoutMs, async () =>
+    await waitFor(`${scenario}: the first request's progress note`, answerTimeoutMs, async () =>
       getAiComments(await getRequester().getIssueState(issueKey)).some((comment) => /TAKEN/.test(comment.text)));
     // The agent now waits in its shell command: the requester takes the issue back and hands it over again, as one does in Jira.
+    if (extraAsk !== null) await getRequester().addComment(issueKey, extraAsk);
     await getRequester().assignIssue(issueKey, getRequester().accountId);
     await getRequester().assignIssue(issueKey, config.accountId);
-    await waitFor('the first request superseded in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).some((record) => record.closeReason === 'superseded'));
-    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => /AGAIN/.test(comment.text)));
-    await waitFor('the second request in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).length >= 2);
+    await waitFor(`${scenario}: the first request superseded in the closed history`, answerTimeoutMs, () =>
+      getClosedRequests(issueKey).some((record) => record.closeReason === 'superseded'));
+    const commentsAtHandOver = getAiComments(await getRequester().getIssueState(issueKey));
+    assert.ok(!commentsAtHandOver.some((comment) => comment.text.includes(firstToken)), `${scenario}: the second hand-over landed while the agent still worked on the first`);
+
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 3);
+    await waitFor(`${scenario}: the second request in the closed history`, answerTimeoutMs, () => getClosedRequests(issueKey).length >= 2);
     const [superseded, final] = getClosedRequests(issueKey);
-    assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['superseded', 'final'], 'the first replaced, the second answered');
-    assert.equal(superseded.supersededBy, final.id, 'the history names the request that replaced it');
+    assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['superseded', 'final'], `${scenario}: the first replaced, the second answered`);
+    assert.equal(superseded.supersededBy, final.id, `${scenario}: the history names the request that replaced it`);
     const secondPrompt = getUserTurnTexts(issueKey).find((text) => text.includes(`[Request ${final.id}`));
-    assert.ok(secondPrompt, 'the second request reached the agent');
-    assert.ok(secondPrompt.includes(buildSupersededRequestsLine([superseded.id])), 'its header names the replaced request');
+    assert.ok(secondPrompt, `${scenario}: the second request reached the agent`);
+    assert.ok(secondPrompt.includes(buildSupersededRequestsLine([superseded.id])), `${scenario}: its header names the replaced request`);
     const comments = getAiComments(state);
-    // Reported before the count is judged: a second final answer is the finding this step exists to catch.
-    report(`R34 ${issueKey}: ${superseded.id} superseded by ${final.id}; comments ${comments.map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
-    assert.equal(comments.filter((comment) => /AGAIN/.test(comment.text)).length, 1, 'one final answer for both requests');
+    report(`R34 ${scenario} ${issueKey}: ${superseded.id} superseded by ${final.id}; comments ${comments.map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
+    const [progressComment, firstAnswer, secondAnswer, ...rest] = comments;
+    assert.match(progressComment.text, /TAKEN/);
+    assert.ok(firstAnswer.text.includes(firstToken), `${scenario}: the first request was answered in full (${firstToken})`);
+    assert.ok(secondAnswer, `${scenario}: the second request got its own answer`);
+    assert.deepEqual(rest, [], `${scenario}: no further answer`);
+    // Not a redo: the second turn neither took the task up again (a second TAKEN) nor ran its 90 s wait.
+    // Exactly the progress note's text: the pointer answer may quote it ("I already sent … TAKEN").
+    assert.equal(comments.filter((comment) => comment.text.trim() === 'TAKEN').length, 1, `${scenario}: the task was taken up once`);
+    assert.deepEqual(getStartedCommands(issueKey, final.id).filter((command) => command.includes(waitCommandMarker)), [], `${scenario}: the second turn did not run the task's wait again`);
+    return comments;
+  }
+
+  it('R34, a new ask: the second hand-over adds a comment; the first request is answered in full, the second answer covers only the new ask', async () => {
+    const extraAsk = `Additionally, reply with a final answer whose text is exactly: ${repeatTokens.extraAsk}`;
+    const [, , secondAnswer] = await runRepeatVariant('repeatAdd', extraAsk);
+    assert.ok(secondAnswer.text.includes(repeatTokens.extraAsk), 'the second answer carries the new ask\'s token');
+    assert.ok(!secondAnswer.text.includes(repeatTokens.repeatAdd), 'the second answer does not repeat the first deliverable');
+  });
+
+  it('R34, nothing new: the second hand-over adds nothing; the first request is answered in full, the second answer is a short pointer', async () => {
+    const [, , secondAnswer] = await runRepeatVariant('repeatSame', null);
+    assert.ok(secondAnswer.text.length <= pointerAnswerMaxChars, `the second answer is a pointer, not a redo (${secondAnswer.text.length} chars)`);
   });
 
   it('long answer: its comments arrive in order, each within both size counts; the count Jira enforces is probed (R19)', async () => {
