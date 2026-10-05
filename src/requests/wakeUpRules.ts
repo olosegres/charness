@@ -1,4 +1,5 @@
 import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
+import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /**
  * @description The wake-up rules of the request/answer core (S4), as pure
@@ -45,7 +46,6 @@ export function getPostRetryUpdate(request: OpenRequestState, nowMs: number): Op
 
 /** Default backstop: open with nothing seen working on it for this long. */
 export const defaultRequestBackstopMs = 90 * 60 * 1000;
-const msPerMinute = 60 * 1000;
 
 /**
  * @description The backstop window, honouring the `REQUEST_BACKSTOP_MINUTES`
@@ -53,9 +53,7 @@ const msPerMinute = 60 * 1000;
  * minutes). A missing, non-numeric or non-positive value keeps the default.
  */
 export function getRequestBackstopMs(overrideMinutes: string | undefined): number {
-  if (overrideMinutes === undefined || overrideMinutes.trim() === '') return defaultRequestBackstopMs;
-  const minutes = Number(overrideMinutes);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes * msPerMinute : defaultRequestBackstopMs;
+  return getMinutesOverrideMs(overrideMinutes, defaultRequestBackstopMs);
 }
 
 /**

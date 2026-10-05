@@ -10,6 +10,7 @@
 
 import type { CompactCommandRoute } from './compactCommandRoute';
 import { resolveDefaultOnThreadToggle } from './threadToggle';
+import { getMinutesOverrideMs } from './minutesOverride';
 
 /**
  * Idle interval before an untouched, idle agent session is auto-compacted (F2)
@@ -21,17 +22,13 @@ import { resolveDefaultOnThreadToggle } from './threadToggle';
  */
 export const idleCompactMs = 55 * 60 * 1000;
 
-const msPerMinute = 60 * 1000;
-
 /**
  * @description The idle window, honouring the `AGENT_IDLE_MINUTES` override (a
  * test needs minutes, not an hour; same pattern as `REQUEST_BACKSTOP_MINUTES`).
  * A missing, non-numeric or non-positive value keeps {@link idleCompactMs}.
  */
 export function getAgentIdleMs(overrideMinutes: string | undefined): number {
-  if (overrideMinutes === undefined || overrideMinutes.trim() === '') return idleCompactMs;
-  const minutes = Number(overrideMinutes);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes * msPerMinute : idleCompactMs;
+  return getMinutesOverrideMs(overrideMinutes, idleCompactMs);
 }
 
 /**

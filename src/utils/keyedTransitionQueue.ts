@@ -8,17 +8,18 @@
  * block the next one.
  */
 export class KeyedTransitionQueue {
-  private readonly tails = new Map<string, Promise<unknown>>();
+  /** Per key, a promise that settles (never rejects) once the last queued transition did. */
+  private readonly tails = new Map<string, Promise<void>>();
 
   /** Run `transition` once every transition queued before it for `key` has settled. */
   run<TResult>(key: string, transition: () => Promise<TResult>): Promise<TResult> {
     const previous = this.tails.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(transition);
-    this.tails.set(key, next);
-    const release = (): void => {
-      if (this.tails.get(key) === next) this.tails.delete(key);
-    };
-    next.then(release, release);
+    const next = previous.then(transition);
+    const settled = next.then(() => undefined, () => undefined);
+    this.tails.set(key, settled);
+    void settled.then(() => {
+      if (this.tails.get(key) === settled) this.tails.delete(key);
+    });
     return next;
   }
 

@@ -9916,28 +9916,33 @@ function handleAgentStarted(key: SessionKey): void {
  * Skipped via the in-flight unbind guard inside `updatePinnedStatus` so the
  * stop-then-unbind sequence doesn't re-pin a stale banner.
  */
+/**
+ * @description The Telegram frames a process that is GONE leaves behind — shared
+ * by an explicit stop ({@link handleAgentStopped}) and the idle stop
+ * ({@link handleAgentSuspended}). Drop the thread's queued-but-unsent output so
+ * nothing coalesced before the stop posts afterwards; stop the liveness loop and
+ * remove its frame (a gone process is idle, a lingering "working…" indicator would
+ * be a stuck spinner — the timer first, so it cannot recreate the frame right after
+ * the delete); the "thinking …" frame and the sub-agent status for the same reason;
+ * and the pending question (F1): no stop path fires the adapter's `questionGone`
+ * (Claude's pane is killed; OpenCode emits no resolve), so a pinned question would
+ * leak forever — clearing it chains `unpinThreadQuestion`, matching
+ * `handleAgentClosed` / `handleAgentError`.
+ */
+function clearGoneProcessFrames(key: SessionKey): void {
+  clearThreadQueues(key);
+  stopClaudeLiveness(key);
+  deleteStatusMessage(key).catch(() => {});
+  clearThinkingMessage(key);
+  clearSubagentStatus(key);
+  clearPendingQuestion(key);
+}
+
 function handleAgentStopped(key: SessionKey): void {
   // Single convergence point for every `stopSession`-driven stop path —
   // `/quit` (OpenCode/terminal), `/quit-all`, `/new`, `/unbind`, and adapter
-  // switch all emit `stopped`. Drop the thread's queued-but-unsent output here so
-  // nothing coalesced before the stop posts after the "stopped" confirmation.
-  clearThreadQueues(key);
-  // Stop the liveness loop and remove its frame — a stopped session is idle, so
-  // a lingering "working…" indicator would be a stuck spinner. Stopping the
-  // timer first prevents it from recreating the frame right after this delete.
-  stopClaudeLiveness(key);
-  deleteStatusMessage(key).catch(() => {});
-  // A stopped session is idle — a lingering "thinking …" frame would be a stuck
-  // indicator, same rationale as the status frame above.
-  clearThinkingMessage(key);
-  // A stopped session has no running delegation — remove the sub-agent status.
-  clearSubagentStatus(key);
-  // F1: this is the convergence point for `/quit`, `/quit-all`, `/new`, and
-  // adapter switch — none of which fire the adapter's `questionGone` (Claude's
-  // pane is killed; OpenCode emits no resolve), so a pinned question would leak
-  // forever. Clear it here (chains `unpinThreadQuestion`), matching
-  // `handleAgentClosed` / `handleAgentError`.
-  clearPendingQuestion(key);
+  // switch all emit `stopped`.
+  clearGoneProcessFrames(key);
   // Session ended — a future session starts with empty context, so forget the
   // last-injected thread-context preamble; the next prompt re-carries it.
   clearThreadContextMarker(key);
@@ -9960,12 +9965,7 @@ function handleAgentStopped(key: SessionKey): void {
  * Posts nothing — `/status` says the agent sleeps.
  */
 function handleAgentSuspended(key: SessionKey): void {
-  clearThreadQueues(key);
-  stopClaudeLiveness(key);
-  deleteStatusMessage(key).catch(() => {});
-  clearThinkingMessage(key);
-  clearSubagentStatus(key);
-  clearPendingQuestion(key);
+  clearGoneProcessFrames(key);
   updatePinnedStatus(key).catch(() => {});
 }
 
