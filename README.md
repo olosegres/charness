@@ -369,8 +369,8 @@ process is never stopped while it works (a running turn, a background task,
 a message not yet taken in). Only `/quit`, `/new` and leaving the folder end
 the conversation.
 
-`/login` works on both backends. tmux-scrape hosts the sign-in inside its
-TUI; json-stream (which has no TUI) runs it **out-of-band** — the bot spawns
+`/login` works on all three backends. tmux-scrape hosts the sign-in inside its
+TUI; the json-stream backends (which have no TUI) run it **out-of-band** — the bot spawns
 `claude auth login` in a pty, posts the sign-in link into the topic, and takes
 your pasted code back (the code message is deleted and a 🔐 confirmation is
 posted). While the sign-in waits for the code, a message that is not a code

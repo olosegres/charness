@@ -23,7 +23,7 @@ import {
   checkIsAuthLoginSucceeded,
   getLoginCommandRoute,
 } from '../utils/claudeAuthLogin';
-import { claudeJsonStreamAdapterName } from '../adapters/adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from '../adapters/adapterNames';
 
 // Real terminal control bytes, built at runtime so no raw control char lands in
 // this source file (keeps it grep-clean and unambiguous).
@@ -83,14 +83,25 @@ test('checkIsAuthLoginSucceeded: status is authoritative, exit code is the fallb
   assert.equal(checkIsAuthLoginSucceeded({ exitCode: null, loggedIn: null }), false);
 });
 
-// ── /login routing: only json-stream intercepts, everything else forwards ──
+// ── /login routing: only the json-stream backends intercept, everything else forwards ──
+
+test('getLoginCommandRoute: /login on a per-turn thread → outOfBand (same host, no TUI)', () => {
+  assert.equal(
+    getLoginCommandRoute({
+      command: 'login',
+      rawBackendName: claudePerTurnAdapterName,
+      checkIsJsonStreamBackend,
+    }),
+    'outOfBand',
+  );
+});
 
 test('getLoginCommandRoute: /login on a json-stream thread → outOfBand (never forwarded)', () => {
   assert.equal(
     getLoginCommandRoute({
       command: 'login',
       rawBackendName: claudeJsonStreamAdapterName,
-      jsonStreamBackendName: claudeJsonStreamAdapterName,
+      checkIsJsonStreamBackend,
     }),
     'outOfBand',
   );
@@ -101,7 +112,7 @@ test('getLoginCommandRoute: /login on a tmux-scrape Claude thread is unchanged (
     getLoginCommandRoute({
       command: 'login',
       rawBackendName: 'claude',
-      jsonStreamBackendName: claudeJsonStreamAdapterName,
+      checkIsJsonStreamBackend,
     }),
     'forwardToAgent',
   );
@@ -113,7 +124,7 @@ test('getLoginCommandRoute: /login on opencode / no-pick threads is not intercep
       getLoginCommandRoute({
         command: 'login',
         rawBackendName,
-        jsonStreamBackendName: claudeJsonStreamAdapterName,
+        checkIsJsonStreamBackend,
       }),
       'forwardToAgent',
       String(rawBackendName),
@@ -126,7 +137,7 @@ test('getLoginCommandRoute: a non-login command on a json-stream thread is untou
     getLoginCommandRoute({
       command: 'compact',
       rawBackendName: claudeJsonStreamAdapterName,
-      jsonStreamBackendName: claudeJsonStreamAdapterName,
+      checkIsJsonStreamBackend,
     }),
     'forwardToAgent',
   );

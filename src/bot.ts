@@ -7176,15 +7176,16 @@ bot.on(message('text'), async (ctx) => {
   if (text.startsWith('/')) {
     const cmd = text.slice(1).split(' ')[0].split('@')[0].toLowerCase();
     if (botCommands.has(cmd)) return;
-    // `/login` on a json-stream Claude thread has no TUI to host the OAuth flow →
-    // run it out-of-band (spawn `claude auth login`, relay the URL). Every other
-    // backend keeps the verbatim forward (tmux's TUI hosts /login itself). The
-    // route reads the RAW backend pick, so an OpenCode/terminal thread is never
-    // wrongly intercepted once json-stream is the default.
+    // `/login` on a json-stream Claude thread (idle or per-turn lifecycle) has no
+    // TUI to host the OAuth flow → run it out-of-band (spawn `claude auth login`,
+    // relay the URL). Every other backend keeps the verbatim forward (tmux's TUI
+    // hosts /login itself). The route reads the RAW backend pick, so an
+    // OpenCode/terminal thread is never wrongly intercepted once json-stream is
+    // the default.
     const loginRoute = getLoginCommandRoute({
       command: cmd,
       rawBackendName: getThreadAdapterNameRaw(key),
-      jsonStreamBackendName: claudeJsonStreamAdapterName,
+      checkIsJsonStreamBackend,
     });
     if (loginRoute === 'outOfBand') {
       await state.pushMessageId(key, ctx.message.message_id);

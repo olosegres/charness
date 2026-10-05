@@ -75,8 +75,9 @@ export type LoginCommandRoute = 'outOfBand' | 'forwardToAgent';
 
 /**
  * @description Route a `/login` command by the thread's Claude backend. Only the
- * json-stream backend (which has no TUI to host the OAuth flow) intercepts it
- * into the bot-driven out-of-band flow; every other case — tmux-scrape Claude
+ * json-stream backends (`claude-json-stream` and `claude-per-turn` — one host,
+ * no TUI to host the OAuth flow) intercept it into the bot-driven out-of-band
+ * flow; every other case — tmux-scrape Claude
  * (its TUI hosts `/login` itself), OpenCode/terminal, or a no-pick thread — keeps
  * the existing verbatim forward.
  *
@@ -84,15 +85,15 @@ export type LoginCommandRoute = 'outOfBand' | 'forwardToAgent';
  * Claude default" call: an OpenCode/terminal thread has a non-Claude raw pick, so
  * gating on the raw name avoids wrongly intercepting `/login` on those threads
  * (which a default-resolving check would do once json-stream is the default).
- * `jsonStreamBackendName` is injected to keep this helper free of an adapter
+ * `checkIsJsonStreamBackend` is injected to keep this helper free of an adapter
  * import.
  */
 export function getLoginCommandRoute(input: {
   command: string;
   rawBackendName: string | undefined;
-  jsonStreamBackendName: string;
+  checkIsJsonStreamBackend: (adapterName: string) => boolean;
 }): LoginCommandRoute {
-  return input.command === 'login' && input.rawBackendName === input.jsonStreamBackendName
+  return input.command === 'login' && input.rawBackendName !== undefined && input.checkIsJsonStreamBackend(input.rawBackendName)
     ? 'outOfBand'
     : 'forwardToAgent';
 }

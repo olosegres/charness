@@ -33,7 +33,7 @@ export type CompactCommandRoute = 'adapterCompact' | 'notSupported' | 'forwardTo
  * remaining backend keeps the pre-existing verbatim forward — so the Claude
  * backends, whose TUI owns `/compact`, are unaffected.
  *
- * `terminalAdapterName` is injected (like `jsonStreamBackendName` in
+ * `terminalAdapterName` is injected (like `checkIsJsonStreamBackend` in
  * {@link getLoginCommandRoute}) to keep this helper free of an adapter import.
  */
 export function getCompactCommandRoute(input: {
