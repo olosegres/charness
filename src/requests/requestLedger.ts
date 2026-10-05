@@ -375,8 +375,8 @@ export class RequestLedger {
    * the same GROUP (same conversation, same requester — `getRequestGroupKey`), if
    * any, is closed as `superseded` first, in the same atomic step — the latest
    * message of a requester is the one that matters, and the new request names it
-   * (and what it had replaced in turn) in `supersededRequestIds`, so one answer
-   * covers them all. Another requester's open request in the conversation is
+   * (and what it had replaced in turn) in `supersededRequestIds`, so the agent
+   * answers only what the new one adds. Another requester's open request in the conversation is
    * untouched. A request WITHOUT a requester (persisted before requesters
    * existed, or raised by an origin that names none) keeps the old rule: the
    * conversation's next request supersedes it whoever raised that one — else it

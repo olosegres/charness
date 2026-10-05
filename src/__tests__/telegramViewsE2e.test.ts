@@ -24,7 +24,7 @@
  *     never answers gets a pinned alert, released when the next message
  *     supersedes its request
  *   → two messages in a row from the operator merge into ONE open request whose
- *     header names the replaced one, so one answer covers both; two messages in
+ *     header names the replaced one and asks for only what it adds; two messages in
  *     a row from two people stay two open requests, each answered on its own
  *   → in «Answers only» a turn posts nothing but its pinned answer — no text, no
  *     status, no thinking, no tool result — while the typing indicator still
@@ -501,7 +501,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
       readClosedRequests().find((record) => record.id === turn.requestId)?.closeReason === 'superseded');
   });
 
-  it('two messages in a row from the operator merge into one open request; its header names the replaced one and one answer covers both', async () => {
+  it('two messages in a row from the operator merge into one open request; its header names the replaced one, answered once', async () => {
     // The first turn stays silent, so its request is still open when the second message lands a moment later.
     fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-20 [fake:silent-once]');
     fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-21 [fake:answer]');

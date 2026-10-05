@@ -32,7 +32,8 @@ export interface RequestOrigin {
  *  - `final`      — the agent answered with the result.
  *  - `question`   — the agent asked the requester; their reply is a new request.
  *  - `superseded` — a newer request of the same group (same conversation, same
- *    requester) arrived; one answer to that one covers this one too.
+ *    requester) arrived; the answer to that one covers what this one asked
+ *    (or, when this one was answered first, only what the newer one adds).
  *  - `cancelled`  — the work was stopped without an answer (interrupt, quit,
  *    leaving the folder, a view switch that turns requests off).
  */

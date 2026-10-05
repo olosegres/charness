@@ -597,7 +597,8 @@ a person assigns an issue to the AI account (in a trigger status)
 - **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
   turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
-  again replaces their earlier open request — one answer covers both.
+  again replaces their earlier open request; the agent answers only what the new hand-over adds (if it
+  already finished the first, a short pointer to that answer).
 - **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
   and opens no request.
 

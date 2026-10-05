@@ -15,8 +15,10 @@ import type { ClosedRequestRecord, RequestAnswerKind, RequestCloseReason } from 
  *                              question / final → closes the request
  *   delivered, request closed: nothing changes (a late answer from a turn that
  *     outlived its request is still delivered — content is never dropped); a
- *     superseded request's result names the request that replaced it, so the
- *     agent knows which one its answer should have gone to
+ *     superseded request's result names the request that replaced it and says
+ *     its prompt follows — the agent answers only what that one adds, never the
+ *     same work twice (Claude Code delivers a message written mid-turn only
+ *     after the turn ends, so this is the normal order there)
  */
 
 /** The longest answer body accepted; the sinks split it to their surface's limits. */
@@ -72,7 +74,7 @@ function buildOpenAnswerMessage(requestId: string, kind: RequestAnswerKind, wasC
 /** The agent-facing line for an answer delivered to a request that was already closed. */
 function buildClosedAnswerMessage(requestId: string, closed: ClosedRequestRecord): string {
   const replacedBy = closed.closeReason === 'superseded' && closed.supersededBy !== undefined
-    ? ` by request ${closed.supersededBy} from the same requester — answer that one, it covers this request too`
+    ? ` by request ${closed.supersededBy} from the same requester; its prompt follows — reply only to what it adds, or say briefly that the answer is above`
     : '';
   return `Delivered. Request ${requestId} was already closed (${closed.closeReason}${replacedBy}), so nothing about it changed.`;
 }

@@ -48,9 +48,12 @@ Numeric bounds are named constants in the files below; this README says only wha
 ## Header (`requestHeader.ts`)
 
 - Agent-facing, English on every surface (not localized). A request that superseded others gets a line
-  naming them and saying ONE answer to this request covers them all, so the agent never answers each
-  separately. `joinPromptsNotTakenIn` is the re-post text of a conversation's untaken prompts (one per
-  requester at most).
+  naming them and asking for only what this request adds — "if you already answered them, do not repeat
+  that answer; if it adds nothing new, say briefly that the answer is above". The line is honest in both
+  timings: an agent that reads the new prompt mid-turn gives one answer; Claude Code delivers a message
+  written mid-turn only AFTER that turn ends, so the agent has by then answered the replaced request (the
+  answer is delivered — content is never dropped) and must not redo the work. `joinPromptsNotTakenIn` is
+  the re-post text of a conversation's untaken prompts (one per requester at most).
 
 ## `answer_request` (`answerRequest.ts`)
 

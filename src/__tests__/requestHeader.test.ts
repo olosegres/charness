@@ -2,8 +2,10 @@
  * @description The per-request header that rides inside a request's prompt
  * (`requests/requestHeader.ts`): names the id and how to answer, says the
  * plain text is not shown only when that is so, and names the same requester's
- * requests this one replaced so the agent gives ONE answer for them all; plus
- * the re-post text of a conversation's untaken prompts.
+ * requests this one replaced so the agent answers only what THIS one adds (it
+ * may already have answered them — Claude Code delivers a message written
+ * mid-turn only after that turn ends); plus the re-post text of a
+ * conversation's untaken prompts.
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -49,7 +51,7 @@ describe('buildRequestHeader', () => {
     assert.match(header, /does not see your plain text output/);
   });
 
-  it('names the replaced requests and says one answer to this one covers them all', () => {
+  it('names the replaced requests and asks for only what this one adds, honest in both timings', () => {
     const header = buildRequestHeader({
       requestId: 'req_Cccc3333',
       originDescription: 'a message in this topic',
@@ -59,9 +61,12 @@ describe('buildRequestHeader', () => {
     const lines = header.trimEnd().split('\n');
     assert.equal(lines.length, 3);
     assert.equal(lines[2], buildSupersededRequestsLine(['req_Aaaa1111', 'req_Bbbb2222']));
-    assert.match(lines[2], /earlier requests req_Aaaa1111, req_Bbbb2222/);
-    assert.match(lines[2], /one answer to this request covers them all/);
-    assert.match(lines[2], /do not answer those separately/);
+    assert.match(lines[2], /earlier requests req_Aaaa1111, req_Bbbb2222\./);
+    // The agent may have answered them already (a message written mid-turn reaches it only after the turn
+    // ends) or not yet: the line must hold either way.
+    assert.match(lines[2], /If you already answered them, do not repeat that answer: reply only to what this message adds/);
+    assert.match(lines[2], /If it adds nothing new, say briefly that the answer is above/);
+    assert.doesNotMatch(lines[2], /still unanswered|one answer .* covers/, 'never claims the replaced requests are unanswered or that one answer covers all');
   });
 
   it('says nothing about replaced requests when there are none', () => {
@@ -71,7 +76,7 @@ describe('buildRequestHeader', () => {
   });
 
   it('the replaced-requests line uses the singular for one request', () => {
-    assert.match(buildSupersededRequestsLine(['req_Aaaa1111']), /earlier request req_Aaaa1111, still unanswered/);
+    assert.match(buildSupersededRequestsLine(['req_Aaaa1111']), /earlier request req_Aaaa1111\. If you already answered it, do not repeat that answer/);
   });
 });
 

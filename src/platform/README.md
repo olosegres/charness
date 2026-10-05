@@ -46,8 +46,10 @@ delivers it. Rules every connector relies on:
   the conversation (`SessionKey`) AND the **requester** — the origin attribute named by
   `requestRequesterAttribute`. A connector that wants per-person requests puts the sender there (a Telegram
   user id, a Jira account id); an origin without it reads as the empty requester, so every such request in a
-  conversation shares one group. The newer request's prompt header names the ids it replaced; one answer to it
-  covers them. Two requesters in one conversation hold two open requests, each woken and alerted on its own.
+  conversation shares one group. The newer request's prompt header names the ids it replaced and asks for only
+  what it adds (the agent may already have answered them: Claude Code delivers a message written mid-turn only
+  after the turn ends). Two requesters in one conversation hold two open requests, each woken and alerted on
+  its own.
 - **Answer kinds.** `progress` keeps the request open; `question` and `final` close it. An answer to a request
   that is already closed is still delivered (the agent may be late) but changes nothing — a Jira sink, for
   one, never hands an issue back for it.

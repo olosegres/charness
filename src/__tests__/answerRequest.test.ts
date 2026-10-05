@@ -155,7 +155,7 @@ describe('answerRequest close rules', () => {
     assert.equal(outcome.ok, true);
     assert.match(
       outcome.ok ? outcome.message : '',
-      new RegExp(`already closed \\(superseded by request ${current.id} from the same requester`),
+      new RegExp(`already closed \\(superseded by request ${current.id} from the same requester; its prompt follows — reply only to what it adds`),
       'the result names the request that replaced it, so the agent answers that one',
     );
     assert.equal(sink.deliveries[0]?.delivery.isRequestOpen, false);

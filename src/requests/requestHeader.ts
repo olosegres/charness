@@ -16,8 +16,11 @@ import type { OpenRequestState, RequestWakeUpReason } from './types';
  * `isPlainTextHidden` adds the line that the requester never sees the agent's
  * ordinary output. `supersededRequestIds` are the same requester's earlier
  * requests this one replaced while they were still open (`requestGroup.ts`);
- * when given, the header names them and says one answer to THIS request covers
- * them all — so the agent never answers each of them separately.
+ * when given, the header names them and asks for only what THIS request adds.
+ * The line holds in both timings (owner decision 2026-10-05): the agent reads it
+ * mid-turn and gives one answer, or — Claude Code delivers a message written
+ * mid-turn only after that turn ends — it has already answered the replaced
+ * request and must not do the work twice.
  */
 export interface RequestHeaderOptions {
   requestId: string;
@@ -29,9 +32,10 @@ export interface RequestHeaderOptions {
 /** @description The header's line naming the requests this one replaced; empty when it replaced none. */
 export function buildSupersededRequestsLine(supersededRequestIds: readonly string[]): string {
   if (supersededRequestIds.length === 0) return '';
-  const noun = supersededRequestIds.length === 1 ? 'request' : 'requests';
-  return `It replaces the same requester's earlier ${noun} ${supersededRequestIds.join(', ')}, still unanswered: ` +
-    'one answer to this request covers them all — do not answer those separately.';
+  const isOne = supersededRequestIds.length === 1;
+  return `It replaces the same requester's earlier ${isOne ? 'request' : 'requests'} ${supersededRequestIds.join(', ')}. ` +
+    `If you already answered ${isOne ? 'it' : 'them'}, do not repeat that answer: reply only to what this message adds. ` +
+    'If it adds nothing new, say briefly that the answer is above.';
 }
 
 /** @description The header block, ending with a blank line before the request's own text. */

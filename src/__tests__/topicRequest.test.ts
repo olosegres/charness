@@ -84,10 +84,10 @@ describe('buildTopicRequestHeader', () => {
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'stream'), hiddenLine);
   });
 
-  it('names the requests it replaced and says one answer covers them; silent when it replaced none', () => {
+  it('names the requests it replaced and asks for only what this one adds; silent when it replaced none', () => {
     const merged = buildTopicRequestHeader('req_c', 'text', 'streamAnswers', ['req_a', 'req_b']);
     assert.match(merged, /replaces the same requester's earlier requests req_a, req_b/);
-    assert.match(merged, /one answer to this request covers them all/);
+    assert.match(merged, /reply only to what this message adds/);
     assert.doesNotMatch(buildTopicRequestHeader('req_c', 'text', 'streamAnswers'), /replaces/);
   });
 
