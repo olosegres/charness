@@ -414,7 +414,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(backgroundTurn, 'PROJ-8 reached its agent');
     assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), ['Fake final answer for PROJ-8 (background, turn 1).']);
     assert.ok(checkIsProcessAlive(backgroundTurn.pid), 'a process with a background task is never stopped');
-    assert.ok(getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-8 process kept: working'), 'the idle fire saw it working');
+    // Its idle mark counts from its own last activity, so its fire may follow PROJ-1's stop: wait for the line, don't read it early.
+    await waitFor('the idle fire saw PROJ-8 working', idleStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-8 process kept: working'));
 
     // The next hand-over resumes PROJ-1's own conversation in a new process.
     const commentsBefore = fakeJira.getIssue('PROJ-1').comments.length;
@@ -425,7 +426,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.notEqual(turns[1].pid, firstTurn.pid, 'answered by a new process');
     const resumedLaunch = getSessionLaunchOf(turns[1].pid);
     assert.deepEqual(getFlagValues(resumedLaunch?.argv ?? [], '--resume'), [sessionId], 'the new process resumed the same conversation');
-    assert.equal(fakeJira.getIssue('PROJ-1').assignee?.accountId, requester.accountId, 'handed back again');
+    // The sink posts the comment first and hands the issue back right after: wait for that state, don't read it a tick early.
+    await waitFor('PROJ-1 handed back again', answerTimeoutMs, () => fakeJira.getIssue('PROJ-1').assignee?.accountId === requester.accountId);
   });
 
   it('the agent killed mid-turn: its own session is resumed and the request is still answered', async () => {
