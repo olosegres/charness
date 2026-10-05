@@ -79,10 +79,9 @@ function getLargestSpillableIndex(blocks: readonly IssueBlock[], textDir: string
   let largestIndex: number | null = null;
   let largestChars = 0;
   blocks.forEach((block, index) => {
-    if (block.spilledTo !== undefined || (isCommentsCollapsed && block.kind === 'comment')) return;
+    if ((isCommentsCollapsed && block.kind === 'comment') || !checkIsSpillable(block, textDir)) return;
     const chars = getIssueBlockText(block).length;
-    const stubChars = getIssueBlockText(getSpilledBlock(block, textDir)).length;
-    if (chars > stubChars && chars > largestChars) {
+    if (chars > largestChars) {
       largestIndex = index;
       largestChars = chars;
     }

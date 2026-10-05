@@ -110,9 +110,11 @@ export interface RequestLedgerDeps {
    */
   onRequestCreated?: (key: SessionKey, request: OpenRequestState) => void;
   /**
-   * Told once what became of a request's prompt (`RequestPromptOutcome`), after the change is saved — so a
-   * connector can count what the prompt carried as sent only once the agent took it in. Every writer of
-   * `isPromptTakenIn` and every close goes through the ledger, so none is missed. Must not throw.
+   * Told once what became of a request's prompt (`RequestPromptOutcome`), after the change is applied (a
+   * supersede: also flushed; a flag or a close: its save only scheduled — a crash before it re-posts the whole
+   * prompt, so nothing is lost) — so a connector can count what the prompt carried as sent only once the agent
+   * took it in. Every writer of `isPromptTakenIn` and every close goes through the ledger, so none is missed.
+   * Must not throw.
    */
   onPromptSettled?: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
