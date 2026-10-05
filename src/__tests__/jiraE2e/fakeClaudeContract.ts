@@ -20,6 +20,12 @@ export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
 export const fakeClaudeCodeVersionOverrideFileName = 'claude-code-version';
 /** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
 export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 1301, cache_read_input_tokens: 24601, output_tokens: 43 } as const;
+/**
+ * What a real `/compact` turn's `result` reports (probe 2026-10-05): an all-zero `usage` and the summary
+ * call — its cache read ≈ the context — only under `modelUsage`, per model.
+ */
+export const fakeCompactionResultUsage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 } as const;
+export const fakeCompactionModelUsage = { 'fake-model': { inputTokens: 1446, outputTokens: 1276, cacheReadInputTokens: 23852, cacheCreationInputTokens: 23979 } } as const;
 export const fakeClaudeLogFileNames = {
   /** One record per `/compact` turn the fake ran: `{ sessionId, pid }`. */
   compactions: 'compactions.jsonl',

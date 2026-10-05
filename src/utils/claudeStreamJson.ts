@@ -148,9 +148,12 @@ function checkIsOwnInputEcho(msg: Record<string, unknown>): boolean {
 }
 
 /**
- * @description The token accounting of one turn, from `result.usage`. The cache
- * fields are the cross-process prompt-cache proof: a resumed process whose
- * `cacheReadTokens` covers the context read the previous process's cache.
+ * @description The token accounting of one turn, from `result.usage` — or, when
+ * that is all zero, the sum of the result's per-model `modelUsage` entries: a
+ * `/compact` turn's result reports its summary call only there (probe
+ * 2026-10-05). The cache fields are the cross-process prompt-cache proof: a
+ * resumed process whose `cacheReadTokens` covers the context read the previous
+ * process's cache.
  */
 export interface ClaudeTurnUsage {
   inputTokens: number;
@@ -169,7 +172,7 @@ function readTokenCount(rec: Record<string, unknown>, key: string): number | nul
 
 /** Parse `result.usage`; `null` when absent or when any present count is malformed
  *  (a half-read accounting would mislead the cache check — better no line). */
-function readTurnUsage(usage: unknown): ClaudeTurnUsage | null {
+function readResultUsage(usage: unknown): ClaudeTurnUsage | null {
   if (!checkIsStreamRecord(usage)) return null;
   const inputTokens = readTokenCount(usage, 'input_tokens');
   const cacheReadTokens = readTokenCount(usage, 'cache_read_input_tokens');
@@ -177,6 +180,36 @@ function readTurnUsage(usage: unknown): ClaudeTurnUsage | null {
   const outputTokens = readTokenCount(usage, 'output_tokens');
   if (inputTokens === null || cacheReadTokens === null || cacheWriteTokens === null || outputTokens === null) return null;
   return { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens };
+}
+
+/** The turn's total over `result.modelUsage` (one entry per model used); `null` when absent or any entry is malformed. */
+function readModelUsageTotal(modelUsage: unknown): ClaudeTurnUsage | null {
+  if (!checkIsStreamRecord(modelUsage)) return null;
+  const total: ClaudeTurnUsage = { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
+  for (const entry of Object.values(modelUsage)) {
+    if (!checkIsStreamRecord(entry)) return null;
+    const inputTokens = readTokenCount(entry, 'inputTokens');
+    const cacheReadTokens = readTokenCount(entry, 'cacheReadInputTokens');
+    const cacheWriteTokens = readTokenCount(entry, 'cacheCreationInputTokens');
+    const outputTokens = readTokenCount(entry, 'outputTokens');
+    if (inputTokens === null || cacheReadTokens === null || cacheWriteTokens === null || outputTokens === null) return null;
+    total.inputTokens += inputTokens;
+    total.cacheReadTokens += cacheReadTokens;
+    total.cacheWriteTokens += cacheWriteTokens;
+    total.outputTokens += outputTokens;
+  }
+  return total;
+}
+
+function checkIsZeroUsage(usage: ClaudeTurnUsage): boolean {
+  return usage.inputTokens === 0 && usage.cacheReadTokens === 0 && usage.cacheWriteTokens === 0 && usage.outputTokens === 0;
+}
+
+/** The turn's accounting: `result.usage`, or the `modelUsage` total when `usage` is all zero (a `/compact` turn). */
+function readTurnUsage(usage: unknown, modelUsage: unknown): ClaudeTurnUsage | null {
+  const resultUsage = readResultUsage(usage);
+  if (resultUsage === null || !checkIsZeroUsage(resultUsage)) return resultUsage;
+  return readModelUsageTotal(modelUsage) ?? resultUsage;
 }
 
 /** The `task_id`s of a `background_tasks_changed` frame's `tasks` list; an
@@ -319,7 +352,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       isError: msg.is_error === true,
       errorText: readString(msg, 'api_error_status') ?? (msg.is_error === true ? (readString(msg, 'result') ?? 'API error') : null),
       resultText: readString(msg, 'result'),
-      usage: readTurnUsage(msg.usage),
+      usage: readTurnUsage(msg.usage, msg.modelUsage),
     }];
   }
 

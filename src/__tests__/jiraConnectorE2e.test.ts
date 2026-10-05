@@ -73,6 +73,7 @@ import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdap
 import {
   checkHasFlag,
   fakeClaudeLogFileNames,
+  fakeCompactionModelUsage,
   fakeTurnUsage,
   getFlagValues,
   getForeignAgentEnvNames,
@@ -400,6 +401,9 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const compactions = (): FakeCompaction[] => readFakeLog<FakeCompaction>(fakeClaudeLogFileNames.compactions);
     await waitFor('PROJ-1\'s session compacted at the idle mark', idleStopTimeoutMs, () => compactions().some((compaction) => compaction.sessionId === sessionId));
     assert.equal(compactions().find((compaction) => compaction.sessionId === sessionId)?.pid, firstTurn.pid, 'compacted in the same process');
+    // L-D11: the compaction turn's accounting comes from the result's `modelUsage` (its `usage` is all zero on the real CLI).
+    const compactionUsage = `jira:PROJ:PROJ-1: input=${fakeCompactionModelUsage['fake-model'].inputTokens} cacheRead=${fakeCompactionModelUsage['fake-model'].cacheReadInputTokens} cacheWrite=${fakeCompactionModelUsage['fake-model'].cacheCreationInputTokens}`;
+    await waitFor('the compaction turn\'s usage line', idleStopTimeoutMs, () => getCharness().output.includes(`${claudeJsonStreamUsageLogPrefix}${compactionUsage}`));
     await waitFor('PROJ-1\'s process stopped after the compaction', idleStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
     // The process dies at the stop's SIGTERM; the bot logs the stop only once its own teardown (the tmux kill) converged.
     await waitFor('the stop logged', idleStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-1 process stopped; the session sleeps'));

@@ -13,6 +13,8 @@ import {
   fakeClaudeCodeVersionOverrideFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
+  fakeCompactionModelUsage,
+  fakeCompactionResultUsage,
   fakeTurnUsage,
   getFlagValues,
   getForeignAgentEnvNames,
@@ -77,7 +79,8 @@ import {
  * that turn: turns run one at a time, in arrival order.
  *
  * A `/compact` user turn is answered like the real CLI's: a `compact_status`
- * success, a `compact_boundary` with token counts and a `result` — logged to
+ * success, a `compact_boundary` with token counts and a `result` whose `usage`
+ * is all zero with the summary call under `modelUsage` — logged to
  * `compactions.jsonl` with the session it compacted.
  *
  * Paths come from the environment its launcher script sets:
@@ -291,7 +294,8 @@ function runCompactionTurn(sessionId: string): void {
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
   appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid });
-  endTurn(sessionId, 'Compacted.');
+  // The real CLI's compaction result: an all-zero `usage`, the summary call only under `modelUsage`.
+  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: sessionId, usage: fakeCompactionResultUsage, modelUsage: fakeCompactionModelUsage });
 }
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {

@@ -60,7 +60,9 @@ Newline-delimited JSON, one object per line, parsed in
 - `assistant` — the settled text of the turn.
 - `result` — turn end (usage, cost, `session_id`). The adapter logs every
   turn's `usage` as `[ClaudeJson] usage <key>: input=… cacheRead=… cacheWrite=…
-  output=…` — the cross-process prompt-cache proof.
+  output=…` — the cross-process prompt-cache proof. A `/compact` turn's result
+  carries an all-zero `usage` and reports its summary call only under the
+  per-model `modelUsage`; the line then logs the `modelUsage` total.
 - `system` `subtype:"background_tasks_changed"` — the CLI's CURRENT list of
   background tasks (`tasks[].task_id`; a background Bash / Monitor is
   `local_bash`, a background sub-agent `local_agent`), re-sent whole on every
@@ -124,7 +126,8 @@ version — the live process's, else the persisted one — is below the gate; an
 unknown version allows the switch. `utils/claudeCodeVersion.ts` holds the gate.
 
 Every `result` logs `[ClaudeJson] usage <key>: input=… cacheRead=… cacheWrite=…
-output=…` (L-D11) — the cross-process cache check reads these lines.
+output=…` (L-D11) — the cross-process cache check reads these lines (the
+`modelUsage` total when `usage` is all zero, as on a `/compact` turn).
 
 ### Process hosting — external tmux + FIFO + file tail (restart isolation)
 

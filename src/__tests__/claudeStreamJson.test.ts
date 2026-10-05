@@ -201,6 +201,31 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
     });
   });
 
+  it('a /compact result carries an all-zero usage and the summary call under modelUsage → turnEnd.usage sums modelUsage (L-D11; shape from the 2026-10-05 probe)', () => {
+    const msg = {
+      type: 'result', subtype: 'success', is_error: false, result: '',
+      usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0, iterations: [] },
+      modelUsage: {
+        'claude-haiku-4-5-20251001': { inputTokens: 1446, outputTokens: 1276, thinkingTokens: 645, cacheReadInputTokens: 23852, cacheCreationInputTokens: 23979, costUSD: 0.058 },
+      },
+    };
+    const [action] = classify(msg);
+    assert.deepEqual((action as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, {
+      inputTokens: 1446, cacheReadTokens: 23852, cacheWriteTokens: 23979, outputTokens: 1276,
+    });
+    // Two models (a sub-agent on another model): the turn's total.
+    const twoModels = classify({ ...msg, modelUsage: { ...msg.modelUsage, 'claude-sonnet-4-5': { inputTokens: 4, outputTokens: 6, cacheReadInputTokens: 100, cacheCreationInputTokens: 10 } } });
+    assert.deepEqual((twoModels[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, {
+      inputTokens: 1450, cacheReadTokens: 23952, cacheWriteTokens: 23989, outputTokens: 1282,
+    });
+    // A non-zero usage wins: modelUsage is the fallback, not a second accounting.
+    const regular = classify({ ...msg, usage: { input_tokens: 3, cache_creation_input_tokens: 1422, cache_read_input_tokens: 24128, output_tokens: 57 } });
+    assert.deepEqual((regular[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, { inputTokens: 3, cacheReadTokens: 24128, cacheWriteTokens: 1422, outputTokens: 57 });
+    // An all-zero usage without a readable modelUsage stays a (zero) usage, as before.
+    const zero = classify({ ...msg, modelUsage: undefined });
+    assert.deepEqual((zero[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 });
+  });
+
   it('result usage with an absent cache field counts it as 0; a malformed count drops the whole usage', () => {
     const noCache = classify({ type: 'result', is_error: false, result: 'ok', usage: { input_tokens: 10, output_tokens: 2 } });
     assert.deepEqual((noCache[0] as Extract<ClaudeStreamAction, { kind: 'turnEnd' }>).usage, { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 2 });
