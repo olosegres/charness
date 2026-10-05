@@ -21,7 +21,7 @@ import {
   parseClaudeBackendArg,
   getClaudeModeAction,
 } from '../adapters/createAdapter';
-import { claudeJsonStreamAdapterName } from '../adapters/adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -47,6 +47,7 @@ test('getThreadAdapterNameRaw: an explicit pick is returned verbatim (any backen
 test('checkIsClaudeBackend: both Claude backends true, others false', () => {
   assert.equal(checkIsClaudeBackend('claude'), true);
   assert.equal(checkIsClaudeBackend(claudeJsonStreamAdapterName), true);
+  assert.equal(checkIsClaudeBackend(claudePerTurnAdapterName), true, 'the per-turn lifecycle is a Claude backend (L5)');
   assert.equal(checkIsClaudeBackend('opencode'), false);
   assert.equal(checkIsClaudeBackend('terminal'), false);
 });
@@ -55,6 +56,8 @@ test('checkIsSameConversationSwitch: only the same adapter or a Claude backend f
   assert.equal(checkIsSameConversationSwitch('opencode', 'opencode'), true);
   assert.equal(checkIsSameConversationSwitch('claude', claudeJsonStreamAdapterName), true);
   assert.equal(checkIsSameConversationSwitch(claudeJsonStreamAdapterName, 'claude'), true);
+  assert.equal(checkIsSameConversationSwitch(claudeJsonStreamAdapterName, claudePerTurnAdapterName), true, 'the two json-stream lifecycles share the conversation');
+  assert.equal(checkIsSameConversationSwitch(claudePerTurnAdapterName, 'claude'), true);
   assert.equal(checkIsSameConversationSwitch(claudeJsonStreamAdapterName, 'opencode'), false);
   assert.equal(checkIsSameConversationSwitch('opencode', 'claude'), false);
   assert.equal(checkIsSameConversationSwitch('claude', 'terminal'), false);
@@ -91,9 +94,12 @@ test('resolveClaudeBackendName: a non-Claude pick falls to the json-stream defau
 // "already" without persisting. getClaudeModeAction takes both resolutions
 // as inputs, so the decision stays correct even if they ever diverge again.
 
-test('parseClaudeBackendArg: json aliases → json-stream, tmux aliases → claude, else null', () => {
+test('parseClaudeBackendArg: json aliases → json-stream, per-turn aliases → per-turn, tmux aliases → claude, else null', () => {
   for (const alias of ['json', 'jsonstream', 'json-stream', 'stream']) {
     assert.equal(parseClaudeBackendArg(alias), claudeJsonStreamAdapterName, alias);
+  }
+  for (const alias of ['perturn', 'per-turn', 'oneshot']) {
+    assert.equal(parseClaudeBackendArg(alias), claudePerTurnAdapterName, alias);
   }
   for (const alias of ['tmux', 'scrape', 'terminal', 'classic']) {
     assert.equal(parseClaudeBackendArg(alias), 'claude', alias);

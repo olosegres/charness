@@ -301,6 +301,7 @@ export interface AdoptedTailStart {
   backgroundTaskIds: string[];
   isTurnInFlight: boolean;
   outstandingToolUseIds: string[];
+  claudeCodeVersion: string | null;
 }
 
 /**
@@ -322,13 +323,14 @@ export function resolveAdoptedTail(
   stdoutSizeBytes: number,
 ): AdoptedTailStart {
   if (persistedTail === null || persistedTail.sessionId !== claudeSessionId) {
-    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] };
+    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null };
   }
   return {
     startOffset: Math.min(persistedTail.offsetBytes, stdoutSizeBytes),
     backgroundTaskIds: persistedTail.backgroundTaskIds ?? [],
     isTurnInFlight: persistedTail.isTurnInFlight ?? false,
     outstandingToolUseIds: persistedTail.outstandingToolUseIds ?? [],
+    claudeCodeVersion: persistedTail.claudeCodeVersion ?? null,
   };
 }
 

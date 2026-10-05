@@ -3,7 +3,7 @@ import type { InlineKeyboardMarkup, Message } from 'telegraf/typings/core/types/
 import { getThreadAdapter } from '../../../adapters/createAdapter';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
-import { openCodeAdapterName } from '../../../adapters/adapterNames';
+import { claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
@@ -159,6 +159,8 @@ export interface CompactionPorts
    * one transition per key, a prompt arriving meanwhile buffered and the session resumed for it.
    */
   suspendThreadSession: (key: SessionKey) => Promise<void>;
+  /** Wake a SLEEPING per-turn session for its idle compaction (L-D7): a resume only; `true` when it is live. */
+  resumeSleepingSessionForCompaction: (key: SessionKey) => Promise<boolean>;
 }
 
 /**
@@ -167,7 +169,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -426,7 +428,9 @@ export function createCompaction(ports: CompactionPorts) {
     const adapter = getThreadAdapter(key);
     const isSuspendable = typeof adapter.suspendSession === 'function';
     if (!isSuspendable && !getState().checkIsCompactOnIdleEnabled(key)) return;
-    if (!adapter.checkIsActive(key)) return;
+    // L-D7: a SLEEPING per-turn session keeps its countdown while a compaction is due — the fire wakes it,
+    // compacts it, and stops it again; every other sleeping or idle-less session has no timer.
+    if (!adapter.checkIsActive(key) && !(adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key))) return;
     const now = Date.now();
     // Stamp AFTER the enabled/active guards (a disabled or session-less topic has no
     // countdown to measure) but BEFORE the latch guard: a latched thread still has
@@ -479,6 +483,11 @@ export function createCompaction(ports: CompactionPorts) {
     getState().noteCompactIdleTurnEnd(key);
   }
 
+  /** Whether the agent's `compact_conversation` armed a compaction for when the turn ends (F1). */
+  function checkIsDeferredCompactionArmed(key: SessionKey): boolean {
+    return deferredCompactionArmed.has(keyToString(key));
+  }
+
   /** Clear all compaction timers/arms for a thread (session teardown / unbind). */
   function clearThreadCompaction(key: SessionKey): void {
     const kStr = keyToString(key);
@@ -520,9 +529,24 @@ export function createCompaction(ports: CompactionPorts) {
    * (L-D1: whether or not the compaction ran). The stop re-checks "working" after
    * the compaction: a prompt taken in meanwhile keeps the process.
    */
+  /** Whether the idle compaction has something to do for the topic: enabled, not latched (D2), a turn since the last compaction. */
+  function checkIsCompactionDue(key: SessionKey): boolean {
+    if (!getState().checkIsCompactOnIdleEnabled(key) || getState().checkIsCompactIdleLatched(key)) return false;
+    const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
+    return lastTurnEndAt > lastCompactionAt;
+  }
+
   async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     const adapter = getThreadAdapter(key);
+    // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep.
+    if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key)) {
+      if (!(await resumeSleepingSessionForCompaction(key))) {
+        console.log(`[compact-on-idle] ${kStr} sleeping per-turn session could not be resumed for its compaction`);
+        return;
+      }
+      console.log(`[compact-on-idle] ${kStr} sleeping per-turn session resumed for its compaction`);
+    }
     // Both instants come from the store, so a restart no longer erases the evidence
     // that this session has an un-compacted turn (the bug: two in-memory zeros made
     // `0 > 0` false, and D2's no-reschedule rule then left the feature dead).
@@ -934,6 +958,7 @@ export function createCompaction(ports: CompactionPorts) {
     clearThreadCompaction,
     rearmThreadIdleTimer,
     armDeferredCompaction,
+    checkIsDeferredCompactionArmed,
     threadsCompacting,
     reAskedQuestionOptions,
     registerCompactionCommands,

@@ -143,13 +143,19 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   it('a trusted record (same session) restores its offset AND its background-task list', () => {
     assert.deepEqual(
       resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, backgroundTaskIds: ['b1', 'a2'] }, 'sess-1', 500),
-      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [] },
+      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null },
     );
   });
 
   it('a record of another session (or none) seeds to EOF with no tasks — no backlog flood, no inherited list', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
-    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
+    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
+  });
+
+  it('restores the CLI version of a trusted record (the auto-stop gate, L-D10); a foreign or older record has none', () => {
+    assert.equal(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 1, claudeCodeVersion: '2.1.287' }, 'sess-1', 5).claudeCodeVersion, '2.1.287');
+    assert.equal(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 1, claudeCodeVersion: '2.1.287' }, 'sess-1', 5).claudeCodeVersion, null);
+    assert.equal(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 1 }, 'sess-1', 5).claudeCodeVersion, null);
   });
 
   it('restores the turn in flight and its outstanding tools from a trusted record; a foreign record never implies a turn', () => {
@@ -162,7 +168,7 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   });
 
   it('clamps the offset to the file size; a record written before the list was tracked reads as no tasks', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
   });
 });
 

@@ -26,6 +26,7 @@ export const adapterEventNames = [
   'started',
   'stopped',
   'suspended',
+  'turnEnded',
   'error',
 ] as const;
 
@@ -59,6 +60,8 @@ export const foreignKeyEventRoutes = {
   stopped: 'requestSide',
   // An idle stop keeps the session, its retry and its compaction state: only Telegram frames to clean up.
   suspended: 'none',
+  // The per-turn stop (L5) applies to an issue's conversation as to a topic's; the handler posts nothing.
+  turnEnded: 'all',
   started: 'none',
   // Logged; there is no topic to post it to.
   error: 'requestSide',

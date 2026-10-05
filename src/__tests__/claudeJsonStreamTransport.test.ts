@@ -28,6 +28,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { ClaudeJsonStreamAdapter, claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
 import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { busyIdleWatchdogMs } from '../utils/jsonStreamBusyWatchdog';
 import {
@@ -359,6 +360,47 @@ describe('json-stream external transport — exit detection', () => {
     await adapter['stopSessionInternal'](key);
     await waiter;
     fs.rmSync(ending.paths.dir, { recursive: true, force: true });
+  });
+
+  it('every result ends with turnEnded (the per-turn stop hangs on it), after the session state settled', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-turnended-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const seen: Array<{ isBusy: boolean }> = [];
+    adapter.on('turnEnded', (k: SessionKey) => { assert.deepEqual(k, key); seen.push({ isBusy: session.isBusy }); });
+    adapter['onStdout'](session, textDeltaLine + resultLine);
+    assert.deepEqual(seen, [{ isBusy: false }], 'one event per result, emitted once the turn is no longer busy');
+    adapter['onStdout'](session, abortErrorResultLine);
+    assert.equal(seen.length, 2, 'an error result is a turn end too');
+  });
+
+  it('the auto-stop gate (L-D10): unknown version → not supported; the reported version decides; the version rides the tail record', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-gate-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+    assert.equal(adapter.checkIsAutoStopSupported(key), false, 'unknown until the process reports it');
+    const oldInit = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-transport', claude_code_version: '2.1.201' }) + '\n';
+    fs.writeFileSync(session.paths.stdoutFile, oldInit);
+    adapter['drainStdoutTail'](session);
+    assert.equal(adapter.checkIsAutoStopSupported(key), false, 'too old: never auto-stopped');
+    assert.equal(tailWrites.at(-1)?.claudeCodeVersion, '2.1.201', 'persisted with the offset, restored on adopt');
+    const newInit = oldInit + JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-transport', claude_code_version: '2.1.287' }) + '\n';
+    fs.writeFileSync(session.paths.stdoutFile, newInit);
+    adapter['drainStdoutTail'](session);
+    assert.equal(adapter.checkIsAutoStopSupported(key), true);
+  });
+
+  it('the two lifecycles are two adapter instances with their own names, sharing the stop-in-flight map', () => {
+    const idle = new ClaudeJsonStreamAdapter();
+    const perTurn = new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn' });
+    assert.equal(idle.name, claudeJsonStreamAdapterName);
+    assert.equal(idle.lifecycle, 'idle');
+    assert.equal(perTurn.name, claudePerTurnAdapterName);
+    assert.equal(perTurn.lifecycle, 'perTurn');
+    assert.notEqual(perTurn.label, idle.label);
+    assert.equal(idle['stopsInFlight'], perTurn['stopsInFlight'], 'a stop on one instance is joined by a start on the other (same tmux name)');
   });
 
   it('reconstructs isBusy from replayed events (adopt has no sendInput)', () => {

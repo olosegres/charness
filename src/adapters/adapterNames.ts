@@ -10,3 +10,15 @@ export const claudeJsonStreamAdapterName = 'claude-json-stream';
 
 /** The OpenCode backend (a local HTTP server). */
 export const openCodeAdapterName = 'opencode';
+
+/**
+ * The json-stream host stopped after EVERY turn (lifecycle plan L5, L-D3): the
+ * same adapter class as {@link claudeJsonStreamAdapterName} with the per-turn
+ * lifecycle, the same tmux session name and host dir per conversation.
+ */
+export const claudePerTurnAdapterName = 'claude-per-turn';
+
+/** Both backends that run the json-stream host (one process per conversation at a time). */
+export function checkIsJsonStreamBackend(name: string): boolean {
+  return name === claudeJsonStreamAdapterName || name === claudePerTurnAdapterName;
+}

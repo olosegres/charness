@@ -97,9 +97,23 @@ import {
   type JsonStreamSessionPaths,
   type StdoutTailState,
 } from '../utils/jsonStreamHost';
-import { claudeJsonStreamAdapterName } from './adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapterNames';
+import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 
+
+/** The two lifecycles of the json-stream host (see {@link ClaudeJsonStreamAdapter.lifecycle}). */
+export type JsonStreamLifecycle = 'idle' | 'perTurn';
+
+/**
+ * In-flight explicit stops, per key — a second stop (or a start's implicit stop)
+ * AWAITS the first instead of racing it: the delayed first `tmux kill-session`
+ * could otherwise land AFTER a fresh same-name spawn and kill the new session.
+ * MODULE-level, shared by the idle and the per-turn adapter instances: both host
+ * a conversation under the SAME tmux name and dir, and a `/claude_mode` switch
+ * stops the process on one instance while the other spawns the next.
+ */
+const stopsInFlightByKey = new Map<string, Promise<void>>();
 
 /**
  * @description Coalesce window for streamed answer/thinking deltas before an
@@ -330,8 +344,22 @@ interface StreamSession {
  * so it no longer needs a TUI to sign in.
  */
 export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapter {
-  readonly name = claudeJsonStreamAdapterName;
-  readonly label = 'Claude Code (stream)';
+  readonly name: string;
+  readonly label: string;
+  /**
+   * `idle` — the process stays between turns and is stopped at the idle mark (L3);
+   * `perTurn` — the process is stopped right after each turn (L5, L-D3), by the
+   * bot on the `turnEnded` event. Same host, same session layout: one process per
+   * conversation at a time whichever lifecycle runs it.
+   */
+  readonly lifecycle: JsonStreamLifecycle;
+
+  constructor(options: { lifecycle: JsonStreamLifecycle } = { lifecycle: 'idle' }) {
+    super();
+    this.lifecycle = options.lifecycle;
+    this.name = options.lifecycle === 'perTurn' ? claudePerTurnAdapterName : claudeJsonStreamAdapterName;
+    this.label = options.lifecycle === 'perTurn' ? 'Claude Code (per-turn)' : 'Claude Code (stream)';
+  }
   /** Emits incremental text deltas (like the tmux scrape) → the transports
    *  synthesise continuation (`getDmDraftContinuation` / group delta path). */
   readonly outputsDeltas = true;
@@ -345,11 +373,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private seenWatermarkWriter: SeenWatermarkWriter | null = null;
   private jsonStreamTailWriter: JsonStreamTailWriter | null = null;
   private sessionLaunchDefaultsReader: SessionLaunchDefaultsReader | null = null;
-  /** In-flight explicit stops, per key — a second stop (or a start's implicit
-   *  stop) AWAITS the first instead of racing it: the delayed first
-   *  `tmux kill-session` could otherwise land AFTER a fresh same-name spawn
-   *  and kill the new session. */
-  private readonly stopsInFlight = new Map<string, Promise<void>>();
+  /** The stops in flight — the module-level map shared by both lifecycles' instances (see {@link stopsInFlightByKey}). */
+  private readonly stopsInFlight = stopsInFlightByKey;
 
   setDisplayPrefsReader(reader: DisplayPrefsReader): void {
     this.displayPrefsReader = reader;
@@ -792,7 +817,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       return false;
     }
     const size = getFileSize(paths.stdoutFile) ?? 0;
-    const { startOffset, backgroundTaskIds, isTurnInFlight, outstandingToolUseIds } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
+    const { startOffset, backgroundTaskIds, isTurnInFlight, outstandingToolUseIds, claudeCodeVersion } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
     const session: StreamSession = {
@@ -821,9 +846,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingQuestion: this.readQuestionSidecar(paths),
       apiErrorFired: false, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
-      // The frames that built the list lie before the tail offset (not replayed);
-      // the version arrives on the next turn's `init`.
-      backgroundTaskIds: new Set(backgroundTaskIds), claudeCodeVersion: null, applyingChunk: null,
+      // The frames that built the list and reported the version lie before the
+      // tail offset (not replayed): both come from the persisted record.
+      backgroundTaskIds: new Set(backgroundTaskIds), claudeCodeVersion, applyingChunk: null,
       // Nothing to catch up on when the tail already sits at EOF.
       adoptCatchUpOffset: startOffset < size ? size : null, adoptCatchUpResolvers: [],
     };
@@ -984,6 +1009,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** The CLI version the live process reported on `system/init`, `null` until then (L-D10 gate input). */
   getClaudeCodeVersion(key: SessionKey): string | null {
     return this.sessions.get(keyToString(key))?.claudeCodeVersion ?? null;
+  }
+
+  /** L-D10: only a CLI that reports the background-task list may be stopped automatically. */
+  checkIsAutoStopSupported(key: SessionKey): boolean {
+    return checkIsClaudeAutoStopSupported(this.getClaudeCodeVersion(key));
   }
 
   async getRuntimeInfo(key: SessionKey): Promise<AgentRuntimeInfo> {
@@ -1541,7 +1571,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   // — turn end —
 
+  /** Every terminal `result` — a normal turn, a compaction turn, an error — ends with the `turnEnded` event. */
   private handleTurnEnd(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'turnEnd' }>): void {
+    this.applyTurnEnd(session, action);
+    // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
+    this.emit('turnEnded', session.key);
+  }
+
+  private applyTurnEnd(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'turnEnd' }>): void {
     // L-D11: every turn's accounting, the compaction turn included — the
     // cross-process prompt-cache check reads these lines, so they must be real
     // and repeatable, never reconstructed from a transcript afterwards.
@@ -1887,6 +1924,8 @@ function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStrea
     backgroundTaskIds: [...session.backgroundTaskIds],
     isTurnInFlight: session.isBusy,
     outstandingToolUseIds: [...session.outstandingToolUseIds],
+    // Only once known: the record never claims a version the process did not report.
+    ...(session.claudeCodeVersion !== null ? { claudeCodeVersion: session.claudeCodeVersion } : {}),
   };
 }
 

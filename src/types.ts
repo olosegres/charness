@@ -79,6 +79,8 @@ export interface JsonStreamTailOffset {
    * written before the list was tracked has none, which reads as "no tasks".
    */
   backgroundTaskIds?: string[];
+  /** The CLI version the process reported on its `init` (`claude_code_version`), restored on adopt for the auto-stop gate (L-D10). */
+  claudeCodeVersion?: string;
   /**
    * Whether a turn was in flight as of `offsetBytes` — set when a user turn is
    * written, cleared by its `result`. Restored on adopt so a process in a long,
@@ -593,6 +595,7 @@ export type CompactionResult =
  * - 'started'  (key: SessionKey)                  — session is up and ready
  * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
  * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
+ * - 'turnEnded' (key: SessionKey)                 — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5)
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)
  * - 'error'    (key: SessionKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
  *
@@ -709,6 +712,13 @@ export interface AgentAdapter extends EventEmitter {
    * Optional, like `checkIsWorking`.
    */
   checkHasBackgroundWork?(key: SessionKey): boolean;
+
+  /**
+   * Whether the live process may be stopped automatically (lifecycle plan L-D10):
+   * its CLI reports the background-task list (`claude_code_version` ≥ 2.1.287).
+   * Unknown version → `false`. Optional: a backend that is never auto-stopped omits it.
+   */
+  checkIsAutoStopSupported?(key: SessionKey): boolean;
 
   /**
    * Re-register the bot-owned scheduler MCP for active OpenCode directories,

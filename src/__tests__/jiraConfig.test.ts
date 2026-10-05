@@ -177,8 +177,11 @@ describe('validateJiraConfig', () => {
     ]);
   });
 
-  it('an unknown adapter is refused', () => {
-    assert.deepEqual(getErrors(createConfig({ adapter: 'terminal' })), ['jira.json adapter must be claude-json-stream']);
+  it('an unknown adapter is refused; the per-turn json-stream lifecycle is accepted (L-D12)', () => {
+    assert.deepEqual(getErrors(createConfig({ adapter: 'terminal' })), ['jira.json adapter must be claude-json-stream or claude-per-turn']);
+    const perTurn = validateJiraConfig(createConfig({ adapter: 'claude-per-turn' }), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+    assert.ok(perTurn.ok, JSON.stringify(perTurn));
+    if (perTurn.ok) assert.equal(perTurn.config.adapter, 'claude-per-turn');
   });
 
   it('R9: an unset or default OPENCODE_URL is refused, a port of its own is accepted', () => {

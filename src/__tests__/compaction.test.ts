@@ -48,6 +48,7 @@ describe('compaction: the compaction flow over its ports', () => {
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},
+      resumeSleepingSessionForCompaction: async () => false,
     });
     compaction.registerCompactionCommands();
     compaction.registerCompactionCallbacks();

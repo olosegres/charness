@@ -32,7 +32,7 @@ import {
   getClaudeModeAction,
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName, openCodeAdapterName } from './adapters/adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend, openCodeAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
@@ -210,6 +210,7 @@ import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
+import { minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
 import { getAgentIdleMs } from './utils/compactOnIdle';
@@ -4257,7 +4258,7 @@ let botMcpToolDigestReader: ((platform: PlatformId) => string) | null = null;
  */
 async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Promise<void> {
   await persistAdapterSessionIds(key, adapter, state);
-  if (adapter.name === claudeJsonStreamAdapterName && botMcpToolDigestReader) {
+  if (checkIsJsonStreamBackend(adapter.name) && botMcpToolDigestReader) {
     await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key.platform));
   }
 }
@@ -4271,7 +4272,7 @@ async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Prom
  * adopt, the live state is the persisted one plus nothing, and a turn that ended
  * or began during the downtime would be misread.
  */
-function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter): void {
+function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter, reason: 'the stale tool list' | 'the per-turn lifecycle'): void {
   const kStr = keyToString(key);
   const tick = (): void => {
     if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
@@ -4280,7 +4281,7 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAd
       timer.unref?.();
       return;
     }
-    console.log(`[reattach] ${kStr}: stopping the adopted process with the stale tool list; the next trigger resumes it with the current tools`);
+    console.log(`[reattach] ${kStr}: stopping the adopted process (${reason}); the next trigger resumes it`);
     void suspendThreadSession(key)
       .then(() => {
         // The suspend declines when a turn began between the look and the transition: look again.
@@ -4583,6 +4584,16 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
   const adapter = getThreadAdapter(key);
   if (!adapter.suspendSession) return;
   const kStr = keyToString(key);
+  // L-D10: a CLI that does not report its background tasks is never auto-stopped — a stop could kill
+  // work the bot cannot see. One line per session, not per fire.
+  if (!(adapter.checkIsAutoStopSupported?.(key) ?? false)) {
+    if (!autoStopUnsupportedLoggedKeys.has(kStr)) {
+      autoStopUnsupportedLoggedKeys.add(kStr);
+      console.log(`[lifecycle] ${kStr} is not auto-stopped: Claude Code ${minAutoStopClaudeCodeVersion} or newer is needed (the version is unknown until the process reports it)`);
+    }
+    return;
+  }
+  autoStopUnsupportedLoggedKeys.delete(kStr);
   await sessionTransitions.run(kStr, async () => {
     if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
     startupPromptBuffer.markStarting(kStr);
@@ -4593,7 +4604,28 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
       startupPromptBuffer.closeWindow(kStr);
     }
   });
+  // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
+  rearmThreadIdleTimer(key);
   if (startupPromptBuffer.checkHasPrompts(kStr)) await ensureAgentSession(key);
+}
+
+/** Conversations already told once that their CLI is too old for the auto-stop (L-D10). */
+const autoStopUnsupportedLoggedKeys = new Set<string>();
+
+/**
+ * @description `turnEnded` from a json-stream adapter: in the per-turn lifecycle
+ * (L5, L-D3) the process is stopped right after the turn — unless a deferred
+ * compaction is armed (its drain compacts first, and that turn ends here too) or
+ * the process still works (a background task, input not yet taken in). The
+ * session sleeps; the next trigger resumes it with the prompt cache warm.
+ */
+function handleAgentTurnEnded(key: SessionKey): void {
+  const adapter = getThreadAdapter(key);
+  if (adapter.name !== claudePerTurnAdapterName) return;
+  if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
+  void suspendThreadSession(key).catch((e) =>
+    console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+  );
 }
 
 /**
@@ -4933,6 +4965,7 @@ const {
   clearThreadCompaction,
   rearmThreadIdleTimer,
   armDeferredCompaction,
+  checkIsDeferredCompactionArmed,
   threadsCompacting,
   reAskedQuestionOptions,
   registerCompactionCommands,
@@ -4946,6 +4979,8 @@ const {
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
   checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
   suspendThreadSession,
+  // L-D7: a sleeping per-turn session is woken for its idle compaction — a resume only, never a fresh start.
+  resumeSleepingSessionForCompaction: async (key) => (await ensureAgentSession(key, { isResumeOnly: true })).ok && getThreadAdapter(key).checkIsActive(key),
 });
 
 /**
@@ -6293,13 +6328,15 @@ registerProviderCommands();
 /** Human label for a Claude backend name (the two adapters share `label`
  *  "Claude Code", so the picker/notices need a distinguishing name). */
 function getClaudeBackendLabel(name: string): string {
-  return name === claudeJsonStreamAdapterName ? '⚡ JSON-stream' : '🖥 Terminal-scrape';
+  if (name === claudeJsonStreamAdapterName) return '⚡ JSON-stream';
+  if (name === claudePerTurnAdapterName) return '🔁 Per-turn';
+  return '🖥 Terminal-scrape';
 }
 
 /** Build the `/claude_mode` picker: one button per Claude backend, `✓` on the
  *  current one. Callback data `ccmode_<adapterName>`. */
 function buildClaudeModeKeyboard(current: string) {
-  const buttons = [claudeJsonStreamAdapterName, 'claude'].map((name) =>
+  const buttons = [claudeJsonStreamAdapterName, claudePerTurnAdapterName, 'claude'].map((name) =>
     Markup.button.callback(
       name === current ? `${getClaudeBackendLabel(name)} ✓` : getClaudeBackendLabel(name),
       `ccmode_${name}`,
@@ -8701,7 +8738,7 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
  */
 function checkAdapterSupportsDraftStreaming(key: SessionKey): boolean {
   const name = getThreadAdapterNameRaw(key);
-  return name === openCodeAdapterName || name === 'claude' || name === claudeJsonStreamAdapterName;
+  return name !== undefined && (name === openCodeAdapterName || name === 'claude' || checkIsJsonStreamBackend(name));
 }
 
 /**
@@ -10037,7 +10074,7 @@ export const COMMANDS_MENU = [
   { command: 'connect', description: '🔑 Connect an OpenCode provider API key' },
   { command: 'disconnect', description: '🔌 Disconnect an OpenCode provider' },
   { command: 'terminal', description: '🖥 Open a raw shell in the bound folder' },
-  { command: 'claude_mode', description: '🔀 Claude backend: tmux-scrape ⇄ json-stream' },
+  { command: 'claude_mode', description: '🔀 Claude backend: json-stream ⇄ per-turn ⇄ tmux-scrape' },
   { command: 'new', description: '🆕 Restart session (alias /clear_session)' },
   { command: 'clear_session', description: '🆕 Restart session (alias /new)' },
   { command: 'model', description: '🧠 Switch model' },
@@ -10380,7 +10417,9 @@ async function reattachExistingSessions(
         try {
           const binding = state.getBinding(key);
           const agent = state.getAgent(key);
-          if (!binding || agent?.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) {
+          // Either json-stream lifecycle owns the same tmux name: the persisted agent name says which instance adopts.
+          const ownerAdapter = agent && checkIsJsonStreamBackend(agent.name) ? getAdapter(agent.name) : null;
+          if (!binding || !(ownerAdapter instanceof ClaudeJsonStreamAdapter) || !agent?.claudeSessionId) {
             await claudeJsonAdapter.killOrphanTmuxSession(sessionName);
             jsonKilled += 1;
             continue;
@@ -10395,20 +10434,24 @@ async function reattachExistingSessions(
             if (!opts.quietReattach && checkIsTelegramKey(key)) replyToThread(key, workDirDecision.message).catch(() => {});
             continue;
           }
-          if (await claudeJsonAdapter.adoptExistingTmuxSession(
+          if (await ownerAdapter.adoptExistingTmuxSession(
             key, sessionName, workDirDecision.workDir, agent.claudeSessionId, agent.jsonStreamTail ?? null,
           )) {
             jsonAdopted += 1;
+            if (ownerAdapter.lifecycle === 'perTurn') {
+              // A per-turn process that outlived the bot is stopped as soon as its turn (if any) ends (L5).
+              stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the per-turn lifecycle');
+            }
             const refresh = decideAdoptedToolListRefresh({
               persistedDigest: agent.mcpToolDigest,
               currentDigest: botMcpToolDigestReader?.(key.platform) ?? '',
-              isWorking: claudeJsonAdapter.checkIsWorking(key),
+              isWorking: ownerAdapter.checkIsWorking(key),
             });
             if (refresh !== 'fresh') {
               // Read from the persisted state (the turn-in-flight flag, the task list); the stop itself
               // looks again once the downtime frames have replayed.
               console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list (${refresh === 'stopNow' ? 'idle: stopped now' : 'working: stopped once idle'})`);
-              stopAdoptedSessionWhenIdle(key, claudeJsonAdapter);
+              if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the stale tool list');
             }
           } else {
             // Dead/zombie — adopt cleaned it up itself; the thread sleeps (below)
@@ -10425,15 +10468,18 @@ async function reattachExistingSessions(
   }
   for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
-    if (!agent || agent.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) continue;
-    if (claudeJsonAdapter.checkIsActive(key)) continue; // adopted above
+    if (!agent || !checkIsJsonStreamBackend(agent.name) || !agent.claudeSessionId) continue;
+    const ownerAdapter = getAdapter(agent.name);
+    if (ownerAdapter.checkIsActive(key)) continue; // adopted above
     // Sleeping (L4): no process is started — the next trigger resumes the conversation. What the agent
     // produced while the bot was down is still recapped, read from the transcript on disk.
     jsonSleeping += 1;
+    // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
+    if (agent.name === claudePerTurnAdapterName) rearmThreadIdleTimer(key);
     const workDirDecision = getWorkDirStartDecision(key);
     if (!workDirDecision.ok) continue; // a vanished folder is reported when the next trigger tries to resume
     void postReattachRecap(
-      key, claudeJsonAdapter, workDirDecision.workDir, agent.claudeSessionId, agent.seenWatermark ?? null, !opts.quietReattach,
+      key, ownerAdapter, workDirDecision.workDir, agent.claudeSessionId, agent.seenWatermark ?? null, !opts.quietReattach,
     ).catch(() => {});
   }
   console.log(`[reattach] claude-json-stream: adopted ${jsonAdopted}, sleeping ${jsonSleeping}, killed ${jsonKilled} orphans (quiet=${opts.quietReattach})`);
@@ -10614,13 +10660,12 @@ function restoreApiRetries(): void {
  * reload resurrected the settled wait.
  */
 function recoverLimitEpisodesFromDisk(): void {
-  const jsonStreamAdapter = getAdapter(claudeJsonStreamAdapterName);
   const now = Date.now();
   let recovered = 0;
   for (const { key } of getServedBindings()) {
     const agent = state.getAgent(key);
-    if (agent?.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) continue;
-    if (!jsonStreamAdapter.checkIsActive(key)) continue;
+    if (!agent || !checkIsJsonStreamBackend(agent.name) || !agent.claudeSessionId) continue;
+    if (!getAdapter(agent.name).checkIsActive(key)) continue;
     // A topic with auto-continue OFF has nothing to recover — and routing a
     // 12h-old stale error through `handleApiError` would re-post the OFF notice
     // (its dedup is in-memory) after EVERY boot, i.e. on every hot reload.
@@ -11447,6 +11492,7 @@ export async function startBot(): Promise<void> {
     onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key))),
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
+    onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),

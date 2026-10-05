@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { expandEnvVars } from '../../mcpConfig';
 import { BindError, validateSubdir, type BindErrorCode } from '../../validation';
 import { defaultOpenCodeUrl, getOpenCodePort } from '../../installManager';
-import { claudeJsonStreamAdapterName } from '../../adapters/adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from '../../adapters/adapterNames';
 import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
@@ -24,8 +24,10 @@ export const jiraPollIntervalDefaultSeconds = 90;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
 
-/** The one backend a Jira session runs on (D16, R14). */
+/** The backend a Jira session runs on by default (D16, R14); `claude-per-turn` is the other allowed one (L-D12). */
 const jiraAdapterName = claudeJsonStreamAdapterName;
+/** The json-stream host, under either lifecycle — no TUI trust dialog (R14). */
+export type JiraAdapterName = typeof claudeJsonStreamAdapterName | typeof claudePerTurnAdapterName;
 /** Backends refused for a Jira project, each with its reason. */
 const refusedAdapterReasons: ReadonlyMap<string, string> = new Map([
   ['opencode', 'OpenCode is not available for a Jira project (it cannot be isolated yet)'],
@@ -97,7 +99,7 @@ export interface JiraConfig {
   projects: ReadonlyMap<string, JiraProjectConfig>;
   pollIntervalMs: number;
   runBudgetPer24h: number;
-  adapter: typeof jiraAdapterName;
+  adapter: JiraAdapterName;
   /** The sessions' model; absent → Claude's default. */
   model: string | null;
   /** The sessions' reasoning effort; absent → the bot's default. */
@@ -197,8 +199,8 @@ export function validateJiraConfig(
   const refusedReason = refusedAdapterReasons.get(adapterName);
   if (refusedReason) {
     errors.push(`jira.json adapter: ${refusedReason}`);
-  } else if (adapterName !== jiraAdapterName) {
-    errors.push(`jira.json adapter must be ${jiraAdapterName}`);
+  } else if (!checkIsJsonStreamBackend(adapterName)) {
+    errors.push(`jira.json adapter must be ${jiraAdapterName} or ${claudePerTurnAdapterName}`);
   }
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
@@ -240,7 +242,7 @@ export function validateJiraConfig(
       projects,
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
-      adapter: jiraAdapterName,
+      adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
       model: raw.model ?? null,
       effort: raw.effort ?? null,
     },

@@ -113,6 +113,8 @@ const answerTimeoutMs = 60 * 1000;
 const resumeTimeoutMs = 3 * 60 * 1000;
 /** The idle window, the compaction turn and the stop, with room to spare. */
 const idleStopTimeoutMs = 2 * 60 * 1000;
+/** A per-turn stop follows the answer at once — well inside the 30 s idle window, which would stop the process too (L5). */
+const perTurnStopTimeoutMs = 15 * 1000;
 /** The grace the shared instance helper gives a stop before killing. */
 const stopTimeoutMs = 20 * 1000;
 /** The restart step waits for this many polls. */
@@ -125,7 +127,7 @@ const flowMarginMs = 60 * 1000;
  * stops (the restart's and `after`'s) — so a slow run fails at the step that is
  * late, never at the suite.
  */
-const flowTimeoutMs = 2 * bootTimeoutMs + 17 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 2 * bootTimeoutMs + 21 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -240,9 +242,12 @@ async function startCharness(): Promise<void> {
   assertMcpListeningOn(charness.output.slice(outputStart), botMcpPort);
 }
 
-function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBaseUrl: string): void {
-  const instance = getLayout();
-  fs.writeFileSync(path.join(instance.dataDir, 'jira.json'), JSON.stringify({
+/** The fake Jira's base url, kept for a `jira.json` rewrite between a stop and a restart. */
+let jiraBaseUrl = '';
+
+/** Write `jira.json` for the instance; `adapter` is the json-stream lifecycle its sessions run on. */
+function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn'): void {
+  fs.writeFileSync(path.join(getLayout().dataDir, 'jira.json'), JSON.stringify({
     site: 'example.atlassian.net',
     baseUrl: jiraBaseUrl,
     email: aiCredentials.email,
@@ -250,8 +255,13 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, jiraBas
     accountId: aiAccount.accountId,
     projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name] } },
     pollIntervalSeconds,
-    adapter: 'claude-json-stream',
+    adapter,
   }, null, 2));
+}
+
+function writeInstanceFiles(ports: { openCode: number; botMcp: number }): void {
+  const instance = getLayout();
+  writeJiraConfig('claude-json-stream');
 
   const claudeBin = writeFakeClaudeLauncher(instance, 'jira');
   writeInstanceEnvFile(instance, {
@@ -289,9 +299,9 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     process.once('SIGTERM', exitOnSignal);
 
     fakeJira = new FakeJira({ aiAccount, credentials: aiCredentials, statuses: [toDo, inProgress] });
-    const jiraBaseUrl = await fakeJira.start();
+    jiraBaseUrl = await fakeJira.start();
     botMcpPort = await getFreeFixedPort();
-    writeInstanceFiles({ openCode: await getFreePort(), botMcp: botMcpPort }, jiraBaseUrl);
+    writeInstanceFiles({ openCode: await getFreePort(), botMcp: botMcpPort });
   });
 
   after(async () => {
@@ -328,6 +338,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     createIssue('PROJ-7', 'answer-after-queued');
     createIssue('PROJ-8', 'background');
     createIssue('PROJ-9', 'slow-once');
+    createIssue('PROJ-10', 'answer');
     createIssue('OTHER-1', 'answer');
     await startCharness();
     const pid = getCharness().pid;
@@ -561,6 +572,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await getCharness().stop();
     // A bot upgrade that changed the tools: the digests the two live processes were started with no longer match.
     markToolDigestStale(['jira:PROJ:PROJ-2', 'jira:PROJ:PROJ-8', 'jira:PROJ:PROJ-9']);
+    // From this boot, NEW Jira sessions run the per-turn lifecycle (L5); the adopted and sleeping ones keep theirs.
+    writeJiraConfig('claude-per-turn');
 
     const searchesBefore = fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
     const outputBeforeRestart = getCharness().output.length;
@@ -579,7 +592,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     await waitFor('PROJ-9 answered by the adopted process', 2 * answerTimeoutMs, () => fakeJira.getIssue('PROJ-9').comments.length > 0);
     assert.equal(getTurns('PROJ-9').length, 1, 'answered by the turn that was in flight, in the adopted process');
     await waitFor('PROJ-9\'s stale process stopped once its turn ended', answerTimeoutMs, () => !checkIsProcessAlive(midTurnAdoptedTurn.pid));
-    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: stopping the adopted process with the stale tool list'));
+    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: stopping the adopted process (the stale tool list)'));
     // Two polls after the restart: the first one decided every issue again.
     await waitFor('two polls after the restart', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);
@@ -604,6 +617,25 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const refreshedTurn = getTurns('PROJ-2').at(-1)!;
     assert.notEqual(refreshedTurn.pid, idleAdoptedTurn.pid, 'a new process');
     assert.deepEqual(getFlagValues(getSessionLaunchOf(refreshedTurn.pid)?.argv ?? [], '--resume'), [idleAdoptedSessionId], 'the same conversation, resumed');
+  });
+
+  it('per-turn mode (L5): the process is gone right after each answer; the next hand-over resumes the same conversation', async () => {
+    fakeJira.assignIssue('PROJ-10', aiAccount, requester);
+    await waitFor('PROJ-10 answered', answerTimeoutMs, () => fakeJira.getIssue('PROJ-10').comments.length === 1);
+    const [firstTurn] = getTurns('PROJ-10');
+    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
+    assert.ok(sessionId, 'PROJ-10\'s launch named its conversation');
+    await waitFor('PROJ-10\'s process stopped right after its turn', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
+    assert.ok(getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-10 process stopped; the session sleeps'), 'the per-turn stop is the idle stop\'s teardown');
+    assert.ok(!getCharness().output.includes('[ClaudeJson] session jira:PROJ:PROJ-10 exited unexpectedly'));
+
+    handIssueToAi('PROJ-10', requester);
+    await waitFor('PROJ-10 answered again', answerTimeoutMs, () => fakeJira.getIssue('PROJ-10').comments.length === 2);
+    const secondTurn = getTurns('PROJ-10').at(-1)!;
+    assert.notEqual(secondTurn.pid, firstTurn.pid, 'a new process per turn');
+    assert.deepEqual(getFlagValues(getSessionLaunchOf(secondTurn.pid)?.argv ?? [], '--resume'), [sessionId], 'the same conversation, resumed');
+    await waitFor('PROJ-10\'s second process stopped too', perTurnStopTimeoutMs, () => !checkIsProcessAlive(secondTurn.pid));
+    assert.equal(fakeJira.getIssue('PROJ-10').assignee?.accountId, requester.accountId, 'handed back');
   });
 
   it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {

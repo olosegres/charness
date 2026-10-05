@@ -23,13 +23,18 @@ describe('reattach: json-stream (L4)', () => {
   it('a thread whose process is gone sleeps: no resume at boot, the recap from the transcript', () => {
     assert.ok(!reattachJsonStream.includes('.resumeSession('), 'no dead-process re-spawn');
     assert.ok(reattachJsonStream.includes('jsonSleeping += 1;'));
-    assert.match(reattachJsonStream, /void postReattachRecap\(\n\s*key, claudeJsonAdapter, workDirDecision\.workDir, agent\.claudeSessionId, agent\.seenWatermark \?\? null, !opts\.quietReattach,\n\s*\)/);
+    assert.match(reattachJsonStream, /void postReattachRecap\(\n\s*key, ownerAdapter, workDirDecision\.workDir, agent\.claudeSessionId, agent\.seenWatermark \?\? null, !opts\.quietReattach,\n\s*\)/);
     assert.ok(reattachJsonStream.includes('sleeping ${jsonSleeping}'), 'the boot line counts the sleeping threads');
   });
 
   it('an adopted process is checked against the persisted tool digest and stopped at its next idle point when stale', () => {
-    assert.match(reattachJsonStream, /decideAdoptedToolListRefresh\(\{\n\s*persistedDigest: agent\.mcpToolDigest,\n\s*currentDigest: botMcpToolDigestReader\?\.\(key\.platform\) \?\? '',\n\s*isWorking: claudeJsonAdapter\.checkIsWorking\(key\),\n\s*\}\)/);
-    assert.ok(reattachJsonStream.includes("if (refresh !== 'fresh') {") && reattachJsonStream.includes('stopAdoptedSessionWhenIdle(key, claudeJsonAdapter);'));
+    assert.match(reattachJsonStream, /decideAdoptedToolListRefresh\(\{\n\s*persistedDigest: agent\.mcpToolDigest,[^]*?isWorking: ownerAdapter\.checkIsWorking\(key\),\n\s*\}\)/);
+    assert.ok(reattachJsonStream.includes("if (refresh !== 'fresh') {") && reattachJsonStream.includes("stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the stale tool list');"));
+    // L5: either json-stream lifecycle owns the same tmux name — the persisted agent name picks the adopting instance;
+    // an adopted per-turn process is stopped as soon as its turn ends.
+    assert.ok(reattachJsonStream.includes('const ownerAdapter = agent && checkIsJsonStreamBackend(agent.name) ? getAdapter(agent.name) : null;'));
+    assert.ok(reattachJsonStream.includes("stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the per-turn lifecycle');"));
+    assert.ok(reattachJsonStream.includes("if (agent.name === claudePerTurnAdapterName) rearmThreadIdleTimer(key);"), 'a sleeping per-turn session with a compaction due gets its timer at boot (L-D7)');
   });
 
   it('every json-stream (re)start persists the digest of the tools it connected to', () => {

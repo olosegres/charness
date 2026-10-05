@@ -7,7 +7,7 @@ import { OpenCodeAdapter } from './openCodeAdapter';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName } from './adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 
 type AdapterFactory = () => AgentAdapter;
@@ -16,7 +16,8 @@ const adapterFactories: Record<string, AdapterFactory> = {
   claude: () => new ClaudeCliAdapter(),
   opencode: () => new OpenCodeAdapter(),
   terminal: () => new TerminalAdapter(),
-  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter(),
+  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle' }),
+  [claudePerTurnAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn' }),
 };
 
 /**
@@ -81,6 +82,7 @@ let onClosed: SessionKeyHandler | null = null;
 let onStarted: SessionKeyHandler | null = null;
 let onStopped: SessionKeyHandler | null = null;
 let onSuspended: SessionKeyHandler | null = null;
+let onTurnEnded: SessionKeyHandler | null = null;
 let onError: ErrorHandler | null = null;
 
 /** Per-thread display-prefs reader for BOTH adapters — same late-wiring idiom
@@ -187,6 +189,7 @@ function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onStarted) adapter.on('started', onStarted);
   if (onStopped) adapter.on('stopped', onStopped);
   if (onSuspended) adapter.on('suspended', onSuspended);
+  if (onTurnEnded) adapter.on('turnEnded', onTurnEnded);
   // Always register error handler to prevent ERR_UNHANDLED_ERROR crash.
   adapter.on('error', (key: SessionKey, error: Error) => {
     if (onError) {
@@ -215,6 +218,7 @@ export function registerAdapterEventHandlers(handlers: {
   onStarted?: SessionKeyHandler;
   onStopped?: SessionKeyHandler;
   onSuspended?: SessionKeyHandler;
+  onTurnEnded?: SessionKeyHandler;
   onError?: ErrorHandler;
 }): void {
   onOutput = handlers.onOutput;
@@ -230,6 +234,7 @@ export function registerAdapterEventHandlers(handlers: {
   onStarted = handlers.onStarted ?? null;
   onStopped = handlers.onStopped ?? null;
   onSuspended = handlers.onSuspended ?? null;
+  onTurnEnded = handlers.onTurnEnded ?? null;
   onError = handlers.onError ?? null;
 
   // Wire to already-created instances
@@ -274,7 +279,7 @@ export function getAdapter(name: string): AgentAdapter {
  * through the `/claude_mode` backend switch, never a start-list entry of its
  * own — listing it next to "Claude Code" would read as two different agents.
  */
-const hiddenAdapterNames = new Set<string>([claudeJsonStreamAdapterName]);
+const hiddenAdapterNames = new Set<string>([claudeJsonStreamAdapterName, claudePerTurnAdapterName]);
 
 export function getAvailableAdapters(): Array<{ name: string; label: string }> {
   return Object.keys(adapterFactories)
@@ -314,17 +319,19 @@ export function getDefaultClaudeBackendName(): string {
 }
 
 /**
- * @description The two Claude Code backends. Both drive the SAME `claude` CLI
+ * @description The three Claude Code backends. All drive the SAME `claude` CLI
  * against the SAME on-disk transcript, so a thread is cross-resumable between
  * them live:
- *  - `'claude'` — the tmux TUI, scraped screen (classic).
+ *  - `'claude'` — the tmux TUI, scraped screen (classic);
  *  - {@link claudeJsonStreamAdapterName} — an EXTERNAL tmux-hosted process
  *    streaming structured stream-json events over a FIFO + stdout file, so it
- *    survives bot restarts (the DEFAULT, see {@link getDefaultClaudeBackendName}).
+ *    survives bot restarts; stopped at the idle mark (the DEFAULT, see
+ *    {@link getDefaultClaudeBackendName});
+ *  - {@link claudePerTurnAdapterName} — the same host, stopped after each turn (L5).
  * `/claude_mode` flips a thread between them.
  */
 export function checkIsClaudeBackend(name: string): boolean {
-  return name === 'claude' || name === claudeJsonStreamAdapterName;
+  return name === 'claude' || checkIsJsonStreamBackend(name);
 }
 
 /**
@@ -359,6 +366,7 @@ export function resolveClaudeBackendName(key: SessionKey): string {
  */
 export function parseClaudeBackendArg(arg: string): string | null {
   if (['json', 'jsonstream', 'json-stream', 'stream'].includes(arg)) return claudeJsonStreamAdapterName;
+  if (['perturn', 'per-turn', 'oneshot'].includes(arg)) return claudePerTurnAdapterName;
   if (['tmux', 'scrape', 'terminal', 'classic'].includes(arg)) return 'claude';
   return null;
 }
