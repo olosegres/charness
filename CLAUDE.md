@@ -212,6 +212,9 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   whatever `TMUX_TMPDIR` says. A test's own servers are private (`TMUX_SOCKET_NAME` + a `TMUX_TMPDIR` inside
   a temp dir) and are ended only by the FULL socket path (`tmux -S <path> kill-server`). Compare a read-only
   `tmux ls` before and after a suite — a session that disappears is a suite bug.
+- **Tests and agents run with a private `TMUX_TMPDIR`** — the default tmux server may host a live bot's sessions.
+- **A guard that protects real state** (processes, tmux servers, files, accounts) is proven load-bearing only against
+  a decoy the test itself creates — never by disabling it while the guarded action can reach the real thing.
 - `jiraConnectorE2e.test.ts` (~1.5 min, part of `yarn test`) boots a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
