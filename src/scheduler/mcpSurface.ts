@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -354,6 +354,55 @@ export interface SchedulerMcpHandle {
   stop(): Promise<void>;
   /** The bound port, available after `start` resolves. */
   readonly port: number;
+  /** The digest of the tool definitions a session of `platform` connects to (see {@link getBotMcpToolDigest}). */
+  getToolDigest(platform: PlatformId | null): string;
+}
+
+/** What the tool registrars need of an {@link McpServer}: the registration call alone. */
+type ToolRegistrar = Pick<McpServer, 'registerTool'>;
+
+/** The parts of a tool definition an MCP client sees — what {@link getBotMcpToolDigest} hashes. */
+export interface BotMcpToolDefinition {
+  name: string;
+  title: string | undefined;
+  description: string | undefined;
+  /** The input schema's top-level parameter names, sorted. */
+  inputKeys: string[];
+}
+
+/**
+ * @description Hash the tool definitions a client would list — a stable id of
+ * "the tools this bot build offers a session of one platform". Lifecycle plan L4:
+ * persisted when a json-stream process starts and compared when the process is
+ * adopted after a bot restart, since the stateless server cannot tell a running
+ * client that its tool list changed.
+ */
+export function buildBotMcpToolDigest(definitions: readonly BotMcpToolDefinition[]): string {
+  const canonical = [...definitions]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(({ name, title, description, inputKeys }) => ({ name, title: title ?? '', description: description ?? '', inputKeys }));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/** A scope of no conversation: only the digest registers against it, and the digest never runs a handler. */
+const digestScope: SchedulerScope = { kind: 'dir', directory: '' };
+
+/**
+ * @description The digest of the tools a session of `platform` gets — built by
+ * the SAME registration the request path runs, recorded instead of served, so
+ * a tool added, renamed, re-described or re-shaped changes it and nothing else
+ * has to be kept in step by hand.
+ */
+export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId | null): string {
+  const definitions: BotMcpToolDefinition[] = [];
+  const recorder: ToolRegistrar = {
+    registerTool: ((name: string, config: { title?: string; description?: string; inputSchema?: Record<string, unknown> }) => {
+      definitions.push({ name, title: config.title, description: config.description, inputKeys: Object.keys(config.inputSchema ?? {}).sort() });
+      return undefined as never;
+    }) as McpServer['registerTool'],
+  };
+  registerBotTools(recorder, deps, digestScope, platform, undefined);
+  return buildBotMcpToolDigest(definitions);
 }
 
 /**
@@ -731,7 +780,7 @@ function summarizeRecord(record: ScheduleRecord): string {
  * then operates only on that thread's jobs. Bound to `deps` + the request's
  * verified `scope`.
  */
-function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
+function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
   server.registerTool(
     'schedule_create',
     {
@@ -878,7 +927,7 @@ function registerSchedulerTools(server: McpServer, deps: SchedulerMcpDeps, scope
  * topic); the actual path-safety + Telegraf send live in `deps.sendFilesToThread`.
  */
 function registerFileSendTool(
-  server: McpServer,
+  server: ToolRegistrar,
   deps: SchedulerMcpDeps,
   scope: SchedulerScope,
   requestSignal: AbortSignal | undefined,
@@ -936,7 +985,7 @@ function registerFileSendTool(
  * `deps.sendMessagesToThread`.
  */
 function registerMessageSendTool(
-  server: McpServer,
+  server: ToolRegistrar,
   deps: SchedulerMcpDeps,
   scope: SchedulerScope,
   requestSignal: AbortSignal | undefined,
@@ -999,7 +1048,7 @@ function registerMessageSendTool(
  * arm + deferred compaction lives in `deps.compactConversation`; this surface
  * only routes the resolved thread and relays the status text.
  */
-function registerCompactConversationTool(server: McpServer, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
+function registerCompactConversationTool(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
   server.registerTool(
     'compact_conversation',
     {
@@ -1073,7 +1122,7 @@ const answerRequestShape = {
  * scope check is passed in so a session can only answer requests of the
  * conversations its token covers; an id outside it reads as unknown.
  */
-function registerAnswerRequestTool(server: McpServer, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
+function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
   server.registerTool(
     'answer_request',
     {
@@ -1261,6 +1310,18 @@ function buildRequestServer(
     { name: mcpServerName, version: mcpServerVersion },
     { instructions: buildMcpServerInstructions(platform) },
   );
+  registerBotTools(server, deps, scope, platform, requestSignal);
+  return server;
+}
+
+/** The tools a session of `platform` gets — the one list the request path serves and the digest records. */
+function registerBotTools(
+  server: ToolRegistrar,
+  deps: SchedulerMcpDeps,
+  scope: SchedulerScope,
+  platform: PlatformId | null,
+  requestSignal: AbortSignal | undefined,
+): void {
   // These deliver into a Telegram topic; for another platform's key they would throw (D18).
   if (platform === 'telegram') {
     registerSchedulerTools(server, deps, scope);
@@ -1269,7 +1330,6 @@ function buildRequestServer(
   }
   registerCompactConversationTool(server, deps, scope);
   registerAnswerRequestTool(server, deps, scope);
-  return server;
 }
 
 /** Read the whole request body into a string (the SDK wants the parsed JSON body). */
@@ -1491,6 +1551,7 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   return {
     start,
     stop,
+    getToolDigest: (platform) => getBotMcpToolDigest(deps, platform),
     get port() {
       return boundPort;
     },

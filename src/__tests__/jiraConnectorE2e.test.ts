@@ -125,7 +125,7 @@ const flowMarginMs = 60 * 1000;
  * stops (the restart's and `after`'s) — so a slow run fails at the step that is
  * late, never at the suite.
  */
-const flowTimeoutMs = 2 * bootTimeoutMs + 10 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
+const flowTimeoutMs = 2 * bootTimeoutMs + 13 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -165,6 +165,18 @@ interface FakeLaunch {
 interface FakeCompaction {
   sessionId: string;
   pid: number;
+}
+
+/** Rewrite the persisted tool digests of the given conversations, as a bot build with other tools would find them (L4). */
+function markToolDigestStale(conversationKeys: string[]): void {
+  const statePath = path.join(getLayout().dataDir, 'state.json');
+  const persisted: { agents?: Record<string, { mcpToolDigest?: string }> } = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  for (const conversationKey of conversationKeys) {
+    const agent = persisted.agents?.[conversationKey];
+    assert.ok(agent?.mcpToolDigest, `${conversationKey} has a persisted tool digest to make stale`);
+    agent.mcpToolDigest = 'a-digest-of-an-earlier-build';
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted));
 }
 
 /** Signal 0 probes the pid without touching it: alive (or not ours) → true, gone → `ESRCH`. */
@@ -525,15 +537,34 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(issueCalls.indexOf('PUT /rest/api/3/issue/PROJ-7/assignee') > thirdCommentIndex, 'handed back by the second answer only, after its comment');
   });
 
-  it('a restart opens no request a second time', async () => {
+  it('a restart opens no request a second time; a gone process is not re-spawned; an adopted one with a stale tool list is stopped once idle (L4)', async () => {
+    // PROJ-2 is handed over once more right before the restart, so its process is alive and IDLE at the boot.
+    const proj2CommentsBefore = fakeJira.getIssue('PROJ-2').comments.length;
+    handIssueToAi('PROJ-2', requester);
+    await waitFor('PROJ-2 answered again', answerTimeoutMs, () => fakeJira.getIssue('PROJ-2').comments.length > proj2CommentsBefore);
+    const idleAdoptedTurn = getTurns('PROJ-2').at(-1)!;
+    const idleAdoptedSessionId = getLaunchSessionId(getSessionLaunchOf(idleAdoptedTurn.pid)?.argv ?? []);
+    assert.ok(idleAdoptedSessionId && checkIsProcessAlive(idleAdoptedTurn.pid), 'PROJ-2\'s process is alive going into the restart');
+    const [workingAdoptedTurn] = getTurns('PROJ-8');
+    assert.ok(checkIsProcessAlive(workingAdoptedTurn.pid), 'PROJ-8\'s process (a background task) is alive going into the restart');
+
     const requestPromptCount = (): number => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.isRequestPrompt).length;
     const promptsBefore = requestPromptCount();
     const commentsBefore = ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length);
     await getCharness().stop();
+    // A bot upgrade that changed the tools: the digests the two live processes were started with no longer match.
+    markToolDigestStale(['jira:PROJ:PROJ-2', 'jira:PROJ:PROJ-8']);
 
     const searchesBefore = fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
     const outputBeforeRestart = getCharness().output.length;
     await startCharness();
+    const bootOutput = (): string => getCharness().output.slice(outputBeforeRestart);
+    assert.match(bootOutput(), /\[reattach\] claude-json-stream: adopted [1-9]\d*, sleeping [1-9]\d*, killed 0 orphans/, 'the live processes adopted; the stopped ones sleep');
+    assert.ok(!bootOutput().includes('resume=true'), 'no sleeping conversation was re-spawned at boot');
+    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-2: adopted with a stale tool list (idle: stopped now)'));
+    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-8: adopted with a stale tool list (working: stopped once idle)'));
+    await waitFor('PROJ-2\'s stale process stopped right after the adopt', answerTimeoutMs, () => !checkIsProcessAlive(idleAdoptedTurn.pid));
+    assert.ok(checkIsProcessAlive(workingAdoptedTurn.pid), 'PROJ-8 keeps working: its background task is never killed');
     // Two polls after the restart: the first one decided every issue again.
     await waitFor('two polls after the restart', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);
@@ -543,12 +574,21 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(requestPromptCount(), promptsBefore, 'no request prompt was posted again');
     // One request per issue. Its PROMPT may reach the agent twice: a request whose taking-in was not yet
     // seen when the agent died is re-posted to the resumed session (R21) — same request, not a second one.
-    for (const key of ['PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-8']) {
+    for (const key of ['PROJ-3', 'PROJ-4', 'PROJ-8']) {
       assert.equal(new Set(getTurns(key).map((turn) => turn.requestId)).size, 1, `${key} was one request, from start to end`);
     }
     assert.equal(new Set(getTurns('PROJ-1').map((turn) => turn.requestId)).size, 2, 'PROJ-1: its first request and the hand-over after the idle stop, no third');
+    assert.equal(new Set(getTurns('PROJ-2').map((turn) => turn.requestId)).size, 2, 'PROJ-2: its first request and the hand-over before the restart, none opened by the restart');
     assert.deepEqual(['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4', 'PROJ-5', 'PROJ-6', 'PROJ-7'].map((key) => fakeJira.getIssue(key).comments.length), commentsBefore);
     assert.equal(fakeJira.getIssue('PROJ-4').assignee?.accountId, aiAccount.accountId, 'PROJ-4 still matches — its trigger was remembered');
+
+    // The next hand-over resumes the stopped conversation in a new process, with the current tools.
+    const proj2CommentsAfterRestart = fakeJira.getIssue('PROJ-2').comments.length;
+    handIssueToAi('PROJ-2', requester);
+    await waitFor('PROJ-2 answered after the refresh', answerTimeoutMs, () => fakeJira.getIssue('PROJ-2').comments.length > proj2CommentsAfterRestart);
+    const refreshedTurn = getTurns('PROJ-2').at(-1)!;
+    assert.notEqual(refreshedTurn.pid, idleAdoptedTurn.pid, 'a new process');
+    assert.deepEqual(getFlagValues(getSessionLaunchOf(refreshedTurn.pid)?.argv ?? [], '--resume'), [idleAdoptedSessionId], 'the same conversation, resumed');
   });
 
   it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {

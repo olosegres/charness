@@ -124,6 +124,14 @@ export interface AgentData {
    */
   seenWatermark?: SeenWatermark;
   /**
+   * The digest of the bot-MCP tool definitions the json-stream process was
+   * started with (`SchedulerMcpHandle.getToolDigest`). Compared at adopt after a
+   * bot restart: a process whose tools are stale is stopped at its next idle
+   * point and resumed with the current ones (lifecycle plan L4). Absent for a
+   * row written before the digest was tracked — read as stale.
+   */
+  mcpToolDigest?: string;
+  /**
    * json-stream stdout tail position (line-boundary byte offset into the
    * external session's `stdout.jsonl`), advanced as the tail consumes lines.
    * Lets a restarted bot resume the surviving process's output exactly where
@@ -1122,6 +1130,17 @@ export class StateStore {
     });
   }
 
+  /** Persist the tool digest a json-stream process was started with (see {@link AgentData.mcpToolDigest}); merge-only. */
+  async setAgentMcpToolDigest(key: SessionKey, mcpToolDigest: string): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const existing = this.state.agents[k];
+      if (!existing) return;
+      this.state.agents[k] = { ...existing, mcpToolDigest };
+      this.scheduleSave();
+    });
+  }
+
   /**
    * @description Release both persisted session ids (and the json-stream tail
    * offset, which is meaningless without its session; plus the session-start
@@ -1143,7 +1162,7 @@ export class StateStore {
         if (droppedMarker) this.scheduleSave();
         return;
       }
-      const { claudeSessionId, opencodeSessionId, jsonStreamTail, startedAt, ...rest } = existing;
+      const { claudeSessionId, opencodeSessionId, jsonStreamTail, startedAt, mcpToolDigest, ...rest } = existing;
       this.state.agents[k] = rest;
       this.scheduleSave();
     });

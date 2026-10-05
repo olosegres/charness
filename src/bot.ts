@@ -211,6 +211,7 @@ import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
+import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
@@ -1914,7 +1915,7 @@ async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
       await replyToThread(key, t('agent.session_recovering'));
       const forkedId = await adapter.forkSession!(key);
       if (forkedId) {
-        await persistAdapterSessionIds(key, adapter, state);
+        await persistSessionStart(key, adapter);
       } else {
         // Fork failed → fall back immediately to a blank restart this tier.
         await releaseThreadSession(key);
@@ -4242,6 +4243,49 @@ export function getStartReadyMessage(
   return t('agent.ready', { ...vars, infoBlock: getStartReadyInfoBlock(model, effort) });
 }
 
+/**
+ * The bot-MCP tool digest per platform, from the scheduler handle once it is wired
+ * at boot; `null` before that (no digest is persisted, which reads as stale).
+ */
+let botMcpToolDigestReader: ((platform: PlatformId) => string) | null = null;
+
+/**
+ * @description Persist what a (re)started session needs for the next boot: the
+ * backend session id and adapter name, and — for a json-stream process, which
+ * is adopted across restarts with the tool list it got at THIS start — the
+ * digest of the bot-MCP tools it connected to (lifecycle plan L4).
+ */
+async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Promise<void> {
+  await persistAdapterSessionIds(key, adapter, state);
+  if (adapter.name === claudeJsonStreamAdapterName && botMcpToolDigestReader) {
+    await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key.platform));
+  }
+}
+
+/**
+ * @description An adopted json-stream process whose tool list is stale (L4) is
+ * stopped at its next idle point: now when idle, else once it stops working —
+ * polled, since the bot gets no "turn ended" event it can hang this on. The next
+ * trigger resumes the conversation with the current tools.
+ */
+function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: AgentAdapter): void {
+  const kStr = keyToString(key);
+  const tick = (): void => {
+    if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
+    if (adapter.checkIsWorking?.(key)) {
+      const timer = setTimeout(tick, adoptedToolListRefreshPollMs);
+      timer.unref?.();
+      return;
+    }
+    console.log(`[reattach] ${kStr}: stopping the adopted process with the stale tool list; the next trigger resumes it with the current tools`);
+    void suspendThreadSession(key).catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
+  };
+  tick();
+}
+
+/** How often an adopted, stale-tool-list process that is still working is re-checked for idleness (L4). */
+const adoptedToolListRefreshPollMs = 5000;
+
 async function startAgentSession(key: SessionKey, args?: string): Promise<string> {
   const kStr = keyToString(key);
   // The bound folder IS the agent's cwd — refuse to start without one. The
@@ -4280,7 +4324,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
 
     // Persist backend session ids so a bot restart can re-attach without
     // losing the live conversation (Claude tmux UUID; OpenCode server UUID).
-    await persistAdapterSessionIds(key, adapter, state);
+    await persistSessionStart(key, adapter);
     // Stamp the session-start time (surfaced by /status). A fresh start is
     // "now"; the agent row already exists (just persisted above), so this
     // merge-only write lands. `/new` cleared the old value via
@@ -4494,7 +4538,7 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
   markNeedsNewMessage(key);
   try {
     await adapter.resumeSession(key, workDirDecision.workDir, sessionId);
-    await persistAdapterSessionIds(key, adapter, state);
+    await persistSessionStart(key, adapter);
     console.log(`[ensure] resumed the sleeping session of ${kStr}`);
     void replayBufferedPrompts(key);
     return adapter.checkIsActive(key);
@@ -6282,7 +6326,7 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
     clearThreadContextMarker(key);
     try {
       await targetAdapter.resumeSession(key, decision.workDir, sessionId, { isWithRecentContext: true });
-      await persistAdapterSessionIds(key, targetAdapter, state);
+      await persistSessionStart(key, targetAdapter);
       return t('claudeMode.switched_resumed', { label });
     } catch (e) {
       console.error('[claude_mode] resume failed, starting fresh:', e instanceof Error ? e.message : e);
@@ -6501,7 +6545,7 @@ async function resumeSessionByIndex(
     // Persist the PICKED id — without this the next restart re-attaches to
     // whatever id the last fresh start wrote, silently dropping the user's
     // pick (live incident 2026-06-10).
-    await persistAdapterSessionIds(key, adapter, state);
+    await persistSessionStart(key, adapter);
     // Stamp "now" as the start time: this is when the thread began using the
     // picked session (the original transcript's creation time isn't cheaply
     // recoverable). The agent row exists (persisted above), so the merge lands.
@@ -10309,14 +10353,17 @@ async function reattachExistingSessions(
   //     replays through the normal pipeline (which is why an adopt posts NO
   //     recap — the replay IS the delivery). A session whose thread released
   //     its persisted id (`/quit`, `/new`) or isn't a json-stream thread is an
-  //     orphan and is killed, never adopted (locked decision). Then RESUME
-  //     (dead-process fallback, the pre-plan behavior) any bound json-stream
-  //     thread that still has a persisted id but no live process — the only
-  //     path that still re-spawns `--resume`, and the only one that recaps.
+  //     orphan and is killed, never adopted (locked decision). A bound
+  //     json-stream thread with a persisted id but no live process SLEEPS
+  //     (lifecycle plan L4): it is NOT re-spawned — its next trigger resumes it
+  //     — and it gets the downtime recap read from the transcript alone. An
+  //     adopted process keeps the bot-MCP tool list it got at its own start, so
+  //     one started under an earlier bot build is stopped at its next idle point
+  //     and resumed with the current tools (`decideAdoptedToolListRefresh`).
   const claudeJsonAdapter = getAdapter(claudeJsonStreamAdapterName);
   let jsonAdopted = 0;
   let jsonKilled = 0;
-  let jsonReopened = 0;
+  let jsonSleeping = 0;
   if (claudeJsonAdapter instanceof ClaudeJsonStreamAdapter) {
     try {
       const found = getServedConversations(await claudeJsonAdapter.listExistingTmuxSessions(), ENV.servedPlatforms);
@@ -10344,9 +10391,18 @@ async function reattachExistingSessions(
             key, sessionName, workDirDecision.workDir, agent.claudeSessionId, agent.jsonStreamTail ?? null,
           )) {
             jsonAdopted += 1;
+            const refresh = decideAdoptedToolListRefresh({
+              persistedDigest: agent.mcpToolDigest,
+              currentDigest: botMcpToolDigestReader?.(key.platform) ?? '',
+              isWorking: claudeJsonAdapter.checkIsWorking(key),
+            });
+            if (refresh !== 'fresh') {
+              console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list (${refresh === 'stopNow' ? 'idle: stopped now' : 'working: stopped once idle'})`);
+              stopAdoptedSessionWhenIdle(key, claudeJsonAdapter);
+            }
           } else {
-            // Dead/zombie — adopt cleaned it up itself; the resume loop below
-            // still reopens this thread from the persisted session id.
+            // Dead/zombie — adopt cleaned it up itself; the thread sleeps (below)
+            // and its next trigger resumes it from the persisted session id.
             jsonKilled += 1;
           }
         } catch (e) {
@@ -10361,26 +10417,16 @@ async function reattachExistingSessions(
     const agent = state.getAgent(key);
     if (!agent || agent.name !== claudeJsonStreamAdapterName || !agent.claudeSessionId) continue;
     if (claudeJsonAdapter.checkIsActive(key)) continue; // adopted above
-    try {
-      const workDirDecision = getWorkDirStartDecision(key);
-      if (!workDirDecision.ok) {
-        console.warn(`[reattach] claude-json-stream ${keyToString(key)} refused: ${workDirDecision.message}`);
-        // A topic message only — a tracker conversation has no topic (R2, as above).
-        if (!opts.quietReattach && checkIsTelegramKey(key)) replyToThread(key, workDirDecision.message).catch(() => {});
-        continue;
-      }
-      const workDir = workDirDecision.workDir;
-      const preAdoptWatermark = state.getAgent(key)?.seenWatermark ?? null;
-      await claudeJsonAdapter.resumeSession(key, workDir, agent.claudeSessionId);
-      jsonReopened += 1;
-      void postReattachRecap(
-        key, claudeJsonAdapter, workDir, agent.claudeSessionId, preAdoptWatermark, !opts.quietReattach,
-      ).catch(() => {});
-    } catch (e) {
-      console.warn(`[reattach] claude-json-stream ${keyToString(key)} failed:`, e instanceof Error ? e.message : e);
-    }
+    // Sleeping (L4): no process is started — the next trigger resumes the conversation. What the agent
+    // produced while the bot was down is still recapped, read from the transcript on disk.
+    jsonSleeping += 1;
+    const workDirDecision = getWorkDirStartDecision(key);
+    if (!workDirDecision.ok) continue; // a vanished folder is reported when the next trigger tries to resume
+    void postReattachRecap(
+      key, claudeJsonAdapter, workDirDecision.workDir, agent.claudeSessionId, agent.seenWatermark ?? null, !opts.quietReattach,
+    ).catch(() => {});
   }
-  console.log(`[reattach] claude-json-stream: adopted ${jsonAdopted}, reopened ${jsonReopened}, killed ${jsonKilled} orphans (quiet=${opts.quietReattach})`);
+  console.log(`[reattach] claude-json-stream: adopted ${jsonAdopted}, sleeping ${jsonSleeping}, killed ${jsonKilled} orphans (quiet=${opts.quietReattach})`);
 
   // 3. Terminal — tmux shells (`term-…`). Like the Claude scan but simpler:
   //    a terminal has no session-id to recover, so adoption keys purely on a
@@ -11489,6 +11535,9 @@ export async function startBot(): Promise<void> {
     answerSinks,
     whenSessionsRestored: () => sessionsRestored,
   });
+  // Known before any session starts or is adopted: every json-stream start persists the digest of the
+  // tools it connected to, and the reattach compares an adopted process's against it (L4).
+  botMcpToolDigestReader = (platform) => schedulerMcpHandle.getToolDigest(platform);
   const isSchedulerMcpStarted = await runSessionBootPhase({
     startBotMcp: () =>
       startSchedulerMcpForBoot({

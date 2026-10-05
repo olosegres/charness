@@ -114,8 +114,13 @@ On boot, reattach ADOPTS a live `cjson-*` session (reopen fifo + resume the
 tail from the persisted offset → the downtime gap replays through the normal
 pipeline, in-flight turn delivered end-to-end, no recap posted); a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
-a thread whose process died falls back to the old dead-process `--resume`
-reopen (the only path that posts a recap). Explicit stop = SIGTERM + tmux
+a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned
+at boot — its next trigger resumes the conversation — and the downtime recap is
+read from the transcript alone. An adopted process keeps the bot-MCP tool list
+it got at its own start (the bot's MCP server is stateless and cannot push a
+`tools/list_changed`), so one started under an earlier bot build — the
+persisted `mcpToolDigest` differs from the current one — is stopped at its next
+idle point and resumed with the current tools. Explicit stop = SIGTERM + tmux
 kill + host-dir removal. The IDLE stop (`suspendSession`, lifecycle plan L3) is
 the same teardown converging on `suspended` instead of `stopped`: the session
 id stays persisted and the next trigger resumes the conversation; the bot never

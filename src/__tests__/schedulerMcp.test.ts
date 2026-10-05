@@ -40,7 +40,9 @@ import {
   verifySchedulerMcpToken,
   buildSpecFromCreateArgs,
   resolveTargetThreadKey,
+  buildBotMcpToolDigest,
   createSchedulerMcpServer,
+  getBotMcpToolDigest,
   serializeSchedulerScope,
   parseSchedulerScope,
   getSchedulerMcpPort,
@@ -141,6 +143,46 @@ describe('resolveSchedulerMcpPort', () => {
   });
   it('ignores a non-positive persisted port', () => {
     assert.equal(resolveSchedulerMcpPort(defaultSchedulerMcpPort, 0), defaultSchedulerMcpPort);
+  });
+});
+
+describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
+  function createDigestDeps(): SchedulerMcpDeps {
+    return {
+      store: {} as SchedulerMcpDeps['store'],
+      armJob: () => {},
+      disarmJob: () => {},
+      getThreadsForDirectory: () => [],
+      getThreadAdapterName: () => 'claude',
+      sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+      sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
+      compactConversation: () => ({ ok: true, message: 'unused' }),
+      answerRequest: async () => ({ ok: false, error: 'unused' }),
+      whenSessionsRestored: async () => {},
+      getSecret: async () => secret,
+    };
+  }
+
+  it('is stable for one platform, differs between the Telegram and the neutral tool set, and is what the handle reports', () => {
+    const deps = createDigestDeps();
+    const telegram = getBotMcpToolDigest(deps, 'telegram');
+    assert.equal(getBotMcpToolDigest(deps, 'telegram'), telegram, 'deterministic');
+    assert.notEqual(getBotMcpToolDigest(deps, 'jira'), telegram, 'an issue gets the two neutral tools only');
+    assert.equal(getBotMcpToolDigest(deps, 'jira'), getBotMcpToolDigest(deps, null), 'a key no codec reads gets the neutral set');
+    assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram'), telegram);
+  });
+
+  it('changes when a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
+    const base = [
+      { name: 'answer_request', title: 'Answer a request', description: 'Send your answer', inputKeys: ['body', 'kind', 'requestId'] },
+      { name: 'compact_conversation', title: 'Compact', description: 'Compact this conversation', inputKeys: ['reason'] },
+    ];
+    const digest = buildBotMcpToolDigest(base);
+    assert.equal(buildBotMcpToolDigest([base[1], base[0]]), digest, 'order-independent');
+    assert.notEqual(buildBotMcpToolDigest([...base, { name: 'schedule_list', title: 'List', description: 'List', inputKeys: [] }]), digest, 'a tool added');
+    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], name: 'answer' }, base[1]]), digest, 'a tool renamed');
+    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], description: 'Send your answer, please' }, base[1]]), digest, 'a description changed');
+    assert.notEqual(buildBotMcpToolDigest([{ ...base[0], inputKeys: ['body', 'kind'] }, base[1]]), digest, 'a parameter dropped');
   });
 });
 

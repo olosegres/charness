@@ -55,7 +55,9 @@ per-backend controls are optional methods the bot checks before calling.
   names state fields, tmux sessions, `DATA_DIR` dirs). The core never parses a key.
 - **Restart-safe.** State lives in `state.json` (+ per-thread JSON in `DATA_DIR`). A bot restart — hot mode
   restarts on every code change — must not kill agents: tmux sessions and the json-stream process are
-  EXTERNAL and re-adopted at boot (json-stream replays the downtime tail from a persisted offset); OpenCode
+  EXTERNAL and re-adopted at boot (json-stream replays the downtime tail from a persisted offset; a json-stream
+  process that is gone is NOT re-spawned — the conversation sleeps and its next trigger resumes it; an adopted
+  process with a stale bot-MCP tool list is stopped at its next idle point); OpenCode
   reconnects SSE and restores sessions by persisted id; a stale-version OpenCode server is replaced. Explicit
   `/quit`, `/quit-all`, `/new` and leaving a folder RELEASE the persisted ids: no auto-reattach, still
   resumable via `/sessions`. tmux is REQUIRED for both Claude backends.

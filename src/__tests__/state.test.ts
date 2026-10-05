@@ -308,6 +308,22 @@ test('clearAgentSessionIds: no-op when the thread has no agent record', async ()
   assert.equal(store.getAgent(key1), null, 'must not create a dangling agent row');
 });
 
+test('setAgentMcpToolDigest: persisted on the agent row, dropped with the session ids (L4)', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgentMcpToolDigest(key1, 'orphan');
+  assert.equal(store.getAgent(key1), null, 'merge-only: no row is created for a digest');
+  await store.setAgent(key1, { name: 'claude-json-stream' });
+  await store.setClaudeSessionId(key1, 'claude-uuid-1');
+  await store.setAgentMcpToolDigest(key1, 'digest-1');
+  assert.equal(store.getAgent(key1)?.mcpToolDigest, 'digest-1');
+
+  await store.clearAgentSessionIds(key1);
+
+  assert.equal(store.getAgent(key1)?.name, 'claude-json-stream');
+  assert.equal(store.getAgent(key1)?.mcpToolDigest, undefined, 'a released session has no process whose tools the digest describes');
+});
+
 test('clearAgentSessionIds: also drops the session-start timestamp', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
