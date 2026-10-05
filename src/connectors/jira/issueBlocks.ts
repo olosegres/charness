@@ -91,7 +91,7 @@ function getNamesText(items: ReadonlyArray<{ name: string }> | undefined): strin
 }
 
 function getFieldsBlock(context: JiraIssueContext, extraFields: readonly JiraExtraField[]): IssueBlock {
-  const { fields, customFields } = context.issue;
+  const { fields, rawFields } = context.issue;
   const lines = [
     ...getFieldLine('Summary', getSingleLineText(fields.summary ?? '') || '(no summary)'),
     ...getFieldLine('Type', getSingleLineText(fields.issuetype?.name ?? '')),
@@ -102,7 +102,7 @@ function getFieldsBlock(context: JiraIssueContext, extraFields: readonly JiraExt
     ...getFieldLine('Fix versions', getNamesText(fields.fixVersions)),
     ...getFieldLine('Labels', (fields.labels ?? []).map(getSingleLineText).filter((label) => label !== '').join(', ')),
     ...getFieldLine('Components', getNamesText(fields.components)),
-    ...extraFields.flatMap((extraField) => getFieldLine(getSingleLineText(extraField.name), getExtraFieldValueText(customFields?.[extraField.id]))),
+    ...extraFields.flatMap((extraField) => getFieldLine(getSingleLineText(extraField.name), getExtraFieldValueText(rawFields?.[extraField.id]))),
   ];
   return createBlock('fields', 'fields', 'Fields', lines.join('\n'));
 }

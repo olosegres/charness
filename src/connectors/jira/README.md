@@ -11,7 +11,7 @@ The `D*` / `R*` / `J*` / `C*` ids cited in code comments are decisions of the co
 `DATA_DIR/jira.json`, strict keys: `site` (`<name>.atlassian.net`), `email`, `apiToken` (normally `${VAR}` from
 the instance's env file), `accountId` (the AI account — the token must belong to it, checked against `/myself`
 at boot), `projects` (key → `{ folder, triggerStatuses, extraFields? }`, the allowlist; status NAMES resolved to
-ids at boot; `extraFields` = site-specific field ids like `customfield_10042` that the prompt shows under their
+ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` that the prompt shows under their
 site name — none by default, and an id the site does not list is logged once at boot and left out),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
@@ -102,7 +102,7 @@ another platform's state.
 - The whole issue, nothing cut: after the request header and the issue-text note, the issue is a list of blocks —
   `fields` (summary, type, priority, status, reporter, parent, fix versions, labels, components, the project's
   `extraFields`), `description`, `hierarchy` (sub-tasks, or an epic's children), `links` (issue links and remote
-  links), `attachments` (one line each: id, name, type, size, author, date, where it is used), then EVERY comment
+  links; a site with issue linking switched off answers the remote-link read with 403, read as no links), `attachments` (one line each: id, name, type, size, author, date, where it is used), then EVERY comment
   oldest first. The comments come from the comments endpoint (the issue's own `comment` field holds at most 100).
 - A restricted comment is marked `[restricted to <role or group>]`, a Service Management internal note
   `[internal]`. Each block carries a sha256 of what it says (a comment's covers its text and marker only, so a

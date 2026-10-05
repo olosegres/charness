@@ -664,7 +664,7 @@ a person assigns an issue to the AI account (in a trigger status)
    refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
-   none by default) names site-specific fields (`customfield_…`) the agent should see next to the standard
+   none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
    ones, shown under their site name; an id the site does not list is logged at start and left out. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.

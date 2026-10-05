@@ -8,7 +8,7 @@ import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStrea
 import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
-import { jiraCustomFieldIdPrefix, type JiraFieldDefinition, type JiraProjectStatus } from './client';
+import type { JiraFieldDefinition, JiraProjectStatus } from './client';
 import type { JiraExtraField } from './issueBlocks';
 
 /**
@@ -45,9 +45,6 @@ const refusedAdapterReasons: ReadonlyMap<string, string> = new Map([
  */
 export const claudeMemoryMarkerNames = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude'] as const;
 
-/** A site-specific field's id, the only kind `extraFields` can name (the standard ones are always in the prompt). */
-const customFieldIdRe = new RegExp(`^${jiraCustomFieldIdPrefix}\\d+$`);
-
 /** A model name as `claude --model` takes it (`opus`, `claude-opus-5-5`, `opus[1m]`). */
 const claudeModelRe = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/;
 const claudeModelMaxLength = 100;
@@ -69,8 +66,9 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const projectSchema = z.strictObject({
   folder: z.string().min(1),
   triggerStatuses: z.array(z.string().min(1)).min(1),
-  // Fields beyond the standard ones the prompt shows, by id (`customfield_10042`); none by default (C11).
-  extraFields: z.array(z.string().regex(customFieldIdRe, `must be a site-specific field id like ${jiraCustomFieldIdPrefix}10042`)).optional(),
+  // Fields beyond the standard ones the prompt shows, by id (`customfield_10042`, `duedate`); none by default (C11).
+  // Whether the site has the field is checked at boot against its field list, never refused here.
+  extraFields: z.array(z.string().min(1)).optional(),
 });
 
 const rawConfigSchema = z.strictObject({

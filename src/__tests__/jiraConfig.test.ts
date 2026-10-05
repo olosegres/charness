@@ -111,15 +111,15 @@ describe('validateJiraConfig', () => {
     assert.deepEqual([jiraDefaultModel, jiraDefaultEffort], ['opus', 'high']);
   });
 
-  it('C11: a project\'s extraFields are taken (empty by default, duplicates once); an id that is not a site-specific field id is refused by field', () => {
+  it('C11: a project\'s extraFields are taken (empty by default, duplicates once) — custom and system ids alike; only an empty id is refused', () => {
     const result = validateJiraConfig(
-      createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['customfield_10042', 'customfield_10042', 'customfield_7'] } } }),
+      createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['customfield_10042', 'customfield_10042', 'duedate'] } } }),
       { workRoot, openCodeUrl: isolatedOpenCodeUrl },
     );
     assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
-    assert.deepEqual(result.config.projects.get('PROJ')?.extraFieldIds, ['customfield_10042', 'customfield_7']);
-    const errors = getErrors(createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['labels', 'customfield_x'] } } }));
-    assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json projects.PROJ.extraFields.0', 'jira.json projects.PROJ.extraFields.1']);
+    assert.deepEqual(result.config.projects.get('PROJ')?.extraFieldIds, ['customfield_10042', 'duedate']);
+    const errors = getErrors(createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['labels', ''] } } }));
+    assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json projects.PROJ.extraFields.1']);
   });
 
   it('R15: an effort outside Claude\'s levels and a model that is not a model name are refused by field', () => {
@@ -314,11 +314,11 @@ describe('loadJiraConfig', () => {
 });
 
 describe('resolveExtraFields (C11)', () => {
-  const siteFields = [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'summary', name: 'Summary' }];
+  const siteFields = [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'duedate', name: 'Due date' }];
 
   it('names the ids the site lists, in the configured order, and reports the ones it does not', () => {
-    assert.deepEqual(resolveExtraFields(['customfield_10042', 'customfield_99999'], siteFields), {
-      extraFields: [{ id: 'customfield_10042', name: 'Acceptance criteria' }],
+    assert.deepEqual(resolveExtraFields(['duedate', 'customfield_10042', 'customfield_99999'], siteFields), {
+      extraFields: [{ id: 'duedate', name: 'Due date' }, { id: 'customfield_10042', name: 'Acceptance criteria' }],
       unknownFieldIds: ['customfield_99999'],
     });
   });

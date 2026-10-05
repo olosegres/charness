@@ -85,7 +85,7 @@ describe('the blocks of an issue (C1, C3)', () => {
 
     it('each kind of value is rendered by its site name: text, number, option, user, list, rich text; empty ones are left out', () => {
       const context = createIssueContext({
-        customFields: {
+        rawFields: {
           customfield_1: 'must pass\nin CI',
           customfield_2: 5,
           customfield_3: { value: 'Critical', id: '1' },
@@ -108,8 +108,14 @@ describe('the blocks of an issue (C1, C3)', () => {
       ]);
     });
 
+    it('a system field named in extraFields is rendered from its raw value like a custom one', () => {
+      const context = createIssueContext({ rawFields: { duedate: '2026-10-09', resolution: { name: 'Fixed', id: '1' } } });
+      const body = getBlock(buildIssueBlocks(context, [{ id: 'duedate', name: 'Due date' }, { id: 'resolution', name: 'Resolution' }]), 'fields').body;
+      assert.ok(body.endsWith('Due date: 2026-10-09\nResolution: Fixed'), body);
+    });
+
     it('an id nobody resolved is not in the list, so it is not rendered; a field the issue did not return is left out', () => {
-      const context = createIssueContext({ customFields: { customfield_1: 'x', customfield_404: 'never listed' } });
+      const context = createIssueContext({ rawFields: { customfield_1: 'x', customfield_404: 'never listed' } });
       const body = getBlock(buildIssueBlocks(context, extraFields.slice(0, 2)), 'fields').body;
       assert.ok(body.includes('Acceptance criteria: x'));
       assert.ok(!body.includes('never listed') && !body.includes('Story points'));

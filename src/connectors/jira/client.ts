@@ -32,8 +32,6 @@ export const jiraBackoffMs = [1_000, 4_000] as const;
 export const jiraBackoffJitterRatio = 0.5;
 /** Jira's own page size for comments; the page actually returned decides where the next one starts. */
 export const jiraCommentPageSize = 100;
-/** The prefix of a site-specific field's id — the raw values the schema below does not model. */
-export const jiraCustomFieldIdPrefix = 'customfield_';
 /**
  * Network error codes that mean the request never left this host — no
  * connection, no address, no TLS session — so nothing reached Jira.
@@ -207,13 +205,15 @@ const issueTypeStatusesSchema = z.array(z.object({
   statuses: z.array(projectStatusSchema),
 }));
 
-/** The values of an issue's fields by id, whatever their shape: the source of the `customfield_*` ones. */
+/** The values of an issue's fields by id, whatever their shape: the source of a project's `extraFields`. */
 const issueRawFieldsSchema = z.object({ fields: z.record(z.string(), attributeValueSchema) });
 
 const remoteLinkSchema = z.object({
   object: z.object({ url: z.string(), title: z.string().optional() }),
 });
 const remoteLinksSchema = z.array(remoteLinkSchema);
+/** What `GET /issue/{key}/remotelink` answers when issue linking is switched off on the site. */
+const remoteLinksDisabledStatus = 403;
 
 const fieldDefinitionsSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 
@@ -222,8 +222,8 @@ const myselfSchema = z.object({ accountId: z.string() });
 
 export type JiraAccount = z.infer<typeof accountSchema>;
 export type JiraChangelogHistory = z.infer<typeof changelogHistorySchema>;
-/** `customFields` (the raw `customfield_*` values) is filled in by `getIssue` only, never by a search. */
-export type JiraIssue = z.infer<typeof issueSchema> & { customFields?: Record<string, AdfAttributeValue> };
+/** `rawFields` (every returned field's value as Jira sent it, by id) is filled in by `getIssue` only, never by a search. */
+export type JiraIssue = z.infer<typeof issueSchema> & { rawFields?: Record<string, AdfAttributeValue> };
 export type JiraComment = z.infer<typeof commentSchema>;
 export type JiraAttachment = z.infer<typeof attachmentSchema>;
 export type JiraIssueReference = z.infer<typeof issueReferenceSchema>;
@@ -325,7 +325,7 @@ export interface JiraClient {
   searchIssues(request: JiraSearchRequest): Promise<JiraSearchResult>;
   /** A page of the issue's changelog, oldest first (Jira's order); `maxResults` defaults to Jira's own page size. */
   getChangelogPage(issueKey: string, startAt: number, maxResults?: number): Promise<JiraChangelogPage>;
-  /** `expand` is Jira's own (`renderedFields`). The result carries the raw `customfield_*` values. */
+  /** `expand` is Jira's own (`renderedFields`). The result carries every returned field's raw value (`rawFields`). */
   getIssue(issueKey: string, fields: string[], expand?: string): Promise<JiraIssue>;
   /** EVERY comment of the issue, oldest first, read page by page, each with its rendered HTML. */
   getComments(issueKey: string): Promise<JiraComment[]>;
@@ -458,14 +458,13 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         isIdempotent: true,
       };
       const text = await send(request);
-      // Parsed twice on purpose: the typed schema drops every key it does not model, and the site-specific
-      // `customfield_*` values (a project's `extraFields`) are exactly those.
+      // Parsed twice on purpose: the typed schema drops every key it does not model, and a project's
+      // `extraFields` (a site-specific `customfield_*`, or a system field such as `duedate`) are mostly those.
       const issue = getParsedResponse(text, issueSchema);
       const rawFields = getParsedResponse(text, issueRawFieldsSchema);
       if (!issue.ok) throw new JiraHttpError(0, request.method, request.path, issue.detail);
       if (!rawFields.ok) throw new JiraHttpError(0, request.method, request.path, rawFields.detail);
-      const customFields = Object.fromEntries(Object.entries(rawFields.value.fields).filter(([fieldId]) => fieldId.startsWith(jiraCustomFieldIdPrefix)));
-      return { ...issue.value, customFields };
+      return { ...issue.value, rawFields: rawFields.value.fields };
     },
 
     getComments: async (issueKey) => {
@@ -487,8 +486,16 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       }
     },
 
-    getRemoteLinks: (issueKey) =>
-      sendForJson({ method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/remotelink`, isIdempotent: true }, remoteLinksSchema),
+    getRemoteLinks: async (issueKey) => {
+      try {
+        return await sendForJson({ method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/remotelink`, isIdempotent: true }, remoteLinksSchema);
+      } catch (error) {
+        // Atlassian: this endpoint's 403 means issue linking is switched off on the site, so there is no link to
+        // read. As a JiraAuthError it would stop polling for good (D14); a missing permission is a 404 here.
+        if (error instanceof JiraAuthError && error.status === remoteLinksDisabledStatus) return [];
+        throw error;
+      }
+    },
 
     getFields: () => sendForJson({ method: 'GET', path: '/rest/api/3/field', isIdempotent: true }, fieldDefinitionsSchema),
 

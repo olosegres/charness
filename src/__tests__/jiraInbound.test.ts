@@ -420,7 +420,7 @@ describe('JiraInbound', () => {
 
     it('the project\'s extra fields are asked for with the standard ones, expanded for the media mapping, and rendered by their site name', async () => {
       const issue = labelledIssue('PROJ-48', { issuetype: { name: 'Task', hierarchyLevel: 0 } });
-      issue.customFields = { customfield_10042: 'The export must finish in 5 s', customfield_10043: null };
+      issue.rawFields = { customfield_10042: 'The export must finish in 5 s', customfield_10043: null };
       const extraProjects: ReadonlyMap<string, JiraProjectTrigger> = new Map([
         ['PROJ', {
           folder: 'proj-work',

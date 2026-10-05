@@ -11,7 +11,7 @@ export const testCommentAuthor = { accountId: 'ann', displayName: 'Ann Author' }
 
 export function createIssueContext(options: {
   fields?: Partial<JiraIssue['fields']>;
-  customFields?: JiraIssue['customFields'];
+  rawFields?: JiraIssue['rawFields'];
   comments?: JiraComment[];
   remoteLinks?: JiraIssueContext['remoteLinks'];
   children?: JiraIssue[];
@@ -21,7 +21,7 @@ export function createIssueContext(options: {
       id: '10100',
       key: 'PROJ-12',
       fields: { summary: 'Fix the export', status: { id: '1', name: 'To Do' }, description: convertMarkdownToAdf('It fails.'), ...options.fields },
-      customFields: options.customFields,
+      rawFields: options.rawFields,
     },
     comments: options.comments ?? [],
     remoteLinks: options.remoteLinks ?? [],
