@@ -46,10 +46,12 @@ test('S4: processVoiceJob delivers the transcript via the shared deliverActivePr
   // The request source (`'voice'`, S7) names the entry point; the trailing
   // `sentAtMs` (the `/timestamps` plumbing — the voice note's real Telegram send
   // time) and `replyContext` (the reply-quote block) are optional in the pattern
-  // so the guard keys on the ROUTE, not the extra arguments.
+  // so the guard keys on the ROUTE, not the extra arguments. The adapter argument
+  // is read after the wake of a sleeping conversation (L-D4), so it is the live
+  // `getThreadAdapter(key)` rather than a variable captured before it.
   assert.match(
     body,
-    /await\s+deliverActivePrompt\(\s*key\s*,\s*adapter\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*(?:,\s*sentAtMs\s*)?(?:,\s*replyContext\s*)?\)/,
+    /await\s+deliverActivePrompt\(\s*key\s*,\s*(?:adapter|getThreadAdapter\(key\))\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*(?:,\s*sentAtMs\s*)?(?:,\s*replyContext\s*)?\)/,
     'voice must route the transcript through deliverActivePrompt (the text+voice choke point)',
   );
 });
