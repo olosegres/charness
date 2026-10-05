@@ -13,9 +13,9 @@ the instance's env file), `accountId` (the AI account — the token must belong 
 at boot), `projects` (key → `{ folder, triggerStatuses }`, the allowlist; status NAMES resolved to ids at boot),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
 since user settings do not apply), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
-(the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; refused
-at the session start — the idle lifecycle runs instead — when the issue's last known Claude Code is below
-2.1.287, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
+(the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; when the
+issue's last known Claude Code is below 2.1.287 the pick is kept but that session runs without the per-turn stop —
+an old process is never auto-stopped — until a newer CLI reports in, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
 resumes it. The instance's env file carries `CONNECTORS=jira`, `DATA_DIR`, `WORK_ROOT`, `TMUX_SOCKET_NAME`, an
 `OPENCODE_URL` off the default port (R9) and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up
 backstop and `AGENT_IDLE_MINUTES` the idle mark (tests).
