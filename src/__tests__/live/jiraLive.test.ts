@@ -332,25 +332,29 @@ interface StreamLine {
 }
 
 /** The texts of the user turns an issue session's agent received so far (the request prompts and the wake-ups). */
+/** The text of a user line of the session's stream — a prompt (a string) or the text blocks of an array content. */
+function getUserLineText(line: StreamLine): string {
+  const content = line.message?.content;
+  return typeof content === 'string' ? content : (content ?? []).map((block) => block.text ?? '').join('');
+}
+
 function getUserTurnTexts(issueKey: string): string[] {
-  return readStreamLines(issueKey).filter((line) => line.type === 'user').map((line) => {
-    const content = line.message?.content;
-    return typeof content === 'string' ? content : (content ?? []).map((block) => block.text ?? '').join('');
-  });
+  return readStreamLines(issueKey).filter((line) => line.type === 'user').map(getUserLineText);
 }
 
 /** The shell commands an issue session's agent has started so far — after the prompt of `afterRequestId` only, when given. */
 function getStartedCommands(issueKey: string, afterRequestId?: string): string[] {
   let isAfterPrompt = afterRequestId === undefined;
-  return readStreamLines(issueKey).flatMap((line) => {
+  const commands = readStreamLines(issueKey).flatMap((line) => {
     const content = line.message?.content;
-    if (typeof content === 'string') {
-      if (afterRequestId !== undefined && content.includes(`[Request ${afterRequestId}`)) isAfterPrompt = true;
-      return [];
-    }
+    // The prompt is read the way `getUserTurnTexts` reads it, whatever shape the echo gives it, so a shape
+    // the string check misses cannot leave `isAfterPrompt` unset and the result vacuously empty.
+    if (afterRequestId !== undefined && line.type === 'user' && getUserLineText(line).includes(`[Request ${afterRequestId}`)) isAfterPrompt = true;
     if (!isAfterPrompt || !Array.isArray(content)) return [];
     return content.flatMap((block) => (block.type === 'tool_use' && block.input?.command ? [block.input.command] : []));
   });
+  if (afterRequestId !== undefined && !isAfterPrompt) throw new Error(`${issueKey}: no user line carries the prompt of ${afterRequestId}`);
+  return commands;
 }
 
 /** The complete lines of an issue session's stdout so far (a line still being written is left out). */

@@ -454,9 +454,15 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
       'Fake final answer for PROJ-7 (answer-after-queued, turn 1).',
       `Answered above for PROJ-7 (covers ${firstTurn.requestId}).`,
     ]);
-    // The superseded request's answer hands nothing back; the second request's final answer does, once.
+    // The superseded request's answer hands nothing back; the second request's final answer does, once. The
+    // count alone cannot tell which answer did it (a hand-back by the first leaves nothing for the second to
+    // change), so the order proves it: the sink comments first, then hands back — the one assignee change
+    // follows the third comment.
     assert.equal(issue.assignee?.accountId, requester.accountId);
-    assert.equal(countAssigneeChanges('PROJ-7'), 1, 'handed back by the second answer only');
+    assert.equal(countAssigneeChanges('PROJ-7'), 1, 'handed back once');
+    const issueCalls = fakeJira.requestLog.filter((request) => request.includes('/issue/PROJ-7/'));
+    const thirdCommentIndex = issueCalls.flatMap((request, index) => (request === 'POST /rest/api/3/issue/PROJ-7/comment' ? [index] : []))[2];
+    assert.ok(issueCalls.indexOf('PUT /rest/api/3/issue/PROJ-7/assignee') > thirdCommentIndex, 'handed back by the second answer only, after its comment');
   });
 
   it('a restart opens no request a second time', async () => {
