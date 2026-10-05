@@ -667,7 +667,8 @@ a person assigns an issue to the AI account (in a trigger status)
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
-   ones, shown under their site name; an id the site does not list is logged at start and left out. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
+   ones, shown under their site name; an id the site does not list is logged at start and left out. `agentBinaries` (optional, host runtime) maps a tool name to the absolute path of an executable — for
+   example `{ "ffmpeg": "/opt/tools/ffmpeg" }` — which is checked at start and put on the agents' PATH. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 
@@ -700,6 +701,8 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
+- `jira_get_attachment` — Jira conversations only: saves the original of one attachment of the conversation's
+  own issue (any size) and returns its path, so the agent can read an image or run `ffmpeg` on a video;
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current

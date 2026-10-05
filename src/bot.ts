@@ -11094,6 +11094,8 @@ function cancelConversationRequest(key: SessionKey): void {
 interface SchedulerWiringDeps {
   requestLedger: RequestLedger;
   answerSinks: AnswerSinks;
+  /** The Jira connector, when this instance serves Jira: its attachment tool is offered to Jira sessions (C10). */
+  jiraConnector: JiraConnector | null;
   whenSessionsRestored: () => Promise<void>;
 }
 
@@ -11139,6 +11141,7 @@ function createSessionPostDeps(): PostToSessionDeps {
  * it captures the same module-level state the rest of bot.ts uses.
  */
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
+  const { jiraConnector } = wiring;
   const ledger = new RunLedger();
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
@@ -11215,6 +11218,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
+    ...(jiraConnector
+      ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
+      : {}),
     answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks: wiring.answerSinks }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
@@ -11680,6 +11686,7 @@ export async function startBot(): Promise<void> {
   const schedulerMcpHandle = wireScheduler({
     requestLedger,
     answerSinks,
+    jiraConnector,
     whenSessionsRestored: () => sessionsRestored,
   });
   // Known before any session starts or is adopted: every json-stream start persists the digest of the

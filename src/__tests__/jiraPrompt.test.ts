@@ -138,6 +138,12 @@ describe('the Jira context preamble (R5)', () => {
     assert.ok(!preamble.includes('Telegram'));
   });
 
+  it('C12: the standing rule — never quote or paraphrase a restricted or internal comment; and C10: the tool that reaches the original files', () => {
+    const preamble = buildJiraContextPreamble({ key: makeJiraKey('PROJ-12'), subdir: 'proj-work' });
+    assert.match(preamble, /A comment marked \[restricted to …\] or \[internal\] is not for everyone who can read this issue: never quote or paraphrase it, or what it says, in an answer\./);
+    assert.match(preamble, /fetch an original with the jira_get_attachment tool \(the attachment id\) and read the file at the path it returns/);
+  });
+
   it('bot.ts glues it on for a Jira key instead of the Telegram thread context', () => {
     const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
     const body = botSource.slice(botSource.indexOf('function getPromptWithThreadContext('));

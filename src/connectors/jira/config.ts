@@ -59,6 +59,8 @@ const folderErrorTexts: Record<BindErrorCode, string> = {
   BIND_OUTSIDE_ROOT: 'is outside WORK_ROOT',
   BIND_NOT_DIRECTORY: 'is not a directory',
 };
+/** A tool's name on the agent's PATH: ONE file name (never `.` or `..`, never a path). */
+const agentBinaryNameRe = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 /** Hosts the test-only `baseUrl` override may point at. */
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -84,6 +86,8 @@ const rawConfigSchema = z.strictObject({
   model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
   effort: z.enum(claudeEffortLevels).optional(),
   baseUrl: z.string().min(1).optional(),
+  // C11: tools the agent should find on its PATH (`ffmpeg`): name → absolute path of the program.
+  agentBinaries: z.record(z.string().regex(agentBinaryNameRe, 'must be one file name'), z.string().min(1)).optional(),
 });
 
 /** @name JiraProjectConfig @description One allowlisted project. */
@@ -113,9 +117,23 @@ export interface JiraConfig {
   model: string;
   /** The sessions' reasoning effort; absent from `jira.json` → {@link jiraDefaultEffort}. */
   effort: ClaudeEffortLevel;
+  /** Tool name → absolute path of an executable, checked at boot; linked into the agents' PATH (host runtime). */
+  agentBinaries: ReadonlyMap<string, string>;
 }
 
 export type JiraConfigResult = { ok: true; config: JiraConfig } | { ok: false; errors: string[] };
+
+/** Why `binaryPath` cannot serve as a tool, or `null`: it must be an absolute path to an executable regular file. */
+function getAgentBinaryError(binaryPath: string): string | null {
+  if (!path.isAbsolute(binaryPath)) return 'must be an absolute path';
+  try {
+    if (!fs.statSync(binaryPath).isFile()) return 'is not a file';
+    fs.accessSync(binaryPath, fs.constants.X_OK);
+  } catch (e) {
+    return e instanceof Error && 'code' in e && e.code === 'ENOENT' ? 'does not exist' : 'is not executable';
+  }
+  return null;
+}
 
 /**
  * @description R12: the marker of Claude memory nearest a folder — in the folder
@@ -214,6 +232,13 @@ export function validateJiraConfig(
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
 
+  const agentBinaries = new Map<string, string>();
+  for (const [name, binaryPath] of Object.entries(raw.agentBinaries ?? {})) {
+    const binaryError = getAgentBinaryError(binaryPath);
+    if (binaryError) errors.push(`jira.json agentBinaries.${name}: ${binaryError}`);
+    else agentBinaries.set(name, binaryPath);
+  }
+
   const projects = new Map<string, JiraProjectConfig>();
   const projectEntries = Object.entries(raw.projects);
   if (projectEntries.length === 0) errors.push('jira.json projects names no project');
@@ -254,6 +279,7 @@ export function validateJiraConfig(
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
       model: raw.model ?? jiraDefaultModel,
       effort: raw.effort ?? jiraDefaultEffort,
+      agentBinaries,
     },
   };
 }

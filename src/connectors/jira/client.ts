@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sleep } from '../../utils';
 import { getRetryAfterHeaderMs } from '../../utils/retryAfterHeader';
+import { downloadJiraAttachment, jiraDownloadStallTimeoutMs } from './attachmentDownload';
 import { adfNodeSchema, attributeValueSchema, type AdfAttributeValue, type AdfDocument } from './adf';
 
 /**
@@ -263,6 +264,8 @@ export interface JiraClientOptions {
   /** In [0, 1); the backoff jitter's source. */
   randomImpl?: () => number;
   timeoutMs?: number;
+  /** How long a download may deliver no data before it is aborted; defaults to {@link jiraDownloadStallTimeoutMs}. */
+  downloadStallTimeoutMs?: number;
 }
 
 interface JiraRequest {
@@ -332,6 +335,12 @@ export interface JiraClient {
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
   /** The site's fields (system and custom), to name an `extraFields` id and to tell an unknown one. */
   getFields(): Promise<JiraFieldDefinition[]>;
+  /**
+   * Stream attachment `attachmentId`'s original into the NEW file `destinationPath` (any size, never held in
+   * memory); resolves the byte count. Fails with {@link JiraAuthError} on 401/403 and {@link JiraHttpError}
+   * otherwise (a stall included, status 0); the file is removed on failure.
+   */
+  downloadAttachment(attachmentId: string, destinationPath: string): Promise<number>;
   addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
@@ -495,6 +504,18 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         if (error instanceof JiraAuthError && error.status === remoteLinksDisabledStatus) return [];
         throw error;
       }
+    },
+
+    downloadAttachment: async (attachmentId, destinationPath) => {
+      const requestPath = `/rest/api/3/attachment/content/${encode(attachmentId)}`;
+      const result = await downloadJiraAttachment(
+        { baseUrl, authorization, fetchImpl, stallTimeoutMs: options.downloadStallTimeoutMs ?? jiraDownloadStallTimeoutMs },
+        attachmentId,
+        destinationPath,
+      );
+      if (result.ok) return result.bytes;
+      if (result.status === 401 || result.status === 403) throw new JiraAuthError(result.status, 'GET', requestPath);
+      throw new JiraHttpError(result.status, 'GET', requestPath, result.detail);
     },
 
     getFields: () => sendForJson({ method: 'GET', path: '/rest/api/3/field', isIdempotent: true }, fieldDefinitionsSchema),

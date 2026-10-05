@@ -111,6 +111,49 @@ describe('validateJiraConfig', () => {
     assert.deepEqual([jiraDefaultModel, jiraDefaultEffort], ['opus', 'high']);
   });
 
+  describe('agentBinaries (C11)', () => {
+    let toolPath = '';
+
+    before(() => {
+      toolPath = path.join(dataDir, 'tool.sh');
+      fs.writeFileSync(toolPath, '#!/bin/sh\n', { mode: 0o755 });
+    });
+
+    const getResult = (agentBinaries: Record<string, string>) => validateJiraConfig(createConfig({ agentBinaries }), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+
+    it('none by default; a tool\'s name and an executable absolute path are taken', () => {
+      const none = validateJiraConfig(createConfig(), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(none.ok);
+      assert.deepEqual([...none.config.agentBinaries], []);
+      const result = getResult({ ffmpeg: toolPath });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      assert.deepEqual([...result.config.agentBinaries], [['ffmpeg', toolPath]]);
+    });
+
+    it('a path that is missing, not executable, not absolute or not a file stops the boot, naming the key and never the value', () => {
+      const notExecutable = path.join(dataDir, 'plain.txt');
+      fs.writeFileSync(notExecutable, 'x', { mode: 0o644 });
+      const result = getResult({ gone: path.join(dataDir, 'nowhere'), plain: notExecutable, relative: 'bin/ffmpeg', folder: dataDir });
+      assert.equal(result.ok, false);
+      const errors = result.ok ? [] : result.errors;
+      assert.deepEqual(errors, [
+        'jira.json agentBinaries.gone: does not exist',
+        'jira.json agentBinaries.plain: is not executable',
+        'jira.json agentBinaries.relative: must be an absolute path',
+        'jira.json agentBinaries.folder: is not a file',
+      ]);
+      assert.ok(!errors.join('\n').includes(dataDir), 'no path is echoed');
+    });
+
+    it('a name must be ONE file name', () => {
+      for (const name of ['a/b', '..', '.', 'with space', '', '../x']) {
+        const result = getResult({ [name]: toolPath });
+        assert.equal(result.ok, false, `"${name}" must be refused`);
+      }
+      assert.ok(getResult({ 'ffmpeg-7.0_static': toolPath }).ok);
+    });
+  });
+
   it('C11: a project\'s extraFields are taken (empty by default, duplicates once) — custom and system ids alike; only an empty id is refused', () => {
     const result = validateJiraConfig(
       createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['customfield_10042', 'customfield_10042', 'duedate'] } } }),

@@ -21,6 +21,7 @@ import { resolveThreadFilesDir } from '../botFileStorage';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { jiraCommentSpillMinChars } from '../connectors/jira/promptSpill';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
+import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const aiAccountId = 'ai-account';
@@ -37,6 +38,9 @@ const requestPaths: string[] = [];
 /** The site's fields (`GET /field`) and the custom values the issue returns. */
 let siteFields: Array<{ id: string; name: string }> = [];
 let issueCustomFields: Record<string, string> = {};
+/** The issue's attachments, as the issue read answers them; the content of attachment `10` is `attachmentBytes`. */
+let issueAttachments: object[] = [];
+const attachmentBytes = 'the original bytes';
 /** The comments the issue answers with. */
 let issueComments: object[] = [];
 /** Status of the field list; 200 serves `siteFields`. */
@@ -87,7 +91,12 @@ describe('prepareJiraConnector', () => {
         }
         if (url === '/rest/api/3/project/PROJ/statuses') return sendJson(response, [{ statuses: [{ id: '10001', name: 'To Do' }, { id: '3', name: 'Done' }] }]);
         if (url === '/rest/api/3/search/jql') return sendJson(response, { issues: [issue], isLast: true });
-        if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, { ...issue, fields: { ...issue.fields, ...issueCustomFields } });
+        if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, { ...issue, fields: { ...issue.fields, ...issueCustomFields, attachment: issueAttachments } });
+        if (url === '/rest/api/3/attachment/content/10?redirect=false') {
+          response.writeHead(200, { 'Content-Type': 'image/png' });
+          response.end(attachmentBytes);
+          return;
+        }
         if (url.startsWith('/rest/api/3/issue/PROJ-1/comment?')) return sendJson(response, { total: issueComments.length, comments: issueComments });
         if (url === '/rest/api/3/issue/PROJ-1/remotelink') return sendJson(response, []);
         if (url === '/rest/api/3/field' && fieldsStatus !== 200) {
@@ -129,6 +138,7 @@ describe('prepareJiraConnector', () => {
     siteFields = [];
     issueCustomFields = {};
     issueComments = [];
+    issueAttachments = [];
     fieldsStatus = 200;
     requestPaths.length = 0;
   });
@@ -239,6 +249,42 @@ describe('prepareJiraConnector', () => {
       logs.mock.restore();
     }
     assert.deepEqual(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1'), { generation: 1, sent: {} });
+  });
+
+  it('C10: the attachment tool saves the issue\'s file under the conversation\'s files dir (jira/) and refuses any id the issue does not list', async () => {
+    issueAttachments = [{ id: '10', filename: 'screen shot.png', mimeType: 'image/png', size: attachmentBytes.length }];
+    writeConfig();
+    connector = await prepare();
+    const key = makeJiraKey('PROJ-1');
+    const fetched = await connector.fetchAttachment(key, '10');
+    const savedAt = path.join(resolveThreadFilesDir(dataDir, key), 'jira', '10-screen shot.png');
+    assert.ok(fetched.ok, JSON.stringify(fetched));
+    assert.ok(fetched.message.includes(savedAt));
+    assert.equal(fs.readFileSync(savedAt, 'utf8'), attachmentBytes);
+    const refused = await connector.fetchAttachment(key, '777');
+    assert.deepEqual(refused, { ok: false, error: 'Attachment 777 is not an attachment of PROJ-1. Its attachments: 10.' });
+  });
+
+  describe('agentBinaries (C11)', () => {
+    it('the tools are linked into DATA_DIR/agent-bin at boot and that folder leads the PATH of the Jira agents; none configured, none added', async () => {
+      const toolPath = path.join(workRoot, 'real-tool');
+      fs.writeFileSync(toolPath, '#!/bin/sh\n', { mode: 0o755 });
+      writeConfig({ agentBinaries: { 'e2e-tool': toolPath } });
+      connector = await prepare();
+      const binDir = path.join(dataDir, 'agent-bin');
+      assert.equal(fs.readlinkSync(path.join(binDir, 'e2e-tool')), toolPath);
+      assert.ok(getClaudePlatformEnvironment(makeJiraKey('PROJ-1'))?.PATH?.startsWith(`${binDir}:`));
+      connector.stop();
+      writeConfig();
+      connector = await prepare();
+      assert.equal(fs.existsSync(binDir), false, 'a tool dropped from the config is unlinked');
+      assert.ok(!getClaudePlatformEnvironment(makeJiraKey('PROJ-1'))?.PATH?.includes('agent-bin'));
+    });
+
+    it('a configured tool that is not there stops the start, naming the key', async () => {
+      writeConfig({ agentBinaries: { ffmpeg: path.join(workRoot, 'missing') } });
+      await assert.rejects(prepare(), (error: Error) => error instanceof JiraConnectorStartError && error.reasons.includes('jira.json agentBinaries.ffmpeg: does not exist'));
+    });
   });
 
   describe('extraFields (C11)', () => {
@@ -400,6 +446,13 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 2, 'only the start and the compaction reset');
     const resume = botSource.slice(botSource.indexOf('async function resumeSleepingSession('), botSource.indexOf('async function resumeSleepingSession(') + 3000);
     assert.ok(!resume.includes('noteConversationContextReset'), 'a resume continues the conversation');
+  });
+
+  it('C10: the bot MCP offers the connector\'s attachment tool only when the instance has the connector', () => {
+    const wiring = botSource.slice(botSource.indexOf('function wireScheduler('), botSource.indexOf('export async function startBot('));
+    assert.match(wiring, /const \{ jiraConnector \} = wiring;/);
+    assert.match(wiring, /\.\.\.\(jiraConnector\s*\?\s*\{ fetchJiraAttachment: \(threadKeyStr: string, attachmentId: string\) => jiraConnector\.fetchAttachment\(keyFromString\(threadKeyStr\), attachmentId\) \}\s*:\s*\{\}\),/);
+    assert.match(startBody, /wireScheduler\(\{\s*requestLedger,\s*answerSinks,\s*jiraConnector,/);
   });
 
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {

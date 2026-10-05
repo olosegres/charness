@@ -6,6 +6,9 @@ import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraC
 import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraContextLedger } from './contextLedger';
+import { fetchIssueAttachment, type JiraAttachmentToolResult } from './attachmentTool';
+import { linkAgentBinaries } from './agentBinaries';
+import { registerAgentBinDir } from '../../utils/agentEnvironment';
 import type { SessionKey } from '../../sessionKey';
 import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
@@ -44,6 +47,11 @@ export interface JiraConnector {
   onPromptSettled(key: SessionKey, requestId: string, outcome: RequestPromptOutcome): void;
   /** The issue's agent lost what it was told (a fresh session, a completed compaction): the next prompt is whole (C6). */
   onContextReset(key: SessionKey, reason: string): void;
+  /**
+   * `jira_get_attachment` (C10): download attachment `attachmentId` of the issue `key` names — and no other
+   * issue's — into the conversation's files dir. The key comes from the session's scoped token, never from the agent.
+   */
+  fetchAttachment(key: SessionKey, attachmentId: string): Promise<JiraAttachmentToolResult>;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -160,7 +168,11 @@ export async function prepareJiraConnector(context: {
   const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
   await unconfirmedPosts.load();
 
+  /** The connector's own folder inside a conversation's files dir. */
+  const getJiraFilesDir = (key: SessionKey): string => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName);
   const contextLedger = JiraContextLedger.createForDataDir(context.dataDir);
+  // C11: the tools the agents should find on their PATH, linked once per boot; a name dropped from the config is unlinked.
+  registerAgentBinDir(linkAgentBinaries(context.dataDir, config.agentBinaries));
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
@@ -188,7 +200,7 @@ export async function prepareJiraConnector(context: {
       runBudgetPer24h: config.runBudgetPer24h,
       pollIntervalMs: config.pollIntervalMs,
       contextLedger,
-      getSpillDir: (key) => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName, jiraSpillDirName),
+      getSpillDir: (key) => path.join(getJiraFilesDir(key), jiraSpillDirName),
       triggerLog,
       now: () => Date.now(),
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
@@ -221,6 +233,7 @@ export async function prepareJiraConnector(context: {
       if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);
       else contextLedger.drop(key.thread, requestId);
     },
+    fetchAttachment: (key, attachmentId) => fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir }, key, attachmentId),
     onContextReset: (key, reason) => {
       contextLedger.reset(key.thread);
       console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);

@@ -172,6 +172,15 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram'), telegram);
   });
 
+  it('C10: with the Jira connector\'s attachment port a Jira session gets its own tool set — its digest differs from the neutral one, no other platform\'s moves', () => {
+    const without = createDigestDeps();
+    const withPort: SchedulerMcpDeps = { ...without, fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }) };
+    assert.notEqual(getBotMcpToolDigest(withPort, 'jira'), getBotMcpToolDigest(without, 'jira'));
+    assert.notEqual(getBotMcpToolDigest(withPort, 'jira'), getBotMcpToolDigest(withPort, null));
+    assert.equal(getBotMcpToolDigest(withPort, 'telegram'), getBotMcpToolDigest(without, 'telegram'));
+    assert.equal(getBotMcpToolDigest(withPort, null), getBotMcpToolDigest(without, null));
+  });
+
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
     const base = [
       { name: 'answer_request', title: 'Answer a request', description: 'Send your answer', inputKeys: ['body', 'kind', 'requestId'] },

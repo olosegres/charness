@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 /**
  * @description The environment an agent of a tracker conversation starts with
  * (Jira connector plan R32): a short allowlist of what a shell and Claude Code's
@@ -58,4 +60,24 @@ export function getAgentEnvironment(env: NodeJS.ProcessEnv = process.env): Recor
     if (value !== undefined && !envFileVariableNames.has(name)) environment[name] = value;
   }
   return environment;
+}
+
+/** What a shell searches when the environment holds no PATH of its own. */
+const defaultAgentPath = '/usr/local/bin:/usr/bin:/bin';
+
+/** A folder of tools the agents of non-Telegram conversations should find first on their PATH (Jira `agentBinaries`). */
+let agentBinDir: string | null = null;
+
+/** @description Set (or, with `null`, clear) the folder {@link addAgentBinDirToPath} puts first on the PATH. */
+export function registerAgentBinDir(dir: string | null): void {
+  agentBinDir = dir;
+}
+
+/**
+ * @description `environment` with the registered tool folder at the front of its PATH — the environment of a
+ * tracker conversation's agent process. Without a registered folder it is returned as it is.
+ */
+export function addAgentBinDirToPath(environment: Record<string, string>): Record<string, string> {
+  if (agentBinDir === null) return environment;
+  return { ...environment, PATH: `${agentBinDir}${path.delimiter}${environment.PATH ?? defaultAgentPath}` };
 }

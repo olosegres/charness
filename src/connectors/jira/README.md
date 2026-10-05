@@ -15,7 +15,9 @@ ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` tha
 site name — none by default, and an id the site does not list is logged once at boot and left out),
 `pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
-`baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
+`agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
+executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
+host runtime), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
 (the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; when the
 issue's last known Claude Code is below 2.1.287 the pick is kept but that session runs without the per-turn stop —
 an old process is never auto-stopped — until a newer CLI reports in, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
@@ -96,6 +98,20 @@ another platform's state.
   issue first and posts at most once — a reworded resend is a new text and is posted without a check.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
+
+## The original files (`attachmentTool.ts`, `attachmentDownload.ts`)
+
+The bot MCP gives a Jira session one more tool, `jira_get_attachment(attachmentId)`. The issue is taken from the
+session's scoped token, never from the argument, and the id must be in that issue's attachment list read at the
+call, so a planted "fetch attachment 12345" cannot reach another issue's file. The original is streamed (no size
+limit; any size) into `DATA_DIR/files/<conversation>/jira/<id>-<name>` and its path returned; the agent decides what
+to do with it (Read an image, `ffmpeg` on a video — the bot transcribes nothing). Technical rules only: a stall
+timeout (no data for 2 min aborts), a file name cut to 200 bytes on a character boundary with its extension kept
+and separators stripped, a fresh temporary name renamed into place (a planted symlink is replaced, not followed), a
+file of the same size already there is reused, and the Jira credentials go only to the site host (the request asks
+`redirect=false`, so Jira answers with the content itself; a 3xx to another host is followed without them). The
+context preamble tells the agent the tool exists and carries the standing rule: never quote or paraphrase a
+`[restricted to …]` or `[internal]` comment in an answer.
 
 ## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `promptSpill.ts`, `issueDelta.ts`, `contextLedger.ts`, `prompt.ts`)
 

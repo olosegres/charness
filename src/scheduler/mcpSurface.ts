@@ -135,6 +135,16 @@ ${compactConversationInstruction}
 
 Each tool's own description has the exact argument recipe.`;
 
+/** For a Jira issue: the neutral set plus the tool that reaches the issue's original files (C10). */
+const jiraInstructions = `This MCP connects the agent to the conversation that asked for its work.
+
+When to use it:
+${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.
+• The issue lists a file (an attachment id in the attachments list, or in a placeholder such as "[image: shot.png — attachment 10234]") you need to look at → jira_get_attachment with that id; it saves the original file and returns its path.
+${compactConversationInstruction}
+
+Each tool's own description has the exact argument recipe.`;
+
 /**
  * Connect-time `instructions` returned in the MCP `initialize` handshake — a
  * short, high-level pointer the client surfaces to the agent BEFORE any call.
@@ -146,8 +156,9 @@ Each tool's own description has the exact argument recipe.`;
  * a Telegram session has the scheduling and send-to-topic tools, so only its
  * instructions name them (Jira connector plan J2, D18).
  */
-export function buildMcpServerInstructions(platform: PlatformId | null): string {
-  return platform === 'telegram' ? telegramInstructions : neutralInstructions;
+export function buildMcpServerInstructions(platform: PlatformId | null, isJiraAttachmentToolOffered = false): string {
+  if (platform === 'telegram') return telegramInstructions;
+  return platform === 'jira' && isJiraAttachmentToolOffered ? jiraInstructions : neutralInstructions;
 }
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */
@@ -325,6 +336,12 @@ export interface SchedulerMcpDeps {
    */
   compactConversation: (threadKey: string) => { ok: boolean; message: string };
   /**
+   * `jira_get_attachment`: download one attachment of the Jira issue the conversation `threadKey` names (Jira
+   * prompt context C10). Supplied by the Jira connector, which stays lazily loaded; absent on an instance
+   * without it, and then the tool is not offered.
+   */
+  fetchJiraAttachment?: (threadKey: string, attachmentId: string) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
+  /**
    * Deliver an agent's answer to a request and apply the close rules
    * (`answer_request`). The surface passes the scope check in; the rules live in
    * `requests/answerRequest.ts`.
@@ -420,7 +437,7 @@ export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId
     },
   };
   registerBotTools(recorder, deps, digestScope, platform, undefined);
-  return buildBotMcpToolDigest(buildMcpServerInstructions(platform), definitions);
+  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, deps.fetchJiraAttachment !== undefined), definitions);
 }
 
 /**
@@ -1098,6 +1115,40 @@ function registerCompactConversationTool(server: ToolRegistrar, deps: SchedulerM
 }
 
 /**
+ * `jira_get_attachment`: the issue is the conversation this session's token names — never an argument —
+ * so a file of any other issue cannot be asked for, however the id got into the agent's head.
+ */
+function registerJiraAttachmentTool(
+  server: ToolRegistrar,
+  deps: SchedulerMcpDeps,
+  fetchJiraAttachment: NonNullable<SchedulerMcpDeps['fetchJiraAttachment']>,
+  scope: SchedulerScope,
+): void {
+  server.registerTool(
+    'jira_get_attachment',
+    {
+      title: 'Get a Jira attachment',
+      description:
+        'Download the ORIGINAL of one attachment of THIS issue and get the local path it was saved at. The ' +
+        'attachment ids are in the issue\'s attachments list and in placeholders like ' +
+        '"[image: shot.png — attachment 10234]". There is no size limit. What you do with the file is up to ' +
+        'you: view an image with your file-reading tool, take frames or the audio of a video with ffmpeg ' +
+        '(when it is on your PATH). Only this issue\'s own attachments can be fetched.',
+      inputSchema: {
+        attachmentId: z.string().min(1).describe('The attachment id, e.g. "10234" from "[image: shot.png — attachment 10234]".'),
+      },
+    },
+    async (args) => {
+      await deps.whenSessionsRestored();
+      const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
+      if (!resolved.ok) return errorResult(resolved.error);
+      const outcome = await fetchJiraAttachment(resolved.threadKey, args.attachmentId);
+      return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
+    },
+  );
+}
+
+/**
  * @description Whether a token's scope covers a conversation (serialized key): a
  * `thread:` token covers exactly its thread, a `dir:` token every thread bound to
  * its directory. Unlike {@link resolveTargetThreadKey} it never picks a target —
@@ -1326,7 +1377,7 @@ function buildRequestServer(
   const platform = getSchedulerScopePlatform(scope);
   const server = new McpServer(
     { name: mcpServerName, version: mcpServerVersion },
-    { instructions: buildMcpServerInstructions(platform) },
+    { instructions: buildMcpServerInstructions(platform, deps.fetchJiraAttachment !== undefined) },
   );
   registerBotTools(server, deps, scope, platform, requestSignal);
   return server;
@@ -1346,6 +1397,8 @@ function registerBotTools(
     registerFileSendTool(server, deps, scope, requestSignal);
     registerMessageSendTool(server, deps, scope, requestSignal);
   }
+  // The original files of the conversation's own issue: only a Jira session, and only with the connector loaded.
+  if (platform === 'jira' && deps.fetchJiraAttachment) registerJiraAttachmentTool(server, deps, deps.fetchJiraAttachment, scope);
   registerCompactConversationTool(server, deps, scope);
   registerAnswerRequestTool(server, deps, scope);
 }
