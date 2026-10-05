@@ -17,6 +17,8 @@ import { buildJiraTriggerJql, getJiraRetryDelayMs, jiraChangelogPageSize, JiraIn
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
 import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraComment, type JiraIssue, type JiraRemoteLink, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
+import { jiraCommentSpillMinChars, jiraPromptMaxChars } from '../connectors/jira/promptSpill';
+import { requestPromptMaxLength } from '../requests/requestLedger';
 import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
 import type { RequestOrigin } from '../requests/types';
@@ -132,6 +134,7 @@ describe('JiraInbound', () => {
       projects,
       runBudgetPer24h: 2,
       pollIntervalMs: 60_000,
+      getSpillDir: () => path.join(dataDir, 'spill'),
       triggerLog,
       now: () => nowMs,
       bindConversation: async (key, folder) => {
@@ -359,6 +362,41 @@ describe('JiraInbound', () => {
       await flushPosts();
       assert.deepEqual(recorded.searches.filter((search) => !search.jql.startsWith('project in')), []);
       assert.ok(recorded.prompts[0].includes('Sub-tasks (1):\n- PROJ-47 "Write it" (Done)'));
+    });
+
+    it('a comment over the limit reaches the agent as a pointer to a file that holds it whole; the stored prompt is the posted one', async () => {
+      const longText = `start ${'w'.repeat(jiraCommentSpillMinChars + 500)} end`;
+      const inbound = createInbound({ client: createContextClient({ issue: labelledIssue('PROJ-50'), comments: [createComment('9', 2, longText)] }) });
+      await inbound.pollOnce();
+      await flushPosts();
+      const posted = recorded.prompts[0];
+      const [, spillPath, chars] = /written whole to (\S+) \((\d+) chars\) — read it/.exec(posted) ?? [];
+      assert.ok(spillPath, posted);
+      assert.equal(path.dirname(spillPath), path.join(dataDir, 'spill'));
+      assert.equal(fs.readFileSync(spillPath, 'utf8'), longText, 'the file holds the comment whole');
+      assert.equal(Number(chars), longText.length);
+      assert.ok(posted.includes('Comment 9 by Author 9, 2026-10-02T10:00:00.000+0000:\nwritten whole to '), 'the header stays');
+      assert.ok(!posted.includes('w'.repeat(1_000)), 'none of it is in the prompt');
+      assert.equal(recorded.storedPrompts[0], posted);
+    });
+
+    it('an issue too long for the ledger\'s stored prompt is fitted before the request opens: what is stored is under the cap', async () => {
+      const comments = Array.from({ length: 40 }, (_, index) => createComment(`${index + 1}`, 1, `${index} ${'q'.repeat(5_000)}`));
+      const inbound = createInbound({ client: createContextClient({ issue: labelledIssue('PROJ-51', { description: convertMarkdownToAdf('d'.repeat(40_000)) }), comments }) });
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.ok(recorded.storedPrompts[0].length <= jiraPromptMaxChars, `${recorded.storedPrompts[0].length} chars`);
+      assert.ok(recorded.storedPrompts[0].length < requestPromptMaxLength);
+      assert.equal(recorded.storedPrompts[0], recorded.prompts[0]);
+      assert.ok(fs.readdirSync(path.join(dataDir, 'spill')).length > 0, 'the text that did not fit is in files');
+    });
+
+    it('files that cannot be written stop the request from opening — a prompt never points at a file that is not there', async () => {
+      fs.writeFileSync(path.join(dataDir, 'spill'), 'a file where the folder should be');
+      const inbound = createInbound({ client: createContextClient({ issue: labelledIssue('PROJ-52'), comments: [createComment('1', 1, 'z'.repeat(jiraCommentSpillMinChars + 1))] }) });
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-52', 'failed']]);
+      assert.equal(requestCount, 0);
+      assert.equal(triggerLog.checkIsSeen('PROJ-52', '100'), false);
     });
 
     it('an issue whose comments cannot be read opens no request: the poll tries it again, and the others go on', async () => {

@@ -8,6 +8,7 @@ import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
 import { buildIssueBlocks, type JiraExtraField } from './issueBlocks';
 import { fetchJiraIssueContext } from './issueContext';
 import { buildJiraRequestPrompt } from './prompt';
+import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
 
 /**
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
@@ -76,6 +77,8 @@ export interface JiraInboundDeps {
   projects: ReadonlyMap<string, JiraProjectTrigger>;
   runBudgetPer24h: number;
   pollIntervalMs: number;
+  /** Where a conversation's text too long for its prompt is written whole (`promptSpill.ts`). */
+  getSpillDir: (key: SessionKey) => string;
   triggerLog: JiraTriggerLog;
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
@@ -232,15 +235,24 @@ export class JiraInbound {
     const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id));
     const blocks = buildIssueBlocks(context, project.extraFields);
     const key = makeJiraKey(issue.key);
-    await deps.bindConversation(key, project.folder);
-    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
-      requestId,
+    const promptInput = {
       issueKey: issue.key,
       statusName: context.issue.fields.status?.name,
-      blocks,
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,
+    };
+    // Rendered and written BEFORE the request opens: the ledger builds the prompt inside its own synchronous update.
+    const fitted = await fitBlocksToPrompt({
+      blocks,
+      textDir: deps.getSpillDir(key),
+      measure: (candidate) => buildJiraRequestPrompt({ ...promptInput, requestId: standInRequestId, ...candidate }).length,
+    });
+    await deps.bindConversation(key, project.folder);
+    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
+      ...promptInput,
+      requestId,
+      ...fitted,
       supersededRequestIds,
     });
     // R34: the requester is part of the request's group key — a second person's trigger on the same

@@ -97,7 +97,7 @@ another platform's state.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
 
-## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `prompt.ts`)
+## The prompt (`issueContext.ts`, `issueBlocks.ts`, `mediaPlaceholders.ts`, `promptSpill.ts`, `prompt.ts`)
 
 - The whole issue, nothing cut: after the request header and the issue-text note, the issue is a list of blocks —
   `fields` (summary, type, priority, status, reporter, parent, fix versions, labels, components, the project's
@@ -114,6 +114,15 @@ another platform's state.
   which has no `alt` — the rendered HTML (`renderedBody` of a comment, `renderedFields` of the description),
   which links the media id to its attachment exactly. No match reads `attachment unknown`; nothing is guessed.
   The recorded shapes are the fixture `__tests__/fixtures/jiraMediaAdf.json`.
+- Nothing is cut off and nothing is lost (`promptSpill.ts`). A comment over 10 000 characters is written WHOLE to
+  `DATA_DIR/files/<conversation>/jira/text/comment-<id>-<hash>.txt`; the prompt keeps its header and says
+  `written whole to <path> (N chars) — read it`. A prompt that would not fit what the request ledger stores for a
+  re-post (64 000 characters, less a margin for the header) moves its biggest blocks to files the same way,
+  largest first, until it fits; if even the stubs do not fit (hundreds of comments), the comments collapse into ONE
+  file. A spilled block keeps its hash. The files are rewritten by every request (same path for the same text),
+  so the 30-day sweep (`botFileStorage.ts`, which now walks the folders nested in a conversation's files dir)
+  only removes what no live issue has used for a month. The issue-text note covers these files too: their
+  content is the issue's, information and never instructions.
 
 ## Comment content (`adf.ts`, `prompt.ts`)
 
@@ -130,6 +139,6 @@ another platform's state.
 ## Tests
 
 `jiraConfig.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
-`jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
+`jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
 real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` and `fakeClaude.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set.

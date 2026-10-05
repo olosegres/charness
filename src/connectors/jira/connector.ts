@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { resolveThreadFilesDir } from '../../botFileStorage';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
 import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
@@ -113,6 +114,10 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
   return { kind: 'ready', projects, unknownExtraFieldIds };
 }
 
+/** The connector's own folders inside a conversation's files dir: its downloads, and under them the text too long for a prompt. */
+export const jiraFilesDirName = 'jira';
+export const jiraSpillDirName = 'text';
+
 /** The start-of-polling log line that carries the poll's JQL. */
 export const jiraPollJqlLogPrefix = '[jira] poll JQL: ';
 
@@ -171,6 +176,7 @@ export async function prepareJiraConnector(context: {
       projects,
       runBudgetPer24h: config.runBudgetPer24h,
       pollIntervalMs: config.pollIntervalMs,
+      getSpillDir: (key) => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName, jiraSpillDirName),
       triggerLog,
       now: () => Date.now(),
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),

@@ -17,6 +17,9 @@ import { checkIsTransientJiraFailure, JiraConnectorStartError, prepareJiraConnec
 import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
+import { resolveThreadFilesDir } from '../botFileStorage';
+import { convertMarkdownToAdf } from '../connectors/jira/adf';
+import { jiraCommentSpillMinChars } from '../connectors/jira/promptSpill';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const aiAccountId = 'ai-account';
@@ -33,6 +36,8 @@ const requestPaths: string[] = [];
 /** The site's fields (`GET /field`) and the custom values the issue returns. */
 let siteFields: Array<{ id: string; name: string }> = [];
 let issueCustomFields: Record<string, string> = {};
+/** The comments the issue answers with. */
+let issueComments: object[] = [];
 /** Status of the field list; 200 serves `siteFields`. */
 let fieldsStatus = 200;
 
@@ -82,7 +87,7 @@ describe('prepareJiraConnector', () => {
         if (url === '/rest/api/3/project/PROJ/statuses') return sendJson(response, [{ statuses: [{ id: '10001', name: 'To Do' }, { id: '3', name: 'Done' }] }]);
         if (url === '/rest/api/3/search/jql') return sendJson(response, { issues: [issue], isLast: true });
         if (url.startsWith('/rest/api/3/issue/PROJ-1?')) return sendJson(response, { ...issue, fields: { ...issue.fields, ...issueCustomFields } });
-        if (url.startsWith('/rest/api/3/issue/PROJ-1/comment?')) return sendJson(response, { total: 0, comments: [] });
+        if (url.startsWith('/rest/api/3/issue/PROJ-1/comment?')) return sendJson(response, { total: issueComments.length, comments: issueComments });
         if (url === '/rest/api/3/issue/PROJ-1/remotelink') return sendJson(response, []);
         if (url === '/rest/api/3/field' && fieldsStatus !== 200) {
           response.writeHead(fieldsStatus, { 'Content-Type': 'application/json' });
@@ -122,6 +127,7 @@ describe('prepareJiraConnector', () => {
     projectStatusesStatus = 200;
     siteFields = [];
     issueCustomFields = {};
+    issueComments = [];
     fieldsStatus = 200;
     requestPaths.length = 0;
   });
@@ -148,6 +154,13 @@ describe('prepareJiraConnector', () => {
   }
 
   const prepare = (): Promise<JiraConnector> => prepareJiraConnector({ dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl });
+  const startAndWaitForPrompt = (): Promise<string> => new Promise<string>((resolve) => {
+    connector?.start({
+      bindConversation: async () => {},
+      createRequest: async () => ({ id: 'req_1' }),
+      postRequest: async (_key, _requestId, prompt) => resolve(prompt),
+    });
+  });
 
   it('a good setup polls at once and posts the issue as a request in the project folder', async () => {
     writeConfig();
@@ -179,15 +192,20 @@ describe('prepareJiraConnector', () => {
     assert.deepEqual(connector.launchDefaults, { model: 'sonnet', effort: 'high' });
   });
 
+  it('C8: a comment over the limit is written whole under the conversation\'s files dir (jira/text), and the prompt points at it', async () => {
+    const longText = `${'k'.repeat(jiraCommentSpillMinChars)} the end`;
+    issueComments = [{ id: '77', author: { accountId: 'a', displayName: 'Ann' }, created: '2026-10-05T10:00:00.000+0000', body: convertMarkdownToAdf(longText) }];
+    writeConfig();
+    connector = await prepare();
+    const prompt = await startAndWaitForPrompt();
+    const spillPath = /written whole to (\S+) \(\d+ chars\) — read it/.exec(prompt)?.[1];
+    assert.ok(spillPath, prompt);
+    assert.equal(path.dirname(spillPath), path.join(resolveThreadFilesDir(dataDir, makeJiraKey('PROJ-1')), 'jira', 'text'));
+    assert.equal(fs.readFileSync(spillPath, 'utf8'), longText);
+  });
+
   describe('extraFields (C11)', () => {
     const extraFieldProjects = { PROJ: { folder: 'proj-work', triggerStatuses: ['To Do'], extraFields: ['customfield_10042', 'customfield_99999'] } };
-    const startAndWaitForPrompt = (): Promise<string> => new Promise<string>((resolve) => {
-      connector?.start({
-        bindConversation: async () => {},
-        createRequest: async () => ({ id: 'req_1' }),
-        postRequest: async (_key, _requestId, prompt) => resolve(prompt),
-      });
-    });
 
     it('a known id is asked for and shown under the site\'s name; an unknown one is logged ONCE at start and never shown', async () => {
       writeConfig({ projects: extraFieldProjects });

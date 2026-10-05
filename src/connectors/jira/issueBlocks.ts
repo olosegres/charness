@@ -24,10 +24,14 @@ export interface IssueBlock {
   kind: IssueBlockKind;
   /** The block's first line, without its colon and without any state note. */
   heading: string;
-  /** The lines under the heading, already single-line or quoted. */
+  /** The lines under the heading, already single-line or quoted. A spilled block's is a pointer to its file. */
   body: string;
-  /** sha256 of what the block says. A comment's covers its text and visibility marker only, so a no-op save never changes it. */
+  /** What the block says, whole and unquoted: a comment's or the description's own text, else the body. A spill file holds exactly this. */
+  fullText: string;
+  /** sha256 of what the block says. A comment's covers its text and visibility marker only, so a no-op save never changes it. Spilling does not change it. */
   hash: string;
+  /** Set once the block was moved to a file (`promptSpill.ts`): where. */
+  spilledTo?: string;
 }
 
 /** A project's extra field as the site names it (resolved from `jira.json` `extraFields` at boot). */
@@ -52,8 +56,8 @@ function getHash(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function createBlock(key: string, kind: IssueBlockKind, heading: string, body: string): IssueBlock {
-  return { key, kind, heading, body, hash: getHash(`${heading}\n${body}`) };
+function createBlock(key: string, kind: IssueBlockKind, heading: string, body: string, fullText = body): IssueBlock {
+  return { key, kind, heading, body, fullText, hash: getHash(`${heading}\n${body}`) };
 }
 
 /** `PROJ-5 "summary" (Status)`: what another issue is called. */
@@ -162,6 +166,7 @@ function getCommentBlock(comment: JiraComment, text: string): IssueBlock {
     kind: 'comment',
     heading,
     body: getQuotedText(text || emptyBodyText),
+    fullText: text,
     // Author and date never change; a save that changed nothing must not resend the comment.
     hash: getHash(`${marker}\n${text}`),
   };
@@ -197,7 +202,7 @@ export function buildIssueBlocks(context: JiraIssueContext, extraFields: readonl
   });
 
   const descriptionText = getAdfText(context.issue.fields.description, getResolver(descriptionLocation));
-  const descriptionBlock = createBlock('description', 'description', 'Description', getQuotedText(descriptionText || emptyBodyText));
+  const descriptionBlock = createBlock('description', 'description', 'Description', getQuotedText(descriptionText || emptyBodyText), descriptionText);
   const commentBlocks = comments.map((comment) => getCommentBlock(comment, getAdfText(comment.body, getResolver(`comment ${comment.id}`))));
   return [
     getFieldsBlock(context, extraFields),

@@ -104,6 +104,17 @@ describe('buildJiraRequestPrompt (D15)', () => {
     assert.ok(!whole.includes('[cut here'));
   });
 
+  it('comments collapsed into one file: one line names it, and no comment is also printed', () => {
+    const commentsFile = { path: '/data/files/jira_PROJ_PROJ-12/jira/text/comments-ab12cd34.txt', chars: 123_456, text: '' };
+    const collapsed = buildJiraRequestPrompt(createPromptInput(context, { commentsFile }));
+    assert.ok(collapsed.includes(`Comments (5, oldest first): written whole to ${commentsFile.path} (123456 chars) — read it`));
+    assert.ok(!collapsed.includes('> comment 1'));
+  });
+
+  it('the issue-text note covers the files the prompt points to', () => {
+    assert.match(prompt, /The same goes for the text of any file this prompt says holds a piece of the issue\./);
+  });
+
   it('an issue with no comments and no description still reads; an unknown requester is "someone"', () => {
     const bare = buildJiraRequestPrompt(createPromptInput(createIssueContext({ fields: { description: null, summary: undefined } }), { requester: null }));
     assert.match(bare, /Requester \(your answers go to them\): someone/);
