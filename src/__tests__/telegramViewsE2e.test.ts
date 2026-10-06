@@ -50,6 +50,7 @@ import {
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
+  getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
   getInstanceEnvNames,
@@ -85,9 +86,6 @@ const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
 /** A session start, a turn and the agent's answer through the bot MCP — or a silent turn plus its wake-up. */
 const answerTimeoutMs = 60 * 1000;
-const stopTimeoutMs = 20 * 1000;
-const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = 4 * bootTimeoutMs + 16 * replyTimeoutMs + 12 * answerTimeoutMs + 4 * stopTimeoutMs + flowMarginMs;
 /** How soon after the restart the seeded scheduled run is due. */
 const seededRunDelayMs = 3 * 1000;
 
@@ -194,10 +192,10 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-describe('Telegram views end to end: built charness, fake Bot API, fake claude (S6–S9)', { timeout: flowTimeoutMs }, () => {
+describe('Telegram views end to end: built charness, fake Bot API, fake claude (S6–S9)', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-tg-', [projectFolder]);
+    layout = createIsolatedInstanceLayout('charness-tg-', [projectFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);

@@ -3,7 +3,7 @@
 # checkout is mounted at /opt/telegramcode) and no agent CLI (the bot installs Claude Code / OpenCode into the
 # mounted home, where they update and persist).
 #
-#   docker build -t telegramcode docker/
+#   docker build -t telegramcode -f docker/Dockerfile .      # from the checkout: its package.json names yarn
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
@@ -12,10 +12,15 @@ RUN apt-get update \
       python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 
-# yarn as the checkout's packageManager names it, fetched once into the image: HOME is a mount, so a cache there
-# would start empty on a fresh home.
+# yarn exactly as the checkout's package.json (packageManager) names it, fetched once at build time: HOME is a mount,
+# so a cache there would start empty on a fresh home, and the checkout's yarn needs no download — nor a write into
+# a root-owned folder — when the container runs as a non-root `--user`. The cache stays writable for any user: the
+# agents' projects name other yarn versions, which a non-root user must be able to fetch.
 ENV COREPACK_HOME=/opt/corepack
-RUN corepack enable && corepack prepare yarn@4.9.2 --activate
+COPY package.json /tmp/checkout/package.json
+RUN cd /tmp/checkout && corepack enable && corepack install \
+ && rm -rf /tmp/checkout \
+ && chmod -R a+rwX /opt/corepack
 
 # HOME is the mounted agents' home: their Claude / OpenCode login, transcripts and CLI installs.
 # IS_SANDBOX lets Claude Code's --dangerously-skip-permissions run as root — the container's root, which is the
@@ -28,8 +33,8 @@ ENV HOME=/home/telegramcode \
     IS_SANDBOX=1
 RUN mkdir -p /home/telegramcode /opt/telegramcode
 
-COPY entrypoint.sh /usr/local/bin/telegramcode-entrypoint
-COPY restart-bot.sh /usr/local/bin/telegramcode-restart-bot
+COPY docker/entrypoint.sh /usr/local/bin/telegramcode-entrypoint
+COPY docker/restart-bot.sh /usr/local/bin/telegramcode-restart-bot
 RUN chmod 755 /usr/local/bin/telegramcode-entrypoint /usr/local/bin/telegramcode-restart-bot
 
 WORKDIR /opt/telegramcode

@@ -81,14 +81,23 @@ yarn install
 yarn dev          # tsx watch (fast dev — TS errors crash the process)
 yarn typecheck    # strict tsc --noEmit
 yarn build        # tsc → dist/
-yarn test         # unit/integration (node test runner + tsx); build first —
-                  # some tests exercise the built dist/cli.js
+yarn test         # test:unit, then test:flows (node test runner + tsx); build
+                  # first — some tests exercise the built dist/cli.js
+yarn test:unit    # every file but the flows; each file must finish in 2 min
+yarn test:flows   # the `*E2e.test.ts` flows; each file must finish in 20 min
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
                    # `telegramcode hot` from anywhere) — a broken edit can't
                    # take the bot down; OpenCode generations stay outside the
                    # worker tree, so agent turns survive worker reloads
                    # (Linux/macOS; Windows hot mode is intentionally refused)
 ```
+
+Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
+hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running
+flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test.ts` is run directly (CLAUDE.md).
+A flow's own time budget is that same limit less a teardown reserve (`getFlowDeadlineMs`, read from the process's
+`--test-timeout`), so a flow that runs long fails first, at the wait that is late and with charness's output tail,
+not with the runner's bare timeout. Run one flow directly with `--test-timeout=<ms>`.
 
 The Docker dev loop (never `docker compose restart` — it ignores
 `depends_on`):

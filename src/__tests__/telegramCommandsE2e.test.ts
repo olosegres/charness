@@ -50,6 +50,7 @@ import {
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
+  getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
   IsolatedCharness,
@@ -78,8 +79,6 @@ const replyTimeoutMs = 20 * 1000;
 /** A session start through the fake agent. */
 const agentStartTimeoutMs = 60 * 1000;
 const stopTimeoutMs = 20 * 1000;
-const flowMarginMs = 60 * 1000;
-const flowTimeoutMs = bootTimeoutMs + 60 * replyTimeoutMs + 6 * agentStartTimeoutMs + 2 * stopTimeoutMs + flowMarginMs;
 
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
@@ -147,7 +146,7 @@ function getCharness(): IsolatedCharness {
 
 /** The standard fake agent behind `claude`, with `claude auth …` answered by {@link fakeClaudeAuthSource}. */
 function writeClaudeLauncherWithAuth(instance: IsolatedInstanceLayout): string {
-  const standardLauncher = writeFakeClaudeLauncher(instance);
+  const standardLauncher = writeFakeClaudeLauncher(instance, null);
   authStateDir = path.join(instance.testRoot, 'fake-auth-state');
   fs.mkdirSync(authStateDir);
   const authScriptPath = path.join(instance.binDir, 'fakeClaudeAuth.js');
@@ -218,10 +217,10 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-describe('Telegram commands end to end: built charness, fake Bot API', { timeout: flowTimeoutMs }, () => {
+describe('Telegram commands end to end: built charness, fake Bot API', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-cmd-', [projectFolder]);
+    layout = createIsolatedInstanceLayout('charness-cmd-', [projectFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);

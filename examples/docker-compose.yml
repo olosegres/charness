@@ -1,7 +1,7 @@
 # The whole bot in one container (README "Run with Docker"): the bot, tmux, every agent it starts, OpenCode and
 # the bot's MCP server. Build the image once from the checkout this file mounts:
 #
-#   docker build -t telegramcode <checkout>/docker
+#   cd <checkout> && docker build -t telegramcode -f docker/Dockerfile .
 #
 # Copy .env.example to .env next to this file and fill in the paths. The bot's own settings and tokens are NOT
 # here: they live in your instance env file (INSTANCE_ENV_FILE), which the container reads read-only. Every host

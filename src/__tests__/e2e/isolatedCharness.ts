@@ -184,6 +184,48 @@ const waitStepMs = 250;
 /** How much of charness's output a failed wait quotes. */
 const outputTailChars = 4000;
 const stopTimeoutMs = 20 * 1000;
+const testTimeoutFlagName = '--test-timeout';
+/**
+ * What a flow's `after` needs inside the file limit: charness's stop (the grace, then a kill), the fake's stop and the
+ * sweep. A flow that spends its budget fails with its own diagnostic and still tears down before the runner ends the file.
+ */
+export const flowTeardownReserveMs = 3 * stopTimeoutMs;
+
+/**
+ * @description The per-file limit (ms) the runner passed on with `--test-timeout`, in either spelling, or null when the
+ * arguments carry none. The flag the runner itself enforces is the one source of the limit — so when it is repeated,
+ * the LAST one counts, as it does for Node.
+ */
+export function getTestFileTimeoutMs(execArgv: readonly string[] = process.execArgv): number | null {
+  const flagPrefix = `${testTimeoutFlagName}=`;
+  let rawLimit: string | undefined;
+  for (let index = 0; index < execArgv.length; index++) {
+    const argument = execArgv[index];
+    if (argument === testTimeoutFlagName) rawLimit = execArgv[index + 1];
+    else if (argument.startsWith(flagPrefix)) rawLimit = argument.slice(flagPrefix.length);
+  }
+  if (rawLimit === undefined) return null;
+  const limitMs = Number(rawLimit);
+  return Number.isFinite(limitMs) && limitMs > 0 ? limitMs : null;
+}
+
+/**
+ * @description When a flow's own time budget ends (ms since the epoch): the file limit its process runs under, counted
+ * from the start of that process, less the teardown's reserve. The flow's budget IS the file limit — one number, set in
+ * the script that runs the flows — so the flow fails first, at the wait that is running and with charness's output tail,
+ * and the runner's bare "timed out after Nms" never has to explain a failure. Throws when no limit applies: a flow
+ * always runs under one.
+ */
+export function getFlowDeadlineMs(
+  execArgv: readonly string[] = process.execArgv,
+  processStartMs: number = Date.now() - process.uptime() * 1000,
+): number {
+  const fileTimeoutMs = getTestFileTimeoutMs(execArgv);
+  if (fileTimeoutMs === null) {
+    throw new Error(`a flow runs under a per-file time limit: run it with \`yarn test:flows\`, or pass ${testTimeoutFlagName}=<ms> to \`node --test\``);
+  }
+  return processStartMs + Math.max(fileTimeoutMs - flowTeardownReserveMs, 0);
+}
 
 /** An OS-chosen free port — from the EPHEMERAL range, the one every outgoing connection on the host is given too. */
 export async function getFreePort(): Promise<number> {
@@ -332,15 +374,18 @@ export interface IsolatedInstanceLayout {
   tmuxSocketName: string;
   /** A private PATH: the running `node`, the fake `claude`, the system tools — no other agent binary. */
   binDir: string;
+  /** When the flow's time budget ends (ms since the epoch; `getFlowDeadlineMs`); null for a layout outside a flow. */
+  flowDeadlineMs: number | null;
 }
 
 /**
  * @description Create the layout under the OS temp dir. `prefix` names the
  * test (`charness-j7-`); `projectFolders` are created under WORK_ROOT. Dead
  * instances of the same prefix left by a killed earlier run are reaped first;
- * the new layout gets an owner file and its own detached reaper.
+ * the new layout gets an owner file and its own detached reaper. A flow passes
+ * its budget's end, which every wait on the layout's charness then honours.
  */
-export function createIsolatedInstanceLayout(prefix: string, projectFolders: readonly string[]): IsolatedInstanceLayout {
+export function createIsolatedInstanceLayout(prefix: string, projectFolders: readonly string[], flowDeadlineMs: number | null = null): IsolatedInstanceLayout {
   for (const reapedRoot of reapDeadIsolatedInstances(prefix)) console.log(`[isolated] reaped a dead earlier instance: ${reapedRoot}`);
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const layout: IsolatedInstanceLayout = {
@@ -354,6 +399,7 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
     tmuxTmpDir: path.join(testRoot, 'tmux'),
     tmuxSocketName: `${prefix}${randomBytes(4).toString('hex')}`,
     binDir: path.join(testRoot, 'bin'),
+    flowDeadlineMs,
   };
   for (const dir of [layout.instanceHome, layout.dataDir, layout.fakeLogDir, layout.fakeStateDir, layout.binDir, ...projectFolders.map((folder) => path.join(layout.workRoot, folder))]) {
     fs.mkdirSync(dir, { recursive: true });
@@ -472,12 +518,20 @@ export class IsolatedCharness {
     this.child = null;
   }
 
-  /** @description Poll `check` until it holds; a timeout quotes the output tail. */
+  /**
+   * @description Poll `check` until it holds. A wait that runs out fails with charness's output tail; so does one still
+   * running when the flow's budget ends, and it says so — the failure names the wait that was late, which the runner's
+   * bare file timeout could not.
+   */
   async waitFor(description: string, timeoutMs: number, check: () => boolean): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
+    const waitDeadline = Date.now() + timeoutMs;
+    const flowDeadline = this.layout.flowDeadlineMs;
+    const isFlowBudgetBinding = flowDeadline !== null && flowDeadline < waitDeadline;
+    const deadline = isFlowBudgetBinding ? flowDeadline : waitDeadline;
     while (!check()) {
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for ${description}; charness output tail:\n${this.output.slice(-outputTailChars)}`);
+        const failure = isFlowBudgetBinding ? `the flow's time budget is spent while waiting for ${description}` : `timed out waiting for ${description}`;
+        throw new Error(`${failure}; charness output tail:\n${this.output.slice(-outputTailChars)}`);
       }
       await new Promise((resolve) => setTimeout(resolve, waitStepMs));
     }
