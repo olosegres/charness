@@ -29,8 +29,7 @@
  *
  * Harness mirrors `openCodeSetModelNoSession.test.ts`: the testSetup module is
  * imported FIRST so the adapter reads its prefs file from a temp `DATA_DIR`;
- * private members reached via runtime bracket access (tests are excluded from
- * tsconfig and run via tsx type-stripping, so this does not affect typecheck).
+ * private members reached via bracket access.
  */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +38,7 @@ import {
   seededEffortLevel,
   noPrefThreadKeyString,
 } from './claudeEffortReapply.testSetup';
-import { ClaudeCliAdapter, checkIsClaudePromptReady } from '../adapters/claudeCliAdapter';
+import { ClaudeCliAdapter, checkIsClaudePromptReady, type ClaudeSession } from '../adapters/claudeCliAdapter';
 import { defaultEffortLevel } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
@@ -58,7 +57,7 @@ const readyPane = 'Some prior output\n\n❯ ';
 function createAdapterWithSession(key: SessionKey): {
   adapter: ClaudeCliAdapter;
   typed: string[];
-  session: { pendingEffortReapply: string | null };
+  session: ClaudeSession;
 } {
   const adapter = new ClaudeCliAdapter();
   const session = adapter['createSession']({
@@ -82,7 +81,7 @@ function createAdapterWithSession(key: SessionKey): {
 describe('Claude effort re-apply on fresh spawn (S7)', () => {
   let adapter: ClaudeCliAdapter;
   let typed: string[];
-  let session: { pendingEffortReapply: string | null };
+  let session: ClaudeSession;
 
   describe('arm step — applyStoredEffortOnSpawn', () => {
     it('arms the pending flag from the stored pref WITHOUT typing', () => {

@@ -28,6 +28,7 @@ import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { type OutboundHints } from '../platform/outbound';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
 const sseOutputBatchMs = 500;
 const ownSessionId = 'ses_own';
@@ -44,33 +45,15 @@ function createAdapterWithSession(): {
   metas: (OutboundHints | undefined)[];
 } {
   const adapter = new OpenCodeAdapter();
-  const session = {
+  // `sessions` / `routeSseData` are private; bracket access.
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId: ownSessionId,
     workDir,
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
     currentModelLabel: 'anthropic/claude',
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
     isBusy: true,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
-  };
-  // sessions / routeSseData are private; tests are excluded from tsconfig and
-  // run via tsx (type-stripping), so bracket access is runtime-only and does
-  // not affect `yarn typecheck`.
-  adapter['sessions'].set(keyToString(key), session);
+  }));
 
   const outputs: string[] = [];
   const metas: (OutboundHints | undefined)[] = [];
@@ -183,7 +166,7 @@ describe('OpenCode output dedup (B4)', () => {
     assert.deepEqual(outputs, ['Answer one.']);
 
     // Simulate the prompt-send reset (sendPromptAsync zeroes both fields).
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     session.currentResponseText = '';
     session.lastEmittedLength = 0;
 

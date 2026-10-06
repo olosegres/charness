@@ -14,9 +14,8 @@
  *     (no PATCH);
  *   - an explicit `/opencode args` session is never eligible (no GET/PATCH).
  *
- * Harness mirrors openCodeStartReady.test.ts: real adapter, `apiRequest`
- * stubbed, sessions injected via runtime bracket access (tests are excluded
- * from tsconfig and run via tsx, so bracket access does not affect typecheck).
+ * Harness mirrors openCodeStartReady.test.ts: real adapter, the server's API
+ * answered at the stubbed HTTP boundary, sessions injected via bracket access.
  * The grace delay is forced to 0 so the fallback runs on the next macrotask.
  */
 
@@ -29,35 +28,33 @@ import {
   prependThreadContextPreamble,
 } from '../threadContextPreamble';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type OpenCodeApiRequest } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
-interface ApiCall {
-  method: string;
-  urlPath: string;
-  body?: unknown;
-}
+const openCodeServer = useStubbedOpenCodeServer();
 
 const sessionId = 'ses_autoname_test';
 
 /**
- * @description Build an adapter with `apiRequest` recorded + the GET title
+ * @description Build an adapter whose API requests are recorded + the GET title
  * caller-controlled, sessions injectable, grace forced to 0. Returns the
  * recorded call log so a test can assert exactly which requests fired.
  */
 function createNamingAdapter(getTitle: string | undefined): {
   adapter: OpenCodeAdapter;
-  calls: ApiCall[];
+  calls: OpenCodeApiRequest[];
 } {
   const adapter = new OpenCodeAdapter();
-  const calls: ApiCall[] = [];
+  const calls: OpenCodeApiRequest[] = [];
 
-  adapter['apiRequest'] = async (method: string, urlPath: string, body?: unknown) => {
-    calls.push({ method, urlPath, body });
-    if (method === 'GET' && urlPath === `/session/${sessionId}`) {
+  openCodeServer.answerApiWith((request) => {
+    calls.push(request);
+    if (request.method === 'GET' && request.urlPath === `/session/${sessionId}`) {
       return { id: sessionId, title: getTitle };
     }
     // prompt_async (204) / PATCH (ok) — nothing meaningful to return.
     return undefined;
-  };
+  });
   adapter['connectSse'] = () => {};
   adapter['fallbackRenameGraceMs'] = 0;
 
@@ -65,31 +62,13 @@ function createNamingAdapter(getTitle: string | undefined): {
 }
 
 function injectSession(adapter: OpenCodeAdapter, key: SessionKey, isAutoNamePending: boolean): void {
-  adapter['sessions'].set(keyToString(key), {
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir: '/tmp/work',
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
-    currentModelLabel: null,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    emittedToolResultPartIds: new Set(),
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
     isAutoNamePending,
-  });
+  }));
 }
 
 /** Drain enough macrotask turns for the grace-0 fallback (GET then PATCH) to run. */
@@ -99,7 +78,7 @@ async function drain(): Promise<void> {
   }
 }
 
-const getCalls = (calls: ApiCall[], method: string, prefix: string): ApiCall[] =>
+const getCalls = (calls: OpenCodeApiRequest[], method: string, prefix: string): OpenCodeApiRequest[] =>
   calls.filter((c) => c.method === method && c.urlPath.startsWith(prefix));
 
 describe('OpenCode fallback session naming', () => {
@@ -117,7 +96,7 @@ describe('OpenCode fallback session naming', () => {
     assert.equal(patches.length, 1, 'renames exactly once');
     assert.deepEqual(patches[0].body, { title: 'Investigate the broken OAuth redirect on staging' });
     // Eligibility consumed — no second attempt on later prompts.
-    assert.equal(adapter['sessions'].get(keyToString(key))['isAutoNamePending'], false);
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).isAutoNamePending, false);
   });
 
   it('renames from the RAW user text — the glued thread-context preamble never leaks into the title', async () => {
@@ -146,7 +125,7 @@ describe('OpenCode fallback session naming', () => {
     assert.equal(getCalls(calls, 'GET', `/session/${sessionId}`).length, 0, 'no title read for a trivial prompt');
     assert.equal(getCalls(calls, 'PATCH', `/session/${sessionId}`).length, 0, 'no rename for a trivial prompt');
     assert.equal(
-      adapter['sessions'].get(keyToString(key))['isAutoNamePending'],
+      getOpenCodeSession(adapter, keyToString(key)).isAutoNamePending,
       true,
       'still eligible — a later meaningful prompt should name it',
     );

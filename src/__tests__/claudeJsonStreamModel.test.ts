@@ -16,8 +16,8 @@
  * - the pick still answers during the window between a `/model` re-spawn and
  *   its first `init`, so the label never blanks out mid-switch.
  *
- * Private members are reached via runtime bracket access (tests are
- * type-stripped by tsx), same pattern as claudeJsonStreamWatermarkAdvance.
+ * Private members are reached via bracket access, same pattern as
+ * claudeJsonStreamWatermarkAdvance.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -25,10 +25,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999222, 77);
 const resolvedModel = 'claude-opus-4-5-20251101';
@@ -44,49 +44,46 @@ const initLine =
     tools: ['Task', 'AskUserQuestion', 'Bash'],
   }) + '\n';
 
-function createAdapterWithSession(pickedModel: string | null): ClaudeJsonStreamAdapter {
+function createAdapterWithSession(pickedModel: string | null): { adapter: ClaudeJsonStreamAdapter; session: StreamSession } {
   const adapter = new ClaudeJsonStreamAdapter();
-  adapter['sessions'].set(keyToString(key), {
+  const session = createStreamSessionFixture({
     key,
     workDir: '/tmp/jsonstream-model-work',
     sessionId: 'sess-json-model',
-    isActive: true,
-    reader: new ClaudeStreamLineReader(),
     model: pickedModel,
-    reportedModel: null,
-    effort: null,
   });
-  return adapter;
+  adapter['sessions'].set(keyToString(key), session);
+  return { adapter, session };
 }
 
 describe('claude-json-stream current model', () => {
   it('names the model claude reports when no explicit pick was made', () => {
-    const adapter = createAdapterWithSession(null);
+    const { adapter, session } = createAdapterWithSession(null);
     // Pre-fix this stayed null for the whole session — the reported bug.
     assert.equal(adapter.getCurrentModel(key), null, 'nothing is known before init arrives');
 
-    adapter['onStdout'](adapter['sessions'].get(keyToString(key)), initLine);
+    adapter['onStdout'](session, initLine);
 
     assert.equal(adapter.getCurrentModel(key), resolvedModel);
   });
 
   it('keeps the re-spawn pick empty so a default session is never pinned to a snapshot', () => {
-    const adapter = createAdapterWithSession(null);
+    const { adapter, session } = createAdapterWithSession(null);
 
-    adapter['onStdout'](adapter['sessions'].get(keyToString(key)), initLine);
+    adapter['onStdout'](session, initLine);
 
     assert.equal(
-      adapter['sessions'].get(keyToString(key)).model,
+      session.model,
       null,
       'the reported id must not become the --model flag of the next effort re-spawn',
     );
   });
 
   it('answers with the pick until init lands, then with the resolved id', () => {
-    const adapter = createAdapterWithSession('opus');
+    const { adapter, session } = createAdapterWithSession('opus');
     assert.equal(adapter.getCurrentModel(key), 'opus', 'the label holds through a /model re-spawn');
 
-    adapter['onStdout'](adapter['sessions'].get(keyToString(key)), initLine);
+    adapter['onStdout'](session, initLine);
 
     assert.equal(adapter.getCurrentModel(key), resolvedModel, 'the live report wins once known');
   });

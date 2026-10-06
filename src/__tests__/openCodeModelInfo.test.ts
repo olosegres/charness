@@ -34,10 +34,9 @@
  * issued concurrently rather than one after the other.
  *
  * Harness mirrors openCodeOutputDedup.test.ts: a session is injected into
- * the adapter, `apiRequest` is stubbed, `output` events captured, and the
- * private `fetchModelInfo` / SSE dispatcher driven via bracket access
- * (tests are excluded from tsconfig and run via tsx type-stripping, so
- * runtime bracket access does not affect `yarn typecheck`).
+ * the adapter, the server's API is answered at the stubbed HTTP boundary,
+ * `output` events captured, and the private `fetchModelInfo` / SSE dispatcher
+ * driven via bracket access.
  */
 
 import { describe, it } from 'node:test';
@@ -45,61 +44,38 @@ import assert from 'node:assert/strict';
 import { OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type OpenCodeApiHandler } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
 const ownSessionId = 'ses_model_info';
 // Unique key so no on-disk `/model` preference exists for it — `restoreSavedModel`
 // returns false and `fetchModelInfo` reaches the `/config` branch under test.
 const key: SessionKey = makeTelegramKey(-100999111, 777);
 
-type ApiRequestStub = (method: string, urlPath: string) => Promise<unknown>;
+const openCodeServer = useStubbedOpenCodeServer();
 
 /** Build a minimal-but-complete live session and inject it into the adapter. */
 function createAdapterWithSession(): {
   adapter: OpenCodeAdapter;
   outputs: string[];
-  setConfigResponse: (stub: ApiRequestStub) => void;
+  setConfigResponse: (handler: OpenCodeApiHandler) => void;
 } {
   // The provider config cache is module-level, so a case that fills it would
   // otherwise decide what the NEXT case observes (cold vs warm).
   resetOpenCodeProviderCaches();
   const adapter = new OpenCodeAdapter();
-  const session = {
+  // Private member; bracket access.
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId: ownSessionId,
     workDir: '/tmp/work',
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
-    isModelInfoShown: false,
-    modelOverride: null,
-    currentModelLabel: null,
-    latestParentRuntimeContext: null,
-    parentAssistantObservationVersion: 0,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
-  };
-  // Private members; runtime-only bracket access (see file header).
-  adapter['sessions'].set(keyToString(key), session);
-
-  const setConfigResponse = (stub: ApiRequestStub): void => {
-    adapter['apiRequest'] = stub;
-  };
+  }));
 
   const outputs: string[] = [];
   adapter.on('output', (_key: SessionKey, text: string) => {
     outputs.push(text);
   });
-  return { adapter, outputs, setConfigResponse };
+  return { adapter, outputs, setConfigResponse: openCodeServer.answerApiWith };
 }
 
 /** Feed a `message.updated` assistant event through the real SSE dispatcher,
@@ -121,19 +97,8 @@ function feedAssistantMessage(adapter: OpenCodeAdapter, providerID: string, mode
 }
 
 async function getRuntimeInfoWithHealthyServer(adapter: OpenCodeAdapter): Promise<ReturnType<OpenCodeAdapter['getRuntimeInfo']>> {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    if (url.endsWith('/global/health')) {
-      return new Response(JSON.stringify({ version: '1.17.11' }), { status: 200 });
-    }
-    throw new Error(`unexpected fetch in test: ${url}`);
-  }) as typeof fetch;
-  try {
-    return await adapter.getRuntimeInfo(key);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  openCodeServer.answerHealthWith(() => ({ version: '1.17.11' }));
+  return adapter.getRuntimeInfo(key);
 }
 
 describe('OpenCode fetchModelInfo (B9)', () => {
@@ -146,7 +111,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
     await adapter['fetchModelInfo'](key);
 
     assert.deepEqual(outputs, [], 'transient /config failure must not claim "not set"');
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     assert.equal(session.isModelInfoShown, false, 'flag must stay false so a later message corrects it');
     assert.equal(session.currentModelLabel, null, 'currentModelLabel must not be pinned to "not set"');
   });
@@ -158,7 +123,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
     await adapter['fetchModelInfo'](key);
 
     assert.deepEqual(outputs, ['Model: not set (use /model to select)']);
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     assert.equal(session.currentModelLabel, 'not set');
   });
 
@@ -170,15 +135,15 @@ describe('OpenCode fetchModelInfo (B9)', () => {
 
     // First resolution fails transiently — nothing emitted, flag left false.
     await adapter['fetchModelInfo'](key);
-    assert.deepEqual(outputs, []);
-    assert.equal(adapter['sessions'].get(keyToString(key)).isModelInfoShown, false);
+    assert.deepEqual<string[]>(outputs, []);
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).isModelInfoShown, false);
 
     // The prompt path (handleMessageUpdate) corrects it on the first assistant
     // message: emits the real label exactly once and sets the flag.
     feedAssistantMessage(adapter, 'anthropic', 'claude-opus-4-8');
 
     assert.deepEqual(outputs, ['Model: anthropic/claude-opus-4-8']);
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     assert.equal(session.isModelInfoShown, true);
     assert.equal(session.currentModelLabel, 'anthropic/claude-opus-4-8');
 
@@ -193,7 +158,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
 
   it('retains only the latest non-aborted parent assistant runtime context', () => {
     const { adapter } = createAdapterWithSession();
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     session.modelOverride = { providerID: 'anthropic', modelID: 'claude-opus-4-8' };
 
     adapter['handleMessageUpdate'](key, {
@@ -233,7 +198,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
 
   it('includes generated output once when reasoning is reported separately', () => {
     const { adapter } = createAdapterWithSession();
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
 
     adapter['handleMessageUpdate'](key, {
       info: {
@@ -255,7 +220,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
 
   it('does not replace measured runtime context with a pending zero-token assistant placeholder', () => {
     const { adapter } = createAdapterWithSession();
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
 
     adapter['handleMessageUpdate'](key, {
       info: {
@@ -290,7 +255,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
   it('fetches the provider config so a cold cache still reports the context limit', async () => {
     const { adapter, setConfigResponse } = createAdapterWithSession();
     let providerRequests = 0;
-    setConfigResponse(async (_method, urlPath) => {
+    setConfigResponse(({ urlPath }) => {
       if (urlPath !== '/config/providers') throw new Error(`unexpected api request: ${urlPath}`);
       providerRequests += 1;
       return { providers: [{ id: 'anthropic', models: { 'claude-sonnet-4-5': { limit: { context: 200_000 } } } }] };
@@ -360,20 +325,13 @@ describe('OpenCode fetchModelInfo (B9)', () => {
       },
     });
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: string | URL | Request) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (!url.endsWith('/global/health')) throw new Error(`unexpected fetch in test: ${url}`);
+    openCodeServer.answerHealthWith(async () => {
       // Yield once so a concurrently-started provider request can be observed.
       await new Promise((resolve) => setImmediate(resolve));
       isProviderStartedBeforeHealthResolved = providerRequests > 0;
-      return new Response(JSON.stringify({ version: '1.17.11' }), { status: 200 });
-    }) as typeof fetch;
-    try {
-      await adapter.getRuntimeInfo(key);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+      return { version: '1.17.11' };
+    });
+    await adapter.getRuntimeInfo(key);
 
     assert.equal(isProviderStartedBeforeHealthResolved, true, 'the provider read must not wait for the health read');
   });
@@ -407,7 +365,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
   it('keeps selected-but-unobserved models out of runtime context until an assistant turn confirms them', async () => {
     const { adapter, setConfigResponse } = createAdapterWithSession();
     let providerRequests = 0;
-    setConfigResponse(async (_method, urlPath) => {
+    setConfigResponse(({ urlPath }) => {
       if (urlPath !== '/config/providers') throw new Error(`unexpected api request: ${urlPath}`);
       providerRequests += 1;
       return {
@@ -432,7 +390,7 @@ describe('OpenCode fetchModelInfo (B9)', () => {
     });
     await adapter['getProvidersConfig']();
 
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     session.modelOverride = { providerID: 'anthropic', modelID: 'claude-opus-4-8' };
     session.currentModelLabel = 'anthropic/claude-opus-4-8';
 

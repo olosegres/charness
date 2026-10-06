@@ -432,6 +432,7 @@ linuxTest('createSendFilesToThread reports delivery-unknown without retrying or 
 
     assert.equal(result.ok, false);
     if (!result.ok) {
+      assert.ok('kind' in result, 'a delivery-unknown failure carries its kind');
       assert.equal(result.kind, 'deliveryUnknown');
       assert.match(result.error, /may already have accepted/i);
       assert.match(result.error, /must not retry automatically/i);

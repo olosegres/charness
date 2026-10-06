@@ -108,7 +108,7 @@ function createHarness(options: {
     },
     ensureSession: async (key, fallbackAdapterName) => {
       callLog.push({ step: 'ensureSession', detail: { key, fallbackAdapterName } });
-      return options.ensureResult ?? { ok: true };
+      return options.ensureResult ?? { ok: true, isFresh: false };
     },
     forwardPrompt: async (key, text) => {
       callLog.push({ step: 'forward', detail: { key, text } });
@@ -214,7 +214,7 @@ test('busy past timeout: forwards anyway after exactly waitIdleTimeoutMs of poll
 });
 
 test('no session: ensureSession called with the job lastAdapterName', async () => {
-  const { deps, callLog } = createHarness({ ensureResult: { ok: true } });
+  const { deps, callLog } = createHarness({ ensureResult: { ok: true, isFresh: false } });
   const deliver = createScheduleDelivery(deps);
   await deliver(makeJob({ lastAdapterName: 'opencode' }), onTime);
 

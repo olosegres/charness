@@ -112,6 +112,12 @@ function assertStreamsTerminal(streams: readonly Readable[]): void {
   }
 }
 
+/** The descriptor behind a stream the service built with `createReadStream('', { fd })`; `@types/node` does not declare `fd`. */
+function getStreamDescriptor(stream: fs.ReadStream): number {
+  assert.ok('fd' in stream && typeof stream.fd === 'number', 'descriptor stream must expose its open file descriptor');
+  return stream.fd;
+}
+
 test('createTelegramFileInput gives two retry attempts distinct streams that both replay from byte zero', async () => {
   const fixture = createOpenDescriptor('retryable-bytes', 'clip.mp4');
   try {
@@ -438,7 +444,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
   const recordedMessageIds: number[] = [];
   const controller = new AbortController();
   let attemptedStream: fs.ReadStream | null = null;
-  let attemptDescriptor: number | null = null;
+  const attemptDescriptors: number[] = [];
   let senderSignal: TelegrafAbortSignal | undefined;
   let markSenderStarted = () => {};
   const senderStarted = new Promise<void>((resolve) => { markSenderStarted = resolve; });
@@ -456,7 +462,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
           assert.fail('non-empty descriptor input must use fs.ReadStream');
         }
         attemptedStream = input.source;
-        attemptDescriptor = input.source.fd;
+        attemptDescriptors.push(getStreamDescriptor(input.source));
         senderSignal = signal;
         assert.equal(
           (await consumeBuffer(input.source)).toString('utf8'),
@@ -496,8 +502,8 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
     assert.notEqual(attemptedStream, null);
     if (attemptedStream !== null) assertStreamsTerminal([attemptedStream]);
     assert.equal(operationSettled, false, 'the service must await Telegram\'s sender result');
-    assert.notEqual(attemptDescriptor, null);
-    if (attemptDescriptor !== null) {
+    assert.equal(attemptDescriptors.length, 1, 'the sender must have received one descriptor stream');
+    for (const attemptDescriptor of attemptDescriptors) {
       assert.doesNotThrow(
         () => fs.fstatSync(attemptDescriptor),
         'the service-owned descriptor must remain open until the sender settles',
@@ -509,7 +515,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
 
     assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
     assert.deepEqual(recordedMessageIds, [acceptedMessageId]);
-    if (attemptDescriptor !== null) {
+    for (const attemptDescriptor of attemptDescriptors) {
       assert.throws(
         () => fs.fstatSync(attemptDescriptor),
         { code: 'EBADF' },
@@ -552,12 +558,8 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
           if (!(media.media.source instanceof fs.ReadStream)) {
             assert.fail('non-empty descriptor input must use fs.ReadStream');
           }
-          assert.notEqual(media.media.source.fd, null);
-          if (media.media.source.fd === null) {
-            assert.fail('descriptor stream must expose its open file descriptor');
-          }
           attemptedStreams.push(media.media.source);
-          attemptDescriptors.push(media.media.source.fd);
+          attemptDescriptors.push(getStreamDescriptor(media.media.source));
         }
         senderSignal = signal;
         assert.deepEqual(
@@ -918,6 +920,7 @@ linuxTest('post-upload response timeout becomes delivery-unknown and releases a 
     const timedOutResult = await timedOutSend;
     assert.equal(timedOutResult.ok, false);
     if (!timedOutResult.ok) {
+      assert.ok('kind' in timedOutResult, 'a delivery-unknown failure carries its kind');
       assert.equal(timedOutResult.kind, 'deliveryUnknown');
       assert.match(timedOutResult.error, /must not retry automatically/i);
     }
@@ -938,7 +941,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
   const controller = new AbortController();
   const recordedMessageIds: number[] = [];
   let attemptedStream: fs.ReadStream | null = null;
-  let attemptDescriptor: number | null = null;
+  const attemptDescriptors: number[] = [];
   let senderSignal: TelegrafAbortSignal | undefined;
   let markUploadConsumed = () => {};
   const uploadConsumed = new Promise<void>((resolve) => { markUploadConsumed = resolve; });
@@ -955,7 +958,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
           assert.fail('non-empty descriptor input must use fs.ReadStream');
         }
         attemptedStream = input.source;
-        attemptDescriptor = input.source.fd;
+        attemptDescriptors.push(getStreamDescriptor(input.source));
         senderSignal = signal;
         await consumeBuffer(input.source);
         markUploadConsumed();
@@ -987,13 +990,14 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
     if (attemptedStream !== null) assertStreamsTerminal([attemptedStream]);
     assert.equal(result.ok, false);
     if (!result.ok) {
+      assert.ok('kind' in result, 'a delivery-unknown failure carries its kind');
       assert.equal(result.kind, 'deliveryUnknown');
       assert.match(result.error, /may already have accepted/i);
       assert.match(result.error, /must not retry automatically/i);
     }
     assert.deepEqual(recordedMessageIds, []);
-    assert.notEqual(attemptDescriptor, null);
-    if (attemptDescriptor !== null) {
+    assert.equal(attemptDescriptors.length, 1, 'the sender must have received one descriptor stream');
+    for (const attemptDescriptor of attemptDescriptors) {
       assert.throws(() => fs.fstatSync(attemptDescriptor), { code: 'EBADF' });
     }
   } finally {

@@ -1,17 +1,16 @@
 /**
  * @description Unit coverage for OpenCode's resume context source:
  *   - `mapOpenCodeMessagesToTurns` (pure mapper of GET /session/:id/message)
- *   - `OpenCodeAdapter.getRecentTurns` (the same mapper behind a mocked
- *     `apiRequest`, plus the failure → [] guard).
+ *   - `OpenCodeAdapter.getRecentTurns` (the same mapper behind a stubbed
+ *     server, plus the failure → [] guard).
  *
  * A message record is `{ info:{ role }, parts:[ {type:'text',text} | tool | step ] }`,
  * the same `parts` shape the SSE `message.part.updated` path handles. The
  * mapper joins text parts, skips tool/step/empty parts and non-user/assistant
  * roles, and keeps the last `limit` turns chronologically.
  *
- * Harness mirrors openCodeModelInfo.test.ts: `apiRequest` is stubbed via
- * runtime bracket access (tests are type-stripped by tsx, so this does not
- * affect `yarn typecheck`).
+ * Harness mirrors openCodeModelInfo.test.ts: the server's API is answered at the
+ * stubbed HTTP boundary.
  */
 
 import { describe, it } from 'node:test';
@@ -23,6 +22,9 @@ import {
 } from '../adapters/openCodeAdapter';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { OpenCodeApiFailure, useStubbedOpenCodeServer } from './openCodeServerStub';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const limit = 3;
 const key: SessionKey = makeTelegramKey(-100222333, 444);
@@ -197,8 +199,7 @@ describe('OpenCodeAdapter.getRecentTurns', () => {
   it('GET /session/:id/message → mapped turns (last 3, tool/step skipped)', async () => {
     const adapter = new OpenCodeAdapter();
     let requestedPath = '';
-    // Private member; runtime-only bracket access (see file header).
-    adapter['apiRequest'] = async (_method: string, urlPath: string) => {
+    openCodeServer.answerApiWith(({ urlPath }) => {
       requestedPath = urlPath;
       return [
         { info: { role: 'user' }, parts: [{ type: 'text', text: 'q1' }] },
@@ -206,7 +207,7 @@ describe('OpenCodeAdapter.getRecentTurns', () => {
         { info: { role: 'user' }, parts: [{ type: 'text', text: 'q2' }] },
         { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'a2' }] },
       ];
-    };
+    });
 
     const turns = await adapter.getRecentTurns(key, '/tmp/work', sessionId, limit);
 
@@ -218,11 +219,11 @@ describe('OpenCodeAdapter.getRecentTurns', () => {
     ]);
   });
 
-  it('a failing apiRequest yields [] (no context block, never throws)', async () => {
+  it('a failing API request yields [] (no context block, never throws)', async () => {
     const adapter = new OpenCodeAdapter();
-    adapter['apiRequest'] = async () => {
-      throw new Error('server unavailable');
-    };
+    openCodeServer.answerApiWith(() => {
+      throw new OpenCodeApiFailure(503, 'server unavailable');
+    });
     const turns = await adapter.getRecentTurns(key, '/tmp/work', sessionId, limit);
     assert.deepEqual(turns, []);
   });

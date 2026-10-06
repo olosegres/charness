@@ -181,7 +181,7 @@ interface OpenCodeSessionStatus {
 /** How many recent user message ids a session remembers to de-duplicate `message.updated`. */
 const seenUserMessageIdsMax = 100;
 
-interface OpenCodeSession {
+export interface OpenCodeSession {
   key: SessionKey;
   sessionId: string;
   workDir: string;

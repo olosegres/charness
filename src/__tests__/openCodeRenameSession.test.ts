@@ -13,9 +13,8 @@
  *   - a PATCH failure resolves to the failure notice (not a throw) and STILL
  *     suppresses the fallback (the user clearly wanted a manual name).
  *
- * Harness mirrors openCodeSessionAutoname.test.ts: real adapter, `apiRequest`
- * stubbed, sessions injected via runtime bracket access (tests are excluded
- * from tsconfig and run via tsx, so bracket access does not affect typecheck).
+ * Harness mirrors openCodeSessionAutoname.test.ts: real adapter, the server's API
+ * answered at the stubbed HTTP boundary, sessions injected via bracket access.
  */
 
 import { describe, it } from 'node:test';
@@ -23,68 +22,49 @@ import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { OpenCodeApiFailure, useStubbedOpenCodeServer, type OpenCodeApiRequest } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
-interface ApiCall {
-  method: string;
-  urlPath: string;
-  body?: unknown;
-}
+const openCodeServer = useStubbedOpenCodeServer();
 
 const sessionId = 'ses_rename_test';
 const workDir = '/tmp/work/telegramCode';
 
 /**
- * @description Build an adapter with `apiRequest` recorded. `shouldPatchFail`
+ * @description Build an adapter whose API requests are recorded. `shouldPatchFail`
  * makes the PATCH throw so the failure-path test can assert the notice + the
  * fallback-suppression invariant.
  */
 function createRenameAdapter(shouldPatchFail = false): {
   adapter: OpenCodeAdapter;
-  calls: ApiCall[];
+  calls: OpenCodeApiRequest[];
 } {
   const adapter = new OpenCodeAdapter();
-  const calls: ApiCall[] = [];
+  const calls: OpenCodeApiRequest[] = [];
 
-  adapter['apiRequest'] = async (method: string, urlPath: string, body?: unknown) => {
-    calls.push({ method, urlPath, body });
-    if (method === 'PATCH' && shouldPatchFail) {
-      throw new Error('OpenCode API PATCH /session failed: 500 boom');
+  openCodeServer.answerApiWith((request) => {
+    calls.push(request);
+    if (request.method === 'PATCH' && shouldPatchFail) {
+      throw new OpenCodeApiFailure(500, 'boom');
     }
     return undefined;
-  };
+  });
   adapter['connectSse'] = () => {};
 
   return { adapter, calls };
 }
 
 function injectSession(adapter: OpenCodeAdapter, key: SessionKey, isAutoNamePending: boolean): void {
-  adapter['sessions'].set(keyToString(key), {
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir,
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
-    currentModelLabel: null,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
     isAutoNamePending,
-  });
+  }));
 }
 
-const getPatches = (calls: ApiCall[]): ApiCall[] =>
+const getPatches = (calls: OpenCodeApiRequest[]): OpenCodeApiRequest[] =>
   calls.filter((c) => c.method === 'PATCH' && c.urlPath.startsWith(`/session/${sessionId}`));
 
 describe('OpenCode manual session rename', () => {
@@ -113,7 +93,7 @@ describe('OpenCode manual session rename', () => {
     await adapter.renameSession(key, 'Investigate the flaky CI run');
 
     assert.equal(
-      adapter['sessions'].get(keyToString(key))['isAutoNamePending'],
+      getOpenCodeSession(adapter, keyToString(key)).isAutoNamePending,
       false,
       'auto-title fallback must never overwrite a manual rename',
     );
@@ -140,7 +120,7 @@ describe('OpenCode manual session rename', () => {
     assert.ok(typeof result === 'string' && result.length > 0, 'a failed PATCH returns a notice, not a throw');
     assert.equal(getPatches(calls).length, 1, 'the PATCH was attempted');
     assert.equal(
-      adapter['sessions'].get(keyToString(key))['isAutoNamePending'],
+      getOpenCodeSession(adapter, keyToString(key)).isAutoNamePending,
       false,
       'a deliberate manual rename retires the fallback even when the PATCH fails',
     );

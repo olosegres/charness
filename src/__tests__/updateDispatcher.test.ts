@@ -68,6 +68,7 @@ function buildCallbackQueryUpdate(chatId: number, threadId: number): Update {
         chat: { id: chatId, type: 'supergroup', title: 'Group', is_forum: true },
         message_thread_id: threadId,
         is_topic_message: true,
+        text: 'pick one',
       },
     },
   };
@@ -81,7 +82,19 @@ function buildMyChatMemberUpdate(chatId: number): Update {
       from: sender,
       date: 1_700_000_003,
       old_chat_member: { status: 'member', user: sender },
-      new_chat_member: { status: 'administrator', user: sender, can_be_edited: false, is_anonymous: false },
+      new_chat_member: {
+        status: 'administrator',
+        user: sender,
+        can_be_edited: false,
+        is_anonymous: false,
+        can_manage_chat: true,
+        can_delete_messages: true,
+        can_manage_video_chats: false,
+        can_restrict_members: false,
+        can_promote_members: false,
+        can_change_info: false,
+        can_invite_users: true,
+      },
     },
   };
 }

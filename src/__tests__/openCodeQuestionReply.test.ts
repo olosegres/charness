@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import { OpenCodeAdapter, buildDirectoryScopedPath } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100779, 9);
 const sessionId = 'ses_question_owner_9';
@@ -39,31 +40,12 @@ function createAdapterWithSession(): {
   apiCalls: Array<{ method: string; urlPath: string; body: unknown }>;
 } {
   const adapter = new OpenCodeAdapter();
-  const session = {
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir: '/tmp/work-question',
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
-    currentModelLabel: null,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
-    isAutoNamePending: false,
-  };
-  adapter['sessions'].set(keyToString(key), session);
+  }));
 
   const apiCalls: Array<{ method: string; urlPath: string; body: unknown }> = [];
   adapter['apiRequest'] = (async (method: string, urlPath: string, body?: unknown) => {
@@ -104,7 +86,7 @@ describe('question reply targets the owning instance', () => {
     const { adapter, apiCalls } = createAdapterWithSession();
 
     adapter['handleQuestionAsked'](key, questionProperties, owningDirectory);
-    const session = adapter['sessions'].get(keyToString(key));
+    const session = getOpenCodeSession(adapter, keyToString(key));
     assert.equal(session.pendingQuestion?.requestId, requestId);
     assert.equal(session.pendingQuestion?.directory, owningDirectory);
 

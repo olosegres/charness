@@ -23,16 +23,16 @@
  *
  * Harness mirrors `openCodeResumeModel.test.ts` / `openCodeOutputDedup.test.ts`:
  * a session is injected into the private `sessions` map and private methods are
- * driven via bracket access (tests are tsx-stripped, so this is runtime-only
- * and does not affect `yarn typecheck`).
+ * driven via bracket access.
  */
 
 import { describe, it } from 'node:test';
 import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
-import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
+import { OpenCodeAdapter, type OpenCodeSession } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100777, 7);
 const sessionId = 'ses_persisted_7';
@@ -42,30 +42,14 @@ const lostNotice = 'OpenCode server restarted; previous session lost. Starting a
 
 useStubbedOpenCodeServer();
 
-function createActiveSession() {
-  return {
+function createActiveSession(): OpenCodeSession {
+  return createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir,
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
     currentModelLabel: 'anthropic/claude',
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
-  };
+  });
 }
 
 /**

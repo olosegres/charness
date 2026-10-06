@@ -93,9 +93,12 @@ function createBotMcpHandle(): SchedulerMcpHandle {
   return handle;
 }
 
+/** The tool digest a stub handle reports; the boot decisions under test never read it. */
+const stubToolDigest = 'stub-tool-digest';
+
 /** A handle that "binds" `port` without listening — for the decisions around the bind. */
 function createStubHandle(port: number): SchedulerMcpHandle {
-  return { start: async () => {}, stop: async () => {}, port };
+  return { start: async () => {}, stop: async () => {}, port, getToolDigest: () => stubToolDigest };
 }
 
 function createBootDeps(handle: SchedulerMcpHandle, overrides: Partial<SchedulerMcpBootDeps> = {}): SchedulerMcpBootDeps {
@@ -209,9 +212,8 @@ describe('runSessionBootPhase', () => {
 describe('startSchedulerMcpForBoot', () => {
   it('a bind failure resolves false and leaves injection inert', async () => {
     const failingHandle: SchedulerMcpHandle = {
+      ...createStubHandle(0),
       start: async () => { throw new Error('EADDRINUSE'); },
-      stop: async () => {},
-      port: 0,
     };
     const isStarted = await startSchedulerMcpForBoot(createBootDeps(failingHandle));
     assert.equal(isStarted, false);

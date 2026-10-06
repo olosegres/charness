@@ -13,20 +13,21 @@
  * resolve the model afterwards. A hanging `GET /config` can no longer gate the
  * ready reply.
  *
- * Harness mirrors openCodeModelInfo.test.ts: real adapter, `apiRequest`
- * stubbed, `connectSse` stubbed to a no-op (no real SSE socket), module-level
- * install/server checks pass naturally in this env (opencode installed, server
- * up). Private members reached via runtime bracket access (tests are excluded
- * from tsconfig and run via tsx type-stripping, so this does not affect
- * `yarn typecheck`).
+ * Harness mirrors openCodeModelInfo.test.ts: real adapter, the server's API
+ * answered at the stubbed HTTP boundary, `connectSse` stubbed to a no-op (no real
+ * SSE socket), module-level install/server checks pass naturally in this env
+ * (opencode installed, server up). Private members reached via bracket access.
  */
 
 import { describe, it } from 'node:test';
-import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, keysEqual, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type JsonValue } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const newSessionId = 'ses_start_ready';
 
@@ -35,13 +36,13 @@ const newSessionId = 'ses_start_ready';
  * /session resolves immediately; GET /config behaviour is caller-controlled;
  * connectSse is a no-op (no real socket).
  */
-function createStubbedAdapter(configHandler: () => Promise<unknown>): {
+function createStubbedAdapter(configHandler: () => Promise<JsonValue>): {
   adapter: OpenCodeAdapter;
   startedKeys: SessionKey[];
 } {
   const adapter = new OpenCodeAdapter();
 
-  adapter['apiRequest'] = async (method: string, urlPath: string) => {
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
     // Session create is now folder-scoped: `/session?directory=<workDir>`
     // (S1). Match the create regardless of the query so this harness keeps
     // resolving the new id; `/session/<id>/abort` etc. keep the path segment.
@@ -52,7 +53,7 @@ function createStubbedAdapter(configHandler: () => Promise<unknown>): {
       return configHandler();
     }
     return undefined;
-  };
+  });
   // No real SSE socket in the test.
   adapter['connectSse'] = () => {};
 
@@ -74,8 +75,6 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
-useStubbedOpenCodeServer();
-
 describe('OpenCode startSession ready reply (B18)', () => {
   it('emits "started" even when GET /config never resolves (hanging server)', async () => {
     // GET /config returns a promise that never settles. The old code awaited it
@@ -83,7 +82,7 @@ describe('OpenCode startSession ready reply (B18)', () => {
     // `started` precedes that await — we must NOT await startSession to
     // completion (it stays pending on /config by design), just confirm the
     // ready signal arrived.
-    const { adapter, startedKeys } = createStubbedAdapter(() => new Promise<unknown>(() => {}));
+    const { adapter, startedKeys } = createStubbedAdapter(() => new Promise<JsonValue>(() => {}));
     const hangKey: SessionKey = makeTelegramKey(-100999222, 1);
 
     void adapter.startSession(hangKey, '/tmp/work');
@@ -94,8 +93,8 @@ describe('OpenCode startSession ready reply (B18)', () => {
 
   it('emits "started" before fetchModelInfo resolves (readiness precedes model)', async () => {
     const events: string[] = [];
-    let resolveConfig: (value: unknown) => void = () => {};
-    const configReady = new Promise<unknown>((resolve) => {
+    let resolveConfig: (value: JsonValue) => void = () => {};
+    const configReady = new Promise<JsonValue>((resolve) => {
       resolveConfig = resolve;
     });
 
@@ -171,29 +170,12 @@ describe('OpenCode single-owner prevention (B20 root cause)', () => {
     const threadB: SessionKey = makeTelegramKey(-100999333, 11);
 
     // Inject thread A holding the shared id.
-    adapter['sessions'].set(keyToString(threadA), {
+    adapter['sessions'].set(keyToString(threadA), createOpenCodeSessionFixture({
       key: threadA,
       sessionId: newSessionId,
       workDir: '/tmp/work',
-      isActive: true,
-      currentResponseText: '',
-      lastEmittedLength: 0,
-      outputTimer: null,
       isModelInfoShown: true,
-      modelOverride: null,
-      currentModelLabel: null,
-      partTypes: new Map(),
-      statusDebounceTimer: null,
-      pendingStatus: null,
-      pendingQuestion: null,
-      effortLevel: null,
-      isBusy: false,
-      isCompacting: false,
-      busyChildSessionIds: new Set(),
-      sseController: null,
-      reconnectTimer: null,
-      sseStallTimer: null,
-    });
+    }));
 
     const stoppedKeys: SessionKey[] = [];
     adapter.on('stopped', (k: SessionKey) => stoppedKeys.push(k));
@@ -206,6 +188,6 @@ describe('OpenCode single-owner prevention (B20 root cause)', () => {
       'the stale duplicate owner (thread A) must be detached',
     );
     assert.equal(adapter['sessions'].has(keyToString(threadA)), false, 'thread A removed from the session map');
-    assert.equal(adapter['sessions'].get(keyToString(threadB)).sessionId, newSessionId, 'thread B owns the session');
+    assert.equal(getOpenCodeSession(adapter, keyToString(threadB)).sessionId, newSessionId, 'thread B owns the session');
   });
 });

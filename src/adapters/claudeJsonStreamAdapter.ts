@@ -167,7 +167,7 @@ interface PendingStreamQuestion {
   questions: OpenCodeQuestion[];
 }
 
-interface StreamSession {
+export interface StreamSession {
   key: SessionKey;
   workDir: string;
   /** The `--session-id` UUID (== Claude on-disk transcript id, shared with the

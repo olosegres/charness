@@ -22,18 +22,19 @@
  * would fail its non-empty assertion). The new `fetchModelInfo(key, false)` call
  * populates them from the server default, so the variants resolve.
  *
- * Harness mirrors `openCodeModelInfo.test.ts`: a session is injected, `apiRequest`
- * is stubbed, `output` events captured, and the private `fetchModelInfo` driven
- * via bracket access. `./openCodeResumeModel.testSetup` is imported FIRST so the
+ * Harness mirrors `openCodeModelInfo.test.ts`: a session is injected, the server's
+ * API is answered at the stubbed HTTP boundary, `output` events captured, and the
+ * private `fetchModelInfo` driven via bracket access. `./openCodeResumeModel.testSetup` is imported FIRST so the
  * adapter reads its model-prefs file from a temp `DATA_DIR` (see that file's note).
  */
 import { describe, it } from 'node:test';
-import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { savedPrefKeyString, savedPrefLabel } from './openCodeResumeModel.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type OpenCodeApiHandler } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
 // Server-default thread: no on-disk `/model` pref (key absent from the prefs
 // file), so resolution falls through to the server default — the B17 case.
@@ -48,10 +49,10 @@ const savedPrefKey: SessionKey = makeTelegramKey(-100999444, 111);
 
 const expectedVariants = ['low', 'medium', 'high', 'max'];
 
-type ApiRequestStub = (method: string, urlPath: string) => Promise<unknown>;
+const openCodeServer = useStubbedOpenCodeServer();
 
 /** Stub serving the live server endpoints the resolution + effort paths hit. */
-const stubServerEndpoints: ApiRequestStub = async (_method, urlPath) => {
+const stubServerEndpoints: OpenCodeApiHandler = ({ urlPath }) => {
   if (urlPath === '/config') {
     return {
       defaultModel: { providerID: serverDefaultProviderID, modelID: serverDefaultModelID },
@@ -71,7 +72,7 @@ const stubServerEndpoints: ApiRequestStub = async (_method, urlPath) => {
       ],
     };
   }
-  throw new Error(`unexpected apiRequest: ${urlPath}`);
+  throw new Error(`unexpected API request: ${urlPath}`);
 };
 
 function createAdapterWithSession(key: SessionKey): {
@@ -79,32 +80,13 @@ function createAdapterWithSession(key: SessionKey): {
   outputs: string[];
 } {
   const adapter = new OpenCodeAdapter();
-  const session = {
+  // Private members; bracket access.
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId: `ses_${key.thread}`,
     workDir: '/tmp/work',
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
-    isModelInfoShown: false,
-    modelOverride: null,
-    currentModelLabel: null,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
-  };
-  // Private members; runtime-only bracket access (tests are tsx-stripped).
-  adapter['sessions'].set(keyToString(key), session);
-  adapter['apiRequest'] = stubServerEndpoints;
+  }));
+  openCodeServer.answerApiWith(stubServerEndpoints);
 
   const outputs: string[] = [];
   adapter.on('output', (_key: SessionKey, text: string) => {
@@ -112,8 +94,6 @@ function createAdapterWithSession(key: SessionKey): {
   });
   return { adapter, outputs };
 }
-
-useStubbedOpenCodeServer();
 
 describe('OpenCode resume model resolution (B17)', () => {
   it('resume with NO saved pref re-resolves the server default → /effort levels available, silently', async () => {
@@ -124,7 +104,7 @@ describe('OpenCode resume model resolution (B17)', () => {
     // What the resume path now does (was: restoreSavedModel(…, false) only).
     await adapter['fetchModelInfo'](serverDefaultKey, false);
 
-    const session = adapter['sessions'].get(keyToString(serverDefaultKey));
+    const session = getOpenCodeSession(adapter, keyToString(serverDefaultKey));
     // The B17 fix: state is repopulated from the server default.
     assert.equal(session.currentModelLabel, serverDefaultLabel, 'model label must be re-resolved on resume');
     assert.deepEqual(
@@ -144,13 +124,13 @@ describe('OpenCode resume model resolution (B17)', () => {
   it('resume with a saved /model pref → pref wins, no server-default lookup, no emit', async () => {
     const { adapter, outputs } = createAdapterWithSession(savedPrefKey);
     // Fail loudly if resolution wrongly reaches the server instead of the pref.
-    adapter['apiRequest'] = async (_method, urlPath) => {
+    openCodeServer.answerApiWith(({ urlPath }) => {
       throw new Error(`pref should win — server must not be queried (${urlPath})`);
-    };
+    });
 
     await adapter['fetchModelInfo'](savedPrefKey, false);
 
-    const session = adapter['sessions'].get(keyToString(savedPrefKey));
+    const session = getOpenCodeSession(adapter, keyToString(savedPrefKey));
     assert.equal(session.currentModelLabel, savedPrefLabel, 'saved /model pref must win on resume');
     assert.deepEqual(session.modelOverride, {
       providerID: 'anthropic',

@@ -213,8 +213,9 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   directory becomes the work root).
 - **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
   test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. README § Run with Docker.
-- `yarn typecheck` · `yarn build` (`tsc` → `dist/`) · `yarn test` (= `test:unit` then `test:flows`, node
-  test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a
+- `yarn typecheck` (strict `tsc` over ALL of `src/`, test code included, via `tsconfig.typecheck.json` — tests run
+  through `tsx`, which checks no types) · `yarn build` (`tsc` → `dist/` from `tsconfig.json`, which leaves
+  `src/__tests__` out) · `yarn test` (= `test:unit` then `test:flows`, node test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a
   whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow, whose own budget is that limit less its
   teardown (`getFlowDeadlineMs`) — so a hung or process-leaking file fails by name instead of hanging the run) ·
   `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` / `telegramcode hot` (`tsc -w` + nodemon on

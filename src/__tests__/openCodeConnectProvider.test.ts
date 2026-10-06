@@ -14,28 +14,25 @@ import {
 } from '../adapters/openCodeAdapter';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type JsonValue, type OpenCodeApiRequest } from './openCodeServerStub';
 
-interface ApiCall {
-  method: string;
-  urlPath: string;
-  body?: unknown;
-}
+const openCodeServer = useStubbedOpenCodeServer();
 
-function createConnectAdapter(providerAuth: unknown, providers: unknown = { all: [] }): {
+function createConnectAdapter(providerAuth: JsonValue, providers: JsonValue = { all: [] }): {
   adapter: OpenCodeAdapter;
-  calls: ApiCall[];
+  calls: OpenCodeApiRequest[];
 } {
   const adapter = new OpenCodeAdapter();
-  const calls: ApiCall[] = [];
+  const calls: OpenCodeApiRequest[] = [];
 
   adapter['ensureProviderAuthServerReady'] = async () => {};
-  adapter['apiRequest'] = async (method: string, urlPath: string, body?: unknown) => {
-    calls.push({ method, urlPath, body });
-    if (method === 'GET' && urlPath === '/provider/auth') return providerAuth;
-    if (method === 'GET' && urlPath === '/provider') return providers;
-    if (method === 'PUT') return undefined;
-    throw new Error(`unexpected call ${method} ${urlPath}`);
-  };
+  openCodeServer.answerApiWith((request) => {
+    calls.push(request);
+    if (request.method === 'GET' && request.urlPath === '/provider/auth') return providerAuth;
+    if (request.method === 'GET' && request.urlPath === '/provider') return providers;
+    if (request.method === 'PUT') return undefined;
+    throw new Error(`unexpected call ${request.method} ${request.urlPath}`);
+  });
 
   return { adapter, calls };
 }

@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ResolvedThreadDisplayPrefs } from '../types';
 import { displayVerbosityModeOptions } from '../utils/displayVerbosity';
+import { defaultTopicView } from '../utils/topicView';
 import { getUniformVerbosityLevel } from '../utils/verbosityRender';
 
 describe('getUniformVerbosityLevel — uniform prefs', () => {
@@ -18,6 +19,7 @@ describe('getUniformVerbosityLevel — uniform prefs', () => {
         thinking: mode,
         toolResults: mode,
         subagent: mode,
+        view: defaultTopicView,
       };
       assert.equal(getUniformVerbosityLevel(prefs), mode, `mode=${mode}`);
     }
@@ -30,6 +32,7 @@ describe('getUniformVerbosityLevel — mixed prefs → null (custom)', () => {
       thinking: 'full',
       toolResults: 'minimal',
       subagent: 'minimal',
+      view: defaultTopicView,
     };
     assert.equal(getUniformVerbosityLevel(prefs), null);
   });
@@ -39,6 +42,7 @@ describe('getUniformVerbosityLevel — mixed prefs → null (custom)', () => {
       thinking: 'short',
       toolResults: 'full',
       subagent: 'short',
+      view: defaultTopicView,
     };
     assert.equal(getUniformVerbosityLevel(prefs), null);
   });
@@ -48,6 +52,7 @@ describe('getUniformVerbosityLevel — mixed prefs → null (custom)', () => {
       thinking: 'minimal',
       toolResults: 'minimal',
       subagent: 'full',
+      view: defaultTopicView,
     };
     assert.equal(getUniformVerbosityLevel(prefs), null);
   });
@@ -57,6 +62,7 @@ describe('getUniformVerbosityLevel — mixed prefs → null (custom)', () => {
       thinking: 'minimal',
       toolResults: 'short',
       subagent: 'full',
+      view: defaultTopicView,
     };
     assert.equal(getUniformVerbosityLevel(prefs), null);
   });

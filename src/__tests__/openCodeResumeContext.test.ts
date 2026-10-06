@@ -12,25 +12,39 @@
  * explicit-resume call site (`resumeSessionByIndex`).
  *
  * These tests drive the real `resumeSessionInner` with the harness style of
- * `openCodeCrashResume.test.ts` (fetch health stub, OPENCODE_BIN
+ * `openCodeCrashResume.test.ts` (stubbed server over fetch, OPENCODE_BIN
  * short-circuit, private members via bracket access). Load-bearing: the
  * default (silent) resume must hydrate runtime context without posting a
  * history block, and the explicit resume must still emit the rendered block.
  */
 
 import { describe, it } from 'node:test';
-import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, openCodeRuntimeContextHydrationConcurrency } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer, type JsonValue } from './openCodeServerStub';
 
 const key: SessionKey = makeTelegramKey(-100778, 8);
 const sessionId = 'ses_resume_ctx_8';
 const workDir = '/tmp/work-resume-ctx';
 const contextHeaderMark = '↩️';
 
-useStubbedOpenCodeServer();
+const openCodeServer = useStubbedOpenCodeServer();
+
+/**
+ * @description The server side of a resume of `sessionId`: the session exists, no
+ * question is pending, aborts succeed; `readHistory` answers the message-history read.
+ */
+function answerResumeApi(readHistory: (urlPath: string) => JsonValue | Promise<JsonValue>): void {
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
+    if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
+    if (method === 'GET' && urlPath === `/session/${sessionId}/message`) return readHistory(urlPath);
+    if (method === 'GET' && urlPath.startsWith('/question?')) return [];
+    if (urlPath.endsWith('/abort')) return undefined;
+    throw new Error(`unexpected API request in test: ${method} ${urlPath}`);
+  });
+}
 
 function createAdapter(): {
   adapter: OpenCodeAdapter;
@@ -40,33 +54,23 @@ function createAdapter(): {
   const adapter = new OpenCodeAdapter();
 
   const messageHistoryRequests: string[] = [];
-  adapter['apiRequest'] = (async (method: string, urlPath: string) => {
-    if (method === 'GET' && urlPath === `/session/${sessionId}`) {
-      return { id: sessionId };
-    }
-     if (method === 'GET' && urlPath === `/session/${sessionId}/message`) {
-       messageHistoryRequests.push(urlPath);
-       return [
-         { info: { role: 'user' }, parts: [{ type: 'text', text: 'how do I deploy?' }] },
-         {
-           info: {
-              id: 'msg_context',
-              sessionID: sessionId,
-              role: 'assistant',
-              providerID: 'historical-provider',
-              modelID: 'historical-model',
-              tokens: { input: 120, cache: { read: 30, write: 5 } },
-           },
-           parts: [{ type: 'text', text: 'run the deploy script' }],
-         },
-       ];
-     }
-     if (method === 'GET' && urlPath.startsWith('/question?')) return [];
-     if (urlPath.endsWith('/abort')) {
-       return undefined;
-     }
-    throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-  }) as OpenCodeAdapter['apiRequest'];
+  answerResumeApi((urlPath) => {
+    messageHistoryRequests.push(urlPath);
+    return [
+      { info: { role: 'user' }, parts: [{ type: 'text', text: 'how do I deploy?' }] },
+      {
+        info: {
+          id: 'msg_context',
+          sessionID: sessionId,
+          role: 'assistant',
+          providerID: 'historical-provider',
+          modelID: 'historical-model',
+          tokens: { input: 120, cache: { read: 30, write: 5 } },
+        },
+        parts: [{ type: 'text', text: 'run the deploy script' }],
+      },
+    ];
+  });
 
   // Keep resume off the real network: no SSE stream, no /config model lookup.
   adapter['connectSse'] = (() => {}) as OpenCodeAdapter['connectSse'];
@@ -117,20 +121,14 @@ describe('OpenCode resume context block gating', () => {
 
   it('does not wait for history hydration and retains its observed model over a pending override', async () => {
     const { adapter, outputs, messageHistoryRequests } = createAdapter();
-    let resolveHistory: (records: unknown) => void = () => {};
-    const history = new Promise<unknown>((resolve) => {
+    let resolveHistory: (records: JsonValue) => void = () => {};
+    const history = new Promise<JsonValue>((resolve) => {
       resolveHistory = resolve;
     });
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
-      if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
-      if (method === 'GET' && urlPath === `/session/${sessionId}/message`) {
-        messageHistoryRequests.push(urlPath);
-        return history;
-      }
-      if (method === 'GET' && urlPath.startsWith('/question?')) return [];
-      if (urlPath.endsWith('/abort')) return undefined;
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+    answerResumeApi((urlPath) => {
+      messageHistoryRequests.push(urlPath);
+      return history;
+    });
 
     const startedKeys: SessionKey[] = [];
     adapter.on('started', (startedKey: SessionKey) => startedKeys.push(startedKey));
@@ -167,17 +165,11 @@ describe('OpenCode resume context block gating', () => {
 
   it('allows historical hydration after partial or malformed parent assistant SSE updates', async () => {
     const { adapter } = createAdapter();
-    let resolveHistory: (records: unknown) => void = () => {};
-    const history = new Promise<unknown>((resolve) => {
+    let resolveHistory: (records: JsonValue) => void = () => {};
+    const history = new Promise<JsonValue>((resolve) => {
       resolveHistory = resolve;
     });
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
-      if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
-      if (method === 'GET' && urlPath === `/session/${sessionId}/message`) return history;
-      if (urlPath.startsWith('/question?')) return [];
-      if (urlPath.endsWith('/abort')) return undefined;
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+    answerResumeApi(() => history);
 
     await adapter['resumeSessionInner'](key, workDir, sessionId);
     const session = adapter['sessions'].get(keyToString(key));
@@ -225,17 +217,11 @@ describe('OpenCode resume context block gating', () => {
 
   it('keeps a complete live parent assistant runtime tuple over older history', async () => {
     const { adapter } = createAdapter();
-    let resolveHistory: (records: unknown) => void = () => {};
-    const history = new Promise<unknown>((resolve) => {
+    let resolveHistory: (records: JsonValue) => void = () => {};
+    const history = new Promise<JsonValue>((resolve) => {
       resolveHistory = resolve;
     });
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
-      if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
-      if (method === 'GET' && urlPath === `/session/${sessionId}/message`) return history;
-      if (urlPath.startsWith('/question?')) return [];
-      if (urlPath.endsWith('/abort')) return undefined;
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+    answerResumeApi(() => history);
 
     await adapter['resumeSessionInner'](key, workDir, sessionId);
     const session = adapter['sessions'].get(keyToString(key));
@@ -274,17 +260,11 @@ describe('OpenCode resume context block gating', () => {
 
   it('blocks stale history after a complete aborted provider-retry SSE update', async () => {
     const { adapter } = createAdapter();
-    let resolveHistory: (records: unknown) => void = () => {};
-    const history = new Promise<unknown>((resolve) => {
+    let resolveHistory: (records: JsonValue) => void = () => {};
+    const history = new Promise<JsonValue>((resolve) => {
       resolveHistory = resolve;
     });
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
-      if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
-      if (method === 'GET' && urlPath === `/session/${sessionId}/message`) return history;
-      if (urlPath.startsWith('/question?')) return [];
-      if (urlPath.endsWith('/abort')) return undefined;
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+    answerResumeApi(() => history);
 
     await adapter['resumeSessionInner'](key, workDir, sessionId);
     const session = adapter['sessions'].get(keyToString(key));
@@ -321,17 +301,11 @@ describe('OpenCode resume context block gating', () => {
 
   it('blocks stale history after an incomplete aborted provider-retry SSE update', async () => {
     const { adapter } = createAdapter();
-    let resolveHistory: (records: unknown) => void = () => {};
-    const history = new Promise<unknown>((resolve) => {
+    let resolveHistory: (records: JsonValue) => void = () => {};
+    const history = new Promise<JsonValue>((resolve) => {
       resolveHistory = resolve;
     });
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
-      if (method === 'GET' && urlPath === `/session/${sessionId}`) return { id: sessionId };
-      if (method === 'GET' && urlPath === `/session/${sessionId}/message`) return history;
-      if (urlPath.startsWith('/question?')) return [];
-      if (urlPath.endsWith('/abort')) return undefined;
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+    answerResumeApi(() => history);
 
     await adapter['resumeSessionInner'](key, workDir, sessionId);
     const session = adapter['sessions'].get(keyToString(key));
@@ -367,13 +341,13 @@ describe('OpenCode resume context block gating', () => {
     const pendingHistoryReads: (() => void)[] = [];
     let activeHistoryReads = 0;
     let maxActiveHistoryReads = 0;
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
+    openCodeServer.answerApiWith(async ({ method, urlPath }) => {
       const sessionIdFromPath = sessionIds.find((candidate) => urlPath === `/session/${candidate}`);
       if (method === 'GET' && sessionIdFromPath) return { id: sessionIdFromPath };
       if (method === 'GET' && urlPath.includes('/message')) {
         activeHistoryReads += 1;
         maxActiveHistoryReads = Math.max(maxActiveHistoryReads, activeHistoryReads);
-        return await new Promise<unknown>((resolve) => {
+        return await new Promise<JsonValue>((resolve) => {
           pendingHistoryReads.push(() => {
             activeHistoryReads -= 1;
             resolve([]);
@@ -381,8 +355,8 @@ describe('OpenCode resume context block gating', () => {
         });
       }
       if (method === 'GET' && urlPath.startsWith('/question?')) return [];
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+      throw new Error(`unexpected API request in test: ${method} ${urlPath}`);
+    });
     adapter['connectSse'] = (() => {}) as OpenCodeAdapter['connectSse'];
     adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 
@@ -413,18 +387,18 @@ describe('OpenCode resume context block gating', () => {
     );
     const pendingHistoryReads: (() => void)[] = [];
     const messageHistoryRequests: string[] = [];
-    adapter['apiRequest'] = async (method: string, urlPath: string) => {
+    openCodeServer.answerApiWith(async ({ method, urlPath }) => {
       const sessionIdFromPath = sessionIds.find((candidate) => urlPath === `/session/${candidate}`);
       if (method === 'GET' && sessionIdFromPath) return { id: sessionIdFromPath };
       if (method === 'GET' && urlPath.includes('/message')) {
         messageHistoryRequests.push(urlPath);
-        return await new Promise<unknown>((resolve) => {
+        return await new Promise<JsonValue>((resolve) => {
           pendingHistoryReads.push(() => resolve([]));
         });
       }
       if (method === 'GET' && urlPath.startsWith('/question?')) return [];
-      throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
-    };
+      throw new Error(`unexpected API request in test: ${method} ${urlPath}`);
+    });
     adapter['connectSse'] = (() => {}) as OpenCodeAdapter['connectSse'];
     adapter['fetchModelInfo'] = (async () => {}) as OpenCodeAdapter['fetchModelInfo'];
 

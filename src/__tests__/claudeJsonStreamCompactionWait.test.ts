@@ -25,9 +25,9 @@
  *   - a wait that times out after `compact_status success` reports SUCCESS with
  *     unknown (`null`) counts, never a failure over an already-compacted session.
  *
- * The adapter's private session map is reached via runtime bracket access (tests
- * are type-stripped by tsx), same pattern as `claudeJsonStreamMcpHeal`. Stdin is
- * a plain file rather than a FIFO, so no `claude` process is involved.
+ * The adapter's private session map is reached via bracket access, same pattern
+ * as `claudeJsonStreamMcpHeal`. Stdin is a plain file rather than a FIFO, so no
+ * `claude` process is involved.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -38,75 +38,29 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
-import { createStdoutTailState, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
+import { getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { compactionSilenceTimeoutMs, compactionWaitPollMs } from '../utils/jsonStreamBusyWatchdog';
 import type { CompactionResult } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 // A key no live thread uses — every path derived from it is a no-op.
 const key: SessionKey = makeTelegramKey(-100999778, 78);
 
 /** A fake LIVE session whose stdin is an ordinary append-mode file. */
-function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {
+function createSession(adapter: ClaudeJsonStreamAdapter, dir: string): StreamSession {
   const paths = getJsonStreamSessionPaths(dir);
   fs.writeFileSync(paths.stdinFifo, '');
-  const session = {
+  const session = createStreamSessionFixture({
     key,
     workDir: dir,
     sessionId: 'sess-compaction-wait',
     pid: process.pid,
     paths,
     fifoFd: fs.openSync(paths.stdinFifo, 'a'),
-    stdinWriteChain: Promise.resolve(),
-    tail: createStdoutTailState(0),
-    pollTimer: null,
-    pollDelayMs: 300,
-    unchangedStreak: 0,
-    isOversizeWarned: false,
-    lastPersistedTailOffset: 0,
-    reader: new ClaudeStreamLineReader(),
-    isActive: true,
-    isStopping: false,
-    isSuspending: false,
-    isRespawning: false,
-    isBusy: false,
-    lastStdoutActivityAt: Date.now(),
-    outstandingToolUseIds: new Set<string>(),
-    model: null,
-    reportedModel: null,
-    effort: null,
-    currentResponseText: '',
-    emittedLength: 0,
-    outputTimer: null,
-    reasoningText: '',
-    reasoningStartedAt: null,
-    reasoningTimer: null,
-    reasoningActive: false,
-    toolNamesById: new Map<string, string>(),
-    questionToolUseIds: new Set<string>(),
-    subagentActive: false,
-    childResponseText: '',
-    childEmittedLength: 0,
-    childOutputTimer: null,
-    pendingInitResolve: null as (() => void) | null,
-    initRequestId: null as string | null,
-    pendingControlRequests: new Map(),
-    compactionInProgress: false,
-    pendingCompaction: null,
-    pendingQuestion: null,
-    apiErrorFired: false,
-    swallowNextAbortError: false,
-    lastWatermarkOffset: -1,
-    unconsumedInputCount: 0,
-    backgroundTaskIds: new Set<string>(),
-    claudeCodeVersion: null,
-    applyingChunk: null,
-    adoptCatchUpOffset: null,
-    adoptCatchUpResolvers: [],
-  };
+  });
   adapter['sessions'].set(keyToString(key), session);
   return session;
 }
@@ -126,7 +80,7 @@ describe('json-stream compaction wait', () => {
     return dir;
   }
 
-  function start(): { adapter: ClaudeJsonStreamAdapter; session: ReturnType<typeof createSession> } {
+  function start(): { adapter: ClaudeJsonStreamAdapter; session: StreamSession } {
     const adapter = new ClaudeJsonStreamAdapter();
     const session = createSession(adapter, createTempDir());
     started.push({ adapter, session });
@@ -152,15 +106,17 @@ describe('json-stream compaction wait', () => {
     const { adapter, session } = start();
 
     let settled: CompactionResult | undefined;
-    const pending = adapter.compactContext(key).then((result) => { settled = result; });
+    const compaction = adapter.compactContext(key);
+    const pending = compaction.then((result) => { settled = result; });
     await settleTicks();
     assert.equal(settled, undefined, 'the wait is still parked while the session lives');
     assert.ok(session.pendingCompaction, 'a compaction awaiter is armed');
 
     adapter['clearTimers'](session);
     await pending;
-    assert.ok(settled && !settled.ok, 'the caller was settled by the teardown, as a FAILURE');
-    const reason = settled.ok ? '' : settled.error;
+    const result = await compaction;
+    assert.equal(result.ok, false, 'the caller was settled by the teardown, as a FAILURE');
+    const reason = result.ok ? '' : result.error;
     assert.match(reason, /session ended/, `unexpected reason: ${reason}`);
     assert.ok(!reason.includes('{'), `the notice must be fully substituted: "${reason}"`);
     assert.equal(session.pendingCompaction, null, 'the awaiter was dropped');

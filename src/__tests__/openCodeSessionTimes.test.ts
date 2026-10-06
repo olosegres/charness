@@ -17,8 +17,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const minuteMs = 60_000;
+const key = makeTelegramKey(-100222333, 444);
+const workDir = '/tmp/work';
 
 describe('OpenCode getSessions time conversion (B13)', () => {
   it('treats time.created/updated as epoch milliseconds — ages come out sane', async () => {
@@ -27,11 +33,11 @@ describe('OpenCode getSessions time conversion (B13)', () => {
     const fortyMinutesAgo = now - 40 * minuteMs;
     const twoHoursAgo = now - 120 * minuteMs;
 
-    adapter['apiRequest'] = async () => [
+    openCodeServer.answerApiWith(() => [
       { id: 'ses_old', title: 'older', time: { created: twoHoursAgo, updated: fortyMinutesAgo } },
-    ];
+    ]);
 
-    const sessions = await adapter['getSessions']();
+    const sessions = await adapter.getSessions(key, workDir);
     assert.equal(sessions.length, 1);
 
     const updatedAgeMin = (now - sessions[0].updatedAt.getTime()) / minuteMs;
@@ -44,9 +50,9 @@ describe('OpenCode getSessions time conversion (B13)', () => {
 
   it('falls back to "now" when the server omits time fields', async () => {
     const adapter = new OpenCodeAdapter();
-    adapter['apiRequest'] = async () => [{ id: 'ses_no_time', title: 'no time' }];
+    openCodeServer.answerApiWith(() => [{ id: 'ses_no_time', title: 'no time' }]);
 
-    const sessions = await adapter['getSessions']();
+    const sessions = await adapter.getSessions(key, workDir);
     assert.equal(sessions.length, 1);
     assert.ok(Math.abs(Date.now() - sessions[0].updatedAt.getTime()) < 5_000);
   });

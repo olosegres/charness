@@ -28,8 +28,8 @@
  *   separator — a greedy value swallowed the rest of the JSON object, taking
  *   the `rate_limit_exceeded` marker the retry classifier needs with it.
  *
- * The adapter's private members are reached via runtime bracket access (tests
- * are type-stripped by tsx), same pattern as the other openCode adapter tests.
+ * The adapter's private members are reached via bracket access, same pattern as
+ * the other openCode adapter tests.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -46,6 +46,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { type AgentApiErrorClass } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
 const own = 'ses_own';
 const key: SessionKey = makeTelegramKey(-100555, 7);
@@ -58,9 +59,7 @@ function createAdapterWithSession(): {
   apiErrors: AgentApiErrorClass[];
 } {
   const adapter = new OpenCodeAdapter();
-  // handleSessionError reads only `isActive` + `sessionId`; a partial session is
-  // enough (runtime-only, tsx strips the type).
-  adapter['sessions'].set(keyToString(key), { key, sessionId: own, isActive: true });
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({ key, sessionId: own }));
   const outputs: string[] = [];
   adapter.on('output', (_k: SessionKey, text: string) => outputs.push(text));
   const apiErrors: AgentApiErrorClass[] = [];

@@ -18,6 +18,7 @@ import {
 } from '../adapters/openCodeAdapter';
 import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
 const own = 'ses_own';
 const child = 'ses_child';
@@ -37,44 +38,16 @@ function createRetryingAdapter(): {
 } {
   const key = makeTelegramKey(-100123, 42);
   const adapter = new OpenCodeAdapter();
-  adapter['sessions'].set('-100123:42', {
+  adapter['sessions'].set('-100123:42', createOpenCodeSessionFixture({
     key,
     sessionId: own,
     workDir: '/tmp/work',
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
-    childResponseText: '',
-    childLastEmittedLength: 0,
-    childOutputTimer: null,
-    activeSubagentTitle: null,
     isModelInfoShown: true,
     modelOverride: { providerID: 'anthropic', modelID: 'claude-opus-5' },
     currentModelLabel: 'anthropic/claude-opus-5',
-    latestParentRuntimeContext: null,
-    parentAssistantObservationVersion: 0,
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    reasoningText: '',
-    reasoningStartedAt: null,
-    reasoningTimer: null,
-    emittedToolResultPartIds: new Set(),
-    pendingQuestion: null,
     effortLevel: 'xhigh',
     isBusy: true,
-    awaitingTurnResponse: false,
-    sawTurnActivity: false,
-    providerRetrySignature: null,
-    isAwaitingModelAfterProviderRetryAbort: false,
-    isAwaitingProviderRetryAbortIdle: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    isAutoNamePending: false,
-    isAwaitingProviderRetryReplacementStart: false,
-    providerRetryReplacementStartTimer: null,
-  });
+  }));
 
   const outputs: string[] = [];
   adapter.on('output', (_key, output: string) => outputs.push(output));
@@ -106,7 +79,7 @@ function createRetryingAdapter(): {
   adapter['routeSseData'](retryEvent);
   adapter['routeSseData'](retryEvent);
 
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   session.modelOverride = { providerID: 'openai', modelID: 'gpt-test' };
   session.currentModelLabel = 'openai/gpt-test';
   session.isModelInfoShown = false;
@@ -281,7 +254,7 @@ test('a failed provider-retry abort posts no prompt and keeps the session busy f
 test('the aborted retry cannot overwrite the selected model after the abort request has resolved', async () => {
   const { adapter, outputs, requests } = createRetryingAdapter();
   const key = makeTelegramKey(-100123, 42);
-  let resolveAbort: (() => void) | null = null;
+  let resolveAbort: () => void = () => {};
   const abortResult = new Promise<void>(resolve => {
     resolveAbort = resolve;
   });
@@ -291,7 +264,7 @@ test('the aborted retry cannot overwrite the selected model after the abort requ
   }) as OpenCodeAdapter['apiRequest'];
 
   adapter.sendInput(key, 'continue');
-  resolveAbort?.();
+  resolveAbort();
   await new Promise(resolve => setImmediate(resolve));
   feedAssistantModel(adapter, 'anthropic', 'claude-opus-5');
 
@@ -312,7 +285,7 @@ test('an aborted retry completion cannot mask a newly submitted prompt as active
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   session.sawTurnActivity = false;
   session.lastMessageId = 'new-turn-message';
 
@@ -343,7 +316,7 @@ test('the idle from an aborted provider retry cannot recover the replacement pro
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   assert.equal(session.isAwaitingProviderRetryAbortIdle, true);
 
   adapter['handleSessionIdle'](key, { sessionID: own });
@@ -359,7 +332,7 @@ test('the idle from an aborted provider retry cannot recover the replacement pro
 test('an early abort idle is consumed before the abort response and never re-armed', async () => {
   const { adapter, requests } = createRetryingAdapter();
   const key = makeTelegramKey(-100123, 42);
-  let resolveAbort: (() => void) | null = null;
+  let resolveAbort: () => void = () => {};
   const abortResult = new Promise<void>(resolve => {
     resolveAbort = resolve;
   });
@@ -370,14 +343,14 @@ test('an early abort idle is consumed before the abort response and never re-arm
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   assert.equal(session.isAwaitingProviderRetryAbortIdle, true);
 
   adapter['handleSessionIdle'](key, { sessionID: own });
   assert.equal(session.isAwaitingProviderRetryAbortIdle, false, 'the early idle is consumed while abort is pending');
   assert.equal(session.awaitingTurnResponse, false, 'the replacement turn has not started before abort resolves');
 
-  resolveAbort?.();
+  resolveAbort();
   await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(session.isAwaitingProviderRetryAbortIdle, false, 'abort completion must not re-arm an already-consumed idle');
@@ -387,7 +360,7 @@ test('an early abort idle is consumed before the abort response and never re-arm
 test('replacement busy arms its wedge detector before prompt_async resolves', async () => {
   const { adapter, requests } = createRetryingAdapter();
   const key = makeTelegramKey(-100123, 42);
-  let resolvePrompt: (() => void) | null = null;
+  let resolvePrompt: () => void = () => {};
   const promptResult = new Promise<void>((resolve) => {
     resolvePrompt = resolve;
   });
@@ -398,14 +371,14 @@ test('replacement busy arms its wedge detector before prompt_async resolves', as
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   assert.equal(session.isAwaitingProviderRetryReplacementStart, true, 'the boundary is armed before the prompt request settles');
 
   adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
 
   assert.equal(session.isAwaitingProviderRetryReplacementStart, false, 'the early busy transition belongs to the replacement');
   assert.equal(session.awaitingTurnResponse, true, 'the early busy transition arms wedge detection');
-  resolvePrompt?.();
+  resolvePrompt();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(session.awaitingTurnResponse, true, 'the delayed HTTP response cannot reset the armed detector');
 });
@@ -416,7 +389,7 @@ test('a replacement retry after busy remains interruptible', async () => {
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
   adapter['handleSessionStatus'](key, own, {
     status: { type: 'retry', attempt: 2, message: 'replacement retry', next: Date.now() + providerRetryDelayMs },
@@ -444,7 +417,7 @@ test('an abort error followed by its idle cannot settle the replacement before b
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
   adapter['handleSessionError'](key, own, { error: 'Aborted' });
   adapter['handleSessionIdle'](key, { sessionID: own });
 
@@ -461,7 +434,7 @@ test('a late retry status from the aborted turn cannot restore provider-retry st
   const key = makeTelegramKey(-100123, 42);
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
 
   adapter['handleSessionStatus'](key, own, {
     status: { type: 'retry', attempt: 2, message: 'stale retry', next: Date.now() + providerRetryDelayMs },
@@ -481,7 +454,7 @@ test('a stale retry after the old idle cannot suppress wedge recovery for the re
 
   adapter.sendInput(key, 'continue');
   await new Promise(resolve => setImmediate(resolve));
-  const session = adapter['sessions'].get('-100123:42');
+  const session = getOpenCodeSession(adapter, '-100123:42');
 
   adapter['handleSessionIdle'](key, { sessionID: own });
   adapter['handleSessionStatus'](key, own, {
@@ -541,7 +514,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
     adapter.sendInput(key, 'continue');
     await new Promise(resolve => setImmediate(resolve));
-    const session = adapter['sessions'].get('-100123:42');
+    const session = getOpenCodeSession(adapter, '-100123:42');
     assert.equal(session.isAwaitingProviderRetryReplacementStart, true, 'the replacement awaits its busy boundary');
     assert.equal(adapter.checkIsBusy(key), true, 'the turn may still start while the bound runs');
 
@@ -570,7 +543,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
     adapter.sendInput(key, 'continue');
     await new Promise(resolve => setImmediate(resolve));
-    const session = adapter['sessions'].get('-100123:42');
+    const session = getOpenCodeSession(adapter, '-100123:42');
     mock.timers.tick(replacementStartTimeoutMs + 1);
     assert.equal(noResponseCount, 1, 'the never-started replacement reaches recovery');
     // The aborted retry's idle never arrived, so its one-shot guard is still
@@ -599,7 +572,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
     adapter.sendInput(key, 'continue');
     await new Promise(resolve => setImmediate(resolve));
-    const session = adapter['sessions'].get('-100123:42');
+    const session = getOpenCodeSession(adapter, '-100123:42');
     assert.notEqual(session.providerRetryReplacementStartTimer, null, 'the boundary is armed together with its bound');
 
     adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
@@ -626,7 +599,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
     adapter.sendInput(key, 'continue');
     await new Promise(resolve => setImmediate(resolve));
-    const session = adapter['sessions'].get('-100123:42');
+    const session = getOpenCodeSession(adapter, '-100123:42');
     // Activity from a CHILD (sub-agent) session marks the turn as alive, but only
     // a PARENT message releases the boundary on the normal path — so the bound
     // can expire while the turn is genuinely running.
@@ -652,7 +625,7 @@ describe('the post-provider-retry replacement start is bounded', () => {
 
     adapter.sendInput(key, 'continue');
     await new Promise(resolve => setImmediate(resolve));
-    const session = adapter['sessions'].get('-100123:42');
+    const session = getOpenCodeSession(adapter, '-100123:42');
     assert.equal(session.isAwaitingProviderRetryReplacementStart, true);
     assert.notEqual(session.providerRetryReplacementStartTimer, null, 'the boundary is armed together with its bound');
 

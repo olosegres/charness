@@ -107,7 +107,7 @@ import {
  * both `chatId` and `threadId` so multiple threads sharing the same `workDir`
  * stay fully isolated (plan §10.2, D8).
  */
-interface ClaudeSession {
+export interface ClaudeSession {
   key: SessionKey;
   workDir: string;
   sessionName: string;
