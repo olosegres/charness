@@ -277,6 +277,7 @@ import {
   checkIsFileTooBig,
   telegramFileDownloadCapBytes,
   incomingFileMessageFilter,
+  findSavedFileName,
 } from './connectors/telegram/fileIntake';
 import type { TelegramFileMeta, AlbumFile } from './connectors/telegram/fileIntake';
 import { createMediaGroupCollector } from './utils/mediaGroupCollector';
@@ -285,6 +286,7 @@ import {
   ensureThreadFilesDir,
   purgeThreadFiles,
   resolveFilesRoot,
+  resolveThreadFilesDir,
   sweepExpiredThreadFiles,
   fileRetentionMs,
   fileSweepIntervalMs,
@@ -4893,10 +4895,28 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
  * so the agent sees WHAT is being referenced. Returns the block, or `undefined`
  * when there is nothing to inject — the connector's
  * {@link getTelegramReplyQuoteBlock} decides. The bot's own id
- * (`bot.botInfo.id`) drives the `from: assistant` attribution.
+ * (`bot.botInfo.id`) drives the `from: assistant` attribution; a replied-to file
+ * is looked up among the files this thread took in.
  */
-function getReplyQuoteBlock(message: Message): string | undefined {
-  return getTelegramReplyQuoteBlock(message, { userId: bot.botInfo?.id });
+function getReplyQuoteBlock(key: SessionKey, message: Message): string | undefined {
+  return getTelegramReplyQuoteBlock(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
+}
+
+/**
+ * @description The bot's saved copy of a file sent to this thread earlier
+ * ({@link findSavedFileName}), or `undefined` when the thread never took it in,
+ * `/clear` purged it or the retention sweep removed it.
+ */
+function findThreadSavedFile(key: SessionKey, meta: TelegramFileMeta): string | undefined {
+  const dir = resolveThreadFilesDir(getDataDir(), key);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return undefined; // No file was ever saved for this thread.
+  }
+  const name = findSavedFileName(entries, meta);
+  return name === undefined ? undefined : path.join(dir, name);
 }
 
 /**
@@ -7277,7 +7297,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getReplyQuoteBlock(ctx.message));
+    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getReplyQuoteBlock(key, ctx.message));
     return;
   }
 
@@ -7450,7 +7470,7 @@ bot.on(message('text'), async (ctx) => {
   // unix seconds) rides along for the `/timestamps` injection, and a Telegram
   // REPLY folds the quoted message into the prompt (see `getReplyQuoteBlock`).
   if (adapter.checkIsActive(key)) {
-    const replyBlock = getReplyQuoteBlock(ctx.message);
+    const replyBlock = getReplyQuoteBlock(key, ctx.message);
     await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, replyBlock);
     return;
   }
@@ -7458,7 +7478,7 @@ bot.on(message('text'), async (ctx) => {
   // A sleeping conversation (its process stopped, its session kept) is resumed by
   // the message itself (L-D4) — the prompt continues the same conversation.
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getReplyQuoteBlock(ctx.message));
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getReplyQuoteBlock(key, ctx.message));
     return;
   }
 
@@ -7511,7 +7531,7 @@ bot.on(message('voice'), async (ctx) => {
   // A Telegram REPLY on the voice note folds the quoted message into the prompt.
   // Compute it HERE (only the handler has `ctx`); the job runs later off the
   // update loop and only sees `key`/`bot`.
-  const replyBlock = getReplyQuoteBlock(ctx.message);
+  const replyBlock = getReplyQuoteBlock(key, ctx.message);
   void getVoiceTranscriptionQueue(key)
     .run(() => processVoiceJob(key, fileId, getTopicRequesterId(ctx.from), sentAtMs, replyBlock))
     .catch((err) => {
@@ -7910,7 +7930,7 @@ async function handleAlbumFile(
     messageId: ctx.message.message_id,
     albumFile: { kind: meta.kind, savedPath, fileSize: meta.fileSize },
     caption: meta.caption,
-    replyContext: getReplyQuoteBlock(ctx.message),
+    replyContext: getReplyQuoteBlock(key, ctx.message),
     requesterId: getTopicRequesterId(ctx.from),
   });
 }
@@ -7951,7 +7971,7 @@ async function handleIncomingFile(
   noteThreadUserActivity(key);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
   // A file sent as a REPLY carries the message it answers, as a typed or spoken reply does.
-  const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(ctx.message));
+  const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(key, ctx.message));
   await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
   trackTopicRequestTurn(key, opening);
 }

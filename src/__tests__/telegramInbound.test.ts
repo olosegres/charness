@@ -332,6 +332,35 @@ test('getTelegramReplyQuoteBlock: a file posted plainly in the topic carries no 
   }
 });
 
+test('getTelegramReplyQuoteBlock: a reply to an uncaptioned photo names it with the saved copy the finder returns', () => {
+  const photo = { ...makeTopicFileMessage('photo', undefined), caption: undefined, message_id: 79 } as RepliedMessage;
+  const message = makeTopicVoiceMessage(photo);
+  const asked: string[] = [];
+  const block = getTelegramReplyQuoteBlock(message, identity, (meta) => {
+    asked.push(`${meta.kind}:${meta.fileUniqueId}`);
+    return '/data/files/t/1-pu-pu.jpg';
+  });
+  assert.deepEqual(asked, ['photo:pu']);
+  assert.equal(block, ['[Replying to an earlier message · from: user]', '> [photo, saved to: /data/files/t/1-pu-pu.jpg]'].join('\n'));
+});
+
+test('getTelegramReplyQuoteBlock: a reply to a file the bot no longer keeps still names the file', () => {
+  const document = makeTopicFileMessage('document', undefined) as RepliedMessage;
+  const block = getTelegramReplyQuoteBlock(makeTopicVoiceMessage(document), identity, () => undefined);
+  assert.equal(
+    block,
+    ['[Replying to an earlier message · from: user]', '> [document: build.log]', '> here is the screen'].join('\n'),
+  );
+});
+
+test('getTelegramReplyQuoteBlock: a reply to a voice note names it', () => {
+  const voice = { ...makeTopicVoiceMessage(undefined), message_id: 78 } as RepliedMessage;
+  assert.equal(
+    getTelegramReplyQuoteBlock(makeTopicFileMessage('photo', voice), identity),
+    ['[Replying to an earlier message · from: user]', '> [voice]'].join('\n'),
+  );
+});
+
 test('getInboundEvent: a captioned photo surfaces as text plus an attachment', () => {
   const message = {
     message_id: 3,

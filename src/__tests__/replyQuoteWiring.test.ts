@@ -46,7 +46,7 @@ function getFunctionBody(name: string): string {
 
 test('the voice handler reads the reply-quote block off the voice message and hands it to the job', () => {
   const handler = getSourceSlice("bot.on(message('voice')", 'async function processVoiceJob(');
-  assert.match(handler, /const\s+replyBlock\s*=\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)/);
+  assert.match(handler, /const\s+replyBlock\s*=\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
   assert.match(
     handler,
     /processVoiceJob\(\s*key\s*,\s*fileId\s*,.*,\s*replyBlock\s*\)/,
@@ -71,7 +71,7 @@ test('a voice transcript forwarded to a live session keeps its reply quote', () 
 test('a typed text buffered behind a session start keeps its reply quote too', () => {
   assert.match(
     botSource,
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)\s*\)/,
+    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
 });
 
@@ -93,13 +93,13 @@ test('a single file sent as a reply carries the quote into its announcement', ()
   const body = getFunctionBody('handleIncomingFile');
   assert.match(
     body,
-    /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)\s*\)/,
+    /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
   assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });
 
 test('an album sent as a reply carries the quote: each member records it, the flush folds the first', () => {
-  assert.match(getFunctionBody('handleAlbumFile'), /replyContext:\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)/);
+  assert.match(getFunctionBody('handleAlbumFile'), /replyContext:\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
   assert.match(flush, /const\s+replyContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.replyContext\)\?\.replyContext/);
   assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*replyContext\s*\)/);

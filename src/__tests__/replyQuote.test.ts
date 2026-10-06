@@ -90,6 +90,38 @@ test('extractReplyQuote: no textual content of any kind → null', () => {
   assert.equal(quote, null);
 });
 
+test('extractReplyQuote: a reply to a file with no caption names the file', () => {
+  const quote = extractReplyQuote(
+    makeSource({ replyText: undefined, replyAttachment: { kind: 'photo' } }),
+  );
+  assert.deepEqual(quote, { quotedText: '[photo]', fromBot: false });
+});
+
+test('extractReplyQuote: the file line gives the name and the saved copy, then the caption follows', () => {
+  const quote = extractReplyQuote(
+    makeSource({
+      replyText: undefined,
+      replyCaption: 'the failing run',
+      replyAttachment: { kind: 'document', fileName: 'build.log', savedPath: '/data/files/t/1-u-build.log' },
+    }),
+  );
+  assert.equal(quote?.quotedText, '[document: build.log, saved to: /data/files/t/1-u-build.log]\nthe failing run');
+});
+
+test('extractReplyQuote: a highlighted part of a caption still follows the file line', () => {
+  const quote = extractReplyQuote(
+    makeSource({ replyText: undefined, replyCaption: 'a long caption', manualQuoteText: 'long', replyAttachment: { kind: 'video' } }),
+  );
+  assert.equal(quote?.quotedText, '[video]\nlong');
+});
+
+test('extractReplyQuote: a file name is flattened to one quoted line', () => {
+  const quote = extractReplyQuote(
+    makeSource({ replyText: undefined, replyAttachment: { kind: 'document', fileName: 'two\nlines.txt' } }),
+  );
+  assert.equal(buildReplyQuoteBlock(quote), '[Replying to an earlier message · from: user]\n> [document: two lines.txt]');
+});
+
 test('extractReplyQuote: DM (no topicRootId) genuine reply → quote (topic-root guard skipped)', () => {
   const quote = extractReplyQuote(
     makeSource({ topicRootId: undefined, replyMessageId: 100, replyText: 'dm reply target' }),

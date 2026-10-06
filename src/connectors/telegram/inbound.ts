@@ -25,8 +25,13 @@ import type {
   PlatformMember,
 } from '../../platform/inbound';
 import { getElevatedMemberIds } from '../../accessControl';
-import { getTelegramFileMeta, type TelegramFileKind } from './fileIntake';
-import { buildReplyQuoteBlock, extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote';
+import { getTelegramFileMeta, type TelegramFileKind, type TelegramFileMeta } from './fileIntake';
+import {
+  buildReplyQuoteBlock,
+  extractReplyQuote,
+  type ReplyQuoteAttachment,
+  type ReplyQuoteSource,
+} from '../../utils/replyQuote';
 
 /**
  * @description The two Telegram membership statuses that grant elevated rights
@@ -178,6 +183,25 @@ function getInboundAuthor(user: User | undefined): InboundAuthor {
 }
 
 /**
+ * @description Finds the bot's saved copy of a file sent to the conversation
+ * earlier (the file intake keeps it under `DATA_DIR`), or `undefined` once it is
+ * gone or was never taken in.
+ */
+export type SavedFileFinder = (meta: TelegramFileMeta) => string | undefined;
+
+/**
+ * @description The file a replied-to message carries, for the quote to name: a
+ * voice note (never saved, its transcript went to the agent) or one of the six
+ * intake kinds, with the bot's saved copy when `findSavedFile` has one.
+ */
+function getReplyQuoteAttachment(replied: Message, findSavedFile?: SavedFileFinder): ReplyQuoteAttachment | undefined {
+  if ('voice' in replied && replied.voice) return { kind: 'voice' };
+  const meta = getTelegramFileMeta(replied);
+  if (!meta) return undefined;
+  return { kind: meta.kind, fileName: meta.fileName, savedPath: findSavedFile?.(meta) };
+}
+
+/**
  * @description A message's Telegram REPLY reduced to the structural input of
  * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
  * Read off the message itself, so a typed text and a voice note reply the same
@@ -186,6 +210,7 @@ function getInboundAuthor(user: User | undefined): InboundAuthor {
 function getReplyQuoteSource(
   message: Message,
   identity: TelegramBotIdentity,
+  findSavedFile?: SavedFileFinder,
 ): ReplyQuoteSource | undefined {
   const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
   if (!replied) return undefined;
@@ -193,6 +218,7 @@ function getReplyQuoteSource(
     manualQuoteText: 'quote' in message ? message.quote?.text : undefined,
     replyText: 'text' in replied ? replied.text : undefined,
     replyCaption: 'caption' in replied ? replied.caption : undefined,
+    replyAttachment: getReplyQuoteAttachment(replied, findSavedFile),
     replyMessageId: replied.message_id,
     topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
     isServiceMessage: 'forum_topic_created' in replied,
@@ -230,13 +256,15 @@ function getInboundReplyTo(
  * file whose announcement does — or `undefined` when there is nothing to fold in
  * (no reply, the topic root, a service message, nothing quotable). One reader for
  * all of them, so a spoken reply or a file sent as a reply carries exactly the
- * block a typed reply to the same message does.
+ * block a typed reply to the same message does. A reply TO a file names that
+ * file, with the path `findSavedFile` returns for it.
  */
 export function getTelegramReplyQuoteBlock(
   message: Message,
   identity: TelegramBotIdentity,
+  findSavedFile?: SavedFileFinder,
 ): string | undefined {
-  return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity))) ?? undefined;
+  return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity, findSavedFile))) ?? undefined;
 }
 
 /**

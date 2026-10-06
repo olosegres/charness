@@ -74,6 +74,8 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   per prompt, so it stays true when the view is switched mid-conversation). A prompt buffered behind a session
   start carries its header and its reply quote from capture time (a typed text and a voice transcript alike).
   A file or an album sent as a reply carries the quote too (an album takes the first member's).
+  A reply TO a file names it (`[photo, saved to: …]`): the path is the thread's saved copy
+  (`findSavedFileName`, matched exactly by the intake's file name), absent once purged or never taken in.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's
   text, status/progress frames, thinking, tool results and sub-agent frames are dropped; a native question with

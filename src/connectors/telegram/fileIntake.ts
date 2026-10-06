@@ -252,6 +252,31 @@ export function buildSavedFileName(
   return `${unixSeconds}-${fileUniqueId}-${nameSegment}`;
 }
 
+/** A saved file's name split at its timestamp: `<unixSeconds>-<rest>`. */
+const savedFileNamePattern = /^(\d+)-(.+)$/s;
+
+/**
+ * @description The bot's saved copy of a file among a thread dir's entries, by
+ * the name {@link buildSavedFileName} gave it. Everything after the timestamp is
+ * fixed by the file (`<fileUniqueId>-<name>`), so a match is exact, never a
+ * prefix guess (a unique id may itself contain `-`). The newest copy wins when
+ * the same file was sent twice; `undefined` when none is left.
+ */
+export function findSavedFileName(
+  entries: readonly string[],
+  meta: Pick<TelegramFileMeta, 'fileUniqueId' | 'kind' | 'fileName'>,
+): string | undefined {
+  const timestamplessName = buildSavedFileName(0, meta.fileUniqueId, meta.kind, meta.fileName).slice('0-'.length);
+  let newest: { name: string; unixSeconds: number } | undefined;
+  for (const name of entries) {
+    const match = savedFileNamePattern.exec(name);
+    if (!match || match[2] !== timestamplessName) continue;
+    const unixSeconds = Number(match[1]);
+    if (!newest || unixSeconds > newest.unixSeconds) newest = { name, unixSeconds };
+  }
+  return newest?.name;
+}
+
 /** Marker line the agent recognises as a bot-injected single-file announcement. */
 export const filePromptHeader = '[Telegram file]';
 

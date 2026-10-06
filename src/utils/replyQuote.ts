@@ -37,6 +37,20 @@ const replyQuoteLinePrefix = '> ';
 const replyQuotePromptSeparator = '\n\n';
 
 /**
+ * @description A file the replied-to message carries. A photo or a voice note
+ * has no text to quote, so the quote names the file instead — and, while the bot
+ * still keeps its copy, where it lies, so the agent can open it.
+ */
+export interface ReplyQuoteAttachment {
+  /** The Telegram media kind, as the file announcement names it (`photo`, `document`, `voice`, …). */
+  kind: string;
+  /** The file's original name, when Telegram has one. */
+  fileName?: string;
+  /** The bot's saved copy of the file, when it has one (it was sent to the topic and taken in). */
+  savedPath?: string;
+}
+
+/**
  * @description Structural inputs for {@link extractReplyQuote}, distilled from a
  * telegraf message by the Telegram connector so this module never imports telegraf.
  */
@@ -47,6 +61,8 @@ export interface ReplyQuoteSource {
   replyText?: string;
   /** `reply_to_message.caption` — the replied-to media message caption. */
   replyCaption?: string;
+  /** The file the replied-to message carries, if any. */
+  replyAttachment?: ReplyQuoteAttachment;
   /** `reply_to_message.message_id`. */
   replyMessageId?: number;
   /** `ctx.message.message_thread_id` — undefined/0 outside a forum topic (e.g. a DM). */
@@ -73,11 +89,13 @@ export interface ExtractedReplyQuote {
  *   - the reply targets the forum topic-root message
  *     (`topicRootId && replyMessageId === topicRootId`) — replying to the topic
  *     root is Telegram's "post in this topic", not a genuine quote;
- *   - none of the three content candidates has non-empty text after trimming.
+ *   - none of the three content candidates has non-empty text after trimming,
+ *     and the replied-to message carries no file.
  *
  * Otherwise `quotedText` is the first non-empty of the manual (highlighted)
  * quote, the replied-to text, then the caption — the highlighted part wins
- * because it is the specific thing the operator pointed at.
+ * because it is the specific thing the operator pointed at — led by the line
+ * naming the replied-to file when there is one ({@link formatReplyAttachment}).
  */
 export function extractReplyQuote(source: ReplyQuoteSource | undefined): ExtractedReplyQuote | null {
   if (!source) return null;
@@ -89,11 +107,23 @@ export function extractReplyQuote(source: ReplyQuoteSource | undefined): Extract
   }
 
   const candidates = [source.manualQuoteText, source.replyText, source.replyCaption];
-  for (const candidate of candidates) {
-    const trimmed = candidate?.trim();
-    if (trimmed) return { quotedText: trimmed, fromBot: source.fromBot };
-  }
-  return null;
+  const text = candidates.map((candidate) => candidate?.trim()).find((trimmed) => !!trimmed);
+  const attachmentLine = source.replyAttachment ? formatReplyAttachment(source.replyAttachment) : undefined;
+  if (!text && !attachmentLine) return null;
+  const quotedText = [attachmentLine, text].filter((line) => !!line).join('\n');
+  return { quotedText, fromBot: source.fromBot };
+}
+
+/**
+ * @description The quote's line naming a replied-to file — `[photo]`,
+ * `[document: report.pdf]`, `[photo, saved to: /…/x.jpg]`. It leads the quoted
+ * content, so the truncation cap never cuts it. A file name is flattened to one
+ * line: a newline in it would end the `> ` prefixing.
+ */
+function formatReplyAttachment(attachment: ReplyQuoteAttachment): string {
+  const name = attachment.fileName ? `: ${attachment.fileName.replace(/\s+/g, ' ')}` : '';
+  const saved = attachment.savedPath ? `, saved to: ${attachment.savedPath}` : '';
+  return `[${attachment.kind}${name}${saved}]`;
 }
 
 /**
