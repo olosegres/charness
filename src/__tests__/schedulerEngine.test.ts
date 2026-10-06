@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
-import { keyToString, type SessionKey } from '../sessionKey';
+import { type SessionKey } from '../sessionKey';
 import { createScheduleForThread } from '../scheduler/store';
 import { createSchedulerEngine, maxTimeoutMs } from '../scheduler/engine';
 import type { DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from '../scheduler/types';

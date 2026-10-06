@@ -39,6 +39,7 @@ import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { TerminalAdapter } from '../adapters/terminalAdapter';
 import { t } from '../i18n';
+import { type AgentAdapter } from '../types';
 
 const subdir = 'myProject';
 const model = 'anthropic/claude-opus-4-8';
@@ -58,7 +59,7 @@ describe('getStartReadyMessage — self-greeting gate', () => {
   });
 
   it('OpenCode (no self-greet) → the generic agent.ready text', () => {
-    const adapter = new OpenCodeAdapter();
+    const adapter: AgentAdapter = new OpenCodeAdapter();
     assert.notEqual(adapter.selfGreetsOnStart, true, 'precondition: OpenCode does NOT self-greet');
     assert.equal(
       getStartReadyMessage(adapter, subdir, undefined, null, null),
@@ -68,7 +69,7 @@ describe('getStartReadyMessage — self-greeting gate', () => {
   });
 
   it('terminal (no self-greet) → the shell-specific terminal.ready text', () => {
-    const adapter = new TerminalAdapter();
+    const adapter: AgentAdapter = new TerminalAdapter();
     assert.notEqual(adapter.selfGreetsOnStart, true, 'precondition: terminal does NOT self-greet');
     // A shell has neither a model nor an effort level, so the caller passes
     // nulls — but even if it did not, terminal.ready carries no info block.

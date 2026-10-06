@@ -22,6 +22,19 @@ import { t } from '../i18n';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
+/** A live session for `key`, built by the adapter's own factory so it carries every field. */
+function injectActiveSession(adapter: ClaudeCliAdapter, key: SessionKey): void {
+  adapter['sessions'].set(keyToString(key), adapter['createSession']({
+    key,
+    workDir: '/tmp/work',
+    sessionName: `claude-${keyToString(key)}`,
+    claudeSessionId: '00000000-0000-4000-8000-000000000000',
+    isActive: true,
+    handledAutoEnter: false,
+    handledAutoAccept: false,
+  }));
+}
+
 function createAdapter(): { adapter: ClaudeCliAdapter; sent: string[] } {
   const adapter = new ClaudeCliAdapter();
   const sent: string[] = [];
@@ -44,7 +57,7 @@ describe('Claude setModel session guard (S3)', () => {
     // bot re-applies its default effort for the newly picked model.
     const key: SessionKey = makeTelegramKey(-100555, 2);
     const { adapter, sent } = createAdapter();
-    adapter['sessions'].set(keyToString(key), { isActive: true });
+    injectActiveSession(adapter, key);
 
     const result = await adapter.setModel(key, 'sonnet');
     assert.equal(result, null, 'a live switch succeeds');
@@ -60,7 +73,7 @@ describe('Claude setModel session guard (S3)', () => {
     // level → the default is NOT re-applied; claude carries the pref across.
     const key: SessionKey = keyFromString(seededThreadKeyString);
     const { adapter, sent } = createAdapter();
-    adapter['sessions'].set(keyToString(key), { isActive: true });
+    injectActiveSession(adapter, key);
 
     const result = await adapter.setModel(key, 'sonnet');
     assert.equal(result, null, 'a live switch succeeds');

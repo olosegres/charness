@@ -14,9 +14,13 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
+import { OpenCodeAdapter, type OpenCodeSession } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const ownSessionId = 'ses_own';
 const key: SessionKey = makeTelegramKey(-100123, 42);
@@ -26,42 +30,20 @@ const workDir = '/tmp/work';
  * Build a live session mirroring the fields the idle path reads. `overrides`
  * tune the wedge preconditions (a just-sent prompt = awaiting + no activity).
  */
-function createAdapterWithSession(overrides: Record<string, unknown>): {
+function createAdapterWithSession(overrides: Partial<OpenCodeSession>): {
   adapter: OpenCodeAdapter;
   noResponseKeys: SessionKey[];
 } {
   const adapter = new OpenCodeAdapter();
-  const session = {
+  adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
     key,
     sessionId: ownSessionId,
     workDir,
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
     currentModelLabel: 'anthropic/claude',
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
     isBusy: true,
-    awaitingTurnResponse: false,
-    sawTurnActivity: false,
-    providerRetrySignature: null,
-    isAwaitingModelAfterProviderRetryAbort: false,
-    providerRetryAbortPromise: null,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    lastMessageId: undefined,
-    sseController: null,
-    reconnectTimer: null,
-    sseStallTimer: null,
     ...overrides,
-  };
-  adapter['sessions'].set(keyToString(key), session);
+  }));
 
   const noResponseKeys: SessionKey[] = [];
   adapter.on('noResponse', (k: SessionKey) => {
@@ -108,22 +90,36 @@ describe('OpenCode wedged-turn noResponse event', () => {
     assert.equal(noResponseKeys.length, 1);
     assert.deepEqual(noResponseKeys[0], key);
     // Resolved: the pending flag is cleared so a later idle cannot re-fire.
-    assert.equal(adapter['sessions'].get(keyToString(key)).awaitingTurnResponse, false);
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).awaitingTurnResponse, false);
 
     feedSessionIdle(adapter);
     assert.equal(noResponseKeys.length, 1, 'a second idle must not re-emit noResponse');
   });
 
-  it('reattached session with undefined providerRetrySignature still fires (guard-bug regression)', () => {
-    // The resume path never sets providerRetrySignature — it must read as "no
-    // retry" so the wedge is NOT silently suppressed (live miss 2026-08-16).
-    const { adapter, noResponseKeys } = createAdapterWithSession({
-      awaitingTurnResponse: true,
-      sawTurnActivity: false,
-      providerRetrySignature: undefined,
+  it('a RESUMED (reattached) session still fires — its idle retry state reads as "no retry" (guard-bug regression)', async () => {
+    // The resume path builds its own session and never sees a provider retry; the
+    // wedge guard must read that as "no retry" so the wedge is NOT silently
+    // suppressed (live miss 2026-08-16). Driven through the real resume path so the
+    // session is the one a reattach actually produces.
+    const adapter = new OpenCodeAdapter();
+    openCodeServer.answerApiWith(({ method, urlPath }) => {
+      if (method === 'GET' && urlPath === `/session/${ownSessionId}`) return { id: ownSessionId };
+      if (method === 'GET' && urlPath === `/session/${ownSessionId}/message`) return [];
+      if (method === 'GET' && urlPath.startsWith('/question?')) return [];
+      if (method === 'POST' && urlPath === `/session/${ownSessionId}/prompt_async`) return undefined;
+      throw new Error(`unexpected API request in test: ${method} ${urlPath}`);
     });
+    adapter['connectSse'] = () => {};
+    adapter['fetchModelInfo'] = async () => {};
+    const noResponseKeys: SessionKey[] = [];
+    adapter.on('noResponse', (k: SessionKey) => {
+      noResponseKeys.push(k);
+    });
+    await adapter['resumeSessionInner'](key, workDir, ownSessionId);
 
+    adapter.sendInput(key, 'continue');
     feedSessionIdle(adapter);
+
     assert.equal(noResponseKeys.length, 1);
   });
 
@@ -136,7 +132,7 @@ describe('OpenCode wedged-turn noResponse event', () => {
     // An assistant message arrives → the turn genuinely started.
     feedAssistantMessage(adapter);
     assert.equal(
-      adapter['sessions'].get(keyToString(key)).sawTurnActivity,
+      getOpenCodeSession(adapter, keyToString(key)).sawTurnActivity,
       true,
       'an assistant message must mark turn activity',
     );
@@ -155,7 +151,7 @@ describe('OpenCode wedged-turn noResponse event', () => {
 
     feedTextDelta(adapter, '[Scheduled run] Дайджест'); // the echoed user prompt
     assert.equal(
-      adapter['sessions'].get(keyToString(key)).sawTurnActivity,
+      getOpenCodeSession(adapter, keyToString(key)).sawTurnActivity,
       false,
       'a user-prompt text part must NOT mark turn activity',
     );

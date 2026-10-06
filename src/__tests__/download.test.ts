@@ -129,7 +129,7 @@ test('fires onRetry once per retry with increasing backoff', async () => {
   const dest = tmpPath();
   await downloadFile(`${baseUrl}/f`, dest, {
     retries: 2,
-    onRetry: (attempt, _err, delayMs) => seen.push(delayMs),
+    onRetry: (_attempt, _err, delayMs) => seen.push(delayMs),
   });
   assert.equal(seen.length, 1);
   assert.ok(seen[0] >= 500, `expected backoff >= 500ms, got ${seen[0]}`);

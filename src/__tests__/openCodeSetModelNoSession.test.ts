@@ -25,6 +25,7 @@ import {
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
 const availableModels = [
   'anthropic/claude-opus-4-8',
@@ -144,30 +145,14 @@ describe('OpenCode getCurrentModel falls back to the saved pref (S2)', () => {
     const adapter = createAdapterNoSession();
     await adapter.setModel(key, 'openai/gpt-5'); // saved pref on disk
 
-    adapter['sessions'].set(keyToString(key), {
+    adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
       key,
       sessionId: 'ses_8',
       workDir: '/tmp/work',
-      isActive: true,
-      currentResponseText: '',
-      lastEmittedLength: 0,
-      outputTimer: null,
       isModelInfoShown: true,
       modelOverride: { providerID: 'anthropic', modelID: 'claude-opus-4-8' },
       currentModelLabel: 'anthropic/claude-opus-4-8',
-      partTypes: new Map(),
-      statusDebounceTimer: null,
-      pendingStatus: null,
-      pendingQuestion: null,
-      effortLevel: null,
-      isBusy: false,
-      isCompacting: false,
-      busyChildSessionIds: new Set(),
-      sseController: null,
-      reconnectTimer: null,
-      sseStallTimer: null,
-      isAutoNamePending: false,
-    });
+    }));
 
     assert.equal(adapter.getCurrentModel(key), 'anthropic/claude-opus-4-8', 'live label must win');
   });

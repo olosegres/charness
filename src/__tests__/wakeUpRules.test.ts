@@ -43,7 +43,7 @@ function createRequest(overrides: Partial<OpenRequestState> = {}): OpenRequestSt
 const idleProbe: SessionTurnProbe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
 
 function createTurn(overrides: Partial<WatchedTurn> = {}): WatchedTurn {
-  return { requestId: 'req_AbCd1234', progressCountAtTurnStart: 0, hasSeenBusy: false, hasSeenOutput: false, ...overrides };
+  return { requestId: 'req_AbCd1234', progressCountAtTurnStart: 0, hasSeenBusy: false, hasSeenOutput: false, isRequestPrompt: false, ...overrides };
 }
 
 describe('getRequestBackstopMs', () => {

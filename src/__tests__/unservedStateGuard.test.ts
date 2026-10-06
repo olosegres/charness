@@ -33,6 +33,7 @@ function createOpenRequest(id: string): OpenRequestState {
     progressAnswerCount: 0,
     silentTurnCount: 0,
     wakeCount: 0,
+    isWakeStopped: false,
   };
 }
 

@@ -15,8 +15,7 @@
  *   - `pollSseStream` is stubbed to a no-op so `ensureGlobalStream` records the
  *     stream in the private `globalStream` field without opening a real socket;
  *   - sessions are injected into the private `sessions` map and lifecycle is
- *     driven via `connectSse` / `disconnectSse` (bracket access — tests are
- *     tsx-stripped, runtime-only, no effect on `yarn typecheck`);
+ *     driven via `connectSse` / `disconnectSse` (bracket access);
  *   - routing is verified by feeding ONE payload-wrapped envelope through
  *     `routeSseData` and asserting it reaches exactly the owning session.
  */
@@ -31,6 +30,7 @@ import {
   checkNeedsSchedulerMcpReregister,
   getSchedulerMcpRetryDelayMs,
   schedulerMcpRetryDelaysMs,
+  type OpenCodeSession,
 } from '../adapters/openCodeAdapter';
 import { openCodeCompactPluginFileName } from '../utils/openCodeCompactPlugin';
 import { keyToString, type SessionKey } from '../sessionKey';
@@ -41,32 +41,19 @@ import {
 } from '../scheduler/injection';
 import { verifySchedulerMcpToken } from '../scheduler/mcpSurface';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
 const sharedDir = '/work/shared';
 const otherDir = '/work/other';
 
-function makeSession(key: SessionKey, sessionId: string, workDir: string) {
-  return {
+function makeSession(key: SessionKey, sessionId: string, workDir: string): OpenCodeSession {
+  return createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir,
-    isActive: true,
-    currentResponseText: '',
-    lastEmittedLength: 0,
-    outputTimer: null,
     isModelInfoShown: true,
-    modelOverride: null,
     currentModelLabel: 'anthropic/claude',
-    partTypes: new Map(),
-    statusDebounceTimer: null,
-    pendingStatus: null,
-    pendingQuestion: null,
-    effortLevel: null,
-    isBusy: false,
-    isCompacting: false,
-    busyChildSessionIds: new Set(),
-    isAutoNamePending: false,
-  };
+  });
 }
 
 /** Adapter with the real socket reader stubbed out. */

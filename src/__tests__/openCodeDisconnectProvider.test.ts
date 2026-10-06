@@ -10,7 +10,7 @@
  * `OPENROUTER_API_KEY`) is still fully active and must NOT be announced as
  * disconnected.
  *
- * Mirrors `openCodeConnectProvider.test.ts`'s stubbed-`apiRequest` harness.
+ * Mirrors `openCodeConnectProvider.test.ts`'s stubbed-server harness.
  */
 
 import { describe, it } from 'node:test';
@@ -18,11 +18,14 @@ import assert from 'node:assert/strict';
 import { OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 
 interface ApiCall {
   method: string;
   urlPath: string;
 }
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 /**
  * @param activeProvidersAfterDelete provider ids `GET /config/providers`
@@ -39,7 +42,7 @@ function createDisconnectAdapter(activeProvidersAfterDelete: string[]): {
   const calls: ApiCall[] = [];
 
   adapter['ensureProviderAuthServerReady'] = async () => {};
-  adapter['apiRequest'] = async (method: string, urlPath: string) => {
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
     calls.push({ method, urlPath });
     if (method === 'DELETE') return undefined;
     if (method === 'GET' && urlPath === '/config/providers') {
@@ -48,7 +51,7 @@ function createDisconnectAdapter(activeProvidersAfterDelete: string[]): {
       };
     }
     throw new Error(`unexpected call ${method} ${urlPath}`);
-  };
+  });
 
   return { adapter, calls };
 }

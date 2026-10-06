@@ -12,9 +12,9 @@
  * query), so a regression that drops `?directory=` — silently re-routing the
  * agent to the wrong folder — fails here.
  *
- * Harness mirrors openCodeStartReady.test.ts: real adapter, `apiRequest`
- * recorded, `connectSse` a no-op. Private members reached via runtime bracket
- * access (tests are excluded from tsconfig, run via tsx type-stripping).
+ * Harness mirrors openCodeStartReady.test.ts: real adapter, API requests
+ * recorded at the stubbed server, `connectSse` a no-op. Private members reached
+ * via bracket access.
  */
 
 import { describe, it } from 'node:test';
@@ -29,17 +29,19 @@ interface ApiCall {
   urlPath: string;
 }
 
+const openCodeServer = useStubbedOpenCodeServer();
+
 const newSessionId = 'ses_folder_scoped';
 const workDir = '/home/user/src/telegramCode';
 const expectedQuery = `directory=${encodeURIComponent(workDir)}`;
 
-/** Adapter with `apiRequest` recorded; POST /session resolves the id, GET
+/** Adapter whose API requests are recorded; POST /session resolves the id, GET
  * /config resolves a model so startSession completes, connectSse a no-op. */
 function createRecordingAdapter(): { adapter: OpenCodeAdapter; calls: ApiCall[] } {
   const adapter = new OpenCodeAdapter();
   const calls: ApiCall[] = [];
 
-  adapter['apiRequest'] = async (method: string, urlPath: string) => {
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
     calls.push({ method, urlPath });
     if (method === 'POST' && urlPath.startsWith('/session?')) {
       return { id: newSessionId };
@@ -51,13 +53,11 @@ function createRecordingAdapter(): { adapter: OpenCodeAdapter; calls: ApiCall[] 
       return [{ id: newSessionId, title: 'scoped', time: { created: Date.now(), updated: Date.now() } }];
     }
     return undefined;
-  };
+  });
   adapter['connectSse'] = () => {};
 
   return { adapter, calls };
 }
-
-useStubbedOpenCodeServer();
 
 describe('OpenCode folder-scoped create + list (S1)', () => {
   it('startSession POSTs /session with the bound folder as ?directory=', async () => {

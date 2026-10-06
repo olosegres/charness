@@ -19,10 +19,9 @@
  *   - a teardown while a request is parked must settle it, so a caller can never
  *     be left hanging on a dead session.
  *
- * The adapter's private session map is reached via runtime bracket access (tests
- * are type-stripped by tsx), same pattern as `claudeJsonStreamTransport`. Stdin
- * is a plain file here instead of a FIFO, so the exact frames written can be
- * read back; no `claude` process is involved.
+ * The adapter's private session map is reached via bracket access, same pattern
+ * as `claudeJsonStreamTransport`. Stdin is a plain file here instead of a FIFO,
+ * so the exact frames written can be read back; no `claude` process is involved.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -33,12 +32,12 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
-import { createStdoutTailState, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
+import { getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { schedulerMcpServerName } from '../scheduler/injection';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 // A key no live thread uses — every path derived from it is a no-op.
 const key: SessionKey = makeTelegramKey(-100999777, 77);
@@ -48,57 +47,17 @@ const key: SessionKey = makeTelegramKey(-100999777, 77);
  * the adapter writes are readable. `pid` is this process (alive) and no exitcode
  * file exists, so the tail poll `writeStdin` arms stays a harmless no-op.
  */
-function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {
+function createSession(adapter: ClaudeJsonStreamAdapter, dir: string): StreamSession {
   const paths = getJsonStreamSessionPaths(dir);
   fs.writeFileSync(paths.stdinFifo, '');
-  const session = {
+  const session = createStreamSessionFixture({
     key,
     workDir: dir,
     sessionId: 'sess-mcp-heal',
     pid: process.pid,
     paths,
     fifoFd: fs.openSync(paths.stdinFifo, 'a'),
-    stdinWriteChain: Promise.resolve(),
-    tail: createStdoutTailState(0),
-    pollTimer: null,
-    pollDelayMs: 300,
-    unchangedStreak: 0,
-    isOversizeWarned: false,
-    lastPersistedTailOffset: 0,
-    reader: new ClaudeStreamLineReader(),
-    isActive: true,
-    isStopping: false,
-    isRespawning: false,
-    isBusy: false,
-    lastStdoutActivityAt: Date.now(),
-    outstandingToolUseIds: new Set<string>(),
-    model: null,
-    reportedModel: null,
-    effort: null,
-    currentResponseText: '',
-    emittedLength: 0,
-    outputTimer: null,
-    reasoningText: '',
-    reasoningStartedAt: null,
-    reasoningTimer: null,
-    reasoningActive: false,
-    toolNamesById: new Map(),
-    questionToolUseIds: new Set(),
-    subagentActive: false,
-    childResponseText: '',
-    childEmittedLength: 0,
-    childOutputTimer: null,
-    // Nullable in `StreamSession`; annotated so a test may arm the handshake.
-    pendingInitResolve: null as (() => void) | null,
-    initRequestId: null as string | null,
-    pendingControlRequests: new Map(),
-    compactionInProgress: false,
-    pendingCompaction: null,
-    pendingQuestion: null,
-    apiErrorFired: false,
-    swallowNextAbortError: false,
-    lastWatermarkOffset: -1,
-  };
+  });
   adapter['sessions'].set(keyToString(key), session);
   return session;
 }
@@ -152,7 +111,7 @@ describe('json-stream adapter — healMcpServer round-trip', () => {
   let dir = '';
   let openFd: number | null = null;
   let adapter: ClaudeJsonStreamAdapter | null = null;
-  let session: ReturnType<typeof createSession> | null = null;
+  let session: StreamSession | null = null;
 
   afterEach(() => {
     if (adapter && session) adapter['clearTimers'](session);

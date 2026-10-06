@@ -30,6 +30,8 @@ import {
   compactionClosingEndMarker,
 } from '../utils/compactOnIdle';
 
+type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
+
 /** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
 const fireBase = {
   isSessionActive: true,
@@ -217,7 +219,7 @@ test('getIdleFireDecision: no session or WORKING (L-D2) → nothing happens, nei
 });
 
 test('getIdleFireDecision: each compaction guard skips the compaction but the stop still happens (L-D1, L-D6)', () => {
-  const cases: Array<[Partial<typeof fireBase>, string]> = [
+  const cases: Array<[Partial<IdleFireInput>, string]> = [
     [{ isEnabled: false }, 'disabled'],
     [{ isLatched: true }, 'latched (D2)'],
     [{ hasCompletedTurnSinceCompaction: false }, 'nothing to compress'],

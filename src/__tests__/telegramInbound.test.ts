@@ -142,7 +142,8 @@ test('getInboundEvent: a reply folds the quoted text and its author in', () => {
     chat: message.chat,
     from: makeUser(8, { first_name: 'Grace' }),
     text: 'the earlier line',
-  } as Message.TextMessage;
+    reply_to_message: undefined,
+  };
   const event = getInboundEvent(message, key, identity);
   assert.deepEqual(event.replyTo, {
     text: 'the earlier line',
@@ -162,7 +163,8 @@ test('getInboundEvent: a highlighted partial quote wins over the full replied-to
     chat: message.chat,
     from: makeUser(8),
     text: 'a very long earlier answer',
-  } as Message.TextMessage;
+    reply_to_message: undefined,
+  };
   message.quote = { text: 'long earlier', position: 2, is_manual: true };
   assert.equal(getInboundEvent(message, key, identity).replyTo?.text, 'long earlier');
 });
@@ -175,7 +177,8 @@ test('getInboundEvent: a reply authored by this bot is attributed to the assista
     chat: message.chat,
     from: makeUser(identity.userId, { is_bot: true }),
     text: 'the agent answer',
-  } as Message.TextMessage;
+    reply_to_message: undefined,
+  };
   assert.equal(getInboundEvent(message, key, identity).replyTo?.isFromAssistant, true);
 });
 
@@ -190,7 +193,8 @@ test('getInboundEvent: replying to the topic root is not a quote', () => {
     chat: message.chat,
     from: makeUser(8),
     text: 'Topic title',
-  } as Message.TextMessage;
+    reply_to_message: undefined,
+  };
   assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 
@@ -203,7 +207,7 @@ test('getInboundEvent: a reply to a service message is not a quote', () => {
     from: makeUser(8),
     text: 'Topic created',
     forum_topic_created: { name: 'Topic', icon_color: 0 },
-  } as unknown as Message.TextMessage;
+  };
   assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 
@@ -214,7 +218,9 @@ test('getInboundEvent: a reply to a message with neither text nor caption is dro
     date: 0,
     chat: message.chat,
     from: makeUser(8),
-  } as Message.TextMessage;
+    dice: { emoji: '🎲', value: 3 },
+    reply_to_message: undefined,
+  };
   assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 

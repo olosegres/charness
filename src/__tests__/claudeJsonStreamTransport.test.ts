@@ -14,97 +14,37 @@
  *   `sendInput` to set it), and the persisted tail offset lands on the line
  *   boundary so a restart replays nothing twice.
  *
- * The adapter's private members are reached via runtime bracket access (tests
- * are type-stripped by tsx), same pattern as claudeJsonStreamWatermarkAdvance.
+ * The adapter's private members are reached via bracket access, same pattern as
+ * claudeJsonStreamWatermarkAdvance.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { ClaudeJsonStreamAdapter, claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter, claudeJsonStreamUsageLogPrefix, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { busyIdleWatchdogMs } from '../utils/jsonStreamBusyWatchdog';
-import {
-  createStdoutTailState,
-  getJsonStreamSessionPaths,
-  resolveAdoptedTail,
-} from '../utils/jsonStreamHost';
+import { getJsonStreamSessionPaths, resolveAdoptedTail } from '../utils/jsonStreamHost';
 import { type JsonStreamTailOffset } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 // A key no live thread uses — cleanup paths derived from it are guaranteed no-ops.
 const key: SessionKey = makeTelegramKey(-100999777, 55);
 
-/** A pid that is certainly dead: a reaped short-lived child of ours. */
-function getDeadPid(): number {
-  const child = spawnSync('true');
-  return child.pid ?? 1;
-}
-
-function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string) {
-  const paths = getJsonStreamSessionPaths(dir);
-  const session = {
+function createSessionInDir(adapter: ClaudeJsonStreamAdapter, dir: string): StreamSession {
+  const session = createStreamSessionFixture({
     key,
     workDir: '/tmp/jsonstream-transport-work',
     sessionId: 'sess-transport',
-    pid: getDeadPid(),
-    paths,
-    fifoFd: -1, // closeFifo tolerates an invalid fd (EBADF swallowed)
-    stdinWriteChain: Promise.resolve(),
-    tail: createStdoutTailState(0),
-    pollTimer: null,
-    pollDelayMs: 300,
-    unchangedStreak: 0,
-    isOversizeWarned: false,
-    lastPersistedTailOffset: 0,
-    reader: new ClaudeStreamLineReader(),
-    isActive: true,
-    isStopping: false,
-    isSuspending: false,
-    isRespawning: false,
-    isBusy: false,
-    lastStdoutActivityAt: Date.now(),
-    outstandingToolUseIds: new Set<string>(),
-    model: null,
-    effort: null,
-    currentResponseText: '',
-    emittedLength: 0,
-    outputTimer: null,
-    reasoningText: '',
-    reasoningStartedAt: null,
-    reasoningTimer: null,
-    reasoningActive: false,
-    toolNamesById: new Map(),
-    questionToolUseIds: new Set(),
-    subagentActive: false,
-    childResponseText: '',
-    childEmittedLength: 0,
-    childOutputTimer: null,
-    pendingInitResolve: null,
-    initRequestId: null,
-    // Bot-issued control requests awaiting their `control_response`; the teardown
-    // path settles every entry, so the fixture must carry the real (empty) map.
-    pendingControlRequests: new Map(),
-    pendingQuestion: null,
-    apiErrorFired: false,
-    swallowNextAbortError: false,
-    lastWatermarkOffset: -1,
-    unconsumedInputCount: 0,
-    compactionInProgress: false,
-    backgroundTaskIds: new Set<string>(),
-    claudeCodeVersion: null,
-    applyingChunk: null,
-    adoptCatchUpOffset: null,
-    adoptCatchUpResolvers: [],
-  };
+    paths: getJsonStreamSessionPaths(dir),
+  });
   adapter['sessions'].set(keyToString(key), session);
   return session;
 }

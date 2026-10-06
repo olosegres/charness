@@ -9,12 +9,11 @@
  * `body.variant`), so there is no code change — this test LOCKS that behavior
  * against regression.
  *
- * Harness mirrors `openCodeStartReady.test.ts`: real adapter, `apiRequest`
- * stubbed (POST /session → id; GET /config → a default model so fetchModelInfo
- * doesn't throw), `connectSse` stubbed to a no-op. The testSetup module is
+ * Harness mirrors `openCodeStartReady.test.ts`: real adapter, the server's API
+ * answered at the stubbed HTTP boundary (POST /session → id; GET /config → a
+ * default model so fetchModelInfo doesn't throw), `connectSse` stubbed to a no-op. The testSetup module is
  * imported FIRST so the adapter reads the seeded pref from a temp `DATA_DIR`.
- * Private members reached via runtime bracket access (tests are excluded from
- * tsconfig and run via tsx type-stripping → no typecheck impact).
+ * Private members reached via bracket access.
  */
 import { describe, it } from 'node:test';
 import { useStubbedOpenCodeServer } from './openCodeServerStub';
@@ -27,6 +26,8 @@ import {
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { defaultEffortLevel } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const newSessionId = 'ses_effort_seed';
 
@@ -54,7 +55,7 @@ const providersConfigStub = {
  */
 function createStubbedAdapter(): OpenCodeAdapter {
   const adapter = new OpenCodeAdapter();
-  adapter['apiRequest'] = async (method: string, urlPath: string) => {
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
     if (method === 'POST' && (urlPath === '/session' || urlPath.startsWith('/session?'))) {
       return { id: newSessionId };
     }
@@ -65,7 +66,7 @@ function createStubbedAdapter(): OpenCodeAdapter {
       return { defaultModel: { providerID: 'anthropic', modelID: 'claude-opus-4-8' } };
     }
     return undefined;
-  };
+  });
   adapter['connectSse'] = () => {};
   return adapter;
 }
@@ -79,8 +80,6 @@ async function waitForSession(adapter: OpenCodeAdapter, keyStr: string): Promise
   }
   return undefined;
 }
-
-useStubbedOpenCodeServer();
 
 describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () => {
   it('a fresh startSession carries effortLevel from the on-disk per-thread pref', async () => {

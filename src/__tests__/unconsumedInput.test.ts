@@ -11,11 +11,15 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
+import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
+
+const openCodeServer = useStubbedOpenCodeServer();
 
 const key: SessionKey = makeTelegramKey(-100999444, 7);
 const userEchoLine = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'the request' } })}\n`;
@@ -35,23 +39,9 @@ const toolResultLine = `${JSON.stringify({
 })}\n`;
 
 describe('Claude json-stream: unconsumed input', () => {
-  function createAdapter(): { adapter: ClaudeJsonStreamAdapter; session: Record<string, unknown> } {
+  function createAdapter(): { adapter: ClaudeJsonStreamAdapter; session: StreamSession } {
     const adapter = new ClaudeJsonStreamAdapter();
-    const session: Record<string, unknown> = {
-      key,
-      workDir: '/tmp/json-unconsumed',
-      sessionId: 'sess-unconsumed',
-      reader: new ClaudeStreamLineReader(),
-      isActive: true,
-      isBusy: false,
-      unconsumedInputCount: 0,
-      currentResponseText: '',
-      emittedLength: 0,
-      lastWatermarkOffset: -1,
-      outstandingToolUseIds: new Set(),
-      questionToolUseIds: new Set(),
-      toolNamesById: new Map(),
-    };
+    const session = createStreamSessionFixture({ key, workDir: '/tmp/json-unconsumed', sessionId: 'sess-unconsumed' });
     adapter['sessions'].set(keyToString(key), session);
     // The FIFO write is the transport, not what is under test.
     adapter['writeStdin'] = () => {};
@@ -108,42 +98,15 @@ describe('OpenCode: unconsumed input', () => {
 
   function createAdapter(): OpenCodeAdapter {
     const adapter = new OpenCodeAdapter();
-    adapter['sessions'].set(keyToString(key), {
+    adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({
       key,
       sessionId: ownSessionId,
       workDir,
-      isActive: true,
-      currentResponseText: '',
-      lastEmittedLength: 0,
-      childResponseText: '',
-      childLastEmittedLength: 0,
-      emittedToolResultPartIds: new Set(),
-      outputTimer: null,
       isModelInfoShown: true,
-      modelOverride: null,
       currentModelLabel: 'anthropic/claude',
-      partTypes: new Map(),
-      statusDebounceTimer: null,
-      pendingStatus: null,
-      pendingQuestion: null,
-      effortLevel: null,
-      isBusy: false,
-      awaitingTurnResponse: false,
-      sawTurnActivity: false,
-      unconsumedInputCount: 0,
-      seenUserMessageIds: new Set(),
-      providerRetrySignature: null,
-      isAwaitingModelAfterProviderRetryAbort: false,
-      providerRetryAbortPromise: null,
-      isCompacting: false,
-      busyChildSessionIds: new Set(),
-      lastMessageId: undefined,
-      sseController: null,
-      reconnectTimer: null,
-      sseStallTimer: null,
-    });
+    }));
     // Neither the HTTP call nor the fallback rename is under test.
-    adapter['apiRequest'] = async () => undefined;
+    openCodeServer.answerApiWith(() => undefined);
     adapter['maybeScheduleFallbackRename'] = () => {};
     return adapter;
   }
@@ -172,7 +135,7 @@ describe('OpenCode: unconsumed input', () => {
 
   it('a prompt whose POST failed stops counting as unconsumed', async () => {
     const adapter = createAdapter();
-    adapter['apiRequest'] = async () => { throw new Error('connection refused'); };
+    openCodeServer.answerApiWith(() => { throw new Error('connection refused'); });
     // The adapter reports the failed send as an `error` event; unheard, emit would throw.
     adapter.on('error', () => {});
 

@@ -12,7 +12,7 @@
  * The advance reads the REAL on-disk transcript size (`fs.statSync`), so the test
  * points Claude's projects root at a temp `$HOME` and drives the adapter's
  * private `onStdout` with real stream-json lines. Private members are reached via
- * runtime bracket access (tests are type-stripped by tsx).
+ * bracket access.
  *
  * Test case: N/A — Charness has no Jira tracker. TODO: add a test-case key
  * if one is ever created.
@@ -24,15 +24,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import {
   getClaudeProjectSlug,
   readClaudeReattachTranscript,
 } from '../adapters/claudeCliAdapter';
-import { ClaudeStreamLineReader } from '../utils/claudeStreamJson';
 import { type SeenWatermark } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const workDir = '/tmp/jsonstream-work';
 const sessionId = 'sess-json-wm';
@@ -69,30 +69,24 @@ describe('claude-json-stream seen-watermark advance on relay (S7)', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  function createAdapterWithSession(): { adapter: ClaudeJsonStreamAdapter; writes: SeenWatermark[] } {
+  function createAdapterWithSession(): { adapter: ClaudeJsonStreamAdapter; session: StreamSession; writes: SeenWatermark[] } {
     const adapter = new ClaudeJsonStreamAdapter();
-    const session = {
-      key,
-      workDir,
-      sessionId,
-      reader: new ClaudeStreamLineReader(),
-      lastWatermarkOffset: -1,
-    };
+    const session = createStreamSessionFixture({ key, workDir, sessionId });
     adapter['sessions'].set(keyToString(key), session);
     const writes: SeenWatermark[] = [];
     adapter.setSeenWatermarkWriter((_key, watermark) => writes.push(watermark));
-    return { adapter, writes };
+    return { adapter, session, writes };
   }
 
   it('advances to the transcript EOF on a settled PARENT assistant message', () => {
-    const { adapter, writes } = createAdapterWithSession();
+    const { adapter, session, writes } = createAdapterWithSession();
     const contents =
       serialize([{ type: 'user', message: { role: 'user', content: 'ask' } }]) +
       serialize([{ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'answer' }] } }]);
     fs.writeFileSync(transcriptPath, contents);
     const eof = Buffer.byteLength(contents, 'utf-8');
 
-    adapter['onStdout'](adapter['sessions'].get(keyToString(key)), parentAssistantLine);
+    adapter['onStdout'](session, parentAssistantLine);
 
     assert.deepEqual(writes, [{ sessionId, claudeTranscriptOffset: eof }]);
 
@@ -103,20 +97,19 @@ describe('claude-json-stream seen-watermark advance on relay (S7)', () => {
   });
 
   it('does NOT advance on a CHILD (sub-agent) message', () => {
-    const { adapter, writes } = createAdapterWithSession();
+    const { adapter, session, writes } = createAdapterWithSession();
     fs.writeFileSync(transcriptPath, serialize([{ type: 'user', message: { role: 'user', content: 'ask' } }]));
 
-    adapter['onStdout'](adapter['sessions'].get(keyToString(key)), childAssistantLine);
+    adapter['onStdout'](session, childAssistantLine);
 
     assert.deepEqual(writes, [], 'a child message must never advance the watermark');
-    assert.equal(adapter['sessions'].get(keyToString(key)).lastWatermarkOffset, -1);
+    assert.equal(session.lastWatermarkOffset, -1);
   });
 
   it('is monotonic — a second settled message without file growth does not re-write', () => {
-    const { adapter, writes } = createAdapterWithSession();
+    const { adapter, session, writes } = createAdapterWithSession();
     const contents = serialize([{ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'a' }] } }]);
     fs.writeFileSync(transcriptPath, contents);
-    const session = adapter['sessions'].get(keyToString(key));
 
     adapter['onStdout'](session, parentAssistantLine); // advances to EOF
     adapter['onStdout'](session, parentAssistantLine); // no growth → no write

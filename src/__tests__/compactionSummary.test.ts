@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { OpenCodeAdapter, getLatestOpenCodeCompactionSummary } from '../adapters/openCodeAdapter';
 import { ClaudeJsonStreamAdapter, readLatestCompactSummaryFromTranscript } from '../adapters/claudeJsonStreamAdapter';
 import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
+import { type AgentAdapter } from '../types';
 
 test('getLatestOpenCodeCompactionSummary: returns the newest summary:true assistant text', () => {
   const records = [
@@ -92,13 +93,16 @@ test('streamsCompactionSummary is declared ONLY by the backend whose summary alr
   // assistant text, so the bot is the ONLY thing that can surface it. The contrast is
   // the point: asserting the `true` alone would also pass on an adapter set where
   // every backend declared it and no summary was ever posted at all.
-  assert.equal(new OpenCodeAdapter().streamsCompactionSummary, true, 'OpenCode streams its own summary');
+  const openCode: AgentAdapter = new OpenCodeAdapter();
+  const jsonStream: AgentAdapter = new ClaudeJsonStreamAdapter();
+  const tmuxScrape: AgentAdapter = new ClaudeCliAdapter();
+  assert.equal(openCode.streamsCompactionSummary, true, 'OpenCode streams its own summary');
   assert.ok(
-    !new ClaudeJsonStreamAdapter().streamsCompactionSummary,
+    !jsonStream.streamsCompactionSummary,
     'the json-stream backend emits no summary text — the bot must post it',
   );
   assert.ok(
-    !new ClaudeCliAdapter().streamsCompactionSummary,
+    !tmuxScrape.streamsCompactionSummary,
     'the tmux backend emits no summary text either',
   );
 });
