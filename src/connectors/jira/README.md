@@ -69,7 +69,11 @@ another platform's state.
   is not in the agent's ENVIRONMENT. That is all it guarantees: the agent runs as the instance's own OS user
   with `--dangerously-skip-permissions`, so it can still read the `ENV_FILE` (which holds the token) and the
   `DATA_DIR` (including the bot MCP's signing secret in `state.json`). Run a Jira instance under an OS user
-  that holds nothing else, with an AI account that sees only the allowlisted projects. A deployment that
+  that holds nothing else, with an AI account that sees only the allowlisted projects; a production Jira account
+  runs only in the whole-bot Docker container (root README, "Run with Docker"), where the agent still reads the
+  `ENV_FILE` and `DATA_DIR` but nothing of the host beyond the container's mounts. The image runs everything as
+  root, so the allowlist carries `IS_SANDBOX` (Claude Code refuses `--dangerously-skip-permissions` as root
+  without it). A deployment that
   needs `CLAUDE_CONFIG_DIR`, a proxy or `NODE_EXTRA_CA_CERTS` must add the name to that allowlist — a missing
   one fails SILENTLY.
 - **Project memory still loads from the working folder and every parent**, so `jira.json` refuses a folder with

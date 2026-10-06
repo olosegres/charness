@@ -27,6 +27,39 @@ interface LockData {
   cwd: string;
   startedAt: string;
   tokenHash: string;
+  /** The holder's host; absent in a lock written before it was recorded. */
+  hostname?: string;
+  /** The holder's pid namespace (`pid:[<inode>]`); absent before it was recorded or where `/proc` has none. */
+  pidNamespace?: string;
+}
+
+/** Where Linux names the pid namespace of the calling process. */
+const ownPidNamespaceLink = '/proc/self/ns/pid';
+
+/** This process's pid namespace, or `undefined` where the system has no such link (macOS). */
+function readOwnPidNamespace(): string | undefined {
+  try {
+    return fs.readlinkSync(ownPidNamespaceLink);
+  } catch {
+    return undefined;
+  }
+}
+
+/** @name LockHolderState @description What an existing lock means for a starting instance. */
+type LockHolderState = 'live' | 'stale' | 'foreign-host';
+
+/**
+ * @description Classify an existing lock (plan S8 C20, the whole bot in a container). A pid is only meaningful in
+ * the pid namespace and on the host that wrote it:
+ *  - another hostname → `foreign-host`: its holder cannot be probed from here, so the start is refused;
+ *  - the same hostname, another pid namespace → `stale`: the container that wrote it was restarted and every
+ *    process in it ended — a probe would read a reused small container pid as a live holder;
+ *  - otherwise (or a lock without these fields) → today's probe.
+ */
+function getLockHolderState(holder: LockData, own: { hostname: string; pidNamespace: string | undefined }): LockHolderState {
+  if (holder.hostname !== undefined && holder.hostname !== own.hostname) return 'foreign-host';
+  if (holder.pidNamespace !== undefined && own.pidNamespace !== undefined && holder.pidNamespace !== own.pidNamespace) return 'stale';
+  return isAlive(holder.pid) ? 'live' : 'stale';
 }
 
 /**
@@ -111,6 +144,7 @@ function hashToken(token: string | undefined): string {
 export type AcquireResult =
   | { ok: true }
   | { ok: false; reason: 'live-holder'; holder: LockData; lockPath: string }
+  | { ok: false; reason: 'foreign-host'; holder: LockData; lockPath: string }
   | { ok: false; reason: 'lost-race'; lockPath: string };
 
 /**
@@ -142,11 +176,13 @@ export type AcquireResult =
 export function tryAcquireLock(): AcquireResult {
   fs.mkdirSync(dataDir(), { recursive: true });
   const lp = lockPath();
+  const own = { hostname: os.hostname(), pidNamespace: readOwnPidNamespace() };
   const payload: LockData = {
     pid: process.pid,
     cwd: process.cwd(),
     startedAt: new Date().toISOString(),
     tokenHash: hashToken(process.env.TELEGRAM_BOT_TOKEN),
+    ...own,
   };
   const tmpPath = `${lp}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2));
@@ -161,7 +197,11 @@ export function tryAcquireLock(): AcquireResult {
         if (code !== 'EEXIST') throw e;
 
         const existing = readLock(lp);
-        if (!existing || !isAlive(existing.pid)) {
+        const holderState = existing ? getLockHolderState(existing, own) : 'stale';
+        if (existing && holderState === 'foreign-host') {
+          return { ok: false, reason: 'foreign-host', holder: existing, lockPath: lp };
+        }
+        if (!existing || holderState === 'stale') {
           try {
             fs.unlinkSync(lp);
           } catch {
@@ -273,6 +313,15 @@ export async function acquireLock(): Promise<void> {
         `  token hash: ${r.holder.tokenHash}\n` +
         `  lock file:  ${r.lockPath}\n\n` +
         `Stop the running instance first, or set DATA_DIR to use a separate state dir.\n`,
+    );
+  } else if (r.reason === 'foreign-host') {
+    process.stderr.write(
+      `telegramcode is locked by an instance on another host, which cannot be checked from here:\n` +
+        `  host:       ${r.holder.hostname}\n` +
+        `  pid:        ${r.holder.pid}\n` +
+        `  started:    ${r.holder.startedAt}\n` +
+        `  lock file:  ${r.lockPath}\n\n` +
+        `Stop that instance; if it is already gone, remove the lock file and start again.\n`,
     );
   } else {
     process.stderr.write(

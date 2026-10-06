@@ -20,6 +20,9 @@ import * as path from 'path';
  * (probed under `env -i`). A deployment that relies on `CLAUDE_CONFIG_DIR`, an
  * HTTP(S) proxy or `NODE_EXTRA_CA_CERTS` must add the name here: a missing one
  * fails silently (no login found, no network), never with an error.
+ * `IS_SANDBOX` lets Claude Code run `--dangerously-skip-permissions` as root,
+ * which the whole bot in a rootless Docker container is (the image sets it);
+ * without it every agent there refuses to start. It holds no secret.
  */
 export const agentEnvironmentNames = [
   'HOME',
@@ -33,6 +36,7 @@ export const agentEnvironmentNames = [
   'TERM',
   'TMPDIR',
   'TZ',
+  'IS_SANDBOX',
 ] as const;
 
 /** Names the instance's `ENV_FILE` set — recorded by the env loader on every load (the hot worker loads it again). */

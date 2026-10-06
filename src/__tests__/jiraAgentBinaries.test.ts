@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { agentBinDirName, linkAgentBinaries } from '../connectors/jira/agentBinaries';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
-import { addAgentBinDirToPath, registerAgentBinDir } from '../utils/agentEnvironment';
+import { addAgentBinDirToPath, agentEnvironmentNames, registerAgentBinDir } from '../utils/agentEnvironment';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -93,6 +93,7 @@ describe('the PATH of a tracker conversation\'s agent (C11)', () => {
   it('it adds no variable: the agent still holds only the allowlisted names', () => {
     registerAgentBinDir('/data/agent-bin');
     const names = Object.keys(getClaudePlatformEnvironment(makeJiraKey('PROJ-1')) ?? {});
-    assert.deepEqual(names.filter((name) => !['HOME', 'PATH', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TMPDIR', 'TZ'].includes(name)), []);
+    const allowedNames: readonly string[] = agentEnvironmentNames;
+    assert.deepEqual(names.filter((name) => !allowedNames.includes(name)), []);
   });
 });

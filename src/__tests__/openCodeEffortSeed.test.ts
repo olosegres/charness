@@ -17,6 +17,7 @@
  * tsconfig and run via tsx type-stripping → no typecheck impact).
  */
 import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import {
   seededThreadKeyString,
@@ -78,6 +79,9 @@ async function waitForSession(adapter: OpenCodeAdapter, keyStr: string): Promise
   }
   return undefined;
 }
+
+
+useStubbedOpenCodeServer();
 
 describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () => {
   it('a fresh startSession carries effortLevel from the on-disk per-thread pref', async () => {

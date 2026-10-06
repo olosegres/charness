@@ -28,6 +28,7 @@
  * adapter reads its model-prefs file from a temp `DATA_DIR` (see that file's note).
  */
 import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { savedPrefKeyString, savedPrefLabel } from './openCodeResumeModel.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
@@ -111,6 +112,9 @@ function createAdapterWithSession(key: SessionKey): {
   });
   return { adapter, outputs };
 }
+
+
+useStubbedOpenCodeServer();
 
 describe('OpenCode resume model resolution (B17)', () => {
   it('resume with NO saved pref re-resolves the server default → /effort levels available, silently', async () => {

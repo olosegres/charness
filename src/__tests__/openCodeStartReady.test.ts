@@ -22,6 +22,7 @@
  */
 
 import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, keysEqual, type SessionKey } from '../sessionKey';
@@ -72,6 +73,9 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+
+useStubbedOpenCodeServer();
 
 describe('OpenCode startSession ready reply (B18)', () => {
   it('emits "started" even when GET /config never resolves (hanging server)', async () => {

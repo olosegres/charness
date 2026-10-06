@@ -27,7 +27,8 @@
  * and does not affect `yarn typecheck`).
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
@@ -36,35 +37,10 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 const key: SessionKey = makeTelegramKey(-100777, 7);
 const sessionId = 'ses_persisted_7';
 const workDir = '/tmp/work-crash';
-const healthPath = '/global/health';
 const restoredNotice = 'OpenCode server restarted; session restored. In-flight reply was lost — resend if needed.';
 const lostNotice = 'OpenCode server restarted; previous session lost. Starting a fresh one with /opencode (or /quit to release).';
 
-let originalFetch: typeof fetch;
-let originalOpencodeBin: string | undefined;
-
-beforeEach(() => {
-  originalFetch = globalThis.fetch;
-  originalOpencodeBin = process.env.OPENCODE_BIN;
-  // checkIsInstalled('opencode') returns true when OPENCODE_BIN is set,
-  // skipping the `which opencode` shell-out (env-dependent in CI).
-  process.env.OPENCODE_BIN = '/usr/bin/true';
-  // Health check → server alive, so ensureOpenCodeServer() and
-  // checkIsOpenCodeServerRunning() both succeed without spawning a process.
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    if (url.endsWith(healthPath)) {
-      return new Response('ok', { status: 200 });
-    }
-    throw new Error(`unexpected fetch in test: ${url}`);
-  }) as typeof fetch;
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (originalOpencodeBin === undefined) delete process.env.OPENCODE_BIN;
-  else process.env.OPENCODE_BIN = originalOpencodeBin;
-});
+useStubbedOpenCodeServer();
 
 function createActiveSession() {
   return {

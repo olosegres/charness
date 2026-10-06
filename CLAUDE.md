@@ -208,6 +208,8 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 
 - **Run:** `yarn start` (`node dist/cli.js`), or installed: `cd <projects-parent> && telegramcode` (the launch
   directory becomes the work root).
+- **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
+  test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. README § Run with Docker.
 - `yarn typecheck` · `yarn build` (`tsc` → `dist/`) · `yarn test` (node test runner + tsx; needs `dist/` —
   process-level tests spawn the built CLI) · `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` /
   `telegramcode hot` (`tsc -w` + nodemon on `dist/`: a broken edit cannot take the bot down, agents survive

@@ -18,6 +18,7 @@
  */
 
 import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, buildDirectoryScopedPath } from '../adapters/openCodeAdapter';
 import type { SessionKey } from '../sessionKey';
@@ -55,6 +56,9 @@ function createRecordingAdapter(): { adapter: OpenCodeAdapter; calls: ApiCall[] 
 
   return { adapter, calls };
 }
+
+
+useStubbedOpenCodeServer();
 
 describe('OpenCode folder-scoped create + list (S1)', () => {
   it('startSession POSTs /session with the bound folder as ?directory=', async () => {
