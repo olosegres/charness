@@ -21,7 +21,6 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   compactionSkillsGuidance,
-  extractCompactionClosingSection,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
   checkShouldAnnounceCompactionStart,
@@ -353,43 +352,6 @@ test('compactionSummaryGuidance: is maximally-complete + session-specific (D3)',
   assert.match(compactionSummaryGuidance, /CLAUDE\.md \/ AGENTS\.md/);
 });
 
-test('extractCompactionClosingSection: pulls the text between the sentinel markers', () => {
-  const summary = [
-    '## Objective',
-    '- do the thing',
-    '',
-    compactionClosingStartMarker,
-    'We were fixing the login bug; next: run the e2e suite.',
-    'Pending question: proceed? Options: yes / no.',
-    compactionClosingEndMarker,
-    'Continue the conversation from where it left off.',
-  ].join('\n');
-  const closing = extractCompactionClosingSection(summary);
-  assert.ok(closing);
-  assert.ok(closing.includes('login bug'));
-  assert.ok(closing.includes('yes / no'));
-  // Trailing boilerplate after the end marker must be excluded.
-  assert.ok(!closing.includes('Continue the conversation'));
-  // The markers themselves are stripped.
-  assert.ok(!closing.includes(compactionClosingStartMarker));
-  assert.ok(!closing.includes(compactionClosingEndMarker));
-});
-
-test('extractCompactionClosingSection: no start marker → null (notice omits the block)', () => {
-  assert.equal(extractCompactionClosingSection('## Objective\n- do the thing'), null);
-  assert.equal(extractCompactionClosingSection(''), null);
-});
-
-test('extractCompactionClosingSection: missing end marker → to end of text', () => {
-  const summary = `intro\n${compactionClosingStartMarker}\nwhere we stopped: mid-refactor.`;
-  assert.equal(extractCompactionClosingSection(summary), 'where we stopped: mid-refactor.');
-});
-
-test('extractCompactionClosingSection: an empty section → null (never a bare block)', () => {
-  const summary = `${compactionClosingStartMarker}\n   \n${compactionClosingEndMarker}`;
-  assert.equal(extractCompactionClosingSection(summary), null);
-});
-
 // ── formatTokenCount (the completion message's numbers) ──
 
 test('formatTokenCount groups digits in threes with ONE locale-independent separator', () => {
@@ -521,34 +483,18 @@ test('checkShouldAnnounceCompactionStart: a route the bot does not await → sil
   }
 });
 
-// ── buildIdleCompactionNoticeParts (§1.4 order + no duplicated closing block) ──
+// ── buildIdleCompactionNoticeParts (§1.4 order, the notice stays one short line) ──
 
 const reAskText = '❓ You still have a pending question.\n\nProceed?';
 
-test('buildIdleCompactionNoticeParts: WITH a summary the notice carries NO closing block', () => {
-  const parts = buildIdleCompactionNoticeParts({
-    noticeText: '🧹 Auto compacted on idle.',
-    closingSection: 'We stopped mid-refactor.',
-    summary: '## Goals\n- finish the refactor',
-    questionText: null,
-  });
-
-  assert.equal(parts.notice, '🧹 Auto compacted on idle.', 'only the notice — the block is a slice of the summary');
-  assert.ok(!(parts.notice ?? '').includes('We stopped mid-refactor.'), 'printing both would duplicate the text');
-  assert.equal(parts.summary, '## Goals\n- finish the refactor');
-});
-
-test('buildIdleCompactionNoticeParts: WITHOUT a summary the notice keeps the closing block', () => {
-  const parts = buildIdleCompactionNoticeParts({
-    noticeText: '🧹 Auto compacted on idle.',
-    closingSection: 'We stopped mid-refactor.',
-    summary: null,
-    questionText: null,
-  });
-
-  assert.ok((parts.notice ?? '').includes('🧹 Auto compacted on idle.'));
-  assert.ok((parts.notice ?? '').includes('We stopped mid-refactor.'), 'with no summary the block is the only recap');
-  assert.equal(parts.summary, null);
+test('buildIdleCompactionNoticeParts: the notice is the short line alone, with or without a summary', () => {
+  // The operator asked for an idle compaction to end in one short line: the notice
+  // used to grow the summary's "Where we stopped" block whenever the summary was off.
+  for (const summary of [null, '## Goals\n- finish the refactor']) {
+    const parts = buildIdleCompactionNoticeParts({ noticeText: '🧹 Auto compacted on idle.', summary, questionText: null });
+    assert.equal(parts.notice, '🧹 Auto compacted on idle.');
+    assert.equal(parts.summary, summary);
+  }
 });
 
 test('buildIdleCompactionNoticeParts: the re-asked question is its OWN part, never folded into the others', () => {
@@ -557,7 +503,6 @@ test('buildIdleCompactionNoticeParts: the re-asked question is its OWN part, nev
   // message and posted LAST.
   const parts = buildIdleCompactionNoticeParts({
     noticeText: '🧹 Auto compacted on idle.',
-    closingSection: null,
     summary: 'a very long summary',
     questionText: reAskText,
   });
@@ -570,7 +515,6 @@ test('buildIdleCompactionNoticeParts: the re-asked question is its OWN part, nev
 test('buildIdleCompactionNoticeParts: a FAILED compaction yields the question only, no notice', () => {
   const parts = buildIdleCompactionNoticeParts({
     noticeText: null,
-    closingSection: null,
     summary: null,
     questionText: reAskText,
   });
@@ -583,7 +527,6 @@ test('buildIdleCompactionNoticeParts: a FAILED compaction yields the question on
 test('buildIdleCompactionNoticeParts: nothing to say → every part null (the caller posts no message)', () => {
   const parts = buildIdleCompactionNoticeParts({
     noticeText: null,
-    closingSection: null,
     summary: null,
     questionText: null,
   });

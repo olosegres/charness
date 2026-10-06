@@ -18,7 +18,6 @@ import {
   compactionSkillsGuidance,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
-  extractCompactionClosingSection,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
   checkShouldAnnounceCompactionStart,
@@ -82,12 +81,6 @@ interface ThreadCompactionResult {
   ok: boolean;
   error?: string;
   /**
-   * The extracted "Where we stopped" closing prose (F2), or null when absent.
-   * ALWAYS null when {@link summary} is set — the block is a slice of the summary,
-   * so printing both would duplicate it (§1.4).
-   */
-  closingSection?: string | null;
-  /**
    * The full compaction summary to post into the topic, marker-stripped and ready
    * to send, or `null` when it must not be posted (the setting is off, the backend
    * streams its own, the route never produced one, or it could not be read).
@@ -129,11 +122,27 @@ interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
 }
 
-/** Build the `/compact_on_idle` picker keyboard (Enable / Disable, ✓ on current). */
-function buildCompactOnIdleKeyboard(isEnabled: boolean) {
+/** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
+interface CompactOnIdlePickerState {
+  isIdleEnabled: boolean;
+  /** The `/compact_summary` setting — the same one, so the two pickers can never disagree. */
+  isSummaryEnabled: boolean;
+}
+
+/**
+ * Build the `/compact_on_idle` picker keyboard: Enable / Disable, then Show / Hide
+ * summary, ✓ on the current value of each.
+ */
+function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
   return Markup.inlineKeyboard([
-    Markup.button.callback(t('compactOnIdle.enableButton') + (isEnabled ? ' ✓' : ''), 'coi_on'),
-    Markup.button.callback(t('compactOnIdle.disableButton') + (!isEnabled ? ' ✓' : ''), 'coi_off'),
+    [
+      Markup.button.callback(t('compactOnIdle.enableButton') + (picker.isIdleEnabled ? ' ✓' : ''), 'coi_on'),
+      Markup.button.callback(t('compactOnIdle.disableButton') + (!picker.isIdleEnabled ? ' ✓' : ''), 'coi_off'),
+    ],
+    [
+      Markup.button.callback(t('compactOnIdle.summaryShowButton') + (picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_on'),
+      Markup.button.callback(t('compactOnIdle.summaryHideButton') + (!picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_off'),
+    ],
   ]);
 }
 
@@ -195,10 +204,10 @@ export function createCompaction(ports: CompactionPorts) {
   /**
    * @description Shared execution seam for the compaction triggers. Resolves the
    * `/compact` route (same pure decision as the manual command), optionally
-   * appends the F2 closing-section instruction, runs the REAL compaction, and — for
-   * the closing-section case — lifts the appended section out of the generated
-   * summary. Returns the outcome; the CALLER owns any topic message so each trigger
-   * words it its own way (the operator-present narration vs the idle notice).
+   * appends the F2 closing-section instruction, runs the REAL compaction, and reads
+   * the generated summary when `/compact_summary` has it posted. Returns the
+   * outcome; the CALLER owns any topic message so each trigger words it its own way
+   * (the operator-present narration vs the idle notice).
    *
    * Also the ONE place the typing indicator is started for a compaction (S3), so all
    * three triggers get it without each remembering to. It is deliberately NOT stopped
@@ -234,7 +243,7 @@ export function createCompaction(ports: CompactionPorts) {
         // there is no completion signal to await, so no closing-section read here.
         const text = instruction ? `${compactCommandText} ${instruction}` : compactCommandText;
         await forwardPromptToAgent(key, adapter, text);
-        return { ok: true, closingSection: null };
+        return { ok: true };
       }
 
       // adapterCompact: OpenCode / json-stream — a real, awaited compaction.
@@ -250,21 +259,13 @@ export function createCompaction(ports: CompactionPorts) {
         streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
         route,
       });
-      // ONE read serves both consumers. The summary is a transcript / HTTP read, and
-      // the closing section is a slice of the very same text.
-      const summary = (isWithSummary || opts.withClosingSection) && adapter.getLatestCompactionSummary
+      // A transcript / HTTP read, made only when the summary will be posted.
+      const summary = isWithSummary && adapter.getLatestCompactionSummary
         ? await adapter.getLatestCompactionSummary(key).catch(() => null)
-        : null;
-      // §1.4: with the full summary posted, the closing block would be a duplicate
-      // slice of it — so it is not extracted at all, and every caller's "append the
-      // block if present" check stays a plain check.
-      const closingSection = !isWithSummary && opts.withClosingSection && summary
-        ? extractCompactionClosingSection(summary)
         : null;
       return {
         ok: true,
-        closingSection,
-        summary: isWithSummary && summary ? stripCompactionClosingMarkers(summary) : null,
+        summary: summary ? stripCompactionClosingMarkers(summary) : null,
         preTokens: compaction.preTokens,
         postTokens: compaction.postTokens,
       };
@@ -623,14 +624,13 @@ export function createCompaction(ports: CompactionPorts) {
       // The compaction failed but the question is already rejected — re-ask it so
       // the user isn't left without the pending decision (no notice: nothing was
       // compacted).
-      await postIdleCompactionResult(key, { noticeText: null, closingSection: null, summary: null }, savedQuestion);
+      await postIdleCompactionResult(key, { noticeText: null, summary: null }, savedQuestion);
       return;
     }
     await postIdleCompactionResult(
       key,
       {
         noticeText: t('compactOnIdle.notice'),
-        closingSection: result.closingSection ?? null,
         summary: result.summary ?? null,
       },
       savedQuestion,
@@ -662,8 +662,8 @@ export function createCompaction(ports: CompactionPorts) {
 
   /**
    * @description Post the idle-compaction outcome (D1/D2) as SEPARATE messages in
-   * the §1.4 order: notice (+ closing section when no full summary) → the full
-   * summary → the RE-ASKED question with its option buttons, LAST.
+   * the §1.4 order: the short notice → the full summary (when `/compact_summary` is
+   * on) → the RE-ASKED question with its option buttons, LAST.
    *
    * The three used to be one joined message. They are split because the re-asked
    * question carries inline buttons the operator must be able to reach: glued behind
@@ -676,7 +676,7 @@ export function createCompaction(ports: CompactionPorts) {
    */
   async function postIdleCompactionResult(
     key: SessionKey,
-    parts: { noticeText: string | null; closingSection: string | null; summary: string | null },
+    parts: { noticeText: string | null; summary: string | null },
     savedQuestion: PendingQuestionState | null,
   ): Promise<void> {
     const question = savedQuestion?.data.questions[savedQuestion.currentIndex];
@@ -775,16 +775,34 @@ export function createCompaction(ports: CompactionPorts) {
     }
   }
 
-  async function handleCompactOnIdleCallback(ctx: Context, enabled: boolean): Promise<void> {
+  /**
+   * @description Both switches as the `/compact_on_idle` picker shows them: in General
+   * the instance-wide defaults, in a regular topic what applies to that topic.
+   */
+  function getCompactOnIdlePickerState(key: SessionKey, isGeneral: boolean): CompactOnIdlePickerState {
+    return isGeneral
+      ? { isIdleEnabled: getState().getCompactOnIdleGlobalDefault(), isSummaryEnabled: getState().getCompactSummaryGlobalDefault() }
+      : { isIdleEnabled: getState().checkIsCompactOnIdleEnabled(key), isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key) };
+  }
+
+  /**
+   * @description A tap on the `/compact_on_idle` picker — either row. `apply` writes
+   * the setting and posts its confirmation; the keyboard is then re-rendered from the
+   * stored state so the ✓ of BOTH rows is right.
+   */
+  async function handleCompactOnIdleCallback(
+    ctx: Context,
+    apply: (key: SessionKey, isGeneral: boolean) => Promise<void>,
+  ): Promise<void> {
     const key = await authoriseContext(ctx);
     if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
     const isGeneral = checkIsGeneral(key);
-    await withThreadLocale(key, () => applyCompactOnIdle(key, isGeneral, enabled));
+    await withThreadLocale(key, () => apply(key, isGeneral));
     await ctx.answerCbQuery();
     // Re-render the picker keyboard so the ✓ follows the new state.
     const cbMsg = ctx.callbackQuery?.message as Message | undefined;
     if (cbMsg) {
-      const keyboard = buildCompactOnIdleKeyboard(enabled);
+      const keyboard = withThreadLocale(key, () => buildCompactOnIdleKeyboard(getCompactOnIdlePickerState(key, isGeneral)));
       try {
         await enqueueSend(
           key,
@@ -799,8 +817,8 @@ export function createCompaction(ports: CompactionPorts) {
 
   /**
    * @description Apply the `/compact_summary` setting and RETURN the confirmation
-   * text — the single write path behind the command and its picker buttons, so the
-   * two can never drift. Regular topic → the per-thread override; General topic →
+   * text — the single write path behind the command, its picker buttons and the
+   * summary row of the `/compact_on_idle` picker, so they can never drift. Regular topic → the per-thread override; General topic →
    * the instance-wide default.
    *
    * Nothing to arm or cancel afterwards (unlike `/compact_on_idle`, which owns a
@@ -885,9 +903,11 @@ export function createCompaction(ports: CompactionPorts) {
     });
 
     // `/compact_on_idle` — toggle auto-compaction after ~55 min idle. Regular topic
-    // → per-thread override; General → the instance-wide default. Bare → an
-    // Enable/Disable picker (✓ on current). Only meaningful for an agent topic with
-    // an active session (terminal / unbound → the "nothing to compact" reply).
+    // → per-thread override; General → the instance-wide default. Bare → a picker:
+    // Enable/Disable, plus a Show/Hide row for the `/compact_summary` setting, which
+    // is what decides whether an idle compaction ends in one line or with the whole
+    // summary (✓ on current). Only meaningful for an agent topic with an active
+    // session (terminal / unbound → the "nothing to compact" reply).
     command('compact_on_idle', async (_ctx, key, parsed) => {
       const arg = parsed.args.join(' ').toLowerCase();
       const isGeneral = checkIsGeneral(key);
@@ -904,14 +924,15 @@ export function createCompaction(ports: CompactionPorts) {
         return;
       }
 
-      const isEnabled = isGeneral
-        ? getState().getCompactOnIdleGlobalDefault()
-        : getState().checkIsCompactOnIdleEnabled(key);
-      const stateWord = isEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off');
-      const title = isGeneral
-        ? t('compactOnIdle.titleGeneral', { state: stateWord })
-        : t('compactOnIdle.title', { state: stateWord });
-      await replyToThread(key, title, buildCompactOnIdleKeyboard(isEnabled));
+      const picker = getCompactOnIdlePickerState(key, isGeneral);
+      const vars = {
+        state: picker.isIdleEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off'),
+        summaryLine: t('compactOnIdle.summaryLine', {
+          state: picker.isSummaryEnabled ? t('compactSummary.on') : t('compactSummary.off'),
+        }),
+      };
+      const title = isGeneral ? t('compactOnIdle.titleGeneral', vars) : t('compactOnIdle.title', vars);
+      await replyToThread(key, title, buildCompactOnIdleKeyboard(picker));
     });
 
     // `/compact_summary` — toggle writing the agent's FULL compaction summary into the
@@ -946,9 +967,17 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   function registerCompactionCallbacks(): void {
-    bot.action('coi_on', (ctx) => handleCompactOnIdleCallback(ctx, true));
+    bot.action('coi_on', (ctx) => handleCompactOnIdleCallback(ctx, (key, isGeneral) => applyCompactOnIdle(key, isGeneral, true)));
 
-    bot.action('coi_off', (ctx) => handleCompactOnIdleCallback(ctx, false));
+    bot.action('coi_off', (ctx) => handleCompactOnIdleCallback(ctx, (key, isGeneral) => applyCompactOnIdle(key, isGeneral, false)));
+
+    bot.action('coi_sum_on', (ctx) => handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
+      await replyToThread(key, await applyCompactSummary(key, isGeneral, true));
+    }));
+
+    bot.action('coi_sum_off', (ctx) => handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
+      await replyToThread(key, await applyCompactSummary(key, isGeneral, false));
+    }));
 
     bot.action('csum_on', (ctx) => handleCompactSummaryCallback(ctx, true));
 

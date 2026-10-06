@@ -331,15 +331,18 @@ export const enDict: Record<string, string> = {
     'After the summary, append a final section wrapped EXACTLY between a line containing only {startMarker} and a line containing only {endMarker}. Inside that section, write IN ENGLISH: (1) one or two terse sentences on what we were doing and the immediate next step; (2) if you asked the user a question that is still unanswered, restate that question and list its answer options. Write nothing after {endMarker}.',
 
   'compactOnIdle.notice':
-    '🧹 Auto compacted on idle to save tokens via cache.\nRun /compact_on_idle to disable it.',
+    '🧹 Auto compacted on idle to save tokens via cache.\n/compact_on_idle — turn it off or show the summary.',
   'compactOnIdle.on': 'ON',
   'compactOnIdle.off': 'OFF',
   'compactOnIdle.title':
-    '🧹 Auto-compact on idle for this topic: {state}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
+    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
   'compactOnIdle.titleGeneral':
-    '🧹 Auto-compact on idle — default for ALL topics: {state}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
+    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
   'compactOnIdle.enableButton': 'Enable',
   'compactOnIdle.disableButton': 'Disable',
+  'compactOnIdle.summaryLine': '📄 Summary after a compaction: {state}',
+  'compactOnIdle.summaryShowButton': '📄 Show summary',
+  'compactOnIdle.summaryHideButton': 'Hide summary',
   'compactOnIdle.setThisTopic': '✅ Auto-compact on idle: {state} for this topic.',
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',

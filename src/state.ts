@@ -310,9 +310,9 @@ export interface StateV1 {
   /**
    * Full-compaction-summary toggle (`/compact_summary`). Same shape and discipline
    * as the `compactOnIdle*` pair above: `compactSummaryEnabled` is the
-   * INSTANCE-WIDE default driven from General (absent ⇒ ON — the operator's stated
-   * preference is to see the summary; stored EXPLICITLY incl. `false` so a General
-   * «Disable» is durable), and `compactSummaryOverrides` holds per-thread explicit
+   * INSTANCE-WIDE default driven from General (absent ⇒ OFF — the operator wants a
+   * compaction to end in one short line; stored EXPLICITLY incl. `false` so a General
+   * choice is durable), and `compactSummaryOverrides` holds per-thread explicit
    * overrides keyed by {@link SessionKey} string, a present entry winning over the
    * default. Both optional so older state files stay valid; lifecycle-independent
    * (only `/compact_summary` mutates them, never session teardown).
@@ -1420,7 +1420,7 @@ export class StateStore {
 
   /**
    * @description Whether compact-on-idle is effectively enabled for `key`: the
-   * per-thread override if set, else the instance default (ON when unset).
+   * per-thread override if set, else the instance default (OFF when unset).
    */
   checkIsCompactOnIdleEnabled(key: SessionKey): boolean {
     return resolveCompactOnIdleEnabled(
@@ -1461,10 +1461,11 @@ export class StateStore {
 
   /**
    * @description The instance-wide full-compaction-summary default (driven from the
-   * General topic). ON when unset — mirrors {@link getCompactOnIdleGlobalDefault}.
+   * General topic). OFF when unset, unlike {@link getCompactOnIdleGlobalDefault}:
+   * a compaction ends in one short line unless the summary is turned on.
    */
   getCompactSummaryGlobalDefault(): boolean {
-    return this.state.compactSummaryEnabled ?? true;
+    return this.state.compactSummaryEnabled ?? false;
   }
 
   /**
@@ -1488,8 +1489,8 @@ export class StateStore {
 
   /**
    * @description Set the instance-wide full-summary default (from General). Stored
-   * EXPLICITLY as a boolean (incl. `false`) so a «Disable» is durable and
-   * distinguishable from "never set", which reads back as the ON default. Debounced
+   * EXPLICITLY as a boolean (incl. `false`) so a choice is durable and
+   * distinguishable from "never set", which reads back as the OFF default. Debounced
    * (a preference, not crash-critical) — mirrors
    * {@link setCompactOnIdleGlobalDefault}.
    */

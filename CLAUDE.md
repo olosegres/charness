@@ -106,7 +106,8 @@ per-backend controls are optional methods the bot checks before calling.
   ~55 min idle (inside the prompt-cache window); `compact_conversation` arms a compaction that runs when the
   turn ends, never mid-turn. A bot-issued compaction is NARRATED (start notice → completion report → the full
   summary via `postCompactionSummary`, plain text, never through the agent-output path); `/compact_summary`
-  toggles the summary post per topic (General → instance default). A backend whose own compaction already
+  toggles the summary post per topic (General → instance default; OFF by default, also on the `/compact_on_idle`
+  picker), so by default a compaction ends in one short line. A backend whose own compaction already
   reaches the topic sets `AgentAdapter.streamsCompactionSummary` (OpenCode) and the bot posts no copy. The
   backends' OWN overflow compaction gets the same summary guidance (name the loaded skills, reload them):
   Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`),

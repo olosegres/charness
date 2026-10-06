@@ -4,9 +4,10 @@
  * recording topic sends). The default Claude backend has no running session here, so what is pinned is what
  * needs none:
  *
- *   • WIRING — the three commands and the four buttons the module registers, in order;
+ *   • WIRING — the three commands and the six buttons the module registers, in order;
  *   • the compact-on-idle switch as the General topic uses it — the instance-wide default: the picker, the
  *     typed form, a button tap that persists, answers and re-renders the ✓;
+ *   • the picker's summary row — the same `/compact_summary` setting, OFF until turned on;
  *   • a regular topic without a session is told the switch needs one, and the hooks the bot's prompt and
  *     output paths call are harmless on such a topic.
  */
@@ -58,9 +59,9 @@ describe('compaction: the compaction flow over its ports', () => {
     await harness.stop();
   });
 
-  it('registers /compact /compact_on_idle /compact_summary and the four switch buttons, in the order the bot has always had', () => {
+  it('registers /compact /compact_on_idle /compact_summary and the six switch buttons, in order', () => {
     assert.deepEqual(harness.registeredCommandNames, ['compact', 'compact_on_idle', 'compact_summary']);
-    assert.deepEqual(harness.registeredActionPatterns, ['coi_on', 'coi_off', 'csum_on', 'csum_off']);
+    assert.deepEqual(harness.registeredActionPatterns, ['coi_on', 'coi_off', 'coi_sum_on', 'coi_sum_off', 'csum_on', 'csum_off']);
   });
 
   it('a regular topic without a session is told the switch needs one', async () => {
@@ -69,12 +70,29 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [], 'no picker for a switch that cannot apply');
   });
 
-  it('in General the bare command shows the instance-wide switch with its Enable / Disable buttons', async () => {
+  it('in General the bare command shows the instance-wide switch and the summary row', async () => {
     isGeneralTopic = true;
     await harness.runCommand('compact_on_idle');
     const picker = harness.replies.at(-1);
-    assert.deepEqual(harness.getKeyboardData(picker), [['coi_on', 'coi_off']]);
-    assert.match(picker?.text ?? '', /\bON\b/, 'the instance-wide default is on until somebody turns it off');
+    assert.deepEqual(harness.getKeyboardData(picker), [['coi_on', 'coi_off'], ['coi_sum_on', 'coi_sum_off']]);
+    assert.match(picker?.text ?? '', /: ON\n/, 'the instance-wide default is on until somebody turns it off');
+    assert.match(picker?.text ?? '', /Summary after a compaction: OFF/, 'the summary is off until somebody turns it on');
+    const markup = (picker?.extra as { reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> } } | undefined)?.reply_markup;
+    assert.ok(markup?.inline_keyboard[1]?.[1]?.text.endsWith('✓'), 'the ✓ sits on «Hide summary»');
+  });
+
+  it('in General a tap on the summary row sets the same switch /compact_summary shows', async () => {
+    const picker = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'idle picker');
+    await harness.tapButton(picker, 'coi_sum_on');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), true);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Compaction summary: ON for ALL topics/);
+    await waitUntil('both picker rows to be re-rendered', () => {
+      const rows = harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard ?? [];
+      return rows.length === 2 && (rows[1]?.[0]?.text.endsWith('✓') ?? false);
+    });
+
+    await harness.tapButton(picker, 'coi_sum_off');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), false);
   });
 
   it('in General the typed form persists the instance-wide default', async () => {
@@ -115,22 +133,22 @@ describe('compaction: the compaction flow over its ports', () => {
     await harness.runCommand('compact_summary');
     const picker = harness.replies.at(-1);
     assert.deepEqual(harness.getKeyboardData(picker), [['csum_on', 'csum_off']]);
-    assert.match(picker?.text ?? '', /\bON\b/, 'the summary post is on until somebody turns it off');
+    assert.match(picker?.text ?? '', /\bOFF\b/, 'the summary post is off until somebody turns it on');
 
-    await harness.runCommand('compact_summary', 'off');
-    assert.equal(harness.state.getCompactSummaryGlobalDefault(), false);
+    await harness.runCommand('compact_summary', 'on');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), true);
 
     const pickerMessage = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'summary picker');
-    await harness.tapButton(pickerMessage, 'csum_on');
-    assert.equal(harness.state.getCompactSummaryGlobalDefault(), true);
+    await harness.tapButton(pickerMessage, 'csum_off');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), false);
     await waitUntil('the summary picker keyboard to be re-rendered', () => (harness.fakeTelegram.getMessage(pickerMessage)?.reply_markup?.inline_keyboard[0] ?? []).length === 2);
   });
 
   it('in a regular topic without a session /compact_summary still sets that topic\'s own switch', async () => {
     isGeneralTopic = false;
-    await harness.runCommand('compact_summary', 'off');
-    assert.equal(harness.state.checkIsCompactSummaryEnabled(harness.key), false, 'this topic\'s override is off');
-    assert.equal(harness.state.getCompactSummaryGlobalDefault(), true, 'the instance-wide default is untouched');
+    await harness.runCommand('compact_summary', 'on');
+    assert.equal(harness.state.checkIsCompactSummaryEnabled(harness.key), true, 'this topic\'s override is on');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), false, 'the instance-wide default is untouched');
   });
 
   it('the hooks the prompt, output and lifecycle paths call are harmless on a topic with no session', () => {

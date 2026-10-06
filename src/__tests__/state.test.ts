@@ -803,39 +803,41 @@ test('compactIdleTracking: stamping under a new session overwrites, never merges
 
 // ── full-compaction-summary toggle (/compact_summary) ──
 
-test('compactSummary: ON by default for the instance and for every thread', async () => {
+test('compactSummary: OFF by default for the instance and for every thread', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
-  assert.equal(store.getCompactSummaryGlobalDefault(), true, 'unset default means ON');
+  assert.equal(store.getCompactSummaryGlobalDefault(), false, 'unset default means OFF');
   assert.equal(store.getCompactSummaryOverride(key1), undefined, 'no thread has an override yet');
-  assert.equal(store.checkIsCompactSummaryEnabled(key1), true, 'a fresh topic posts the summary');
+  assert.equal(store.checkIsCompactSummaryEnabled(key1), false, 'a fresh topic posts no summary');
 });
 
-test('compactSummary: a General «Disable» is DURABLE — false is stored explicitly and reloads', async () => {
+test('compactSummary: a General choice is DURABLE — stored explicitly either way and reloads', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
-  await first.setCompactSummaryGlobalDefault(false);
-  assert.equal(first.getCompactSummaryGlobalDefault(), false);
+  await first.setCompactSummaryGlobalDefault(true);
   await first.flush();
 
-  // The failure this pins: dropping the `false` (or storing it only when truthy)
-  // reads back as the ON default on the next boot, so every topic starts posting the
-  // summary wall again after a restart the operator never asked for.
-  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(raw.compactSummaryEnabled, false, 'off stored explicitly as false, not omitted');
-
+  // The failure this pins: dropping the stored value reads back as the OFF default
+  // on the next boot, so a summary the operator turned on for every topic would
+  // silently stop after a restart.
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.getCompactSummaryGlobalDefault(), false, 'off survives a reload');
-  assert.equal(second.checkIsCompactSummaryEnabled(key1), false, 'and the instance default applies to a thread');
+  assert.equal(second.getCompactSummaryGlobalDefault(), true, 'on survives a reload');
+  assert.equal(second.checkIsCompactSummaryEnabled(key1), true, 'and the instance default applies to a thread');
+
+  // An explicit off is kept as `false`, not as "never set", so a later change of
+  // the shipped default cannot turn it back on.
+  await second.setCompactSummaryGlobalDefault(false);
+  await second.flush();
+  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal(raw.compactSummaryEnabled, false, 'off stored explicitly as false, not omitted');
 });
 
 test('compactSummary: a per-thread override beats the instance default, both ways, and is per-thread', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
   await first.setCompactSummaryGlobalDefault(false);
-  // The interesting direction: an ON override over an OFF instance default. An
-  // override stored only when it DIFFERS from the shipped default would lose this.
+  // An ON override over an OFF instance default.
   await first.setCompactSummaryOverride(key1, true);
   assert.equal(first.checkIsCompactSummaryEnabled(key1), true, 'the override wins over the default');
   assert.equal(first.checkIsCompactSummaryEnabled(key2), false, 'an untouched thread still follows the default');
@@ -847,7 +849,8 @@ test('compactSummary: a per-thread override beats the instance default, both way
   assert.equal(second.checkIsCompactSummaryEnabled(key1), true);
   assert.equal(second.checkIsCompactSummaryEnabled(key2), false);
 
-  // The other direction: an OFF override under the shipped ON default.
+  // The other direction: an OFF override under an ON instance default. An override
+  // stored only when it DIFFERS from the shipped OFF default would lose this.
   await second.setCompactSummaryGlobalDefault(true);
   await second.setCompactSummaryOverride(key2, false);
   assert.equal(second.checkIsCompactSummaryEnabled(key2), false, 'an explicit false override is honoured');

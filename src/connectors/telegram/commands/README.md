@@ -47,8 +47,9 @@ one stays visible and the connect stays armed. The OAuth buttons reach the sign-
 
 ## `compaction.ts`
 
-`/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`), `/compact_summary` (`csum_on` / `csum_off`;
-read when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), the compact-on-idle
+`/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`, plus `coi_sum_on` / `coi_sum_off` for the
+`/compact_summary` switch on the same picker), `/compact_summary` (`csum_on` / `csum_off`; OFF by default; read
+when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), the compact-on-idle
 watchdog with its re-ask, the full-summary post (`postCompactionSummary`) and the deferred compaction the
 `compact_conversation` MCP tool arms. In General a switch is the instance-wide default, in a regular topic that
 topic's override. Execution always goes through

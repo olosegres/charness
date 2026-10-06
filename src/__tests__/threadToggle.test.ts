@@ -1,6 +1,7 @@
 /**
- * @description The resolution rule shared by every default-ON per-thread toggle
- * (`utils/threadToggle`), plus each of its three named wrappers.
+ * @description The resolution rule shared by every per-thread toggle
+ * (`utils/threadToggle`), plus each of its three named wrappers — two fall back to
+ * ON when nothing is set, `/compact_summary` to OFF.
  *
  * Load-bearing intent (per `.claude/rules/tests.md`): the three wrappers are thin
  * by design, and a thin wrapper is exactly what silently stops matching its
@@ -17,20 +18,21 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { resolveDefaultOnThreadToggle } from '../utils/threadToggle';
+import { resolveDefaultOnThreadToggle, resolveThreadToggle } from '../utils/threadToggle';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from '../utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from '../utils/autoContinueOnLimit';
 
-/** Every wrapper over the shared rule, by the setting it resolves. */
+/** Every wrapper over the shared rule, by the setting it resolves, with the value it falls back to. */
 const wrappers = {
-  '/compact_on_idle': resolveCompactOnIdleEnabled,
-  '/auto_continue_limits': resolveAutoContinueOnLimitEnabled,
-  '/compact_summary': resolveCompactSummaryEnabled,
+  '/compact_on_idle': { resolve: resolveCompactOnIdleEnabled, unsetValue: true },
+  '/auto_continue_limits': { resolve: resolveAutoContinueOnLimitEnabled, unsetValue: true },
+  // A compaction ends in one short line unless the summary is turned on.
+  '/compact_summary': { resolve: resolveCompactSummaryEnabled, unsetValue: false },
 };
 
-/** `[globalDefault, threadOverride, expected]` — the whole decision table. */
+/** `[globalDefault, threadOverride, expected]` — the decision table of a default-ON toggle. */
 const cases: Array<[boolean | undefined, boolean | undefined, boolean]> = [
-  // Nothing set anywhere ⇒ ON: every one of these features ships enabled.
+  // Nothing set anywhere ⇒ ON for a default-ON toggle.
   [undefined, undefined, true],
   // An explicit global `false` must NOT be confused with "never set".
   [false, undefined, false],
@@ -55,14 +57,26 @@ test('resolveDefaultOnThreadToggle: override wins, else the default, ON when uns
   }
 });
 
-test('all three named wrappers resolve identically to the shared rule', () => {
-  for (const [name, resolve] of Object.entries(wrappers)) {
-    for (const [globalDefault, threadOverride, expected] of cases) {
+test('resolveThreadToggle: only the all-unset case reads the fallback', () => {
+  for (const [globalDefault, threadOverride, expected] of cases) {
+    const isUnset = globalDefault === undefined && threadOverride === undefined;
+    assert.equal(
+      resolveThreadToggle(globalDefault, threadOverride, false),
+      isUnset ? false : expected,
+      `global=${globalDefault} override=${threadOverride}`,
+    );
+  }
+});
+
+test('all three named wrappers resolve identically to the shared rule with their own fallback', () => {
+  for (const [name, { resolve, unsetValue }] of Object.entries(wrappers)) {
+    for (const [globalDefault, threadOverride] of cases) {
       assert.equal(
         resolve(globalDefault, threadOverride),
-        expected,
+        resolveThreadToggle(globalDefault, threadOverride, unsetValue),
         `${name}: global=${globalDefault} override=${threadOverride}`,
       );
     }
+    assert.equal(resolve(undefined, undefined), unsetValue, `${name}: nothing set`);
   }
 });

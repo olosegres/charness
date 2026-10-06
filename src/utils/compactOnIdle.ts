@@ -1,6 +1,6 @@
 /**
  * @description Pure decision + text helpers for the compact-on-idle feature and
- * the shared closing-section instruction/extraction (plan
+ * the shared closing-section instruction (plan
  * `agent/tasks/actual/2026-09-14-self-compact-and-compact-on-idle.md`, F2).
  *
  * Kept out of `bot.ts` (which cannot be imported by tests — its module-scope
@@ -9,7 +9,7 @@
  */
 
 import type { CompactCommandRoute } from './compactCommandRoute';
-import { resolveDefaultOnThreadToggle } from './threadToggle';
+import { resolveDefaultOnThreadToggle, resolveThreadToggle } from './threadToggle';
 import { getMinutesOverrideMs } from './minutesOverride';
 
 /**
@@ -156,8 +156,9 @@ export function resolveCompactOnIdleEnabled(
 /**
  * @description Resolve whether the full compaction summary is posted for a thread
  * (`/compact_summary`). A per-thread override always wins; otherwise the
- * instance-wide default applies, which is ON when unset — the operator's stated
- * preference is to see the summary by default.
+ * instance-wide default applies, which is OFF when unset: the operator asked for a
+ * compaction to end in one short line, with the summary there only for a topic
+ * (or an instance) that turns it on.
  *
  * Unlike compact-on-idle this is read at COMPACTION time rather than used to arm a
  * timer, so it is meaningful in a topic with no live session and is deliberately
@@ -167,7 +168,7 @@ export function resolveCompactSummaryEnabled(
   globalDefault: boolean | undefined,
   threadOverride: boolean | undefined,
 ): boolean {
-  return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
+  return resolveThreadToggle(globalDefault, threadOverride, false);
 }
 
 /**
@@ -349,9 +350,10 @@ export function formatTokenCount(count: number): string {
  * wrapped in. Sentinels — not a markdown heading — because the two backends
  * generate very different summary formats (OpenCode's `## Goals/…` template vs
  * Claude Code's freeform numbered recap), so a heading match is unreliable while
- * exact markers are backend-agnostic and let the extractor stop before any
- * trailing boilerplate. The per-locale instruction pins these exact strings, so
- * changing them means changing the instruction wording in lockstep.
+ * exact markers are backend-agnostic. They are stripped before a summary is
+ * posted ({@link stripCompactionClosingMarkers}). The per-locale instruction pins
+ * these exact strings, so changing them means changing the instruction wording in
+ * lockstep.
  */
 export const compactionClosingStartMarker = '<<<WHERE_WE_STOPPED>>>';
 export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
@@ -361,8 +363,7 @@ export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
  * posted to the topic, keeping every line of prose — including the closing section
  * the markers wrap, which is genuine content.
  *
- * The markers exist so the bot can find that section mechanically (§1.5); they are
- * machine scaffolding and mean nothing to a reader. A marker sitting ALONE on its
+ * The markers are machine scaffolding and mean nothing to a reader. A marker sitting ALONE on its
  * line takes the whole line with it (its own newline included), so the summary is
  * not left with a blank gap where it stood; a marker the model happened to put
  * AHEAD of real prose on one line loses only the marker, never the prose. A summary
@@ -429,7 +430,7 @@ export function checkShouldAnnounceCompactionStart(input: {
 
 /** The three parts of an idle-compaction report, each its OWN topic message. */
 export interface IdleCompactionNoticeParts {
-  /** The idle notice (plus the closing block when no full summary follows). */
+  /** The short idle notice. */
   notice: string | null;
   /** The full summary, posted as its own message(s). */
   summary: string | null;
@@ -446,51 +447,21 @@ export interface IdleCompactionNoticeParts {
  * would bury those buttons under a wall of text (and the summary alone can
  * outgrow a single Telegram message).
  *
- * The closing "Where we stopped" block is dropped whenever a full summary is
- * present, because that block is a SLICE of the summary and printing both is
- * duplication the operator would notice. The seam that reads the summary already
- * suppresses the block, but the rule is stated here — where it is testable — so
- * it does not rest on a caller remembering it.
+ * The notice is the one short line on its own. It used to carry the summary's
+ * "Where we stopped" block whenever the full summary was off, which still made
+ * every idle compaction a paragraph; with the summary off the operator now gets
+ * the line alone, and the block reaches the topic only inside the full summary.
  */
 export function buildIdleCompactionNoticeParts(input: {
   /** The idle notice text, or `null` when the compaction FAILED (nothing to announce). */
   noticeText: string | null;
-  closingSection: string | null;
   summary: string | null;
   /** The re-asked question's rendered text, or `null` when none was pending. */
   questionText: string | null;
 }): IdleCompactionNoticeParts {
-  const closing = input.summary ? null : input.closingSection;
-  const noticeSegments = [input.noticeText, closing].filter(
-    (segment): segment is string => typeof segment === 'string' && segment.length > 0,
-  );
   return {
-    notice: noticeSegments.length > 0 ? noticeSegments.join('\n\n') : null,
+    notice: input.noticeText && input.noticeText.length > 0 ? input.noticeText : null,
     summary: input.summary && input.summary.length > 0 ? input.summary : null,
     question: input.questionText && input.questionText.length > 0 ? input.questionText : null,
   };
-}
-
-/**
- * @description Pull the closing-section prose out of a generated compaction
- * summary: return the text between {@link compactionClosingStartMarker} and
- * {@link compactionClosingEndMarker} (or to end-of-text when the end marker is
- * missing), trimmed, with any stray marker lines removed. Returns `null` when
- * the start marker is absent or the section is empty — the caller then omits the
- * closing block from the notice (graceful degradation), never posting an empty
- * or marker-only block.
- */
-export function extractCompactionClosingSection(summaryText: string): string | null {
-  if (!summaryText) return null;
-  const startIndex = summaryText.indexOf(compactionClosingStartMarker);
-  if (startIndex === -1) return null;
-  const afterStart = startIndex + compactionClosingStartMarker.length;
-  const endIndex = summaryText.indexOf(compactionClosingEndMarker, afterStart);
-  const raw = endIndex === -1 ? summaryText.slice(afterStart) : summaryText.slice(afterStart, endIndex);
-  // Defensive: drop any residual marker fragments the model echoed inside.
-  const text = raw
-    .split(compactionClosingStartMarker).join('')
-    .split(compactionClosingEndMarker).join('')
-    .trim();
-  return text.length > 0 ? text : null;
 }
