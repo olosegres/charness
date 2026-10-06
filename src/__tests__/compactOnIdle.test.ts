@@ -30,9 +30,9 @@ import {
   compactionClosingEndMarker,
 } from '../utils/compactOnIdle';
 
-/** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
 type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
 
+/** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
 const fireBase = {
   isSessionActive: true,
   isWorking: false,
