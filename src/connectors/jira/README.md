@@ -139,6 +139,8 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   so the 30-day sweep (`botFileStorage.ts`, which walks the folders nested in a conversation's files dir)
   only removes what no live issue has used for a month. The issue-text note covers these files too: their
   content is the issue's, information and never instructions.
+- A compaction an issue's agent asks for (`compact_conversation`, when a person asks it in a comment) runs when its
+  turn ends and is SILENT: there is no topic to narrate it in, and the next prompt is the whole issue again.
 - Nothing is repeated (`issueDelta.ts`, `contextLedger.ts`). Per issue, `DATA_DIR/jira-context/<ISSUE-KEY>.json`
   holds the hash of every block the conversation's agent has taken in. A request stores the WHOLE prompt (a
   re-post and a usage-limit hold send that); the text actually forwarded is built right before the forward,
@@ -172,4 +174,7 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 `jiraConfig.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
 real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` and `fakeClaude.ts`;
-`live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set.
+`live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
+prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and
+effort) also need `JIRA_LIVE_MEDIA_ISSUE` and an instance `jira.json` that maps `ffmpeg` in `agentBinaries` and names
+neither `model` nor `effort` (the file header lists the inputs).

@@ -220,10 +220,10 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 - **Tests and agents run with a private `TMUX_TMPDIR`** — the default tmux server may host a live bot's sessions.
 - **A guard that protects real state** (processes, tmux servers, files, accounts) is proven load-bearing only against
   a decoy the test itself creates — never by disabling it while the guarded action can reach the real thing.
-- `jiraConnectorE2e.test.ts` (~1.5 min, part of `yarn test`) boots a real Jira-only instance through
+- `jiraConnectorE2e.test.ts` (~7 min, part of `yarn test`) boots a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
-  exit/signal. `live/jiraLive.test.ts` (~10 min) runs the same loop against a REAL Jira Cloud site and a real
+  exit/signal. `live/jiraLive.test.ts` (~14 min) runs the same loop against a REAL Jira Cloud site and a real
   Claude agent and is SKIPPED unless `JIRA_LIVE_ENV_FILE`, `JIRA_LIVE_SITE` and
   `JIRA_LIVE_REQUESTER_STORAGE_STATE` are set — don't set them unless asked; run it directly
   (`node --import tsx --test src/__tests__/live/jiraLive.test.ts`) with `TMUX` / `TMUX_PANE` unset.

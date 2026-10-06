@@ -26,6 +26,17 @@ export interface FakeJiraComment {
   author: JiraAccount;
   created: string;
   body: AdfDocument;
+  /** Set by an edit ({@link FakeJira.editComment}). */
+  updated?: string;
+  updateAuthor?: JiraAccount;
+}
+
+/** A file attached to an issue; `content` is what the download answers with. */
+export interface FakeJiraAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  content: Buffer;
 }
 
 interface FakeJiraChangelogItem {
@@ -53,6 +64,7 @@ export interface FakeJiraIssue {
   created: string;
   histories: FakeJiraHistory[];
   comments: FakeJiraComment[];
+  attachments: FakeJiraAttachment[];
 }
 
 /** What a new issue is made of; the rest is filled in as Jira would. */
@@ -95,6 +107,7 @@ export class FakeJira {
   private readonly issues = new Map<string, FakeJiraIssue>();
   private nextHistoryId = 1000;
   private nextCommentId = 5000;
+  private nextAttachmentId = 9000;
   /** `METHOD path` of every request, in order. */
   readonly requestLog: string[] = [];
 
@@ -129,7 +142,42 @@ export class FakeJira {
       created: new Date().toISOString(),
       histories: [],
       comments: [],
+      attachments: [],
     });
+  }
+
+  /** @description A comment by a person (not the AI account) — what a requester writes on the issue. Resolves its id. */
+  addComment(issueKey: string, author: JiraAccount, text: string): string {
+    this.nextCommentId += 1;
+    const id = this.nextCommentId.toString();
+    this.getIssue(issueKey).comments.push({ id, author, created: new Date().toISOString(), body: createAdfParagraph(text) });
+    return id;
+  }
+
+  /** @description Edit a comment's text as `editor` does: `updated` and `updateAuthor` move, the author and date stay. */
+  editComment(issueKey: string, commentId: string, text: string, editor: JiraAccount): void {
+    const comment = this.getIssue(issueKey).comments.find((candidate) => candidate.id === commentId);
+    if (!comment) throw new Error(`fake Jira has no comment ${commentId} on ${issueKey}`);
+    comment.body = createAdfParagraph(text);
+    comment.updated = new Date().toISOString();
+    comment.updateAuthor = editor;
+  }
+
+  deleteComment(issueKey: string, commentId: string): void {
+    const issue = this.getIssue(issueKey);
+    issue.comments = issue.comments.filter((comment) => comment.id !== commentId);
+  }
+
+  setDescription(issueKey: string, description: string): void {
+    this.getIssue(issueKey).description = description;
+  }
+
+  /** @description Attach a file to an issue; its id is unique across the site, as Jira's are. */
+  addAttachment(issueKey: string, file: Omit<FakeJiraAttachment, 'id'>): string {
+    this.nextAttachmentId += 1;
+    const id = this.nextAttachmentId.toString();
+    this.getIssue(issueKey).attachments.push({ id, ...file });
+    return id;
   }
 
   /** @description Assign the issue, recording the change in its changelog under `author`. */
@@ -168,6 +216,14 @@ export class FakeJira {
         created: issue.created,
         description: createAdfParagraph(issue.description),
         comment: { total: issue.comments.length, comments: issue.comments },
+        attachment: issue.attachments.map((attachment) => ({
+          id: attachment.id,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.content.length,
+          created: issue.created,
+          author: issue.reporter,
+        })),
       },
       ...(isChangelogExpanded
         ? { changelog: { startAt: 0, maxResults: issue.histories.length, total: issue.histories.length, histories: [...issue.histories].reverse() } }
@@ -191,11 +247,21 @@ export class FakeJira {
     const route = url.pathname.startsWith(restPrefix) ? url.pathname.slice(restPrefix.length) : url.pathname;
     const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink))?$/.exec(route);
     const statusesMatch = /^\/project\/([^/]+)\/statuses$/.exec(route);
+    const attachmentContentMatch = /^\/attachment\/content\/([^/]+)$/.exec(route);
 
     if (method === 'GET' && route === '/myself') {
       send(200, { accountId: this.options.aiAccount.accountId });
     } else if (method === 'GET' && statusesMatch) {
       send(200, [{ statuses: this.options.statuses }]);
+    } else if (method === 'GET' && attachmentContentMatch) {
+      // With `redirect=false`, as the connector asks, Jira answers with the file itself.
+      const attachment = [...this.issues.values()].flatMap((issue) => issue.attachments).find((candidate) => candidate.id === attachmentContentMatch[1]);
+      if (!attachment) {
+        send(404, { errorMessages: ['The attachment does not exist.'] });
+        return;
+      }
+      response.writeHead(200, { 'content-type': attachment.mimeType, 'content-length': attachment.content.length });
+      response.end(attachment.content);
     } else if (method === 'POST' && route === '/search/jql') {
       const isChangelogExpanded = requestBody.expand === 'changelog';
       send(200, { issues: [...this.issues.values()].map((issue) => this.getIssueJson(issue, isChangelogExpanded)), isLast: true });
