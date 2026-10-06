@@ -1,10 +1,17 @@
 # Test image: the product image plus the Chromium the Jira live test's requester drives (its stored browser
 # login). Never used to run an instance.
 #
-#   docker build -t telegramcode-test -f docker/Dockerfile.test docker/
+#   docker build -t telegramcode-test -f docker/Dockerfile.test .      # from the checkout: its package.json names Playwright
 FROM telegramcode
 
-# The same Playwright as the repo's playwright-core, so its Chromium revision matches; installed outside HOME,
-# which is a mount.
+# The same Playwright as the repo's playwright-core (read from package.json, which must pin it exactly), so its
+# Chromium revision matches; installed outside HOME, which is a mount.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-RUN npx -y playwright@1.59.1 install --with-deps chromium && rm -rf /root/.npm
+COPY package.json /tmp/checkout/package.json
+RUN playwrightVersion="$(node -p "require('/tmp/checkout/package.json').devDependencies['playwright-core']")" \
+ && case "$playwrightVersion" in \
+      [0-9]*.[0-9]*.[0-9]*) ;; \
+      *) echo "package.json must pin playwright-core to an exact version, got: $playwrightVersion" >&2; exit 1 ;; \
+    esac \
+ && npx -y playwright@"$playwrightVersion" install --with-deps chromium \
+ && rm -rf /root/.npm /tmp/checkout

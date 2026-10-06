@@ -229,12 +229,13 @@ the agents' home folder           ──────▶    /home/telegramcode: t
 
    ```bash
    git clone https://github.com/olosegres/charness /srv/telegramcode/checkout
-   docker build -t telegramcode /srv/telegramcode/checkout/docker
+   cd /srv/telegramcode/checkout && docker build -t telegramcode -f docker/Dockerfile .
    ```
 
-   The image holds only system tools (tmux, git, ffmpeg, ripgrep, …). On first start the container installs the
-   checkout's dependencies for the image and builds it; the bot installs Claude Code and OpenCode into the
-   agents' home.
+   The image holds only system tools (tmux, git, ffmpeg, ripgrep, …) and the yarn the checkout's `package.json`
+   names (build from the checkout's root, which is how the build reads it; rebuild after a yarn bump so no
+   container has to download it). On first start the container installs the checkout's dependencies for the
+   image and builds it; the bot installs Claude Code and OpenCode into the agents' home.
 2. **Instance env file**, as for a host install (`TELEGRAM_BOT_TOKEN`, `DATA_DIR`, `WORK_ROOT`, …). It stays on
    the host and is mounted read-only. Every host path it names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is
    mounted at the SAME path, so `state.json`, sessions and file paths stay valid inside and an instance can move
