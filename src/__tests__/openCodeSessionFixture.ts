@@ -22,6 +22,8 @@ export function createOpenCodeSessionFixture(overrides: Partial<OpenCodeSession>
     currentResponseText: '',
     lastEmittedLength: 0,
     outputTimer: null,
+    compactionSummaryMessageId: null,
+    isResponseCompactionSummary: false,
     childResponseText: '',
     childLastEmittedLength: 0,
     childOutputTimer: null,
