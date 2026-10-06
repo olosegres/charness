@@ -26,7 +26,7 @@ import type {
 } from '../../platform/inbound';
 import { getElevatedMemberIds } from '../../accessControl';
 import { getTelegramFileMeta, type TelegramFileKind } from './fileIntake';
-import { extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote';
+import { buildReplyQuoteBlock, extractReplyQuote, type ReplyQuoteSource } from '../../utils/replyQuote';
 
 /**
  * @description The two Telegram membership statuses that grant elevated rights
@@ -178,6 +178,29 @@ function getInboundAuthor(user: User | undefined): InboundAuthor {
 }
 
 /**
+ * @description A message's Telegram REPLY reduced to the structural input of
+ * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
+ * Read off the message itself, so a typed text and a voice note reply the same
+ * way — the reply is a property of the message, not of its content.
+ */
+function getReplyQuoteSource(
+  message: Message,
+  identity: TelegramBotIdentity,
+): ReplyQuoteSource | undefined {
+  const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
+  if (!replied) return undefined;
+  return {
+    manualQuoteText: 'quote' in message ? message.quote?.text : undefined,
+    replyText: 'text' in replied ? replied.text : undefined,
+    replyCaption: 'caption' in replied ? replied.caption : undefined,
+    replyMessageId: replied.message_id,
+    topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
+    isServiceMessage: 'forum_topic_created' in replied,
+    fromBot: identity.userId !== undefined && replied.from?.id === identity.userId,
+  };
+}
+
+/**
  * @description The replied-to message reduced to what the core renders into the
  * agent prompt.
  *
@@ -192,25 +215,27 @@ function getInboundReplyTo(
   identity: TelegramBotIdentity,
 ): InboundReplyTo | undefined {
   const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
-  if (!replied) return undefined;
-
-  const isFromAssistant = identity.userId !== undefined && replied.from?.id === identity.userId;
-  const source: ReplyQuoteSource = {
-    manualQuoteText: 'quote' in message ? message.quote?.text : undefined,
-    replyText: 'text' in replied ? replied.text : undefined,
-    replyCaption: 'caption' in replied ? replied.caption : undefined,
-    replyMessageId: replied.message_id,
-    topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
-    isServiceMessage: 'forum_topic_created' in replied,
-    fromBot: isFromAssistant,
-  };
-  const quote = extractReplyQuote(source);
-  if (!quote) return undefined;
+  const quote = extractReplyQuote(getReplyQuoteSource(message, identity));
+  if (!replied || !quote) return undefined;
   return {
     text: quote.quotedText,
     author: 'from' in replied ? getInboundAuthor(replied.from) : null,
     isFromAssistant: quote.fromBot,
   };
+}
+
+/**
+ * @description The agent-facing reply-quote block for a message the bot forwards
+ * as a prompt — a typed text, or a voice note whose transcript becomes one — or
+ * `undefined` when there is nothing to fold in (no reply, the topic root, a
+ * service message, nothing quotable). One reader for both, so a spoken reply
+ * carries exactly the block a typed reply to the same message does.
+ */
+export function getTelegramReplyQuoteBlock(
+  message: Message,
+  identity: TelegramBotIdentity,
+): string | undefined {
+  return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity))) ?? undefined;
 }
 
 /**

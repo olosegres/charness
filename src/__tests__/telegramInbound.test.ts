@@ -26,6 +26,7 @@ import {
   getNormalizedAttachments,
   getPlatformMembers,
   getTelegramCommand,
+  getTelegramReplyQuoteBlock,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
 import { AdminCache } from '../accessControl';
@@ -215,6 +216,85 @@ test('getInboundEvent: a reply to a message with neither text nor caption is dro
     from: makeUser(8),
   } as Message.TextMessage;
   assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
+});
+
+// ─── reply-quote block (typed text and voice note) ──────────────────────
+
+/** The topic every message below is posted in (its root message id). */
+const topicRootId = 42;
+
+/** What a message's `reply_to_message` holds (telegraf does not export the name). */
+type RepliedMessage = NonNullable<Message.VoiceMessage['reply_to_message']>;
+
+/** The agent's earlier answer in the topic — what the operator replies to. */
+const agentAnswer = {
+  message_id: 77,
+  date: 0,
+  chat: { id: -1001234567890, type: 'supergroup', title: 'g' },
+  from: makeUser(identity.userId, { is_bot: true }),
+  message_thread_id: topicRootId,
+  text: 'The build failed:\nAPI_URL is not set',
+} as RepliedMessage;
+
+/**
+ * A voice note posted in the topic. Telegram sets `reply_to_message` on EVERY
+ * topic message: the topic-root service message for a plain post, the replied-to
+ * message for a REPLY.
+ */
+function makeTopicVoiceMessage(replyTo: RepliedMessage | undefined): Message.VoiceMessage {
+  return {
+    message_id: 80,
+    date: 0,
+    chat: { id: -1001234567890, type: 'supergroup', title: 'g' },
+    from: makeUser(7),
+    message_thread_id: topicRootId,
+    is_topic_message: true,
+    reply_to_message: replyTo,
+    voice: { file_id: 'v1', file_unique_id: 'vu', duration: 3 },
+  } as Message.VoiceMessage;
+}
+
+/** The topic-root service message a plain (non-reply) topic post points at. */
+const topicRootMessage = {
+  message_id: topicRootId,
+  date: 0,
+  chat: { id: -1001234567890, type: 'supergroup', title: 'g' },
+  from: makeUser(7),
+  forum_topic_created: { name: 'Topic', icon_color: 0 },
+} as RepliedMessage;
+
+test('getTelegramReplyQuoteBlock: a voice reply to the agent answer carries the quote block', () => {
+  assert.equal(
+    getTelegramReplyQuoteBlock(makeTopicVoiceMessage(agentAnswer), identity),
+    ['[Replying to an earlier message · from: assistant]', '> The build failed:', '> API_URL is not set'].join('\n'),
+  );
+});
+
+test('getTelegramReplyQuoteBlock: a voice reply gets exactly the block a typed reply to the same message does', () => {
+  const typedReply = makePlainMessage('why?');
+  typedReply.message_thread_id = topicRootId;
+  typedReply.reply_to_message = agentAnswer;
+  const typedBlock = getTelegramReplyQuoteBlock(typedReply, identity);
+  assert.ok(typedBlock !== undefined);
+  assert.equal(getTelegramReplyQuoteBlock(makeTopicVoiceMessage(agentAnswer), identity), typedBlock);
+});
+
+test('getTelegramReplyQuoteBlock: the highlighted part of the replied-to message wins for a voice reply too', () => {
+  const message = makeTopicVoiceMessage(agentAnswer);
+  message.quote = { text: 'API_URL', position: 31, is_manual: true };
+  assert.equal(
+    getTelegramReplyQuoteBlock(message, identity),
+    ['[Replying to an earlier message · from: assistant]', '> API_URL'].join('\n'),
+  );
+});
+
+test('getTelegramReplyQuoteBlock: a voice posted plainly in the topic carries no block', () => {
+  // Its `reply_to_message` is the topic root — "post in this topic", not a quote.
+  assert.equal(getTelegramReplyQuoteBlock(makeTopicVoiceMessage(topicRootMessage), identity), undefined);
+});
+
+test('getTelegramReplyQuoteBlock: a voice that replies to nothing carries no block', () => {
+  assert.equal(getTelegramReplyQuoteBlock(makeTopicVoiceMessage(undefined), identity), undefined);
 });
 
 test('getInboundEvent: a captioned photo surfaces as text plus an attachment', () => {

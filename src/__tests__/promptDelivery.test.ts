@@ -148,7 +148,10 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   });
 
   it('the text and voice handlers hand a mid-startup prompt to it, with the request header opened at capture time (S7)', () => {
-    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, true\);/);
-    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{transcript\}`, true\);/);
+    // Through one shared unit, which also folds the reply quote in at capture time
+    // (`voiceReplyQuoteWiring.test.ts`): the replay forwards the buffered text as is.
+    assert.match(botSource, /await bufferPromptDuringStartup\(key, text, \{ source: 'text'/);
+    assert.match(botSource, /await bufferPromptDuringStartup\(key, transcript, \{ source: 'voice'/);
+    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true\);/);
   });
 });

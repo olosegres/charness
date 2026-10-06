@@ -71,7 +71,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   native question, never open one.
 - The request header leads the per-message body (ahead of the reply quote, never in the once-per-change thread
   preamble) and says the plain text is hidden only in the answers-only view. A prompt buffered behind a session
-  start carries its header from capture time.
+  start carries its header and its reply quote from capture time (a typed text and a voice transcript alike).
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's
   text, status/progress frames, thinking, tool results and sub-agent frames are dropped; a native question with

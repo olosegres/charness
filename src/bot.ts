@@ -138,6 +138,7 @@ import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   getTelegramCommand,
+  getTelegramReplyQuoteBlock,
 } from './connectors/telegram/inbound';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
@@ -266,7 +267,7 @@ import {
   checkShouldSkipPreambleForText,
 } from './threadContextPreamble';
 import { getPinnedBannerSkipDecision } from './utils/pinnedBannerSkipDecision';
-import { extractReplyQuote, buildReplyQuoteBlock, type ReplyQuoteSource } from './utils/replyQuote';
+import { getPromptWithReplyQuote } from './utils/replyQuote';
 import {
   getTelegramFileMeta,
   getMediaGroupId,
@@ -4758,12 +4759,14 @@ async function forwardPromptToAgent(
   // Fold the reply-quote block (from a Telegram REPLY) ahead of the user's text
   // so the agent sees WHAT is being referenced — only for a normal prompt, since
   // a slash command forwarded to the agent is a control token a prefixed block
-  // would corrupt. The folded `body` is what gets cached, preamble-wrapped and
-  // timestamped below.
-  const quotedBody =
-    options.replyContext && !checkShouldSkipPreambleForText(text)
-      ? `${options.replyContext}\n\n${textWithHeld}`
-      : textWithHeld;
+  // would corrupt, and a terminal's input is a shell line the block's `> ` lines
+  // would turn into file-overwriting redirections. The folded `body` is what gets
+  // cached, preamble-wrapped and timestamped below.
+  const quotedBody = getPromptWithReplyQuote(textWithHeld, {
+    block: options.replyContext,
+    isSlashCommand: checkShouldSkipPreambleForText(text),
+    isShellInput: adapter.name === 'terminal',
+  });
   // The request header (S7) leads the per-message body, like the reply quote and
   // unlike the once-per-change thread preamble: it names THIS message's request.
   const body = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
@@ -4885,29 +4888,11 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
  * reply-quote block. When the operator uses Telegram's REPLY feature, this folds
  * the replied-to message's content into the forwarded prompt so the agent sees
  * WHAT is being referenced. Returns the block, or `undefined` when there is
- * nothing to inject (no reply, a forum/service or topic-root message, or a reply
- * carrying no textual content — the pure {@link extractReplyQuote} decides).
- *
- * Union fields are read with the `'x' in msg` idiom (no casts): `text`/`caption`
- * live only on their specific variants, `forum_topic_created` marks a service
- * message; `message_id` / `from` / `message_thread_id` are on every variant. The
- * bot's own id (`bot.botInfo.id`) drives the `from: assistant` attribution.
+ * nothing to inject — the connector's {@link getTelegramReplyQuoteBlock} decides.
+ * The bot's own id (`bot.botInfo.id`) drives the `from: assistant` attribution.
  */
 function getReplyQuoteBlock(message: Message.TextMessage | Message.VoiceMessage): string | undefined {
-  const replied = message.reply_to_message;
-  if (!replied) return undefined;
-
-  const botId = bot.botInfo?.id;
-  const source: ReplyQuoteSource = {
-    manualQuoteText: message.quote?.text,
-    replyText: 'text' in replied ? replied.text : undefined,
-    replyCaption: 'caption' in replied ? replied.caption : undefined,
-    replyMessageId: replied.message_id,
-    topicRootId: message.message_thread_id,
-    isServiceMessage: 'forum_topic_created' in replied,
-    fromBot: botId !== undefined && replied.from?.id === botId,
-  };
-  return buildReplyQuoteBlock(extractReplyQuote(source)) ?? undefined;
+  return getTelegramReplyQuoteBlock(message, { userId: bot.botInfo?.id });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -7273,10 +7258,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    // The request is opened at capture time (S7): the buffered text carries its header.
-    const opening = await openTopicRequest(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) });
-    await deliverPromptOrBuffer(key, `${opening.header}${text}`, true);
-    trackTopicRequestTurn(key, opening);
+    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getReplyQuoteBlock(ctx.message));
     return;
   }
 
@@ -7594,9 +7576,7 @@ async function processVoiceJob(
 
     // Session is mid-startup → buffer the transcript and replay it once ready.
     if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      const opening = await openTopicRequest(key, transcript, { source: 'voice', requesterId });
-      await deliverPromptOrBuffer(key, `${opening.header}${transcript}`, true);
-      trackTopicRequestTurn(key, opening);
+      await bufferPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, replyContext);
       return;
     }
 
@@ -8584,6 +8564,31 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
   await applyQuestionAnswer(key, [selectedLabel]);
   await ctx.answerCbQuery(selectedLabel);
 });
+
+/**
+ * @description Buffer a free-form prompt (text OR voice) that arrived while the
+ * thread's session is starting — the startup twin of {@link deliverActivePrompt}.
+ * The request is opened at capture time (S7), so the buffered text carries its
+ * header; the reply-quote block is folded in here too, since the replay forwards
+ * the buffered text as is and a REPLY made during the boot would otherwise reach
+ * the agent without the message it points at.
+ */
+async function bufferPromptDuringStartup(
+  key: SessionKey,
+  text: string,
+  intake: TopicRequestIntake,
+  replyContext?: string,
+): Promise<void> {
+  const opening = await openTopicRequest(key, text, intake);
+  // The adapter being started is the one the replay forwards to.
+  const quotedText = getPromptWithReplyQuote(text, {
+    block: replyContext,
+    isSlashCommand: checkShouldSkipPreambleForText(text),
+    isShellInput: getThreadAdapter(key).name === 'terminal',
+  });
+  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
+  trackTopicRequestTurn(key, opening);
+}
 
 /**
  * @description The single choke point for delivering a free-form prompt (text OR

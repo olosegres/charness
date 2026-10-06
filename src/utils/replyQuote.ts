@@ -6,13 +6,14 @@
  *
  * The block is plain English (agent-facing, NOT i18n) and mirrors the
  * thread-context preamble in shape: the bot just prepends it to the prompt body
- * in `forwardPromptToAgent`, the single choke point for direct texts and voice
- * transcripts. It rides the per-message body (like the `/timestamps` line), NOT
- * the once-per-change preamble marker.
+ * ({@link getPromptWithReplyQuote}) in `forwardPromptToAgent`, the single choke
+ * point for direct texts and voice transcripts, and in the startup buffering of
+ * both. It rides the per-message body (like the `/timestamps` line), NOT the
+ * once-per-change preamble marker.
  *
  * These helpers take STRUCTURAL input (no telegraf imports) so they are fully
- * unit-testable; the impure bridge that reads a real telegraf message lives in
- * `bot.ts` (`getReplyQuoteBlock`).
+ * unit-testable; the bridge that reads a real telegraf message lives in the
+ * Telegram connector (`getTelegramReplyQuoteBlock`).
  */
 
 /**
@@ -31,9 +32,12 @@ const replyQuoteTruncationMarker = '… [truncated]';
 /** Prefix applied to every line of the quoted content (markdown blockquote). */
 const replyQuoteLinePrefix = '> ';
 
+/** Separator between the block and the prompt it leads. */
+const replyQuotePromptSeparator = '\n\n';
+
 /**
  * @description Structural inputs for {@link extractReplyQuote}, distilled from a
- * telegraf message by the `bot.ts` bridge so this module never imports telegraf.
+ * telegraf message by the Telegram connector so this module never imports telegraf.
  */
 export interface ReplyQuoteSource {
   /** `ctx.message.quote?.text` — the part the operator highlighted (partial quote). */
@@ -108,4 +112,27 @@ export function buildReplyQuoteBlock(quote: ExtractedReplyQuote | null): string 
   const header = `${replyQuoteHeaderPrefix}${quote.fromBot ? 'assistant' : 'user'}]`;
   const quotedLines = content.split('\n').map((line) => `${replyQuoteLinePrefix}${line}`);
   return [header, ...quotedLines].join('\n');
+}
+
+/**
+ * @description Lead a prompt with its reply-quote block — the ONE folding rule,
+ * shared by the live forward (`forwardPromptToAgent`) and a prompt buffered
+ * behind a session start, whose replay forwards the buffered text as is: a reply
+ * made while the agent boots must reach it exactly like one made after.
+ *
+ * The prompt is returned unchanged when there is no block, or when it is not an
+ * agent prompt at all:
+ *   - a slash command is a control token for the agent, which a block ahead of
+ *     it would corrupt into plain text (`isSlashCommand` classifies the user's
+ *     own text — the caller may have extended it, held prompts ride after it);
+ *   - a terminal topic's input is a shell command line, and typed into a shell
+ *     the block's `> ` lines run as redirections that overwrite a file named by
+ *     the quote's first word. A typed reply there never carries a block either.
+ */
+export function getPromptWithReplyQuote(
+  prompt: string,
+  quote: { block: string | undefined; isSlashCommand: boolean; isShellInput: boolean },
+): string {
+  if (!quote.block || quote.isSlashCommand || quote.isShellInput) return prompt;
+  return `${quote.block}${replyQuotePromptSeparator}${prompt}`;
 }
