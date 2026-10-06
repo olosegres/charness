@@ -57,7 +57,6 @@ function createRecordingAdapter(): { adapter: OpenCodeAdapter; calls: ApiCall[] 
   return { adapter, calls };
 }
 
-
 useStubbedOpenCodeServer();
 
 describe('OpenCode folder-scoped create + list (S1)', () => {

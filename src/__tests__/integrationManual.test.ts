@@ -27,9 +27,10 @@ test('R9 — re-attach to surviving tmux session after bot restart', { skip: 'in
    *   2. Send one prompt so the session has a non-trivial transcript.
    *      Confirm the bot answered.
    *
-   *   3. Kill the bot HARD (`kill -9 $(pidof node)` or `docker compose
-   *      kill telegramcode-pet`). DO NOT use Ctrl-C — the graceful shutdown
-   *      path stops sessions, which would defeat the test.
+   *   3. Kill the bot HARD (`kill -9 <bot pid>`, inside the container with
+   *      `docker exec`; never `docker kill`, which ends tmux and the agents
+   *      too). DO NOT use Ctrl-C — the graceful shutdown path stops
+   *      sessions, which would defeat the test.
    *
    *   4. `tmux ls` should still show `claude-<C>-<T>` and the original
    *      claude process should still be running inside it (verify with

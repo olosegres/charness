@@ -74,7 +74,6 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
 }
 
-
 useStubbedOpenCodeServer();
 
 describe('OpenCode startSession ready reply (B18)', () => {

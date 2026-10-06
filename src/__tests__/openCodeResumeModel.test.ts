@@ -113,7 +113,6 @@ function createAdapterWithSession(key: SessionKey): {
   return { adapter, outputs };
 }
 
-
 useStubbedOpenCodeServer();
 
 describe('OpenCode resume model resolution (B17)', () => {

@@ -26,6 +26,12 @@ let tmpRoot: string;
 let savedDataDir: string | undefined;
 let savedToken: string | undefined;
 
+/**
+ * A pid in the very-high range where reuse is extremely unlikely on a fresh tmp filesystem within the duration of
+ * a single test: 4194303, above the default pid_max on most kernels.
+ */
+const deadPid = 2 ** 22 - 1;
+
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-lock-'));
   savedDataDir = process.env.DATA_DIR;
@@ -124,10 +130,7 @@ test('second tryAcquireLock returns live-holder when first instance is still ali
 });
 
 test('stale lock (dead pid) is cleared and reclaimed on next tryAcquireLock', () => {
-  // Plant a stale lockfile pointing at a guaranteed-dead pid. We use a
-  // pid in the very-high range where reuse is extremely unlikely on a fresh
-  // tmp filesystem within the duration of a single test.
-  const deadPid = 2 ** 22 - 1; // 4194303, above default pid_max on most kernels
+  // Plant a stale lockfile pointing at a guaranteed-dead pid.
   fs.mkdirSync(path.dirname(lockPath()), { recursive: true });
   fs.writeFileSync(
     lockPath(),
@@ -213,12 +216,12 @@ test('same hostname and pid namespace: today\'s probe — a live holder is refus
 });
 
 test('same hostname and pid namespace: a dead holder is taken over', () => {
-  writeLock({ pid: 2 ** 22 - 1, hostname: os.hostname(), pidNamespace: readOwnPidNamespace() });
+  writeLock({ pid: deadPid, hostname: os.hostname(), pidNamespace: readOwnPidNamespace() });
   assert.equal(tryAcquireLock().ok, true);
 });
 
 test('another hostname: refused without a probe, naming the holder\'s host — even when its pid is dead here', () => {
-  writeLock({ pid: 2 ** 22 - 1, hostname: 'other-host', pidNamespace: readOwnPidNamespace() });
+  writeLock({ pid: deadPid, hostname: 'other-host', pidNamespace: readOwnPidNamespace() });
   const r = tryAcquireLock();
   assert.equal(r.ok, false);
   if (r.ok) return;
@@ -234,6 +237,6 @@ test('a lock without the new fields keeps today\'s logic', () => {
   const live = tryAcquireLock();
   assert.equal(live.ok, false);
   if (!live.ok) assert.equal(live.reason, 'live-holder');
-  writeLock({ pid: 2 ** 22 - 1 });
+  writeLock({ pid: deadPid });
   assert.equal(tryAcquireLock().ok, true);
 });

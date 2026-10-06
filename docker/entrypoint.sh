@@ -17,11 +17,17 @@ if [ ! -f package.json ]; then
 fi
 mkdir -p "$HOME"
 
-# Dependencies installed for THIS image: node-pty is native, so a node_modules installed on a host is reinstalled.
+# Dependencies installed for THIS image: node-pty is native, so a node_modules installed on a host is rebuilt.
 lockHash=$(sha256sum yarn.lock | cut -d' ' -f1)
-if [ "$(cat "$installStamp" 2>/dev/null || true)" != "$lockHash" ]; then
+installedFor=$(cat "$installStamp" 2>/dev/null || true)
+if [ "$installedFor" != "$lockHash" ]; then
   echo "telegramcode: installing dependencies for the image" >&2
   yarn install --immutable
+  # No stamp: this node_modules was not installed by the image. yarn keeps a native build made under the same
+  # Node version as up to date, whatever system built it, so rebuild them all once.
+  if [ -z "$installedFor" ]; then
+    yarn rebuild
+  fi
   echo "$lockHash" > "$installStamp"
 fi
 if [ ! -f dist/cli.js ]; then

@@ -80,7 +80,6 @@ async function waitForSession(adapter: OpenCodeAdapter, keyStr: string): Promise
   return undefined;
 }
 
-
 useStubbedOpenCodeServer();
 
 describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () => {

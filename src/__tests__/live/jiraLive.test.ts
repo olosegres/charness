@@ -102,7 +102,7 @@ import { parse as parseEnvFile } from 'dotenv';
 import { JiraLiveRequester, type LiveComment, type LiveIssueState } from './jiraLiveRequester';
 import { getPollJqlProjectKeys, getPolledDecisions } from '../jiraE2e/charnessLog';
 import { getForeignAgentEnvNames } from '../jiraE2e/fakeClaudeContract';
-import { isolatedLaunchEnvNames } from '../e2e/isolatedCharness';
+import { isolatedLaunchEnvNames, isolatedSandboxEnv } from '../e2e/isolatedCharness';
 import { getClaudeMemoryAbove, validateJiraConfig, type JiraAdapterName, type JiraConfig } from '../../connectors/jira/config';
 import { createJiraClient, type JiraClient } from '../../connectors/jira/client';
 import { jiraCommentAdfMaxChars, jiraCommentMarkdownMaxChars, type AdfDocument } from '../../connectors/jira/adf';
@@ -403,8 +403,7 @@ async function startCharness(): Promise<number> {
       SHELL: '/bin/sh',
       LANG: 'C.UTF-8',
       TERM: 'dumb',
-      // The telegramcode image runs everything as root, where Claude Code needs it (run-isolated.sh passes it on).
-      ...(process.env.IS_SANDBOX ? { IS_SANDBOX: process.env.IS_SANDBOX } : {}),
+      ...isolatedSandboxEnv,
     },
     cwd: dataDir,
     stdio: ['ignore', 'pipe', 'pipe'],
