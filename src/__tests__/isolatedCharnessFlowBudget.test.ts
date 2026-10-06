@@ -37,6 +37,11 @@ describe('getTestFileTimeoutMs', () => {
     assert.equal(getTestFileTimeoutMs(['--test-timeout', `${fileTimeoutMs}`]), fileTimeoutMs);
   });
 
+  it('takes the last of a repeated flag, the one Node enforces', () => {
+    assert.equal(getTestFileTimeoutMs([`--test-timeout=${fileTimeoutMs}`, '--test-timeout', `${shortBudgetMs}`]), shortBudgetMs);
+    assert.equal(getTestFileTimeoutMs([`--test-timeout=${shortBudgetMs}`, `--test-timeout=${fileTimeoutMs}`]), fileTimeoutMs);
+  });
+
   it('is null when the arguments carry no limit, or one that is no limit', () => {
     assert.equal(getTestFileTimeoutMs([]), null);
     assert.equal(getTestFileTimeoutMs(['--import', 'tsx']), null);

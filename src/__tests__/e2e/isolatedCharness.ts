@@ -193,20 +193,20 @@ export const flowTeardownReserveMs = 3 * stopTimeoutMs;
 
 /**
  * @description The per-file limit (ms) the runner passed on with `--test-timeout`, in either spelling, or null when the
- * arguments carry none. The flag the runner itself enforces is the one source of the limit.
+ * arguments carry none. The flag the runner itself enforces is the one source of the limit — so when it is repeated,
+ * the LAST one counts, as it does for Node.
  */
 export function getTestFileTimeoutMs(execArgv: readonly string[] = process.execArgv): number | null {
   const flagPrefix = `${testTimeoutFlagName}=`;
+  let rawLimit: string | undefined;
   for (let index = 0; index < execArgv.length; index++) {
     const argument = execArgv[index];
-    let rawLimit: string | undefined;
     if (argument === testTimeoutFlagName) rawLimit = execArgv[index + 1];
     else if (argument.startsWith(flagPrefix)) rawLimit = argument.slice(flagPrefix.length);
-    if (rawLimit === undefined) continue;
-    const limitMs = Number(rawLimit);
-    if (Number.isFinite(limitMs) && limitMs > 0) return limitMs;
   }
-  return null;
+  if (rawLimit === undefined) return null;
+  const limitMs = Number(rawLimit);
+  return Number.isFinite(limitMs) && limitMs > 0 ? limitMs : null;
 }
 
 /**
