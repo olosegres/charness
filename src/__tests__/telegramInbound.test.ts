@@ -218,7 +218,7 @@ test('getInboundEvent: a reply to a message with neither text nor caption is dro
   assert.equal(getInboundEvent(message, key, identity).replyTo, undefined);
 });
 
-// ─── reply-quote block (typed text and voice note) ──────────────────────
+// ─── reply-quote block (typed text, voice note, file) ───────────────────
 
 /** The topic every message below is posted in (its root message id). */
 const topicRootId = 42;
@@ -295,6 +295,41 @@ test('getTelegramReplyQuoteBlock: a voice posted plainly in the topic carries no
 
 test('getTelegramReplyQuoteBlock: a voice that replies to nothing carries no block', () => {
   assert.equal(getTelegramReplyQuoteBlock(makeTopicVoiceMessage(undefined), identity), undefined);
+});
+
+/** A photo or document posted in the topic, captioned like a real upload. */
+function makeTopicFileMessage(kind: 'photo' | 'document', replyTo: RepliedMessage | undefined): Message {
+  const base = {
+    message_id: 81,
+    date: 0,
+    chat: { id: -1001234567890, type: 'supergroup', title: 'g' },
+    from: makeUser(7),
+    message_thread_id: topicRootId,
+    is_topic_message: true,
+    reply_to_message: replyTo,
+    caption: 'here is the screen',
+  };
+  return kind === 'photo'
+    ? ({ ...base, photo: [{ file_id: 'p1', file_unique_id: 'pu', width: 10, height: 10 }] } as Message.PhotoMessage)
+    : ({ ...base, document: { file_id: 'd1', file_unique_id: 'du', file_name: 'build.log' } } as Message.DocumentMessage);
+}
+
+test('getTelegramReplyQuoteBlock: a photo or document sent as a reply carries the block a typed reply does', () => {
+  // The file's own caption is the user's text, never the quote: the quote is the message replied to.
+  const typedReply = makePlainMessage('why?');
+  typedReply.message_thread_id = topicRootId;
+  typedReply.reply_to_message = agentAnswer;
+  const typedBlock = getTelegramReplyQuoteBlock(typedReply, identity);
+  assert.ok(typedBlock !== undefined);
+  for (const kind of ['photo', 'document'] as const) {
+    assert.equal(getTelegramReplyQuoteBlock(makeTopicFileMessage(kind, agentAnswer), identity), typedBlock, kind);
+  }
+});
+
+test('getTelegramReplyQuoteBlock: a file posted plainly in the topic carries no block', () => {
+  for (const kind of ['photo', 'document'] as const) {
+    assert.equal(getTelegramReplyQuoteBlock(makeTopicFileMessage(kind, topicRootMessage), identity), undefined, kind);
+  }
 });
 
 test('getInboundEvent: a captioned photo surfaces as text plus an attachment', () => {

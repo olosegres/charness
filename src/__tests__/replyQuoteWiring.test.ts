@@ -1,19 +1,19 @@
 /**
- * @description Wiring guard — a voice note sent as a Telegram REPLY reaches the
- * agent with the same reply-quote block a typed reply does, on every route its
- * transcript can take: forwarded to a live session, or buffered behind a session
+ * @description Wiring guard — a voice note or a file sent as a Telegram REPLY
+ * reaches the agent with the same reply-quote block a typed reply does, on every
+ * route it can take: forwarded to a live session, or buffered behind a session
  * start (a fresh start, a resume of a sleeping conversation, an idle or per-turn
  * stop in progress).
  *
  * Why a structural test (and not a behavioural one): the handlers live in the
  * side-effecting `bot.ts` entrypoint and depend on Telegram + download +
  * transcription I/O, so they cannot be exercised in isolation. The pieces they
- * wire are pure and covered behaviourally — reading the block off a voice
+ * wire are pure and covered behaviourally — reading the block off a voice or file
  * message in `telegramInbound.test.ts` (`getTelegramReplyQuoteBlock`), folding it
  * into a prompt in `replyQuote.test.ts` (`getPromptWithReplyQuote`). This guard
  * locks the seam between them: the startup buffer used to forward the bare
- * transcript, so a reply made while the agent booted lost the message it
- * pointed at.
+ * transcript, and a file announcement never carried the block at all, so either
+ * reached the agent without the message it pointed at.
  */
 
 import { test } from 'node:test';
@@ -37,7 +37,7 @@ function getSourceSlice(startMarker: string, endMarker: string): string {
 
 /** A top-level function's body — up to the next top-level declaration. */
 function getFunctionBody(name: string): string {
-  const startIdx = botSource.indexOf(`async function ${name}(`);
+  const startIdx = botSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
   assert.notEqual(startIdx, -1, `${name} must exist in bot.ts`);
   const after = botSource.slice(startIdx + 1);
   const nextDeclMatch = after.search(/\n(?:async function|function) /);
@@ -75,11 +75,33 @@ test('a typed text buffered behind a session start keeps its reply quote too', (
   );
 });
 
-test('the startup buffer and the live forward fold the block with the one rule', () => {
-  // Both routes end in the same agent-facing shape only while they share the
-  // helper; an inline copy is how one of them drifts (or loses the shell guard).
-  for (const name of ['bufferPromptDuringStartup', 'forwardPromptToAgent']) {
+test('every route folds the block with the one rule', () => {
+  // The live forward and the finished-text helper end in the same agent-facing
+  // shape only while they share the pure fold; an inline copy is how one of them
+  // drifts (or loses the shell guard).
+  for (const name of ['getPromptWithThreadReplyQuote', 'forwardPromptToAgent']) {
     assert.match(getFunctionBody(name), /getPromptWithReplyQuote\(/, `${name} must fold through getPromptWithReplyQuote`);
     assert.match(getFunctionBody(name), /isShellInput:\s*[^,\n]*\.name\s*===\s*'terminal'/, `${name} must keep the block out of a terminal`);
   }
+  assert.match(
+    getFunctionBody('bufferPromptDuringStartup'),
+    /getPromptWithThreadReplyQuote\(\s*key\s*,\s*text\s*,\s*replyContext\s*\)/,
+  );
+});
+
+test('a single file sent as a reply carries the quote into its announcement', () => {
+  const body = getFunctionBody('handleIncomingFile');
+  assert.match(
+    body,
+    /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)\s*\)/,
+  );
+  assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
+});
+
+test('an album sent as a reply carries the quote: each member records it, the flush folds the first', () => {
+  assert.match(getFunctionBody('handleAlbumFile'), /replyContext:\s*getReplyQuoteBlock\(\s*ctx\.message\s*\)/);
+  const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
+  assert.match(flush, /const\s+replyContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.replyContext\)\?\.replyContext/);
+  assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*replyContext\s*\)/);
+  assert.match(flush, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });

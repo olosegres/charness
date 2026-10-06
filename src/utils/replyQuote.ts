@@ -7,8 +7,9 @@
  * The block is plain English (agent-facing, NOT i18n) and mirrors the
  * thread-context preamble in shape: the bot just prepends it to the prompt body
  * ({@link getPromptWithReplyQuote}) in `forwardPromptToAgent`, the single choke
- * point for direct texts and voice transcripts, and in the startup buffering of
- * both. It rides the per-message body (like the `/timestamps` line), NOT the
+ * point for direct texts and voice transcripts, and where a prompt leaves as
+ * finished text: the startup buffering of both, and a file or album announcement.
+ * It rides the per-message body (like the `/timestamps` line), NOT the
  * once-per-change preamble marker.
  *
  * These helpers take STRUCTURAL input (no telegraf imports) so they are fully

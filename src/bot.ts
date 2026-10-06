@@ -4887,15 +4887,31 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
 }
 
 /**
- * @description Bridge a telegraf text/voice message to the agent-facing
- * reply-quote block. When the operator uses Telegram's REPLY feature, this folds
- * the replied-to message's content into the forwarded prompt so the agent sees
- * WHAT is being referenced. Returns the block, or `undefined` when there is
- * nothing to inject — the connector's {@link getTelegramReplyQuoteBlock} decides.
- * The bot's own id (`bot.botInfo.id`) drives the `from: assistant` attribution.
+ * @description Bridge a telegraf message (text, voice, or a file) to the
+ * agent-facing reply-quote block. When the operator uses Telegram's REPLY
+ * feature, this folds the replied-to message's content into the forwarded prompt
+ * so the agent sees WHAT is being referenced. Returns the block, or `undefined`
+ * when there is nothing to inject — the connector's
+ * {@link getTelegramReplyQuoteBlock} decides. The bot's own id
+ * (`bot.botInfo.id`) drives the `from: assistant` attribution.
  */
-function getReplyQuoteBlock(message: Message.TextMessage | Message.VoiceMessage): string | undefined {
+function getReplyQuoteBlock(message: Message): string | undefined {
   return getTelegramReplyQuoteBlock(message, { userId: bot.botInfo?.id });
+}
+
+/**
+ * @description Fold a reply-quote block into a prompt that leaves as finished
+ * text through {@link deliverPromptOrBuffer} — one buffered behind a session
+ * start, whose replay forwards it as is, or a file announcement — by the one
+ * rule `forwardPromptToAgent` applies to a live prompt. The thread's adapter is
+ * the one the text reaches, so a terminal keeps the block out of its shell line.
+ */
+function getPromptWithThreadReplyQuote(key: SessionKey, text: string, replyContext: string | undefined): string {
+  return getPromptWithReplyQuote(text, {
+    block: replyContext,
+    isSlashCommand: checkShouldSkipPreambleForText(text),
+    isShellInput: getThreadAdapter(key).name === 'terminal',
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -7795,6 +7811,12 @@ interface AlbumCollectorItem {
   messageId: number;
   albumFile: AlbumFile;
   caption?: string;
+  /**
+   * The reply-quote block when THIS item was sent as a REPLY. A client may mark
+   * every album member or only some, so the flush, like the caption's, takes the
+   * first one.
+   */
+  replyContext?: string;
   /** The sender, by Telegram user id — the album's request is filed under them. */
   requesterId: string;
 }
@@ -7818,6 +7840,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       const orderedItems = [...items].sort((a, b) => a.messageId - b.messageId);
       const files = orderedItems.map((item) => item.albumFile);
       const caption = orderedItems.find((item) => item.caption && item.caption.trim())?.caption;
+      const replyContext = orderedItems.find((item) => item.replyContext)?.replyContext;
       const promptText = buildAlbumPromptText(files, caption);
       const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
       // User took over (album upload) before a pending API-error retry fired →
@@ -7827,7 +7850,8 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       noteThreadUserActivity(key);
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
-        await deliverPromptOrBuffer(key, `${opening.header}${promptText}`, isStarting);
+        const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, replyContext);
+        await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
         trackTopicRequestTurn(key, opening);
       } catch (err) {
         console.error('[Bot] album flush failed:', err);
@@ -7886,6 +7910,7 @@ async function handleAlbumFile(
     messageId: ctx.message.message_id,
     albumFile: { kind: meta.kind, savedPath, fileSize: meta.fileSize },
     caption: meta.caption,
+    replyContext: getReplyQuoteBlock(ctx.message),
     requesterId: getTopicRequesterId(ctx.from),
   });
 }
@@ -7925,7 +7950,9 @@ async function handleIncomingFile(
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
   noteThreadUserActivity(key);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
-  await deliverPromptOrBuffer(key, `${opening.header}${promptText}`, isStarting);
+  // A file sent as a REPLY carries the message it answers, as a typed or spoken reply does.
+  const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(ctx.message));
+  await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
   trackTopicRequestTurn(key, opening);
 }
 
@@ -8583,12 +8610,7 @@ async function bufferPromptDuringStartup(
   replyContext?: string,
 ): Promise<void> {
   const opening = await openTopicRequest(key, text, intake);
-  // The adapter being started is the one the replay forwards to.
-  const quotedText = getPromptWithReplyQuote(text, {
-    block: replyContext,
-    isSlashCommand: checkShouldSkipPreambleForText(text),
-    isShellInput: getThreadAdapter(key).name === 'terminal',
-  });
+  const quotedText = getPromptWithThreadReplyQuote(key, text, replyContext);
   await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
   trackTopicRequestTurn(key, opening);
 }

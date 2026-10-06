@@ -226,10 +226,11 @@ function getInboundReplyTo(
 
 /**
  * @description The agent-facing reply-quote block for a message the bot forwards
- * as a prompt — a typed text, or a voice note whose transcript becomes one — or
- * `undefined` when there is nothing to fold in (no reply, the topic root, a
- * service message, nothing quotable). One reader for both, so a spoken reply
- * carries exactly the block a typed reply to the same message does.
+ * as a prompt — a typed text, a voice note whose transcript becomes one, or a
+ * file whose announcement does — or `undefined` when there is nothing to fold in
+ * (no reply, the topic root, a service message, nothing quotable). One reader for
+ * all of them, so a spoken reply or a file sent as a reply carries exactly the
+ * block a typed reply to the same message does.
  */
 export function getTelegramReplyQuoteBlock(
   message: Message,
