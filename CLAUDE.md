@@ -210,8 +210,10 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   directory becomes the work root).
 - **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
   test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. README § Run with Docker.
-- `yarn typecheck` · `yarn build` (`tsc` → `dist/`) · `yarn test` (node test runner + tsx; needs `dist/` —
-  process-level tests spawn the built CLI) · `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` /
+- `yarn typecheck` · `yarn build` (`tsc` → `dist/`) · `yarn test` (= `test:unit` then `test:flows`, node
+  test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a
+  whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow — so a hung or process-leaking file fails
+  by name instead of hanging the run) · `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` /
   `telegramcode hot` (`tsc -w` + nodemon on `dist/`: a broken edit cannot take the bot down, agents survive
   reloads; Linux/macOS only).
 - **tmux safety in tests and by hand.** Run anything that touches tmux as `env -u TMUX -u TMUX_PANE …`. Never
@@ -225,8 +227,8 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 - `jiraConnectorE2e.test.ts` (~7 min, part of `yarn test`) boots a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
-  exit/signal. `live/jiraLive.test.ts` (~14 min) runs the same loop against a REAL Jira Cloud site and a real
-  Claude agent and is SKIPPED unless `JIRA_LIVE_ENV_FILE`, `JIRA_LIVE_SITE` and
+  exit/signal. `live/jiraLive.test.ts` (~14 min, not part of `yarn test`) runs the same loop against a REAL Jira
+  Cloud site and a real Claude agent and is SKIPPED unless `JIRA_LIVE_ENV_FILE`, `JIRA_LIVE_SITE` and
   `JIRA_LIVE_REQUESTER_STORAGE_STATE` are set — don't set them unless asked; run it directly
   (`node --import tsx --test src/__tests__/live/jiraLive.test.ts`) with `TMUX` / `TMUX_PANE` unset.
 - **Verifying code you wrote is YOUR job** — run it, drive the real surface; never hand the check to the user.

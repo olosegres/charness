@@ -55,7 +55,9 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "yarn typecheck && yarn build",
     "preversion": "yarn typecheck && yarn build && yarn test",
-    "test": "node --import tsx --import ./src/__tests__/globalTestSetup.ts --test 'src/__tests__/**/*.test.ts'",
+    "test": "yarn test:unit && yarn test:flows",
+    "test:unit": "node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=120000 'src/__tests__/**/!(*E2e|*Live).test.ts'",
+    "test:flows": "node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=1200000 'src/__tests__/**/*E2e.test.ts'",
     "claude": "UID=$(id -u) GID=$(id -g) docker compose run --rm claude"
   },
   "dependencies": {
