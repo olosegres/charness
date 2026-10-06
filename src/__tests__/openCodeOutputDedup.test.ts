@@ -87,12 +87,19 @@ function globalEnvelope(type: string, properties: Record<string, unknown>): stri
   return JSON.stringify({ directory: workDir, project: 'proj', payload: { type, properties } });
 }
 
-/** Feed one `message.part.delta` text event through the real SSE dispatcher. */
-function feedTextDelta(adapter: OpenCodeAdapter, delta: string): void {
+/** Feed one `message.part.delta` text event (of message `messageId`) through the real SSE dispatcher. */
+function feedTextDelta(adapter: OpenCodeAdapter, delta: string, messageId = 'msg_1'): void {
   adapter['routeSseData'](
     globalEnvelope('message.part.delta', {
-      sessionID: ownSessionId, messageID: 'msg_1', partID: 'prt_1', field: 'text', delta,
+      sessionID: ownSessionId, messageID: messageId, partID: `prt_${messageId}`, field: 'text', delta,
     }),
+  );
+}
+
+/** Feed the `message.updated` of an own assistant message (`info` adds e.g. `summary` or `finish`). */
+function feedAssistantMessageUpdated(adapter: OpenCodeAdapter, messageId: string, info: Record<string, unknown>): void {
+  adapter['routeSseData'](
+    globalEnvelope('message.updated', { info: { id: messageId, sessionID: ownSessionId, role: 'assistant', ...info } }),
   );
 }
 
@@ -183,5 +190,44 @@ describe('OpenCode output dedup (B4)', () => {
     feedTextDelta(adapter, 'Answer two.');
     mock.timers.tick(sseOutputBatchMs + 1);
     assert.deepEqual(outputs, ['Answer one.', 'Answer two.']);
+  });
+});
+
+describe('OpenCode compaction summary output', () => {
+  beforeEach(() => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+  });
+  afterEach(() => {
+    mock.timers.reset();
+  });
+
+  it('every tail of the summary message carries isCompactionSummary; the answer after it does not', () => {
+    const { adapter, outputs, metas } = createAdapterWithSession();
+
+    // The fork stores the summary message (`summary: true`) before its text streams.
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true });
+    feedTextDelta(adapter, 'Summary, part one. ', 'msg_summary');
+    mock.timers.tick(sseOutputBatchMs + 1);
+    feedTextDelta(adapter, 'Part two.', 'msg_summary');
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true, finish: 'stop' });
+
+    feedTextDelta(adapter, 'Back to work.', 'msg_after');
+    feedSessionIdle(adapter);
+
+    assert.deepEqual(outputs, ['Summary, part one. ', 'Part two.', 'Back to work.']);
+    assert.deepEqual(metas.map((meta) => meta?.isCompactionSummary === true), [true, true, false]);
+    assert.equal(metas[1]?.isContinuation, true, 'the summary still streams as one message');
+    assert.equal(metas[2]?.isContinuation, false, 'the answer after the summary starts its own message');
+  });
+
+  it('an ordinary answer is never marked as a summary', () => {
+    const { adapter, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_1', {});
+    feedTextDelta(adapter, 'Just an answer.');
+    feedSessionIdle(adapter);
+
+    assert.equal(metas.length, 1);
+    assert.equal(metas[0]?.isCompactionSummary, undefined);
   });
 });

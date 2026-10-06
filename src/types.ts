@@ -835,7 +835,9 @@ export interface AgentAdapter extends EventEmitter {
    * ordinary agent output, so the bot must NOT post a second copy of it.
    *
    * True for OpenCode: its `POST /session/:id/summarize` produces a real assistant
-   * message, which rides the SSE stream straight into the topic. The Claude
+   * message, which rides the SSE stream into the topic marked
+   * `OutboundHints.isCompactionSummary` (the bot drops it unless `/compact_summary`
+   * is on). The Claude
    * backends write the summary only into their on-disk transcript (an
    * `isCompactSummary: true` record) and emit no assistant text at all, so they
    * leave this unset and the bot posts the summary itself.

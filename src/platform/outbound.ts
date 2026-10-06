@@ -136,6 +136,14 @@ export interface OutboundHints {
    */
   isSubagent?: boolean;
   /**
+   * True when this text is the agent's OWN compaction summary streaming as
+   * ordinary output (OpenCode's summary message, `streamsCompactionSummary`).
+   * The core drops it unless `/compact_summary` is on for the topic — the same
+   * switch that gates the summary the bot posts for the other backends — so a
+   * connector only ever sees it when it is meant to be shown.
+   */
+  isCompactionSummary?: boolean;
+  /**
    * True when this content is an interactive question the user is expected to
    * answer. The connector gives it its own prominent message rather than
    * appending it to the streaming cursor. (Claude scrapes questions out of its

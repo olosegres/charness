@@ -8809,6 +8809,10 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   markThreadTurnProducedOutput(key);
   noteThreadActivity(key);
 
+  // A backend's own streamed compaction summary (OpenCode) obeys `/compact_summary`, like the
+  // summary the bot posts for the other backends: off → the compaction ends in its short notices.
+  if (meta?.isCompactionSummary && !state.checkIsCompactSummaryEnabled(key)) return;
+
   // Answers-only view (S9): the agent's text — sub-agent chunks and progress
   // bursts included — never reaches the topic; a native question still does (it
   // falls through to its branch below). A real answer still retires a pinned

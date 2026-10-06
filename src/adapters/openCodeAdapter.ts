@@ -199,6 +199,11 @@ interface OpenCodeSession {
   lastEmittedLength: number;
   /** Timer for batching SSE deltas before emitting output */
   outputTimer: NodeJS.Timeout | null;
+  /** Id of the newest compaction summary message (`message.updated` with `summary: true`), learned
+   *  before its text streams, so its parts can be told apart from an ordinary answer. */
+  compactionSummaryMessageId: string | null;
+  /** {@link currentResponseText} holds that summary: its tails carry `isCompactionSummary`. Reset alongside it. */
+  isResponseCompactionSummary: boolean;
   /**
    * Accumulated SUB-AGENT (child session) text for the current turn, streamed
    * only in `/subagent full` mode. Kept strictly SEPARATE from
@@ -1432,8 +1437,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * `summarize` produces a real assistant message, which rides the SSE stream into
-   * the topic as ordinary agent output — so the bot must not post its own copy of
-   * the summary here, or the operator would read it twice.
+   * the topic as agent output marked `isCompactionSummary` — so the bot must not
+   * post its own copy of the summary here, or the operator would read it twice.
    */
   readonly streamsCompactionSummary = true;
 
@@ -1878,6 +1883,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           currentResponseText: '',
           lastEmittedLength: 0,
           outputTimer: null,
+          compactionSummaryMessageId: null,
+          isResponseCompactionSummary: false,
           childResponseText: '',
           childLastEmittedLength: 0,
           childOutputTimer: null,
@@ -2088,6 +2095,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // Reset accumulated response text for new message
     session.currentResponseText = '';
     session.lastEmittedLength = 0;
+    session.isResponseCompactionSummary = false;
     // The child (sub-agent) accumulator resets with the parent's — a new turn
     // starts clean (a stale debounce firing later emits nothing: empty tail).
     session.childResponseText = '';
@@ -3055,6 +3063,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         currentResponseText: '',
         lastEmittedLength: 0,
         outputTimer: null,
+        compactionSummaryMessageId: null,
+        isResponseCompactionSummary: false,
         childResponseText: '',
         childLastEmittedLength: 0,
         childOutputTimer: null,
@@ -4231,6 +4241,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const delta = properties.delta as string | undefined;
     const field = properties.field as string | undefined;
     const partId = (properties.partID as string) || part?.id;
+    const messageId = (properties.messageID as string | undefined) || part?.messageID;
 
     // Track part type from message.part.updated events (full part object)
     if (part?.type && partId) {
@@ -4255,7 +4266,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           this.handleSubagentTextPart(key, session, delta, field);
           break;
         }
-        this.handleTextDelta(key, session, delta, field);
+        this.handleTextDelta(key, session, delta, field, messageId);
         break;
       case 'tool':
         this.handleToolPart(key, session, part, isSubagent);
@@ -4281,13 +4292,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * @description Handle text delta — accumulate and emit as 'output'.
+   * @description Handle text delta — accumulate and emit as 'output'. Text of the
+   * compaction summary message marks the accumulated response as that summary.
    */
   private handleTextDelta(
     key: SessionKey,
     session: OpenCodeSession,
     delta: string | undefined,
     field: string | undefined,
+    messageId: string | undefined,
   ): void {
     // For message.part.delta: only process text field deltas
     if (field && field !== 'text') return;
@@ -4295,6 +4308,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const text = delta || '';
     if (!text) return;
 
+    if (messageId !== undefined && messageId === session.compactionSummaryMessageId) session.isResponseCompactionSummary = true;
     session.currentResponseText += text;
 
     // Debounce: batch rapid SSE deltas before emitting
@@ -4330,6 +4344,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // `isFinal` rides only the idle-triggered flush so the bot can skip the
     // possibly-429-stretched debounce for the turn's last frame.
     const meta: OutboundHints = { isContinuation, isFinal };
+    if (session.isResponseCompactionSummary) meta.isCompactionSummary = true;
     this.emit('output', key, tail, meta);
     session.lastEmittedLength = session.currentResponseText.length;
   }
@@ -4693,6 +4708,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // and counting those (the old unconditional set in handlePartUpdate) marked
     // every wedge as "active" and masked it (live miss 2026-08-16).
     if (info.role === 'assistant') session.sawTurnActivity = true;
+    // The summary message is stored (and announced here) before its text streams.
+    if (isParentAssistantMessage && info.summary === true && info.id) session.compactionSummaryMessageId = info.id;
     if (info.role === 'user' && (!info.sessionID || info.sessionID === session.sessionId)) {
       this.noteUserMessageSeen(session, info.id);
     }
@@ -5257,6 +5274,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     session.currentResponseText = '';
     session.lastEmittedLength = 0;
+    session.isResponseCompactionSummary = false;
     session.childResponseText = '';
     session.childLastEmittedLength = 0;
     session.partTypes.clear();
