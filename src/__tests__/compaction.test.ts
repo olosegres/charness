@@ -27,6 +27,8 @@ let harness: CommandHarness;
 let compaction: ReturnType<typeof createCompaction>;
 /** Whether the topic under test is General — the instance-wide switch — or a regular topic. */
 let isGeneralTopic = false;
+/** How many button taps the fake Bot API had answered when each topic reply was posted. */
+const callbackAnswersAtReply: number[] = [];
 
 async function waitUntil(description: string, check: () => boolean): Promise<void> {
   const deadline = Date.now() + waitTimeoutMs;
@@ -41,6 +43,10 @@ describe('compaction: the compaction flow over its ports', () => {
     harness = await createCommandHarness();
     compaction = createCompaction({
       ...harness.core,
+      replyToThread: async (key, text, extra) => {
+        callbackAnswersAtReply.push(harness.fakeTelegram.callbackAnswers.length);
+        return harness.core.replyToThread(key, text, extra);
+      },
       checkIsGeneral: () => isGeneralTopic,
       startTypingLoader: () => {},
       forwardPromptToAgent: async () => {},
@@ -92,6 +98,17 @@ describe('compaction: the compaction flow over its ports', () => {
     });
 
     await harness.tapButton(picker, 'coi_sum_off');
+    assert.equal(harness.state.getCompactSummaryGlobalDefault(), false);
+  });
+
+  it('a switch tap is answered before its confirmation waits in the paced send queue', async () => {
+    // A late answer (the queue held by a 429) throws, and the keyboard re-render after it never ran.
+    const picker = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'idle picker');
+    for (const callbackData of ['coi_sum_on', 'coi_sum_off', 'csum_on', 'csum_off']) {
+      const answersBeforeTap = harness.fakeTelegram.callbackAnswers.length;
+      await harness.tapButton(picker, callbackData);
+      assert.equal(callbackAnswersAtReply.at(-1), answersBeforeTap + 1, `${callbackData} confirmed after its answer`);
+    }
     assert.equal(harness.state.getCompactSummaryGlobalDefault(), false);
   });
 

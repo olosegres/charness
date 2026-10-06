@@ -797,8 +797,10 @@ export function createCompaction(ports: CompactionPorts) {
     const key = await authoriseContext(ctx);
     if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
     const isGeneral = checkIsGeneral(key);
-    await withThreadLocale(key, () => apply(key, isGeneral));
+    // Answer the tap BEFORE the confirmation: it waits in the paced send queue, which under a 429 can
+    // outlive the callback, and a late answer throws — skipping the keyboard re-render below.
     await ctx.answerCbQuery();
+    await withThreadLocale(key, () => apply(key, isGeneral));
     // Re-render the picker keyboard so the ✓ follows the new state.
     const cbMsg = ctx.callbackQuery?.message as Message | undefined;
     if (cbMsg) {
@@ -851,10 +853,11 @@ export function createCompaction(ports: CompactionPorts) {
     const key = await authoriseContext(ctx);
     if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
     const isGeneral = checkIsGeneral(key);
+    // Answered first for the reason given in `handleCompactOnIdleCallback`.
+    await ctx.answerCbQuery();
     await withThreadLocale(key, async () => {
       await replyToThread(key, await applyCompactSummary(key, isGeneral, enabled));
     });
-    await ctx.answerCbQuery();
     const cbMsg = ctx.callbackQuery?.message as Message | undefined;
     if (cbMsg) {
       const keyboard = buildCompactSummaryKeyboard(enabled);
