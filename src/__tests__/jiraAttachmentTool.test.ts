@@ -5,7 +5,7 @@
  * another issue's id is refused before any download, a file of any size streams
  * to disk, a stalled connection is aborted, a long name is cut on a character
  * boundary, a same-size file is reused, a planted symlink is replaced and never
- * followed, and the credentials never leave the site host.
+ * followed, and the credentials never leave the site's origin (host, port, https).
  */
 
 /** Test case: N/A — TelegramCode has no Jira tracker. */
@@ -18,7 +18,7 @@ import type { AddressInfo } from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { createJiraClient } from '../connectors/jira/client';
-import { jiraDownloadMaxRedirects, jiraDownloadStallTimeoutMs } from '../connectors/jira/attachmentDownload';
+import { downloadJiraAttachment, jiraDownloadMaxRedirects, jiraDownloadStallTimeoutMs } from '../connectors/jira/attachmentDownload';
 import { fetchIssueAttachment, getAttachmentFileName, jiraAttachmentFileNameMaxBytes } from '../connectors/jira/attachmentTool';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
@@ -301,6 +301,26 @@ describe('fetchIssueAttachment (C10)', () => {
     const viaSite = await fetchAttachment('15');
     assert.ok(viaSite.ok, JSON.stringify(viaSite));
     assert.equal(siteRequests.at(-1)?.authorization, expectedAuthorization, 'the site\'s own redirect target is asked with the credentials');
+  });
+
+  it('a redirect from the https site to its own host over plain http is followed WITHOUT the credentials', async () => {
+    const httpsSiteUrl = 'https://example-site.atlassian.net';
+    const requests: Array<{ url: string; authorization: string | undefined }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = input.toString();
+      requests.push({ url, authorization: new Headers(init?.headers).get('authorization') ?? undefined });
+      return url.startsWith(httpsSiteUrl)
+        ? new Response(null, { status: 302, headers: { Location: 'http://example-site.atlassian.net/file/abc' } })
+        : new Response('plain-bytes');
+    };
+    const destinationPath = path.join(downloadDir, 'downgrade.bin');
+    fs.mkdirSync(downloadDir, { recursive: true });
+    const result = await downloadJiraAttachment({ baseUrl: httpsSiteUrl, authorization: expectedAuthorization, fetchImpl, stallTimeoutMs }, '19', destinationPath);
+    assert.deepEqual(result, { ok: true, bytes: 'plain-bytes'.length });
+    assert.deepEqual(requests, [
+      { url: `${httpsSiteUrl}/rest/api/3/attachment/content/19?redirect=false`, authorization: expectedAuthorization },
+      { url: 'http://example-site.atlassian.net/file/abc', authorization: undefined },
+    ], 'the credentials are never sent unencrypted, even to the site\'s own host');
   });
 
   it('a redirect loop ends in an error after a few hops', async () => {

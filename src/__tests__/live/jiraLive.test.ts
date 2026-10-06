@@ -32,7 +32,8 @@
  *
  * The AI account's token is used by this test only against the configured site:
  * to prove it belongs to the AI account, for the AI assigning an issue to itself,
- * and for the comment-size probe (R19). The requester's login never reaches
+ * for the comment-size probe (R19), and for the decoy's removal of the AI's own
+ * comments that revealed the secret word. The requester's login never reaches
  * charness (D2).
  *
  * One flow, in order, on fresh issues of the one allowlisted project:

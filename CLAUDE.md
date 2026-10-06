@@ -75,7 +75,7 @@ per-backend controls are optional methods the bot checks before calling.
 - **Bot-injected MCP server `telegramBot`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
   `dir:`) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
   `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
-  `compact_conversation`). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
+  `compact_conversation`, plus `jira_get_attachment` for a Jira one). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit
   only after reconnecting; tool RESULTS reflect live code.
 - **Scheduler** (`src/scheduler/`). `/schedule` hands free text to the agent, which calls `schedule_*`;

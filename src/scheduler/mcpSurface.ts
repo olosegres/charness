@@ -126,24 +126,26 @@ ${answerRequestInstruction} The requester may not see your plain text, so anythi
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 
-/** For a conversation on a tracker: the requester sees nothing but the answers. */
-const neutralInstructions = `This MCP connects the agent to the conversation that asked for its work.
+/** What a Jira session's instructions add: the tool that reaches the issue's original files (C10). */
+const jiraAttachmentInstruction =
+  '• The issue lists a file (an attachment id in the attachments list, or in a placeholder such as "[image: shot.png — attachment 10234]") you need to look at → jira_get_attachment with that id; it saves the original file and returns its path.';
+
+/** For a conversation on a tracker: the requester sees nothing but the answers; `extraInstructions` name the platform's own tools. */
+function buildTrackerInstructions(extraInstructions: readonly string[]): string {
+  return `This MCP connects the agent to the conversation that asked for its work.
 
 When to use it:
-${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.
-${compactConversationInstruction}
+${[
+  `${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.`,
+  ...extraInstructions,
+  compactConversationInstruction,
+].join('\n')}
 
 Each tool's own description has the exact argument recipe.`;
+}
 
-/** For a Jira issue: the neutral set plus the tool that reaches the issue's original files (C10). */
-const jiraInstructions = `This MCP connects the agent to the conversation that asked for its work.
-
-When to use it:
-${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.
-• The issue lists a file (an attachment id in the attachments list, or in a placeholder such as "[image: shot.png — attachment 10234]") you need to look at → jira_get_attachment with that id; it saves the original file and returns its path.
-${compactConversationInstruction}
-
-Each tool's own description has the exact argument recipe.`;
+const neutralInstructions = buildTrackerInstructions([]);
+const jiraInstructions = buildTrackerInstructions([jiraAttachmentInstruction]);
 
 /**
  * Connect-time `instructions` returned in the MCP `initialize` handshake — a

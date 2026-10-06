@@ -8,10 +8,11 @@ import { promises as fsp } from 'fs';
  *  - a STALL timeout — a connection that stops delivering never ends by itself
  *    and would hold the agent's tool call for ever, so no bytes for
  *    {@link jiraDownloadStallTimeoutMs} (headers included) aborts the download;
- *  - the credentials go only to the site host: `redirect=false` makes Jira answer
- *    with the content itself, but a 3xx to another host (Atlassian's media CDN,
- *    whose URL carries its own token) is followed WITHOUT the Authorization
- *    header, so the token is never handed to a host that did not ask for it;
+ *  - the credentials go only to the site (its origin — scheme, host and port):
+ *    `redirect=false` makes Jira answer with the content itself, but a 3xx to
+ *    another host (Atlassian's media CDN, whose URL carries its own token) or to
+ *    plain http is followed WITHOUT the Authorization header, so the token is
+ *    never handed to a host that did not ask for it, nor sent unencrypted;
  *  - the file is created exclusively (`wx`) at the path it is given — a caller
  *    hands it a fresh temporary name and renames it into place.
  */
@@ -45,7 +46,7 @@ export async function downloadJiraAttachment(
   attachmentId: string,
   destinationPath: string,
 ): Promise<JiraDownloadResult> {
-  const siteHost = new URL(options.baseUrl).host;
+  const siteOrigin = new URL(options.baseUrl).origin;
   const controller = new AbortController();
   let stallTimer: NodeJS.Timeout | null = null;
   const armStallTimer = (): void => {
@@ -58,7 +59,7 @@ export async function downloadJiraAttachment(
     let url = `${options.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}?redirect=false`;
     for (let hop = 0; ; hop += 1) {
       const response = await options.fetchImpl(url, {
-        headers: new URL(url).host === siteHost ? { Authorization: options.authorization } : {},
+        headers: new URL(url).origin === siteOrigin ? { Authorization: options.authorization } : {},
         redirect: 'manual',
         signal: controller.signal,
       });

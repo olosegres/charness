@@ -108,8 +108,9 @@ limit; any size) into `DATA_DIR/files/<conversation>/jira/<id>-<name>` and its p
 to do with it (Read an image, `ffmpeg` on a video — the bot transcribes nothing). Technical rules only: a stall
 timeout (no data for 2 min aborts), a file name cut to 200 bytes on a character boundary with its extension kept
 and separators stripped, a fresh temporary name renamed into place (a planted symlink is replaced, not followed), a
-file of the same size already there is reused, and the Jira credentials go only to the site host (the request asks
-`redirect=false`, so Jira answers with the content itself; a 3xx to another host is followed without them). The
+file of the same size already there is reused, and the Jira credentials go only to the site's origin (the request
+asks `redirect=false`, so Jira answers with the content itself; a 3xx to another host, or to plain http, is followed
+without them). The
 context preamble tells the agent the tool exists and carries the standing rule: never quote or paraphrase a
 `[restricted to …]` or `[internal]` comment in an answer.
 
