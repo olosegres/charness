@@ -95,6 +95,9 @@ yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running
 flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test.ts` is run directly (CLAUDE.md).
+A flow's own time budget is that same limit less a teardown reserve (`getFlowDeadlineMs`, read from the process's
+`--test-timeout`), so a flow that runs long fails first, at the wait that is late and with charness's output tail,
+not with the runner's bare timeout. Run one flow directly with `--test-timeout=<ms>`.
 
 The Docker dev loop (never `docker compose restart` — it ignores
 `depends_on`):

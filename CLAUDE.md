@@ -212,10 +212,10 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. README § Run with Docker.
 - `yarn typecheck` · `yarn build` (`tsc` → `dist/`) · `yarn test` (= `test:unit` then `test:flows`, node
   test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a
-  whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow — so a hung or process-leaking file fails
-  by name instead of hanging the run) · `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` /
-  `telegramcode hot` (`tsc -w` + nodemon on `dist/`: a broken edit cannot take the bot down, agents survive
-  reloads; Linux/macOS only).
+  whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow, whose own budget is that limit less its
+  teardown (`getFlowDeadlineMs`) — so a hung or process-leaking file fails by name instead of hanging the run) ·
+  `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` / `telegramcode hot` (`tsc -w` + nodemon on
+  `dist/`: a broken edit cannot take the bot down, agents survive reloads; Linux/macOS only).
 - **tmux safety in tests and by hand.** Run anything that touches tmux as `env -u TMUX -u TMUX_PANE …`. Never
   touch the DEFAULT tmux server: a bare `kill-server` run from inside tmux goes to the server `$TMUX` names,
   whatever `TMUX_TMPDIR` says. A test's own servers are private (`TMUX_SOCKET_NAME` + a `TMUX_TMPDIR` inside

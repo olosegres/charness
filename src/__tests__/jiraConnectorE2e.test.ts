@@ -52,6 +52,7 @@ import {
   createIsolatedInstanceLayout,
   exitOnSignal,
   fakeClaudePath,
+  getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
   getInstanceEnvNames,
@@ -121,21 +122,8 @@ const resumeTimeoutMs = 3 * 60 * 1000;
 const idleStopTimeoutMs = 2 * 60 * 1000;
 /** A per-turn stop follows the answer at once — well inside the 30 s idle window, which would stop the process too (L5). */
 const perTurnStopTimeoutMs = 15 * 1000;
-/** The grace the shared instance helper gives a stop before killing. */
-const stopTimeoutMs = 20 * 1000;
 /** The restart step waits for this many polls. */
 const restartPollWaitMs = 3 * pollIntervalSeconds * 1000;
-/** Room for the steps' own work between their waits. */
-const flowMarginMs = 60 * 1000;
-/**
- * Every wait the flow can spend, added up — two boots, the answer waits of five
- * steps plus the two of each R34 step, the resume, the restart's polls, two
- * stops (the restart's and `after`'s) — so a slow run fails at the step that is
- * late, never at the suite.
- */
-/** The prompt-context steps: ~45 waits for a hand-over answered, a restart, a crash-and-repost (E3), and a failed resume. */
-const promptContextStepsMs = 45 * answerTimeoutMs + 2 * resumeTimeoutMs + 2 * bootTimeoutMs + 2 * stopTimeoutMs;
-const flowTimeoutMs = 2 * bootTimeoutMs + 21 * answerTimeoutMs + resumeTimeoutMs + idleStopTimeoutMs + restartPollWaitMs + 2 * stopTimeoutMs + flowMarginMs + promptContextStepsMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 let fakeJira: FakeJira;
@@ -356,10 +344,10 @@ function createIssue(key: string, mode: string): void {
   fakeJira.createIssue({ key, summary: `[fake:${mode}] Task ${key}`, description: `Please handle ${key}.`, statusId: inProgress.id, reporter: requester });
 }
 
-describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)', { timeout: flowTimeoutMs }, () => {
+describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-j7-', [projectFolder]);
+    layout = createIsolatedInstanceLayout('charness-j7-', [projectFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
