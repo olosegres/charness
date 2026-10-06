@@ -70,6 +70,7 @@ function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {
     reader: new ClaudeStreamLineReader(),
     isActive: true,
     isStopping: false,
+    isSuspending: false,
     isRespawning: false,
     isBusy: false,
     lastStdoutActivityAt: Date.now(),
@@ -84,8 +85,8 @@ function createSession(adapter: ClaudeJsonStreamAdapter, dir: string) {
     reasoningStartedAt: null,
     reasoningTimer: null,
     reasoningActive: false,
-    toolNamesById: new Map(),
-    questionToolUseIds: new Set(),
+    toolNamesById: new Map<string, string>(),
+    questionToolUseIds: new Set<string>(),
     subagentActive: false,
     childResponseText: '',
     childEmittedLength: 0,
@@ -215,7 +216,7 @@ describe('json-stream compaction wait', () => {
     await settleTicks();
 
     // The CLI said it worked, then went quiet past the silence bound.
-    adapter['handleCompactStatus'](session, { kind: 'compactStatus', result: 'success' });
+    adapter['handleCompactStatus'](session, { kind: 'compactStatus', result: 'success', error: null });
     assert.equal(session.pendingCompaction?.sawSuccess, true, 'the success was recorded');
     assert.equal(settled, undefined, 'a success status alone does not settle the wait');
     session.lastStdoutActivityAt = Date.now() - compactionSilenceTimeoutMs - 1_000;
@@ -257,4 +258,71 @@ describe('json-stream compaction wait', () => {
     adapter['handleCompactBoundary'](session, { kind: 'compactBoundary', trigger: 'manual', preTokens: 314150, postTokens: 12883 });
     assert.deepEqual(await pending, { ok: true, preTokens: 314150, postTokens: 12883 });
   });
+
+  describe('every completed compaction is told as `contextCompacted` (Jira prompt context C6)', () => {
+    /** The adapter's `contextCompacted` events, as `<key> <trigger>`. */
+    function recordCompacted(adapter: ClaudeJsonStreamAdapter): string[] {
+      const events: string[] = [];
+      adapter.on('contextCompacted', (compactedKey: SessionKey, trigger: string | null) => events.push(`${keyToString(compactedKey)} ${trigger}`));
+      return events;
+    }
+
+    it('the CLI\'s own overflow compaction, read from stdout as the live tail or the downtime replay reads it — nobody waits for it, it is told all the same', () => {
+      const { adapter, session } = start();
+      const events = recordCompacted(adapter);
+      fs.appendFileSync(
+        session.paths.stdoutFile,
+        JSON.stringify({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190000, post_tokens: 9000 } }) + '\n',
+      );
+      assert.equal(adapter['drainStdoutTail'](session), true, 'the boundary frame was consumed');
+      assert.deepEqual(events, [`${keyToString(key)} auto`]);
+    });
+
+    it('a bot-issued compaction confirmed by its boundary is told once', async () => {
+      const { adapter, session } = start();
+      const events = recordCompacted(adapter);
+      const pending = adapter.compactContext(key);
+      await settleTicks();
+      adapter['handleCompactBoundary'](session, { kind: 'compactBoundary', trigger: 'manual', preTokens: 314150, postTokens: 12883 });
+      await pending;
+      assert.deepEqual(events, [`${keyToString(key)} manual`]);
+    });
+
+    it('a bot-issued compaction confirmed only by its turn end, or by the wait that saw its success, is told once', async () => {
+      const first = start();
+      const turnEndEvents = recordCompacted(first.adapter);
+      const byTurnEnd = first.adapter.compactContext(key);
+      await settleTicks();
+      first.adapter['handleTurnEnd'](first.session, { kind: 'turnEnd', isError: false, errorText: null, resultText: null, usage: null });
+      assert.deepEqual(await byTurnEnd, { ok: true, preTokens: null, postTokens: null });
+      assert.deepEqual(turnEndEvents, [`${keyToString(key)} null`]);
+      first.adapter['clearTimers'](first.session);
+      first.adapter['sessions'].delete(keyToString(key));
+
+      const second = start();
+      const timeoutEvents = recordCompacted(second.adapter);
+      const byTimeout = second.adapter.compactContext(key);
+      await settleTicks();
+      second.adapter['handleCompactStatus'](second.session, { kind: 'compactStatus', result: 'success', error: null });
+      second.session.lastStdoutActivityAt = Date.now() - compactionSilenceTimeoutMs - 1_000;
+      await new Promise((resolve) => setTimeout(resolve, compactionWaitPollMs + 50));
+      assert.deepEqual(await byTimeout, { ok: true, preTokens: null, postTokens: null });
+      assert.equal(timeoutEvents.length, 1);
+    });
+
+    it('a compaction that failed, or a session torn down mid-compaction, tells nothing: the context is still there', async () => {
+      const { adapter, session } = start();
+      const events = recordCompacted(adapter);
+      const failed = adapter.compactContext(key);
+      await settleTicks();
+      adapter['handleCompactStatus'](session, { kind: 'compactStatus', result: 'failed', error: 'Not enough messages to compact.' });
+      assert.equal((await failed).ok, false);
+      const tornDown = adapter.compactContext(key);
+      await settleTicks();
+      adapter['clearTimers'](session);
+      assert.equal((await tornDown).ok, false);
+      assert.deepEqual(events, []);
+    });
+  });
 });
+

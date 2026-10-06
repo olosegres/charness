@@ -14,7 +14,7 @@ import type { OpenRequestState, RequestWakeUpReason } from './types';
  * @description `originDescription` says where the request came from in a few
  * words ("a message in this topic", "PROJ-123 assigned to you by …").
  * `isPlainTextHidden` adds the line that the requester never sees the agent's
- * ordinary output. `supersededRequestIds` are the same requester's earlier
+ * ordinary output or its thinking. `supersededRequestIds` are the same requester's earlier
  * requests this one replaced while they were still open (`requestGroup.ts`);
  * when given, the header names them and asks for only what THIS request adds.
  * The line holds in both timings (owner decision 2026-10-05): the agent reads it
@@ -48,7 +48,7 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
   const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
   if (supersededLine !== '') lines.push(supersededLine);
   if (options.isPlainTextHidden) {
-    lines.push('The requester does not see your plain text output — only what you send through answer_request reaches them.');
+    lines.push('The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.');
   }
   return `${lines.join('\n')}\n\n`;
 }

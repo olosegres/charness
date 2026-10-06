@@ -1,145 +1,36 @@
-# Two-instance docker-compose for Charness 2.0 (forum supergroup mode).
+# The whole bot in one container (README "Run with Docker"): the bot, tmux, every agent it starts, OpenCode and
+# the bot's MCP server. Build the image once from the checkout this file mounts:
 #
-# Pet vs. work: two completely independent bots running on the same host,
-# isolated by:
-#   - separate Telegram bot tokens and groups (TELEGRAM_BOT_TOKEN_* / ALLOWED_GROUP_ID_*)
-#   - separate WORK_ROOT (subtree of host filesystem each instance manages)
-#   - separate DATA_DIR (state.json, mcp.json, tmp/ — see plan §10.7)
-#   - separate OPENCODE_URL ports (plan §13.8 — same port = shared opencode-server = session crosstalk)
+#   docker build -t telegramcode <checkout>/docker
 #
-# Edit .env (copy from .env.example) before `docker compose up -d`.
+# Copy .env.example to .env next to this file and fill in the paths. The bot's own settings and tokens are NOT
+# here: they live in your instance env file (INSTANCE_ENV_FILE), which the container reads read-only. Every host
+# path that file names (DATA_DIR, WORK_ROOT, TMUX_TMPDIR, …) is mounted at the SAME path: TELEGRAMCODE_DATA_DIR
+# and TELEGRAMCODE_WORK_ROOT are its DATA_DIR and WORK_ROOT (prefixed, because compose prefers a variable your
+# shell exports over .env).
 #
-# Audit S16 hardening:
-#   - cap_drop ALL + no-new-privileges (no kernel surface beyond stdlib);
-#   - bounded mem_limit / pids_limit (keep one runaway thread from
-#     starving the host);
-#   - healthcheck pings claude --version so a stuck container is visible
-#     to `docker ps`.
+# A second instance: copy the service with its own name, hostname, checkout, home, data dir and env file
+# (another bot token and group). Ports and tmux servers are private to each container.
 #
-# Security note on bind mounts: `~/.ssh` is copied into /home/agent on
-# entrypoint so the agent can git push from inside the container. The
-# agent itself runs `--dangerously-skip-permissions` and so can read
-# every file it has perms on. Run the bot under a dedicated host user
-# with a minimal ssh deploy key, or feed an ssh-agent socket instead,
-# if your `~/.ssh` carries keys you would not hand the LLM.
+# Never `docker compose restart` — it ignores depends_on; use `docker compose down && docker compose up -d`.
+# To restart only the bot (agents keep running): docker exec telegramcode-main telegramcode-restart-bot
 
 services:
-  telegramcode-pet:
-    image: claude-node-git           # built by `yarn claude` once in this repo
-    container_name: telegramcode-pet
-    stdin_open: true
-    tty: true
-    working_dir: /workspace
-    user: "${UID:-1000}:${GID:-1000}"
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 4g
-    pids_limit: 512
-    healthcheck:
-      test: ["CMD-SHELL", "claude --version >/dev/null 2>&1 || exit 1"]
-      interval: 60s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-    volumes:
-      # Your personal/home projects — bot binds threads inside this tree.
-      - ${PET_WORK_ROOT:-/home/${USER}/src}:/workspace:rw
-      # Bot source. Bind-mount lets you edit the bot without rebuilding.
-      - ../:/telegramcode:ro
-      - ../.docker-entrypoint.sh:/docker-entrypoint.sh:ro
-      # Per-instance bot state. MUST differ between instances (plan §10.7).
-      - telegramcode_pet_data:/data
-      # Per-instance home (npm cache, CLI configs, history).
-      - telegramcode_pet_home:/home/agent
-      # Host configs the bot reads from /home/agent at runtime.
-      - ~/.gitconfig:/tmp/host-gitconfig:ro
-      - ~/.ssh:/tmp/host-ssh:ro
-      # OpenCode model preferences + auth (separate from work instance).
-      - ~/.config/opencode-pet:/home/agent/.config/opencode:rw
-      - ~/.local/state/opencode-pet:/home/agent/.local/state/opencode:rw
-    environment:
-      - HOME=/home/agent
-      - TERM=xterm-256color
-      - TARGET_UID=${UID:-1000}
-      - TARGET_GID=${GID:-1000}
-      # ── required ──
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN_PET}
-      - ALLOWED_GROUP_ID=${ALLOWED_GROUP_ID_PET}
-      - WORK_ROOT=/workspace
-      - DATA_DIR=/data
-      # ── optional ──
-      # Surfaces: group | dm | both (default). OWNER_USER_ID enables the
-      # owner-DM surface in `both`; required for `dm`.
-      # - CHAT_MODE=both
-      # - OWNER_USER_ID=${OWNER_USER_ID}
-      # OpenCode server port — DIFFERENT from work instance (plan §13.8).
-      - OPENCODE_URL=http://localhost:4096
-      # Scheduler MCP must not share the OpenCode port inside this container.
-      - SCHEDULER_MCP_PORT=${SCHEDULER_MCP_PORT_PET:-4097}
-      # Provider API keys (used by claude/opencode + voice transcription).
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
-    command: ["npx", "tsx", "/telegramcode/src/index.ts"]
+  telegramcode:
+    image: telegramcode
+    container_name: telegramcode-main
+    # Fixed: the instance lock tells this container's own restarts from another machine by it.
+    hostname: telegramcode-main
     restart: unless-stopped
-
-  telegramcode-work:
-    image: claude-node-git
-    container_name: telegramcode-work
-    stdin_open: true
-    tty: true
-    working_dir: /workspace
-    user: "${UID:-1000}:${GID:-1000}"
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 4g
-    pids_limit: 512
-    healthcheck:
-      test: ["CMD-SHELL", "claude --version >/dev/null 2>&1 || exit 1"]
-      interval: 60s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
+    # The bot flushes its state and releases its lock before it exits.
+    stop_grace_period: 60s
+    # Rootful Docker only: run as your own user (rootless Docker maps the container's root to you already).
+    # user: "${UID}:${GID}"
     volumes:
-      - ${WORK_WORK_ROOT:-/home/${USER}/work}:/workspace:rw
-      - ../:/telegramcode:ro
-      - ../.docker-entrypoint.sh:/docker-entrypoint.sh:ro
-      - telegramcode_work_data:/data
-      - telegramcode_work_home:/home/agent
-      - ~/.gitconfig:/tmp/host-gitconfig:ro
-      - ~/.ssh:/tmp/host-ssh:ro
-      - ~/.config/opencode-work:/home/agent/.config/opencode:rw
-      - ~/.local/state/opencode-work:/home/agent/.local/state/opencode:rw
+      - ${CHECKOUT}:/opt/telegramcode
+      - ${AGENTS_HOME}:/home/telegramcode
+      - ${TELEGRAMCODE_DATA_DIR}:${TELEGRAMCODE_DATA_DIR}
+      - ${TELEGRAMCODE_WORK_ROOT}:${TELEGRAMCODE_WORK_ROOT}
+      - ${INSTANCE_ENV_FILE}:${INSTANCE_ENV_FILE}:ro
     environment:
-      - HOME=/home/agent
-      - TERM=xterm-256color
-      - TARGET_UID=${UID:-1000}
-      - TARGET_GID=${GID:-1000}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN_WORK}
-      - ALLOWED_GROUP_ID=${ALLOWED_GROUP_ID_WORK}
-      - WORK_ROOT=/workspace
-      - DATA_DIR=/data
-      # Surfaces: group | dm | both (default). OWNER_USER_ID enables the
-      # owner-DM surface in `both`; required for `dm`.
-      # - CHAT_MODE=both
-      # - OWNER_USER_ID=${OWNER_USER_ID}
-      # DIFFERENT port from pet — otherwise both instances try to bind 4096
-      # and share an opencode-server (plan §13.8).
-      - OPENCODE_URL=http://localhost:4097
-      # Scheduler MCP must not share the OpenCode port inside this container.
-      - SCHEDULER_MCP_PORT=${SCHEDULER_MCP_PORT_WORK:-4107}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
-    command: ["npx", "tsx", "/telegramcode/src/index.ts"]
-    restart: unless-stopped
-
-volumes:
-  telegramcode_pet_data:
-  telegramcode_pet_home:
-  telegramcode_work_data:
-  telegramcode_work_home:
+      - ENV_FILE=${INSTANCE_ENV_FILE}

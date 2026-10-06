@@ -97,6 +97,11 @@ same tmux name and host dir per conversation:
   still works. stdin is never closed while a task runs: EOF kills background
   tasks ~5 s later (probe 2026-10-04).
 
+Every COMPLETED compaction is told as `contextCompacted` (key, trigger): a bot-issued one on its one success
+path (`resolveCompaction`), and the CLI's own overflow compaction — a `compact_boundary` nobody waited for, live
+or met while replaying the downtime tail. A connector that tracks what a conversation was already told (Jira)
+starts over from it; a failed compaction tells nothing.
+
 A stopped conversation SLEEPS: its session id stays persisted and the next
 trigger (a message, a Jira request, a limit resume, a wake-up, a schedule, a
 command that needs a live agent) resumes it through the bot's one choke point,

@@ -596,6 +596,7 @@ export type CompactionResult =
  * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
  * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
  * - 'turnEnded' (key: SessionKey)                 — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5)
+ * - 'contextCompacted' (key: SessionKey, trigger: string | null) — a compaction COMPLETED (json-stream): one the bot issued, or the CLI's own overflow compaction; the conversation's context was replaced by a summary (Jira prompt context C6)
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)
  * - 'error'    (key: SessionKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
  *

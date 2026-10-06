@@ -324,7 +324,7 @@ import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
-import type { OpenRequestState, RequestAlertReason } from './requests/types';
+import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
@@ -4354,6 +4354,9 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // Fresh session — the agent's context is empty, so the next prompt must
   // re-carry the thread-context preamble. Forget the last-injected marker.
   clearThreadContextMarker(key);
+  // Here, at the start (C6): a request whose ensure finds this start under way builds its prompt against an
+  // empty sent-set, so it carries the whole issue even though its own ensure did not start anything.
+  noteConversationContextReset(key, 'fresh session');
   const adapter = getThreadAdapter(key);
 
   // Boot loader. A self-greeting agent (Claude) prints its banner shortly — keep
@@ -4425,7 +4428,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
  * that threw (`start-failed`); `message` carries the matching localized text.
  */
 export type EnsureAgentSessionResult =
-  | { ok: true; message: string }
+  | { ok: true; message: string; isFresh: boolean }
   | { ok: false; reason: EnsureAgentSessionFailureReason; message: string };
 
 /**
@@ -4530,7 +4533,7 @@ async function ensureAgentSessionNow(
   });
   switch (plan.kind) {
     case 'ready':
-      return { ok: true, message: '' };
+      return { ok: true, message: '', isFresh: false };
     case 'unbound':
       return { ok: false, reason: 'unbound', message: t('thread.bind_required') };
     case 'noAdapter':
@@ -4539,7 +4542,7 @@ async function ensureAgentSessionNow(
       return { ok: false, reason: 'nothing-to-resume', message: t('agent.no_session') };
     case 'resume': {
       await switchThreadAdapter(key, plan.adapterName);
-      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '' };
+      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '', isFresh: false };
       if (getResumeFailureAction(options.isResumeOnly === true) === 'fail') {
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
@@ -4547,14 +4550,14 @@ async function ensureAgentSessionNow(
       const startMessage = await startAgentSession(key, options.args);
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
       return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message }
+        ? { ok: true, message, isFresh: true }
         : { ok: false, reason: 'start-failed', message };
     }
     case 'start': {
       await switchThreadAdapter(key, plan.adapterName);
       const message = await startAgentSession(key, options.args);
       return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message }
+        ? { ok: true, message, isFresh: true }
         : { ok: false, reason: 'start-failed', message };
     }
   }
@@ -10991,6 +10994,43 @@ const requestAlertTextKeys: Readonly<Record<RequestAlertReason, string>> = {
 };
 
 /**
+ * @name ConnectorConversationHooks
+ * @description What a connector is told about its own conversations by the core,
+ * routed by `key.platform` (the core never parses a key). Telegram needs none.
+ */
+interface ConnectorConversationHooks {
+  /** The request ledger's word on a request's prompt (Jira prompt context C4). */
+  onPromptSettled: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
+  /** The conversation's agent lost what it was told: a fresh session started, or a compaction completed (C6). */
+  onContextReset: (key: SessionKey, reason: string) => void;
+}
+
+/** The conversation hooks of the platforms this process serves that have any. */
+function createConnectorConversationHooks(jiraConnector: JiraConnector | null): ReadonlyMap<PlatformId, ConnectorConversationHooks> {
+  const hooks = new Map<PlatformId, ConnectorConversationHooks>();
+  if (jiraConnector) {
+    hooks.set('jira', {
+      onPromptSettled: (key, requestId, outcome) => jiraConnector.onPromptSettled(key, requestId, outcome),
+      onContextReset: (key, reason) => jiraConnector.onContextReset(key, reason),
+    });
+  }
+  return hooks;
+}
+
+/** Built at boot, once the connectors are prepared; empty until then (and for a Telegram-only instance). */
+let connectorConversationHooks: ReadonlyMap<PlatformId, ConnectorConversationHooks> = new Map();
+
+/**
+ * @description Tell the conversation's connector its agent's context is gone (C6):
+ * a fresh session, or a completed compaction. NOT an idle stop, a resume or a
+ * restart — the conversation survives those. Distinct from
+ * {@link clearThreadContextMarker}, which a stop clears too.
+ */
+function noteConversationContextReset(key: SessionKey, reason: string): void {
+  connectorConversationHooks.get(key.platform)?.onContextReset(key, reason);
+}
+
+/**
  * @description Build the answer sinks of the platforms this process serves.
  * Built once at boot and shared by `answer_request`, the wake-up alerts and the
  * alert release on close, so all three speak to the same sink.
@@ -11063,6 +11103,8 @@ function cancelConversationRequest(key: SessionKey): void {
 interface SchedulerWiringDeps {
   requestLedger: RequestLedger;
   answerSinks: AnswerSinks;
+  /** The Jira connector, when this instance serves Jira: its attachment tool is offered to Jira sessions (C10). */
+  jiraConnector: JiraConnector | null;
   whenSessionsRestored: () => Promise<void>;
 }
 
@@ -11080,7 +11122,7 @@ function createSessionPostDeps(): PostToSessionDeps {
     },
     ensureSession: async (conversationKey, fallbackAdapterName) => {
       const result = await ensureAgentSession(keyFromString(conversationKey), { fallbackAdapterName });
-      if (result.ok) return { ok: true };
+      if (result.ok) return { ok: true, isFresh: result.isFresh };
       // A post may start fresh, so the resume-only reasons cannot occur here; a resume that failed
       // continued into a fresh start, whose failure is what a post reports.
       const reason = result.reason === 'nothing-to-resume' || result.reason === 'resume-failed' ? 'start-failed' : result.reason;
@@ -11108,6 +11150,7 @@ function createSessionPostDeps(): PostToSessionDeps {
  * it captures the same module-level state the rest of bot.ts uses.
  */
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
+  const { jiraConnector } = wiring;
   const ledger = new RunLedger();
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
@@ -11184,6 +11227,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
+    ...(jiraConnector
+      ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
+      : {}),
     answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks: wiring.answerSinks }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
@@ -11419,10 +11465,13 @@ export async function startBot(): Promise<void> {
   //     The answer sinks are built here, once: `answer_request`, the wake-up
   //     alerts and the release of an alert when its request closes all share them.
   const answerSinks = createAnswerSinks(jiraConnector?.answerSink ?? null);
+  connectorConversationHooks = createConnectorConversationHooks(jiraConnector);
   const requestLedger = new RequestLedger({
     store: state,
     releaseAlert: (alert) => releaseRequestAlert(answerSinks, alert),
     onRequestCreated: (key) => announceLimitWaitToNewRequest(key),
+    // C4: a connector counts what a prompt carried as sent only once its agent took it in.
+    onPromptSettled: (key, requestId, outcome) => connectorConversationHooks.get(key.platform)?.onPromptSettled(key, requestId, outcome),
   });
   await requestLedger.load();
   topicRequestLedger = requestLedger;
@@ -11549,6 +11598,7 @@ export async function startBot(): Promise<void> {
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
+    onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),
@@ -11645,6 +11695,7 @@ export async function startBot(): Promise<void> {
   const schedulerMcpHandle = wireScheduler({
     requestLedger,
     answerSinks,
+    jiraConnector,
     whenSessionsRestored: () => sessionsRestored,
   });
   // Known before any session starts or is adopted: every json-stream start persists the digest of the

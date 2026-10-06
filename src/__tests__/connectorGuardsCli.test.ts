@@ -176,9 +176,10 @@ describe('scripts/run-isolated.sh', () => {
     fs.writeFileSync(path.join(fakeBinDir, 'node'), '#!/bin/sh\nenv\necho "ARGS:$*"\n', { mode: 0o755 });
   });
 
-  function runIsolated(args: string[]): { status: number | null; stdout: string } {
+  function runIsolated(args: string[], extraEnv: Record<string, string> = {}): { status: number | null; stdout: string } {
     const result = spawnSync('/bin/sh', [runIsolatedPath, ...args], {
       env: {
+        ...extraEnv,
         PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ''}`,
         HOME: tmpRoot,
         TELEGRAM_BOT_TOKEN: placeholderSecret,
@@ -208,6 +209,14 @@ describe('scripts/run-isolated.sh', () => {
     assert.match(stdout, new RegExp(`^ENV_FILE=${envFile}$`, 'm'));
     assert.match(stdout, /ARGS:.*dist\/cli\.js hot$/m);
     assert.ok(!stdout.includes(placeholderSecret), 'no inherited secret reaches the instance');
+  });
+
+  it('passes IS_SANDBOX on when it is set (the telegramcode image runs the instance as root), and only then', () => {
+    const envFile = writeEnvFile(jiraInstance);
+    const { status, stdout } = runIsolated([envFile], { IS_SANDBOX: '1' });
+    assert.equal(status, 0);
+    assert.match(stdout, /^IS_SANDBOX=1$/m);
+    assert.doesNotMatch(runIsolated([envFile]).stdout, /^IS_SANDBOX=/m);
   });
 
   it('refuses a relative, missing or non-file env file', () => {

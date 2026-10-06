@@ -1442,18 +1442,28 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   private handleCompactBoundary(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'compactBoundary' }>): void {
-    if (!session.pendingCompaction) return;
-    this.resolveCompaction(session, { ok: true, preTokens: action.preTokens, postTokens: action.postTokens });
+    if (!session.pendingCompaction) {
+      // The CLI's own compaction (a context overflow mid-turn, or one met while replaying the downtime tail):
+      // nobody waits for it, but the conversation's context was replaced all the same.
+      this.emit('contextCompacted', session.key, action.trigger);
+      return;
+    }
+    this.resolveCompaction(session, { ok: true, preTokens: action.preTokens, postTokens: action.postTokens }, action.trigger);
   }
 
-  /** Resolve (and clear) the in-flight compaction awaiter exactly once. */
-  private resolveCompaction(session: StreamSession, result: CompactionResult): void {
+  /**
+   * Resolve (and clear) the in-flight compaction awaiter exactly once. Every way a bot-issued compaction can
+   * succeed (its boundary, its turn end, the timeout that saw its success) ends here, so a success is told
+   * once as `contextCompacted`.
+   */
+  private resolveCompaction(session: StreamSession, result: CompactionResult, trigger: string | null = null): void {
     const pending = session.pendingCompaction;
     if (!pending) return;
     session.pendingCompaction = null;
     session.compactionInProgress = false;
     if (pending.timer) clearInterval(pending.timer);
     pending.resolve(result);
+    if (result.ok) this.emit('contextCompacted', session.key, trigger);
   }
 
   // — answer text —

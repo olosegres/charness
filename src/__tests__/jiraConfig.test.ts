@@ -15,9 +15,12 @@ import * as path from 'path';
 import {
   getClaudeMemoryAbove,
   getOpenCodeIsolationError,
+  jiraDefaultEffort,
+  jiraDefaultModel,
   jiraPollIntervalDefaultSeconds,
   jiraRunBudgetDefault,
   loadJiraConfig,
+  resolveExtraFields,
   resolveTriggerStatusIds,
   validateJiraConfig,
 } from '../connectors/jira/config';
@@ -79,12 +82,12 @@ describe('validateJiraConfig', () => {
     assert.equal(config.pollIntervalMs, jiraPollIntervalDefaultSeconds * 1000);
     assert.equal(config.runBudgetPer24h, jiraRunBudgetDefault);
     assert.equal(config.adapter, 'claude-json-stream');
-    assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'] }]]);
+    assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'], extraFieldIds: [] }]]);
   });
 
-  it('explicit poll interval, budget, json-stream adapter, model and effort are taken; absent model and effort are null', () => {
+  it('explicit poll interval, budget, json-stream adapter, model and effort are taken', () => {
     const result = validateJiraConfig(
-      createConfig({ pollIntervalSeconds: 30, runBudgetPer24h: 2, adapter: 'claude-json-stream', model: 'opus[1m]', effort: 'high' }),
+      createConfig({ pollIntervalSeconds: 30, runBudgetPer24h: 2, adapter: 'claude-json-stream', model: 'opus[1m]', effort: 'low' }),
       { workRoot, openCodeUrl: isolatedOpenCodeUrl },
     );
     assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
@@ -92,11 +95,74 @@ describe('validateJiraConfig', () => {
     assert.equal(result.config.runBudgetPer24h, 2);
     assert.equal(result.config.adapter, 'claude-json-stream');
     assert.equal(result.config.model, 'opus[1m]');
-    assert.equal(result.config.effort, 'high');
-    const defaults = validateJiraConfig(createConfig(), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
-    assert.ok(defaults.ok);
-    assert.equal(defaults.config.model, null);
-    assert.equal(defaults.config.effort, null);
+    assert.equal(result.config.effort, 'low');
+  });
+
+  it('C14: a Jira session defaults to opus with high effort — each key overrides only its own default', () => {
+    const getModelAndEffort = (overrides: Record<string, string>): [string, string] => {
+      const result = validateJiraConfig(createConfig(overrides), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      return [result.config.model, result.config.effort];
+    };
+    assert.deepEqual(getModelAndEffort({}), ['opus', 'high']);
+    assert.deepEqual(getModelAndEffort({ model: 'sonnet' }), ['sonnet', 'high']);
+    assert.deepEqual(getModelAndEffort({ effort: 'low' }), ['opus', 'low']);
+    assert.deepEqual(getModelAndEffort({ model: 'sonnet', effort: 'low' }), ['sonnet', 'low']);
+    assert.deepEqual([jiraDefaultModel, jiraDefaultEffort], ['opus', 'high']);
+  });
+
+  describe('agentBinaries (C11)', () => {
+    let toolPath = '';
+
+    before(() => {
+      toolPath = path.join(dataDir, 'tool.sh');
+      fs.writeFileSync(toolPath, '#!/bin/sh\n', { mode: 0o755 });
+    });
+
+    const getResult = (agentBinaries: Record<string, string>) => validateJiraConfig(createConfig({ agentBinaries }), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+
+    it('none by default; a tool\'s name and an executable absolute path are taken', () => {
+      const none = validateJiraConfig(createConfig(), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(none.ok);
+      assert.deepEqual([...none.config.agentBinaries], []);
+      const result = getResult({ ffmpeg: toolPath });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      assert.deepEqual([...result.config.agentBinaries], [['ffmpeg', toolPath]]);
+    });
+
+    it('a path that is missing, not executable, not absolute or not a file stops the boot, naming the key and never the value', () => {
+      const notExecutable = path.join(dataDir, 'plain.txt');
+      fs.writeFileSync(notExecutable, 'x', { mode: 0o644 });
+      const result = getResult({ gone: path.join(dataDir, 'nowhere'), plain: notExecutable, relative: 'bin/ffmpeg', folder: dataDir });
+      assert.equal(result.ok, false);
+      const errors = result.ok ? [] : result.errors;
+      assert.deepEqual(errors, [
+        'jira.json agentBinaries.gone: does not exist',
+        'jira.json agentBinaries.plain: is not executable',
+        'jira.json agentBinaries.relative: must be an absolute path',
+        'jira.json agentBinaries.folder: is not a file',
+      ]);
+      assert.ok(!errors.join('\n').includes(dataDir), 'no path is echoed');
+    });
+
+    it('a name must be ONE file name', () => {
+      for (const name of ['a/b', '..', '.', 'with space', '', '../x']) {
+        const result = getResult({ [name]: toolPath });
+        assert.equal(result.ok, false, `"${name}" must be refused`);
+      }
+      assert.ok(getResult({ 'ffmpeg-7.0_static': toolPath }).ok);
+    });
+  });
+
+  it('C11: a project\'s extraFields are taken (empty by default, duplicates once) — custom and system ids alike; only an empty id is refused', () => {
+    const result = validateJiraConfig(
+      createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['customfield_10042', 'customfield_10042', 'duedate'] } } }),
+      { workRoot, openCodeUrl: isolatedOpenCodeUrl },
+    );
+    assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+    assert.deepEqual(result.config.projects.get('PROJ')?.extraFieldIds, ['customfield_10042', 'duedate']);
+    const errors = getErrors(createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['labels', ''] } } }));
+    assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json projects.PROJ.extraFields.1']);
   });
 
   it('R15: an effort outside Claude\'s levels and a model that is not a model name are refused by field', () => {
@@ -287,6 +353,21 @@ describe('loadJiraConfig', () => {
       fs.writeFileSync(configPath(), text);
       assert.deepEqual(load(), { ok: false, errors: [`${configPath()} must hold a JSON object`] }, text);
     }
+  });
+});
+
+describe('resolveExtraFields (C11)', () => {
+  const siteFields = [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'duedate', name: 'Due date' }];
+
+  it('names the ids the site lists, in the configured order, and reports the ones it does not', () => {
+    assert.deepEqual(resolveExtraFields(['duedate', 'customfield_10042', 'customfield_99999'], siteFields), {
+      extraFields: [{ id: 'duedate', name: 'Due date' }, { id: 'customfield_10042', name: 'Acceptance criteria' }],
+      unknownFieldIds: ['customfield_99999'],
+    });
+  });
+
+  it('nothing configured, nothing resolved', () => {
+    assert.deepEqual(resolveExtraFields([], siteFields), { extraFields: [], unknownFieldIds: [] });
   });
 });
 

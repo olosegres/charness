@@ -59,6 +59,8 @@ const commentPageSize = 100;
 const pageLoadTimeoutMs = 60 * 1000;
 /** The status category Jira gives every finished status. */
 const doneStatusCategoryKey = 'done';
+/** The status category of an issue nobody started on. */
+const toDoStatusCategoryKey = 'new';
 
 export class JiraLiveRequester {
   private constructor(
@@ -138,6 +140,14 @@ export class JiraLiveRequester {
     const done = transitions?.transitions.find((transition) => transition.to.statusCategory.key === doneStatusCategoryKey);
     if (!done) throw new Error(`${issueKey} has no transition into a finished status`);
     await this.callJson('POST', `/rest/api/3/issue/${issueKey}/transitions`, null, { transition: { id: done.id } });
+  }
+
+  /** @description Move a finished issue back to a status of the "to do" category, so that it can be handed over again. */
+  async reopenIssue(issueKey: string): Promise<void> {
+    const transitions = await this.callJson('GET', `/rest/api/3/issue/${issueKey}/transitions`, transitionsSchema);
+    const reopen = transitions?.transitions.find((transition) => transition.to.statusCategory.key === toDoStatusCategoryKey);
+    if (!reopen) throw new Error(`${issueKey} has no transition into a to-do status`);
+    await this.callJson('POST', `/rest/api/3/issue/${issueKey}/transitions`, null, { transition: { id: reopen.id } });
   }
 
   async getIssueState(issueKey: string): Promise<LiveIssueState> {

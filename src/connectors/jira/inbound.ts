@@ -5,7 +5,13 @@ import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraCl
 import { makeJiraKey } from './sessionKeyCodec';
 import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
-import { buildJiraRequestPrompt, jiraPromptIssueFields } from './prompt';
+import { buildIssueBlocks, type JiraExtraField } from './issueBlocks';
+import { fetchJiraIssueContext } from './issueContext';
+import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from './prompt';
+import { getIssueDelta } from './issueDelta';
+import type { JiraContextLedger } from './contextLedger';
+import type { SessionPromptText } from '../../postToSession';
+import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
 
 /**
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
@@ -47,6 +53,8 @@ export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator'];
 export interface JiraProjectTrigger {
   folder: string;
   triggerStatusIds: ReadonlySet<string>;
+  /** The project's `extraFields` the site knows, named (an unknown id was dropped at boot). */
+  extraFields: readonly JiraExtraField[];
 }
 
 /**
@@ -65,13 +73,15 @@ export type JiraIssueDecision = 'notAllowed' | 'notMatching' | 'posting' | 'seen
 const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen']);
 
 export interface JiraInboundDeps {
-  client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue'>;
+  client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue' | 'getComments' | 'getRemoteLinks'>;
   aiAccountId: string;
   /** `https://<site>` (or the test-only loopback base) — issue links are `<siteUrl>/browse/<KEY>`. */
   siteUrl: string;
   projects: ReadonlyMap<string, JiraProjectTrigger>;
   runBudgetPer24h: number;
   pollIntervalMs: number;
+  /** Where a conversation's text too long for its prompt is written whole (`promptSpill.ts`). */
+  getSpillDir: (key: SessionKey) => string;
   triggerLog: JiraTriggerLog;
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
@@ -85,8 +95,14 @@ export interface JiraInboundDeps {
     origin: RequestOrigin,
     createPrompt: (requestId: string, supersededRequestIds: readonly string[]) => string,
   ) => Promise<Pick<OpenRequestState, 'id' | 'supersededRequestIds'>>;
-  /** Post the request's prompt to the issue's session (and start watching its turn). */
-  postRequest: (key: SessionKey, requestId: string, prompt: string) => Promise<void>;
+  /**
+   * Post the request's prompt to the issue's session (and start watching its turn): `fullText` is the whole
+   * issue (the request keeps it for a re-post, a hold keeps it); `buildText` runs right before the forward and
+   * makes the delta for a session that already knows the issue (C5).
+   */
+  postRequest: (key: SessionKey, requestId: string, prompt: SessionPromptText) => Promise<void>;
+  /** What each issue's conversation was already told (C4). */
+  contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild'>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
   parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
 }
@@ -225,15 +241,27 @@ export class JiraInbound {
   ): Promise<JiraIssueDecision> {
     const { deps } = this;
     // Fetched before the request opens: a request is never left without its prompt.
-    const details = await deps.client.getIssue(issue.key, jiraPromptIssueFields);
+    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id));
+    const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId);
     const key = makeJiraKey(issue.key);
-    await deps.bindConversation(key, project.folder);
-    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
-      requestId,
-      issue: details,
+    const promptInput = {
+      issueKey: issue.key,
+      statusName: context.issue.fields.status?.name,
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,
+    };
+    // Rendered and written BEFORE the request opens: the ledger builds the prompt inside its own synchronous update.
+    const fitted = await fitBlocksToPrompt({
+      blocks,
+      textDir: deps.getSpillDir(key),
+      measure: (candidate) => buildJiraRequestPrompt({ ...promptInput, requestId: standInRequestId, ...candidate }).length,
+    });
+    await deps.bindConversation(key, project.folder);
+    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
+      ...promptInput,
+      requestId,
+      ...fitted,
       supersededRequestIds,
     });
     // R34: the requester is part of the request's group key — a second person's trigger on the same
@@ -242,7 +270,20 @@ export class JiraInbound {
       kind: 'trackerEvent',
       attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? emptyRequester },
     }, createPrompt);
-    const prompt = createPrompt(request.id, request.supersededRequestIds ?? []);
+    const supersededRequestIds = request.supersededRequestIds ?? [];
+    const fullText = createPrompt(request.id, supersededRequestIds);
+    const prompt: SessionPromptText = {
+      fullText,
+      // C5: built only once the post knows whether the session is fresh — right before the forward.
+      buildText: ({ isFresh }) => {
+        const snapshot = deps.contextLedger.getSnapshot(issue.key);
+        const isWhole = isFresh || Object.keys(snapshot.sent).length === 0;
+        const delta = getIssueDelta(fitted.blocks, isWhole ? {} : snapshot.sent);
+        // Counted as sent only once the agent takes it in (C4): the connector commits it then.
+        deps.contextLedger.recordBuild(issue.key, request.id, snapshot.generation, delta.sent);
+        return isWhole ? fullText : buildJiraDeltaPrompt({ ...promptInput, requestId: request.id, supersededRequestIds, delta });
+      },
+    };
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of
     // the poll must not wait for it; until the post settles, the issue is skipped.
     this.postingIssueKeys.add(issue.key);
@@ -257,7 +298,7 @@ export class JiraInbound {
    * A record that cannot be written is still remembered for this process, so the
    * posted request is never posted again before a restart. Never rejects.
    */
-  private async postAndRecord(key: SessionKey, requestId: string, prompt: string, record: JiraTriggerRecord): Promise<void> {
+  private async postAndRecord(key: SessionKey, requestId: string, prompt: SessionPromptText, record: JiraTriggerRecord): Promise<void> {
     try {
       await this.deps.postRequest(key, requestId, prompt);
     } catch (error) {

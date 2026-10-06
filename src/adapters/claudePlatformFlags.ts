@@ -1,6 +1,6 @@
 import type { SessionKey } from '../sessionKey';
 import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { getAgentEnvironment } from '../utils/agentEnvironment';
+import { addAgentBinDirToPath, getAgentEnvironment } from '../utils/agentEnvironment';
 
 /**
  * @description Claude Code flags a session needs because of its conversation's
@@ -32,11 +32,12 @@ export function getClaudePlatformFlags(key: SessionKey): string[] {
 /**
  * @description The environment a session starts with because of its platform:
  * outside Telegram only the agent allowlist (R32 — never the instance's own
- * variables, its tracker token among them); `null` — a Telegram topic's wrapper
+ * variables, its tracker token among them), with the tool folder of the connector's `agentBinaries` first on
+ * its PATH; `null` — a Telegram topic's wrapper
  * keeps `env -u ANTHROPIC_API_KEY` and inherits the tmux session environment:
  * the bot's own on the default server, the minimal server environment of
  * `getTmuxExecEnv` on a private one (every instance that serves Jira).
  */
 export function getClaudePlatformEnvironment(key: SessionKey): Record<string, string> | null {
-  return checkIsTelegramKey(key) ? null : getAgentEnvironment();
+  return checkIsTelegramKey(key) ? null : addAgentBinDirToPath(getAgentEnvironment());
 }

@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { sleep } from '../../utils';
 import { getRetryAfterHeaderMs } from '../../utils/retryAfterHeader';
-import { adfNodeSchema, type AdfDocument } from './adf';
+import { downloadJiraAttachment, jiraDownloadStallTimeoutMs } from './attachmentDownload';
+import { adfNodeSchema, attributeValueSchema, type AdfAttributeValue, type AdfDocument } from './adf';
 
 /**
  * @description The Jira Cloud REST v3 client of the Jira connector (plan J4,
@@ -30,6 +31,8 @@ export const jiraRetryAfterCapMs = 60_000;
 export const jiraBackoffMs = [1_000, 4_000] as const;
 /** Up to this share is added at random to a backoff, so clients that failed together do not retry together. */
 export const jiraBackoffJitterRatio = 0.5;
+/** Jira's own page size for comments; the page actually returned decides where the next one starts. */
+export const jiraCommentPageSize = 100;
 /**
  * Network error codes that mean the request never left this host — no
  * connection, no address, no TLS session — so nothing reached Jira.
@@ -95,11 +98,27 @@ const changelogHistorySchema = z.object({
   items: z.array(changelogItemSchema),
 });
 
+/** Who may read a comment when it is restricted (Jira's `Visibility`); a role's or a group's name. */
+const visibilitySchema = z.object({
+  type: z.string(),
+  value: z.string(),
+  identifier: z.string().nullable().optional(),
+});
+
 const commentSchema = z.object({
   id: z.string(),
   author: accountSchema.optional(),
   created: z.string(),
+  /** Changes on every edit, and on a save that changed nothing. */
+  updated: z.string().optional(),
+  updateAuthor: accountSchema.optional(),
+  /** Only a restricted comment carries it. */
+  visibility: visibilitySchema.optional(),
+  /** `false` is a Service Management internal note. */
+  jsdPublic: z.boolean().optional(),
   body: adfNodeSchema.nullable().optional(),
+  /** Only with `expand=renderedBody`: the HTML that names the attachment behind each media node. */
+  renderedBody: z.string().optional(),
 });
 
 const commentPageSchema = z.object({
@@ -107,24 +126,58 @@ const commentPageSchema = z.object({
   comments: z.array(commentSchema),
 });
 
+/** An issue as another issue points at it: its parent, a sub-task, the far end of a link. */
+const issueReferenceSchema = z.object({
+  key: z.string(),
+  fields: z.object({
+    summary: z.string().optional(),
+    status: z.object({ name: z.string() }).optional(),
+  }).optional(),
+});
+
+const issueLinkSchema = z.object({
+  type: z.object({ inward: z.string(), outward: z.string() }),
+  inwardIssue: issueReferenceSchema.optional(),
+  outwardIssue: issueReferenceSchema.optional(),
+});
+
+const attachmentSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  created: z.string().optional(),
+  author: accountSchema.optional(),
+});
+
+const namedSchema = z.object({ name: z.string() });
+
 const issueFieldsSchema = z.object({
   summary: z.string().optional(),
   status: z.object({ id: z.string(), name: z.string() }).optional(),
+  /** `hierarchyLevel` 0 is a standard issue, 1 and up hold children (an epic), below 0 is a sub-task. */
+  issuetype: z.object({ name: z.string(), hierarchyLevel: z.number().optional() }).optional(),
+  priority: namedSchema.nullable().optional(),
+  parent: issueReferenceSchema.nullable().optional(),
+  subtasks: z.array(issueReferenceSchema).optional(),
+  issuelinks: z.array(issueLinkSchema).optional(),
+  fixVersions: z.array(namedSchema).optional(),
+  labels: z.array(z.string()).optional(),
+  components: z.array(namedSchema).optional(),
+  attachment: z.array(attachmentSchema).optional(),
   assignee: accountSchema.nullable().optional(),
   reporter: accountSchema.nullable().optional(),
   creator: accountSchema.nullable().optional(),
   created: z.string().optional(),
   description: adfNodeSchema.nullable().optional(),
-  comment: z.object({
-    total: z.number().optional(),
-    comments: z.array(commentSchema),
-  }).optional(),
 });
 
 const issueSchema = z.object({
   id: z.string(),
   key: z.string(),
   fields: issueFieldsSchema,
+  /** Only with `expand=renderedFields`; the description's HTML, read for the attachment behind each media node. */
+  renderedFields: z.object({ description: z.string().nullable().optional() }).optional(),
   changelog: z.object({
     startAt: z.number(),
     maxResults: z.number(),
@@ -153,13 +206,32 @@ const issueTypeStatusesSchema = z.array(z.object({
   statuses: z.array(projectStatusSchema),
 }));
 
+/** The values of an issue's fields by id, whatever their shape: the source of a project's `extraFields`. */
+const issueRawFieldsSchema = z.object({ fields: z.record(z.string(), attributeValueSchema) });
+
+const remoteLinkSchema = z.object({
+  object: z.object({ url: z.string(), title: z.string().optional() }),
+});
+const remoteLinksSchema = z.array(remoteLinkSchema);
+/** What `GET /issue/{key}/remotelink` answers when issue linking is switched off on the site. */
+const remoteLinksDisabledStatus = 403;
+
+const fieldDefinitionsSchema = z.array(z.object({ id: z.string(), name: z.string() }));
+
 const createdCommentSchema = z.object({ id: z.string() });
 const myselfSchema = z.object({ accountId: z.string() });
 
 export type JiraAccount = z.infer<typeof accountSchema>;
 export type JiraChangelogHistory = z.infer<typeof changelogHistorySchema>;
-export type JiraIssue = z.infer<typeof issueSchema>;
+/** `rawFields` (every returned field's value as Jira sent it, by id) is filled in by `getIssue` only, never by a search. */
+export type JiraIssue = z.infer<typeof issueSchema> & { rawFields?: Record<string, AdfAttributeValue> };
 export type JiraComment = z.infer<typeof commentSchema>;
+export type JiraAttachment = z.infer<typeof attachmentSchema>;
+export type JiraIssueReference = z.infer<typeof issueReferenceSchema>;
+export type JiraIssueLink = z.infer<typeof issueLinkSchema>;
+export type JiraRemoteLink = z.infer<typeof remoteLinkSchema>;
+/** A field as `GET /field` lists it: its id and its display name. */
+export type JiraFieldDefinition = z.infer<typeof fieldDefinitionsSchema>[number];
 export type JiraSearchResult = z.infer<typeof searchResultSchema>;
 export type JiraChangelogPage = z.infer<typeof changelogPageSchema>;
 /** A status as `GET /project/{key}/statuses` lists it. */
@@ -192,6 +264,8 @@ export interface JiraClientOptions {
   /** In [0, 1); the backoff jitter's source. */
   randomImpl?: () => number;
   timeoutMs?: number;
+  /** How long a download may deliver no data before it is aborted; defaults to {@link jiraDownloadStallTimeoutMs}. */
+  downloadStallTimeoutMs?: number;
 }
 
 interface JiraRequest {
@@ -254,7 +328,19 @@ export interface JiraClient {
   searchIssues(request: JiraSearchRequest): Promise<JiraSearchResult>;
   /** A page of the issue's changelog, oldest first (Jira's order); `maxResults` defaults to Jira's own page size. */
   getChangelogPage(issueKey: string, startAt: number, maxResults?: number): Promise<JiraChangelogPage>;
-  getIssue(issueKey: string, fields: string[]): Promise<JiraIssue>;
+  /** `expand` is Jira's own (`renderedFields`). The result carries every returned field's raw value (`rawFields`). */
+  getIssue(issueKey: string, fields: string[], expand?: string): Promise<JiraIssue>;
+  /** EVERY comment of the issue, oldest first, read page by page, each with its rendered HTML. */
+  getComments(issueKey: string): Promise<JiraComment[]>;
+  getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
+  /** The site's fields (system and custom), to name an `extraFields` id and to tell an unknown one. */
+  getFields(): Promise<JiraFieldDefinition[]>;
+  /**
+   * Stream attachment `attachmentId`'s original into the NEW file `destinationPath` (any size, never held in
+   * memory); resolves the byte count. Fails with {@link JiraAuthError} on 401/403 and {@link JiraHttpError}
+   * otherwise (a stall included, status 0); the file is removed on failure.
+   */
+  downloadAttachment(attachmentId: string, destinationPath: string): Promise<number>;
   addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
@@ -374,11 +460,65 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         changelogPageSchema,
       ),
 
-    getIssue: (issueKey, fields) =>
-      sendForJson(
-        { method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}?fields=${fields.map(encode).join(',')}`, isIdempotent: true },
-        issueSchema,
-      ),
+    getIssue: async (issueKey, fields, expand) => {
+      const request: JiraRequest = {
+        method: 'GET',
+        path: `/rest/api/3/issue/${encode(issueKey)}?fields=${fields.map(encode).join(',')}${expand ? `&expand=${encode(expand)}` : ''}`,
+        isIdempotent: true,
+      };
+      const text = await send(request);
+      // Parsed twice on purpose: the typed schema drops every key it does not model, and a project's
+      // `extraFields` (a site-specific `customfield_*`, or a system field such as `duedate`) are mostly those.
+      const issue = getParsedResponse(text, issueSchema);
+      const rawFields = getParsedResponse(text, issueRawFieldsSchema);
+      if (!issue.ok) throw new JiraHttpError(0, request.method, request.path, issue.detail);
+      if (!rawFields.ok) throw new JiraHttpError(0, request.method, request.path, rawFields.detail);
+      return { ...issue.value, rawFields: rawFields.value.fields };
+    },
+
+    getComments: async (issueKey) => {
+      const comments: JiraComment[] = [];
+      for (;;) {
+        const page = await sendForJson(
+          {
+            method: 'GET',
+            path: `/rest/api/3/issue/${encode(issueKey)}/comment?orderBy=created&expand=renderedBody&startAt=${comments.length}&maxResults=${jiraCommentPageSize}`,
+            isIdempotent: true,
+          },
+          commentPageSchema,
+        );
+        comments.push(...page.comments);
+        // `total` ends the read; without it a page shorter than asked does. An empty page always does.
+        const isLastPage = page.comments.length === 0
+          || (page.total === undefined ? page.comments.length < jiraCommentPageSize : comments.length >= page.total);
+        if (isLastPage) return comments;
+      }
+    },
+
+    getRemoteLinks: async (issueKey) => {
+      try {
+        return await sendForJson({ method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/remotelink`, isIdempotent: true }, remoteLinksSchema);
+      } catch (error) {
+        // Atlassian: this endpoint's 403 means issue linking is switched off on the site, so there is no link to
+        // read. As a JiraAuthError it would stop polling for good (D14); a missing permission is a 404 here.
+        if (error instanceof JiraAuthError && error.status === remoteLinksDisabledStatus) return [];
+        throw error;
+      }
+    },
+
+    downloadAttachment: async (attachmentId, destinationPath) => {
+      const requestPath = `/rest/api/3/attachment/content/${encode(attachmentId)}`;
+      const result = await downloadJiraAttachment(
+        { baseUrl, authorization, fetchImpl, stallTimeoutMs: options.downloadStallTimeoutMs ?? jiraDownloadStallTimeoutMs },
+        attachmentId,
+        destinationPath,
+      );
+      if (result.ok) return result.bytes;
+      if (result.status === 401 || result.status === 403) throw new JiraAuthError(result.status, 'GET', requestPath);
+      throw new JiraHttpError(result.status, 'GET', requestPath, result.detail);
+    },
+
+    getFields: () => sendForJson({ method: 'GET', path: '/rest/api/3/field', isIdempotent: true }, fieldDefinitionsSchema),
 
     addComment: async (issueKey, body) => {
       const request: JiraRequest = { method: 'POST', path: `/rest/api/3/issue/${encode(issueKey)}/comment`, isIdempotent: false, body: { body } };

@@ -291,12 +291,15 @@ export function createCompaction(ports: CompactionPorts) {
    * the text was typed in would be a claim the bot cannot back.
    */
   async function runNarratedCompaction(key: SessionKey, route: CompactCommandRoute, logTag: string): Promise<void> {
-    const isNarrated = route === 'adapterCompact';
+    // A tracker issue has no topic to narrate into (R6): its agent asked for the compaction through the bot MCP, and
+    // the compaction runs, and fails, silently there — the failure is in the log.
+    const isInTopic = checkIsTelegramKey(key);
+    const isNarrated = route === 'adapterCompact' && isInTopic;
     // The START notice also needs the session to be live (pure rule): the seam refuses
     // a dead session as its first act, and a "compacting…" ahead of that refusal is a
     // promise the very next message retracts. The seam still re-checks, so a session
     // lost right afterwards just reports the failure as before.
-    if (checkShouldAnnounceCompactionStart({ route, isSessionActive: getThreadAdapter(key).checkIsActive(key) })) {
+    if (isInTopic && checkShouldAnnounceCompactionStart({ route, isSessionActive: getThreadAdapter(key).checkIsActive(key) })) {
       await replyToThread(key, t('compact.started'));
     }
 
@@ -308,7 +311,7 @@ export function createCompaction(ports: CompactionPorts) {
       // Always surfaced, even on the drain, which used to only log: having just
       // announced a start, going silent would leave the operator waiting on a
       // compaction that already gave up.
-      await replyToThread(key, result.error ?? t('compact.failed', { reason: 'unknown' }));
+      if (isInTopic) await replyToThread(key, result.error ?? t('compact.failed', { reason: 'unknown' }));
       return;
     }
 

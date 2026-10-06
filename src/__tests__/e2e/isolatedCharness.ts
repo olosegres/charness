@@ -171,8 +171,14 @@ function startIsolatedInstanceReaper(layout: IsolatedInstanceLayout): void {
   reaper.unref();
 }
 
+/**
+ * `IS_SANDBOX` for a launch through `run-isolated.sh`, which passes it on: the telegramcode image runs everything as
+ * root, where Claude Code needs it. Empty where the test process has none (a host run).
+ */
+export const isolatedSandboxEnv: Record<string, string> = process.env.IS_SANDBOX ? { IS_SANDBOX: process.env.IS_SANDBOX } : {};
+
 /** The only variables `run-isolated.sh` passes to the instance. */
-export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
+export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE', ...Object.keys(isolatedSandboxEnv)];
 
 const waitStepMs = 250;
 /** How much of charness's output a failed wait quotes. */
@@ -432,6 +438,7 @@ export class IsolatedCharness {
         SHELL: '/bin/sh',
         LANG: 'C.UTF-8',
         TERM: 'dumb',
+        ...isolatedSandboxEnv,
       },
       cwd: this.layout.testRoot,
       stdio: ['ignore', 'pipe', 'pipe'],

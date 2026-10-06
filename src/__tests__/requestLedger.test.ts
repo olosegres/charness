@@ -607,3 +607,71 @@ describe('RequestLedger alert release', () => {
     assert.deepEqual(storeAfter.getUnreleasedRequestAlerts(), {});
   });
 });
+
+describe('what became of a request\'s prompt (Jira prompt context C4)', () => {
+  /** A ledger that records every prompt-settled event as `<request id> <outcome>`. */
+  async function createRecordingLedger(events: string[]): Promise<RequestLedger> {
+    const ledger = new RequestLedger({
+      store: await createStore(),
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      onPromptSettled: (key, requestId, outcome) => events.push(`${keyToString(key)} ${requestId} ${outcome}`),
+    });
+    await ledger.load();
+    return ledger;
+  }
+
+  it('taken in when the flag is first set — once, however often it is set again', async () => {
+    const events: string[] = [];
+    const ledger = await createRecordingLedger(events);
+    const request = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'the prompt' });
+    await ledger.updateOpenRequest(request.id, { silentTurnCount: 1 });
+    assert.deepEqual(events, [], 'another change says nothing');
+    await ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
+    await ledger.updateOpenRequest(request.id, (current) => ({ isPromptTakenIn: true, wakeCount: current.wakeCount + 1 }));
+    assert.deepEqual(events, [`${keyToString(topicKey)} ${request.id} takenIn`]);
+    await ledger.closeRequest(request.id, 'final');
+    assert.equal(events.length, 1, 'its close changes nothing: it was taken in already');
+  });
+
+  it('taken in when its own question or final answer closes it before the flag was set', async () => {
+    for (const reason of ['final', 'question'] as const) {
+      const events: string[] = [];
+      const ledger = await createRecordingLedger(events);
+      const request = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+      await ledger.closeRequest(request.id, reason);
+      assert.deepEqual(events, [`${keyToString(topicKey)} ${request.id} takenIn`], reason);
+    }
+  });
+
+  it('dropped when it is cancelled, or superseded by the same requester\'s next request, before it was taken in', async () => {
+    const events: string[] = [];
+    const ledger = await createRecordingLedger(events);
+    const cancelled = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.closeRequest(cancelled.id, 'cancelled');
+    const first = await ledger.createRequest(otherTopicKey, operatorOrigin, { createPrompt: () => 'p' });
+    const second = await ledger.createRequest(otherTopicKey, operatorOrigin, { createPrompt: () => 'p' });
+    assert.deepEqual(events, [`${keyToString(topicKey)} ${cancelled.id} dropped`, `${keyToString(otherTopicKey)} ${first.id} dropped`]);
+    assert.notEqual(first.id, second.id);
+  });
+
+  it('a requesterless request superseded by a person\'s is dropped too; one already taken in is not', async () => {
+    const events: string[] = [];
+    const ledger = await createRecordingLedger(events);
+    const requesterless = await ledger.createRequest(topicKey, messageOrigin, { createPrompt: () => 'p' });
+    await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: () => 'p' });
+    assert.deepEqual(events, [`${keyToString(topicKey)} ${requesterless.id} dropped`]);
+    const takenIn = await ledger.createRequest(otherTopicKey, colleagueOrigin, { createPrompt: () => 'p' });
+    await ledger.updateOpenRequest(takenIn.id, { isPromptTakenIn: true });
+    await ledger.createRequest(otherTopicKey, colleagueOrigin, { createPrompt: () => 'p' });
+    assert.deepEqual(events.slice(1), [`${keyToString(otherTopicKey)} ${takenIn.id} takenIn`], 'its supersede says nothing more');
+  });
+
+  it('a request that is not open says nothing', async () => {
+    const events: string[] = [];
+    const ledger = await createRecordingLedger(events);
+    assert.equal(await ledger.updateOpenRequest('req_unknown1', { isPromptTakenIn: true }), null);
+    assert.equal(await ledger.closeRequest('req_unknown1', 'final'), null);
+    assert.deepEqual(events, []);
+  });
+});
+

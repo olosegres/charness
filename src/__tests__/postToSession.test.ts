@@ -9,14 +9,14 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { postToSession, type PostToSessionDeps } from '../postToSession';
+import { postToSession, type PostToSessionDeps, type SessionPromptText } from '../postToSession';
 
 function createDeps(calls: string[], overrides: Partial<PostToSessionDeps> = {}): PostToSessionDeps {
   return {
     checkBusy: () => false,
     ensureSession: async (conversationKey, fallbackAdapterName) => {
       calls.push(`ensure ${conversationKey} ${fallbackAdapterName ?? '-'}`);
-      return { ok: true };
+      return { ok: true, isFresh: false };
     },
     forwardPrompt: async (conversationKey, text) => {
       calls.push(`forward ${conversationKey} ${text}`);
@@ -80,7 +80,7 @@ describe('postToSession', () => {
     const calls: string[] = [];
     let isLimitWaitArmed = true;
     const deps = createDeps(calls, {
-      holdForLimitResume: (conversationKey, text, heldText) => {
+      holdForLimitResume: (_conversationKey, text, heldText) => {
         calls.push(`hold? ${text} | ${heldText ?? '-'}`);
         return isLimitWaitArmed;
       },
@@ -102,5 +102,76 @@ describe('postToSession', () => {
     const deps = createDeps(calls, { holdForLimitResume: () => false });
     assert.deepEqual(await postToSession(deps, 'k', 'p'), { ok: true, isHeld: false });
     assert.deepEqual(calls, ['ensure k -', 'forward k p']);
+  });
+
+  describe('a prompt built for the session it lands in (Jira prompt context C5)', () => {
+    /** A prompt whose builder records when it ran and what it was told. */
+    function createSessionPrompt(calls: string[]): SessionPromptText {
+      return {
+        fullText: 'the whole issue',
+        buildText: ({ isFresh }) => {
+          calls.push(`build isFresh=${isFresh}`);
+          return isFresh ? 'the whole issue' : 'only what changed';
+        },
+      };
+    }
+
+    it('is built after the ensure, the wait for the busy turn and the second hold check — right before the forward', async () => {
+      const calls: string[] = [];
+      let busyChecks = 0;
+      const deps = createDeps(calls, {
+        checkBusy: () => {
+          busyChecks += 1;
+          calls.push(`busy? ${busyChecks <= 2}`);
+          return busyChecks <= 2;
+        },
+        holdForLimitResume: (_conversationKey, text) => {
+          calls.push(`hold? ${text}`);
+          return false;
+        },
+      });
+      assert.deepEqual(await postToSession(deps, 'k', createSessionPrompt(calls)), { ok: true, isHeld: false });
+      assert.deepEqual(calls, [
+        'hold? the whole issue',
+        'ensure k -',
+        'busy? true',
+        'busy? true',
+        'busy? false',
+        'hold? the whole issue',
+        'build isFresh=false',
+        'forward k only what changed',
+      ]);
+    });
+
+    it('a session the ensure started is fresh: the builder is told so', async () => {
+      const calls: string[] = [];
+      const deps = createDeps(calls, { ensureSession: async () => ({ ok: true, isFresh: true }) });
+      await postToSession(deps, 'k', createSessionPrompt(calls));
+      assert.deepEqual(calls, ['build isFresh=true', 'forward k the whole issue']);
+    });
+
+    it('a hold keeps the full text and builds nothing — before the ensure, and after the wait', async () => {
+      for (const holdAtCheck of [1, 2]) {
+        const calls: string[] = [];
+        let holdChecks = 0;
+        const deps = createDeps(calls, {
+          holdForLimitResume: (_conversationKey, text) => {
+            holdChecks += 1;
+            calls.push(`hold? ${text}`);
+            return holdChecks === holdAtCheck;
+          },
+        });
+        assert.deepEqual(await postToSession(deps, 'k', createSessionPrompt(calls)), { ok: true, isHeld: true });
+        assert.ok(!calls.some((call) => call.startsWith('build') || call.startsWith('forward')), calls.join(' | '));
+        assert.ok(calls.every((call) => !call.startsWith('hold?') || call === 'hold? the whole issue'));
+      }
+    });
+
+    it('a session that cannot be ensured builds nothing', async () => {
+      const calls: string[] = [];
+      const deps = createDeps(calls, { ensureSession: async () => ({ ok: false, reason: 'start-failed' }) });
+      await postToSession(deps, 'k', createSessionPrompt(calls));
+      assert.deepEqual(calls, []);
+    });
   });
 });

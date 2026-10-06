@@ -43,6 +43,10 @@ let handle: SchedulerMcpHandle;
 let ledger: RequestLedger;
 let deliveries: RequestAnswerDelivery[];
 let compactCalls: string[];
+/** `<thread key> <attachment id>` of every `jira_get_attachment` call that reached the connector's port. */
+let attachmentCalls: string[];
+/** Whether the Jira connector's port is supplied (an instance without the connector has none). */
+let isJiraAttachmentOffered = true;
 let openSessionsGate: () => void;
 let clients: Client[];
 
@@ -60,9 +64,11 @@ beforeEach(async () => {
   await ledger.load();
   deliveries = [];
   compactCalls = [];
+  attachmentCalls = [];
+  isJiraAttachmentOffered = true;
   clients = [];
   const answerSinks: AnswerSinks = new Map([
-    ['telegram', { deliverAnswer: async (_key, delivery) => { deliveries.push(delivery); return { ok: true }; } }],
+    ['telegram', { deliverAnswer: async (_key, delivery) => { deliveries.push(delivery); return { ok: true }; }, deliverAlert: async () => ({ ok: true }), releaseAlert: async () => {} }],
   ]);
   const sessionsRestored = new Promise<void>((resolve) => { openSessionsGate = resolve; });
   handle = createSchedulerMcpServer({
@@ -79,6 +85,16 @@ beforeEach(async () => {
       return { ok: true, message: 'compaction armed' };
     },
     answerRequest: (args) => answerRequest({ ledger, answerSinks }, args),
+    get fetchJiraAttachment() {
+      return isJiraAttachmentOffered
+        ? async (threadKey: string, attachmentId: string) => {
+          attachmentCalls.push(`${threadKey} ${attachmentId}`);
+          return attachmentId === '10234'
+            ? { ok: true as const, message: 'Attachment 10234 (shot.png, image/png, 3 bytes) is saved at /files/10234-shot.png.' }
+            : { ok: false as const, error: `Attachment ${attachmentId} is not an attachment of PROJ-12.` };
+        }
+        : undefined;
+    },
     whenSessionsRestored: () => sessionsRestored,
     getSecret: async () => secret,
     port: 0,
@@ -162,15 +178,57 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
   const neutralToolNames = ['answer_request', 'compact_conversation'];
   const telegramOnlyToolNames = ['schedule_create', 'schedule_list', 'schedule_cancel', 'send_file_to_user', 'send_messages_to_user'];
 
-  it('a Jira session sees only answer_request and compact_conversation, with instructions naming no Telegram tool', async () => {
+  it('a Jira session sees answer_request, compact_conversation and jira_get_attachment, with instructions naming no Telegram tool', async () => {
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
 
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    assert.deepEqual(toolNames, [...neutralToolNames].sort());
+    assert.deepEqual(toolNames, [...neutralToolNames, 'jira_get_attachment'].sort());
     const instructions = client.getInstructions() ?? '';
     assert.match(instructions, /answer_request/);
+    assert.match(instructions, /jira_get_attachment/);
     for (const name of telegramOnlyToolNames) assert.doesNotMatch(instructions, new RegExp(name), name);
     assert.doesNotMatch(instructions, /Telegram/);
+  });
+
+  it('C10: a Jira session without the connector\'s port is not offered the tool', async () => {
+    isJiraAttachmentOffered = false;
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [...neutralToolNames].sort());
+    assert.doesNotMatch(client.getInstructions() ?? '', /jira_get_attachment/, 'the instructions name no tool the session lacks');
+  });
+
+  it('C10: no other kind of session has the tool, a Telegram topic and a folder session included', async () => {
+    for (const scope of [
+      { kind: 'thread' as const, threadKey: keyToString(topicKey) },
+      { kind: 'dir' as const, directory: sharedFolder },
+      { kind: 'thread' as const, threadKey: 'a-key-no-codec-reads' },
+    ]) {
+      const client = await connectAgent(scope);
+      assert.ok(!(await client.listTools()).tools.some((tool) => tool.name === 'jira_get_attachment'), scope.kind);
+    }
+  });
+
+  it('C10: the issue is the SESSION\'s own — the call carries nothing but an attachment id, and what the port answers is relayed', async () => {
+    openSessionsGate();
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'jira_get_attachment');
+    assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), ['attachmentId'], 'no argument can name an issue');
+    const fetched = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '10234' } }));
+    assert.equal(fetched.isError, undefined);
+    assert.match(JSON.stringify(fetched.content), /saved at \/files\/10234-shot\.png/);
+    // A planted argument naming another issue is not an argument of the tool, whatever the agent adds.
+    const refused = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '99999', issueKey: 'OTHER-1', threadKey: keyToString(makeJiraKey('OTHER-1')) } }));
+    assert.equal(refused.isError, true);
+    assert.match(JSON.stringify(refused.content), /is not an attachment of PROJ-12/);
+    assert.deepEqual(attachmentCalls, [`${keyToString(makeJiraKey('PROJ-12'))} 10234`, `${keyToString(makeJiraKey('PROJ-12'))} 99999`]);
+  });
+
+  it('C10: the tool changes the digest a Jira session connects to — an adopted process reconnects at idle (L4) — and no other platform\'s', () => {
+    const withTool = handle.getToolDigest('jira');
+    const telegram = handle.getToolDigest('telegram');
+    isJiraAttachmentOffered = false;
+    assert.notEqual(handle.getToolDigest('jira'), withTool);
+    assert.equal(handle.getToolDigest('telegram'), telegram);
   });
 
   it('a Telegram session and an OpenCode folder session keep every tool', async () => {

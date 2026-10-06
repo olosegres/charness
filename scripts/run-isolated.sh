@@ -8,7 +8,8 @@
 #   scripts/run-isolated.sh /absolute/path/to/instance.env [telegramcode args…]
 #
 # The env file holds every setting of the instance, e.g. CONNECTORS, DATA_DIR,
-# WORK_ROOT and TMUX_SOCKET_NAME.
+# WORK_ROOT and TMUX_SOCKET_NAME. IS_SANDBOX is passed on when set: inside the
+# telegramcode image the instance runs as root, where Claude Code needs it.
 set -eu
 
 if [ "$#" -lt 1 ]; then
@@ -34,5 +35,6 @@ exec env -i \
   SHELL="${SHELL:-/bin/sh}" \
   LANG="${LANG:-C.UTF-8}" \
   TERM="${TERM:-dumb}" \
+  ${IS_SANDBOX:+"IS_SANDBOX=$IS_SANDBOX"} \
   ENV_FILE="$env_file" \
   node "$script_dir/../dist/cli.js" "$@"

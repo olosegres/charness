@@ -18,7 +18,8 @@
  * history block, and the explicit resume must still emit the rendered block.
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
+import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter, openCodeRuntimeContextHydrationConcurrency } from '../adapters/openCodeAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
@@ -27,30 +28,9 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 const key: SessionKey = makeTelegramKey(-100778, 8);
 const sessionId = 'ses_resume_ctx_8';
 const workDir = '/tmp/work-resume-ctx';
-const healthPath = '/global/health';
 const contextHeaderMark = '↩️';
 
-let originalFetch: typeof fetch;
-let originalOpencodeBin: string | undefined;
-
-beforeEach(() => {
-  originalFetch = globalThis.fetch;
-  originalOpencodeBin = process.env.OPENCODE_BIN;
-  process.env.OPENCODE_BIN = '/usr/bin/true';
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    if (url.endsWith(healthPath)) {
-      return new Response('ok', { status: 200 });
-    }
-    throw new Error(`unexpected fetch in test: ${url}`);
-  }) as typeof fetch;
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (originalOpencodeBin === undefined) delete process.env.OPENCODE_BIN;
-  else process.env.OPENCODE_BIN = originalOpencodeBin;
-});
+useStubbedOpenCodeServer();
 
 function createAdapter(): {
   adapter: OpenCodeAdapter;

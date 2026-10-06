@@ -1,0 +1,10 @@
+# Test image: the product image plus the Chromium the Jira live test's requester drives (its stored browser
+# login). Never used to run an instance.
+#
+#   docker build -t telegramcode-test -f docker/Dockerfile.test docker/
+FROM telegramcode
+
+# The same Playwright as the repo's playwright-core, so its Chromium revision matches; installed outside HOME,
+# which is a mount.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx -y playwright@1.59.1 install --with-deps chromium && rm -rf /root/.npm

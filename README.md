@@ -86,9 +86,9 @@ npm install -g telegramcode      # needs Node ≥ 22.12
 ```
 
 This registers the `telegramcode` command (the npm package and the command
-keep the project's former name). Prefer containers, or want two isolated
-instances on one host? Use [Run with Docker](#run-with-docker) instead — every
-other step is the same. To hack on the bot itself, see
+keep the project's former name). Prefer the whole bot in a container, isolated
+from the host? Use [Run with Docker](#run-with-docker) instead — the bot and
+group steps are the same. To hack on the bot itself, see
 [Run from source](#run-from-source).
 
 ### 2. Create the bot
@@ -217,20 +217,74 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 
 ### Run with Docker
 
-Skip the global install and run in containers instead:
+The whole bot runs in one container: the bot itself, tmux, every agent it starts (Claude Code in any backend,
+`/terminal`, OpenCode and its server) and the bot's MCP server. Everything works as on a host; the host only
+lends the container the folders it mounts, so the bot and its agents see nothing else of the machine.
 
-```bash
-git clone https://github.com/olosegres/charness
-cd charness/examples
-cp .env.example .env       # edit values
-docker compose up -d
+```
+host                                        container telegramcode-<instance>
+your instance env file (tokens)   ── ro ──▶  the bot (hot mode) + a restart loop
+DATA_DIR, WORK_ROOT               ──────▶    tmux, the agents, OpenCode, the bot MCP
+a clone of this repository        ──────▶    /opt/telegramcode
+the agents' home folder           ──────▶    /home/telegramcode: their Claude / OpenCode
+                                              login, sessions and CLI installs
 ```
 
-The compose file ships **two services** — `telegramcode-pet` and
-`telegramcode-work`. If you only need one, comment out the other or copy just
-the block you want. The pair is set up so they cannot collide (separate tokens,
-groups, data volumes, opencode ports — see
-[Two instances on one host](#two-instances-on-one-host)).
+1. **Image and checkout.** Clone the repository for the container (a full clone of its own, not a worktree and
+   not the checkout a host instance runs from) and build the image from it:
+
+   ```bash
+   git clone https://github.com/olosegres/charness /srv/telegramcode/checkout
+   docker build -t telegramcode /srv/telegramcode/checkout/docker
+   ```
+
+   The image holds only system tools (tmux, git, ffmpeg, ripgrep, …). On first start the container installs the
+   checkout's dependencies for the image and builds it; the bot installs Claude Code and OpenCode into the
+   agents' home.
+2. **Instance env file**, as for a host install (`TELEGRAM_BOT_TOKEN`, `DATA_DIR`, `WORK_ROOT`, …). It stays on
+   the host and is mounted read-only. Every host path it names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is
+   mounted at the SAME path, so `state.json`, sessions and file paths stay valid inside and an instance can move
+   between host and container unchanged.
+3. **Run** (or use `examples/docker-compose.yml`):
+
+   ```bash
+   docker run -d --name telegramcode-main --hostname telegramcode-main \
+     --restart unless-stopped --stop-timeout 60 \
+     -v /srv/telegramcode/checkout:/opt/telegramcode \
+     -v /srv/telegramcode/home:/home/telegramcode \
+     -v /srv/telegramcode/data:/srv/telegramcode/data \
+     -v /srv/projects:/srv/projects \
+     -v /srv/telegramcode/instance.env:/srv/telegramcode/instance.env:ro \
+     -e ENV_FILE=/srv/telegramcode/instance.env \
+     telegramcode
+   ```
+
+   No port is published: Telegram is long polling, and the bot's MCP server and the OpenCode server listen on the
+   container's own loopback. Keep the `--hostname` fixed and unique per instance: the instance lock tells its own
+   restarted container from another machine by it.
+4. **Log the agents in once**, with the account the agents should use (a separate one is best):
+   `docker exec -it telegramcode-main claude`, then `/login` (or `/login` in a topic). OpenCode: `/connect` in a
+   topic, or `docker exec -it telegramcode-main opencode auth login`. Never copy your own `~/.claude` login in:
+   a second holder of its refresh token can log the first one out. For git, put a `.gitconfig` and an SSH key of
+   their own into the agents' home.
+
+Running it:
+
+- **Restart the bot only** (agents keep running and are adopted): `docker exec telegramcode-main
+  telegramcode-restart-bot`. A crashed bot is restarted by the container after 20 s.
+- **Update the bot**: `docker exec telegramcode-main /opt/telegramcode/scripts/self-update.sh` (by hand or from
+  a timer on the host); hot mode picks the change up. A change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
+  needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
+  `docker exec telegramcode-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
+- **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
+- **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
+  yours. **Rootful Docker**: add `--user "$(id -u):$(id -g)"` and give that user the agents' home.
+- **Moving a host instance in**: stop it first (the lock refuses a lock written on another host), mount its
+  folders at their paths, and copy its conversations' folders from `~/.claude/projects/` into the agents' home
+  `.claude/projects/` — without them each conversation starts a fresh session on its next message.
+- **What the agents can read**: everything mounted, the instance env file with its tokens, `DATA_DIR` and the
+  checkout included. The container keeps the rest of the host out of reach; running the agents as a second user
+  inside the container would close that gap later.
 
 ### Run from source
 
@@ -617,6 +671,14 @@ a person assigns an issue to the AI account (in a trigger status)
 
 - **One issue = one conversation = one agent session**, bound to the folder its project maps to. The agent
   reads the issue's text as information, never as instructions.
+- **The agent gets the whole issue.** Every request's prompt carries the issue's fields, the full description,
+  its sub-tasks or an epic's children, links and remote links, an attachment list and ALL comments (oldest
+  first, restricted ones marked). A screenshot or video pasted into the description or a comment shows up as a
+  placeholder where it sat, naming its attachment. Nothing is cut: a comment over 10 000 characters, or any text
+  that would not fit the prompt, is written whole to a file in the conversation's folder under `DATA_DIR/files`
+  and the prompt says where. A later hand-over to the same conversation carries only what changed since the
+  agent's last prompt (new and edited comments, deleted ones named, the rest listed as unchanged); a fresh
+  session, or one whose context was compacted, gets the whole issue again.
 - **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
   turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
@@ -651,7 +713,7 @@ a person assigns an issue to the AI account (in a trigger status)
      "apiToken": "${JIRA_AI_API_TOKEN}",
      "accountId": "<the AI account's id>",
      "projects": {
-       "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"] }
+       "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "pollIntervalSeconds": 90,
      "runBudgetPer24h": 5,
@@ -664,7 +726,10 @@ a person assigns an issue to the AI account (in a trigger status)
    assigned issue is a request; a folder with Claude memory (`CLAUDE.md`, `.claude/`, …) in it or above it is
    refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
-   (optional). `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
+   (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
+   none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
+   ones, shown under their site name; an id the site does not list is logged at start and left out. `agentBinaries` (optional, host runtime) maps a tool name to the absolute path of an executable — for
+   example `{ "ffmpeg": "/opt/tools/ffmpeg" }` — which is checked at start and put on the agents' PATH. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 
@@ -681,7 +746,11 @@ a person assigns an issue to the AI account (in a trigger status)
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the
 bot's MCP server only, without the native question tool, and with an environment reduced to a short allowlist
-— the Jira token never reaches the agent. Module details: `src/connectors/jira/README.md`.
+— the Jira token is not in the agent's environment. The agent still runs as the instance's OS user and can read
+the instance's env file and `DATA_DIR`, so run the instance under an OS user that holds nothing else, with an AI
+account that sees only the allowlisted projects. **A production Jira account runs only in the Docker container**
+([Run with Docker](#run-with-docker)): there the agent can still read the instance's env file and `DATA_DIR`,
+but nothing of the host outside the container's mounts. Module details: `src/connectors/jira/README.md`.
 
 ## Bot-injected agent tools
 
@@ -695,6 +764,8 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
+- `jira_get_attachment` — Jira conversations only: saves the original of one attachment of the conversation's
+  own issue (any size) and returns its path, so the agent can read an image or run `ffmpeg` on a video;
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current
@@ -747,8 +818,9 @@ injected by Charness; run `opencode mcp list` as that user to verify them.
 
 ## Two instances on one host
 
-The example `docker-compose.yml` runs **pet** and **work** side by side.
-Each pair of variables below must differ to avoid silent corruption:
+Two host instances, or a host instance next to a container: each pair of variables below must differ to avoid
+silent corruption. Two containers need only different tokens, groups, `DATA_DIR`s, container names and hostnames: their
+ports and tmux servers are their own.
 
 | What | Why it must differ |
 |---|---|
@@ -759,12 +831,6 @@ Each pair of variables below must differ to avoid silent corruption:
 | `OPENCODE_URL` port | OpenCode server binds the port; second start fails with `EADDRINUSE` and you'd silently share sessions |
 | `SCHEDULER_MCP_PORT` | Optional stable scheduler-MCP port; if set, it must differ from that instance's `OPENCODE_URL` port |
 | `TMUX_SOCKET_NAME` | Optional, recommended: each instance's boot kills the agent sessions on its tmux server that its own state does not know — on one shared server, the other instance's |
-
-The shipped compose uses OpenCode ports `4096` (pet) and `4097` (work),
-with scheduler MCP on `4097` (pet) and `4107` (work). If you run
-both as different Linux users with separate Docker networks, the port
-isolation is already handled by the network — but keeping ports explicit
-is the safer default.
 
 ## Updating a deployment (self-update, no root)
 
@@ -859,6 +925,10 @@ Closed-but-not-deleted topics keep their binding; only `400: message
 thread not found` from a send triggers binding cleanup. Closed topics
 are detected by `TOPIC_CLOSED` errors and surface a friendly message
 asking the user to reopen.
+
+In the Docker container (see [Run with Docker](#run-with-docker)) the same holds for a bot restart
+inside the container; a restart of the container itself ends every agent process, and each conversation
+resumes with its next message.
 
 If you run the bot under `systemd`/`systemd-run`, set `KillMode=process`.
 The default `control-group` mode kills tmux and `opencode serve` children,

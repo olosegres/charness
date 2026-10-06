@@ -1,0 +1,413 @@
+{
+  "note": [
+    "Real ADF, rendered HTML and attachment list recorded from a sandbox Jira Cloud site (2026-10-05) and sanitised:",
+    "site, issue key, account, attachment, comment and media ids are placeholders; ADF localIds are dropped; dates are UTC.",
+    "Shapes this fixture pins (they decide how a media node maps to an attachment):",
+    " - an image or video pasted/uploaded in the editor is mediaSingle > media {type \"file\", id (Media Services uuid), alt = the file name};",
+    " - the stored attachment is named exactly `alt` unless an attachment of that name already existed, then `<stem> (<media id>).<ext>`;",
+    " - a non-image file inside running text is mediaInline {id, type \"file\"} with NO alt;",
+    " - the rendered HTML links every file to its attachment: `<a href=\".../attachment/content/<attachment id>\" data-media-services-id=\"<media id>\">`",
+    "   for a mediaInline, `<img src=\".../attachment/content/<id>\">` / `<object data=\".../attachment/content/<id>?stream=true\">` (no media id) for an image / video;",
+    " - REST uploads keep duplicate names, and an attachment may be referenced by no ADF at all.",
+    "The restricted comment is NOT recorded live (no project role of the sandbox accepts the test accounts, group visibility is off on the site):",
+    "its `visibility` follows the Visibility schema of Atlassian's REST v3 OpenAPI document."
+  ],
+  "issueKey": "PROJ-123",
+  "siteHost": "example.atlassian.net",
+  "description": {
+    "body": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "probe issue, no media yet"
+            },
+            {
+              "type": "mediaInline",
+              "attrs": {
+                "id": "00000000-0000-4000-8000-000000000004",
+                "collection": "",
+                "type": "file"
+              }
+            },
+            {
+              "type": "text",
+              "text": " "
+            }
+          ],
+          "attrs": {}
+        },
+        {
+          "type": "mediaSingle",
+          "attrs": {
+            "width": 529,
+            "widthType": "pixel",
+            "layout": "align-start"
+          },
+          "content": [
+            {
+              "type": "media",
+              "attrs": {
+                "type": "file",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "alt": "unique-shot.png",
+                "collection": "",
+                "height": 360,
+                "width": 640
+              }
+            }
+          ]
+        },
+        {
+          "type": "mediaSingle",
+          "attrs": {
+            "width": 529,
+            "widthType": "pixel",
+            "layout": "align-start"
+          },
+          "content": [
+            {
+              "type": "media",
+              "attrs": {
+                "type": "file",
+                "id": "00000000-0000-4000-8000-000000000005",
+                "alt": "image-20261005-190000-20261005-185717.png",
+                "collection": "",
+                "height": 360,
+                "width": 640
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "renderedBody": "<p>probe issue, no media yet<span class=\"nobr\"><a href=\"/rest/api/3/attachment/content/20009\" title=\"desc-notes.txt attached to PROJ-123\" data-attachment-type=\"file\" data-attachment-name=\"desc-notes.txt\" data-media-services-type=\"file\" data-media-services-id=\"00000000-0000-4000-8000-000000000004\" rel=\"noreferrer\">desc-notes.txt<sup><img class=\"rendericon\" src=\"/images/icons/link_attachment_7.gif\" height=\"7\" width=\"7\" align=\"absmiddle\" alt=\"\" border=\"0\"/></sup></a></span> </p>\n\n<p><span class=\"image-wrap\" style=\"\"><img src=\"https://example.atlassian.net/rest/api/3/attachment/content/20003\" alt=\"unique-shot.png\" width=\"529\" style=\"border: 0px solid black\" /></span></p>\n\n<p><span class=\"image-wrap\" style=\"\"><img src=\"https://example.atlassian.net/rest/api/3/attachment/content/20005\" alt=\"image-20261005-190000-20261005-185717.png\" width=\"529\" style=\"border: 0px solid black\" /></span></p>"
+  },
+  "attachments": [
+    {
+      "id": "20001",
+      "filename": "probe-shot.png",
+      "mimeType": "image/png",
+      "size": 11194,
+      "created": "2026-10-05T18:49:14.430+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20001"
+    },
+    {
+      "id": "20002",
+      "filename": "probe-shot (00000000-0000-4000-8000-000000000002).png",
+      "mimeType": "image/png",
+      "size": 11194,
+      "created": "2026-10-05T18:50:31.279+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20002"
+    },
+    {
+      "id": "20003",
+      "filename": "unique-shot.png",
+      "mimeType": "image/png",
+      "size": 11194,
+      "created": "2026-10-05T18:54:18.640+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20003"
+    },
+    {
+      "id": "20004",
+      "filename": "probe-clip.mp4",
+      "mimeType": "video/mp4",
+      "size": 10889,
+      "created": "2026-10-05T18:56:39.330+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20004"
+    },
+    {
+      "id": "20005",
+      "filename": "image-20261005-190000-20261005-185717.png",
+      "mimeType": "image/png",
+      "size": 11194,
+      "created": "2026-10-05T18:57:28.239+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20005"
+    },
+    {
+      "id": "20006",
+      "filename": "probe-notes.txt",
+      "mimeType": "text/plain",
+      "size": 17,
+      "created": "2026-10-05T18:58:13.015+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20006"
+    },
+    {
+      "id": "20007",
+      "filename": "dup-name.txt",
+      "mimeType": "text/plain",
+      "size": 17,
+      "created": "2026-10-05T18:58:43.905+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20007"
+    },
+    {
+      "id": "20008",
+      "filename": "dup-name.txt",
+      "mimeType": "text/plain",
+      "size": 17,
+      "created": "2026-10-05T18:58:45.006+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20008"
+    },
+    {
+      "id": "20009",
+      "filename": "desc-notes.txt",
+      "mimeType": "text/plain",
+      "size": 17,
+      "created": "2026-10-05T19:00:49.648+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20009"
+    },
+    {
+      "id": "20010",
+      "filename": "probe-shot (00000000-0000-4000-8000-000000000008).png",
+      "mimeType": "image/png",
+      "size": 11194,
+      "created": "2026-10-05T19:02:21.575+0000",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20010"
+    }
+  ],
+  "comments": [
+    {
+      "id": "30001",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "created": "2026-10-05T18:56:39.482+0000",
+      "updated": "2026-10-05T18:56:39.482+0000",
+      "updateAuthor": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "jsdPublic": true,
+      "body": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Repro video: "
+              }
+            ],
+            "attrs": {}
+          },
+          {
+            "type": "mediaSingle",
+            "attrs": {
+              "width": 320,
+              "widthType": "pixel",
+              "layout": "align-start"
+            },
+            "content": [
+              {
+                "type": "media",
+                "attrs": {
+                  "type": "file",
+                  "id": "00000000-0000-4000-8000-000000000003",
+                  "alt": "probe-clip.mp4",
+                  "collection": "",
+                  "height": 240,
+                  "width": 320
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "renderedBody": "<p>Repro video: </p>\n\n<p><div class=\"embeddedObject\"><object classid=\"clsid:02BF25D5-8C17-4B23-BC80-D3488ABDDC6B\" codebase=\"https://www.apple.com/qtactivex/qtplugin.cab\" data=\"/rest/api/3/attachment/content/20004?stream=true\" height=\"380\" type=\"video/mp4\" width=\"320\" ><param name=\"data\" value=\"/rest/api/3/attachment/content/20004?stream=true\"/><param name=\"src\" value=\"/rest/api/3/attachment/content/20004?stream=true\"/><param name=\"type\" value=\"video/mp4\"/><embed height=\"380\" pluginspage=\"https://www.apple.com/quicktime/download/\" src=\"/rest/api/3/attachment/content/20004?stream=true\" type=\"video/mp4\" width=\"320\" /></object></div></p>"
+    },
+    {
+      "id": "30002",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "created": "2026-10-05T18:58:13.170+0000",
+      "updated": "2026-10-05T18:58:13.170+0000",
+      "updateAuthor": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "jsdPublic": true,
+      "body": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Notes file: "
+              },
+              {
+                "type": "mediaInline",
+                "attrs": {
+                  "id": "00000000-0000-4000-8000-000000000007",
+                  "collection": "",
+                  "type": "file"
+                }
+              },
+              {
+                "type": "text",
+                "text": " "
+              }
+            ],
+            "attrs": {}
+          }
+        ]
+      },
+      "renderedBody": "<p>Notes file: <span class=\"nobr\"><a href=\"/rest/api/3/attachment/content/20006\" title=\"probe-notes.txt attached to PROJ-123\" data-attachment-type=\"file\" data-attachment-name=\"probe-notes.txt\" data-media-services-type=\"file\" data-media-services-id=\"00000000-0000-4000-8000-000000000007\" rel=\"noreferrer\">probe-notes.txt<sup><img class=\"rendericon\" src=\"/images/icons/link_attachment_7.gif\" height=\"7\" width=\"7\" align=\"absmiddle\" alt=\"\" border=\"0\"/></sup></a></span> </p>"
+    },
+    {
+      "id": "30003",
+      "author": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "created": "2026-10-05T19:02:21.809+0000",
+      "updated": "2026-10-05T19:02:21.809+0000",
+      "updateAuthor": {
+        "accountId": "account-id-requester",
+        "accountType": "atlassian",
+        "displayName": "Requester Person"
+      },
+      "jsdPublic": true,
+      "body": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Screenshot again: "
+              }
+            ],
+            "attrs": {}
+          },
+          {
+            "type": "mediaSingle",
+            "attrs": {
+              "width": 489,
+              "widthType": "pixel",
+              "layout": "align-start"
+            },
+            "content": [
+              {
+                "type": "media",
+                "attrs": {
+                  "type": "file",
+                  "id": "00000000-0000-4000-8000-000000000008",
+                  "alt": "probe-shot.png",
+                  "collection": "",
+                  "height": 360,
+                  "width": 640
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "renderedBody": "<p>Screenshot again: </p>\n\n<p><span class=\"image-wrap\" style=\"\"><img src=\"https://example.atlassian.net/rest/api/3/attachment/content/20010\" alt=\"probe-shot.png\" width=\"489\" style=\"border: 0px solid black\" /></span></p>"
+    }
+  ],
+  "restrictedCommentSchemaExample": {
+    "id": "30099",
+    "author": {
+      "accountId": "account-id-requester",
+      "accountType": "atlassian",
+      "displayName": "Requester Person"
+    },
+    "created": "2026-10-05T14:00:00.000+0000",
+    "updated": "2026-10-05T14:00:00.000+0000",
+    "updateAuthor": {
+      "accountId": "account-id-requester",
+      "accountType": "atlassian",
+      "displayName": "Requester Person"
+    },
+    "jsdPublic": true,
+    "visibility": {
+      "type": "role",
+      "value": "Administrators",
+      "identifier": "Administrators"
+    },
+    "body": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Only the team should read this."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

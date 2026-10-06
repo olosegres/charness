@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 /**
  * @description The environment an agent of a tracker conversation starts with
  * (Jira connector plan R32): a short allowlist of what a shell and Claude Code's
@@ -18,6 +20,9 @@
  * (probed under `env -i`). A deployment that relies on `CLAUDE_CONFIG_DIR`, an
  * HTTP(S) proxy or `NODE_EXTRA_CA_CERTS` must add the name here: a missing one
  * fails silently (no login found, no network), never with an error.
+ * `IS_SANDBOX` lets Claude Code run `--dangerously-skip-permissions` as root,
+ * which the whole bot in a rootless Docker container is (the image sets it);
+ * without it every agent there refuses to start. It holds no secret.
  */
 export const agentEnvironmentNames = [
   'HOME',
@@ -31,6 +36,7 @@ export const agentEnvironmentNames = [
   'TERM',
   'TMPDIR',
   'TZ',
+  'IS_SANDBOX',
 ] as const;
 
 /** Names the instance's `ENV_FILE` set — recorded by the env loader on every load (the hot worker loads it again). */
@@ -58,4 +64,24 @@ export function getAgentEnvironment(env: NodeJS.ProcessEnv = process.env): Recor
     if (value !== undefined && !envFileVariableNames.has(name)) environment[name] = value;
   }
   return environment;
+}
+
+/** What a shell searches when the environment holds no PATH of its own. */
+const defaultAgentPath = '/usr/local/bin:/usr/bin:/bin';
+
+/** A folder of tools the agents of non-Telegram conversations should find first on their PATH (Jira `agentBinaries`). */
+let agentBinDir: string | null = null;
+
+/** @description Set (or, with `null`, clear) the folder {@link addAgentBinDirToPath} puts first on the PATH. */
+export function registerAgentBinDir(dir: string | null): void {
+  agentBinDir = dir;
+}
+
+/**
+ * @description `environment` with the registered tool folder at the front of its PATH — the environment of a
+ * tracker conversation's agent process. Without a registered folder it is returned as it is.
+ */
+export function addAgentBinDirToPath(environment: Record<string, string>): Record<string, string> {
+  if (agentBinDir === null) return environment;
+  return { ...environment, PATH: `${agentBinDir}${path.delimiter}${environment.PATH ?? defaultAgentPath}` };
 }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -11,6 +12,7 @@ import {
   fakeClaudeLogFileNames,
   fakeClaudeCodeVersion,
   fakeClaudeCodeVersionOverrideFileName,
+  fakeClaudeCrashOnPromptFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
   fakeCompactionModelUsage,
@@ -71,6 +73,13 @@ import {
  *    `final` and ends; the queued message then runs as the next turn. A turn
  *    whose header names requests this one replaced answers with a short pointer
  *    to the answer above instead of the result again (the header's rule);
+ *  - `compact`     — asks the bot to compact the conversation (`compact_conversation`, as the agent does when a
+ *    person asks it to), then answers `final`; the bot compacts when the turn ends;
+ *  - `overflow`    — the CLI's own overflow compaction: a `compact_boundary` frame (trigger `auto`) that nobody
+ *    asked for, then `final`;
+ *  - `fetch-attachment` — calls `jira_get_attachment` for each id of a `[fetch:<id>,<id>]` token in the request's
+ *    text, logs every outcome to `tool-calls.jsonl`, then answers `final`;
+ *  - `run-tool`    — runs `e2e-tool` BY NAME on its own PATH and logs what it printed, then answers `final`;
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
  *    turns and the idle stop must keep it (lifecycle plan L-D2).
@@ -88,8 +97,8 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
 /** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
@@ -103,8 +112,13 @@ const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
-/** The request header's line that the requester does not see the agent's plain text (`requests/requestHeader.ts`). */
-const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text';
+const compactToolName = 'compact_conversation';
+const attachmentToolName = 'jira_get_attachment';
+/** The program `run-tool` runs by name: found only on a PATH the connector's `agentBinaries` put it on. */
+const probeToolName = 'e2e-tool';
+const fetchIdsRe = /\[fetch:([0-9,]+)\]/;
+/** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
+const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
 /** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
 const supersededRequestsLineRe = /It replaces the same requester's earlier requests? ((?:req_[A-Za-z0-9_-]+(?:, )?)+)\. If you already answered/;
 /** How much of a stdin line that is not JSON the error message quotes. */
@@ -235,9 +249,14 @@ function listKnownRequests(issueKey: string): KnownRequest[] {
     .sort((a, b) => a.firstTurnAt - b.firstTurnAt);
 }
 
-function getMode(text: string): FakeClaudeMode {
+/**
+ * The mode the request's text names; a text that names none (a delta prompt leaves the unchanged summary out,
+ * prompt context S4) keeps the mode the issue's earlier requests had — the conversation remembers it, as a
+ * real agent's context does.
+ */
+function getMode(text: string, issueKey: string): FakeClaudeMode {
   const named = modeRe.exec(text)?.[1];
-  return fakeModes.find((mode) => mode === named) ?? 'answer';
+  return fakeModes.find((mode) => mode === named) ?? listKnownRequests(issueKey)[0]?.mode ?? 'answer';
 }
 
 /** The bot MCP server: the `http` entry of the `--mcp-config` files. */
@@ -250,17 +269,21 @@ function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
   return null;
 }
 
-async function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
+async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, string>): Promise<string> {
   if (!server.url) throw new Error('the bot MCP server has no url');
   const client = new Client({ name: 'fake-claude', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers ?? {} } }));
   try {
-    const result = CallToolResultSchema.parse(await client.callTool({ name: answerToolName, arguments: args }));
+    const result = CallToolResultSchema.parse(await client.callTool({ name: toolName, arguments: args }));
     const text = result.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
     return result.isError ? `error: ${text}` : text;
   } finally {
     await client.close();
   }
+}
+
+function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
+  return callBotTool(server, answerToolName, args);
 }
 
 /** R6: what a real turn streams before its answer — a `system/status` frame, a thinking block, a tool call and its result. */
@@ -315,7 +338,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const state: RequestTurnState = previous ?? { mode: getMode(content), issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', turnCount: 0, firstTurnAt: Date.now() };
+  const issueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+  const state: RequestTurnState = previous ?? { mode: getMode(content, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
   writeRequestState(requestId, state);
   appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });
@@ -364,6 +388,25 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
     return;
   }
+  const logToolCall = (tool: string, args: Record<string, string>, outcome: string): void => {
+    appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool, args, outcome });
+  };
+  if (state.mode === 'compact' && server) {
+    logToolCall(compactToolName, { reason: 'a person asked' }, await callBotTool(server, compactToolName, { reason: 'a person asked' }));
+  }
+  if (state.mode === 'overflow') {
+    // The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running.
+    writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
+  }
+  if (state.mode === 'fetch-attachment' && server) {
+    for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
+      logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
+    }
+  }
+  if (state.mode === 'run-tool') {
+    const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
+    logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
+  }
   const kind = state.mode === 'progress' ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
   if (state.mode === 'background') {
@@ -376,7 +419,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const isSessionLaunch = checkHasFlag(argv, ['--input-format', 'stream-json']);
   // Variable NAMES only — the test checks what reached the agent, never a value.
-  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, envNames: Object.keys(process.env), home: process.env.HOME });
+  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH });
   if (!isSessionLaunch) {
     process.stdout.write(`${fakeClaudeVersion}\n`);
     return;
@@ -428,6 +471,12 @@ async function main(): Promise<void> {
     if (content.trim() === compactCommandText || content.startsWith(`${compactCommandText} `)) {
       turnChain = turnChain.then(() => runCompactionTurn(sessionId));
       return;
+    }
+    const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    appendJsonLine(fakeClaudeLogFileNames.prompts, { pid: process.pid, issueKey: promptIssueKey, requestId: requestIdRe.exec(content)?.[0] ?? null, text: content });
+    if (fs.existsSync(path.join(getStateDir(), fakeClaudeCrashOnPromptFileName))) {
+      // The message was read and neither echoed nor answered: the prompt never gets taken in.
+      process.exit(1);
     }
     notifyUserMessageQueued();
     turnChain = turnChain.then(() => runTurn(argv, sessionId, content)).catch((error: Error) => {

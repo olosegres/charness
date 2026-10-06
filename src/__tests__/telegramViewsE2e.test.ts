@@ -16,7 +16,7 @@
  *   → charness restarted: the view survives
  *   → the fake agent started; in «Stream + answers» a message opens a request
  *     the agent answers through the bot MCP; in «Answers only» the header says
- *     the plain text is not shown; in the full stream no request is opened; a
+ *     the plain text and the thinking are not shown; in the full stream no request is opened; a
  *     silent turn is woken; `/schedule` and a scheduled run are requests too
  *   → every answer is pinned with a notification and only the latest stays
  *     pinned, across a restart; a restart that finds the bot MCP port held for a
@@ -337,7 +337,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     const [turn] = getTurns('TOPIC-1');
     assert.match(turn.requestId ?? '', /^req_/, 'the prompt carried a request header');
     assert.equal(turn.isRequestPrompt, true);
-    assert.equal(turn.isPlainTextHidden, false, 'the stream is shown in this view, so the header does not say otherwise');
+    assert.equal(turn.isPlainTextHidden, false, 'the stream is shown in this view, so the header does not claim the plain text and thinking are hidden');
     assert.equal(answer.kind, 'final');
     assert.ok(answer.outcome.startsWith('Delivered'), answer.outcome);
     await waitForTopicMessage('the answer in the topic', (message) => message.text.includes('Fake final answer for TOPIC-1'));
@@ -347,11 +347,11 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.deepEqual(closed?.origin, { kind: 'message', attributes: { source: 'text', requester: operator.id.toString() } }, 'the origin names the sender: the merge key\'s requester');
   });
 
-  it('in «Answers only» the header tells the agent its plain text is not shown', async () => {
+  it('in «Answers only» the header tells the agent its plain text and thinking are not shown', async () => {
     await sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
     fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-2 [fake:answer]');
     await waitForFakeAnswer('TOPIC-2');
-    assert.equal(getTurns('TOPIC-2')[0].isPlainTextHidden, true);
+    assert.equal(getTurns('TOPIC-2')[0].isPlainTextHidden, true, 'the prompt the agent received carries the line that only its answer_request answers reach the user');
   });
 
   it('in the full stream no request is opened: the agent gets the bare message and its stream shows', async () => {

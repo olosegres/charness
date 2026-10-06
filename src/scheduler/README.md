@@ -55,7 +55,11 @@ constants in the code; this README keeps what the code cannot say.
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
   thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session
   gets `schedule_*`, `send_file_to_user` and `send_messages_to_user`; any other platform sees just
-  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool.
+  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool. A Jira
+  session also gets `jira_get_attachment` — only when the Jira connector is loaded, through the
+  `fetchJiraAttachment` port it supplies (the connector stays lazily loaded); the issue is the session's own
+  conversation, taken from its token, never from an argument. The tool changes the Jira digest, so an adopted
+  process reconnects at idle (L4).
 - The server serves BEFORE sessions re-attach, so a tool that reads session state awaits
   `deps.whenSessionsRestored()`. Boot order is `runSessionBootPhase`: bot MCP first, then reattach and
   restores, then `onSessionsRestored`, then the active-session heals, then the schedule re-arm. A session

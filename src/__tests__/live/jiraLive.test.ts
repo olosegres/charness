@@ -14,16 +14,26 @@
  *                                       refuses a jira.json that points anywhere else)
  *   JIRA_LIVE_REQUESTER_STORAGE_STATE   a Playwright login state of the REQUESTER account on that
  *                                       site (R33: the requester acts only through its browser)
+ *   JIRA_LIVE_MEDIA_ISSUE               optional: a sandbox issue with a screenshot (unique-shot.png: 640x360, colour
+ *                                       bars, black leftmost and white rightmost) pasted into its description and a
+ *                                       2-second video (probe-clip.mp4) into a comment (any state): the prompt-context steps
+ *                                       (media read through the attachment tool, a delta, a compaction
+ *                                       then a whole prompt) run on it. A run hands it over four times, so
+ *                                       the instance's run budget (`runBudgetPer24h`, default 5) allows one run a
+ *                                       day: raise it for a rerun, or the hand-overs are parked
  *   JIRA_LIVE_LONG_IDLE_MINUTES         optional: how long the run sleeps before the cross-process
  *                                       cache measurement (lifecycle plan L6 step 5, ~50); unset →
  *                                       that step is skipped
  *
  * The instance env file must also set `AGENT_IDLE_MINUTES` (a few minutes): the
  * lifecycle steps wait for the idle compaction and stop at that mark.
+ * For the prompt-context steps its `jira.json` names neither `model` nor `effort` (a step
+ * checks the defaults were used) and maps `ffmpeg` in `agentBinaries`.
  *
  * The AI account's token is used by this test only against the configured site:
  * to prove it belongs to the AI account, for the AI assigning an issue to itself,
- * and for the comment-size probe (R19). The requester's login never reaches
+ * for the comment-size probe (R19), and for the decoy's removal of the AI's own
+ * comments that revealed the secret word. The requester's login never reaches
  * charness (D2).
  *
  * One flow, in order, on fresh issues of the one allowlisted project:
@@ -48,23 +58,30 @@
  *   → lifecycle (plan L6 step 1): the answered issue idles — its session is
  *     compacted in its own process (the context sizes and the compaction's
  *     counts logged) and the process stopped; the next hand-over resumes the
- *     same conversation in a new process and the answer carries a code word
- *     that only the earlier context holds (it was given in a comment the prompt
- *     no longer quotes); the resumed turn's usage is recorded as a measurement
+ *     same conversation in a new process and the answer reveals the secret word
+ *     the agent picked in its first turn — the issue holds only the word's
+ *     SHA-256, so only the earlier context can give it; the resumed turn's usage
+ *     is recorded as a measurement
  *   → charness restarted (new sessions now `claude-per-turn`): no request opened again
  *   → the killed agent's request still answered
  *   → lifecycle (L6 step 2): a per-turn issue — the process is gone right after
  *     its answer; a hand-over a minute later runs a new process that resumes the
- *     conversation (the code word again) and writes only a small fraction of
+ *     conversation (the secret word again) and writes only a small fraction of
  *     what the first process wrote: the first process's context came from the
  *     cache
  *   → lifecycle (L6 step 5, when `JIRA_LIVE_LONG_IDLE_MINUTES` is set): the
  *     sleeping per-turn session's idle compaction, then a resume that long after
- *     it — the code word again; the usage is recorded as a measurement
- *   → decoy: with the per-turn issue's stored session id released (charness
- *     stopped, the repo's own state store), the same hand-over starts a FRESH
- *     session that cannot give the code word — the recall checks above are
- *     load-bearing
+ *     it — the secret word again; the usage is recorded as a measurement
+ *   → decoy: the AI's comments that revealed the word are removed (a fresh session's prompt
+ *     carries the whole issue, so it would read the word from them); with the per-turn issue's
+ *     stored session id released (charness stopped, the repo's own state store), the same hand-over
+ *     starts a FRESH session that cannot reveal the word, though its prompt holds the digest — the
+ *     recall checks above are load-bearing
+ *   → prompt context (needs `JIRA_LIVE_MEDIA_ISSUE`): a pasted screenshot and video are fetched through the
+ *     attachment tool and measured with ffmpeg on the agent's PATH; a later hand-over is a delta; a
+ *     compaction the agent runs on request makes the next prompt the whole issue again; the run named
+ *     neither model nor effort, so every session ran on the defaults. What the agent was sent and called is
+ *     read from Claude's own transcript
  *   → every Jira session's MCP servers: only the bot's own (R8)
  *   → the self-assigned issue: no request, nothing posted
  *   end: charness stopped, its private tmux server removed, the issues moved to a
@@ -76,7 +93,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -85,17 +102,20 @@ import { parse as parseEnvFile } from 'dotenv';
 import { JiraLiveRequester, type LiveComment, type LiveIssueState } from './jiraLiveRequester';
 import { getPollJqlProjectKeys, getPolledDecisions } from '../jiraE2e/charnessLog';
 import { getForeignAgentEnvNames } from '../jiraE2e/fakeClaudeContract';
+import { isolatedLaunchEnvNames, isolatedSandboxEnv } from '../e2e/isolatedCharness';
 import { getClaudeMemoryAbove, validateJiraConfig, type JiraAdapterName, type JiraConfig } from '../../connectors/jira/config';
 import { createJiraClient, type JiraClient } from '../../connectors/jira/client';
 import { jiraCommentAdfMaxChars, jiraCommentMarkdownMaxChars, type AdfDocument } from '../../connectors/jira/adf';
 import { makeJiraKey } from '../../connectors/jira/sessionKeyCodec';
 import { getJiraConfigPath } from '../../connectors/jira/configFile';
-import { jiraPromptCommentCount } from '../../connectors/jira/prompt';
+import { jiraFilesDirName } from '../../connectors/jira/connector';
+import { resolveThreadFilesDir } from '../../botFileStorage';
 import { StateStore } from '../../state';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../../utils/jsonStreamHost';
 import { keyToString } from '../../sessionKey';
 import { claudeJsonStreamUsageLogPrefix } from '../../adapters/claudeJsonStreamAdapter';
 import { claudePerTurnAdapterName } from '../../adapters/adapterNames';
+import { getClaudeTranscriptPath } from '../../adapters/claudeCliAdapter';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../../connectors/telegram/telegramCallGuard';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
 import { buildSupersededRequestsLine } from '../../requests/requestHeader';
@@ -104,6 +124,8 @@ const liveEnvFile = process.env.JIRA_LIVE_ENV_FILE;
 const liveSite = process.env.JIRA_LIVE_SITE;
 const requesterStorageState = process.env.JIRA_LIVE_REQUESTER_STORAGE_STATE;
 const longIdleMinutesEnvName = 'JIRA_LIVE_LONG_IDLE_MINUTES';
+/** The key of a sandbox issue prepared with pasted media (a screenshot in the description, a video in a comment); its steps are skipped without it. */
+const mediaIssueKey = process.env.JIRA_LIVE_MEDIA_ISSUE;
 
 /** The long idle wait (minutes), or `null` when the step is to be skipped; a value that is not a positive number is refused up front. */
 function parseLongIdleMinutes(raw: string | undefined): number | null {
@@ -118,8 +140,6 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const cliPath = path.join(repoRoot, 'dist', 'cli.js');
 const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 
-/** The only variables `run-isolated.sh` passes to the instance. */
-const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE'];
 /** What a Jira-only instance's env file must set. */
 const agentIdleMinutesEnvName = 'AGENT_IDLE_MINUTES';
 const requiredInstanceEnvNames = ['CONNECTORS', 'DATA_DIR', 'WORK_ROOT', 'TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'REQUEST_BACKSTOP_MINUTES', agentIdleMinutesEnvName];
@@ -136,6 +156,9 @@ const answerTimeoutMs = 5 * 60 * 1000;
 /** The 3-minute backstop, the one-minute sweep, a resume and the agent's two-minute sleep, with room. */
 const killedAnswerTimeoutMs = 12 * 60 * 1000;
 const stopTimeoutMs = 30 * 1000;
+/** A call the test itself makes to the Jira REST API. */
+const restRequestTimeoutMs = 60 * 1000;
+const noContentStatus = 204;
 const waitStepMs = 3000;
 /** Polls happen at once on start, then one interval apart: two and a half intervals hold two polls. */
 const restartPollIntervals = 2.5;
@@ -193,20 +216,27 @@ function getRepeatScenarioText(token: string): string {
 }
 
 /**
- * L6: the code word of the issues whose conversation is resumed. It is given in the issue's FIRST comment,
- * never in the description, so that filler comments can push it (and the agent's answer) out of the
- * `jiraPromptCommentCount` comments the request prompt quotes: a later hand-over asking for it can be
- * answered only from the conversation's earlier context — a fresh session cannot see it.
+ * L6: the recall of the issues whose conversation is resumed is a HASH COMMITMENT. In its first turn the agent
+ * picks a secret word of its own, keeps it out of the issue and out of every file, and posts only the word's
+ * SHA-256. A later hand-over asks for the word, and the run checks sha256(answer) against the posted digest.
+ * Every prompt may carry the whole issue — a fresh session's does, the agent's own digest comment included —
+ * yet no prompt holds the word: only the conversation's earlier context does, so a matching word proves the
+ * recall came from it, and the decoy (a fresh session) cannot produce one.
  */
-const codeWordTokens = { final: createAskToken('CODE'), perTurn: createAskToken('CODE') } as const;
-const codeWordAskText = 'Reply with a final answer whose text is exactly the code word given in the first comment of this issue, nothing else.';
-const recallAskText = 'Reply with a final answer whose text is exactly the code word you were given earlier in this issue, nothing else. If you were never given one, reply with a final answer whose text is exactly: UNKNOWN';
-/** What a session that never saw the code word is told to answer. */
-const unknownCodeWordAnswer = 'UNKNOWN';
-const fillerCommentText = 'Filler comment of the live run, nothing to do here.';
+const secretWordAskText = [
+  'Pick a secret word yourself: 16 random letters and digits.',
+  'Never write it into this issue, into a file or into an answer, and keep it in any summary of this conversation.',
+  'Compute its SHA-256 with this shell command, your word in place of WORD: `printf %s WORD | sha256sum`.',
+  'Send a final answer whose text is exactly the 64-character hex digest it printed, nothing else.',
+].join(' ');
+const recallAskText = 'Reply with a final answer whose text is exactly the secret word you picked earlier in this issue (your earlier answer is its SHA-256), nothing else. If you never picked one, reply with a final answer whose text is exactly: UNKNOWN';
+/** What a session that never picked the word is told to answer. */
+const unknownSecretWordAnswer = 'UNKNOWN';
+/** A SHA-256 as `sha256sum` prints it. */
+const sha256HexRe = /^[0-9a-f]{64}$/;
 
-function getCodeWordCommentText(token: string): string {
-  return `The code word for this issue is: ${token}`;
+function getSha256Hex(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 /**
@@ -218,8 +248,8 @@ function getCodeWordCommentText(token: string): string {
 const resumedTurnCacheWriteMaxShare = 0.5;
 
 const scenarioTexts = {
-  final: codeWordAskText,
-  perTurn: codeWordAskText,
+  final: secretWordAskText,
+  perTurn: secretWordAskText,
   question: [
     'Before doing anything else, ask the requester which colour they prefer, as a question answer, and end your turn.',
     'Once they have answered in a comment, reply with a final answer whose text is exactly that colour in upper case, nothing else.',
@@ -262,6 +292,8 @@ let jiraConfigOriginalText: string | null = null;
  */
 const seenInitsByProcess = new Map<string, { issueKey: string; inits: StreamLine[] }>();
 const issueKeys = new Map<Scenario | 'self' | 'probe', string>();
+/** The SHA-256 each recall scenario's first answer posted: the commitment to its secret word. */
+const committedDigests = new Map<'final' | 'perTurn', string>();
 
 function getIssueKey(scenario: Scenario | 'self' | 'probe'): string {
   const issueKey = issueKeys.get(scenario);
@@ -371,6 +403,7 @@ async function startCharness(): Promise<number> {
       SHELL: '/bin/sh',
       LANG: 'C.UTF-8',
       TERM: 'dumb',
+      ...isolatedSandboxEnv,
     },
     cwd: dataDir,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -406,12 +439,22 @@ function getSessionPaths(issueKey: string): ReturnType<typeof getJsonStreamSessi
   return getJsonStreamSessionPaths(resolveJsonStreamSessionDir(dataDir, makeJiraKey(issueKey)));
 }
 
+/** One block of a stream or transcript line's content: text, or a tool call with its name and input. */
+interface StreamContentBlock {
+  type?: string;
+  text?: string;
+  name?: string;
+  input?: { command?: string };
+}
+
 interface StreamLine {
   type?: string;
   subtype?: string;
   mcp_servers?: Array<{ name: string; status: string }>;
+  /** The model a `system/init` frame reports. */
+  model?: string;
   /** A user line's content may be a plain string. */
-  message?: { content?: string | Array<{ type?: string; text?: string; name?: string; input?: { command?: string } }> };
+  message?: { content?: string | StreamContentBlock[] };
 }
 
 /** The texts of the user turns an issue session's agent received so far (the request prompts and the wake-ups). */
@@ -440,17 +483,54 @@ function getStartedCommands(issueKey: string, afterRequestId?: string): string[]
   return commands;
 }
 
-/** The complete lines of an issue session's stdout so far (a line still being written is left out). */
-function readStreamLines(issueKey: string): StreamLine[] {
-  const { stdoutFile } = getSessionPaths(issueKey);
-  if (!fs.existsSync(stdoutFile)) return [];
-  return fs.readFileSync(stdoutFile, 'utf8').split('\n').slice(0, -1).flatMap((line) => {
+/** The tool calls among the given lines. */
+function getToolUseBlocks(lines: readonly StreamLine[]): StreamContentBlock[] {
+  return lines.flatMap((line) => {
+    const content = line.message?.content;
+    return Array.isArray(content) ? content.filter((block) => block.type === 'tool_use') : [];
+  });
+}
+
+/** Parse JSON lines, dropping a line still being written (no newline yet) and any that is not JSON. */
+function parseJsonLines(text: string): StreamLine[] {
+  return text.split('\n').slice(0, -1).flatMap((line) => {
     try {
       return [JSON.parse(line)];
     } catch {
       return [];
     }
   });
+}
+
+/** The complete lines of an issue session's stdout so far (a line still being written is left out). */
+function readStreamLines(issueKey: string): StreamLine[] {
+  const { stdoutFile } = getSessionPaths(issueKey);
+  return fs.existsSync(stdoutFile) ? parseJsonLines(fs.readFileSync(stdoutFile, 'utf8')) : [];
+}
+
+/** The Claude session ids charness started for an issue's conversation (its spawn log lines), each once. */
+function getSpawnedSessionIds(issueKey: string): string[] {
+  const linePrefix = `[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`;
+  const sessionIds = charnessOutput.split('\n').filter((line) => line.startsWith(linePrefix)).map((line) => line.slice(linePrefix.length).split(' ')[0]);
+  return [...new Set(sessionIds)];
+}
+
+/**
+ * What Claude Code itself recorded of an issue's conversation (its transcript): every prompt it was sent and every
+ * tool it called, across the conversation's processes — a per-turn process takes its stream file with it, so the
+ * stream file of one process cannot show a later hand-over.
+ */
+function readTranscriptLines(issueKey: string): StreamLine[] {
+  const workDir = path.join(instanceEnv.WORK_ROOT, config.projects.get(projectKey)?.folder ?? '');
+  return getSpawnedSessionIds(issueKey).flatMap((sessionId) => {
+    const transcriptFile = getClaudeTranscriptPath(workDir, sessionId);
+    return fs.existsSync(transcriptFile) ? parseJsonLines(fs.readFileSync(transcriptFile, 'utf8')) : [];
+  });
+}
+
+/** A request prompt as the transcript holds it: the request header, behind the preamble when the session just started. */
+function checkIsRequestPrompt(text: string): boolean {
+  return text.startsWith('[Request ') || (text.startsWith('[Jira issue context]') && text.includes('\n\n[Request '));
 }
 
 /** Collect the `system/init` frames of every live issue session (see `seenInitsByProcess`); called by each wait's poll. */
@@ -622,7 +702,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     if (config.projects.size !== 1) throw new Error('the live run expects exactly one allowlisted project');
     [projectKey] = [...config.projects.keys()];
     aiClient = createJiraClient({ baseUrl: config.baseUrl, email: config.email, apiToken: config.apiToken });
-    report(`run ${runId}: project ${projectKey}, poll every ${config.pollIntervalMs / 1000} s, model ${config.model ?? 'default'}, effort ${config.effort ?? 'default'}`);
+    report(`run ${runId}: project ${projectKey}, poll every ${config.pollIntervalMs / 1000} s, model ${config.model}, effort ${config.effort}`);
   });
 
   after(async () => {
@@ -636,6 +716,13 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
           if (!(await requester.getIssueState(issueKey)).isDone) await requester.moveToDone(issueKey);
         } catch (error) {
           report(`${issueKey} not moved to a finished status: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (mediaIssueKey) {
+        try {
+          if (!(await requester.getIssueState(mediaIssueKey)).isDone) await requester.moveToDone(mediaIssueKey);
+        } catch (error) {
+          report(`${mediaIssueKey} not moved to a finished status: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       await requester.close();
@@ -692,7 +779,6 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       issueKeys.set(scenario, await getRequester().createIssue(projectKey, `[charness ${runMarker}] ${scenario}`, text));
     }
     report(`created: ${[...issueKeys].map(([scenario, issueKey]) => `${scenario}=${issueKey}`).join(', ')}`);
-    for (const scenario of ['final', 'perTurn'] as const) await getRequester().addComment(getIssueKey(scenario), getCodeWordCommentText(codeWordTokens[scenario]));
     for (const scenario of answeredScenarios) await getRequester().assignIssue(getIssueKey(scenario), config.accountId);
     await aiClient.assignIssue(getIssueKey('self'), config.accountId);
 
@@ -739,8 +825,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
 
   it('final: the answer is a comment by the AI, the issue goes back to the requester, the request closes `final`', async () => {
     const issueKey = getIssueKey('final');
-    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => comment.text.includes(codeWordTokens.final)));
+    const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => sha256HexRe.test(comment.text.trim())));
     assert.equal(getAiComments(state).length, 1, 'one comment');
+    committedDigests.set('final', getAiComments(state)[0].text.trim());
     await waitFor('the request in the closed history', answerTimeoutMs, () => getClosedRequests(issueKey).length > 0);
     assert.deepEqual(getClosedRequests(issueKey).map((record) => record.closeReason), ['final']);
     report(`final ${issueKey}: comment ${getAiComments(state)[0].id} "${getAiComments(state)[0].text}"`);
@@ -864,19 +951,48 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       `${label}: the resumed process wrote a small fraction of the first one's cache (first ${formatUsage(firstTurn)}; resumed ${formatUsage(resumedTurn)})`);
   }
 
+  /** The digest the scenario's first answer posted: the commitment its recall is checked against. */
+  function getCommittedDigest(scenario: 'final' | 'perTurn'): string {
+    const digest = committedDigests.get(scenario);
+    assert.ok(digest, `${scenario}: its first answer posted a digest`);
+    return digest;
+  }
+
+  /** Did the answer reveal the word whose digest the scenario's first answer posted? */
+  function checkRevealsCommittedWord(scenario: 'final' | 'perTurn', answerText: string | undefined): boolean {
+    return answerText !== undefined && getSha256Hex(answerText.trim()) === getCommittedDigest(scenario);
+  }
+
   /**
-   * Hand the issue over asking for its code word, with the comments the prompt would quote first pushed out
-   * of the quoted window: `jiraPromptCommentCount` fillers, then the ask. Asserts the premise — none of the
-   * comments the prompt quotes holds the code word — so the recall cannot pass through the prompt.
+   * Hand the issue over asking for the secret word. Asserts the premise first — nothing written on the issue
+   * (description, comments) is the word — so a matching answer cannot have come from any prompt.
    */
   async function handOverWithRecallAsk(scenario: 'final' | 'perTurn'): Promise<void> {
     const issueKey = getIssueKey(scenario);
-    for (let index = 0; index < jiraPromptCommentCount; index += 1) await getRequester().addComment(issueKey, fillerCommentText);
     await getRequester().addComment(issueKey, recallAskText);
-    const quotedComments = (await getRequester().getIssueState(issueKey)).comments.slice(-jiraPromptCommentCount);
-    assert.equal(quotedComments.length, jiraPromptCommentCount, `${issueKey}: the quoted window is full`);
-    assert.ok(quotedComments.every((comment) => !comment.text.includes(codeWordTokens[scenario])), `${issueKey}: no comment the prompt quotes holds the code word`);
+    const texts = [scenarioTexts[scenario], ...(await getRequester().getIssueState(issueKey)).comments.map((comment) => comment.text)];
+    assert.ok(texts.every((text) => text.split(/\s+/).every((word) => !checkRevealsCommittedWord(scenario, word))), `${issueKey}: the secret word is written nowhere on the issue`);
     await getRequester().assignIssue(issueKey, config.accountId);
+  }
+
+  /**
+   * Remove the AI's own comments that reveal the committed word. A fresh session's prompt carries the whole issue,
+   * its comments too: the word the agent revealed in an earlier answer would be read from there and the decoy could
+   * not tell a recall from a read. The AI account's own credentials, on the configured site, its own comment only.
+   */
+  async function deleteRevealingAiComments(scenario: 'final' | 'perTurn'): Promise<void> {
+    const issueKey = getIssueKey(scenario);
+    const revealing = getAiComments(await getRequester().getIssueState(issueKey)).filter((comment) => checkRevealsCommittedWord(scenario, comment.text));
+    assert.ok(revealing.length > 0, `${issueKey}: the premise — an earlier answer revealed the word on the issue`);
+    for (const comment of revealing) {
+      const response = await fetch(`${config.baseUrl}/rest/api/3/issue/${issueKey}/comment/${comment.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString('base64')}` },
+        signal: AbortSignal.timeout(restRequestTimeoutMs),
+      });
+      assert.equal(response.status, noContentStatus, `${issueKey}: the AI's comment ${comment.id} was deleted`);
+    }
+    report(`decoy ${issueKey}: ${revealing.length} comment(s) revealing the word removed before the fresh session`);
   }
 
   /** Release the issue's stored session id through the repo's own state store — charness must be stopped. */
@@ -904,12 +1020,12 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`L6/1 idle ${issueKey}: answer turn ${formatUsage(answerUsage)}; compaction pre=${compaction.preTokens} post=${compaction.postTokens}, its turn ${formatUsage(compactionUsage)}; process stopped`);
   });
 
-  it('lifecycle (L6 step 1): the next hand-over resumes the sleeping conversation in a new process; the answer gives the code word only the earlier context holds', async () => {
+  it('lifecycle (L6 step 1): the next hand-over resumes the sleeping conversation in a new process; the answer reveals the secret word only the earlier context holds', async () => {
     const issueKey = getIssueKey('final');
     await handOverWithRecallAsk('final');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
     const recalled = getAiComments(state).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.final), `the resumed answer gives the code word (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('final', recalled.text), `the resumed answer reveals the word of the posted digest (got "${recalled?.text}")`);
     assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
     assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] spawn', ' session='), 2, 'a second process');
     assert.ok(charnessOutput.split('\n').some((line) => line.startsWith(`[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`) && line.includes(' resume=true ')), 'the second process resumed the conversation');
@@ -960,8 +1076,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
   it('lifecycle (L6 step 2): per-turn — the process is gone right after the answer; a hand-over a minute later resumes the conversation in a new process that finds the first one\'s context in the cache', async () => {
     const issueKey = getIssueKey('perTurn');
     await getRequester().assignIssue(issueKey, config.accountId);
-    const firstState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => comment.text.includes(codeWordTokens.perTurn)));
+    const firstState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.some((comment) => sha256HexRe.test(comment.text.trim())));
     assert.equal(getAiComments(firstState).length, 1, 'one answer');
+    committedDigests.set('perTurn', getAiComments(firstState)[0].text.trim());
     await waitFor(`${issueKey}'s process stopped right after its turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 1);
     assert.equal(getAgentPid(issueKey), null, 'no process between the turns');
     assert.equal(countConversationLogLines(issueKey, '[ClaudeJson] session', ' exited unexpectedly'), 0, 'a per-turn stop is not an unexpected exit');
@@ -971,7 +1088,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const secondState = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 2);
     const recalled = getAiComments(secondState).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.perTurn), `the second process gives the code word from the first one's context (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('perTurn', recalled.text), `the second process reveals the word of the first one's digest (got "${recalled?.text}")`);
     assert.equal(countSleepingResumes(issueKey), 1, 'the hand-over resumed the sleeping session');
     await waitFor(`${issueKey}'s second process stopped too`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 2);
     assert.equal(getAgentPid(issueKey), null, 'no process after the second turn either');
@@ -980,7 +1097,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     report(`L6/2 per-turn ${issueKey}: turn 1 ${formatUsage(firstUsage)}; turn 2 (new process, ${perTurnHandOverGapMs / 1000} s later) ${formatUsage(usages[1])}; comments ${getAiComments(secondState).map((comment) => `${comment.id} "${comment.text}"`).join(', ')}`);
   });
 
-  it('lifecycle (L6 step 5): the sleeping per-turn session is compacted at the idle mark; a resume long after it still gives the code word', { skip: longIdleMinutes === null ? `set ${longIdleMinutesEnvName} to run` : false }, async () => {
+  it('lifecycle (L6 step 5): the sleeping per-turn session is compacted at the idle mark; a resume long after it still reveals the secret word', { skip: longIdleMinutes === null ? `set ${longIdleMinutesEnvName} to run` : false }, async () => {
     const issueKey = getIssueKey('perTurn');
     await waitFor(`${issueKey}'s sleeping session compacted at the idle mark`, getIdleStopTimeoutMs(), () => getCompactions(issueKey).length === 1 && countIdleStops(issueKey) === 3);
     assert.equal(countConversationLogLines(issueKey, '[compact-on-idle]', ' sleeping per-turn session resumed for its compaction'), 1, 'the compaction resumed the sleeping session (L-D7)');
@@ -993,15 +1110,16 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length >= 3);
     const recalled = getAiComments(state).at(-1);
-    assert.ok(recalled && recalled.text.includes(codeWordTokens.perTurn), `the answer still gives the code word from the first turn's context (got "${recalled?.text}")`);
+    assert.ok(recalled && checkRevealsCommittedWord('perTurn', recalled.text), `the answer still reveals the word of the first turn's digest (got "${recalled?.text}")`);
     await waitFor(`${issueKey}'s process stopped after the late turn`, perTurnStopTimeoutMs, () => countIdleStops(issueKey) === 4);
     // A measurement for the plan's table, not a cache proof (a resume after a compaction rewrites the compacted prefix).
     const usages = await waitForUsageRecords(issueKey, 4);
     report(`L6/5 ${issueKey}: resume ${longIdleMinutes} min after the compaction turn: ${formatUsage(usages[3])}`);
   });
 
-  it('decoy: with the stored session id released, the same hand-over starts a fresh session that cannot give the code word — the recall checks are load-bearing', async () => {
+  it('decoy: with the stored session id released, the same hand-over starts a fresh session that cannot reveal the secret word — the recall checks are load-bearing', async () => {
     const issueKey = getIssueKey('perTurn');
+    await deleteRevealingAiComments('perTurn');
     const aiCommentsBefore = getAiComments(await getRequester().getIssueState(issueKey)).length;
     await stopCharness();
     await releaseStoredSession(issueKey);
@@ -1009,11 +1127,114 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     await handOverWithRecallAsk('perTurn');
     const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > aiCommentsBefore);
     const answer = getAiComments(state).at(-1);
-    assert.ok(answer && !answer.text.includes(codeWordTokens.perTurn), `a fresh session cannot give the code word (got "${answer?.text}")`);
+    assert.ok(answer && !checkRevealsCommittedWord('perTurn', answer.text), `a fresh session cannot reveal the word, though its prompt holds the digest (got "${answer?.text}")`);
     const bootOutput = charnessOutput.slice(outputStart);
     assert.ok(!bootOutput.includes(`[ensure] resumed the sleeping session of ${keyToString(makeJiraKey(issueKey))}`), 'nothing was resumed');
     assert.ok(bootOutput.split('\n').some((line) => line.startsWith(`[ClaudeJson] spawn ${keyToString(makeJiraKey(issueKey))} session=`) && line.includes(' resume=false ')), 'the hand-over started a fresh session');
-    report(`decoy ${issueKey}: fresh session answered ${answer.id} "${answer.text}" (expected ${unknownCodeWordAnswer} or anything without the code word)`);
+    report(`decoy ${issueKey}: fresh session answered ${answer.id} "${answer.text}" (expected ${unknownSecretWordAnswer} or any word that does not match the digest)`);
+  });
+
+  describe('prompt context (the Jira prompt context plan, S7)', { skip: mediaIssueKey ? false : `set JIRA_LIVE_MEDIA_ISSUE to run` }, () => {
+    const mediaAskText = [
+      'Look at the screenshot named unique-shot.png in the description and at the video probe-clip.mp4 in the first comment.',
+      'Reply with ONE final answer of three parts: (1) the picture\'s size in pixels as WxH, (2) the colour of its leftmost and of its rightmost vertical bar, (3) the video\'s duration in whole seconds as "N s".',
+      'Fetch the originals with the attachment tool. Look at the picture itself for its colours, measure its size however you like, and measure the video by running `ffmpeg -i <its file>` (ffmpeg is on your PATH; there is no ffprobe) and reading its Duration line; do not guess.',
+    ].join(' ');
+    const followUpText = 'Thanks. One more question: what was the file name of the video? Reply with a final answer of that name only.';
+    const compactAskText = 'Please compact this conversation now (the compact_conversation tool), then reply with a final answer whose text is exactly: COMPACTED';
+
+    function getMediaIssueKey(): string {
+      if (!mediaIssueKey) throw new Error('JIRA_LIVE_MEDIA_ISSUE is not set');
+      return mediaIssueKey;
+    }
+
+    // An earlier run may have left a conversation and downloaded files behind: this issue's conversation starts over
+    // (a fresh session's prompt is the whole issue) and its files are fetched again.
+    before(async () => {
+      const issueKey = getMediaIssueKey();
+      await stopCharness();
+      await releaseStoredSession(issueKey);
+      fs.rmSync(path.join(resolveThreadFilesDir(dataDir, makeJiraKey(issueKey)), jiraFilesDirName), { recursive: true, force: true });
+      await startCharness();
+    });
+
+    /** Ask in a comment, hand the issue over again, and resolve the AI comments once a new answer is there and the issue is back with the requester. */
+    async function askAndWait(issueKey: string, askText: string): Promise<LiveComment[]> {
+      await getRequester().addComment(issueKey, askText);
+      const state = await getRequester().getIssueState(issueKey);
+      const aiCommentsBefore = getAiComments(state).length;
+      if (state.isDone) await getRequester().reopenIssue(issueKey);
+      // Assigning the AI again is no new hand-over: the issue must first be with someone else.
+      if (state.assigneeAccountId === config.accountId) await getRequester().assignIssue(issueKey, getRequester().accountId);
+      await getRequester().assignIssue(issueKey, config.accountId);
+      return getAiComments(await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > aiCommentsBefore));
+    }
+
+    /** The newest request prompt in the conversation's transcript — the text the agent really read. */
+    function getLastPrompt(issueKey: string): string {
+      const prompt = readTranscriptLines(issueKey).filter((line) => line.type === 'user').map(getUserLineText).filter(checkIsRequestPrompt).at(-1);
+      assert.ok(prompt, `${issueKey}: its transcript holds a request prompt`);
+      return prompt;
+    }
+
+    it('live 1 — pasted media: the agent fetches the screenshot and the video through the attachment tool and measures them (ffmpeg is on its PATH)', async () => {
+      const issueKey = getMediaIssueKey();
+      const comments = await askAndWait(issueKey, mediaAskText);
+      const answer = comments.at(-1)?.text ?? '';
+      const prompt = getLastPrompt(issueKey);
+      assert.match(prompt, /\[image: unique-shot\.png — attachment \d+\]/, 'the prompt shows the screenshot where it sat');
+      assert.match(prompt, /\[video: probe-clip\.mp4 — attachment \d+\]/, 'and the video');
+      assert.match(prompt, /^Attachments \(\d+\):$/m, 'and lists the attachments');
+      const toolUses = getToolUseBlocks(readTranscriptLines(issueKey));
+      const toolNames = toolUses.flatMap((block) => (block.name ? [block.name] : []));
+      assert.ok(toolNames.some((name) => name.endsWith('jira_get_attachment')), `the agent used the attachment tool (tools used: ${[...new Set(toolNames)].join(', ')})`);
+      const downloadDir = path.join(resolveThreadFilesDir(dataDir, makeJiraKey(issueKey)), jiraFilesDirName);
+      const downloaded = fs.existsSync(downloadDir) ? fs.readdirSync(downloadDir).filter((name) => !name.endsWith('.tmp')) : [];
+      assert.ok(downloaded.some((name) => name.endsWith('unique-shot.png')) && downloaded.some((name) => name.endsWith('probe-clip.mp4')), `the originals were saved (${downloaded.join(', ')})`);
+      const commands = toolUses.flatMap((block) => (block.input?.command ? [block.input.command] : []));
+      assert.ok(commands.some((command) => /(?:^|[\s;&|(])ffmpeg\s/.test(command)), `the agent ran ffmpeg by its name (commands: ${commands.join(' ; ')})`);
+      assert.match(answer, /640\s*[x×]\s*360/, `the answer gives the picture's size (got "${answer}")`);
+      assert.ok(/black/i.test(answer) && /white/i.test(answer), `and the colours of its outer bars, which only a look at the picture gives (got "${answer}")`);
+      assert.match(answer, /\b2(?:\.\d+)?\s*(?:s\b|sec)/i, `and the video's duration (got "${answer}")`);
+      report(`live 1 ${issueKey}: answered "${answer}"; tools ${[...new Set(toolNames)].join(', ')}; saved ${downloaded.join(', ')}`);
+    });
+
+    it('live 2 — a later hand-over carries only what changed since the agent\'s last prompt', async () => {
+      const issueKey = getMediaIssueKey();
+      const comments = await askAndWait(issueKey, followUpText);
+      const prompt = getLastPrompt(issueKey);
+      assert.ok(prompt.includes('what changed since your last prompt:'), `a delta:\n${prompt}`);
+      assert.ok(prompt.includes(`> ${followUpText}`) && prompt.includes('(new):'), 'the new comment is in it');
+      assert.match(prompt, /Unchanged since your last prompt: .*description/, 'the description was left out and named');
+      assert.ok(!prompt.includes('[image: unique-shot.png'), 'the screenshot placeholder is not told twice');
+      assert.match(comments.at(-1)?.text ?? '', /probe-clip/, 'the agent still knows the video\'s name from its context');
+      report(`live 2 ${issueKey}: delta of ${prompt.length} characters; answered "${comments.at(-1)?.text}"`);
+    });
+
+    it('live 3 — a compaction the agent runs on request makes the next prompt the whole issue again', async () => {
+      const issueKey = getMediaIssueKey();
+      const compactionsBefore = getCompactions(issueKey).length;
+      const comments = await askAndWait(issueKey, compactAskText);
+      assert.match(comments.at(-1)?.text ?? '', /COMPACTED/);
+      await waitFor(`${issueKey}'s compaction ran`, answerTimeoutMs, () => getCompactions(issueKey).length > compactionsBefore);
+      await waitFor('the bot noted the reset', answerTimeoutMs, () => charnessOutput.includes(`[jira] ${issueKey}: its context was reset (compaction (manual))`));
+      await askAndWait(issueKey, followUpText);
+      const prompt = getLastPrompt(issueKey);
+      assert.ok(!prompt.includes('what changed since your last prompt:'), 'not a delta any more');
+      assert.ok(prompt.includes('\nFields:\n') && prompt.includes('\nDescription:\n') && /\nComments \(\d+, oldest first\):/.test(prompt), `the whole issue:\n${prompt.slice(0, 600)}`);
+      assert.match(prompt, /\[image: unique-shot\.png — attachment \d+\]/, 'the screenshot is told again');
+      report(`live 3 ${issueKey}: whole prompt of ${prompt.length} characters after the compaction`);
+    });
+
+    it('live 4 — a jira.json that names neither model nor effort: every session ran on opus with high effort', () => {
+      const raw: { model?: string; effort?: string } = JSON.parse(fs.readFileSync(getJiraConfigPath(dataDir), 'utf8'));
+      assert.deepEqual([raw.model, raw.effort], [undefined, undefined], 'the precondition: jira.json names neither');
+      const spawns = charnessOutput.split('\n').filter((line) => line.startsWith('[ClaudeJson] spawn jira:'));
+      assert.ok(spawns.length > 0);
+      for (const line of spawns) assert.match(line, / effort=high model=opus /, line);
+      const inits = [mediaIssueKey ?? '', ...sessionScenarios.map(getIssueKey)].flatMap((issueKey) => getSeenInits(issueKey).concat(readStreamLines(issueKey).filter((line) => line.type === 'system' && line.subtype === 'init')));
+      assert.ok(inits.length > 0 && inits.every((init) => /opus/i.test(init.model ?? '')), `the agents report the model they ran: ${[...new Set(inits.map((init) => init.model))].join(', ')}`);
+    });
   });
 
   it('every Jira session loaded only the bot\'s MCP server (R8)', () => {

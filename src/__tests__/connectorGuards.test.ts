@@ -199,8 +199,9 @@ describe('loadEnvFiles with ENV_FILE', () => {
     process.env.ENV_FILE = instanceDirectory;
     assert.throws(() => loadEnvFiles(tmpRoot), /not a regular file/);
 
-    const unreadableFile = path.join(tmpRoot, 'unreadable.env');
-    fs.writeFileSync(unreadableFile, 'J3_INSTANCE_VALUE=from-instance\n', { mode: 0o000 });
+    // A regular file whose read fails for every user: root (the whole bot in a container runs as one) reads a
+    // mode-000 file without complaint, while this one answers EIO.
+    const unreadableFile = '/proc/self/mem';
     process.env.ENV_FILE = unreadableFile;
     assert.throws(() => loadEnvFiles(tmpRoot), /could not be read/);
     assert.equal(process.env.J3_INSTANCE_VALUE, undefined);

@@ -26,7 +26,16 @@ export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 130
  */
 export const fakeCompactionResultUsage = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 } as const;
 export const fakeCompactionModelUsage = { 'fake-model': { inputTokens: 1446, outputTokens: 1276, cacheReadInputTokens: 23852, cacheCreationInputTokens: 23979 } } as const;
+/**
+ * A file in the fake's state dir that, while it exists, makes every process of the fake exit as soon as it reads a
+ * user message — before it echoes or answers it: a prompt that reached the agent and was never taken in (E3).
+ */
+export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
 export const fakeClaudeLogFileNames = {
+  /** One record per user message the fake READ, the crashing ones too: `{ pid, issueKey, requestId, text }`. */
+  prompts: 'prompts.jsonl',
+  /** One record per tool the fake called on the bot MCP, or ran on its own PATH: `{ issueKey, tool, args, outcome }`. */
+  toolCalls: 'tool-calls.jsonl',
   /** One record per `/compact` turn the fake ran: `{ sessionId, pid }`. */
   compactions: 'compactions.jsonl',
   launches: 'launches.jsonl',
@@ -70,6 +79,24 @@ export interface FakeClaudeTurn {
   supersededRequestIds: string[];
   turnCount: number;
   pid: number;
+}
+
+/** One line of the fake's `prompts.jsonl`: a user message it read. */
+export interface FakeClaudePrompt {
+  pid: number;
+  issueKey: string;
+  requestId: string | null;
+  /** The whole text the agent was sent: header, issue, everything. */
+  text: string;
+}
+
+/** One line of `tool-calls.jsonl`. */
+export interface FakeClaudeToolCall {
+  issueKey: string;
+  tool: string;
+  args: Record<string, string>;
+  /** The tool's result text (`error: …` for a refusal), or what the program printed. */
+  outcome: string;
 }
 
 /**

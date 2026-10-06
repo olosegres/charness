@@ -27,6 +27,7 @@ export const adapterEventNames = [
   'stopped',
   'suspended',
   'turnEnded',
+  'contextCompacted',
   'error',
 ] as const;
 
@@ -62,6 +63,8 @@ export const foreignKeyEventRoutes = {
   suspended: 'none',
   // The per-turn stop (L5) applies to an issue's conversation as to a topic's; the handler posts nothing.
   turnEnded: 'all',
+  // A completed compaction resets what the conversation was told: its connector sends the whole issue next (C6).
+  contextCompacted: 'all',
   started: 'none',
   // Logged; there is no topic to post it to.
   error: 'requestSide',

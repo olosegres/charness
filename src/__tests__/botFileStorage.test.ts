@@ -110,6 +110,53 @@ describe('botFileStorage', () => {
     assert.ok(fs.existsSync(atBoundary), 'file exactly at cutoff is kept');
   });
 
+  it('sweep reaches the folders nested in a thread dir: old files go, emptied folders and the thread dir are pruned', async () => {
+    const dataDir = await makeDataDir();
+    const now = Date.now();
+    const dir = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 5));
+    const nestedDir = path.join(dir, 'tracker', 'text');
+    await fsp.mkdir(nestedDir, { recursive: true });
+    await writeAgedFile(nestedDir, 'old-spill.txt', now, fileRetentionMs + 60_000);
+    await writeAgedFile(path.join(dir, 'tracker'), 'old-download.bin', now, fileRetentionMs * 2);
+
+    const result = await sweepExpiredThreadFiles(resolveFilesRoot(dataDir), fileRetentionMs, now);
+
+    assert.equal(result.removedFiles, 2);
+    assert.equal(result.removedDirs, 3, 'the text folder, its parent and the thread dir');
+    assert.ok(!fs.existsSync(dir), 'nothing left, so the thread dir went');
+  });
+
+  it('sweep keeps every folder above a fresh nested file, and removes only the old ones beside it', async () => {
+    const dataDir = await makeDataDir();
+    const now = Date.now();
+    const dir = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 6));
+    const nestedDir = path.join(dir, 'tracker', 'text');
+    await fsp.mkdir(nestedDir, { recursive: true });
+    const old = await writeAgedFile(nestedDir, 'old.txt', now, fileRetentionMs + 1_000);
+    const fresh = await writeAgedFile(nestedDir, 'fresh.txt', now, 60_000);
+
+    const result = await sweepExpiredThreadFiles(resolveFilesRoot(dataDir), fileRetentionMs, now);
+
+    assert.deepEqual(result, { removedFiles: 1, removedDirs: 0 });
+    assert.ok(!fs.existsSync(old) && fs.existsSync(fresh) && fs.existsSync(nestedDir));
+  });
+
+  it('sweep does not follow a symlink out of the files tree, and keeps it', async () => {
+    const dataDir = await makeDataDir();
+    const now = Date.now();
+    const outside = await makeDataDir();
+    const outsideFile = await writeAgedFile(outside, 'not-ours.txt', now, fileRetentionMs * 3);
+    const dir = await ensureThreadFilesDir(dataDir, makeTelegramKey(-1, 7));
+    const link = path.join(dir, 'link-out');
+    await fsp.symlink(outside, link);
+
+    const result = await sweepExpiredThreadFiles(resolveFilesRoot(dataDir), fileRetentionMs, now);
+
+    assert.deepEqual(result, { removedFiles: 0, removedDirs: 0 });
+    assert.ok(fs.existsSync(outsideFile), 'what the link points at was not touched');
+    assert.ok(fs.existsSync(link) && fs.existsSync(dir), 'the link and its thread dir stay');
+  });
+
   it('sweep on a missing files root returns zeroes and does not throw', async () => {
     const dataDir = await makeDataDir();
     const result = await sweepExpiredThreadFiles(resolveFilesRoot(dataDir), fileRetentionMs, Date.now());

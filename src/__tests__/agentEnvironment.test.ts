@@ -53,6 +53,11 @@ describe('getAgentEnvironment', () => {
     assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', TZ: 'Europe/Berlin' }), { HOME: '/home/user' });
   });
 
+  it('passes IS_SANDBOX on: the whole bot in a container runs as its root, where Claude Code needs it (plan S8 C20)', () => {
+    assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', IS_SANDBOX: '1' }), { HOME: '/home/user', IS_SANDBOX: '1' });
+    assert.deepEqual(getAgentEnvironment({ HOME: '/home/user' }), { HOME: '/home/user' }, 'and adds nothing when the bot has none');
+  });
+
   it('starts clean: a name an earlier case recorded is not remembered', () => {
     assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', TZ: 'Europe/Berlin' }), { HOME: '/home/user', TZ: 'Europe/Berlin' });
   });
@@ -93,6 +98,22 @@ describe('getClaudePlatformEnvironment', () => {
   it('a tracker conversation gets the allowlist; a Telegram topic keeps its environment', () => {
     assert.deepEqual(getClaudePlatformEnvironment(makeJiraKey('PROJ-12')), getAgentEnvironment());
     assert.equal(getClaudePlatformEnvironment(makeTelegramKey(-1001111111111, 42)), null);
+  });
+});
+
+describe('a Jira agent in the container', () => {
+  const savedValue = process.env.IS_SANDBOX;
+  afterEach(() => {
+    if (savedValue === undefined) delete process.env.IS_SANDBOX;
+    else process.env.IS_SANDBOX = savedValue;
+  });
+
+  it('starts with IS_SANDBOX when the bot has it, and without it when not; a Telegram topic keeps its environment', () => {
+    process.env.IS_SANDBOX = '1';
+    assert.equal(getClaudePlatformEnvironment(makeJiraKey('PROJ-12'))?.IS_SANDBOX, '1');
+    assert.equal(getClaudePlatformEnvironment(makeTelegramKey(-1001111111111, 42)), null);
+    delete process.env.IS_SANDBOX;
+    assert.equal(getClaudePlatformEnvironment(makeJiraKey('PROJ-12'))?.IS_SANDBOX, undefined);
   });
 });
 

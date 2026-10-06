@@ -8,7 +8,8 @@ import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStrea
 import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
 import { checkIsJiraProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
-import type { JiraProjectStatus } from './client';
+import type { JiraFieldDefinition, JiraProjectStatus } from './client';
+import type { JiraExtraField } from './issueBlocks';
 
 /**
  * @description The Jira connector's configuration (Jira connector plan J4,
@@ -23,6 +24,9 @@ export const jiraPollIntervalMaxSeconds = 600;
 export const jiraPollIntervalDefaultSeconds = 90;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
+/** What a Jira session runs on when `jira.json` names neither (C14); either key still overrides its own default. */
+export const jiraDefaultModel = 'opus';
+export const jiraDefaultEffort: ClaudeEffortLevel = 'high';
 
 /** The backend a Jira session runs on by default (D16, R14); `claude-per-turn` is the other allowed one (L-D12). */
 const jiraAdapterName = claudeJsonStreamAdapterName;
@@ -55,6 +59,8 @@ const folderErrorTexts: Record<BindErrorCode, string> = {
   BIND_OUTSIDE_ROOT: 'is outside WORK_ROOT',
   BIND_NOT_DIRECTORY: 'is not a directory',
 };
+/** A tool's name on the agent's PATH: ONE file name (never `.` or `..`, never a path). */
+const agentBinaryNameRe = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 /** Hosts the test-only `baseUrl` override may point at. */
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -62,6 +68,9 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const projectSchema = z.strictObject({
   folder: z.string().min(1),
   triggerStatuses: z.array(z.string().min(1)).min(1),
+  // Fields beyond the standard ones the prompt shows, by id (`customfield_10042`, `duedate`); none by default (C11).
+  // Whether the site has the field is checked at boot against its field list, never refused here.
+  extraFields: z.array(z.string().min(1)).optional(),
 });
 
 const rawConfigSchema = z.strictObject({
@@ -77,6 +86,8 @@ const rawConfigSchema = z.strictObject({
   model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
   effort: z.enum(claudeEffortLevels).optional(),
   baseUrl: z.string().min(1).optional(),
+  // C11: tools the agent should find on its PATH (`ffmpeg`): name → absolute path of the program.
+  agentBinaries: z.record(z.string().regex(agentBinaryNameRe, 'must be one file name'), z.string().min(1)).optional(),
 });
 
 /** @name JiraProjectConfig @description One allowlisted project. */
@@ -85,6 +96,8 @@ export interface JiraProjectConfig {
   folder: string;
   /** Status NAMES that make an assigned issue a request; resolved to ids at boot (D11). */
   triggerStatusNames: string[];
+  /** Ids of the extra fields the prompt shows; resolved to names at boot, an unknown one dropped. */
+  extraFieldIds: string[];
 }
 
 /** @name JiraConfig @description The validated configuration. */
@@ -100,13 +113,27 @@ export interface JiraConfig {
   pollIntervalMs: number;
   runBudgetPer24h: number;
   adapter: JiraAdapterName;
-  /** The sessions' model; absent → Claude's default. */
-  model: string | null;
-  /** The sessions' reasoning effort; absent → the bot's default. */
-  effort: ClaudeEffortLevel | null;
+  /** The sessions' model; absent from `jira.json` → {@link jiraDefaultModel}. */
+  model: string;
+  /** The sessions' reasoning effort; absent from `jira.json` → {@link jiraDefaultEffort}. */
+  effort: ClaudeEffortLevel;
+  /** Tool name → absolute path of an executable, checked at boot; linked into the agents' PATH (host runtime). */
+  agentBinaries: ReadonlyMap<string, string>;
 }
 
 export type JiraConfigResult = { ok: true; config: JiraConfig } | { ok: false; errors: string[] };
+
+/** Why `binaryPath` cannot serve as a tool, or `null`: it must be an absolute path to an executable regular file. */
+function getAgentBinaryError(binaryPath: string): string | null {
+  if (!path.isAbsolute(binaryPath)) return 'must be an absolute path';
+  try {
+    if (!fs.statSync(binaryPath).isFile()) return 'is not a file';
+    fs.accessSync(binaryPath, fs.constants.X_OK);
+  } catch (e) {
+    return e instanceof Error && 'code' in e && e.code === 'ENOENT' ? 'does not exist' : 'is not executable';
+  }
+  return null;
+}
 
 /**
  * @description R12: the marker of Claude memory nearest a folder — in the folder
@@ -205,6 +232,13 @@ export function validateJiraConfig(
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
 
+  const agentBinaries = new Map<string, string>();
+  for (const [name, binaryPath] of Object.entries(raw.agentBinaries ?? {})) {
+    const binaryError = getAgentBinaryError(binaryPath);
+    if (binaryError) errors.push(`jira.json agentBinaries.${name}: ${binaryError}`);
+    else agentBinaries.set(name, binaryPath);
+  }
+
   const projects = new Map<string, JiraProjectConfig>();
   const projectEntries = Object.entries(raw.projects);
   if (projectEntries.length === 0) errors.push('jira.json projects names no project');
@@ -227,7 +261,7 @@ export function validateJiraConfig(
       errors.push(`jira.json projects.${projectKey}.folder: Claude would load ${memory.markerName} found ${where} — pick a folder outside HOME and any repository`);
       continue;
     }
-    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses });
+    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses, extraFieldIds: [...new Set(project.extraFields ?? [])] });
   }
 
   if (errors.length > 0) return { ok: false, errors };
@@ -243,8 +277,9 @@ export function validateJiraConfig(
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
-      model: raw.model ?? null,
-      effort: raw.effort ?? null,
+      model: raw.model ?? jiraDefaultModel,
+      effort: raw.effort ?? jiraDefaultEffort,
+      agentBinaries,
     },
   };
 }
@@ -294,4 +329,24 @@ export function resolveTriggerStatusIds(
   }
   const statusIds = statusNames.flatMap((name) => idsByName.get(name.toLowerCase()) ?? []);
   return { ok: true, statusIds: [...new Set(statusIds)] };
+}
+
+/**
+ * @description Name a project's `extraFields` ids from the site's field list. An
+ * id the site does not list is `unknown`: the connector logs it once at boot and
+ * leaves it out of every prompt (C11) — a typo must not stop the whole instance.
+ */
+export function resolveExtraFields(
+  extraFieldIds: readonly string[],
+  fieldDefinitions: readonly JiraFieldDefinition[],
+): { extraFields: JiraExtraField[]; unknownFieldIds: string[] } {
+  const nameById = new Map(fieldDefinitions.map((definition) => [definition.id, definition.name]));
+  const extraFields: JiraExtraField[] = [];
+  const unknownFieldIds: string[] = [];
+  for (const id of extraFieldIds) {
+    const name = nameById.get(id);
+    if (name === undefined) unknownFieldIds.push(id);
+    else extraFields.push({ id, name });
+  }
+  return { extraFields, unknownFieldIds };
 }

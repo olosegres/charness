@@ -16,6 +16,7 @@ import {
   createJiraClient,
   jiraBackoffJitterRatio,
   jiraBackoffMs,
+  jiraCommentPageSize,
   jiraMaxAttempts,
   jiraRetryAfterCapMs,
   JiraAuthError,
@@ -217,6 +218,92 @@ describe('createJiraClient', () => {
       const comments = await createClient().getRecentComments('PROJ-7', 20);
       assert.deepEqual(comments.map((comment) => comment.id), ['5']);
       assert.equal(requests[0].url, '/rest/api/3/issue/PROJ-7/comment?orderBy=-created&maxResults=20');
+    });
+
+    it('getComments (C2): EVERY comment, oldest first, page after page — the next page starts after what the last one held', async () => {
+      const createComments = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({
+        id: `${from + index}`, author: { accountId: 'a' }, created: '2026-10-03T10:00:00.000+0000', body: null,
+      }));
+      const total = jiraCommentPageSize * 2 + 30;
+      respondWith(
+        { status: 200, body: json({ total, comments: createComments(0, jiraCommentPageSize) }) },
+        // A page shorter than asked (Jira's own cap): the read still goes on from where it stopped.
+        { status: 200, body: json({ total, comments: createComments(jiraCommentPageSize, 80) }) },
+        { status: 200, body: json({ total, comments: createComments(jiraCommentPageSize + 80, 50) }) },
+      );
+      const comments = await createClient().getComments('PROJ-7');
+      assert.equal(comments.length, total);
+      assert.deepEqual(comments.map((comment) => comment.id), Array.from({ length: total }, (_, index) => `${index}`));
+      assert.deepEqual(requests.map((request) => request.url), [
+        `/rest/api/3/issue/PROJ-7/comment?orderBy=created&expand=renderedBody&startAt=0&maxResults=${jiraCommentPageSize}`,
+        `/rest/api/3/issue/PROJ-7/comment?orderBy=created&expand=renderedBody&startAt=${jiraCommentPageSize}&maxResults=${jiraCommentPageSize}`,
+        `/rest/api/3/issue/PROJ-7/comment?orderBy=created&expand=renderedBody&startAt=${jiraCommentPageSize + 80}&maxResults=${jiraCommentPageSize}`,
+      ]);
+    });
+
+    it('getComments: no comments is one request; a total that never arrives ends on a short page; every field the prompt needs is kept', async () => {
+      respondWith({ status: 200, body: json({ total: 0, comments: [] }) });
+      assert.deepEqual(await createClient().getComments('PROJ-7'), []);
+      assert.equal(requests.length, 1);
+      requests = [];
+      const edited = {
+        id: '9', author: { accountId: 'a', displayName: 'Ann' }, created: '2026-10-03T10:00:00.000+0000', updated: '2026-10-04T10:00:00.000+0000',
+        updateAuthor: { accountId: 'b' }, visibility: { type: 'role', value: 'Administrators', identifier: 'Administrators' }, jsdPublic: false,
+        body: null, renderedBody: '<p>hi</p>',
+      };
+      respondWith({ status: 200, body: json({ comments: [edited] }) });
+      assert.deepEqual(await createClient().getComments('PROJ-7'), [edited]);
+      assert.equal(requests.length, 1, 'a page shorter than asked, with no total, is the last one');
+    });
+
+    it('getIssue (C1): the requested expand rides along, and every field\'s raw value comes back beside the typed fields — custom and system alike', async () => {
+      respondWith({
+        status: 200,
+        body: json({
+          id: '1', key: 'PROJ-7',
+          fields: {
+            summary: 'Do it', issuetype: { name: 'Epic', hierarchyLevel: 1 }, priority: { name: 'High' }, labels: ['a'],
+            parent: { key: 'PROJ-1', fields: { summary: 'Goal', status: { name: 'Open' } } },
+            issuelinks: [{ type: { inward: 'is blocked by', outward: 'blocks' }, outwardIssue: { key: 'PROJ-9' } }],
+            attachment: [{ id: '10', filename: 'a.png', mimeType: 'image/png', size: 3 }],
+            customfield_10042: 'text', customfield_10043: { value: 'High' }, customfield_10044: null, duedate: '2026-10-09', description: null,
+          },
+          renderedFields: { description: '<p>x</p>', environment: '<p>ignored</p>' },
+        }),
+      });
+      const issue = await createClient().getIssue('PROJ-7', ['summary', 'customfield_10042'], 'renderedFields');
+      assert.equal(requests[0].url, '/rest/api/3/issue/PROJ-7?fields=summary,customfield_10042&expand=renderedFields');
+      assert.equal(issue.fields.issuetype?.hierarchyLevel, 1);
+      assert.equal(issue.fields.parent?.key, 'PROJ-1');
+      assert.equal(issue.fields.attachment?.[0].filename, 'a.png');
+      assert.equal(issue.renderedFields?.description, '<p>x</p>');
+      assert.deepEqual(issue.rawFields?.customfield_10043, { value: 'High' });
+      assert.equal(issue.rawFields?.customfield_10044, null);
+      assert.equal(issue.rawFields?.duedate, '2026-10-09', 'a system field the typed schema does not model');
+      assert.deepEqual(issue.rawFields?.labels, ['a']);
+    });
+
+    it('getRemoteLinks and getFields read their lists', async () => {
+      respondWith(
+        { status: 200, body: json([{ id: 1, object: { url: 'https://example.com/spec', title: 'Spec' } }, { object: { url: 'https://example.com/x' } }]) },
+        { status: 200, body: json([{ id: 'customfield_10042', name: 'Acceptance criteria', custom: true }, { id: 'summary', name: 'Summary' }]) },
+      );
+      const client = createClient();
+      assert.deepEqual(await client.getRemoteLinks('PROJ-7'), [{ object: { url: 'https://example.com/spec', title: 'Spec' } }, { object: { url: 'https://example.com/x' } }]);
+      assert.deepEqual(await client.getFields(), [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'summary', name: 'Summary' }]);
+      assert.deepEqual(requests.map((request) => request.url), ['/rest/api/3/issue/PROJ-7/remotelink', '/rest/api/3/field']);
+    });
+
+    it('getRemoteLinks: a 403 — issue linking switched off on the site — is no links, not a refusal that stops polling', async () => {
+      respondWith({ status: 403, body: json({ errorMessages: ['Issue linking is disabled.'] }) });
+      assert.deepEqual(await createClient().getRemoteLinks('PROJ-7'), []);
+      assert.equal(requests.length, 1);
+    });
+
+    it('getRemoteLinks: a 401 is still a JiraAuthError, and a 404 still fails the read', async () => {
+      respondWith({ status: 401 }, { status: 404, body: json({ errorMessages: ['Issue does not exist'] }) });
+      await assert.rejects(createClient().getRemoteLinks('PROJ-7'), (error: Error) => error instanceof JiraAuthError && error.status === 401);
+      await assert.rejects(createClient().getRemoteLinks('PROJ-7'), (error: Error) => error instanceof JiraHttpError && error.status === 404);
     });
 
     it('getProjectStatuses flattens every issue type\'s statuses, deduplicated by id', async () => {
