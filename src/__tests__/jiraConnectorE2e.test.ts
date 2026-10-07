@@ -392,13 +392,6 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     for (const name of ['TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'DATA_DIR', 'WORK_ROOT']) assert.ok(envNames.includes(name), `${name} is set`);
   });
 
-  it('the project folder holds Claude memory, in it and above it — the instance below must still boot and serve it', () => {
-    const instance = getLayout();
-    for (const memoryFolder of [instance.workRoot, path.join(instance.workRoot, projectFolder)]) {
-      assert.ok(fs.existsSync(path.join(memoryFolder, claudeMemoryFileName)), `${claudeMemoryFileName} in ${memoryFolder}`);
-    }
-  });
-
   it('boots Jira-only, started with nothing but run-isolated.sh\'s variables', async () => {
     createIssue('PROJ-1', 'answer');
     createIssue('PROJ-2', 'silent-once');

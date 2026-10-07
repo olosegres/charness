@@ -729,7 +729,8 @@ a person assigns an issue to the AI account (in a trigger status)
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
    and in every parent) like any Claude Code session, while your user-level Claude setup stays out of its
-   sessions. `pollIntervalSeconds` is 10–600 (default 90);
+   sessions — except that for a folder under HOME that walk reads `~/.claude/CLAUDE.md` back in.
+   `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard

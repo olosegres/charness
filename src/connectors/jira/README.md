@@ -78,7 +78,7 @@ another platform's state.
   one fails SILENTLY.
 - **Project memory loads from the working folder and every parent**, like any Claude Code session — `jira.json`
   does not restrict the folder; the operator chooses it. Only the USER level stays out (`--setting-sources`
-  above). The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
+  above) — but for a folder under HOME that walk reads `~/.claude/CLAUDE.md` back in. The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
   trust dialog would hold the session; OpenCode cannot be isolated yet), and the OpenCode URL needs a port of
   its own.
 - `config.ts`: an unknown key is an error; `${VAR}` placeholders expand from the env file; every message names
