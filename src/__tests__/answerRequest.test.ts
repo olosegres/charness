@@ -222,6 +222,35 @@ describe('answerRequest refusals', () => {
   });
 });
 
+describe('answerRequest tells who follows the answers', () => {
+  it('a delivered answer is heard after its close, a late one too; a refused or failed one never', async () => {
+    await ledger.load();
+    const heard: Array<{ requestId: string; kind: string; isOpen: boolean | undefined }> = [];
+    const deps = {
+      ledger,
+      answerSinks: sinks,
+      onAnswerDelivered: (key: SessionKey, requestId: string, kind: string) => {
+        assert.equal(keyToString(key), keyToString(topicKey));
+        heard.push({ requestId, kind, isOpen: ledger.getRequest(requestId)?.isOpen });
+      },
+    };
+    const request = await ledger.createRequest(topicKey, origin);
+
+    await answerRequest(deps, createArgs(request.id, { kind: 'progress' }));
+    await answerRequest(deps, createArgs(request.id));
+    await answerRequest(deps, createArgs(request.id, { body: 'one more thing' }));
+    await answerRequest(deps, createArgs('req_unknown'));
+    sink.nextResult = { ok: false, error: 'the surface is down' };
+    await answerRequest(deps, createArgs(request.id));
+
+    assert.deepEqual(heard, [
+      { requestId: request.id, kind: 'progress', isOpen: true },
+      { requestId: request.id, kind: 'final', isOpen: false },
+      { requestId: request.id, kind: 'final', isOpen: false },
+    ]);
+  });
+});
+
 describe('answerRequest during boot', () => {
   it('waits for the ledger load instead of refusing a valid id', async () => {
     // A request from a previous run, persisted before this "boot".

@@ -1,7 +1,15 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import type { OpenRequestState, RequestAlertReason } from './types';
+import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
+import {
+  addAnswerTailOutput,
+  answerTailMaxReminders,
+  buildAnswerTailReminder,
+  createAnswerTail,
+  decideAnswerTail,
+  type AnswerTail,
+} from './answerTail';
 import {
   checkIsTurnInputConsumed,
   checkIsWakingStopped,
@@ -22,7 +30,9 @@ import {
  * followed to their own turn end (`requestGroup.ts`) — and runs a
  * slower sweep over the open requests nobody is watching (the 15-minute
  * follow-up after a progress note, and the backstop). Every decision is made by
- * `wakeUpRules.ts`; this module only observes, persists and acts.
+ * `wakeUpRules.ts`; this module only observes, persists and acts. The same sweep
+ * follows the agent's text after a final answer in a view that hides the stream
+ * (`answerTail.ts`), and reminds the agent once when that text is worth it.
  *
  * No adapter emits a turn-end event, so turns are POLLED through the injected
  * `probeTurn` (the precedent is the deferred-compaction poll). The watch state is
@@ -30,10 +40,11 @@ import {
  * backstop covers a turn whose tracking was lost.
  *
  * A wake-up is a reminder forwarded into the SAME session — never a request.
+ * The answer tails are in memory as well: a restart forgets them.
  */
 
 /** How often a watched turn is polled for its end. */
-export const watchedTurnPollMs = 3_000;
+export const watchedTurnPollMs = 10_000;
 /** How often the unwatched open requests are swept (follow-ups, backstop). */
 export const unwatchedSweepMs = 60_000;
 /** A live turn's activity is persisted at most this often (it pushes the backstop back). */
@@ -57,6 +68,10 @@ export interface RequestWakeUpEngineDeps {
   forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
   deliverAlert: (key: SessionKey, request: OpenRequestState, reason: RequestAlertReason) => Promise<string | null>;
   backstopMs: number;
+  /** Whether the conversation's view hides the agent's stream: only then is a final answer's tail followed. Absent: never. */
+  checkIsAnswerTailWatched?: (key: SessionKey) => boolean;
+  /** Bring the session up (resume only) and forward the answer-tail reminder; `false` when it could not be reached. */
+  remindAnswerTail?: (key: SessionKey, text: string) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -66,6 +81,11 @@ interface WatchedRequestTurn extends WatchedTurn {
   key: SessionKey;
 }
 
+interface WatchedAnswerTail {
+  key: SessionKey;
+  tail: AnswerTail;
+}
+
 export class RequestWakeUpEngine {
   private readonly deps: RequestWakeUpEngineDeps;
   private readonly now: () => number;
@@ -73,6 +93,10 @@ export class RequestWakeUpEngine {
   private readonly watched = new Map<string, WatchedRequestTurn>();
   /** Last persisted live-turn activity per request id, for the persist step. */
   private readonly activityPersistedAt = new Map<string, number>();
+  /** The tail after the latest final answer, by serialized conversation key. */
+  private readonly answerTails = new Map<string, WatchedAnswerTail>();
+  /** The request whose tail was last reminded and how often, by serialized conversation key (the reminder cap). */
+  private readonly answerTailReminders = new Map<string, { requestId: string; count: number }>();
   private pollTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
@@ -129,6 +153,8 @@ export class RequestWakeUpEngine {
   async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
+    // The agent works on an open request now: what it writes is owed to that one, not a tail.
+    this.answerTails.delete(keyToString(key));
     this.watched.set(requestId, {
       key,
       requestId,
@@ -164,9 +190,32 @@ export class RequestWakeUpEngine {
     for (const turn of this.getWatchedTurnsOf(key)) turn.hasSeenOutput = true;
   }
 
-  /** Drop every watch of `key`'s conversation. */
+  /**
+   * @description An answer to `requestId` was delivered. Any answer ends the
+   * tail of the one before: the agent spoke to the requester. A final answer
+   * starts a fresh tail where the view hides the stream, unless its request
+   * already had all its reminders.
+   */
+  noteAnswerDelivered(key: SessionKey, requestId: string, kind: RequestAnswerKind): void {
+    const conversationKey = keyToString(key);
+    this.answerTails.delete(conversationKey);
+    if (kind !== 'final') return;
+    const reminded = this.answerTailReminders.get(conversationKey);
+    if (reminded?.requestId === requestId && reminded.count >= answerTailMaxReminders) return;
+    if (this.deps.checkIsAnswerTailWatched?.(key) !== true) return;
+    this.answerTails.set(conversationKey, { key, tail: createAnswerTail(requestId, this.now()) });
+  }
+
+  /** @description The agent wrote text of its own in this conversation (not a sub-agent's, not a block the bot made). */
+  noteAnswerTailOutput(key: SessionKey): void {
+    const entry = this.answerTails.get(keyToString(key));
+    if (entry) entry.tail = addAnswerTailOutput(entry.tail, this.now());
+  }
+
+  /** Drop every watch of `key`'s conversation, its answer tail included. */
   private unwatchConversation(key: SessionKey): void {
     for (const turn of this.getWatchedTurnsOf(key)) this.watched.delete(turn.requestId);
+    this.answerTails.delete(keyToString(key));
   }
 
   /**
@@ -281,6 +330,9 @@ export class RequestWakeUpEngine {
         // One conversation's failure must not stop the others from being swept.
         await this.sweepOpenRequest(key, request).catch((e) => logWakeUpFailure(`sweeping ${keyToString(key)}`, e));
       }
+      for (const [conversationKey, entry] of [...this.answerTails]) {
+        await this.sweepAnswerTail(conversationKey, entry).catch((e) => logWakeUpFailure(`the answer tail of ${conversationKey}`, e));
+      }
     } finally {
       this.isSweeping = false;
     }
@@ -293,6 +345,24 @@ export class RequestWakeUpEngine {
       return;
     }
     await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs));
+  }
+
+  private async sweepAnswerTail(conversationKey: string, entry: WatchedAnswerTail): Promise<void> {
+    if (this.answerTails.get(conversationKey) !== entry) return;
+    if (this.deps.checkIsAnswerTailWatched?.(entry.key) !== true || this.deps.ledger.listOpenRequestsOf(entry.key).length > 0) {
+      // The stream is shown again, or a newer request is open and its own answer is owed.
+      this.answerTails.delete(conversationKey);
+      return;
+    }
+    const decision = decideAnswerTail(entry.tail, this.deps.probeTurn(entry.key), this.now());
+    if (decision === 'wait') return;
+    this.answerTails.delete(conversationKey);
+    if (decision === 'drop') return;
+    const { requestId } = entry.tail;
+    const reminded = this.answerTailReminders.get(conversationKey);
+    this.answerTailReminders.set(conversationKey, { requestId, count: reminded?.requestId === requestId ? reminded.count + 1 : 1 });
+    const isDelivered = (await this.deps.remindAnswerTail?.(entry.key, buildAnswerTailReminder(requestId))) ?? false;
+    console.log(`[requests] answer-tail reminder for ${requestId} ${isDelivered ? 'forwarded' : 'NOT delivered (the session could not be reached)'}`);
   }
 
   /** Persist that the agent is working on it, at most once per step unless forced. */

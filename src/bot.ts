@@ -239,7 +239,7 @@ import {
   checkShouldEnqueueSubagentStatus,
   checkShouldExpireSubagentStatus,
 } from './utils/subagentStatusRender';
-import { checkIsAgentEventShown, type AgentStreamEvent } from './utils/topicView';
+import { checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
 import {
   buildTopicRequestHeader,
   checkShouldOpenTopicRequest,
@@ -312,6 +312,7 @@ import { schedulerMcpServerName } from './scheduler/injection';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
+import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
 import { createSessionTurnProbe } from './requests/sessionTurnProbe';
@@ -11125,6 +11126,18 @@ async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState,
 }
 
 /**
+ * @description Remind the agent, in its own session, of what it wrote after its
+ * final answer (`answerTail.ts`). Resumes a stopped session, never starts a new
+ * one; marked as a reminder so a wedge recovery keeps replaying the real prompt.
+ */
+async function remindAnswerTail(key: SessionKey, text: string): Promise<boolean> {
+  const ensured = await ensureAgentSession(key, { isResumeOnly: true });
+  if (!ensured.ok || !getThreadAdapter(key).checkIsActive(key)) return false;
+  await forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isRequestReminder: true });
+  return true;
+}
+
+/**
  * @description The person took over the conversation (interrupt, quit, restart,
  * switch or resume of the session, a switch to another agent or a shell, leaving
  * the folder): its open request closes silently and nothing wakes it. Safe before
@@ -11272,7 +11285,11 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     ...(jiraConnector
       ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
       : {}),
-    answerRequest: (args) => answerRequest({ ledger: wiring.requestLedger, answerSinks: wiring.answerSinks }, args),
+    answerRequest: (args) => answerRequest({
+      ledger: wiring.requestLedger,
+      answerSinks: wiring.answerSinks,
+      onAnswerDelivered: (key, requestId, kind) => requestWakeUpEngine?.noteAnswerDelivered(key, requestId, kind),
+    }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
     // Reuse the port persisted from a prior boot (env override wins) so the
@@ -11544,6 +11561,9 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
+    checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
+    remindAnswerTail,
   });
   requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
 
@@ -11619,6 +11639,11 @@ export async function startBot(): Promise<void> {
   registerAdapterEventHandlers({
     onOutput: (key, output, meta) => dispatchAdapterEvent(key, 'output', () => {
       noteTurnOutput(key);
+      // The agent's own text, counted in the tail after its final answer — not a sub-agent's, a
+      // compaction summary, a block the bot made (resume context, retry notice), a spinner burst or an API error.
+      if (checkIsAgentProseOutput(output, meta) && !checkIsProgressChunk(output) && classifyAgentApiError(output, Date.now()) === null) {
+        requestWakeUpEngine?.noteAnswerTailOutput(key);
+      }
       void withThreadLocale(key, () => handleAgentOutput(key, output, meta));
     }, () => {
       noteTurnOutput(key);

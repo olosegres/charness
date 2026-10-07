@@ -1,4 +1,4 @@
-import { tryKeyFromString } from '../sessionKey';
+import { tryKeyFromString, type SessionKey } from '../sessionKey';
 import { getAnswerSink, type AnswerSinks } from '../platform/answerSink';
 import type { RequestLedger } from './requestLedger';
 import type { ClosedRequestRecord, RequestAnswerKind, RequestCloseReason } from './types';
@@ -35,10 +35,13 @@ const closingAnswerReasons: Readonly<Record<RequestAnswerKind, RequestCloseReaso
  * @name AnswerRequestDeps
  * @description The ledger (awaited until loaded — the bot MCP server serves
  * before the boot finished) and the answer sinks by platform.
+ * `onAnswerDelivered` hears every answer that reached the requester, to an open
+ * request or a closed one (the wake-up engine follows what comes after a final).
  */
 export interface AnswerRequestDeps {
   ledger: Pick<RequestLedger, 'whenLoaded' | 'getRequest' | 'updateOpenRequest' | 'closeRequest'>;
   answerSinks: AnswerSinks;
+  onAnswerDelivered?: (key: SessionKey, requestId: string, kind: RequestAnswerKind) => void;
 }
 
 /**
@@ -108,6 +111,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
   const warning = delivery.warning ? ` Note: ${delivery.warning}` : '';
 
   if (!lookup.isOpen) {
+    deps.onAnswerDelivered?.(key, args.requestId, args.kind);
     return { ok: true, message: `${buildClosedAnswerMessage(args.requestId, lookup.request)}${warning}` };
   }
   const closeReason = closingAnswerReasons[args.kind];
@@ -120,5 +124,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
       ...(current.prompt !== undefined && current.isPromptTakenIn !== true ? { isPromptTakenIn: true } : {}),
       ...(current.nextPostRetryAt !== undefined ? { nextPostRetryAt: undefined } : {}),
     }));
+  // After the close: whoever hears it sees the request as it now stands.
+  deps.onAnswerDelivered?.(key, args.requestId, args.kind);
   return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}` };
 }

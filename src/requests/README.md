@@ -84,6 +84,24 @@ Numeric bounds are named constants in the files below; this README says only wha
   folder, switching to another agent or a shell) closes EVERY open request of the conversation `cancelled`
   (`cancelConversation`); a limit-wait stop and the counters reset of a "continue" nudge apply to every one too.
 
+## The tail after a final answer (`answerTail.ts`, followed by the wake-up engine)
+
+- Only where the view hides the stream (a Telegram topic in "Answers only"): there the requester sees just the
+  answers, and work the agent goes on with after its `final` would never reach them — the request is closed, so
+  no wake-up rule covers it.
+- Any delivered answer ends the previous tail; a `final` starts a fresh one. The agent's own text after it is
+  counted in messages (a pause of `answerTailMessageGapMs` starts a new one; sub-agent chunks, summaries,
+  questions, bot-made blocks, spinner bursts and API-error lines are not its text).
+- A closing line right after the answer is no tail. Text later than `answerTailGraceMs`, or
+  `answerTailMessageCount` messages in all, is: the sweep reminds the agent once its turn ended, or after
+  `answerTailSilenceMs` without new text if the session still reports a turn. The reminder names the answered
+  request (`answer_request` still delivers to a closed one) and asks for an answer only if something matters.
+- The reply to a reminder is a final answer again and starts its own tail, so a result a background job brings
+  later still reaches the requester — up to `answerTailMaxReminders` reminders per answered request, never a loop.
+  A new open request, a person taking over, a limit stop, a view switch or a session that stopped before the tail
+  was worth anything drops it.
+  Tails live in memory; a restart forgets them.
+
 ## Usage limits (`limitWaitAnswer.ts`)
 
 - During an ARMED wait the probe holds the turn: nothing wakes the request and no attempt is spent. The bot

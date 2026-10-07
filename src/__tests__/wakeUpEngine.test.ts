@@ -936,3 +936,162 @@ describe('a request whose first post is still starting its session (J7b)', () =>
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1);
   });
 });
+
+describe('the tail after a final answer, where the view hides the stream', () => {
+  /** The answer-tail reminders forwarded, by conversation. */
+  let tailReminders: Array<{ key: string; text: string }>;
+  let isTailWatched: boolean;
+  let isTailRemindable: boolean;
+
+  function createTailEngine(ledger: RequestLedger): RequestWakeUpEngine {
+    tailReminders = [];
+    isTailWatched = true;
+    isTailRemindable = true;
+    return new RequestWakeUpEngine({
+      ledger,
+      probeTurn: () => probe,
+      prepareWakeUpSession: async () => true,
+      forwardWakeUp: recordWakeUp,
+      deliverAlert: async () => null,
+      backstopMs,
+      checkIsAnswerTailWatched: () => isTailWatched,
+      remindAnswerTail: async (key, text) => {
+        if (isTailRemindable) tailReminders.push({ key: keyToString(key), text });
+        return isTailRemindable;
+      },
+      now: () => nowMs,
+    });
+  }
+
+  /** A request answered with a final, its turn still running. */
+  async function answerFinal(ledger: RequestLedger, engine: RequestWakeUpEngine): Promise<OpenRequestState> {
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await ledger.closeRequest(request.id, 'final');
+    engine.noteAnswerDelivered(topicKey, request.id, 'final');
+    return request;
+  }
+
+  /** The agent writes one message `afterMs` from now. */
+  function writeAfter(engine: RequestWakeUpEngine, afterMs: number): void {
+    nowMs += afterMs;
+    engine.noteAnswerTailOutput(topicKey);
+  }
+
+  async function endTurn(engine: RequestWakeUpEngine): Promise<void> {
+    probe = { ...probe, isBusy: false };
+    await engine.sweepUnwatchedRequests();
+  }
+
+  it('two more messages after the answer: a reminder at the turn end, naming the request; its replies are followed up to the cap', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    const request = await answerFinal(ledger, engine);
+    writeAfter(engine, 2_000);
+    writeAfter(engine, 15_000);
+
+    await engine.sweepUnwatchedRequests();
+    assert.equal(tailReminders.length, 0, 'never while the turn runs');
+    await endTurn(engine);
+    assert.equal(tailReminders.length, 1);
+    assert.equal(tailReminders[0].key, keyToString(topicKey));
+    assert.match(tailReminders[0].text, new RegExp(`after your final answer to request ${request.id}`));
+
+    // The agent sends what mattered and goes on writing (a background job's result comes later): followed again.
+    for (let reminder = 2; reminder <= 4; reminder++) {
+      engine.noteAnswerDelivered(topicKey, request.id, 'final');
+      writeAfter(engine, 60_000);
+      await endTurn(engine);
+    }
+    assert.equal(tailReminders.length, 3, 'three reminders per answered request, never a loop');
+
+    // Another request's answer has its own count.
+    const next = await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    await endTurn(engine);
+    assert.equal(tailReminders.length, 4);
+    assert.match(tailReminders[3].text, new RegExp(next.id));
+    assert.deepEqual(wakeUps, [], 'a tail reminder is not a wake-up of an open request');
+  });
+
+  it('one message later than 30 s is enough', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 5 * 60_000);
+    await endTurn(engine);
+    assert.equal(tailReminders.length, 1);
+  });
+
+  it('a closing line right after the answer is no tail, and the tail goes once the session stopped', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 2_000);
+    await endTurn(engine);
+    probe = { ...probe, isActive: false };
+    await engine.sweepUnwatchedRequests();
+    // Text that comes after the stop (a later session) is not this answer's tail any more.
+    probe = { ...probe, isActive: true };
+    writeAfter(engine, 60_000);
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(tailReminders, []);
+  });
+
+  it('a turn that keeps looking busy is reminded after 30 quiet minutes, not before', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    nowMs += 30 * 60_000 - 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(tailReminders, []);
+    nowMs += 1;
+    await engine.sweepUnwatchedRequests();
+    assert.equal(tailReminders.length, 1);
+  });
+
+  it('any later answer ends the tail; a new request takes over from it', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    const request = await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    engine.noteAnswerDelivered(topicKey, request.id, 'progress');
+    await endTurn(engine);
+    assert.deepEqual(tailReminders, [], 'the agent spoke to the requester after it wrote');
+
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    const next = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, next.id);
+    await endTurn(engine);
+    assert.deepEqual(tailReminders, [], 'what the agent writes now is owed to the open request');
+  });
+
+  it('a person taking over, a view that shows the stream, or an unreachable session: no reminder, no retry', async () => {
+    const ledger = await createLedger();
+    const engine = createTailEngine(ledger);
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    await engine.cancelConversation(topicKey);
+    await endTurn(engine);
+    assert.deepEqual(tailReminders, [], 'taken over');
+
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    isTailWatched = false;
+    await endTurn(engine);
+    assert.deepEqual(tailReminders, [], 'switched to a view with the stream');
+
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    assert.deepEqual(tailReminders, [], 'not watched when the answer came');
+    isTailWatched = true;
+    await answerFinal(ledger, engine);
+    writeAfter(engine, 60_000);
+    isTailRemindable = false;
+    await endTurn(engine);
+    await endTurn(engine);
+    assert.deepEqual(tailReminders, [], 'unreachable, and not tried again');
+  });
+});
