@@ -2,13 +2,13 @@
 
 > Self-hosted Telegram bot that runs OpenCode and Claude Code coding agents on your own machine or VPS, driven from your phone. One forum topic is one project with its own isolated agent session, like terminal tabs.
 
-Charness (formerly TelegramCode) turns Telegram into a terminal for agentic coding CLIs. It runs on your own machine or server and connects out to Telegram only, so there are no open inbound ports. You bind each forum topic (or the bot's own DM) to a project folder, and each topic runs its own isolated OpenCode or Claude Code session that you drive by chat, voice, or file. Sessions survive both bot restarts and agent-server restarts. It supports voice input (Whisper), photo/file/PDF intake, scheduled prompts, pinned question alerts (a pin pierces a muted topic for exactly one notification), a raw `/terminal` shell, an agent-facing MCP so the agent can send back files/images/video and schedule itself, and 12 UI languages. MIT licensed, Node 22.12+, install with `npm install -g telegramcode` (the npm package and the command keep the former name).
+Charness (formerly TelegramCode) turns Telegram into a terminal for agentic coding CLIs. It runs on your own machine or server and connects out to Telegram only, so there are no open inbound ports. You bind each forum topic (or the bot's own DM) to a project folder, and each topic runs its own isolated OpenCode or Claude Code session that you drive by chat, voice, or file. Sessions survive both bot restarts and agent-server restarts. It supports voice input (Whisper), photo/file/PDF intake, scheduled prompts, pinned question alerts (a pin pierces a muted topic for exactly one notification), a raw `/terminal` shell, an agent-facing MCP so the agent can send back files/images/video and schedule itself, and 12 UI languages. MIT licensed, Node 22.12+, install with `npm install -g charness` (the command keeps the former name, `telegramcode`; `charness` works too).
 
 ## Project
 
 - [GitHub repository](https://github.com/olosegres/charness): source, issues, and releases (MIT license).
 - [README](https://github.com/olosegres/charness#readme): full feature list, quick start, commands, and troubleshooting.
-- [npm package](https://www.npmjs.com/package/telegramcode): install with `npm install -g telegramcode` (Node 22.12+).
+- [npm package](https://www.npmjs.com/package/charness): install with `npm install -g charness` (Node 22.12+).
 - [DEVELOPMENT.md](https://github.com/olosegres/charness/blob/main/DEVELOPMENT.md): architecture and local development.
 
 ## Key features
@@ -24,4 +24,4 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 
 ## Install
 
-- [Quick Start](https://github.com/olosegres/charness#quick-start): `npm install -g telegramcode`, put your bot token in one `.env`, launch from your projects folder, bind a topic.
+- [Quick Start](https://github.com/olosegres/charness#quick-start): `npm install -g charness`, put your bot token in one `.env`, launch from your projects folder, bind a topic.

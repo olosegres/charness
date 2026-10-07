@@ -1,6 +1,54 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 — 2026-10-07
+
+**Published as `charness`.** The npm package is renamed from `telegramcode` to
+`charness`, after the project. To move over:
+`npm uninstall -g telegramcode && npm install -g charness`. The `telegramcode`
+command, the `~/.config/telegramcode` config, the `~/.telegramCode` data dir and
+the `TELEGRAMCODE_*` variables stay as they were, so an existing setup carries
+over unchanged; `charness` is a new alias of the command.
+
+### Added
+- **Requests and answers.** A message, a voice note or a scheduled run opens a
+  request; the agent answers it with the `answer_request` tool (progress,
+  question or final), and every answer is pinned in the topic (only the latest
+  stays pinned). An agent that ends its turn without answering is woken, and
+  the operator is alerted when waking gives up. A usage-limit stop answers the
+  open request.
+- **`/verbosity` views**: Stream only, Stream + answers, Answers only. In
+  Answers only, an agent that keeps writing after its final answer is reminded
+  to send whatever matters.
+- **Sleeping Claude conversations.** An idle json-stream conversation is
+  compacted and its process stopped; the next message resumes it. A third
+  Claude backend, per-turn, stops the process after every turn.
+- **Compaction**: `/compact` on every agent backend, compaction on idle, the
+  agent's own `compact_conversation` tool, and the summary posted to the topic
+  on request (`/compact_summary`, off by default). Every compaction summary
+  names the skills to load again.
+- **Usage limits**: wait for the reset and resume by itself
+  (`/auto_continue_limits`).
+- **`/reminders`**: reminders the bot posts and pins itself, without an agent.
+- **Watchdog checks**: `schedule_create` with a `checkCommand` runs a check on
+  schedule and wakes the agent on the first failure.
+- **`/timezone`**: one instance-wide time zone for schedules and timestamps.
+- **`/model`**: a two-level picker with pages and per-provider disabling;
+  the model and effort are shown when an agent starts or switches.
+- **OpenCode `/connect`** works with ordinary providers.
+- **Replies**: the replied-to message goes into the agent's prompt, and a
+  replied-to photo, file or voice note is named with the bot's saved copy.
+- **Voice**: transcription is retried after a timeout or a transient error.
+- **`send_messages_to_user`**: each message may carry a file.
+- **Jira Cloud connector** (`CONNECTORS=jira`): an issue assigned to the AI
+  account becomes a request in its own session, and the answers come back as
+  comments.
+- **Docker**: the whole bot runs in one container (`docker/`).
+
+### Fixed
+- Many fixes in output streaming, session restore after a restart, OpenCode
+  event routing and the Claude screen scrape; see the git history.
+
+## Earlier changes, shipped in the 2.0.x packages
 
 ### Changed
 - **`WORK_DIR` is no longer fatal.** Launch `telegramcode` from the parent

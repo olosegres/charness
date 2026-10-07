@@ -501,6 +501,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"charness@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "charness@workspace:."
+  dependencies:
+    "@modelcontextprotocol/sdk": "npm:^1.29.0"
+    "@types/node": "npm:^22.10.0"
+    abort-controller: "npm:^3.0.0"
+    croner: "npm:^10.0.1"
+    dotenv: "npm:^16.4.5"
+    form-data: "npm:^4.0.5"
+    marklassian: "npm:^1.2.1"
+    node-pty: "npm:^1.0.0"
+    nodemon: "npm:^3.1.0"
+    playwright-core: "npm:1.59.1"
+    telegraf: "npm:^4.16.3"
+    tsx: "npm:^4.21.0"
+    typescript: "npm:^5.7.0"
+    zod: "npm:^4.4.3"
+  bin:
+    charness: ./dist/cli.js
+    telegramCode: ./dist/cli.js
+    telegramcode: ./dist/cli.js
+  languageName: unknown
+  linkType: soft
+
 "chokidar@npm:^3.5.2":
   version: 3.6.0
   resolution: "chokidar@npm:3.6.0"
@@ -2050,30 +2075,6 @@ __metadata:
   checksum: 10c0/58931c0cfb00481a99faf757cff3421f9ffb25a4f26c6d34150bc3a0a6e30a98860d7ff824f785f0155c9772fff478fc4a8d22ed975e48014f5037e727f2c995
   languageName: node
   linkType: hard
-
-"telegramcode@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "telegramcode@workspace:."
-  dependencies:
-    "@modelcontextprotocol/sdk": "npm:^1.29.0"
-    "@types/node": "npm:^22.10.0"
-    abort-controller: "npm:^3.0.0"
-    croner: "npm:^10.0.1"
-    dotenv: "npm:^16.4.5"
-    form-data: "npm:^4.0.5"
-    marklassian: "npm:^1.2.1"
-    node-pty: "npm:^1.0.0"
-    nodemon: "npm:^3.1.0"
-    playwright-core: "npm:1.59.1"
-    telegraf: "npm:^4.16.3"
-    tsx: "npm:^4.21.0"
-    typescript: "npm:^5.7.0"
-    zod: "npm:^4.4.3"
-  bin:
-    telegramCode: ./dist/cli.js
-    telegramcode: ./dist/cli.js
-  languageName: unknown
-  linkType: soft
 
 "tinyglobby@npm:^0.2.12":
   version: 0.2.15

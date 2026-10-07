@@ -82,14 +82,17 @@ from your projects folder, bind a topic to an agent.
 ### 1. Install the CLI
 
 ```bash
-npm install -g telegramcode      # needs Node ≥ 22.12
+npm install -g charness      # needs Node ≥ 22.12
 ```
 
-This registers the `telegramcode` command (the npm package and the command
-keep the project's former name). Prefer the whole bot in a container, isolated
-from the host? Use [Run with Docker](#run-with-docker) instead — the bot and
-group steps are the same. To hack on the bot itself, see
-[Run from source](#run-from-source).
+This registers the `telegramcode` command (it keeps the project's former name;
+`charness` works too). Coming from the old `telegramcode` npm package (2.x)?
+Run `npm uninstall -g telegramcode` first: both install the same commands. The
+config, `DATA_DIR` and sessions carry over as they are.
+
+Prefer the whole bot in a container, isolated from the host? Use
+[Run with Docker](#run-with-docker) instead — the bot and group steps are the
+same. To hack on the bot itself, see [Run from source](#run-from-source).
 
 ### 2. Create the bot
 
@@ -294,7 +297,7 @@ To hack on the bot itself:
 ```bash
 git clone https://github.com/olosegres/charness && cd charness
 yarn install && yarn build
-npm install -g .            # registers the `telegramcode` command
+npm install -g .            # registers the `telegramcode` (and `charness`) command
 ```
 
 Shortcut: `yarn install-link` runs `yarn install && yarn build && npm link` in
@@ -987,7 +990,7 @@ different port for the second instance (e.g. `4097`).
 ## FAQ
 
 **How do I run Claude Code from my phone?**
-Install `telegramcode` on your own machine or VPS, create a Telegram bot, and bind a forum topic (or the bot's DM) to a project folder. Start a Claude Code session in that topic and you drive it entirely from Telegram: type prompts, send voice notes, or drop in files, and the agent's output streams back into the same topic. Your phone never runs the agent; it stays on your machine.
+Install Charness on your own machine or VPS, create a Telegram bot, and bind a forum topic (or the bot's DM) to a project folder. Start a Claude Code session in that topic and you drive it entirely from Telegram: type prompts, send voice notes, or drop in files, and the agent's output streams back into the same topic. Your phone never runs the agent; it stays on your machine.
 
 **Can I control OpenCode without opening any ports?**
 Yes. The bot only makes outbound connections to Telegram, so nothing listens for inbound traffic and you never expose a port. OpenCode runs as a local HTTP server that the bot talks to on loopback, and you reach it from anywhere through Telegram.

@@ -10,8 +10,9 @@
 > supergroup. Read every such request as per-topic.
 
 > **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is
-> `olosegres/charness`). The npm package and the CLI command keep the old name, lowercase **`telegramcode`**
-> (legacy `telegramCode` bin alias kept), and so do the `~/.config/telegramcode` config dir, the `DATA_DIR`
+> `olosegres/charness`; the npm package is **`charness`** since 3.0.0, up to 2.0.3 it was `telegramcode`). The CLI
+> command keeps the old name, lowercase **`telegramcode`** (`charness` and the legacy `telegramCode` are bin
+> aliases), and so do the `~/.config/telegramcode` config dir, the `DATA_DIR`
 > default `~/.telegramCode` and the `TELEGRAMCODE_*` env vars.
 
 ## What this project is
