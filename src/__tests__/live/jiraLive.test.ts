@@ -103,7 +103,7 @@ import { JiraLiveRequester, type LiveComment, type LiveIssueState } from './jira
 import { getPollJqlProjectKeys, getPolledDecisions } from '../jiraE2e/charnessLog';
 import { getForeignAgentEnvNames } from '../jiraE2e/fakeClaudeContract';
 import { isolatedLaunchEnvNames, isolatedSandboxEnv } from '../e2e/isolatedCharness';
-import { getClaudeMemoryAbove, validateJiraConfig, type JiraAdapterName, type JiraConfig } from '../../connectors/jira/config';
+import { validateJiraConfig, type JiraAdapterName, type JiraConfig } from '../../connectors/jira/config';
 import { createJiraClient, type JiraClient } from '../../connectors/jira/client';
 import { jiraCommentAdfMaxChars, jiraCommentMarkdownMaxChars, type AdfDocument } from '../../connectors/jira/adf';
 import { makeJiraKey } from '../../connectors/jira/sessionKeyCodec';
@@ -744,12 +744,6 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     if (longIdleMinutes !== null) assert.ok(longIdleMinutes > agentIdleMinutes, 'the long idle wait lies beyond the idle mark');
     report(`idle mark ${agentIdleMinutes} min; long idle wait ${longIdleMinutes === null ? 'skipped' : `${longIdleMinutes} min`}`);
     assert.ok(path.isAbsolute(instanceEnv.TMUX_TMPDIR) && !instanceEnv.TMUX_TMPDIR.startsWith(os.tmpdir()), 'TMUX_TMPDIR is a folder of the instance\'s own');
-    const realHome = fs.realpathSync(os.homedir());
-    for (const dir of [dataDir, instanceEnv.WORK_ROOT, instanceEnv.TMUX_TMPDIR]) {
-      assert.ok(!fs.realpathSync(dir).startsWith(`${realHome}${path.sep}`), `${dir} is outside HOME`);
-    }
-    const [project] = [...config.projects.values()];
-    assert.equal(getClaudeMemoryAbove(path.join(instanceEnv.WORK_ROOT, project.folder)), null, 'no Claude memory in or above the working folder');
 
     assert.equal((await aiClient.getMyself()).accountId, config.accountId, 'the API token belongs to the configured AI account');
     requester = await JiraLiveRequester.open(liveSite ?? '', requesterStorageState ?? '');

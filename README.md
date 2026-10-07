@@ -727,8 +727,9 @@ a person assigns an issue to the AI account (in a trigger status)
    ```
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
-   assigned issue is a request; a folder with Claude memory (`CLAUDE.md`, `.claude/`, …) in it or above it is
-   refused, because the agent still loads project memory. `pollIntervalSeconds` is 10–600 (default 90);
+   assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
+   and in every parent) like any Claude Code session, while your user-level Claude setup stays out of its
+   sessions. `pollIntervalSeconds` is 10–600 (default 90);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard

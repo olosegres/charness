@@ -76,9 +76,9 @@ another platform's state.
   without it). A deployment that
   needs `CLAUDE_CONFIG_DIR`, a proxy or `NODE_EXTRA_CA_CERTS` must add the name to that allowlist — a missing
   one fails SILENTLY.
-- **Project memory still loads from the working folder and every parent**, so `jira.json` refuses a folder with
-  Claude memory in it or above it (`getClaudeMemoryAbove`) — which rules out anything under HOME or inside a
-  repository. The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
+- **Project memory loads from the working folder and every parent**, like any Claude Code session — `jira.json`
+  does not restrict the folder; the operator chooses it. Only the USER level stays out (`--setting-sources`
+  above). The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
   trust dialog would hold the session; OpenCode cannot be isolated yet), and the OpenCode URL needs a port of
   its own.
 - `config.ts`: an unknown key is an error; `${VAR}` placeholders expand from the env file; every message names

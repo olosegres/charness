@@ -12,10 +12,10 @@ import { addAgentBinDirToPath, getAgentEnvironment } from '../utils/agentEnviron
  *    credentials), no user settings, no user hooks, no user skills. Probed on
  *    Claude Code 2.1.287: the user memory, the user `model` setting and the user
  *    skills are gone while the subscription login still works. Project memory
- *    still loads from the working folder AND every parent folder, and for a
- *    folder under HOME that walk reads `~/.claude/CLAUDE.md` back in (probed:
- *    present under HOME, absent in /tmp). The flag alone is therefore enough
- *    only for a working folder outside HOME whose parents hold no Claude memory.
+ *    still loads from the working folder AND every parent folder, as in any
+ *    Claude Code session — the operator chooses the folder. For a folder under
+ *    HOME that walk reads `~/.claude/CLAUDE.md` back in (probed: present under
+ *    HOME, absent in /tmp).
  *  - `--disallowedTools AskUserQuestion` — a tracker has no surface for a native
  *    question, and a pending one holds every wake-up, so the request would hang
  *    with no alert; the agent asks through `answer_request` kind `question`.

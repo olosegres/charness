@@ -13,7 +13,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  getClaudeMemoryAbove,
   getOpenCodeIsolationError,
   jiraDefaultEffort,
   jiraDefaultModel,
@@ -52,17 +51,9 @@ function getErrors(parsedJson: object, context: { openCodeUrl: string | undefine
   return result.ok ? [] : result.errors;
 }
 
-/** R12 refuses a folder with Claude memory above it, so the temp folder itself must have a clean ancestry. */
-function createCleanWorkRoot(): string {
-  const created = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
-  const memory = getClaudeMemoryAbove(created);
-  assert.equal(memory, null, `the temp folder's ancestry holds ${memory?.markerName}: run the tests with TMPDIR outside HOME and any repository`);
-  return created;
-}
-
 describe('validateJiraConfig', () => {
   before(() => {
-    workRoot = createCleanWorkRoot();
+    workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
     fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;
@@ -176,24 +167,41 @@ describe('validateJiraConfig', () => {
     ]);
   });
 
-  it('R12: a folder with Claude memory in it or anywhere above it is refused, naming the marker and how far up', () => {
-    const cases: Array<[string, string, string]> = [
-      ['CLAUDE.md', 'memory-file/project', 'Claude would load CLAUDE.md found 1 folder(s) above it'],
-      ['CLAUDE.local.md', 'memory-local/project', 'Claude would load CLAUDE.local.md found 1 folder(s) above it'],
-      ['AGENTS.md', 'memory-agents/deep/project', 'Claude would load AGENTS.md found 2 folder(s) above it'],
-      ['.claude', 'memory-dir/project', 'Claude would load .claude found 1 folder(s) above it'],
+  it('a folder with Claude memory in it or anywhere above it is accepted — the agent loads that memory like any Claude Code session', () => {
+    const memoryMarkerNames = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude'];
+    // The project folder and the folder holding the marker, both relative to a case folder of their own.
+    const markerPlacements = [
+      { placement: 'in the folder', projectFolder: 'project', markerFolder: 'project' },
+      { placement: 'one folder above', projectFolder: 'above/project', markerFolder: 'above' },
+      { placement: 'two folders above', projectFolder: 'above/middle/project', markerFolder: 'above' },
     ];
-    for (const [markerName, folder, expected] of cases) {
-      fs.mkdirSync(path.join(workRoot, folder), { recursive: true });
-      const markerParent = path.join(workRoot, folder.split('/')[0]);
-      if (markerName === '.claude') fs.mkdirSync(path.join(markerParent, markerName));
-      else fs.writeFileSync(path.join(markerParent, markerName), '# memory\n');
-      const errors = getErrors(createConfig({ projects: { PROJ: { folder, triggerStatuses: ['AI To Do'] } } }));
-      assert.deepEqual(errors, [`jira.json projects.PROJ.folder: ${expected} — pick a folder outside HOME and any repository`], markerName);
+    let caseNumber = 0;
+    for (const markerName of memoryMarkerNames) {
+      for (const { placement, projectFolder, markerFolder } of markerPlacements) {
+        const caseFolder = `memory-case-${caseNumber++}`;
+        fs.mkdirSync(path.join(workRoot, caseFolder, projectFolder), { recursive: true });
+        const markerPath = path.join(workRoot, caseFolder, markerFolder, markerName);
+        if (markerName === '.claude') fs.mkdirSync(markerPath);
+        else fs.writeFileSync(markerPath, '# memory\n');
+        const folder = path.join(caseFolder, projectFolder);
+        const result = validateJiraConfig(createConfig({ projects: { PROJ: { folder, triggerStatuses: ['AI To Do'] } } }), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+        const label = `${markerName} ${placement}`;
+        assert.ok(result.ok, `${label}: ${result.ok ? '' : result.errors.join('\n')}`);
+        assert.equal(result.config.projects.get('PROJ')?.folder, folder, label);
+      }
     }
-    fs.mkdirSync(path.join(workRoot, 'memory-inside'));
-    fs.writeFileSync(path.join(workRoot, 'memory-inside', 'CLAUDE.md'), '# memory\n');
-    assert.match(getErrors(createConfig({ projects: { PROJ: { folder: 'memory-inside', triggerStatuses: ['x'] } } }))[0], /CLAUDE\.md found in it/);
+  });
+
+  it('a WORK_ROOT that itself holds Claude memory is accepted', () => {
+    const memoryWorkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-memory-root-'));
+    try {
+      fs.mkdirSync(path.join(memoryWorkRoot, 'proj-work'));
+      fs.writeFileSync(path.join(memoryWorkRoot, 'CLAUDE.md'), '# memory\n');
+      const result = validateJiraConfig(createConfig(), { workRoot: memoryWorkRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+    } finally {
+      fs.rmSync(memoryWorkRoot, { recursive: true, force: true });
+    }
   });
 
   it('a placeholder whose variable is unset names the field and the variable, never a value', () => {
@@ -322,7 +330,7 @@ describe('loadJiraConfig', () => {
   const configPath = (): string => getJiraConfigPath(dataDir);
 
   before(() => {
-    workRoot = createCleanWorkRoot();
+    workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-work-'));
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-config-data-'));
     fs.mkdirSync(path.join(workRoot, 'proj-work'));
     process.env[tokenVarName] = tokenValue;

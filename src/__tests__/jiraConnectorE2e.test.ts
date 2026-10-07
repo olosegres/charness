@@ -7,9 +7,10 @@
  * real bot MCP. One flow, in order:
  *
  *   isolation checked before the boot: a private tmux server (named, in a
- *   private TMUX_TMPDIR), a temp HOME, DATA_DIR and WORK_ROOT with no Claude
- *   memory above, ports of its own, an env file without a bot token or Atlassian
- *   variables
+ *   private TMUX_TMPDIR), a temp HOME, DATA_DIR and WORK_ROOT, ports of its own,
+ *   an env file without a bot token or Atlassian variables; the project folder
+ *   holds Claude memory (a `CLAUDE.md` in it, one in WORK_ROOT above it) and the
+ *   instance still boots and serves it, as any Claude Code session loads it
  *   → the requester assigns four issues, plus one the AI assigned itself and one
  *     of a project outside the allowlist
  *   → answered: a comment by the AI account, the issue handed back
@@ -91,7 +92,6 @@ import { resolveThreadFilesDir } from '../botFileStorage';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { requestRequesterAttribute } from '../requests/requestGroup';
 import type { ClosedRequestRecord } from '../requests/types';
-import { getClaudeMemoryAbove } from '../connectors/jira/config';
 import { notTelegramChatPhrase } from '../connectors/telegram/foreignKeyFallbacks';
 import { foreignKeyAccessorErrorPrefix } from '../connectors/telegram/sessionKeyCodec';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../connectors/telegram/telegramCallGuard';
@@ -104,6 +104,8 @@ const colleague = { accountId: 'colleague-account', accountType: 'atlassian', di
 const inProgress = { id: '10001', name: 'In Progress' };
 const toDo = { id: '10000', name: 'To Do' };
 const projectFolder = 'proj';
+/** Project memory the agent loads from its working folder and every parent: one in the folder, one above it. */
+const claudeMemoryFileName = 'CLAUDE.md';
 /** The instance's secret: the AI account's token, which jira.json takes from the env file. */
 const instanceTokenEnvName = 'CHARNESS_JIRA_AI_API_TOKEN';
 /** The shortest poll the config allows. */
@@ -270,12 +272,16 @@ function waitFor(description: string, timeoutMs: number, check: () => boolean): 
 
 /**
  * Start charness the way an isolated instance is started: `run-isolated.sh` with only its env file.
- * Ready = the poll started, which the boot does only after the bot MCP is up on its fixed port.
+ * Ready = the poll started, which the boot does only after the bot MCP is up on its fixed port, and its JQL is
+ * logged: the connector logs that line right after the "polling" one, and a read between the two sees only the first.
  */
 async function startCharness(): Promise<void> {
   charness ??= new IsolatedCharness(getLayout());
   const outputStart = charness.output.length;
-  await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(`[jira] polling PROJ every ${pollIntervalSeconds} s`));
+  await charness.start(
+    bootTimeoutMs,
+    (runOutput) => runOutput.includes(`[jira] polling PROJ every ${pollIntervalSeconds} s`) && getPollJqlProjectKeys(runOutput).length > 0,
+  );
   assertMcpListeningOn(charness.output.slice(outputStart), botMcpPort);
 }
 
@@ -348,6 +354,9 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
     layout = createIsolatedInstanceLayout('charness-j7-', [projectFolder], getFlowDeadlineMs());
+    for (const memoryFolder of [layout.workRoot, path.join(layout.workRoot, projectFolder)]) {
+      fs.writeFileSync(path.join(memoryFolder, claudeMemoryFileName), '# Project memory\n');
+    }
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -377,11 +386,17 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     for (const dir of [instance.instanceHome, instance.dataDir, instance.workRoot, instance.tmuxTmpDir]) {
       assert.ok(!dir.startsWith(`${realHome}${path.sep}`), `${dir} is outside the user's HOME`);
     }
-    assert.equal(getClaudeMemoryAbove(path.join(instance.workRoot, projectFolder)), null, 'no Claude memory in or above the working folder');
     const envNames = getInstanceEnvNames(instance);
     assert.ok(!envNames.includes('TELEGRAM_BOT_TOKEN'), 'no bot token');
     assert.ok(!envNames.some((name) => name.startsWith('ATLASSIAN_')), 'no Atlassian variables');
     for (const name of ['TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'DATA_DIR', 'WORK_ROOT']) assert.ok(envNames.includes(name), `${name} is set`);
+  });
+
+  it('the project folder holds Claude memory, in it and above it — the instance below must still boot and serve it', () => {
+    const instance = getLayout();
+    for (const memoryFolder of [instance.workRoot, path.join(instance.workRoot, projectFolder)]) {
+      assert.ok(fs.existsSync(path.join(memoryFolder, claudeMemoryFileName)), `${claudeMemoryFileName} in ${memoryFolder}`);
+    }
   });
 
   it('boots Jira-only, started with nothing but run-isolated.sh\'s variables', async () => {

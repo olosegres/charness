@@ -13,7 +13,7 @@ import type { JiraExtraField } from './issueBlocks';
 
 /**
  * @description The Jira connector's configuration (Jira connector plan J4,
- * D10/D11/D16, R4/R9; J4b R12/R14/R15): `DATA_DIR/jira.json`, `${VAR}` placeholders expanded from
+ * D10/D11/D16, R4/R9; J4b R14/R15): `DATA_DIR/jira.json`, `${VAR}` placeholders expanded from
  * the environment (the secrets stay in the instance's env file, never in the
  * JSON). Validation names the field that is wrong and never echoes a value.
  */
@@ -37,13 +37,6 @@ const refusedAdapterReasons: ReadonlyMap<string, string> = new Map([
   ['opencode', 'OpenCode is not available for a Jira project (it cannot be isolated yet)'],
   ['claude', 'the tmux Claude backend is not available for a Jira project (its folder-trust dialog would hold the session)'],
 ]);
-
-/**
- * What Claude Code loads as project memory from the working folder AND every
- * folder above it (R12): any of these above a Jira folder brings someone's
- * instructions into the session — under HOME that is the operator's own setup.
- */
-export const claudeMemoryMarkerNames = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude'] as const;
 
 /** A model name as `claude --model` takes it (`opus`, `claude-opus-5-5`, `opus[1m]`). */
 const claudeModelRe = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/;
@@ -133,22 +126,6 @@ function getAgentBinaryError(binaryPath: string): string | null {
     return e instanceof Error && 'code' in e && e.code === 'ENOENT' ? 'does not exist' : 'is not executable';
   }
   return null;
-}
-
-/**
- * @description R12: the marker of Claude memory nearest a folder — in the folder
- * itself or any folder above it, up to the filesystem root — with how many
- * levels up it was found; `null` when the ancestry is clean.
- */
-export function getClaudeMemoryAbove(folderPath: string): { markerName: string; levelsUp: number } | null {
-  let current = path.resolve(folderPath);
-  for (let levelsUp = 0; ; levelsUp += 1) {
-    const markerName = claudeMemoryMarkerNames.find((name) => fs.existsSync(path.join(current, name)));
-    if (markerName) return { markerName, levelsUp };
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
 }
 
 /** Names of the fields that still hold a `${VAR}` placeholder — a variable the env file does not set. */
@@ -253,12 +230,6 @@ export function validateJiraConfig(
     } catch (e) {
       const reason = e instanceof BindError ? folderErrorTexts[e.code] : 'cannot be resolved';
       errors.push(`jira.json projects.${projectKey}.folder: ${reason}`);
-      continue;
-    }
-    const memory = getClaudeMemoryAbove(path.join(fs.realpathSync(context.workRoot), folder));
-    if (memory) {
-      const where = memory.levelsUp === 0 ? 'in it' : `${memory.levelsUp} folder(s) above it`;
-      errors.push(`jira.json projects.${projectKey}.folder: Claude would load ${memory.markerName} found ${where} — pick a folder outside HOME and any repository`);
       continue;
     }
     projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses, extraFieldIds: [...new Set(project.extraFields ?? [])] });
