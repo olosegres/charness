@@ -456,6 +456,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       await installTool('claude');
     }
 
+    // Claude writes the transcript only with the first turn, so a session that never took one
+    // (e.g. `/model` right after `/new`) has nothing to `--resume` and the CLI exits
+    // "No conversation found". Such a session is started again under the same id instead.
+    const isResumable = opts.resume && fs.existsSync(getClaudeTranscriptPath(workDir, sessionId));
     const mcpFlags = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const args: string[] = [
       '-p',
@@ -479,7 +483,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       '--permission-mode', 'bypassPermissions',
       '--permission-prompt-tool', 'stdio',
     ];
-    if (opts.resume) args.push('--resume', sessionId);
+    if (isResumable) args.push('--resume', sessionId);
     else args.push('--session-id', sessionId);
     if (opts.model) args.push('--model', opts.model);
     if (opts.effort) args.push('--effort', opts.effort);
@@ -495,7 +499,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const sessionDir = resolveJsonStreamSessionDir(resolveDataDir(), key);
     const paths = getJsonStreamSessionPaths(sessionDir);
     const tmuxName = buildJsonStreamTmuxSessionName(key);
-    console.log(`[ClaudeJson] spawn ${keyToString(key)} session=${sessionId} resume=${opts.resume} effort=${opts.effort} model=${opts.model ?? 'default'} (tmux ${tmuxName})`);
+    console.log(`[ClaudeJson] spawn ${keyToString(key)} session=${sessionId} resume=${isResumable} effort=${opts.effort} model=${opts.model ?? 'default'} (tmux ${tmuxName})`);
 
     let pid: number;
     let fifoFd: number;
@@ -1858,7 +1862,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   async getAvailableModels(): Promise<string[]> {
     // The CLI `--model` accepts these aliases (resolved to the latest snapshot).
-    return ['sonnet', 'opus', 'haiku'];
+    return ['fable', 'opus', 'sonnet', 'haiku'];
   }
 
   async setEffort(key: SessionKey, level: string): Promise<string | null> {

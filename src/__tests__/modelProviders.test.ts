@@ -98,10 +98,10 @@ describe('modelProviders: the model, effort and provider flows over their ports'
   it('/model lists the backend\'s models and arms the numbered pick on the page it shows', async () => {
     await harness.runCommand('model');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /3 models/);
-    assert.match(picker?.text ?? '', /1\. sonnet\n2\. opus\n3\. haiku/);
-    assert.deepEqual(harness.getKeyboardData(picker), [['mdl_0_0'], ['mdl_0_1'], ['mdl_0_2']]);
-    assert.deepEqual(threadModelLists.get(keyString), ['sonnet', 'opus', 'haiku']);
+    assert.match(picker?.text ?? '', /4 models/);
+    assert.match(picker?.text ?? '', /1\. fable\n2\. opus\n3\. sonnet\n4\. haiku/);
+    assert.deepEqual(harness.getKeyboardData(picker), [['mdl_0_0'], ['mdl_0_1'], ['mdl_0_2'], ['mdl_0_3']]);
+    assert.deepEqual(threadModelLists.get(keyString), ['fable', 'opus', 'sonnet', 'haiku']);
     assert.equal(awaitingModelSelection.has(keyString), true, 'a bare digit now picks from this page');
   });
 
