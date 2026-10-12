@@ -78,6 +78,7 @@ export const kaDict: Record<string, string> = {
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
     '/auto_continue_limits — ავტო-გაგრჯელება გამოყენების ლიმიტის შემდეგ (გადამრთველი)\n' +
+    '/account — ამ თემის Claude ანგარიში (არჩევა; დამატება / ხელახლა შესვლა / წაშლა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
     '/bind — კავშირის მართვა',
@@ -640,4 +641,45 @@ export const kaDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — პასუხი მოვა {time}-ის შემდეგ.',
   'requests.limit.answerNextAttemptNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — შემდეგი მცდელობა {time}-ზე.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 გამოყენების ლიმიტი ამოიწურა. ავტომატური გაგრძელება გამორთულია, ამიტომ სამუშაო დაელოდება, სანამ ოპერატორი არ განაახლებს მას.',
+
+  'account.title': '👤 ამ თემის Claude ანგარიში: {name}\n\n{list}\n\nშეეხეთ პროფილს, რომ ეს თემა მასზე გადაიყვანოთ. General თემაში არჩევანი ყველა თემის ნაგულისხმევი ხდება.',
+  'account.titleGeneral': '👤 Claude ანგარიში — ნაგულისხმევი ყველა თემისთვის: {name}\n\n{list}\n\nშეეხეთ პროფილს, რომ ის ნაგულისხმევი გახდეს. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ.',
+  'account.row.loggedOut': 'არ არის შესული',
+  'account.row.topics': ' · {count} თემა',
+  'account.kind.personal': 'პირადი {plan}',
+  'account.kind.corporate': 'კორპორატიული {plan}',
+  'account.kind.unknown': 'გეგმა {plan}',
+  'account.addButton': '➕ დამატება',
+  'account.loginButton': '🔑 ხელახლა შესვლა',
+  'account.removeButton': '🗑 წაშლა',
+  'account.backButton': '⬅️ უკან',
+  'account.followButton': '↩ ნაგულისხმევის მიყოლა ({name})',
+  'account.pickLogin': '🔑 რომელ პროფილში შევიდეთ ხელახლა?',
+  'account.pickRemove': '🗑 რომელი პროფილი წავშალოთ? მისი შესვლა იშლება; მისი ამრჩევი თემები ნაგულისხმევს უბრუნდებიან.',
+  'account.nothingToRemove': 'დამატებული პროფილები არ არის. default პროფილი თავად ~/.claude-ია და მისი წაშლა შეუძლებელია.',
+  'account.confirmRemove': '🗑 წავშალოთ პროფილი {name} ({email})? მისი შესვლა იშლება და მისი ამრჩევი {count} თემა ნაგულისხმევს უბრუნდება.',
+  'account.confirmRemoveButton': '🗑 დიახ, წაიშალოს {name}',
+  'account.removed': '✅ პროფილი {name} წაიშალა. {count} თემა ახლა ნაგულისხმევს მიჰყვება.',
+  'account.removeDefaultRefused': 'default პროფილი თავად ~/.claude-ია და მისი წაშლა შეუძლებელია.',
+  'account.removeInstanceDefaultRefused': '{name} ყველა თემის ნაგულისხმევია. ჯერ General თემაში სხვა ნაგულისხმევი აირჩიეთ.',
+  'account.unknown': '❌ პროფილი სახელით {name} არ არსებობს. სიისთვის გაუშვით /account.',
+  'account.notLoggedIn': '⚠️ პროფილი {name} შესული არ არის. ჯერ გაუშვით /account login {name}.',
+  'account.askName': '➕ ახალი პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო (მაგ. work). გამოაგზავნეთ შემდეგი შეტყობინებით ან გაუშვით /account add <სახელი>.',
+  'account.invalidName': '❌ პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო, და არა "default".',
+  'account.exists': 'პროფილი სახელით {name} უკვე არსებობს.',
+  'account.created': '✅ პროფილი {name} შეიქმნა. იწყება შესვლა…',
+  'account.createFailed': '⚠️ პროფილ {name}-ის საქაღალდის შექმნა ვერ მოხერხდა. იხილეთ ბოტის ლოგი.',
+  'account.login_url': '🔐 Claude-ში შესვლა პროფილისთვის {name}. გახსენით ეს ბმული ბრაუზერში, რომელშიც იმ ანგარიშით ხართ შესული — ინკოგნიტო ფანჯარა ან სხვა ბრაუზერის პროფილი თქვენს მიმდინარე შესვლას გვერდზე ტოვებს — დაასრულეთ შესვლა და კოდი აქ ჩასვით:\n{url}',
+  'account.login_success': '✅ პროფილი {name} შევიდა: {email} ({plan}).',
+  'account.login_failed': '⚠️ პროფილ {name}-ში შესვლა ვერ მოხერხდა. სცადეთ ხელახლა: /account login {name}.',
+  'account.setThisTopic': '✅ ამ თემის Claude ანგარიში: {name}.{apply}',
+  'account.setGlobal': '✅ ნაგულისხმევი Claude ანგარიში ყველა თემისთვის: {name}. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ; დანარჩენები ახლავე ან შემდეგ გაშვებისას გადადიან.',
+  'account.followSet': '✅ ეს თემა ნაგულისხმევ Claude ანგარიშს ({name}) მიჰყვება.{apply}',
+  'account.usage': 'გამოყენება: /account — არჩევა; /account add <სახელი>; /account use <სახელი>; /account login <სახელი>; /account remove <სახელი>.',
+  'account.applied.inactive': ' ამოქმედდება სესიის შემდეგ გაშვებისას ან განახლებისას.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' მიმდინარე სესია მის ქვეშ გადაიტვირთა — იგივე საუბარი.',
+  'account.applied.deferred': ' აგენტი მუშაობს; გადართვა მისი სვლის დასრულებისას ამოქმედდება.',
+  'account.applied.restartRequired': ' აგენტი მუშაობს; გადართვა შემდეგ გაშვებისას ან განახლებისას ამოქმედდება.',
+  'account.askNameCancelled': '✖ ანგარიშის დამატება გაუქმდა. შეტყობინებები ისევ აგენტთან მიდის.',
 };

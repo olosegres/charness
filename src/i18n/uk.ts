@@ -84,6 +84,7 @@ export const ukDict: Record<string, string> = {
     '/compact — стиснути контекст агента\n' +
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
     '/auto_continue_limits — авто-продовження після ліміту використання (перемикач)\n' +
+    '/account — обліковий запис Claude для цього топіка (вибір; додати / увійти знову / видалити)\n' +
     '/clear — видалити повідомлення треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
     '/bind — керування прив\'язкою',
@@ -646,4 +647,45 @@ export const ukDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Досягнуто ліміту використання — відповідь буде після {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Досягнуто ліміту використання — наступна спроба о {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Досягнуто ліміту використання. Автопродовження вимкнено — робота чекатиме, доки оператор її не відновить.',
+
+  'account.title': '👤 Обліковий запис Claude для цього топіка: {name}\n\n{list}\n\nНатисніть профіль, щоб перемкнути на нього цей топік. У топіку General вибір стає типовим для всіх топіків.',
+  'account.titleGeneral': '👤 Обліковий запис Claude — типовий для ВСІХ топіків: {name}\n\n{list}\n\nНатисніть профіль, щоб зробити його типовим. Топіки з власним вибором зберігають його.',
+  'account.row.loggedOut': 'не виконано вхід',
+  'account.row.topics': ' · топіків: {count}',
+  'account.kind.personal': 'особистий {plan}',
+  'account.kind.corporate': 'корпоративний {plan}',
+  'account.kind.unknown': 'план {plan}',
+  'account.addButton': '➕ Додати',
+  'account.loginButton': '🔑 Увійти знову',
+  'account.removeButton': '🗑 Видалити',
+  'account.backButton': '⬅️ Назад',
+  'account.followButton': '↩ Як типовий ({name})',
+  'account.pickLogin': '🔑 У який профіль увійти знову?',
+  'account.pickRemove': '🗑 Який профіль видалити? Його вхід видаляється; топіки, що його обрали, повертаються до типового.',
+  'account.nothingToRemove': 'Доданих профілів немає. Профіль default — це сам ~/.claude, його не можна видалити.',
+  'account.confirmRemove': '🗑 Видалити профіль {name} ({email})? Його вхід видаляється, а топіків, що його обрали ({count}), повернуться до типового.',
+  'account.confirmRemoveButton': '🗑 Так, видалити {name}',
+  'account.removed': '✅ Профіль {name} видалено. Топіків, що тепер використовують типовий: {count}.',
+  'account.removeDefaultRefused': 'Профіль default — це сам ~/.claude, його не можна видалити.',
+  'account.removeInstanceDefaultRefused': '{name} — типовий профіль для всіх топіків. Спершу оберіть інший у топіку General.',
+  'account.unknown': '❌ Профілю {name} немає. Список — /account.',
+  'account.notLoggedIn': '⚠️ У профіль {name} не виконано вхід. Спершу /account login {name}.',
+  'account.askName': '➕ Назва нового профілю — малі латинські літери, цифри, - та _, до {max} символів (наприклад, work). Надішліть її наступним повідомленням або виконайте /account add <назва>.',
+  'account.invalidName': '❌ Назва профілю — малі латинські літери, цифри, - та _, до {max} символів, і не "default".',
+  'account.exists': 'Профіль {name} уже існує.',
+  'account.created': '✅ Профіль {name} створено. Запускаю вхід…',
+  'account.createFailed': '⚠️ Не вдалося створити каталог профілю {name}. Дивіться лог бота.',
+  'account.login_url': '🔐 Вхід у Claude для профілю {name}. Відкрийте посилання в браузері, де виконано вхід у ТОЙ обліковий запис — вікно інкогніто або інший профіль браузера не підхопить поточний вхід, — завершіть вхід і надішліть код сюди:\n{url}',
+  'account.login_success': '✅ Профіль {name}: виконано вхід як {email} ({plan}).',
+  'account.login_failed': '⚠️ Вхід у профіль {name} не вдався. Повторити: /account login {name}.',
+  'account.setThisTopic': '✅ Обліковий запис Claude для цього топіка: {name}.{apply}',
+  'account.setGlobal': '✅ Типовий обліковий запис Claude для ВСІХ топіків: {name}. Топіки з власним вибором зберігають його; решта перемикаються зараз або під час наступного запуску.',
+  'account.followSet': '✅ Цей топік використовує типовий обліковий запис Claude ({name}).{apply}',
+  'account.usage': 'Використання: /account — вибір; /account add <назва>; /account use <назва>; /account login <назва>; /account remove <назва>.',
+  'account.applied.inactive': ' Застосується під час наступного запуску або відновлення сесії.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' Запущену сесію перезапущено під ним — та сама розмова.',
+  'account.applied.deferred': ' Агент працює; перемикання застосується після завершення ходу.',
+  'account.applied.restartRequired': ' Агент працює; перемикання застосується під час наступного запуску або відновлення.',
+  'account.askNameCancelled': '✖ Додавання облікового запису скасовано. Повідомлення знову йдуть агенту.',
 };

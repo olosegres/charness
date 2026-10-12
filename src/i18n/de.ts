@@ -78,6 +78,7 @@ export const deDict: Record<string, string> = {
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
     '/auto_continue_limits — automatisch nach einem Nutzungslimit fortsetzen (Umschalter)\n' +
+    '/account — Claude-Konto für dieses Thema (Auswahl; hinzufügen / neu anmelden / entfernen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
     '/bind — Verknüpfung verwalten',
@@ -640,4 +641,45 @@ export const deDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Nutzungslimit erreicht — die Antwort kommt nach {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Nutzungslimit erreicht — nächster Versuch um {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Nutzungslimit erreicht. Die automatische Fortsetzung ist aus — die Arbeit wartet, bis der Betreiber sie fortsetzt.',
+
+  'account.title': '👤 Claude-Konto für dieses Thema: {name}\n\n{list}\n\nTippe auf ein Profil, um dieses Thema darauf umzustellen. Im Thema General wird die Wahl zum Standard für alle Themen.',
+  'account.titleGeneral': '👤 Claude-Konto — Standard für ALLE Themen: {name}\n\n{list}\n\nTippe auf ein Profil, um es zum Standard zu machen. Themen mit eigener Wahl behalten sie.',
+  'account.row.loggedOut': 'nicht angemeldet',
+  'account.row.topics': ' · {count} Thema/Themen',
+  'account.kind.personal': 'persönlich {plan}',
+  'account.kind.corporate': 'Firma {plan}',
+  'account.kind.unknown': 'Plan {plan}',
+  'account.addButton': '➕ Hinzufügen',
+  'account.loginButton': '🔑 Neu anmelden',
+  'account.removeButton': '🗑 Entfernen',
+  'account.backButton': '⬅️ Zurück',
+  'account.followButton': '↩ Dem Standard folgen ({name})',
+  'account.pickLogin': '🔑 Welches Profil soll sich neu anmelden?',
+  'account.pickRemove': '🗑 Welches Profil soll entfernt werden? Seine Anmeldung wird gelöscht; Themen, die es gewählt hatten, kehren zum Standard zurück.',
+  'account.nothingToRemove': 'Es gibt keine hinzugefügten Profile. Das Profil default ist ~/.claude selbst und kann nicht entfernt werden.',
+  'account.confirmRemove': '🗑 Profil {name} ({email}) entfernen? Seine Anmeldung wird gelöscht und {count} Thema/Themen, die es gewählt hatten, kehren zum Standard zurück.',
+  'account.confirmRemoveButton': '🗑 Ja, {name} entfernen',
+  'account.removed': '✅ Profil {name} entfernt. {count} Thema/Themen folgen jetzt dem Standard.',
+  'account.removeDefaultRefused': 'Das Profil default ist ~/.claude selbst und kann nicht entfernt werden.',
+  'account.removeInstanceDefaultRefused': '{name} ist der Standard für alle Themen. Wähle zuerst im Thema General einen anderen Standard.',
+  'account.unknown': '❌ Kein Profil namens {name}. /account zeigt die Liste.',
+  'account.notLoggedIn': '⚠️ Profil {name} ist nicht angemeldet. Zuerst /account login {name} ausführen.',
+  'account.askName': '➕ Name des neuen Profils — Kleinbuchstaben, Ziffern, - und _, bis zu {max} Zeichen (z. B. work). Sende ihn als nächste Nachricht oder führe /account add <name> aus.',
+  'account.invalidName': '❌ Ein Profilname besteht aus Kleinbuchstaben, Ziffern, - und _, höchstens {max} Zeichen, und ist nicht "default".',
+  'account.exists': 'Ein Profil namens {name} existiert bereits.',
+  'account.created': '✅ Profil {name} angelegt. Anmeldung wird gestartet…',
+  'account.createFailed': '⚠️ Das Verzeichnis für Profil {name} konnte nicht angelegt werden. Siehe Bot-Log.',
+  'account.login_url': '🔐 Claude-Anmeldung für Profil {name}. Öffne diesen Link in einem Browser, der als DIESES Konto angemeldet ist — ein Inkognito-Fenster oder ein anderes Browserprofil hält deine aktuelle Anmeldung heraus —, schließe die Anmeldung ab und füge den Code hier ein:\n{url}',
+  'account.login_success': '✅ Profil {name} angemeldet: {email} ({plan}).',
+  'account.login_failed': '⚠️ Anmeldung für Profil {name} fehlgeschlagen. Erneut versuchen mit /account login {name}.',
+  'account.setThisTopic': '✅ Claude-Konto für dieses Thema: {name}.{apply}',
+  'account.setGlobal': '✅ Standard-Claude-Konto für ALLE Themen: {name}. Themen mit eigener Wahl behalten sie; die übrigen wechseln jetzt oder beim nächsten Start.',
+  'account.followSet': '✅ Dieses Thema folgt dem Standard-Claude-Konto ({name}).{apply}',
+  'account.usage': 'Verwendung: /account — die Auswahl; /account add <name>; /account use <name>; /account login <name>; /account remove <name>.',
+  'account.applied.inactive': ' Gilt beim nächsten Start oder Fortsetzen der Sitzung.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' Die laufende Sitzung wurde darunter neu gestartet — dieselbe Unterhaltung.',
+  'account.applied.deferred': ' Der Agent arbeitet; der Wechsel gilt, sobald sein Zug endet.',
+  'account.applied.restartRequired': ' Der Agent arbeitet; der Wechsel gilt beim nächsten Start oder Fortsetzen.',
+  'account.askNameCancelled': '✖ Konto hinzufügen abgebrochen. Nachrichten gehen wieder an den Agenten.',
 };

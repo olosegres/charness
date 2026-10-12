@@ -20,4 +20,9 @@ it through the topic. `bot.ts` wires the ports (`replyToThread`, `deleteThreadMe
   `auth.json` (plus a provider-auth reload). A success also retires the pinned logged-out notice.
 - **A pty is a bot child and is not restart-safe:** a restart drops the flow. `cancel…` (`/quit`, session release,
   teardown) kills the pty and forgets the thread's entry; a cancelled flow never reports.
+- **A Claude sign-in may target an account profile** (`startClaudeAuthLogin(key, { name, configDir })`, from
+  `/account`): the pty AND the `claude auth status` probe run with that profile's `CLAUDE_CONFIG_DIR`, the link
+  message tells the operator to open it as the other account, the confirmation names the account (email, plan),
+  and the parsed status goes to the bot through the optional `onClaudeProfileAuthStatus` port. Only the
+  `default` profile (no directory of its own) retires the pinned logged-out notice — it IS the `~/.claude` login.
 - The parse and decision helpers are `../utils/claudeAuthLogin.ts` and `../utils/openCodeAuthLogin.ts`.

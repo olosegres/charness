@@ -71,3 +71,20 @@ WAS armed. The picker shows a «skip once» row only while a resume is armed; a 
 keyboard-less confirmation. The usage-limit notice appends the shared pointer through
 `appendAutoContinueLimitsHint` and its own «skip once» button consumes the picker through the returned
 `consumeAutoContinueLimitsPicker`.
+
+## `claudeAccounts.ts`
+
+`/account` (`/accounts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_login_menu`,
+`acct_rm_menu`, `acct_back`, `acct_login_<name>`, `acct_rm_<name>`, `acct_rmok_<name>`: which Claude account
+profile (`utils/claudeProfiles.ts`) a topic's Claude sessions run on. A button BAKES the profile name into its
+data (names are slugs of at most 32 characters, so the data stays under 64 bytes) — an old keyboard can never act
+on another profile. A regular topic sets its own pick, General the instance default; the picker is meant for
+repeated use and re-renders in place. The module owns no process: it asks the bot through ports to probe
+`claude auth status --json` under a profile's directory (`readClaudeAuthStatus`, refreshed on every render so the
+list shows the CLI's truth), to start the sign-in relay for a profile (`startClaudeProfileLogin` →
+`agentLogin/`), and to move live sessions onto a changed pick (`applyClaudeProfile` for one topic,
+`applyClaudeProfileEverywhere` after a General pick, a removal or a finished sign-in). «Add» without a name arms a
+per-topic name capture the text handler consults (`checkIsAwaitingProfileName` / `submitProfileName`; a slash
+command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
+picked; `default` is never removed; the instance default is refused until General picks another; removing a
+profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).

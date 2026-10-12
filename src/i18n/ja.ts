@@ -78,6 +78,7 @@ export const jaDict: Record<string, string> = {
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
     '/auto_continue_limits — 使用量上限後に自動再開（切り替え）\n' +
+    '/account — このトピックの Claude アカウント（選択; 追加 / 再ログイン / 削除）\n' +
     '/clear — スレッドのメッセージを削除\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
     '/bind — バインドを管理',
@@ -634,4 +635,45 @@ export const jaDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 使用量の上限に達しました — 回答は {time} 以降になります。',
   'requests.limit.answerNextAttemptNotice': '🚧 使用量の上限に達しました — 次の試行は {time} です。',
   'requests.limit.answerAutoResumeOffNotice': '🚧 使用量の上限に達しました。自動再開はオフのため、オペレーターが再開するまで作業は待機します。',
+
+  'account.title': '👤 このトピックの Claude アカウント: {name}\n\n{list}\n\nプロファイルをタップすると、このトピックがそれに切り替わります。General トピックでは、選択が全トピックの既定になります。',
+  'account.titleGeneral': '👤 Claude アカウント — 全トピックの既定: {name}\n\n{list}\n\nプロファイルをタップすると既定になります。独自に選択したトピックはそのままです。',
+  'account.row.loggedOut': '未ログイン',
+  'account.row.topics': ' · {count} トピック',
+  'account.kind.personal': '個人 {plan}',
+  'account.kind.corporate': '法人 {plan}',
+  'account.kind.unknown': 'プラン {plan}',
+  'account.addButton': '➕ 追加',
+  'account.loginButton': '🔑 再ログイン',
+  'account.removeButton': '🗑 削除',
+  'account.backButton': '⬅️ 戻る',
+  'account.followButton': '↩ 既定に従う ({name})',
+  'account.pickLogin': '🔑 どのプロファイルを再ログインしますか？',
+  'account.pickRemove': '🗑 どのプロファイルを削除しますか？ そのログインは消去され、それを選んでいたトピックは既定に戻ります。',
+  'account.nothingToRemove': '追加されたプロファイルはありません。default プロファイルは ~/.claude そのものなので削除できません。',
+  'account.confirmRemove': '🗑 プロファイル {name} ({email}) を削除しますか？ そのログインは消去され、それを選んでいた {count} トピックは既定に戻ります。',
+  'account.confirmRemoveButton': '🗑 はい、{name} を削除',
+  'account.removed': '✅ プロファイル {name} を削除しました。{count} トピックが既定に従うようになりました。',
+  'account.removeDefaultRefused': 'default プロファイルは ~/.claude そのものなので削除できません。',
+  'account.removeInstanceDefaultRefused': '{name} は全トピックの既定です。まず General トピックで別の既定を選んでください。',
+  'account.unknown': '❌ {name} というプロファイルはありません。/account で一覧を表示します。',
+  'account.notLoggedIn': '⚠️ プロファイル {name} はログインしていません。先に /account login {name} を実行してください。',
+  'account.askName': '➕ 新しいプロファイル名 — 小文字、数字、- と _、{max} 文字まで（例: work）。次のメッセージとして送るか、/account add <名前> を実行してください。',
+  'account.invalidName': '❌ プロファイル名は小文字、数字、- と _ で {max} 文字まで、かつ "default" 以外です。',
+  'account.exists': '{name} というプロファイルは既にあります。',
+  'account.created': '✅ プロファイル {name} を作成しました。ログインを開始します…',
+  'account.createFailed': '⚠️ プロファイル {name} のディレクトリを作成できませんでした。ボットのログを確認してください。',
+  'account.login_url': '🔐 プロファイル {name} の Claude ログイン。そのアカウントでログイン済みのブラウザでこのリンクを開き（シークレットウィンドウか別のブラウザプロファイルなら現在のログインを引きずりません）、ログインを完了してコードをここに貼り付けてください:\n{url}',
+  'account.login_success': '✅ プロファイル {name} がログインしました: {email} ({plan})。',
+  'account.login_failed': '⚠️ プロファイル {name} のログインに失敗しました。/account login {name} で再試行してください。',
+  'account.setThisTopic': '✅ このトピックの Claude アカウント: {name}。{apply}',
+  'account.setGlobal': '✅ 全トピックの既定 Claude アカウント: {name}。独自に選択したトピックはそのまま、他は今すぐか次回の起動時に切り替わります。',
+  'account.followSet': '✅ このトピックは既定の Claude アカウント ({name}) に従います。{apply}',
+  'account.usage': '使い方: /account — 選択画面; /account add <名前>; /account use <名前>; /account login <名前>; /account remove <名前>。',
+  'account.applied.inactive': ' セッションの次回の起動または再開時に適用されます。',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' 実行中のセッションをそのアカウントで再起動しました — 同じ会話です。',
+  'account.applied.deferred': ' エージェントが作業中です。切り替えはターン終了時に適用されます。',
+  'account.applied.restartRequired': ' エージェントが作業中です。切り替えは次回の起動または再開時に適用されます。',
+  'account.askNameCancelled': '✖ アカウントの追加をキャンセルしました。メッセージは再びエージェントに届きます。',
 };

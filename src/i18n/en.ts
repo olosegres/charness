@@ -82,6 +82,7 @@ export const enDict: Record<string, string> = {
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
     '/auto_continue_limits — auto-resume after a usage limit (toggle)\n' +
+    '/account — Claude account for this topic (picker; add / re-login / remove)\n' +
     '/clear — delete thread messages\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
     '/bind — manage binding',
@@ -688,4 +689,45 @@ export const enDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Usage limit reached — the answer will come after {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Usage limit reached — next attempt at {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Usage limit reached. Automatic resume is off, so the work waits until the operator resumes it.',
+
+  'account.title': '👤 Claude account for this topic: {name}\n\n{list}\n\nTap a profile to switch this topic to it. In the General topic the pick becomes the default for all topics.',
+  'account.titleGeneral': '👤 Claude account — default for ALL topics: {name}\n\n{list}\n\nTap a profile to make it the default. Topics with their own pick keep it.',
+  'account.row.loggedOut': 'not signed in',
+  'account.row.topics': ' · {count} topic(s)',
+  'account.kind.personal': 'personal {plan}',
+  'account.kind.corporate': 'corporate {plan}',
+  'account.kind.unknown': 'plan {plan}',
+  'account.addButton': '➕ Add',
+  'account.loginButton': '🔑 Re-login',
+  'account.removeButton': '🗑 Remove',
+  'account.backButton': '⬅️ Back',
+  'account.followButton': '↩ Follow the default ({name})',
+  'account.pickLogin': '🔑 Which profile should sign in again?',
+  'account.pickRemove': '🗑 Which profile should be removed? Its login is deleted; topics that picked it return to the default.',
+  'account.nothingToRemove': 'There are no added profiles. The default profile is ~/.claude itself and cannot be removed.',
+  'account.confirmRemove': '🗑 Remove profile {name} ({email})? Its login is deleted and {count} topic(s) that picked it return to the default.',
+  'account.confirmRemoveButton': '🗑 Yes, remove {name}',
+  'account.removed': '✅ Profile {name} removed. {count} topic(s) now follow the default.',
+  'account.removeDefaultRefused': 'The default profile is ~/.claude itself and cannot be removed.',
+  'account.removeInstanceDefaultRefused': '{name} is the default for all topics. Pick another default in the General topic first.',
+  'account.unknown': '❌ No profile named {name}. Run /account to see the list.',
+  'account.notLoggedIn': '⚠️ Profile {name} is not signed in. Run /account login {name} first.',
+  'account.askName': '➕ Name for the new profile — lowercase letters, digits, - and _, up to {max} characters (e.g. work). Send it as the next message, or run /account add <name>.',
+  'account.invalidName': '❌ A profile name is lowercase letters, digits, - and _, up to {max} characters, and not "default".',
+  'account.exists': 'A profile named {name} already exists.',
+  'account.created': '✅ Profile {name} created. Starting its sign-in…',
+  'account.createFailed': '⚠️ Could not create the directory for profile {name}. See the bot log.',
+  'account.login_url': '🔐 Sign in to Claude for profile {name}. Open this link in a browser that is signed in as THAT account — an incognito window or another browser profile keeps your current login out of the way — complete the sign-in and paste the code back here:\n{url}',
+  'account.login_success': '✅ Profile {name} signed in: {email} ({plan}).',
+  'account.login_failed': '⚠️ Sign-in for profile {name} failed. Run /account login {name} to try again.',
+  'account.setThisTopic': '✅ Claude account for this topic: {name}.{apply}',
+  'account.setGlobal': '✅ Default Claude account for ALL topics: {name}. Topics with their own pick keep it; the others switch now or at their next start.',
+  'account.followSet': '✅ This topic follows the default Claude account ({name}).{apply}',
+  'account.usage': 'Usage: /account — the picker; /account add <name>; /account use <name>; /account login <name>; /account remove <name>.',
+  'account.applied.inactive': ' It applies when the session next starts or resumes.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' The running session was restarted under it — same conversation.',
+  'account.applied.deferred': ' The agent is working; the switch applies when its turn ends.',
+  'account.applied.restartRequired': ' The agent is working; the switch applies at the next start or resume.',
+  'account.askNameCancelled': '✖ Adding an account cancelled. Messages go to the agent again.',
 };

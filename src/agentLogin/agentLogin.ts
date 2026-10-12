@@ -12,11 +12,11 @@ import { t } from '../i18n';
 import { type IPty, spawn as spawnPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from '../utils/resolveBinary';
 import {
-  parseAuthStatusLoggedIn,
   checkIsClaudeAuthLoginCodePrompt,
   parseClaudeAuthLoginUrl,
   checkIsAuthLoginSucceeded,
 } from '../utils/claudeAuthLogin';
+import { claudeConfigDirVariableName, parseClaudeAuthStatus, readProcessErrorStdout, type ClaudeAuthStatus } from '../utils/claudeProfiles';
 import {
   getOpenCodeAuthFilePath,
   checkProviderAuthed,
@@ -59,6 +59,8 @@ function appendEscToCancelHint(text: string): string {
 
 interface PendingAuthLogin {
   readonly pty: IPty;
+  /** The account profile being signed in (`null` = the default `~/.claude` login). */
+  readonly profile: ClaudeLoginProfile | null;
   /** Accumulated pty output (ANSI included) — re-parsed on each chunk. */
   output: string;
   /** The sign-in URL has been relayed to the topic. */
@@ -135,14 +137,30 @@ async function readOpenCodeProviderAuthed(providerId: string): Promise<boolean |
 }
 
 /**
+ * A Claude account profile a `/login` signs in (`utils/claudeProfiles.ts`): its name for the confirmation and
+ * the config directory the CLI must write the login into (`null` = the default `~/.claude`).
+ */
+export interface ClaudeLoginProfile {
+  name: string;
+  configDir: string | null;
+}
+
+/**
  * What the sign-in drivers need from the bot: the topic's send/delete, retiring the pinned logged-out
- * notice, and a process runner for the `claude auth status` probe.
+ * notice, a process runner for the `claude auth status` probe (run with the profile's `CLAUDE_CONFIG_DIR` when
+ * one is signed in), and — optionally — a sink for the auth status a profile sign-in ends with, so the bot can
+ * record the account's email and plan.
  */
 export interface AgentLoginPorts {
   replyToThread: (key: SessionKey, text: string) => Promise<number | null>;
   deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<void>;
   clearAuthNotice: (key: SessionKey) => void;
-  execFileAsync: (file: string, args: readonly string[], options: { timeout: number }) => Promise<{ stdout: string }>;
+  execFileAsync: (
+    file: string,
+    args: readonly string[],
+    options: { timeout: number; env?: NodeJS.ProcessEnv },
+  ) => Promise<{ stdout: string }>;
+  onClaudeProfileAuthStatus?: (key: SessionKey, profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null) => Promise<void>;
 }
 
 /**
@@ -150,7 +168,7 @@ export interface AgentLoginPorts {
  * thread, per sign-in kind) are state of the returned instance, not of the module.
  */
 export function createAgentLogin(ports: AgentLoginPorts) {
-  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync } = ports;
+  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync, onClaudeProfileAuthStatus } = ports;
 
   /** Per-thread in-flight `claude auth login` flows, keyed by `keyToString(key)`. */
   const pendingAuthLogins = new Map<string, PendingAuthLogin>();
@@ -180,17 +198,31 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     }
   }
 
-  /** Read `claude auth status --json` → loggedIn, or `null` if the probe fails. */
-  async function readAuthLoginStatus(): Promise<boolean | null> {
+  /**
+   * @description The environment a `claude auth …` process runs with: the bot's own minus `ANTHROPIC_API_KEY`
+   * (the subscription login, never the metered console path), plus the profile's `CLAUDE_CONFIG_DIR` when one
+   * is signed in — the login must land in THAT directory, and the status probe must read the same one.
+   */
+  function buildClaudeAuthEnv(configDir: string | null): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+    if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
+    return env;
+  }
+
+  /** Read `claude auth status --json` under `configDir`, or `null` if the probe fails or prints something else. */
+  async function readAuthLoginStatus(configDir: string | null): Promise<ClaudeAuthStatus | null> {
     try {
       const { stdout } = await execFileAsync(
         resolveClaudeBinary(),
         ['auth', 'status', '--json'],
-        { timeout: authStatusProbeTimeoutMs },
+        { timeout: authStatusProbeTimeoutMs, env: buildClaudeAuthEnv(configDir) },
       );
-      return parseAuthStatusLoggedIn(stdout);
-    } catch {
-      return null;
+      return parseClaudeAuthStatus(stdout);
+    } catch (e) {
+      // A logged-out directory makes the CLI exit non-zero WITH its JSON on stdout (probed on 2.1.296):
+      // that is the answer, not a failed probe.
+      return parseClaudeAuthStatus(readProcessErrorStdout(e));
     }
   }
 
@@ -198,9 +230,12 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    * @description Start the out-of-band `/login` flow for a json-stream thread: spawn
    * `claude auth login --claudeai` in a pty, relay the sign-in URL when it appears,
    * and arm the pending-code state (the thread's next plain text is written into the
-   * pty as the code). Re-running `/login` while a flow is pending restarts it.
+   * pty as the code). Re-running `/login` while a flow is pending restarts it. With a
+   * `profile` the CLI signs THAT account profile in (`CLAUDE_CONFIG_DIR` set on the
+   * pty), the link message tells the operator to open it as the other account, and
+   * the confirmation names the account; the default login is unchanged.
    */
-  async function startClaudeAuthLogin(key: SessionKey): Promise<void> {
+  async function startClaudeAuthLogin(key: SessionKey, profile: ClaudeLoginProfile | null = null): Promise<void> {
     const k = keyToString(key);
     cancelClaudeAuthLogin(key); // clean restart on a repeated /login
 
@@ -208,15 +243,14 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     try {
       // Force subscription login (never metered): `--claudeai` picks the Claude
       // subscription and dropping ANTHROPIC_API_KEY keeps the metered console path
-      // out of the way. cwd is irrelevant — login writes to `~/.claude` globally.
-      const env: Record<string, string | undefined> = { ...process.env };
-      delete env.ANTHROPIC_API_KEY;
+      // out of the way. cwd is irrelevant — login writes to the config directory
+      // (`~/.claude`, or the profile's own).
       child = spawnPty(resolveClaudeBinary(), ['auth', 'login', '--claudeai'], {
         name: 'xterm-256color',
         cols: authLoginPtyCols,
         rows: authLoginPtyRows,
         cwd: process.cwd(),
-        env,
+        env: buildClaudeAuthEnv(profile?.configDir ?? null),
       });
     } catch (e) {
       console.warn(`[login] ${k} pty spawn failed:`, e);
@@ -226,6 +260,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
 
     const pending: PendingAuthLogin = {
       pty: child,
+      profile,
       output: '',
       urlRelayed: false,
       timeoutTimer: setTimeout(() => {
@@ -245,7 +280,10 @@ export function createAgentLogin(ports: AgentLoginPorts) {
         if (url) {
           current.urlRelayed = true;
           clearTimeout(current.timeoutTimer);
-          void replyToThread(key, appendEscToCancelHint(t('agent.login_url', { url })));
+          const linkText = current.profile
+            ? t('account.login_url', { name: current.profile.name, url })
+            : t('agent.login_url', { url });
+          void replyToThread(key, appendEscToCancelHint(linkText));
         }
       }
     });
@@ -308,8 +346,26 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     if (!pending || pending.pty !== child) return; // cancelled/replaced → no report
     clearTimeout(pending.timeoutTimer);
     pendingAuthLogins.delete(k);
-    const loggedIn = await readAuthLoginStatus();
-    if (checkIsAuthLoginSucceeded({ exitCode, loggedIn })) {
+    const status = await readAuthLoginStatus(pending.profile?.configDir ?? null);
+    const isSucceeded = checkIsAuthLoginSucceeded({ exitCode, loggedIn: status?.loggedIn ?? null });
+    if (pending.profile) {
+      // The bot records the account (email, plan) whatever the outcome — a failed sign-in reads as logged out.
+      await onClaudeProfileAuthStatus?.(key, pending.profile, status);
+      // The `default` profile IS the `~/.claude` login: a success retires the pinned logged-out notice, as `/login` does.
+      if (isSucceeded && pending.profile.configDir === null) clearAuthNotice(key);
+      await replyToThread(
+        key,
+        isSucceeded
+          ? t('account.login_success', {
+              name: pending.profile.name,
+              email: status?.email ?? '?',
+              plan: status?.subscriptionType ?? '?',
+            })
+          : t('account.login_failed', { name: pending.profile.name }),
+      );
+      return;
+    }
+    if (isSucceeded) {
       clearAuthNotice(key); // recovery → retire any pinned logged-out notice
       await replyToThread(key, t('agent.login_success'));
     } else {

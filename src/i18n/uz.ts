@@ -78,6 +78,7 @@ export const uzDict: Record<string, string> = {
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
     '/auto_continue_limits — foydalanish limitidan keyin avtodavom (almashtirgich)\n' +
+    '/account — bu mavzu uchun Claude hisobi (tanlov; qo‘shish / qayta kirish / o‘chirish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
     '/bind — bog‘lanishni boshqarish',
@@ -640,4 +641,45 @@ export const uzDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Foydalanish limitiga yetildi — javob {time} dan keyin keladi.',
   'requests.limit.answerNextAttemptNotice': '🚧 Foydalanish limitiga yetildi — keyingi urinish {time} da.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Foydalanish limitiga yetildi. Avtomatik davom ettirish o‘chirilgan, shuning uchun ish operator uni davom ettirguncha kutadi.',
+
+  'account.title': '👤 Bu mavzu uchun Claude hisobi: {name}\n\n{list}\n\nMavzuni unga o‘tkazish uchun profilni bosing. General mavzusida tanlov barcha mavzular uchun standart bo‘ladi.',
+  'account.titleGeneral': '👤 Claude hisobi — BARCHA mavzular uchun standart: {name}\n\n{list}\n\nProfilni standart qilish uchun uni bosing. O‘z tanloviga ega mavzular uni saqlab qoladi.',
+  'account.row.loggedOut': 'kirilmagan',
+  'account.row.topics': ' · {count} ta mavzu',
+  'account.kind.personal': 'shaxsiy {plan}',
+  'account.kind.corporate': 'korporativ {plan}',
+  'account.kind.unknown': 'reja {plan}',
+  'account.addButton': '➕ Qo‘shish',
+  'account.loginButton': '🔑 Qayta kirish',
+  'account.removeButton': '🗑 O‘chirish',
+  'account.backButton': '⬅️ Orqaga',
+  'account.followButton': '↩ Standartga ergashish ({name})',
+  'account.pickLogin': '🔑 Qaysi profilga qayta kirilsin?',
+  'account.pickRemove': '🗑 Qaysi profil o‘chirilsin? Uning kirishi o‘chadi; uni tanlagan mavzular standartga qaytadi.',
+  'account.nothingToRemove': 'Qo‘shilgan profillar yo‘q. default profili ~/.claude ning o‘zi va uni o‘chirib bo‘lmaydi.',
+  'account.confirmRemove': '🗑 {name} ({email}) profili o‘chirilsinmi? Uning kirishi o‘chadi va uni tanlagan {count} ta mavzu standartga qaytadi.',
+  'account.confirmRemoveButton': '🗑 Ha, {name} o‘chirilsin',
+  'account.removed': '✅ {name} profili o‘chirildi. {count} ta mavzu endi standartga ergashadi.',
+  'account.removeDefaultRefused': 'default profili ~/.claude ning o‘zi va uni o‘chirib bo‘lmaydi.',
+  'account.removeInstanceDefaultRefused': '{name} barcha mavzular uchun standart. Avval General mavzusida boshqa standartni tanlang.',
+  'account.unknown': '❌ {name} nomli profil yo‘q. Ro‘yxat uchun /account ni ishga tushiring.',
+  'account.notLoggedIn': '⚠️ {name} profiliga kirilmagan. Avval /account login {name} ni bajaring.',
+  'account.askName': '➕ Yangi profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi (masalan, work). Uni keyingi xabar qilib yuboring yoki /account add <nom> ni bajaring.',
+  'account.invalidName': '❌ Profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi, va "default" emas.',
+  'account.exists': '{name} nomli profil allaqachon bor.',
+  'account.created': '✅ {name} profili yaratildi. Kirish boshlanmoqda…',
+  'account.createFailed': '⚠️ {name} profili uchun katalog yaratib bo‘lmadi. Bot jurnaliga qarang.',
+  'account.login_url': '🔐 {name} profili uchun Claude ga kirish. Bu havolani O‘SHA hisob bilan kirilgan brauzerda oching — inkognito oynasi yoki boshqa brauzer profili joriy kirishingizni chetda qoldiradi — kirishni yakunlang va kodni shu yerga joylang:\n{url}',
+  'account.login_success': '✅ {name} profiliga kirildi: {email} ({plan}).',
+  'account.login_failed': '⚠️ {name} profiliga kirish muvaffaqiyatsiz. Qayta urinish uchun /account login {name}.',
+  'account.setThisTopic': '✅ Bu mavzu uchun Claude hisobi: {name}.{apply}',
+  'account.setGlobal': '✅ BARCHA mavzular uchun standart Claude hisobi: {name}. O‘z tanloviga ega mavzular uni saqlaydi; qolganlari hozir yoki keyingi ishga tushishda o‘tadi.',
+  'account.followSet': '✅ Bu mavzu standart Claude hisobiga ({name}) ergashadi.{apply}',
+  'account.usage': 'Foydalanish: /account — tanlov; /account add <nom>; /account use <nom>; /account login <nom>; /account remove <nom>.',
+  'account.applied.inactive': ' Seans keyingi safar ishga tushganda yoki davom etganda qo‘llanadi.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' Ishlayotgan seans u bilan qayta ishga tushirildi — o‘sha suhbat.',
+  'account.applied.deferred': ' Agent ishlamoqda; o‘tish uning navbati tugaganda qo‘llanadi.',
+  'account.applied.restartRequired': ' Agent ishlamoqda; o‘tish keyingi ishga tushish yoki davom etishda qo‘llanadi.',
+  'account.askNameCancelled': '✖ Hisob qo‘shish bekor qilindi. Xabarlar yana agentga boradi.',
 };

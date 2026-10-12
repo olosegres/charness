@@ -22,6 +22,7 @@ import {
   registerSeenWatermarkWriter,
   registerJsonStreamTailWriter,
   registerSessionLaunchDefaultsReader,
+  registerClaudeConfigDirReader,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -88,7 +89,7 @@ import {
   type ReadinessFacts,
   type StartupTarget,
 } from './utils/startupReadiness';
-import { getStateStore, KeyLock, type StateStore } from './state';
+import { getStateStore, KeyLock, resolveDataDir, type StateStore } from './state';
 import { releaseLock } from './instanceLock';
 import { gracefulShutdown } from './shutdown';
 import {
@@ -351,7 +352,7 @@ import {
   type OpenCodeAuthMethod,
   parseOAuthCallbackFromReply,
 } from './utils/openCodeAuthLogin';
-import { createAgentLogin } from './agentLogin/agentLogin';
+import { createAgentLogin, type ClaudeLoginProfile } from './agentLogin/agentLogin';
 import type { BotCore, CommandContext } from './connectors/telegram/commands/botCore';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from './connectors/telegram/questionKeyboards';
 import { createDisplayModes, formatTopicView } from './connectors/telegram/commands/displayModes';
@@ -359,6 +360,9 @@ import { createReminders, type ReminderWizardSession } from './connectors/telegr
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
+import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
+import { claudeConfigDirVariableName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { resolveClaudeBinary } from './utils/resolveBinary';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENV parsing & fatal validation
@@ -2036,6 +2040,12 @@ function clearLimitResumeNotice(key: SessionKey): void {
   if (pinnedId !== pinnedNoticePendingSentinel) void unpinMessageQuiet(key, pinnedId);
 }
 
+/**
+ * Where a profile sign-in's final auth status goes: the `/account` module, built further down (it needs the
+ * sign-in driver built here), so the driver reaches it through this late-bound slot.
+ */
+let claudeProfileAuthStatusSink: ((key: SessionKey, profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null) => Promise<void>) | null = null;
+
 // Out-of-band sign-in drivers (`/login`, `/connect` OAuth): `agentLogin/README.md`.
 const {
   cancelPendingLogin,
@@ -2052,6 +2062,7 @@ const {
   deleteThreadMessage,
   clearAuthNotice,
   execFileAsync,
+  onClaudeProfileAuthStatus: (key, profile, status) => claudeProfileAuthStatusSink?.(key, profile, status) ?? Promise.resolve(),
 });
 
 /**
@@ -4304,7 +4315,7 @@ async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Prom
  * adopt, the live state is the persisted one plus nothing, and a turn that ended
  * or began during the downtime would be misread.
  */
-function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter, reason: 'the stale tool list' | 'the per-turn lifecycle'): void {
+function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter, reason: 'the stale tool list' | 'the per-turn lifecycle' | 'the account profile'): void {
   const kStr = keyToString(key);
   const tick = (): void => {
     if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
@@ -6534,6 +6545,93 @@ const {
 
 registerAutoContinueLimitsCommands();
 
+// ── Claude account profiles (`/account`): `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts` ──
+
+/**
+ * @description The Claude config directory a conversation's NEXT process starts with: its resolved account
+ * profile's directory, `null` for the default profile. Registered as the adapters' reader at boot. A profile
+ * whose directory vanished (a hand-cleaned `DATA_DIR`) runs on the default rather than failing the spawn.
+ */
+function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
+  const name = state.resolveClaudeProfileName(key);
+  const dir = resolveClaudeProfileDir(resolveDataDir(), name);
+  if (dir !== null && !fs.existsSync(dir)) {
+    console.warn(`[account] ${keyToString(key)}: the directory of profile ${name} is missing; its process runs on the default profile`);
+    return null;
+  }
+  return dir;
+}
+
+/** `claude auth status --json` under `configDir` (`null` = `~/.claude`), the subscription login only; `null` when the probe fails. */
+async function readClaudeAuthStatusUnder(configDir: string | null): Promise<ClaudeAuthStatus | null> {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
+  try {
+    const { stdout } = await execFileAsync(resolveClaudeBinary(), ['auth', 'status', '--json'], { timeout: claudeAuthStatusProbeTimeoutMs, env });
+    return parseClaudeAuthStatus(stdout);
+  } catch (e) {
+    // A logged-out directory makes the CLI exit non-zero WITH its JSON on stdout: that is the answer.
+    return parseClaudeAuthStatus(readProcessErrorStdout(e));
+  }
+}
+
+const claudeAuthStatusProbeTimeoutMs = 5000;
+
+/**
+ * @description Bring ONE conversation's live Claude session onto the profile it resolves to now. json-stream
+ * re-spawns the process with `--resume` when idle and defers to turn end when it works (the adapter owns
+ * that); the tmux TUI is reopened under the new environment when idle (`resumeSession` kills and recreates the
+ * pane, same conversation) and left alone when busy — its next start or resume applies the pick. Any other
+ * backend has no Claude process to move.
+ */
+async function applyClaudeProfileToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
+  const adapter = getThreadAdapter(key);
+  if (adapter instanceof ClaudeJsonStreamAdapter) return adapter.applyClaudeConfigDir(key);
+  if (!(adapter instanceof ClaudeCliAdapter)) return 'inactive';
+  const current = adapter.getSessionClaudeConfigDir(key);
+  if (current === undefined) return 'inactive';
+  if (current === resolveThreadClaudeConfigDir(key)) return 'unchanged';
+  if (adapter.checkIsBusy(key)) return 'restartRequired';
+  const sessionId = state.getAgent(key)?.claudeSessionId;
+  const decision = getWorkDirStartDecision(key);
+  if (!sessionId || !decision.ok) return 'restartRequired';
+  markNeedsNewMessage(key);
+  await adapter.resumeSession(key, decision.workDir, sessionId);
+  await persistSessionStart(key, adapter);
+  return 'respawned';
+}
+
+/** After a General pick, a removal or a sign-in: every served conversation follows its resolved profile. */
+async function applyClaudeProfileEverywhere(): Promise<void> {
+  for (const { key } of getServedBindings()) {
+    try {
+      await applyClaudeProfileToThread(key);
+    } catch (e) {
+      console.warn(`[account] ${keyToString(key)}: moving the session onto its profile failed:`, e instanceof Error ? e.message : e);
+    }
+  }
+}
+
+const {
+  registerClaudeAccountCommands,
+  registerClaudeAccountCallbacks,
+  checkIsAwaitingProfileName,
+  cancelProfileNameCapture,
+  submitProfileName,
+  onClaudeProfileAuthStatus: recordClaudeProfileAuthStatus,
+} = createClaudeAccounts({
+  ...botCore,
+  getDataDir: resolveDataDir,
+  readClaudeAuthStatus: readClaudeAuthStatusUnder,
+  startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
+  applyClaudeProfile: applyClaudeProfileToThread,
+  applyClaudeProfileEverywhere,
+});
+claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
+
+registerClaudeAccountCommands();
+
 registerCompactionCommands();
 
 /**
@@ -6856,8 +6954,12 @@ command('tab', async (_ctx, key) => {
 });
 
 command(['esc', 'escape'], async (_ctx, key) => {
-  // A pending sign-in (`/login`, `/connect` OAuth) takes priority: the first /esc
-  // only cancels it, so the topic stops waiting for a pasted code.
+  // A pending «Add account» name prompt, then a pending sign-in (`/login`, `/connect` OAuth) take
+  // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
+  if (cancelProfileNameCapture(key)) {
+    await replyToThread(key, t('account.askNameCancelled'));
+    return;
+  }
   if (cancelPendingLogin(key)) {
     await replyToThread(key, t('login.cancelled'));
     return;
@@ -7166,7 +7268,7 @@ const botCommands = new Set([
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts',
 ]);
 
 /**
@@ -7202,6 +7304,8 @@ bot.on(message('text'), async (ctx) => {
   // Slash commands we don't own → forward to the agent (e.g. `/context`, `/help`).
   if (text.startsWith('/')) {
     const cmd = text.slice(1).split(' ')[0].split('@')[0].toLowerCase();
+    // A slash command ends a pending «Add account» name prompt (the command itself runs normally).
+    cancelProfileNameCapture(key);
     if (botCommands.has(cmd)) return;
     // `/login` on a json-stream Claude thread (idle or per-turn lifecycle) has no
     // TUI to host the OAuth flow → run it out-of-band (spawn `claude auth login`,
@@ -7245,6 +7349,13 @@ bot.on(message('text'), async (ctx) => {
   // + cancel the flow.
   if (checkIsOpenCodeOAuthAwaitingReply(key) && !text.startsWith('/')) {
     await submitOpenCodeOAuthReply(key, text, ctx.message.message_id);
+    return;
+  }
+
+  // `/account` «Add» asked for the new profile's name → this message is it (a bad name keeps the prompt
+  // armed and says so; a slash command above already disarmed it).
+  if (checkIsAwaitingProfileName(key) && !text.startsWith('/')) {
+    await submitProfileName(key, text);
     return;
   }
 
@@ -8432,6 +8543,7 @@ registerModelCallbacks();
 registerCompactionCallbacks();
 
 registerAutoContinueLimitsCallbacks();
+registerClaudeAccountCallbacks();
 
 // «⏭ Skip once» in the `/auto_continue_limits` picker: drop THIS armed resume and
 // leave the on/off setting alone. The episode is identified by the `fireAt` baked
@@ -10194,6 +10306,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'auto_continue_limits', description: '🚧 Auto-resume after a usage limit (toggle)' },
+  { command: 'account', description: '👤 Claude account for this topic (picker; add / re-login / remove)' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
   { command: 'status', description: '📊 Show status' },
@@ -10427,6 +10540,13 @@ async function reattachExistingSessions(
           const preAdoptWatermark = state.getAgent(key)?.seenWatermark ?? null;
           if (await claudeAdapter.adoptExistingTmuxSession(key, sessionName, workDir, agent.claudeSessionId)) {
             adopted += 1;
+            // The pane keeps the account it was started with; a changed pick reopens it (idle) or waits for the next start.
+            const spawnedConfigDir = claudeAdapter.getSessionClaudeConfigDir(key);
+            if (spawnedConfigDir !== undefined && spawnedConfigDir !== resolveThreadClaudeConfigDir(key)) {
+              void applyClaudeProfileToThread(key)
+                .then((outcome) => console.log(`[reattach] ${keyToString(key)}: the pane's account profile differs from the topic's pick: ${outcome}`))
+                .catch((e) => console.warn(`[reattach] ${keyToString(key)}: moving the pane onto its profile failed:`, e instanceof Error ? e.message : e));
+            }
             // Fire-and-forget: the body (a Claude fs read) must not serialize the
             // reattach scan. postReattachRecap swallows its own errors; the `.catch`
             // is defensive.
@@ -10554,6 +10674,13 @@ async function reattachExistingSessions(
               // looks again once the downtime frames have replayed.
               console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list (${refresh === 'stopNow' ? 'idle: stopped now' : 'working: stopped once idle'})`);
               if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the stale tool list');
+            }
+            // The surviving process keeps the account it was spawned with; a topic whose pick changed while the
+            // bot was down gets it at the next idle point (the resume reads the current profile).
+            const spawnedConfigDir = ownerAdapter.getSessionClaudeConfigDir(key);
+            if (spawnedConfigDir !== undefined && spawnedConfigDir !== resolveThreadClaudeConfigDir(key)) {
+              console.log(`[reattach] ${keyToString(key)}: adopted under profile dir ${spawnedConfigDir ?? 'default'}, the topic now resolves to ${resolveThreadClaudeConfigDir(key) ?? 'default'}`);
+              if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the account profile');
             }
           } else {
             // Dead/zombie — adopt cleaned it up itself; the thread sleeps (below)
@@ -11510,6 +11637,9 @@ export async function startBot(): Promise<void> {
   //     phase: its launch defaults (R15) must apply to a session resumed during
   //     reattach, and a broken setup stops the start with every reason at once.
   //     It starts polling once the sessions are restored.
+  // Every Claude spawn from here on reads the conversation's account profile (`/account`).
+  registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
+
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   if (jiraConnector) {
     const { launchDefaults } = jiraConnector;

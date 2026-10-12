@@ -78,6 +78,7 @@ export const esDict: Record<string, string> = {
     '/compact — compactar el contexto del agente\n' +
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
     '/auto_continue_limits — reanudar automáticamente tras un límite de uso (conmutador)\n' +
+    '/account — cuenta de Claude para este tema (selector; añadir / volver a entrar / eliminar)\n' +
     '/clear — eliminar mensajes del hilo\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gestionar vínculo',
@@ -640,4 +641,45 @@ export const esDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Se alcanzó el límite de uso — la respuesta llegará después de las {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Se alcanzó el límite de uso — próximo intento a las {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Se alcanzó el límite de uso. La reanudación automática está desactivada, así que el trabajo espera hasta que el operador lo reanude.',
+
+  'account.title': '👤 Cuenta de Claude para este tema: {name}\n\n{list}\n\nToca un perfil para cambiar este tema a él. En el tema General la elección pasa a ser la predeterminada para todos los temas.',
+  'account.titleGeneral': '👤 Cuenta de Claude — predeterminada para TODOS los temas: {name}\n\n{list}\n\nToca un perfil para hacerlo predeterminado. Los temas con elección propia la conservan.',
+  'account.row.loggedOut': 'sin iniciar sesión',
+  'account.row.topics': ' · {count} tema(s)',
+  'account.kind.personal': 'personal {plan}',
+  'account.kind.corporate': 'corporativo {plan}',
+  'account.kind.unknown': 'plan {plan}',
+  'account.addButton': '➕ Añadir',
+  'account.loginButton': '🔑 Volver a entrar',
+  'account.removeButton': '🗑 Eliminar',
+  'account.backButton': '⬅️ Atrás',
+  'account.followButton': '↩ Seguir el predeterminado ({name})',
+  'account.pickLogin': '🔑 ¿Qué perfil debe iniciar sesión de nuevo?',
+  'account.pickRemove': '🗑 ¿Qué perfil eliminar? Su sesión se borra; los temas que lo eligieron vuelven al predeterminado.',
+  'account.nothingToRemove': 'No hay perfiles añadidos. El perfil default es el propio ~/.claude y no puede eliminarse.',
+  'account.confirmRemove': '🗑 ¿Eliminar el perfil {name} ({email})? Su sesión se borra y {count} tema(s) que lo eligieron vuelven al predeterminado.',
+  'account.confirmRemoveButton': '🗑 Sí, eliminar {name}',
+  'account.removed': '✅ Perfil {name} eliminado. {count} tema(s) siguen ahora el predeterminado.',
+  'account.removeDefaultRefused': 'El perfil default es el propio ~/.claude y no puede eliminarse.',
+  'account.removeInstanceDefaultRefused': '{name} es el predeterminado de todos los temas. Elige primero otro predeterminado en el tema General.',
+  'account.unknown': '❌ No hay ningún perfil llamado {name}. /account muestra la lista.',
+  'account.notLoggedIn': '⚠️ El perfil {name} no ha iniciado sesión. Ejecuta antes /account login {name}.',
+  'account.askName': '➕ Nombre del nuevo perfil — minúsculas, dígitos, - y _, hasta {max} caracteres (p. ej. work). Envíalo como siguiente mensaje o ejecuta /account add <nombre>.',
+  'account.invalidName': '❌ Un nombre de perfil: minúsculas, dígitos, - y _, hasta {max} caracteres, y no "default".',
+  'account.exists': 'Ya existe un perfil llamado {name}.',
+  'account.created': '✅ Perfil {name} creado. Iniciando su sesión…',
+  'account.createFailed': '⚠️ No se pudo crear el directorio del perfil {name}. Mira el registro del bot.',
+  'account.login_url': '🔐 Inicio de sesión en Claude para el perfil {name}. Abre este enlace en un navegador con sesión iniciada en ESA cuenta — una ventana de incógnito u otro perfil del navegador evita arrastrar tu sesión actual —, completa el inicio de sesión y pega el código aquí:\n{url}',
+  'account.login_success': '✅ Perfil {name} con sesión iniciada: {email} ({plan}).',
+  'account.login_failed': '⚠️ Falló el inicio de sesión del perfil {name}. Reintenta con /account login {name}.',
+  'account.setThisTopic': '✅ Cuenta de Claude para este tema: {name}.{apply}',
+  'account.setGlobal': '✅ Cuenta de Claude predeterminada para TODOS los temas: {name}. Los temas con elección propia la conservan; los demás cambian ahora o en su próximo inicio.',
+  'account.followSet': '✅ Este tema sigue la cuenta de Claude predeterminada ({name}).{apply}',
+  'account.usage': 'Uso: /account — el selector; /account add <nombre>; /account use <nombre>; /account login <nombre>; /account remove <nombre>.',
+  'account.applied.inactive': ' Se aplica cuando la sesión arranque o se reanude.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' La sesión en curso se reinició con ella — misma conversación.',
+  'account.applied.deferred': ' El agente está trabajando; el cambio se aplica al terminar su turno.',
+  'account.applied.restartRequired': ' El agente está trabajando; el cambio se aplica en el próximo inicio o reanudación.',
+  'account.askNameCancelled': '✖ Añadir cuenta cancelado. Los mensajes vuelven a ir al agente.',
 };

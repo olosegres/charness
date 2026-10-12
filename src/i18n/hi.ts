@@ -78,6 +78,7 @@ export const hiDict: Record<string, string> = {
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
     '/auto_continue_limits — उपयोग-सीमा के बाद स्वतः पुनःआरंभ (टॉगल)\n' +
+    '/account — इस टॉपिक का Claude खाता (चयनकर्ता; जोड़ें / फिर से लॉगिन / हटाएँ)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
     '/bind — बाइंडिंग प्रबंधित करें',
@@ -639,4 +640,45 @@ export const hiDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 उपयोग सीमा पूरी हो गई — जवाब {time} के बाद आएगा।',
   'requests.limit.answerNextAttemptNotice': '🚧 उपयोग सीमा पूरी हो गई — अगला प्रयास {time} पर।',
   'requests.limit.answerAutoResumeOffNotice': '🚧 उपयोग सीमा पूरी हो गई। स्वचालित पुनरारंभ बंद है, इसलिए काम तब तक रुका रहेगा जब तक ऑपरेटर इसे फिर से शुरू नहीं करता।',
+
+  'account.title': '👤 इस टॉपिक का Claude खाता: {name}\n\n{list}\n\nकिसी प्रोफ़ाइल पर टैप करें ताकि यह टॉपिक उस पर चला जाए। General टॉपिक में चुनाव सभी टॉपिक के लिए डिफ़ॉल्ट बन जाता है।',
+  'account.titleGeneral': '👤 Claude खाता — सभी टॉपिक के लिए डिफ़ॉल्ट: {name}\n\n{list}\n\nकिसी प्रोफ़ाइल पर टैप करके उसे डिफ़ॉल्ट बनाएँ। अपना चुनाव रखने वाले टॉपिक उसे बनाए रखते हैं।',
+  'account.row.loggedOut': 'साइन इन नहीं',
+  'account.row.topics': ' · {count} टॉपिक',
+  'account.kind.personal': 'व्यक्तिगत {plan}',
+  'account.kind.corporate': 'कॉर्पोरेट {plan}',
+  'account.kind.unknown': 'प्लान {plan}',
+  'account.addButton': '➕ जोड़ें',
+  'account.loginButton': '🔑 फिर से लॉगिन',
+  'account.removeButton': '🗑 हटाएँ',
+  'account.backButton': '⬅️ वापस',
+  'account.followButton': '↩ डिफ़ॉल्ट का पालन करें ({name})',
+  'account.pickLogin': '🔑 किस प्रोफ़ाइल में फिर से साइन इन करना है?',
+  'account.pickRemove': '🗑 कौन सी प्रोफ़ाइल हटानी है? उसका लॉगिन मिट जाएगा; उसे चुनने वाले टॉपिक डिफ़ॉल्ट पर लौट जाएँगे।',
+  'account.nothingToRemove': 'कोई जोड़ी गई प्रोफ़ाइल नहीं है। default प्रोफ़ाइल स्वयं ~/.claude है और हटाई नहीं जा सकती।',
+  'account.confirmRemove': '🗑 प्रोफ़ाइल {name} ({email}) हटाएँ? उसका लॉगिन मिट जाएगा और उसे चुनने वाले {count} टॉपिक डिफ़ॉल्ट पर लौट जाएँगे।',
+  'account.confirmRemoveButton': '🗑 हाँ, {name} हटाएँ',
+  'account.removed': '✅ प्रोफ़ाइल {name} हटाई गई। {count} टॉपिक अब डिफ़ॉल्ट का पालन करते हैं।',
+  'account.removeDefaultRefused': 'default प्रोफ़ाइल स्वयं ~/.claude है और हटाई नहीं जा सकती।',
+  'account.removeInstanceDefaultRefused': '{name} सभी टॉपिक के लिए डिफ़ॉल्ट है। पहले General टॉपिक में कोई और डिफ़ॉल्ट चुनें।',
+  'account.unknown': '❌ {name} नाम की कोई प्रोफ़ाइल नहीं। सूची के लिए /account चलाएँ।',
+  'account.notLoggedIn': '⚠️ प्रोफ़ाइल {name} साइन इन नहीं है। पहले /account login {name} चलाएँ।',
+  'account.askName': '➕ नई प्रोफ़ाइल का नाम — छोटे अक्षर, अंक, - और _, अधिकतम {max} वर्ण (जैसे work)। इसे अगला संदेश बनाकर भेजें, या /account add <नाम> चलाएँ।',
+  'account.invalidName': '❌ प्रोफ़ाइल नाम में छोटे अक्षर, अंक, - और _ हों, अधिकतम {max} वर्ण, और "default" न हो।',
+  'account.exists': '{name} नाम की प्रोफ़ाइल पहले से है।',
+  'account.created': '✅ प्रोफ़ाइल {name} बनाई गई। साइन इन शुरू हो रहा है…',
+  'account.createFailed': '⚠️ प्रोफ़ाइल {name} की डायरेक्टरी नहीं बन सकी। बॉट लॉग देखें।',
+  'account.login_url': '🔐 प्रोफ़ाइल {name} के लिए Claude में साइन इन। यह लिंक ऐसे ब्राउज़र में खोलें जो उसी खाते से साइन इन हो — इनकॉग्निटो विंडो या दूसरा ब्राउज़र प्रोफ़ाइल आपके मौजूदा लॉगिन को अलग रखता है — साइन इन पूरा करें और कोड यहाँ पेस्ट करें:\n{url}',
+  'account.login_success': '✅ प्रोफ़ाइल {name} साइन इन हुई: {email} ({plan})।',
+  'account.login_failed': '⚠️ प्रोफ़ाइल {name} का साइन इन विफल रहा। फिर से कोशिश के लिए /account login {name} चलाएँ।',
+  'account.setThisTopic': '✅ इस टॉपिक का Claude खाता: {name}।{apply}',
+  'account.setGlobal': '✅ सभी टॉपिक के लिए डिफ़ॉल्ट Claude खाता: {name}। अपना चुनाव रखने वाले टॉपिक उसे रखते हैं; बाकी अभी या अगली शुरुआत पर बदलते हैं।',
+  'account.followSet': '✅ यह टॉपिक डिफ़ॉल्ट Claude खाते ({name}) का पालन करता है।{apply}',
+  'account.usage': 'उपयोग: /account — चयनकर्ता; /account add <नाम>; /account use <नाम>; /account login <नाम>; /account remove <नाम>।',
+  'account.applied.inactive': ' सत्र के अगली बार शुरू या फिर से चालू होने पर लागू होगा।',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' चल रहा सत्र उसके तहत फिर से शुरू किया गया — वही बातचीत।',
+  'account.applied.deferred': ' एजेंट काम कर रहा है; बदलाव उसकी बारी खत्म होने पर लागू होगा।',
+  'account.applied.restartRequired': ' एजेंट काम कर रहा है; बदलाव अगली शुरुआत या पुनरारंभ पर लागू होगा।',
+  'account.askNameCancelled': '✖ खाता जोड़ना रद्द किया गया। संदेश फिर से एजेंट को जाते हैं।',
 };

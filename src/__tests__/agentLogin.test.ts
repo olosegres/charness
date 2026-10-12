@@ -17,7 +17,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createAgentLogin, type AgentLoginPorts } from '../agentLogin/agentLogin';
+import { createAgentLogin, type AgentLoginPorts, type ClaudeLoginProfile } from '../agentLogin/agentLogin';
+import type { ClaudeAuthStatus } from '../utils/claudeProfiles';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -38,6 +39,7 @@ const fakeClaudeSource = `
 const fs = require('fs');
 const dir = process.env.FAKE_LOGIN_DIR;
 fs.writeFileSync(dir + '/claude.pid', String(process.pid));
+fs.writeFileSync(dir + '/claude.configdir', process.env.CLAUDE_CONFIG_DIR || '');
 process.stdout.write('If the browser did not open, visit: ${claudeLoginUrl}\\n\\nPaste code here if prompted > ');
 process.stdin.setEncoding('utf8');
 process.stdin.once('data', (line) => { fs.writeFileSync(dir + '/claude.code', line.trim()); process.exit(0); });
@@ -74,6 +76,10 @@ interface RecordedPorts {
   replies: string[];
   deletedMessageIds: number[];
   clearedAuthNoticeKeys: SessionKey[];
+  /** The `CLAUDE_CONFIG_DIR` each `claude auth status` probe ran with (`undefined` = not set). */
+  statusProbeConfigDirs: Array<string | undefined>;
+  /** What a profile sign-in reported at its end. */
+  profileReports: Array<{ profile: ClaudeLoginProfile; status: ClaudeAuthStatus | null }>;
 }
 
 let workDir = '';
@@ -93,6 +99,8 @@ function createRecordedPorts(statusStdout: string): RecordedPorts {
     replies: [],
     deletedMessageIds: [],
     clearedAuthNoticeKeys: [],
+    statusProbeConfigDirs: [],
+    profileReports: [],
     ports: {
       replyToThread: async (_key, text) => {
         recorded.replies.push(text);
@@ -104,7 +112,13 @@ function createRecordedPorts(statusStdout: string): RecordedPorts {
       clearAuthNotice: (clearedKey) => {
         recorded.clearedAuthNoticeKeys.push(clearedKey);
       },
-      execFileAsync: async () => ({ stdout: statusStdout }),
+      execFileAsync: async (_file, _args, options) => {
+        recorded.statusProbeConfigDirs.push(options.env?.CLAUDE_CONFIG_DIR);
+        return { stdout: statusStdout };
+      },
+      onClaudeProfileAuthStatus: async (_key, profile, status) => {
+        recorded.profileReports.push({ profile, status });
+      },
     },
   };
   return recorded;
@@ -185,6 +199,41 @@ describe('agentLogin: the sign-in drivers', () => {
     await waitUntil('the failure notice', () => recorded.replies.some((reply) => reply.includes('sign-in failed')));
 
     assert.equal(recorded.clearedAuthNoticeKeys.length, 0, 'a failed sign-in leaves the logged-out notice alone');
+  });
+
+  it('a profile sign-in runs the CLI and the status probe under the profile\'s CLAUDE_CONFIG_DIR, names the account and reports it to the bot', async () => {
+    const profileDir = path.join(workDir, 'claude-profiles', 'work');
+    fs.mkdirSync(profileDir, { recursive: true });
+    const recorded = createRecordedPorts('{"loggedIn":true,"email":"work@example.com","subscriptionType":"team","orgName":"Example Org"}');
+    const login = createAgentLogin(recorded.ports);
+
+    await login.startClaudeAuthLogin(key, { name: 'work', configDir: profileDir });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.match(recorded.replies[0], /profile work/, 'the link message names the profile');
+    assert.match(recorded.replies[0], /incognito/, 'and tells the operator to open it as the other account');
+    assert.equal(readFakeFile('claude.configdir'), profileDir, 'the CLI signs THAT directory in');
+
+    await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId);
+    await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('work@example.com')));
+    assert.match(recorded.replies.at(-1) ?? '', /Profile work signed in: work@example\.com \(team\)/);
+    assert.deepEqual(recorded.statusProbeConfigDirs, [profileDir], 'the status probe reads the same directory');
+    assert.deepEqual(recorded.profileReports, [{
+      profile: { name: 'work', configDir: profileDir },
+      status: { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org' },
+    }]);
+    assert.equal(recorded.clearedAuthNoticeKeys.length, 0, 'a profile sign-in is not the ~/.claude login: the logged-out notice stays');
+  });
+
+  it('the default login still runs with no CLAUDE_CONFIG_DIR of its own', async () => {
+    const recorded = createRecordedPorts('{"loggedIn":true}');
+    const login = createAgentLogin(recorded.ports);
+    await login.startClaudeAuthLogin(key);
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.equal(readFakeFile('claude.configdir'), process.env.CLAUDE_CONFIG_DIR ?? '');
+    await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId);
+    await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('Signed in to Claude')));
+    assert.deepEqual(recorded.statusProbeConfigDirs, [process.env.CLAUDE_CONFIG_DIR]);
+    assert.deepEqual(recorded.profileReports, []);
   });
 
   it('a cancel ends the pty, forgets the flow and the cancelled flow never reports', async () => {

@@ -78,6 +78,7 @@ export const frDict: Record<string, string> = {
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
     '/auto_continue_limits — reprise auto après une limite d’usage (bascule)\n' +
+    '/account — compte Claude de ce sujet (sélecteur ; ajouter / se reconnecter / supprimer)\n' +
     '/clear — supprimer les messages du fil\n' +
     '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
     '/bind — gérer la liaison',
@@ -640,4 +641,45 @@ export const frDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Limite d’utilisation atteinte — la réponse arrivera après {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Limite d’utilisation atteinte — prochaine tentative à {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite d’utilisation atteinte. La reprise automatique est désactivée : le travail attend que l’opérateur le reprenne.',
+
+  'account.title': '👤 Compte Claude de ce sujet : {name}\n\n{list}\n\nTouchez un profil pour y basculer ce sujet. Dans le sujet General, le choix devient la valeur par défaut de tous les sujets.',
+  'account.titleGeneral': '👤 Compte Claude — par défaut pour TOUS les sujets : {name}\n\n{list}\n\nTouchez un profil pour en faire la valeur par défaut. Les sujets ayant leur propre choix le gardent.',
+  'account.row.loggedOut': 'non connecté',
+  'account.row.topics': ' · {count} sujet(s)',
+  'account.kind.personal': 'personnel {plan}',
+  'account.kind.corporate': 'entreprise {plan}',
+  'account.kind.unknown': 'offre {plan}',
+  'account.addButton': '➕ Ajouter',
+  'account.loginButton': '🔑 Se reconnecter',
+  'account.removeButton': '🗑 Supprimer',
+  'account.backButton': '⬅️ Retour',
+  'account.followButton': '↩ Suivre la valeur par défaut ({name})',
+  'account.pickLogin': '🔑 Quel profil reconnecter ?',
+  'account.pickRemove': '🗑 Quel profil supprimer ? Sa connexion est effacée ; les sujets qui l’avaient choisi reviennent à la valeur par défaut.',
+  'account.nothingToRemove': 'Aucun profil ajouté. Le profil default est ~/.claude lui-même et ne peut pas être supprimé.',
+  'account.confirmRemove': '🗑 Supprimer le profil {name} ({email}) ? Sa connexion est effacée et {count} sujet(s) qui l’avaient choisi reviennent à la valeur par défaut.',
+  'account.confirmRemoveButton': '🗑 Oui, supprimer {name}',
+  'account.removed': '✅ Profil {name} supprimé. {count} sujet(s) suivent désormais la valeur par défaut.',
+  'account.removeDefaultRefused': 'Le profil default est ~/.claude lui-même et ne peut pas être supprimé.',
+  'account.removeInstanceDefaultRefused': '{name} est la valeur par défaut de tous les sujets. Choisissez d’abord une autre valeur par défaut dans le sujet General.',
+  'account.unknown': '❌ Aucun profil nommé {name}. /account affiche la liste.',
+  'account.notLoggedIn': '⚠️ Le profil {name} n’est pas connecté. Lancez d’abord /account login {name}.',
+  'account.askName': '➕ Nom du nouveau profil — minuscules, chiffres, - et _, {max} caractères au plus (p. ex. work). Envoyez-le comme prochain message, ou lancez /account add <nom>.',
+  'account.invalidName': '❌ Un nom de profil : minuscules, chiffres, - et _, {max} caractères au plus, et pas "default".',
+  'account.exists': 'Un profil nommé {name} existe déjà.',
+  'account.created': '✅ Profil {name} créé. Lancement de la connexion…',
+  'account.createFailed': '⚠️ Impossible de créer le dossier du profil {name}. Voir le journal du bot.',
+  'account.login_url': '🔐 Connexion à Claude pour le profil {name}. Ouvrez ce lien dans un navigateur connecté avec CE compte — une fenêtre privée ou un autre profil de navigateur évite de reprendre votre connexion actuelle —, terminez la connexion et collez le code ici :\n{url}',
+  'account.login_success': '✅ Profil {name} connecté : {email} ({plan}).',
+  'account.login_failed': '⚠️ La connexion du profil {name} a échoué. Réessayez avec /account login {name}.',
+  'account.setThisTopic': '✅ Compte Claude de ce sujet : {name}.{apply}',
+  'account.setGlobal': '✅ Compte Claude par défaut pour TOUS les sujets : {name}. Les sujets ayant leur propre choix le gardent ; les autres basculent maintenant ou à leur prochain démarrage.',
+  'account.followSet': '✅ Ce sujet suit le compte Claude par défaut ({name}).{apply}',
+  'account.usage': 'Usage : /account — le sélecteur ; /account add <nom> ; /account use <nom> ; /account login <nom> ; /account remove <nom>.',
+  'account.applied.inactive': ' S’applique au prochain démarrage ou à la prochaine reprise de la session.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' La session en cours a été relancée dessous — même conversation.',
+  'account.applied.deferred': ' L’agent travaille ; la bascule s’applique à la fin de son tour.',
+  'account.applied.restartRequired': ' L’agent travaille ; la bascule s’applique au prochain démarrage ou à la prochaine reprise.',
+  'account.askNameCancelled': '✖ Ajout de compte annulé. Les messages repartent vers l’agent.',
 };

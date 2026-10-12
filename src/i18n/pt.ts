@@ -78,6 +78,7 @@ export const ptDict: Record<string, string> = {
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
     '/auto_continue_limits — retomar automaticamente após um limite de uso (alternar)\n' +
+    '/account — conta Claude deste tópico (seletor; adicionar / entrar de novo / remover)\n' +
     '/clear — apagar mensagens do tópico\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gerir vínculo',
@@ -641,4 +642,45 @@ export const ptDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Limite de uso atingido — a resposta virá depois das {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Limite de uso atingido — próxima tentativa às {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite de uso atingido. A retomada automática está desligada, então o trabalho espera até o operador retomá-lo.',
+
+  'account.title': '👤 Conta Claude deste tópico: {name}\n\n{list}\n\nToque num perfil para mudar este tópico para ele. No tópico General a escolha passa a ser a padrão de todos os tópicos.',
+  'account.titleGeneral': '👤 Conta Claude — padrão para TODOS os tópicos: {name}\n\n{list}\n\nToque num perfil para torná-lo o padrão. Tópicos com escolha própria mantêm-na.',
+  'account.row.loggedOut': 'sem sessão iniciada',
+  'account.row.topics': ' · {count} tópico(s)',
+  'account.kind.personal': 'pessoal {plan}',
+  'account.kind.corporate': 'corporativo {plan}',
+  'account.kind.unknown': 'plano {plan}',
+  'account.addButton': '➕ Adicionar',
+  'account.loginButton': '🔑 Entrar de novo',
+  'account.removeButton': '🗑 Remover',
+  'account.backButton': '⬅️ Voltar',
+  'account.followButton': '↩ Seguir o padrão ({name})',
+  'account.pickLogin': '🔑 Qual perfil deve entrar de novo?',
+  'account.pickRemove': '🗑 Qual perfil remover? O login dele é apagado; tópicos que o escolheram voltam ao padrão.',
+  'account.nothingToRemove': 'Não há perfis adicionados. O perfil default é o próprio ~/.claude e não pode ser removido.',
+  'account.confirmRemove': '🗑 Remover o perfil {name} ({email})? O login dele é apagado e {count} tópico(s) que o escolheram voltam ao padrão.',
+  'account.confirmRemoveButton': '🗑 Sim, remover {name}',
+  'account.removed': '✅ Perfil {name} removido. {count} tópico(s) agora seguem o padrão.',
+  'account.removeDefaultRefused': 'O perfil default é o próprio ~/.claude e não pode ser removido.',
+  'account.removeInstanceDefaultRefused': '{name} é o padrão de todos os tópicos. Escolha outro padrão no tópico General primeiro.',
+  'account.unknown': '❌ Não há perfil chamado {name}. /account mostra a lista.',
+  'account.notLoggedIn': '⚠️ O perfil {name} não tem sessão iniciada. Execute antes /account login {name}.',
+  'account.askName': '➕ Nome do novo perfil — minúsculas, dígitos, - e _, até {max} caracteres (ex.: work). Envie-o como próxima mensagem ou execute /account add <nome>.',
+  'account.invalidName': '❌ Um nome de perfil: minúsculas, dígitos, - e _, até {max} caracteres, e não "default".',
+  'account.exists': 'Já existe um perfil chamado {name}.',
+  'account.created': '✅ Perfil {name} criado. Iniciando o login…',
+  'account.createFailed': '⚠️ Não foi possível criar o diretório do perfil {name}. Veja o log do bot.',
+  'account.login_url': '🔐 Login no Claude para o perfil {name}. Abra este link num navegador com sessão iniciada NESSA conta — uma janela anónima ou outro perfil do navegador evita arrastar o seu login atual —, conclua o login e cole o código aqui:\n{url}',
+  'account.login_success': '✅ Perfil {name} com sessão iniciada: {email} ({plan}).',
+  'account.login_failed': '⚠️ O login do perfil {name} falhou. Tente de novo com /account login {name}.',
+  'account.setThisTopic': '✅ Conta Claude deste tópico: {name}.{apply}',
+  'account.setGlobal': '✅ Conta Claude padrão para TODOS os tópicos: {name}. Tópicos com escolha própria mantêm-na; os outros mudam agora ou no próximo início.',
+  'account.followSet': '✅ Este tópico segue a conta Claude padrão ({name}).{apply}',
+  'account.usage': 'Uso: /account — o seletor; /account add <nome>; /account use <nome>; /account login <nome>; /account remove <nome>.',
+  'account.applied.inactive': ' Aplica-se quando a sessão iniciar ou for retomada.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' A sessão em curso foi reiniciada com ela — mesma conversa.',
+  'account.applied.deferred': ' O agente está a trabalhar; a troca aplica-se ao fim do turno.',
+  'account.applied.restartRequired': ' O agente está a trabalhar; a troca aplica-se no próximo início ou retoma.',
+  'account.askNameCancelled': '✖ Adição de conta cancelada. As mensagens voltam a ir para o agente.',
 };

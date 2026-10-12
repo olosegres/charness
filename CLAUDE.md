@@ -117,6 +117,14 @@ per-backend controls are optional methods the bot checks before calling.
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
   scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
+- **Claude account profiles** (`/account`, `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
+  subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`
+  handed to the CLI through `CLAUDE_CONFIG_DIR` at EVERY spawn (the `ClaudeConfigDirReader` seam in
+  `createAdapter.ts`), with `projects/`, settings, skills, plugins and the user memory symlinked back into
+  `~/.claude`; `default` IS `~/.claude`. Instance default from General + per-topic override (state.json, resolver
+  in the utils module). Never switch an account by swapping files under `~/.claude` — the CLI re-reads them live
+  and every running session would change at once; a live switch is the `/model` re-spawn, deferred while the
+  process works.
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
 - **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);

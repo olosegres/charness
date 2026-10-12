@@ -367,6 +367,7 @@ actually start an agent or terminal in the folder.
 | `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so) |
 | `/compact_summary` | Toggle posting the agent's full summary after a compaction — `/compact`, the idle compaction and the agent's own `compact_conversation` (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. Off by default: a compaction ends in a short line. On OpenCode it also hides the summary OpenCode streams itself |
 | `/auto_continue_limits` | Toggle waiting out a usage / session limit and resuming this topic by itself (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. On by default. While a resume is waiting the picker also offers «⏭ Skip once» — drop that one resume without turning the mode off |
+| `/account` | Which Claude account this topic's Claude sessions run on, when you keep several subscriptions signed in (`/accounts` is an alias). Bare: the picker — every profile with its email, plan (personal Pro/Max or corporate Team/Enterprise) and how many topics use it, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working). In **General** the pick becomes the default for all topics. «➕ Add» asks for a name and runs the sign-in for the new account; «🔑 Re-login» and «🗑 Remove» pick a profile. Text forms: `/account add <name>`, `/account use <name>`, `/account login <name>`, `/account remove <name>`. See [Several Claude accounts](#several-claude-accounts-account) |
 | `/bind` | Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons |
 | `/mcp` | List MCP servers active for this thread |
 
@@ -448,6 +449,41 @@ conversation resumes on the other backend. The pick persists per topic
 (▶️ Claude and `/claude` reopen it; on a sleeping topic they resume it).
 Billing note: the json-stream backends strip `ANTHROPIC_API_KEY` from the
 agent's env, so usage bills to your Claude subscription rather than an API key.
+
+### Several Claude accounts (`/account`)
+
+If you hold more than one Claude subscription (a personal Pro/Max and a
+corporate Team/Enterprise seat, say), the bot keeps each signed in as its own
+**profile** and lets you choose, per topic, which one a Claude session runs on —
+so one account's usage limit does not stop every topic.
+
+- The profile `default` is your existing `~/.claude` login; nothing is migrated.
+  An added profile is a Claude config directory of its own under
+  `DATA_DIR/claude-profiles/<name>/` (the CLI gets it through
+  `CLAUDE_CONFIG_DIR`): it holds that account's login, while the transcripts,
+  settings, skills, plugins and your user memory are symlinks back into
+  `~/.claude` — every account sees the same hooks and skills, and a conversation
+  started under one account resumes under another.
+- **Adding an account:** `/account` → «➕ Add» (or `/account add work`) — give it
+  a short name, then open the sign-in link the bot posts **in a browser that is
+  signed in as that other account** (an incognito window or another browser
+  profile keeps your current login out of the way), finish the sign-in and paste
+  the code back into the topic. The code message is deleted; the bot confirms
+  with the account's email and plan.
+- **Switching:** tap a profile in `/account` (or `/account use <name>`). A
+  running session on the default (stream) backend is restarted under the new
+  account with the same conversation — right away when idle, at the end of its
+  turn when it is working; a sleeping topic simply resumes under it. The
+  tmux-scrape backend is reopened the same way when idle and waits for the next
+  start when busy. In the **General** topic the pick is the default for all
+  topics; a topic with its own pick keeps it («↩ Follow the default» drops it).
+  A profile that is not signed in cannot be picked.
+- **Removing:** «🗑 Remove» deletes the profile's login directory. `default`
+  cannot be removed, nor the profile that is currently the instance default
+  (pick another one in General first); topics that had picked the removed
+  profile return to the default and the confirmation says how many.
+- A child `claude` the agent starts inherits the same `CLAUDE_CONFIG_DIR`, so
+  it runs on the topic's account too.
 
 ## Scheduler (`/schedule`)
 

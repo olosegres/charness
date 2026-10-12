@@ -82,6 +82,7 @@ export const ruDict: Record<string, string> = {
     '/compact — сжать контекст агента\n' +
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
     '/auto_continue_limits — авто-продолжение после лимита использования (переключатель)\n' +
+    '/account — аккаунт Claude для этого топика (выбор; добавить / войти заново / удалить)\n' +
     '/clear — удалить сообщения треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
     '/bind — управление binding',
@@ -644,4 +645,45 @@ export const ruDict: Record<string, string> = {
   'requests.limit.answerAfterResetNotice': '🚧 Достигнут лимит использования — ответ будет после {time}.',
   'requests.limit.answerNextAttemptNotice': '🚧 Достигнут лимит использования — следующая попытка в {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Достигнут лимит использования. Автопродолжение выключено — работа подождёт, пока оператор её не возобновит.',
+
+  'account.title': '👤 Аккаунт Claude для этого топика: {name}\n\n{list}\n\nНажмите профиль, чтобы переключить на него этот топик. В топике General выбор становится значением по умолчанию для всех топиков.',
+  'account.titleGeneral': '👤 Аккаунт Claude — по умолчанию для ВСЕХ топиков: {name}\n\n{list}\n\nНажмите профиль, чтобы сделать его значением по умолчанию. Топики со своим выбором сохраняют его.',
+  'account.row.loggedOut': 'не выполнен вход',
+  'account.row.topics': ' · топиков: {count}',
+  'account.kind.personal': 'личный {plan}',
+  'account.kind.corporate': 'корпоративный {plan}',
+  'account.kind.unknown': 'план {plan}',
+  'account.addButton': '➕ Добавить',
+  'account.loginButton': '🔑 Войти заново',
+  'account.removeButton': '🗑 Удалить',
+  'account.backButton': '⬅️ Назад',
+  'account.followButton': '↩ Как по умолчанию ({name})',
+  'account.pickLogin': '🔑 В какой профиль войти заново?',
+  'account.pickRemove': '🗑 Какой профиль удалить? Его вход удаляется; топики, выбравшие его, возвращаются к значению по умолчанию.',
+  'account.nothingToRemove': 'Добавленных профилей нет. Профиль default — это сам ~/.claude, его удалить нельзя.',
+  'account.confirmRemove': '🗑 Удалить профиль {name} ({email})? Его вход удаляется, а топиков, выбравших его ({count}), вернутся к значению по умолчанию.',
+  'account.confirmRemoveButton': '🗑 Да, удалить {name}',
+  'account.removed': '✅ Профиль {name} удалён. Топиков, перешедших на значение по умолчанию: {count}.',
+  'account.removeDefaultRefused': 'Профиль default — это сам ~/.claude, его удалить нельзя.',
+  'account.removeInstanceDefaultRefused': '{name} — профиль по умолчанию для всех топиков. Сначала выберите другой в топике General.',
+  'account.unknown': '❌ Профиля {name} нет. Список — /account.',
+  'account.notLoggedIn': '⚠️ В профиль {name} не выполнен вход. Сначала /account login {name}.',
+  'account.askName': '➕ Имя нового профиля — строчные латинские буквы, цифры, - и _, до {max} символов (например, work). Отправьте его следующим сообщением или выполните /account add <имя>.',
+  'account.invalidName': '❌ Имя профиля — строчные латинские буквы, цифры, - и _, до {max} символов, и не "default".',
+  'account.exists': 'Профиль {name} уже существует.',
+  'account.created': '✅ Профиль {name} создан. Запускаю вход…',
+  'account.createFailed': '⚠️ Не удалось создать каталог профиля {name}. Смотрите лог бота.',
+  'account.login_url': '🔐 Вход в Claude для профиля {name}. Откройте ссылку в браузере, где выполнен вход в ТОТ аккаунт — окно инкогнито или другой профиль браузера не даст подхватить текущий вход, — завершите вход и пришлите код сюда:\n{url}',
+  'account.login_success': '✅ Профиль {name}: выполнен вход как {email} ({plan}).',
+  'account.login_failed': '⚠️ Вход в профиль {name} не удался. Повторить: /account login {name}.',
+  'account.setThisTopic': '✅ Аккаунт Claude для этого топика: {name}.{apply}',
+  'account.setGlobal': '✅ Аккаунт Claude по умолчанию для ВСЕХ топиков: {name}. Топики со своим выбором сохраняют его; остальные переключаются сейчас или при следующем запуске.',
+  'account.followSet': '✅ Этот топик использует аккаунт Claude по умолчанию ({name}).{apply}',
+  'account.usage': 'Использование: /account — выбор; /account add <имя>; /account use <имя>; /account login <имя>; /account remove <имя>.',
+  'account.applied.inactive': ' Применится при следующем запуске или возобновлении сессии.',
+  'account.applied.unchanged': '',
+  'account.applied.respawned': ' Запущенная сессия перезапущена под ним — тот же разговор.',
+  'account.applied.deferred': ' Агент работает; переключение применится по окончании хода.',
+  'account.applied.restartRequired': ' Агент работает; переключение применится при следующем запуске или возобновлении.',
+  'account.askNameCancelled': '✖ Добавление аккаунта отменено. Сообщения снова идут агенту.',
 };
