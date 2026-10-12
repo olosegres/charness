@@ -25,7 +25,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
-import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader } from './claudeConfigDir';
+import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader, ClaudeRateLimitSink } from './claudeConfigDir';
 import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
@@ -402,6 +402,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   setClaudeConfigDirReader(reader: ClaudeConfigDirReader): void {
     this.claudeConfigDirReader = reader;
+  }
+
+  private claudeRateLimitSink: ClaudeRateLimitSink | null = null;
+  /** Where a session's `rate_limit_event` frames go (the bot's per-profile usage cache). */
+  setClaudeRateLimitSink(sink: ClaudeRateLimitSink): void {
+    this.claudeRateLimitSink = sink;
   }
 
   /** The config directory the conversation's next process must start with (its account profile). */
@@ -1424,7 +1430,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         this.handleCompactBoundary(session, action);
         return;
       case 'rateLimit':
-        // Subscription usage-window signal; not surfaced to the topic (parity).
+        // Subscription usage-window signal; not surfaced to the topic (parity) — handed to the bot's usage
+        // cache for the profile this process runs on.
+        this.claudeRateLimitSink?.(session.configDir, {
+          status: action.status, rateLimitType: action.rateLimitType, resetsAtMs: action.resetsAtMs, windows: action.windows,
+        });
         return;
       case 'userEcho':
         // Claude has read one of our user messages. A message written mid-turn

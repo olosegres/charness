@@ -682,4 +682,8 @@ export const kaDict: Record<string, string> = {
   'account.applied.deferred': ' აგენტი მუშაობს; გადართვა მისი სვლის დასრულებისას ამოქმედდება.',
   'account.applied.restartRequired': ' აგენტი მუშაობს; გადართვა შემდეგ გაშვებისას ან განახლებისას ამოქმედდება.',
   'account.askNameCancelled': '✖ ანგარიშის დამატება გაუქმდა. შეტყობინებები ისევ აგენტთან მიდის.',
+  'account.row.usage': '    ⏱ 5სთ {session} · კვირა {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (მოძველებული)',
+  'account.row.limited': '    ⛔ ლიმიტზეა {until}-მდე',
+  'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % დახარჯულია → როდის განულდება ({timezone}). Fable-ს საკუთარი კვირეული ფანჯარა აქვს; «—» = ამ გეგმაზე ასეთი ფანჯარა არ არის.',
 };

@@ -23,6 +23,7 @@ import {
   registerJsonStreamTailWriter,
   registerSessionLaunchDefaultsReader,
   registerClaudeConfigDirReader,
+  registerClaudeRateLimitSink,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -361,7 +362,10 @@ import { createModelProviders, type PendingProviderConnect } from './connectors/
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { claudeConfigDirVariableName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
+import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
+import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6613,6 +6617,59 @@ async function applyClaudeProfileEverywhere(): Promise<void> {
   }
 }
 
+/**
+ * The per-profile usage cache (`utils/claudeUsageRefresher.ts`): every signed-in profile's windows off the
+ * OAuth usage endpoint on a 10-minute timer, on `/account` open and on a `claude_profiles` call, plus the
+ * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
+ */
+const claudeUsageRefresher = createClaudeUsageRefresher({
+  listProfiles: () => [
+    { name: defaultClaudeProfileName, configDir: null, loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.loggedIn },
+    ...Object.entries(state.getClaudeProfileRecords()).map(([name, record]) => ({
+      name, configDir: resolveClaudeProfileDir(resolveDataDir(), name), loggedIn: record.loggedIn,
+    })),
+  ],
+  getSnapshot: (name) => state.getClaudeProfileInfo(name)?.usage,
+  saveSnapshot: (name, snapshot) => state.setClaudeProfileUsage(name, snapshot),
+  readToken: (configDir) => readClaudeOAuthToken(configDir),
+  fetchUsage: (accessToken) => fetchClaudeUsage(accessToken),
+});
+
+/** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */
+function resolveClaudeProfileNameForDir(configDir: string | null): string | null {
+  if (configDir === null) return defaultClaudeProfileName;
+  const root = resolveClaudeProfilesRoot(resolveDataDir());
+  if (path.dirname(configDir) !== root) return null;
+  const name = path.basename(configDir);
+  return state.getClaudeProfileRecord(name) ? name : null;
+}
+
+/**
+ * A json-stream session's `rate_limit_event`: its windows refresh the owning profile's snapshot; a REJECTED
+ * request marks the profile limited until the window resets (the `claude_profiles` ranking skips it; the
+ * auto-switch phase will act on the same mark), an allowed one clears a stale mark.
+ */
+function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimitEvent): void {
+  const name = resolveClaudeProfileNameForDir(configDir);
+  if (name === null) return;
+  claudeUsageRefresher.noteStreamWindows(name, event.windows);
+  if (event.status === 'rejected' && event.resetsAtMs !== null) {
+    state.setClaudeProfileLimitedUntil(name, new Date(event.resetsAtMs).toISOString());
+  } else if (event.status === 'allowed' && state.getClaudeProfileInfo(name)?.limitedUntil) {
+    state.setClaudeProfileLimitedUntil(name, null);
+  }
+}
+
+/** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
+async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeProfilesReport> {
+  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+  return buildClaudeProfilesReport(
+    buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
+    model,
+    Date.now(),
+  );
+}
+
 const {
   registerClaudeAccountCommands,
   registerClaudeAccountCallbacks,
@@ -6623,6 +6680,8 @@ const {
 } = createClaudeAccounts({
   ...botCore,
   getDataDir: resolveDataDir,
+  getInstanceTimezone: getCurrentTimezone,
+  refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudeProfileToThread,
@@ -11409,6 +11468,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
+    listClaudeProfiles: listClaudeProfilesForAgent,
     ...(jiraConnector
       ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
       : {}),
@@ -11639,6 +11699,10 @@ export async function startBot(): Promise<void> {
   //     It starts polling once the sessions are restored.
   // Every Claude spawn from here on reads the conversation's account profile (`/account`).
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
+  registerClaudeRateLimitSink(onClaudeRateLimitEvent);
+  // The usage cache: a first poll now (off the boot path), then the timer.
+  claudeUsageRefresher.start();
+  void claudeUsageRefresher.refreshAll();
 
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   if (jiraConnector) {

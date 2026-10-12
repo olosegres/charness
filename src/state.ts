@@ -18,6 +18,7 @@ import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
+import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
@@ -175,12 +176,13 @@ export interface ClaudeProfileRecord {
   /** ISO instant of that read. */
   statusCheckedAt?: string;
   /**
-   * Reserved for the auto-switch phase: until this instant the profile is known to be at its usage limit and
-   * other topics avoid it. Never written yet.
+   * Until this instant the profile is known to be at a usage limit (a json-stream session of it was REJECTED
+   * on a window; the mark is the window's reset) and the `claude_profiles` ranking leaves it out. The
+   * auto-switch phase will act on it; nothing else writes it.
    */
   limitedUntil?: string;
-  /** Reserved for the usage phase: the last usage snapshot read for the profile. Never written yet. */
-  usage?: Record<string, unknown>;
+  /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
+  usage?: ClaudeUsageSnapshot;
 }
 
 /**
@@ -382,9 +384,10 @@ export interface StateV1 {
   autoContinueOnLimitOverrides?: Record<string, boolean>;
   /**
    * Claude account profiles (`/account`, `utils/claudeProfiles.ts`). `claudeProfiles` is the registry of the
-   * profiles the operator ADDED, keyed by name — `default` (`~/.claude` itself) is never in it. A record holds
-   * what the picker shows (the last `claude auth status` read) and leaves room for the balancing phases
-   * (`limitedUntil`, a usage snapshot). `claudeProfileDefault` is the INSTANCE-WIDE pick driven from General
+   * profiles the operator ADDED, keyed by name, plus ONE hidden record for `default` (`~/.claude` itself) that
+   * carries only its probe result, usage snapshot and limit mark — the registry getters never list it, the
+   * usage readers (`getClaudeProfileInfo`) do. A record holds what the picker shows (the last `claude auth
+   * status` read), the usage snapshot and the limit mark. `claudeProfileDefault` is the INSTANCE-WIDE pick driven from General
    * (absent ⇒ `default`); `claudeProfileOverrides` the per-thread picks keyed by {@link SessionKey} string, a
    * present entry winning over the default. Same discipline as the `autoContinueOnLimit*` pair: optional so
    * older state files stay valid, lifecycle-independent (only `/account` mutates them).
@@ -1790,18 +1793,63 @@ export class StateStore {
 
   // ── Claude account profiles (`/account`) ──
 
-  /** The added profiles by name — `default` is never among them. */
+  /** The added profiles by name — `default` is never among them (its hidden record is `getClaudeProfileInfo`'s). */
   getClaudeProfileRecords(): Readonly<Record<string, ClaudeProfileRecord>> {
-    return this.state.claudeProfiles ?? {};
+    const records: Record<string, ClaudeProfileRecord> = {};
+    for (const [name, record] of Object.entries(this.state.claudeProfiles ?? {})) {
+      if (name !== defaultClaudeProfileName) records[name] = record;
+    }
+    return records;
   }
 
+  /** An ADDED profile's record; `undefined` for an unknown name and for `default`. */
   getClaudeProfileRecord(name: string): ClaudeProfileRecord | undefined {
-    return this.state.claudeProfiles?.[name];
+    return name === defaultClaudeProfileName ? undefined : this.state.claudeProfiles?.[name];
   }
 
   /** The names the resolver treats as known: the added profiles (`default` is implicit). */
   getClaudeProfileNames(): Set<string> {
-    return new Set(Object.keys(this.state.claudeProfiles ?? {}));
+    return new Set(Object.keys(this.getClaudeProfileRecords()));
+  }
+
+  /** What is known about ANY profile, `default` included (its probe result, usage snapshot, limit mark). */
+  getClaudeProfileInfo(name: string): ClaudeProfileRecord | undefined {
+    return this.state.claudeProfiles?.[name];
+  }
+
+  /** Every record, the hidden `default` one included — the usage ranking's input. */
+  getAllClaudeProfileInfos(): Readonly<Record<string, ClaudeProfileRecord>> {
+    return this.state.claudeProfiles ?? {};
+  }
+
+  /**
+   * @description Store a profile's usage snapshot (debounced: a stream frame may update it every API request).
+   * `default` gets its hidden record on first write; an unknown added name is ignored (removed meanwhile).
+   */
+  setClaudeProfileUsage(name: string, usage: ClaudeUsageSnapshot): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    record.usage = usage;
+    this.scheduleSave();
+  }
+
+  /** The limit mark (`null` clears it); same record rules as the usage. Debounced. */
+  setClaudeProfileLimitedUntil(name: string, limitedUntil: string | null): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    if (limitedUntil === null) delete record.limitedUntil;
+    else record.limitedUntil = limitedUntil;
+    this.scheduleSave();
+  }
+
+  /** The mutable record behind `name`: created for `default`, `null` for an added name that is not registered. */
+  private touchClaudeProfileInfo(name: string): ClaudeProfileRecord | null {
+    const existing = this.state.claudeProfiles?.[name];
+    if (existing) return existing;
+    if (name !== defaultClaudeProfileName) return null;
+    const created: ClaudeProfileRecord = { createdAt: new Date().toISOString() };
+    (this.state.claudeProfiles ??= {})[name] = created;
+    return created;
   }
 
   /**

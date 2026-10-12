@@ -9,7 +9,7 @@ import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
-import type { ClaudeConfigDirReader } from './claudeConfigDir';
+import type { ClaudeConfigDirReader, ClaudeRateLimitSink } from './claudeConfigDir';
 
 type AdapterFactory = () => AgentAdapter;
 
@@ -198,6 +198,20 @@ export function registerClaudeConfigDirReader(reader: ClaudeConfigDirReader): vo
   }
 }
 
+/** Where the json-stream adapter reports `rate_limit_event` frames (the per-profile usage cache) — same idiom. */
+let claudeRateLimitSink: ClaudeRateLimitSink | null = null;
+
+function checkAdapterTakesClaudeRateLimitSink(adapter: AgentAdapter): adapter is AgentAdapter & { setClaudeRateLimitSink(sink: ClaudeRateLimitSink): void } {
+  return typeof (adapter as { setClaudeRateLimitSink?: unknown }).setClaudeRateLimitSink === 'function';
+}
+
+export function registerClaudeRateLimitSink(sink: ClaudeRateLimitSink): void {
+  claudeRateLimitSink = sink;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesClaudeRateLimitSink(adapter)) adapter.setClaudeRateLimitSink(sink);
+  }
+}
+
 function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onOutput) adapter.on('output', onOutput);
   if (onStatus) adapter.on('status', onStatus);
@@ -296,6 +310,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (claudeConfigDirReader && checkAdapterTakesClaudeConfigDirReader(adapter)) {
       adapter.setClaudeConfigDirReader(claudeConfigDirReader);
+    }
+    if (claudeRateLimitSink && checkAdapterTakesClaudeRateLimitSink(adapter)) {
+      adapter.setClaudeRateLimitSink(claudeRateLimitSink);
     }
   }
   return adapter;

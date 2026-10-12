@@ -686,4 +686,8 @@ export const ruDict: Record<string, string> = {
   'account.applied.deferred': ' Агент работает; переключение применится по окончании хода.',
   'account.applied.restartRequired': ' Агент работает; переключение применится при следующем запуске или возобновлении.',
   'account.askNameCancelled': '✖ Добавление аккаунта отменено. Сообщения снова идут агенту.',
+  'account.row.usage': '    ⏱ 5ч {session} · неделя {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (устарело)',
+  'account.row.limited': '    ⛔ на лимите до {until}',
+  'account.usageHint': 'Использование: % окна израсходовано → когда сбросится ({timezone}). У Fable своё недельное окно; «—» = на этом тарифе такого окна нет.',
 };

@@ -248,7 +248,31 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
 
   it('rate_limit_event → rateLimit with type + utilization (subscription window)', () => {
     const msg = { type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.79, isUsingOverage: false } };
-    assert.deepEqual(classify(msg), [{ kind: 'rateLimit', rateLimitType: 'seven_day', utilization: 0.79 }]);
+    assert.deepEqual(classify(msg), [{ kind: 'rateLimit', rateLimitType: 'seven_day', utilization: 0.79, status: 'allowed_warning', resetsAtMs: null, windows: [] }]);
+  });
+
+  it('rate_limit_event lifts unifiedWindows (utilization 0..1, resetsAt in epoch seconds → ms) and the window the status is about', () => {
+    // Measured shape (2026-10): `seven_day_overage_included` is the Fable weekly window.
+    const msg = {
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed', resetsAt: 1791202200, rateLimitType: 'five_hour', overageStatus: 'rejected', isUsingOverage: false,
+        unifiedWindows: {
+          five_hour: { utilization: 0.05, resetsAt: 1791202200 },
+          seven_day: { utilization: 0.28, resetsAt: 1791666000 },
+          seven_day_overage_included: { utilization: 0.33 },
+          broken: { utilization: 'x' },
+        },
+      },
+    };
+    assert.deepEqual(classify(msg), [{
+      kind: 'rateLimit', rateLimitType: 'five_hour', utilization: null, status: 'allowed', resetsAtMs: 1791202200000,
+      windows: [
+        { name: 'five_hour', utilization: 0.05, resetsAtMs: 1791202200000 },
+        { name: 'seven_day', utilization: 0.28, resetsAtMs: 1791666000000 },
+        { name: 'seven_day_overage_included', utilization: 0.33, resetsAtMs: null },
+      ],
+    }]);
   });
 });
 

@@ -682,4 +682,8 @@ export const frDict: Record<string, string> = {
   'account.applied.deferred': ' L’agent travaille ; la bascule s’applique à la fin de son tour.',
   'account.applied.restartRequired': ' L’agent travaille ; la bascule s’applique au prochain démarrage ou à la prochaine reprise.',
   'account.askNameCancelled': '✖ Ajout de compte annulé. Les messages repartent vers l’agent.',
+  'account.row.usage': '    ⏱ 5h {session} · semaine {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (périmé)',
+  'account.row.limited': '    ⛔ à la limite jusqu’à {until}',
+  'account.usageHint': 'Usage : % de chaque fenêtre consommé → quand elle se réinitialise ({timezone}). Fable a sa propre fenêtre hebdomadaire ; « — » = pas de telle fenêtre sur ce forfait.',
 };

@@ -53,6 +53,8 @@ describe('claudeAccounts: /account over its ports', () => {
       ...harness.core,
       checkIsGeneral: () => isGeneralTopic,
       getDataDir: () => dataDir,
+      getInstanceTimezone: () => 'UTC',
+      refreshClaudeUsage: async () => {},
       readClaudeAuthStatus: async (configDir) => statusByDir.get(configDir) ?? null,
       startClaudeProfileLogin: async (key, profile) => {
         startedLogins.push({ key, profile });

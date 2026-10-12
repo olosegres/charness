@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import type { StateStore } from '../state';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
+import type { ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import {
@@ -112,6 +113,8 @@ const compactConversationInstruction =
   '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
 const answerRequestInstruction =
   '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request.';
+const claudeProfilesInstruction =
+  '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
 const telegramInstructions = `This MCP lets the agent act on its own Telegram topic.
 
@@ -123,6 +126,7 @@ ${compactConversationInstruction}
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
 ${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request.
+${claudeProfilesInstruction}
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 
@@ -139,6 +143,7 @@ ${[
   `${answerRequestInstruction} The requester never sees your plain text or tool output: anything they must read goes through answer_request.`,
   ...extraInstructions,
   compactConversationInstruction,
+  claudeProfilesInstruction,
 ].join('\n')}
 
 Each tool's own description has the exact argument recipe.`;
@@ -343,6 +348,13 @@ export interface SchedulerMcpDeps {
    * without it, and then the tool is not offered.
    */
   fetchJiraAttachment?: (threadKey: string, attachmentId: string) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
+  /**
+   * `claude_profiles`: the signed-in Claude account profiles with their usage windows and the one a new
+   * process of `model` should run on (`utils/claudeUsage.ts`); the bot refreshes the snapshots on demand
+   * before answering. Offered on every platform (a child process is launched the same way everywhere); the
+   * tool is absent when the port is.
+   */
+  listClaudeProfiles?: (model: string | null) => Promise<ClaudeProfilesReport>;
   /**
    * Deliver an agent's answer to a request and apply the close rules
    * (`answer_request`). The surface passes the scope check in; the rules live in
@@ -1403,6 +1415,47 @@ function registerBotTools(
   if (platform === 'jira' && deps.fetchJiraAttachment) registerJiraAttachmentTool(server, deps, deps.fetchJiraAttachment, scope);
   registerCompactConversationTool(server, deps, scope);
   registerAnswerRequestTool(server, deps, scope);
+  if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps.listClaudeProfiles);
+}
+
+/**
+ * `claude_profiles`: which Claude account a child process should run on. Reads the bot's per-profile usage
+ * cache (refreshed on demand by the port); touches no conversation, so it needs no scope resolution. The
+ * answer is the report as JSON with a one-line verdict first, so an agent can act on it without parsing.
+ */
+function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: NonNullable<SchedulerMcpDeps['listClaudeProfiles']>): void {
+  server.registerTool(
+    'claude_profiles',
+    {
+      title: 'Claude accounts and their usage',
+      description:
+        'The Claude account profiles signed in on this host, each with its usage windows — session (5 h), weekly ' +
+        '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the profile with the most ' +
+        'headroom for the model you pass (Fable → its own weekly window + the session window; any other model → the ' +
+        'shared weekly window + the session window; signed-out and limited profiles are skipped). Call it BEFORE ' +
+        'launching a child `claude` and start the child with CLAUDE_CONFIG_DIR=<configDir> in its environment — ' +
+        'configDir null means the default profile: set nothing. Without the variable the child inherits the account ' +
+        'of this very session.',
+      inputSchema: {
+        model: z
+          .string()
+          .max(64)
+          .optional()
+          .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides which weekly window counts. Omit for the shared windows.'),
+      },
+    },
+    async (args) => {
+      const report = await listClaudeProfiles(args.model?.trim() || null);
+      const verdict = report.recommended === null
+        ? 'No eligible profile: every signed-in account is limited or at 100 % on a relevant window.'
+        : (() => {
+            const entry = report.profiles.find((profile) => profile.name === report.recommended);
+            const dir = entry?.configDir ?? null;
+            return `recommended: ${report.recommended} → ${dir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${dir}`}`;
+          })();
+      return textResult(`${verdict}\n${JSON.stringify(report, null, 1)}`);
+    },
+  );
 }
 
 /** Read the whole request body into a string (the SDK wants the parsed JSON body). */

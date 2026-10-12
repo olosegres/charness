@@ -682,4 +682,8 @@ export const esDict: Record<string, string> = {
   'account.applied.deferred': ' El agente está trabajando; el cambio se aplica al terminar su turno.',
   'account.applied.restartRequired': ' El agente está trabajando; el cambio se aplica en el próximo inicio o reanudación.',
   'account.askNameCancelled': '✖ Añadir cuenta cancelado. Los mensajes vuelven a ir al agente.',
+  'account.row.usage': '    ⏱ 5h {session} · semana {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (desactualizado)',
+  'account.row.limited': '    ⛔ en el límite hasta {until}',
+  'account.usageHint': 'Uso: % de cada ventana consumido → cuándo se reinicia ({timezone}). Fable tiene su propia ventana semanal; «—» = ese plan no tiene tal ventana.',
 };

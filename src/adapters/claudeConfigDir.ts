@@ -9,6 +9,24 @@ import type { SessionKey } from '../sessionKey';
  */
 export type ClaudeConfigDirReader = (key: SessionKey) => string | null;
 
+/** A `rate_limit_event` a json-stream session reported, attributed to the config directory it runs under. */
+export interface ClaudeRateLimitEvent {
+  /** `allowed` / `allowed_warning` / `rejected` (the CLI's status for the request). */
+  status: string | null;
+  /** The window the status is about (`five_hour`, `seven_day`, …) and its reset instant. */
+  rateLimitType: string | null;
+  resetsAtMs: number | null;
+  /** `rate_limit_info.unifiedWindows`, every window the frame carried (`utilization` 0..1). */
+  windows: Array<{ name: string; utilization: number; resetsAtMs: number | null }>;
+}
+
+/**
+ * @description Where the json-stream adapter reports a session's `rate_limit_event` frames — the bot folds
+ * them into the usage snapshot of the profile that owns `configDir` (`null` = the default profile;
+ * `utils/claudeUsageRefresher.ts`). Registered at boot through `registerClaudeRateLimitSink`.
+ */
+export type ClaudeRateLimitSink = (configDir: string | null, event: ClaudeRateLimitEvent) => void;
+
 /** What a live Claude session reports about the account it runs on and whether it matches the topic's pick. */
 export type ClaudeConfigDirApplyResult =
   /** No live process for the key: the next resume reads the reader by itself. */

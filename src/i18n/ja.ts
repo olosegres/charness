@@ -676,4 +676,8 @@ export const jaDict: Record<string, string> = {
   'account.applied.deferred': ' エージェントが作業中です。切り替えはターン終了時に適用されます。',
   'account.applied.restartRequired': ' エージェントが作業中です。切り替えは次回の起動または再開時に適用されます。',
   'account.askNameCancelled': '✖ アカウントの追加をキャンセルしました。メッセージは再びエージェントに届きます。',
+  'account.row.usage': '    ⏱ 5時間 {session} · 週 {weekly} · Fable {fable}',
+  'account.row.usageStale': '（古い）',
+  'account.row.limited': '    ⛔ 上限中、{until} まで',
+  'account.usageHint': '使用量: 各ウィンドウの使用 % → リセット時刻（{timezone}）。Fable には専用の週間ウィンドウがあります。「—」= このプランにはそのウィンドウがありません。',
 };

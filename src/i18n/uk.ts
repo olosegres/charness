@@ -688,4 +688,8 @@ export const ukDict: Record<string, string> = {
   'account.applied.deferred': ' Агент працює; перемикання застосується після завершення ходу.',
   'account.applied.restartRequired': ' Агент працює; перемикання застосується під час наступного запуску або відновлення.',
   'account.askNameCancelled': '✖ Додавання облікового запису скасовано. Повідомлення знову йдуть агенту.',
+  'account.row.usage': '    ⏱ 5год {session} · тиждень {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (застаріло)',
+  'account.row.limited': '    ⛔ на ліміті до {until}',
+  'account.usageHint': 'Використання: % вікна витрачено → коли скинеться ({timezone}). У Fable власне тижневе вікно; «—» = на цьому тарифі такого вікна немає.',
 };

@@ -20,6 +20,13 @@ import {
   type ClaudeAuthStatus,
 } from '../../../utils/claudeProfiles';
 import {
+  formatClaudeUsageBucket,
+  formatClaudeUsageResetAt,
+  getClaudeUsageBucket,
+  type ClaudeUsageBucketKind,
+} from '../../../utils/claudeUsage';
+import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
+import {
   accountAddCallback,
   accountBackCallback,
   accountFollowDefaultCallback,
@@ -57,6 +64,10 @@ export interface ClaudeAccountsPorts
     'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
   getDataDir: () => string;
+  /** The instance zone (`/timezone`) the reset instants are shown in. */
+  getInstanceTimezone: () => string;
+  /** Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`); never throws. */
+  refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
   /** `claude auth status --json` under `configDir` (`null` = `~/.claude`); `null` when the probe fails. */
   readClaudeAuthStatus: (configDir: string | null) => Promise<ClaudeAuthStatus | null>;
   /** Start the out-of-band sign-in of `profile`; the relay posts the link and the outcome into the topic. */
@@ -75,7 +86,8 @@ export interface ClaudeAccountsPorts
 export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
-    getDataDir, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile, applyClaudeProfileEverywhere,
+    getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
+    applyClaudeProfileEverywhere,
   } = ports;
 
   /** Topics whose next plain message is the name of a new profile (armed by «Add»). */
@@ -109,10 +121,13 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return defaultStatus;
   }
 
-  /** Persist a probe's answer on the profile's record (nothing for a failed probe or the default profile). */
+  /**
+   * Persist a probe's answer on the profile's record (nothing for a failed probe). `default` gets its hidden
+   * record, so the usage ranking and the CLI twin know whether it is signed in and as whom.
+   */
   async function recordProfileStatus(name: string, status: ClaudeAuthStatus | null): Promise<void> {
-    if (status === null || name === defaultClaudeProfileName) return;
-    if (getState().getClaudeProfileRecord(name) === undefined) return; // removed meanwhile
+    if (status === null) return;
+    if (name !== defaultClaudeProfileName && getState().getClaudeProfileRecord(name) === undefined) return; // removed meanwhile
     await getState().upsertClaudeProfileRecord(name, {
       loggedIn: status.loggedIn,
       email: status.email ?? undefined,
@@ -136,7 +151,28 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       ? t('account.row.loggedOut')
       : `${row.email ?? '?'}, ${t(`account.kind.${row.kind}`, { plan: row.subscriptionType ?? '?' })}`;
     const users = row.topicCount > 0 ? t('account.row.topics', { count: row.topicCount }) : '';
-    return `${marker}${row.name} — ${account}${users}`;
+    return `${marker}${row.name} — ${account}${users}${formatUsageLines(row.name)}`;
+  }
+
+  /**
+   * The profile's usage under its row: the three windows as `used% → reset` in the instance zone (`—` for a
+   * window the account has no figure for — a corporate seat has no Fable window), `(stale)` when the last poll
+   * could not refresh, and the limit mark while it holds. Nothing for a profile never polled.
+   */
+  function formatUsageLines(name: string): string {
+    const info = getState().getClaudeProfileInfo(name);
+    const nowMs = Date.now();
+    const timezone = getInstanceTimezone();
+    const lines: string[] = [];
+    if (info?.usage && info.usage.buckets.length > 0) {
+      const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(info.usage, kind), timezone, nowMs);
+      const stale = info.usage.isStale ? t('account.row.usageStale') : '';
+      lines.push(t('account.row.usage', { session: read('session'), weekly: read('weekly_all'), fable: read('weekly_scoped') }) + stale);
+    }
+    if (info?.limitedUntil && Date.parse(info.limitedUntil) > nowMs) {
+      lines.push(t('account.row.limited', { until: formatClaudeUsageResetAt(info.limitedUntil, timezone, nowMs) }));
+    }
+    return lines.map((line) => `\n${line}`).join('');
   }
 
   function formatRowButton(row: AccountPickerRow): string {
@@ -148,7 +184,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   }
 
   async function buildPickerRows(key: SessionKey, isGeneral: boolean): Promise<AccountPickerRow[]> {
-    const defaultStatus = await refreshProfileStatuses();
+    // The usage poll runs beside the status probes; a snapshot younger than a minute is kept.
+    const [defaultStatus] = await Promise.all([refreshProfileStatuses(), refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs })]);
     const state = getState();
     const topicCounts = countTopicsPerProfile(state.listBindings().map(({ key: boundKey }) => state.resolveClaudeProfileName(boundKey)));
     return buildAccountPickerRows({
@@ -168,9 +205,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const rows = await buildPickerRows(key, isGeneral);
     const list = rows.map(formatRow).join('\n');
     const activeName = resolveActiveName(key, isGeneral);
-    const text = isGeneral
+    const title = isGeneral
       ? t('account.titleGeneral', { name: activeName, list })
       : t('account.title', { name: activeName, list });
+    const text = `${title}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}`;
     const keyboardRows = rows.map((row) => [Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name))]);
     keyboardRows.push([
       Markup.button.callback(t('account.addButton'), accountAddCallback),

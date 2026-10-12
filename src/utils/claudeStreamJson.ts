@@ -123,8 +123,20 @@ export type ClaudeStreamAction =
   | { kind: 'compactBoundary'; trigger: string | null; preTokens: number | null; postTokens: number | null }
   /** `system/api_retry` — a provider retry the CLI is performing. */
   | { kind: 'apiRetry'; text: string }
-  /** `rate_limit_event` — subscription usage window signal (billing proof). */
-  | { kind: 'rateLimit'; rateLimitType: string | null; utilization: number | null }
+  /**
+   * `rate_limit_event` — subscription usage window signal, one per API request. `status` is `allowed` /
+   * `allowed_warning` / `rejected`, `rateLimitType` + `resetsAtMs` name the window the status is about, and
+   * `windows` lifts `rate_limit_info.unifiedWindows` (`five_hour`, `seven_day`, `seven_day_overage_included`
+   * with `utilization` 0..1 and a reset instant) — the per-profile usage cache feeds on them (`utils/claudeUsage.ts`).
+   */
+  | {
+      kind: 'rateLimit';
+      rateLimitType: string | null;
+      utilization: number | null;
+      status: string | null;
+      resetsAtMs: number | null;
+      windows: Array<{ name: string; utilization: number; resetsAtMs: number | null }>;
+    }
   /** `--replay-user-messages` echo of a message the BOT wrote — the input-ack
    *  signal (see {@link checkIsOwnInputEcho} for the user lines that are not). */
   | { kind: 'userEcho' };
@@ -294,10 +306,22 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
 
   if (type === 'rate_limit_event') {
     const info = checkIsStreamRecord(msg.rate_limit_info) ? msg.rate_limit_info : {};
+    // `resetsAt` is epoch SECONDS on the frame (measured 2026-10: `1791202200`).
+    const readResetMs = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value * 1000 : null);
+    const windows: Array<{ name: string; utilization: number; resetsAtMs: number | null }> = [];
+    if (checkIsStreamRecord(info.unifiedWindows)) {
+      for (const [name, window] of Object.entries(info.unifiedWindows)) {
+        if (!checkIsStreamRecord(window) || typeof window.utilization !== 'number') continue;
+        windows.push({ name, utilization: window.utilization, resetsAtMs: readResetMs(window.resetsAt) });
+      }
+    }
     return [{
       kind: 'rateLimit',
       rateLimitType: readString(info, 'rateLimitType'),
       utilization: typeof info.utilization === 'number' ? info.utilization : null,
+      status: readString(info, 'status'),
+      resetsAtMs: readResetMs(info.resetsAt),
+      windows,
     }];
   }
 

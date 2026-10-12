@@ -683,4 +683,8 @@ export const ptDict: Record<string, string> = {
   'account.applied.deferred': ' O agente está a trabalhar; a troca aplica-se ao fim do turno.',
   'account.applied.restartRequired': ' O agente está a trabalhar; a troca aplica-se no próximo início ou retoma.',
   'account.askNameCancelled': '✖ Adição de conta cancelada. As mensagens voltam a ir para o agente.',
+  'account.row.usage': '    ⏱ 5h {session} · semana {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (desatualizado)',
+  'account.row.limited': '    ⛔ no limite até {until}',
+  'account.usageHint': 'Uso: % de cada janela consumido → quando ela reinicia ({timezone}). O Fable tem a sua própria janela semanal; «—» = esse plano não tem tal janela.',
 };

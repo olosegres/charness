@@ -682,4 +682,8 @@ export const deDict: Record<string, string> = {
   'account.applied.deferred': ' Der Agent arbeitet; der Wechsel gilt, sobald sein Zug endet.',
   'account.applied.restartRequired': ' Der Agent arbeitet; der Wechsel gilt beim nächsten Start oder Fortsetzen.',
   'account.askNameCancelled': '✖ Konto hinzufügen abgebrochen. Nachrichten gehen wieder an den Agenten.',
+  'account.row.usage': '    ⏱ 5h {session} · Woche {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (veraltet)',
+  'account.row.limited': '    ⛔ am Limit bis {until}',
+  'account.usageHint': 'Nutzung: % des Fensters verbraucht → wann es zurückgesetzt wird ({timezone}). Fable hat ein eigenes Wochenfenster; «—» = kein solches Fenster in diesem Tarif.',
 };

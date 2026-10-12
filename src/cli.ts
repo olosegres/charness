@@ -40,6 +40,9 @@ function printUsage(): void {
       `  telegramcode hot              Hot-reload dev mode: tsc -w + nodemon on dist/\n` +
       `                                  (rebuilds + restarts the bot on src/ edits;\n` +
       `                                   in-flight agent sessions are reattached)\n` +
+      `  telegramcode claude-profiles  Claude account profiles + usage from the bot's cache;\n` +
+      `                                  --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
+      `                                  (empty = default), --model <name>, --json\n` +
       `  telegramcode --help, -h       Show this help\n` +
       `  telegramcode --version, -v    Print the version\n` +
       `\n` +
@@ -92,6 +95,14 @@ async function main(): Promise<void> {
 
   if (sub === '--version' || sub === '-v' || sub === 'version') {
     printVersion();
+    return;
+  }
+
+  // Which Claude account profile a child process should run on (the `claude_profiles` MCP tool's twin);
+  // loaded lazily so the bot's own start path stays as it was.
+  if (sub === 'claude-profiles') {
+    const { runClaudeProfilesCli } = await import('./cli/claudeProfiles');
+    process.exitCode = await runClaudeProfilesCli(process.argv.slice(3));
     return;
   }
 

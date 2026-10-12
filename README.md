@@ -484,6 +484,27 @@ so one account's usage limit does not stop every topic.
   profile return to the default and the confirmation says how many.
 - A child `claude` the agent starts inherits the same `CLAUDE_CONFIG_DIR`, so
   it runs on the topic's account too.
+- **Usage per account.** Under each profile `/account` shows how much of each
+  subscription window is used and when it resets, in the instance timezone:
+  the 5-hour session window, the weekly window (all models) and Fable's own
+  weekly window (`—` on a plan without one). The bot reads the figures with
+  each profile's own login every 10 minutes, when `/account` opens and when an
+  agent asks; a json-stream session's own rate-limit events keep them current
+  between polls. A token the CLI has not renewed yet shows the last figures as
+  `(stale)`; a profile whose session was refused on a window is marked
+  `⛔ at its limit until …` and is skipped by the recommendation below.
+- **Which account for a child process.** An agent that launches a detached
+  `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
+  `claude_profiles` — optionally with the model it will run — and gets every
+  profile with its windows plus `recommended`: the signed-in, unlimited profile
+  with the most headroom (Fable → Fable's weekly window and the session window;
+  any other model → the shared weekly window and the session window). It then
+  starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
+  profile: set nothing). The same answer from a shell, for a worker without
+  MCP: `telegramcode claude-profiles [--best] [--model <name>] [--json]` —
+  `--best` prints just the directory (an empty line for the default), so
+  `CLAUDE_CONFIG_DIR="$(telegramcode claude-profiles --best --model fable)"`
+  works as is; it reads the bot's cache off `DATA_DIR/state.json`.
 
 ## Scheduler (`/schedule`)
 

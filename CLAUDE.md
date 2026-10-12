@@ -124,7 +124,10 @@ per-backend controls are optional methods the bot checks before calling.
   `~/.claude`; `default` IS `~/.claude`. Instance default from General + per-topic override (state.json, resolver
   in the utils module). Never switch an account by swapping files under `~/.claude` — the CLI re-reads them live
   and every running session would change at once; a live switch is the `/model` re-spawn, deferred while the
-  process works.
+  process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
+  endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot) plus the
+  json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
+  `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`.
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
 - **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);

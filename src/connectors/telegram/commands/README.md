@@ -88,3 +88,7 @@ per-topic name capture the text handler consults (`checkIsAwaitingProfileName` /
 command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
 picked; `default` is never removed; the instance default is refused until General picks another; removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
+Under each row the picker prints the profile's usage windows (`utils/claudeUsage.ts`: session, weekly, Fable
+weekly — percent used → reset in the instance zone, `getInstanceTimezone`), read off the record's snapshot
+after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
+goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in.

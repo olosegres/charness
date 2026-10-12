@@ -181,6 +181,14 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.equal(getBotMcpToolDigest(withPort, null), getBotMcpToolDigest(without, null));
   });
 
+  it('the claude_profiles port adds its tool on EVERY platform (a child process is launched the same way everywhere), so each digest moves', () => {
+    const without = createDigestDeps();
+    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, profiles: [] }) };
+    for (const platform of ['telegram', 'jira', null] as const) {
+      assert.notEqual(getBotMcpToolDigest(withPort, platform), getBotMcpToolDigest(without, platform), `${platform ?? 'neutral'} digest`);
+    }
+  });
+
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
     const base = [
       { name: 'answer_request', title: 'Answer a request', description: 'Send your answer', inputKeys: ['body', 'kind', 'requestId'] },
@@ -700,6 +708,8 @@ interface ServerFixture {
   fileSendHandler: { current: SendFilesToThread };
   messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }>;
   messageSendHandler: { current: SendMessagesToThread };
+  /** The `model` each `claude_profiles` call asked for (`null` = omitted). */
+  claudeProfilesCalls: Array<string | null>;
 }
 
 const mcpSingleMessageId = 301;
@@ -901,6 +911,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     // MCP-layer mapping in registerMessageSendTool (`as_file`→`asFile`, dir-scope
     // `authorizedWorkDir` injection) is observable at this boundary.
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
+    const claudeProfilesCalls: Array<string | null> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
       return { ok: true, summary: `Delivered ${options.messages.length} messages to the topic.`, undeliveredCount: 0, sentMessageIds: [] };
@@ -923,6 +934,19 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       answerRequest: async () => ({ ok: false, error: 'unused' }),
       whenSessionsRestored: async () => {},
       getSecret: async () => secret,
+      // `claude_profiles`: a canned report that records the model it was asked for.
+      listClaudeProfiles: async (model) => {
+        claudeProfilesCalls.push(model);
+        return {
+          model,
+          relevantBuckets: ['session', model === 'fable' ? 'weekly_scoped' : 'weekly_all'],
+          recommended: model === 'fable' ? 'work' : 'default',
+          profiles: [
+            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 19, isRecommended: model !== 'fable' },
+            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 90, isRecommended: model === 'fable' },
+          ],
+        };
+      },
       port: 0,
     };
     const handle = createSchedulerMcpServer(deps);
@@ -931,6 +955,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       handle,
       store,
       armed,
+      claudeProfilesCalls,
       disarmed,
       boundThreads,
       fileWorkDir,
@@ -1067,6 +1092,29 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     } finally {
       await client.close();
     }
+  });
+
+  it('claude_profiles: listed for a thread AND a directory scope, passes the model through, answers a verdict line + the report JSON', async () => {
+    for (const scope of [{ kind: 'thread' as const, threadKey: threadAKey }, { kind: 'dir' as const, directory: fixture.fileWorkDir }]) {
+      const client = await buildClient(fixture.handle.port, buildSchedulerMcpToken(secret, scope));
+      try {
+        const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'claude_profiles');
+        assert.ok(tool, `claude_profiles is offered to a ${scope.kind} scope`);
+        assert.match(tool.description ?? '', /CLAUDE_CONFIG_DIR/);
+        const result = await client.callTool({ name: 'claude_profiles', arguments: { model: 'fable' } });
+        const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+        const [verdict, ...rest] = text.split('\n');
+        assert.equal(verdict, 'recommended: work → CLAUDE_CONFIG_DIR=/data/profiles/work');
+        const report = JSON.parse(rest.join('\n')) as { model: string | null; recommended: string | null; profiles: Array<{ name: string }> };
+        assert.equal(report.model, 'fable');
+        assert.deepEqual(report.profiles.map((profile) => profile.name), ['default', 'work']);
+        const noModel = await client.callTool({ name: 'claude_profiles', arguments: {} });
+        assert.match((noModel.content as Array<{ type: string; text: string }>)[0].text, /^recommended: default → default profile, set no CLAUDE_CONFIG_DIR\n/);
+      } finally {
+        await client.close();
+      }
+    }
+    assert.deepEqual(fixture.claudeProfilesCalls, ['fable', null, 'fable', null]);
   });
 
   it('send_messages_to_user routes each message to the scope-resolved thread', async () => {

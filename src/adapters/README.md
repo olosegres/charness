@@ -274,6 +274,12 @@ reader); after a bot restart an adopted process reports the directory recovered 
 its own wrapper script / `pane_start_command` (`getSessionClaudeConfigDir`), and a
 mismatch with the topic's current pick is corrected at the next idle point.
 
+The json-stream adapter also reports every `rate_limit_event` frame to the
+`ClaudeRateLimitSink` registered at boot (`registerClaudeRateLimitSink`), attributed to
+the `configDir` the session runs under: the bot folds the frame's `unifiedWindows` into
+that profile's usage snapshot and marks the profile limited on a `rejected` status
+(`utils/claudeUsageRefresher.ts`). Nothing is rendered into the topic (parity).
+
 ## Shared session store
 
 Both Claude backends drive the same `claude` binary against

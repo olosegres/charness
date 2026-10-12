@@ -676,4 +676,8 @@ export const zhDict: Record<string, string> = {
   'account.applied.deferred': ' 代理正在工作；切换将在本轮结束时生效。',
   'account.applied.restartRequired': ' 代理正在工作；切换将在下次启动或恢复时生效。',
   'account.askNameCancelled': '✖ 已取消添加账号。消息重新发送给代理。',
+  'account.row.usage': '    ⏱ 5小时 {session} · 每周 {weekly} · Fable {fable}',
+  'account.row.usageStale': '（已过时）',
+  'account.row.limited': '    ⛔ 已达上限，直到 {until}',
+  'account.usageHint': '用量：各窗口已用 % → 重置时间（{timezone}）。Fable 有单独的每周窗口；「—」= 该套餐没有此窗口。',
 };

@@ -681,4 +681,8 @@ export const hiDict: Record<string, string> = {
   'account.applied.deferred': ' एजेंट काम कर रहा है; बदलाव उसकी बारी खत्म होने पर लागू होगा।',
   'account.applied.restartRequired': ' एजेंट काम कर रहा है; बदलाव अगली शुरुआत या पुनरारंभ पर लागू होगा।',
   'account.askNameCancelled': '✖ खाता जोड़ना रद्द किया गया। संदेश फिर से एजेंट को जाते हैं।',
+  'account.row.usage': '    ⏱ 5घं {session} · सप्ताह {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (पुराना)',
+  'account.row.limited': '    ⛔ सीमा पर, {until} तक',
+  'account.usageHint': 'उपयोग: हर विंडो का % खर्च → कब रीसेट होगी ({timezone})। Fable की अपनी साप्ताहिक विंडो है; «—» = इस प्लान में ऐसी विंडो नहीं।',
 };

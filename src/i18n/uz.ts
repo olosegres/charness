@@ -682,4 +682,8 @@ export const uzDict: Record<string, string> = {
   'account.applied.deferred': ' Agent ishlamoqda; o‘tish uning navbati tugaganda qo‘llanadi.',
   'account.applied.restartRequired': ' Agent ishlamoqda; o‘tish keyingi ishga tushish yoki davom etishda qo‘llanadi.',
   'account.askNameCancelled': '✖ Hisob qo‘shish bekor qilindi. Xabarlar yana agentga boradi.',
+  'account.row.usage': '    ⏱ 5s {session} · hafta {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (eskirgan)',
+  'account.row.limited': '    ⛔ limitda, {until} gacha',
+  'account.usageHint': 'Foydalanish: har bir oynaning % sarflangan → qachon tiklanadi ({timezone}). Fable’ning o‘z haftalik oynasi bor; «—» = bu tarifda bunday oyna yo‘q.',
 };

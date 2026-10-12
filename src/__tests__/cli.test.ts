@@ -100,6 +100,46 @@ test('removed `bot` worker entry is an unknown command', () => {
   assert.match(stderr, /Usage:/);
 });
 
+test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints the dir to launch under (empty for default), --json the report, a bad flag exits 2', () => {
+  const soon = new Date(Date.now() + 3_600_000).toISOString();
+  const bucket = (kind: string, percent: number, scopeModel: string | null = null) => ({ kind, percent, resetsAt: soon, scopeModel });
+  fs.writeFileSync(path.join(tmpRoot, 'state.json'), JSON.stringify({
+    claudeProfiles: {
+      default: { createdAt: '2026-10-01T00:00:00.000Z', loggedIn: true, email: 'me@example.com', subscriptionType: 'max',
+        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 81), bucket('weekly_all', 76), bucket('weekly_scoped', 33, 'Fable')] } },
+      work: { createdAt: '2026-10-02T00:00:00.000Z', loggedIn: true, email: 'w@example.com', subscriptionType: 'pro',
+        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 10), bucket('weekly_all', 90), bucket('weekly_scoped', 5, 'Fable')] } },
+    },
+  }));
+  const fable = runCli(['claude-profiles', '--best', '--model', 'fable']);
+  assert.equal(fable.status, 0, fable.stderr);
+  assert.equal(fable.stdout, `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`);
+  const opus = runCli(['claude-profiles', '--best', '--model=opus']);
+  assert.equal(opus.status, 0, opus.stderr);
+  assert.equal(opus.stdout, '\n', 'the default profile is an empty line: set no CLAUDE_CONFIG_DIR');
+  const json = runCli(['claude-profiles', '--json', '--model', 'fable']);
+  assert.equal(json.status, 0, json.stderr);
+  const report = JSON.parse(json.stdout) as { recommended: string; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
+  assert.equal(report.recommended, 'work');
+  assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 19], ['work', false, 90]]);
+  const human = runCli(['claude-profiles']);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /✓ default .*5h 81% → /);
+  assert.match(human.stdout, /• work .*Fable 5% → /);
+  assert.match(human.stdout, /recommended for any model: default/);
+  const bad = runCli(['claude-profiles', '--frob']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /unknown option: --frob/);
+});
+
+test('claude-profiles with no state file: default is the only profile, with unknown usage, and is recommended', () => {
+  const best = runCli(['claude-profiles', '--best']);
+  assert.equal(best.status, 0, best.stderr);
+  assert.equal(best.stdout, '\n');
+  const human = runCli(['claude-profiles']);
+  assert.match(human.stdout, /✓ default .*usage not read yet/, 'unknown usage alone is still a usable account, hence recommended');
+});
+
 test('internal hot worker entry invokes the shared runBot preflight', () => {
   const missingWorkRoot = path.join(tmpRoot, 'missing-work-root');
   const result = spawnSync(process.execPath, [botEntryPath], {

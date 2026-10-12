@@ -730,4 +730,8 @@ export const enDict: Record<string, string> = {
   'account.applied.deferred': ' The agent is working; the switch applies when its turn ends.',
   'account.applied.restartRequired': ' The agent is working; the switch applies at the next start or resume.',
   'account.askNameCancelled': '✖ Adding an account cancelled. Messages go to the agent again.',
+  'account.row.usage': '    ⏱ 5h {session} · week {weekly} · Fable {fable}',
+  'account.row.usageStale': ' (stale)',
+  'account.row.limited': '    ⛔ at its limit until {until}',
+  'account.usageHint': 'Usage: % of each window used → when it resets ({timezone}). Fable has a weekly window of its own; «—» = no such window on that plan.',
 };
