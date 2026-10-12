@@ -34,7 +34,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Time-aware prompts** — `/timestamps on` prepends each forwarded prompt's send time (local-offset ISO), so a days-long session knows what "yesterday" or "2 days ago" means; agent-facing only, per topic
 - **Reply context** — reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text, voice and files (a photo, a document, an album…), both agents; a reply TO a photo, file or voice note names it, with the path of the bot's saved copy when it has one
 - **Your timezone** — `/timezone Europe/Moscow` once, and schedules fire at your wall-clock time while the agent is told what time it actually is; no server-clock guessing
-- **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/auto_continue_limits` turns it off per topic or skips a single resume
+- **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/auto_continue_limits` turns it off per topic or skips a single resume. With several Claude accounts signed in (`/account`), the limit notice offers a «🔁 Switch to …» button to move the topic to an account with room and continue at once — or the bot does it by itself when you turn auto-switch on
 
 ## Two surfaces: group topics, bot DM, or both
 
@@ -367,7 +367,7 @@ actually start an agent or terminal in the folder.
 | `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so) |
 | `/compact_summary` | Toggle posting the agent's full summary after a compaction — `/compact`, the idle compaction and the agent's own `compact_conversation` (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. Off by default: a compaction ends in a short line. On OpenCode it also hides the summary OpenCode streams itself |
 | `/auto_continue_limits` | Toggle waiting out a usage / session limit and resuming this topic by itself (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. On by default. While a resume is waiting the picker also offers «⏭ Skip once» — drop that one resume without turning the mode off |
-| `/account` | Which Claude account this topic's Claude sessions run on, when you keep several subscriptions signed in (`/accounts` is an alias). Bare: the picker — every profile with its email, plan (personal Pro/Max or corporate Team/Enterprise) and how many topics use it, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working). In **General** the pick becomes the default for all topics. «➕ Add» asks for a name and runs the sign-in for the new account; «🔑 Re-login» and «🗑 Remove» pick a profile. Text forms: `/account add <name>`, `/account use <name>`, `/account login <name>`, `/account remove <name>`. See [Several Claude accounts](#several-claude-accounts-account) |
+| `/account` | Which Claude account this topic's Claude sessions run on, when you keep several subscriptions signed in (`/accounts` is an alias). Bare: the picker — every profile with its email, plan (personal Pro/Max or corporate Team/Enterprise) and how many topics use it, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working). In **General** the pick becomes the default for all topics. «➕ Add» asks for a name and runs the sign-in for the new account; «🔑 Re-login» and «🗑 Remove» pick a profile. The «🔁 Auto-switch on limit» button (or `/account autoswitch on\|off`, OFF by default) lets the bot move a topic to another signed-in account with room when its own hits a usage limit. Text forms: `/account add <name>`, `/account use <name>`, `/account login <name>`, `/account remove <name>`. See [Several Claude accounts](#several-claude-accounts-account) |
 | `/bind` | Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons |
 | `/mcp` | List MCP servers active for this thread |
 
@@ -493,6 +493,20 @@ so one account's usage limit does not stop every topic.
   between polls. A token the CLI has not renewed yet shows the last figures as
   `(stale)`; a profile whose session was refused on a window is marked
   `⛔ at its limit until …` and is skipped by the recommendation below.
+- **Another account takes over on a limit.** When a topic's account hits a
+  usage limit and another signed-in profile still has room on the windows the
+  topic's model drains (fresh figures, not marked limited), the limit notice
+  carries «🔁 Switch to <profile>» buttons, best profile first: a tap moves the
+  topic to that account (the running session is restarted under it with the
+  same conversation), drops the wait for the reset and tells the agent to
+  continue right away. With **auto-switch** on (`/account` → «🔁 Auto-switch on
+  limit», or `/account autoswitch on`; in General the default for all topics)
+  the bot does the same by itself and posts one line — «Usage limit on a —
+  this topic switched to b and continues». It is OFF by default: moving work
+  between subscriptions is your call. The exhausted profile is marked limited
+  until its window resets, so it is not picked again before then; when no
+  profile has room the bot waits for the reset as before. An agent that is
+  still working switches at the end of its turn (the wait stays armed).
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
   `claude_profiles` — optionally with the model it will run — and gets every

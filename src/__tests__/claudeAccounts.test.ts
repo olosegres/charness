@@ -9,7 +9,10 @@
  *   • «Add» without a name arms the name capture; the next message is the name, `/esc`-style cancel disarms it;
  *   • `use <name>` in a topic sets the pick and moves the live session (the apply port's outcome is reported);
  *     in General it sets the instance default and moves every session; a logged-out profile is refused;
- *   • `remove`: default refused, the instance default refused, otherwise the picks that named it are dropped.
+ *   • `remove`: default refused, the instance default refused, otherwise the picks that named it are dropped;
+ *   • the auto-switch-on-limit toggle (OFF by default): the picker's button flips it, `autoswitch on|off` too,
+ *     General sets the instance default; a «switch to …» tap on a limit notice goes to its port and consumes the
+ *     notice, a stale one only answers the callback.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -35,6 +38,9 @@ let applyOutcome: ClaudeProfileApplyOutcome = 'inactive';
 const appliedKeys: SessionKey[] = [];
 let applyEverywhereCalls = 0;
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
+const limitSwitchTaps: Array<{ key: SessionKey; episodeId: number; name: string }> = [];
+/** What the stand-in limit-switch port answers: the confirmation, or `null` for a stale tap. */
+let limitSwitchOutcome: string | null = null;
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
 
@@ -66,6 +72,10 @@ describe('claudeAccounts: /account over its ports', () => {
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
       },
+      takeLimitSwitchOffer: async (key, episodeId, name) => {
+        limitSwitchTaps.push({ key, episodeId, name });
+        return limitSwitchOutcome;
+      },
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -90,6 +100,9 @@ describe('claudeAccounts: /account over its ports', () => {
       String(/^acct_login_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rm_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rmok_([a-z0-9][a-z0-9_-]{0,31})$/),
+      'acct_autosw_on',
+      'acct_autosw_off',
+      String(/^acsw_(\d+)_([a-z0-9][a-z0-9_-]{0,31})$/),
     ]);
   });
 
@@ -100,6 +113,7 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(picker), [
       ['acct_use_default'],
       ['acct_add', 'acct_login_menu', 'acct_rm_menu'],
+      ['acct_autosw_on'], // OFF by default, so the button offers ON
     ]);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
@@ -226,5 +240,55 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.equal(applyEverywhereCalls, callsBefore + 1);
     assert.doesNotMatch(harness.edits.at(-1)?.text ?? '', /team —/, 'the picker re-rendered without it');
     assert.equal(keyToString(appliedKeys[0]), keyToString(harness.key));
+  });
+
+  it('the auto-switch toggle is OFF by default; the picker button flips the topic override and re-renders with the other button', async () => {
+    assert.equal(harness.state.checkIsClaudeAutoSwitchOnLimitEnabled(harness.key), false);
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1);
+    assert.match(picker?.text ?? '', /Auto-switch on limit/);
+    const toggleRow = harness.getKeyboardData(picker).find((row) => row[0].startsWith('acct_autosw_'));
+    assert.deepEqual(toggleRow, ['acct_autosw_on']);
+    await harness.tapButton(picker!.messageId!, 'acct_autosw_on');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
+    const rerender = harness.edits.at(-1);
+    assert.equal(rerender?.messageId, picker!.messageId);
+    assert.ok(harness.getKeyboardData(rerender).some((row) => row[0] === 'acct_autosw_off'), 'ON now, so the button offers OFF');
+    await harness.runCommand('account', 'autoswitch off');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Auto-switch to another account on a usage limit: OFF for this topic/);
+    await harness.runCommand('account', 'autoswitch maybe');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: /);
+  });
+
+  it('in General the toggle sets the instance default', async () => {
+    isGeneralTopic = true;
+    await harness.runCommand('account', 'autoswitch on');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
+    assert.match(harness.replies.at(-1)?.text ?? '', /ON for ALL topics/);
+    await harness.runCommand('account');
+    const toggleRow = harness.getKeyboardData(harness.replies.at(-1)).find((row) => row[0].startsWith('acct_autosw_'));
+    assert.deepEqual(toggleRow, ['acct_autosw_off']);
+    await harness.runCommand('account', 'autoswitch off');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
+    isGeneralTopic = false;
+  });
+
+  it('a «switch to …» tap on a limit notice reaches the port with its episode and consumes the notice; a stale tap only answers', async () => {
+    const noticeId = (await harness.core.replyToThread(harness.key, 'limit notice'))!;
+    limitSwitchOutcome = 'switched to work';
+    await harness.tapButton(noticeId, 'acsw_1760000000000_work');
+    assert.deepEqual(limitSwitchTaps.at(-1), { key: harness.key, episodeId: 1760000000000, name: 'work' });
+    const consumed = harness.edits.at(-1);
+    assert.equal(consumed?.messageId, noticeId);
+    assert.equal(consumed?.text, 'switched to work');
+    assert.deepEqual(harness.getKeyboardData(consumed), [], 'the keyboard is dropped with the confirmation');
+
+    const editsBefore = harness.edits.length;
+    limitSwitchOutcome = null;
+    await harness.tapButton(noticeId, 'acsw_1750000000000_work');
+    assert.equal(limitSwitchTaps.at(-1)?.episodeId, 1750000000000);
+    assert.equal(harness.edits.length, editsBefore, 'a stale tap edits nothing');
   });
 });

@@ -32,6 +32,9 @@ export const accountAddCallback = 'acct_add';
 export const accountFollowDefaultCallback = 'acct_follow';
 /** Back to the main picker from a sub-picker. */
 export const accountBackCallback = 'acct_back';
+/** Flip the auto-switch-on-limit setting (`utils/claudeLimitSwitch.ts`): the topic's override, in General the instance default. */
+export const accountAutoSwitchOnCallback = 'acct_autosw_on';
+export const accountAutoSwitchOffCallback = 'acct_autosw_off';
 
 export function buildAccountUseCallback(name: string): string {
   return `acct_use_${name}`;

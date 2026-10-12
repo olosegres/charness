@@ -13,7 +13,7 @@
  * in `compactOnIdle.ts`.
  */
 
-import { resolveDefaultOnThreadToggle } from './threadToggle';
+import { resolveDefaultOnThreadToggle, resolveThreadToggle } from './threadToggle';
 
 /**
  * @description Resolve whether limit auto-continue is enabled for a thread. A
@@ -26,6 +26,19 @@ export function resolveAutoContinueOnLimitEnabled(
   threadOverride: boolean | undefined,
 ): boolean {
   return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
+}
+
+/**
+ * @description Resolve whether the bot may switch a limited topic to ANOTHER Claude account profile by itself
+ * (`/account` → auto-switch; the decisions live in `claudeLimitSwitch.ts`, which re-exports this). A per-thread
+ * override wins; otherwise the instance default; unset everywhere ⇒ OFF — moving work between subscriptions is
+ * an account-policy decision the operator opts into. Kept beside its sibling so `state.ts` loads no more than it did.
+ */
+export function resolveClaudeAutoSwitchOnLimitEnabled(
+  globalDefault: boolean | undefined,
+  threadOverride: boolean | undefined,
+): boolean {
+  return resolveThreadToggle(globalDefault, threadOverride, false);
 }
 
 /** `callback_data` prefix of the «skip this resume once» button. */

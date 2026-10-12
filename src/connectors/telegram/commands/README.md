@@ -91,4 +91,9 @@ profile drops the topic picks that named it (the state returns them, so their se
 Under each row the picker prints the profile's usage windows (`utils/claudeUsage.ts`: session, weekly, Fable
 weekly — percent used → reset in the instance zone, `getInstanceTimezone`), read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
-goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in.
+goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The picker's
+last row is the auto-switch-on-limit toggle (`acct_autosw_on` / `acct_autosw_off`, `/account autoswitch on|off`;
+OFF by default; General sets the instance default, a topic its override — `utils/claudeLimitSwitch.ts`). The
+module also owns the `acsw_<episode>_<name>` button a usage-limit notice carries: the tap goes to the
+`takeLimitSwitchOffer` port (the bot checks the episode is still the topic's open one, moves the topic and
+resumes the work) and the notice is edited into the confirmation; a stale tap only answers the callback.

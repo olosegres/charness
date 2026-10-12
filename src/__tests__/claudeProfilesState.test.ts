@@ -87,4 +87,20 @@ describe('StateStore: Claude account profiles', () => {
     assert.equal(reloaded.getClaudeProfileOverride(topicA), 'ghost');
     assert.equal(reloaded.resolveClaudeProfileName(topicA), 'default');
   });
+
+  it('auto-switch on limit: OFF everywhere by default; a topic override wins over the instance default; both survive a reload', async () => {
+    assert.equal(store.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), false);
+    await store.setClaudeAutoSwitchOnLimitGlobalDefault(true);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), true);
+    await store.setClaudeAutoSwitchOnLimitOverride(topicA, false);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), false);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), true);
+    await store.flush();
+    const reloaded = new StateStore(dataDir);
+    await reloaded.init();
+    assert.equal(reloaded.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
+    assert.equal(reloaded.getClaudeAutoSwitchOnLimitOverride(topicA), false);
+    assert.equal(reloaded.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), true);
+  });
 });

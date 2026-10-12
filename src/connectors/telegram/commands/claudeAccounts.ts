@@ -26,8 +26,11 @@ import {
   type ClaudeUsageBucketKind,
 } from '../../../utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
+import { claudeLimitSwitchCallbackRe, parseClaudeLimitSwitchCallbackData } from '../../../utils/claudeLimitSwitch';
 import {
   accountAddCallback,
+  accountAutoSwitchOffCallback,
+  accountAutoSwitchOnCallback,
   accountBackCallback,
   accountFollowDefaultCallback,
   accountLoginCallbackRe,
@@ -76,6 +79,11 @@ export interface ClaudeAccountsPorts
   applyClaudeProfile: (key: SessionKey) => Promise<ClaudeProfileApplyOutcome>;
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
+  /**
+   * A tap on a «switch to <profile>» button of a usage-limit notice (`utils/claudeLimitSwitch.ts`): move the
+   * topic and continue its work. The confirmation the notice is edited into, or `null` when the tap is stale.
+   */
+  takeLimitSwitchOffer: (key: SessionKey, episodeId: number, name: string) => Promise<string | null>;
 }
 
 /**
@@ -87,7 +95,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere,
+    applyClaudeProfileEverywhere, takeLimitSwitchOffer,
   } = ports;
 
   /** Topics whose next plain message is the name of a new profile (armed by «Add»). */
@@ -211,12 +219,21 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const title = isGeneral
       ? t('account.titleGeneral', { name: activeName, list })
       : t('account.title', { name: activeName, list });
-    const text = `${title}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}`;
+    const text = `${title}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}\n\n${t('account.autoSwitchHint')}`;
     const keyboardRows = rows.map((row) => [Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name))]);
     keyboardRows.push([
       Markup.button.callback(t('account.addButton'), accountAddCallback),
       Markup.button.callback(t('account.loginButton'), accountLoginMenuCallback),
       Markup.button.callback(t('account.removeButton'), accountRemoveMenuCallback),
+    ]);
+    // The auto-switch toggle: one button that flips the setting (in General the instance default, else the
+    // topic's override); the picker re-renders in place, so the label follows the value.
+    const isAutoSwitchOn = resolveAutoSwitchEnabled(key, isGeneral);
+    keyboardRows.push([
+      Markup.button.callback(
+        t('account.autoSwitchButton', { state: isAutoSwitchOn ? t('autoContinueLimits.on') : t('autoContinueLimits.off') }),
+        isAutoSwitchOn ? accountAutoSwitchOffCallback : accountAutoSwitchOnCallback,
+      ),
     ]);
     if (!isGeneral && getState().getClaudeProfileOverride(key) !== undefined) {
       keyboardRows.push([
@@ -243,6 +260,26 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
   function describeApplyOutcome(outcome: ClaudeProfileApplyOutcome): string {
     return t(`account.applied.${outcome}`);
+  }
+
+  /** The auto-switch value the topic (General: the instance) effectively has. */
+  function resolveAutoSwitchEnabled(key: SessionKey, isGeneral: boolean): boolean {
+    return isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key);
+  }
+
+  /**
+   * @description Set whether the bot moves a limited topic to another account by itself (OFF by default: an
+   * account-policy decision the operator opts into) and RETURN the confirmation — the one write path behind
+   * the picker's toggle and `/account autoswitch on|off`. General sets the instance default, a topic its override.
+   */
+  async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
+    const stateWord = enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
+    if (isGeneral) {
+      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled);
+      return t('account.autoSwitchSetGlobal', { state: stateWord });
+    }
+    await getState().setClaudeAutoSwitchOnLimitOverride(key, enabled);
+    return t('account.autoSwitchSetThisTopic', { state: stateWord });
   }
 
   /**
@@ -409,6 +446,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
           await replyToThread(key, await removeProfile(name));
           return;
         }
+        case 'autoswitch': {
+          if (name !== 'on' && name !== 'off') { await replyToThread(key, t('account.usage')); return; }
+          await replyToThread(key, await applyAutoSwitch(key, isGeneral, name === 'on'));
+          return;
+        }
         default:
           await replyToThread(key, t('account.usage'));
       }
@@ -492,6 +534,24 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const result = await removeProfile(name);
       await answerTap(ctx, key, result);
       await rerenderPicker(key, messageId, isGeneral);
+    }));
+
+    for (const [callback, enabled] of [[accountAutoSwitchOnCallback, true], [accountAutoSwitchOffCallback, false]] as const) {
+      bot.action(callback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+        await answerTap(ctx, key, await applyAutoSwitch(key, isGeneral, enabled));
+        await rerenderPicker(key, messageId, isGeneral);
+      }));
+    }
+
+    // «🔁 Switch to <profile>» on a usage-limit notice: a one-shot button — the notice is edited into the
+    // confirmation (keyboard dropped); a stale tap (the episode is over) only says so.
+    bot.action(claudeLimitSwitchCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
+      const parsed = parseClaudeLimitSwitchCallbackData(ctx.match[0]);
+      if (parsed === null) { await ctx.answerCbQuery(); return; }
+      const confirmation = await takeLimitSwitchOffer(key, parsed.episodeId, parsed.name);
+      if (confirmation === null) { await ctx.answerCbQuery(t('account.limitSwitchExpired')); return; }
+      await ctx.answerCbQuery();
+      if (messageId !== null) await editThreadMessage(key, messageId, confirmation);
     }));
   }
 

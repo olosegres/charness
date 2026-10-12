@@ -127,7 +127,13 @@ per-backend controls are optional methods the bot checks before calling.
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
   endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot) plus the
   json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
-  `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`.
+  `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
+  LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
+  `announceUsageLimitOrSwitchAccount`): the limited profile gets `limitedUntil`, the ranking names the other
+  signed-in profiles with fresh usage and room; auto-switch ON (`/account` toggle, OFF by default, same
+  default + override pair as `/auto_continue_limits`) moves the topic (`setClaudeProfileOverride` → the apply
+  re-spawn → `cancelApiRetry` → the continue nudge through `deliverPromptOrBuffer`), OFF puts `acsw_<episode>_<name>`
+  buttons on the limit notice; no candidate ⇒ the wait as before.
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
 - **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);

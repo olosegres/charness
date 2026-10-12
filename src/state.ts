@@ -16,7 +16,7 @@ import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
-import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
+import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ScheduleRecord } from './scheduler/types';
@@ -395,6 +395,14 @@ export interface StateV1 {
   claudeProfiles?: Record<string, ClaudeProfileRecord>;
   claudeProfileDefault?: string;
   claudeProfileOverrides?: Record<string, string>;
+  /**
+   * Auto-switch of the Claude account on a usage limit (`/account`, `utils/claudeLimitSwitch.ts`): whether a
+   * topic whose profile hits a limit is moved to another signed-in profile with room by itself. The same
+   * instance-default + per-thread-override pair as `autoContinueOnLimit*`, but absent ⇒ OFF — the switch is an
+   * account-policy decision the operator opts into.
+   */
+  claudeAutoSwitchOnLimitEnabled?: boolean;
+  claudeAutoSwitchOnLimitOverrides?: Record<string, boolean>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -1787,6 +1795,43 @@ export class StateStore {
         return;
       }
       (this.state.autoContinueOnLimitOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
+  }
+
+  // ── Claude account auto-switch on a usage limit (`/account`) ──
+
+  /** The instance-wide auto-switch default (driven from General). OFF when unset: the switch is opt-in. */
+  getClaudeAutoSwitchOnLimitGlobalDefault(): boolean {
+    return this.state.claudeAutoSwitchOnLimitEnabled ?? false;
+  }
+
+  /** The per-thread auto-switch override, or `undefined` when the thread follows the instance default. */
+  getClaudeAutoSwitchOnLimitOverride(key: SessionKey): boolean | undefined {
+    return this.state.claudeAutoSwitchOnLimitOverrides?.[keyToString(key)];
+  }
+
+  /** Whether the bot may move `key` to another Claude account by itself when its own hits a usage limit. */
+  checkIsClaudeAutoSwitchOnLimitEnabled(key: SessionKey): boolean {
+    return resolveClaudeAutoSwitchOnLimitEnabled(
+      this.state.claudeAutoSwitchOnLimitEnabled,
+      this.getClaudeAutoSwitchOnLimitOverride(key),
+    );
+  }
+
+  /** Set the instance-wide auto-switch default (from General); stored explicitly, like {@link setAutoContinueOnLimitGlobalDefault}. */
+  async setClaudeAutoSwitchOnLimitGlobalDefault(enabled: boolean): Promise<void> {
+    if (this.state.claudeAutoSwitchOnLimitEnabled === enabled) return;
+    this.state.claudeAutoSwitchOnLimitEnabled = enabled;
+    this.scheduleSave();
+  }
+
+  /** Set the per-thread auto-switch override (from a regular topic); the map is created on the first override. */
+  async setClaudeAutoSwitchOnLimitOverride(key: SessionKey, enabled: boolean): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (this.state.claudeAutoSwitchOnLimitOverrides?.[k] === enabled) return;
+      (this.state.claudeAutoSwitchOnLimitOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
   }

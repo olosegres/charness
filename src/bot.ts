@@ -334,7 +334,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError } from './apiErrorRetry';
+import { decideRetryAction, classifyAgentApiError, usageLimitDefaultMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -365,6 +365,14 @@ import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connecto
 import { claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
+import {
+  buildClaudeLimitSwitchCallbackData,
+  decideClaudeLimitSwitch,
+  getClaudeLimitSwitchTapDecision,
+  pickClaudeLimitSwitchCandidates,
+  resolveClaudeLimitedUntil,
+  type ClaudeLimitSwitchPlan,
+} from './utils/claudeLimitSwitch';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 
@@ -1303,6 +1311,12 @@ const limitResumeNoticePinnedMessageId = new Map<string, number>();
  * Cleared by {@link cancelApiRetry} (the user took over / the session went away).
  */
 const autoContinueOffNoticedThreads = new Set<string>();
+/**
+ * The OPEN «switch account» offer per thread (`utils/claudeLimitSwitch.ts`): the limit episode the buttons on
+ * the notice were posted for and the profile that hit the limit. A tap is honoured only while the thread's open
+ * offer is the button's episode; retired with the episode in {@link cancelApiRetry}.
+ */
+const claudeLimitSwitchOffers = new Map<string, { episodeId: number; from: string }>();
 const threadModelLists = new Map<string, string[]>();
 const awaitingModelSelection = new Set<string>();
 const statusCoalescers = new Map<string, StatusCoalesceState>();
@@ -1603,7 +1617,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
-    void announceLimitWait(key, wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
+    void announceUsageLimitOrSwitchAccount(key, cls, Date.now(), wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -1652,7 +1666,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     limitWait = cls.resetAt !== undefined
       ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    void announceLimitWait(key, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
+    void announceUsageLimitOrSwitchAccount(key, cls, action.fireAt, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1775,7 +1789,8 @@ async function announceLimitWait(
   wait: UsageLimitWait,
   texts: LimitWaitTexts,
   isPlainNoticeDue: boolean,
-): Promise<void> {
+  plainNoticeExtra?: object,
+): Promise<{ isPlainNoticePosted: boolean }> {
   let outcome: LimitWaitAnswerOutcome = 'notAnswered';
   if (requestLimitWaitAnswerDeps) {
     try {
@@ -1784,7 +1799,47 @@ async function announceLimitWait(
       console.warn('[requests] limit answer failed:', e instanceof Error ? e.message : e);
     }
   }
-  if (outcome === 'notAnswered' && isPlainNoticeDue) await replyToThread(key, texts.plainNotice);
+  if (outcome !== 'notAnswered' || !isPlainNoticeDue) return { isPlainNoticePosted: false };
+  await replyToThread(key, texts.plainNotice, plainNoticeExtra);
+  return { isPlainNoticePosted: true };
+}
+
+/**
+ * @description A usage limit on a topic, with the account switch in front of the wait (`utils/claudeLimitSwitch.ts`):
+ * when another signed-in Claude profile has room, auto-switch ON moves the topic there at once and the wait is
+ * never announced (the work continues — one line says so); OFF puts «switch to …» buttons on the wait notice
+ * (on a line of their own when an open request's answer replaced the notice). No profile with room, or a
+ * backend without profiles: the wait is announced as before.
+ */
+async function announceUsageLimitOrSwitchAccount(
+  key: SessionKey,
+  cls: AgentApiErrorClass,
+  episodeId: number,
+  wait: UsageLimitWait,
+  texts: LimitWaitTexts,
+  isPlainNoticeDue: boolean,
+): Promise<void> {
+  let plan: ClaudeLimitSwitchPlan & { from: string } = { action: 'none', from: defaultClaudeProfileName };
+  try {
+    plan = await planClaudeLimitSwitch(key, cls, episodeId);
+  } catch (e) {
+    console.warn(`[account] ${keyToString(key)}: the limit switch plan failed:`, e instanceof Error ? e.message : e);
+  }
+  if (plan.action === 'auto') {
+    const to = plan.to;
+    const isSwitched = await switchClaudeAccountAfterLimit(key, plan.from, to, { isAnnounced: true }).catch((e) => {
+      console.warn(`[account] ${keyToString(key)}: the auto-switch to ${to} failed:`, e instanceof Error ? e.message : e);
+      return false;
+    });
+    if (isSwitched) return;
+  }
+  const keyboard = plan.action === 'offer'
+    ? Markup.inlineKeyboard(plan.candidates.map((name) => [
+      Markup.button.callback(t('account.limitSwitchButton', { name }), buildClaudeLimitSwitchCallbackData(episodeId, name)),
+    ]))
+    : undefined;
+  const { isPlainNoticePosted } = await announceLimitWait(key, wait, texts, isPlainNoticeDue, keyboard);
+  if (keyboard && !isPlainNoticePosted) await replyToThread(key, t('account.limitSwitchOffer'), keyboard);
 }
 
 /**
@@ -1862,6 +1917,7 @@ function cancelApiRetry(key: SessionKey): void {
   // error — so neither can re-notify per message.
   clearLimitResumeNotice(key);
   autoContinueOffNoticedThreads.delete(k);
+  claudeLimitSwitchOffers.delete(k);
   // NOTE: intentionally does NOT touch the logged-out notice. `cancelApiRetry`
   // fires on EVERY inbound message (user takeover); clearing the auth notice here
   // would drop the one-notice guard so the user's next prompt (into the STILL
@@ -6660,6 +6716,98 @@ function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimit
   }
 }
 
+/** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
+function getThreadClaudeModel(key: SessionKey): string | null {
+  return getThreadAdapter(key).getCurrentModel?.(key) ?? state.getAgent(key)?.model ?? null;
+}
+
+/** Whether the topic's agent is a Claude backend (a usage limit there is a limit of its account profile). */
+function checkIsClaudeProfileBackend(key: SessionKey): boolean {
+  const adapter = getThreadAdapter(key);
+  return adapter instanceof ClaudeJsonStreamAdapter || adapter instanceof ClaudeCliAdapter;
+}
+
+/**
+ * @description What a usage limit on `key` leads to (`utils/claudeLimitSwitch.ts`): the profile the topic runs
+ * on is marked limited until the reset the error named (else its session window, else the retry's blind delay),
+ * the usage snapshots are brought up to date, and the other signed-in profiles with room for the topic's
+ * model are ranked. An offer is remembered per thread under its episode so only ITS buttons can act on it.
+ * `none` for a non-Claude backend, a non-Telegram conversation, or when no profile can take over.
+ */
+async function planClaudeLimitSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<ClaudeLimitSwitchPlan & { from: string }> {
+  const from = state.resolveClaudeProfileName(key);
+  if (!checkIsTelegramKey(key) || !checkIsClaudeProfileBackend(key)) return { action: 'none', from };
+  const nowMs = Date.now();
+  state.setClaudeProfileLimitedUntil(from, resolveClaudeLimitedUntil({
+    resetAtMs: cls.kind === 'usageLimit' ? cls.resetAt : undefined,
+    usage: state.getClaudeProfileInfo(from)?.usage,
+    existingLimitedUntil: state.getClaudeProfileInfo(from)?.limitedUntil ?? null,
+    nowMs,
+    fallbackMs: usageLimitDefaultMs,
+  }));
+  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+  const candidates = pickClaudeLimitSwitchCandidates({
+    profiles: buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
+    currentName: from,
+    model: getThreadClaudeModel(key),
+    nowMs: Date.now(),
+  });
+  const plan = decideClaudeLimitSwitch({ candidates, isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key) });
+  if (plan.action === 'offer') claudeLimitSwitchOffers.set(keyToString(key), { episodeId, from });
+  else claudeLimitSwitchOffers.delete(keyToString(key));
+  const detail = plan.action === 'auto' ? ` → ${plan.to}` : plan.action === 'offer' ? ` [${plan.candidates.join(', ')}]` : '';
+  console.log(`[account] ${keyToString(key)}: usage limit on ${from}; switch plan: ${plan.action}${detail}`);
+  return { ...plan, from };
+}
+
+/**
+ * @description Move a limited topic onto profile `to` and continue the work there: the topic's pick is set,
+ * its live session re-spawned under the new directory (the `/account` apply path — same conversation), the armed
+ * limit wait disarmed, and the "continue" nudge delivered the way the wait's own resume would deliver it. A
+ * session that works keeps its wait: the switch applies at turn end. Returns whether the work continues now (the
+ * caller announces the wait otherwise). The one-line outcome is posted only when `isAnnounced` — the auto-switch
+ * has no other voice, while a tapped button's notice is edited into the same line by its handler.
+ */
+async function switchClaudeAccountAfterLimit(key: SessionKey, from: string, to: string, options: { isAnnounced: boolean }): Promise<boolean> {
+  const k = keyToString(key);
+  await state.setClaudeProfileOverride(key, to);
+  const outcome = await applyClaudeProfileToThread(key);
+  if (outcome === 'deferred' || outcome === 'restartRequired') {
+    claudeLimitSwitchOffers.delete(k);
+    if (options.isAnnounced) await replyToThread(key, t('account.limitSwitchedDeferred', { from, to }));
+    return false;
+  }
+  cancelApiRetry(key); // retires the offer too: the switch consumed it
+  console.log(`[account] ${k}: switched from ${from} to ${to} after a usage limit (${outcome}); resuming`);
+  if (options.isAnnounced) await replyToThread(key, t('account.limitSwitched', { from, to }));
+  const ensured = await ensureAgentSession(key);
+  if (!ensured.ok) {
+    await replyToThread(key, ensured.message);
+    return true;
+  }
+  const resume = getLimitResumeMessage({
+    continueNudge: t('apiRetry.continueNudge'),
+    untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+  });
+  await deliverPromptOrBuffer(key, resume.text, startupPromptBuffer.checkIsStarting(k));
+  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: resume.isRequestPrompt });
+  return true;
+}
+
+/**
+ * @description A tap on a «switch to <profile>» button of a limit notice: honoured only while the thread's open
+ * offer is the button's episode (a stale notice changes nothing), and only for a profile that still exists and
+ * is signed in. The confirmation to edit the notice into, or `null` when the tap expired.
+ */
+async function takeClaudeLimitSwitchOffer(key: SessionKey, episodeId: number, to: string): Promise<string | null> {
+  const offer = claudeLimitSwitchOffers.get(keyToString(key));
+  if (!offer || getClaudeLimitSwitchTapDecision({ openEpisodeId: offer.episodeId, requestedEpisodeId: episodeId }) === 'expired') return null;
+  if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to) === undefined) return t('account.unknown', { name: to });
+  if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to)?.loggedIn === false) return t('account.notLoggedIn', { name: to });
+  const isSwitched = await switchClaudeAccountAfterLimit(key, offer.from, to, { isAnnounced: false });
+  return isSwitched ? t('account.limitSwitched', { from: offer.from, to }) : t('account.limitSwitchedDeferred', { from: offer.from, to });
+}
+
 /** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
 async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeProfilesReport> {
   await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
@@ -6686,6 +6834,7 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudeProfileToThread,
   applyClaudeProfileEverywhere,
+  takeLimitSwitchOffer: takeClaudeLimitSwitchOffer,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
