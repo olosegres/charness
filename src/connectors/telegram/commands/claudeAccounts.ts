@@ -117,7 +117,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       readClaudeAuthStatus(null),
       ...names.map((name) => readClaudeAuthStatus(resolveDir(name))),
     ]);
-    await Promise.all(names.map((name, index) => recordProfileStatus(name, statuses[index])));
+    await Promise.all([
+      recordProfileStatus(defaultClaudeProfileName, defaultStatus),
+      ...names.map((name, index) => recordProfileStatus(name, statuses[index])),
+    ]);
     return defaultStatus;
   }
 

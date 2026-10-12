@@ -101,6 +101,11 @@ describe('claudeAccounts: /account over its ports', () => {
       ['acct_use_default'],
       ['acct_add', 'acct_login_menu', 'acct_rm_menu'],
     ]);
+    // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
+    assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
+    assert.equal(harness.state.getClaudeProfileRecord('default'), undefined);
+    assert.deepEqual(Object.keys(harness.state.getClaudeProfileRecords()), []);
+    assert.match(picker?.text ?? '', /Usage: % of each window used/);
   });
 
   it('`add <name>` lays the directory out, records the profile and starts its sign-in under that directory', async () => {
