@@ -9,6 +9,7 @@ import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
+import type { ClaudeConfigDirReader } from './claudeConfigDir';
 
 type AdapterFactory = () => AgentAdapter;
 
@@ -41,6 +42,10 @@ function checkAdapterTakesWatermarkWriter(adapter: AgentAdapter): adapter is Age
 
 function checkAdapterTakesLaunchDefaults(adapter: AgentAdapter): adapter is AgentAdapter & { setSessionLaunchDefaultsReader(reader: SessionLaunchDefaultsReader): void } {
   return 'setSessionLaunchDefaultsReader' in adapter && typeof adapter.setSessionLaunchDefaultsReader === 'function';
+}
+
+function checkAdapterTakesClaudeConfigDirReader(adapter: AgentAdapter): adapter is AgentAdapter & { setClaudeConfigDirReader(reader: ClaudeConfigDirReader): void } {
+  return typeof (adapter as { setClaudeConfigDirReader?: unknown }).setClaudeConfigDirReader === 'function';
 }
 
 function checkAdapterTakesJsonStreamTailWriter(adapter: AgentAdapter): adapter is AgentAdapter & { setJsonStreamTailWriter(writer: JsonStreamTailWriter): void } {
@@ -178,6 +183,21 @@ export function registerSessionLaunchDefaultsReader(reader: SessionLaunchDefault
   }
 }
 
+/** The Claude config directory per conversation (the account profile) — same late-wiring idiom. */
+let claudeConfigDirReader: ClaudeConfigDirReader | null = null;
+
+/**
+ * @description Register the reader of a conversation's Claude config directory (its account profile,
+ * `utils/claudeProfiles.ts`). Wired by the bot once its state is loaded; both Claude adapters read it at every
+ * spawn. Until then every process runs on the default profile.
+ */
+export function registerClaudeConfigDirReader(reader: ClaudeConfigDirReader): void {
+  claudeConfigDirReader = reader;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesClaudeConfigDirReader(adapter)) adapter.setClaudeConfigDirReader(reader);
+  }
+}
+
 function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onOutput) adapter.on('output', onOutput);
   if (onStatus) adapter.on('status', onStatus);
@@ -273,6 +293,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (sessionLaunchDefaultsReader && checkAdapterTakesLaunchDefaults(adapter)) {
       adapter.setSessionLaunchDefaultsReader(sessionLaunchDefaultsReader);
+    }
+    if (claudeConfigDirReader && checkAdapterTakesClaudeConfigDirReader(adapter)) {
+      adapter.setClaudeConfigDirReader(claudeConfigDirReader);
     }
   }
   return adapter;

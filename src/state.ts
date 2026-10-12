@@ -17,6 +17,7 @@ import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './ut
 import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from './utils/autoContinueOnLimit';
+import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
@@ -154,6 +155,32 @@ export interface AgentData {
    * `/status`. Optional so older state files stay valid.
    */
   startedAt?: string;
+}
+
+/**
+ * One added Claude account profile (`/account add <name>`): the directory is
+ * `DATA_DIR/claude-profiles/<name>/`; this record is what the picker shows about it
+ * plus room for the balancing phases. All fields but `createdAt` are optional —
+ * a record is written the moment the directory exists, before any login.
+ */
+export interface ClaudeProfileRecord {
+  /** ISO instant the profile was added. */
+  createdAt: string;
+  /** From the last `claude auth status --json` read under the profile's directory. */
+  loggedIn?: boolean;
+  email?: string;
+  /** `pro` / `max` / `team` / `enterprise` — whatever the CLI reports. */
+  subscriptionType?: string;
+  orgName?: string;
+  /** ISO instant of that read. */
+  statusCheckedAt?: string;
+  /**
+   * Reserved for the auto-switch phase: until this instant the profile is known to be at its usage limit and
+   * other topics avoid it. Never written yet.
+   */
+  limitedUntil?: string;
+  /** Reserved for the usage phase: the last usage snapshot read for the profile. Never written yet. */
+  usage?: Record<string, unknown>;
 }
 
 /**
@@ -353,6 +380,18 @@ export interface StateV1 {
    */
   autoContinueOnLimitEnabled?: boolean;
   autoContinueOnLimitOverrides?: Record<string, boolean>;
+  /**
+   * Claude account profiles (`/account`, `utils/claudeProfiles.ts`). `claudeProfiles` is the registry of the
+   * profiles the operator ADDED, keyed by name — `default` (`~/.claude` itself) is never in it. A record holds
+   * what the picker shows (the last `claude auth status` read) and leaves room for the balancing phases
+   * (`limitedUntil`, a usage snapshot). `claudeProfileDefault` is the INSTANCE-WIDE pick driven from General
+   * (absent ⇒ `default`); `claudeProfileOverrides` the per-thread picks keyed by {@link SessionKey} string, a
+   * present entry winning over the default. Same discipline as the `autoContinueOnLimit*` pair: optional so
+   * older state files stay valid, lifecycle-independent (only `/account` mutates them).
+   */
+  claudeProfiles?: Record<string, ClaudeProfileRecord>;
+  claudeProfileDefault?: string;
+  claudeProfileOverrides?: Record<string, string>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -1745,6 +1784,126 @@ export class StateStore {
         return;
       }
       (this.state.autoContinueOnLimitOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
+  }
+
+  // ── Claude account profiles (`/account`) ──
+
+  /** The added profiles by name — `default` is never among them. */
+  getClaudeProfileRecords(): Readonly<Record<string, ClaudeProfileRecord>> {
+    return this.state.claudeProfiles ?? {};
+  }
+
+  getClaudeProfileRecord(name: string): ClaudeProfileRecord | undefined {
+    return this.state.claudeProfiles?.[name];
+  }
+
+  /** The names the resolver treats as known: the added profiles (`default` is implicit). */
+  getClaudeProfileNames(): Set<string> {
+    return new Set(Object.keys(this.state.claudeProfiles ?? {}));
+  }
+
+  /**
+   * @description Add or update a profile record (merge; `createdAt` is kept once written). Flushed
+   * immediately rather than debounced: the record is the registry entry of a directory that already holds
+   * a login, and a crash between the two would leave an orphan directory the picker never shows.
+   */
+  async upsertClaudeProfileRecord(name: string, patch: Partial<ClaudeProfileRecord>): Promise<void> {
+    const existing = this.state.claudeProfiles?.[name];
+    (this.state.claudeProfiles ??= {})[name] = {
+      ...existing,
+      ...patch,
+      createdAt: existing?.createdAt ?? patch.createdAt ?? new Date().toISOString(),
+    };
+    await this.flush();
+  }
+
+  /**
+   * @description Drop a profile from the registry together with every per-thread pick of it (those threads
+   * return to the instance default) and the instance default itself when it named this profile. Returns the
+   * threads whose pick was dropped, so the caller can re-point their live sessions.
+   */
+  async removeClaudeProfileRecord(name: string): Promise<SessionKey[]> {
+    const dropped: SessionKey[] = [];
+    if (this.state.claudeProfiles) {
+      delete this.state.claudeProfiles[name];
+      if (Object.keys(this.state.claudeProfiles).length === 0) delete this.state.claudeProfiles;
+    }
+    if (this.state.claudeProfileDefault === name) delete this.state.claudeProfileDefault;
+    for (const [keyStr, picked] of Object.entries(this.state.claudeProfileOverrides ?? {})) {
+      if (picked !== name) continue;
+      delete this.state.claudeProfileOverrides![keyStr];
+      // A key of an unregistered platform is dropped from the map; there is nothing to re-point.
+      const key = tryKeyFromString(keyStr);
+      if (key) dropped.push(key);
+    }
+    if (this.state.claudeProfileOverrides && Object.keys(this.state.claudeProfileOverrides).length === 0) {
+      delete this.state.claudeProfileOverrides;
+    }
+    await this.flush();
+    return dropped;
+  }
+
+  /** The instance-wide profile pick (General), `default` when none was ever set. */
+  getClaudeProfileGlobalDefault(): string {
+    return resolveClaudeProfileNameFromSelection({
+      globalDefault: this.state.claudeProfileDefault,
+      threadOverride: undefined,
+      knownNames: this.getClaudeProfileNames(),
+    });
+  }
+
+  /** The thread's own pick as stored (it may name a removed profile), or `undefined` when it follows the default. */
+  getClaudeProfileOverride(key: SessionKey): string | undefined {
+    return this.state.claudeProfileOverrides?.[keyToString(key)];
+  }
+
+  /** The profile the thread effectively uses — override, then instance default, then `default`. */
+  resolveClaudeProfileName(key: SessionKey): string {
+    return resolveClaudeProfileNameFromSelection({
+      globalDefault: this.state.claudeProfileDefault,
+      threadOverride: this.getClaudeProfileOverride(key),
+      knownNames: this.getClaudeProfileNames(),
+    });
+  }
+
+  /** Threads whose stored pick names `name` (General's default is not a thread). */
+  listClaudeProfileOverrideKeys(name: string): SessionKey[] {
+    const keys: SessionKey[] = [];
+    for (const [keyStr, picked] of Object.entries(this.state.claudeProfileOverrides ?? {})) {
+      if (picked !== name) continue;
+      const key = tryKeyFromString(keyStr);
+      if (key) keys.push(key);
+    }
+    return keys;
+  }
+
+  /** Set the instance-wide pick from General (`default` clears it). Debounced — a preference. */
+  async setClaudeProfileGlobalDefault(name: string): Promise<void> {
+    const next = name === defaultClaudeProfileName ? undefined : name;
+    if (this.state.claudeProfileDefault === next) return;
+    if (next === undefined) delete this.state.claudeProfileDefault;
+    else this.state.claudeProfileDefault = next;
+    this.scheduleSave();
+  }
+
+  /**
+   * @description Set the thread's own pick; `null` makes the thread follow the instance default again. A pick
+   * of `default` is stored EXPLICITLY (it must win over a non-default instance default). Debounced.
+   */
+  async setClaudeProfileOverride(key: SessionKey, name: string | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if ((this.state.claudeProfileOverrides?.[k] ?? null) === name) return;
+      if (name === null) {
+        delete this.state.claudeProfileOverrides?.[k];
+        if (this.state.claudeProfileOverrides && Object.keys(this.state.claudeProfileOverrides).length === 0) {
+          delete this.state.claudeProfileOverrides;
+        }
+      } else {
+        (this.state.claudeProfileOverrides ??= {})[k] = name;
+      }
       this.scheduleSave();
     });
   }

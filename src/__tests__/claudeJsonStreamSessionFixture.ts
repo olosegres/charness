@@ -51,6 +51,8 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     outstandingToolUseIds: new Set(),
     model: null,
     reportedModel: null,
+    configDir: null,
+    isConfigDirSwitchPending: false,
     effort: null,
     currentResponseText: '',
     emittedLength: 0,

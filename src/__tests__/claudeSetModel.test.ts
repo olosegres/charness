@@ -29,6 +29,7 @@ function injectActiveSession(adapter: ClaudeCliAdapter, key: SessionKey): void {
     workDir: '/tmp/work',
     sessionName: `claude-${keyToString(key)}`,
     claudeSessionId: '00000000-0000-4000-8000-000000000000',
+    configDir: null,
     isActive: true,
     handledAutoEnter: false,
     handledAutoAccept: false,

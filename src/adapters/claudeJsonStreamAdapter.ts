@@ -25,6 +25,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
+import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader } from './claudeConfigDir';
 import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
@@ -76,6 +77,7 @@ import {
 import {
   buildJsonStreamTmuxSessionName,
   buildWrapperScript,
+  readWrapperScriptConfigDir,
   checkIsPidAlive,
   createStdoutTailState,
   decodeStdoutTailChunk,
@@ -223,6 +225,11 @@ export interface StreamSession {
    *  so `/status` and the pinned banner can name the running model at all. */
   reportedModel: string | null;
   effort: string | null;
+  /** The `CLAUDE_CONFIG_DIR` this process runs with (its account profile, `utils/claudeProfiles.ts`); `null` =
+   *  the default profile. Set at spawn from the reader, recovered from the wrapper script at adopt. */
+  configDir: string | null;
+  /** The topic's profile changed while the process worked: re-spawn under the reader's directory at turn end. */
+  isConfigDirSwitchPending: boolean;
   // — answer accumulation —
   currentResponseText: string;
   emittedLength: number;
@@ -373,6 +380,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private seenWatermarkWriter: SeenWatermarkWriter | null = null;
   private jsonStreamTailWriter: JsonStreamTailWriter | null = null;
   private sessionLaunchDefaultsReader: SessionLaunchDefaultsReader | null = null;
+  private claudeConfigDirReader: ClaudeConfigDirReader | null = null;
   /** The stops in flight — the module-level map shared by both lifecycles' instances (see {@link stopsInFlightByKey}). */
   private readonly stopsInFlight = stopsInFlightByKey;
 
@@ -390,6 +398,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   setSessionLaunchDefaultsReader(reader: SessionLaunchDefaultsReader): void {
     this.sessionLaunchDefaultsReader = reader;
+  }
+
+  setClaudeConfigDirReader(reader: ClaudeConfigDirReader): void {
+    this.claudeConfigDirReader = reader;
+  }
+
+  /** The config directory the conversation's next process must start with (its account profile). */
+  private resolveConfigDir(key: SessionKey): string | null {
+    return this.claudeConfigDirReader?.(key) ?? null;
   }
 
   private getLaunchOptions(key: SessionKey): { model: string | null; effort: string } {
@@ -415,13 +432,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async startSession(key: SessionKey, workDir: string, _args?: string, sessionId?: string): Promise<void> {
     await this.stopSessionInternal(key);
     const id = sessionId && checkIsValidUuid(sessionId) ? sessionId : randomUUID();
-    await this.spawnSession(key, workDir, id, { ...this.getLaunchOptions(key), resume: false });
+    await this.spawnSession(key, workDir, id, { ...this.getLaunchOptions(key), resume: false, configDir: this.resolveConfigDir(key) });
   }
 
   async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
     if (!checkIsValidUuid(sessionId)) throw new Error(`Invalid sessionId: ${sessionId}`);
-    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), resume: true });
+    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), resume: true, configDir: this.resolveConfigDir(key) });
 
     // Post the short last-N-turn context block ONLY on the explicit user resume
     // (`/sessions` pick) — a silent re-attach stays quiet (ResumeSessionOptions).
@@ -449,7 +466,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     key: SessionKey,
     workDir: string,
     sessionId: string,
-    opts: { effort: string | null; model: string | null; resume: boolean },
+    opts: { effort: string | null; model: string | null; resume: boolean; configDir: string | null },
   ): Promise<void> {
     if (!checkIsInstalled('claude')) {
       this.emit('output', key, 'Installing Claude Code...');
@@ -499,7 +516,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const sessionDir = resolveJsonStreamSessionDir(resolveDataDir(), key);
     const paths = getJsonStreamSessionPaths(sessionDir);
     const tmuxName = buildJsonStreamTmuxSessionName(key);
-    console.log(`[ClaudeJson] spawn ${keyToString(key)} session=${sessionId} resume=${isResumable} effort=${opts.effort} model=${opts.model ?? 'default'} (tmux ${tmuxName})`);
+    console.log(`[ClaudeJson] spawn ${keyToString(key)} session=${sessionId} resume=${isResumable} effort=${opts.effort} model=${opts.model ?? 'default'} configDir=${opts.configDir ?? 'default'} (tmux ${tmuxName})`);
 
     let pid: number;
     let fifoFd: number;
@@ -508,7 +525,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       fs.rmSync(sessionDir, { recursive: true, force: true });
       fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
       await execFilePromise('mkfifo', [paths.stdinFifo]);
-      fs.writeFileSync(paths.wrapperFile, buildWrapperScript(this.claudePath, args, workDir, paths, getClaudePlatformEnvironment(key)), { mode: 0o755 });
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript(this.claudePath, args, workDir, paths, getClaudePlatformEnvironment(key), opts.configDir), { mode: 0o755 });
       // A stale same-name tmux session (crashed bot / pre-adopt build) would make
       // `new-session` fail — and must not keep running unowned next to ours.
       await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(tmuxName));
@@ -537,6 +554,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
+      configDir: opts.configDir, isConfigDirSwitchPending: false,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -841,6 +859,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
       model: null, reportedModel: null, effort: null,
+      // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1590,6 +1610,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.applyTurnEnd(session, action);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
     this.emit('turnEnded', session.key);
+    this.applyPendingConfigDirSwitch(session);
   }
 
   private applyTurnEnd(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'turnEnd' }>): void {
@@ -1891,8 +1912,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * intermediate exit is suppressed (`isRespawning`) so the bot sees no
    * closed/stopped churn.
    */
-  private async respawnWithChange(session: StreamSession, change: { model: string | null; effort: string | null }): Promise<void> {
+  private async respawnWithChange(
+    session: StreamSession,
+    change: { model: string | null; effort: string | null; configDir?: string | null },
+  ): Promise<void> {
     const { key, workDir, sessionId } = session;
+    const configDir = change.configDir === undefined ? session.configDir : change.configDir;
     session.isRespawning = true;
     this.rejectQuestion(key);
     await session.stdinWriteChain.catch(() => { /* already logged */ });
@@ -1902,7 +1927,53 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* gone */ }
     await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     // spawnSession lays the host dir out fresh and replaces the map entry.
-    await this.spawnSession(key, workDir, sessionId, { effort: change.effort, model: change.model, resume: true });
+    await this.spawnSession(key, workDir, sessionId, { effort: change.effort, model: change.model, resume: true, configDir });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Account profile (`/account`) — the spawn's CLAUDE_CONFIG_DIR; a live change re-spawns
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** The `CLAUDE_CONFIG_DIR` the live process runs with (`null` = default profile); `undefined` without a live process. */
+  getSessionClaudeConfigDir(key: SessionKey): string | null | undefined {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? session.configDir : undefined;
+  }
+
+  /**
+   * @description Bring the live process onto the account profile its conversation resolves to NOW: nothing
+   * when it already runs there; a re-spawn with `--resume` (the `/model` path — same conversation, model and
+   * effort kept) when it is idle; deferred to the end of its turn when it works, since a re-spawn kills the turn
+   * and any background task. A sleeping conversation needs nothing: its next resume reads the reader.
+   */
+  async applyClaudeConfigDir(key: SessionKey): Promise<ClaudeConfigDirApplyResult> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return 'inactive';
+    const wanted = this.resolveConfigDir(key);
+    if (wanted === session.configDir) {
+      session.isConfigDirSwitchPending = false;
+      return 'unchanged';
+    }
+    if (this.checkIsWorking(key)) {
+      session.isConfigDirSwitchPending = true;
+      return 'deferred';
+    }
+    session.isConfigDirSwitchPending = false;
+    console.log(`[ClaudeJson] ${keyToString(key)}: re-spawning under configDir=${wanted ?? 'default'} (was ${session.configDir ?? 'default'})`);
+    await this.respawnWithChange(session, { model: session.model, effort: session.effort, configDir: wanted });
+    return 'respawned';
+  }
+
+  /** A deferred profile switch runs once the turn that held it off has ended (and nothing else works). */
+  private applyPendingConfigDirSwitch(session: StreamSession): void {
+    if (!session.isConfigDirSwitchPending || !session.isActive) return;
+    if (this.checkIsWorking(session.key)) return; // a background task still runs: the next turn end looks again
+    // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down.
+    setTimeout(() => {
+      void this.applyClaudeConfigDir(session.key).catch((e) =>
+        console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e),
+      );
+    }, 0).unref?.();
   }
 
   private clearTimers(session: StreamSession): void {

@@ -34,6 +34,8 @@ import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { claudeLoginPastePromptRe } from '../utils/claudeAuthLogin';
+import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
+import type { ClaudeConfigDirReader } from './claudeConfigDir';
 import {
   SPINNER_TICK_RE,
   POST_THINKING_TRAILER_RE,
@@ -113,6 +115,8 @@ export interface ClaudeSession {
   sessionName: string;
   /** UUID we pass via `--session-id` (or, on resume, via `--resume`). */
   claudeSessionId: string;
+  /** The `CLAUDE_CONFIG_DIR` the pane's claude runs with (its account profile); `null` = the default profile. */
+  configDir: string | null;
   queue: SerialQueue;
   pollTimer: NodeJS.Timeout | null;
   lastContent: string;
@@ -482,6 +486,15 @@ function parseTmuxSessionName(name: string): SessionKey | null {
  */
 export function checkIsValidUuid(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+/**
+ * @description The `env CLAUDE_CONFIG_DIR=<dir>` argv prefix of a pane whose
+ * conversation uses a non-default account profile; empty for the default
+ * (`utils/claudeProfiles.ts`). Quoted with the rest of the argv by the caller.
+ */
+export function buildConfigDirEnvPrefix(configDir: string | null): string[] {
+  return configDir === null ? [] : ['env', `${claudeConfigDirVariableName}=${configDir}`];
 }
 
 /**
@@ -2963,6 +2976,22 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * wired → reads fall back to all-fields-`minimal`.
    */
   private displayPrefsReader: DisplayPrefsReader | null = null;
+  private claudeConfigDirReader: ClaudeConfigDirReader | null = null;
+
+  setClaudeConfigDirReader(reader: ClaudeConfigDirReader): void {
+    this.claudeConfigDirReader = reader;
+  }
+
+  /** The config directory the conversation's next pane must start with (its account profile). */
+  private resolveConfigDir(key: SessionKey): string | null {
+    return this.claudeConfigDirReader?.(key) ?? null;
+  }
+
+  /** The `CLAUDE_CONFIG_DIR` the live pane runs with (`null` = default profile); `undefined` without a live session. */
+  getSessionClaudeConfigDir(key: SessionKey): string | null | undefined {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? session.configDir : undefined;
+  }
 
   /** @description Inject the per-thread display-prefs reader (see the field's JSDoc). */
   setDisplayPrefsReader(reader: DisplayPrefsReader): void {
@@ -3382,7 +3411,11 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     // The `--settings` file carries the PreCompact hook that gives an
     // overflow-triggered compaction the bot's summary guidance.
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
+    const configDir = this.resolveConfigDir(key);
     const claudeArgv: string[] = [
+      // A non-default account profile: `env CLAUDE_CONFIG_DIR=<dir>` in front (the pane's shell
+      // runs it, so a child claude the agent starts inherits the same account).
+      ...buildConfigDirEnvPrefix(configDir),
       claudePath,
       // Followed by an option on purpose: `--disallowedTools` takes several values.
       ...getClaudePlatformFlags(key),
@@ -3423,6 +3456,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       workDir,
       sessionName,
       claudeSessionId,
+      configDir,
       isActive: true,
       handledAutoEnter: false,
       handledAutoAccept: false,
@@ -4001,7 +4035,9 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     // fresh one would (plan §19). Argv-style shell-quoting mirrors
     // `startSession` (audit S1).
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
+    const configDir = this.resolveConfigDir(key);
     const claudeArgv: string[] = [
+      ...buildConfigDirEnvPrefix(configDir),
       claudePath,
       // Followed by an option on purpose: `--disallowedTools` takes several values.
       ...getClaudePlatformFlags(key),
@@ -4034,6 +4070,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       workDir,
       sessionName,
       claudeSessionId: sessionId,
+      configDir,
       isActive: true,
       handledAutoEnter: false,
       handledAutoAccept: false,
@@ -4176,12 +4213,16 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       return true;
     }
 
-    console.log(`[Claude] adopt: re-attaching to ${sessionName} in ${workDir}`);
+    // The account the surviving pane runs on is in its own start command; the bot compares it with the topic's pick.
+    const startCommand = await tmuxAsync('display-message', '-p', '-t', getTmuxPaneTarget(sessionName), '#{pane_start_command}');
+    const configDir = parseClaudeConfigDirFromCommand(startCommand ?? '');
+    console.log(`[Claude] adopt: re-attaching to ${sessionName} in ${workDir} (configDir=${configDir ?? 'default'})`);
     const session = this.createSession({
       key,
       workDir,
       sessionName,
       claudeSessionId,
+      configDir,
       isActive: true,
       handledAutoEnter: true,  // don't try to auto-Enter on a session that's already past startup
       handledAutoAccept: true, // same — bypass-permissions was accepted on the original launch

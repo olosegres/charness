@@ -33,6 +33,7 @@ import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 import type { JsonStreamTailOffset } from '../types';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
 import { shellSingleQuote } from './tmuxExec';
+import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from './claudeProfiles';
 
 /** Subdirectory of `DATA_DIR` that holds every thread's json-stream host dir. */
 export const jsonStreamRootDirName = 'jsonstream';
@@ -146,8 +147,13 @@ export function parseJsonStreamTmuxSessionName(name: string): SessionKey | null 
  * even if the tmux server environment carries a key. With an `environment`
  * (a tracker conversation, R32) claude gets exactly those variables instead —
  * `env -i`, so nothing of the tmux server's environment reaches it (no API key
- * either). All embedded strings are single-quoted; `claudePath` must be ABSOLUTE
- * (tmux server PATH differs).
+ * either). A non-default Claude account profile adds `CLAUDE_CONFIG_DIR=<dir>` to
+ * either `env` form (`utils/claudeProfiles.ts`); the default profile adds nothing,
+ * so the wrapper of a topic that never picked an account is byte-identical to
+ * the golden shape. The variable sits in the process environment — not only in
+ * the CLI's own reading of it — so a child `claude` the agent starts inherits the
+ * same account. All embedded strings are single-quoted; `claudePath` must be
+ * ABSOLUTE (tmux server PATH differs).
  */
 export function buildWrapperScript(
   claudePath: string,
@@ -155,11 +161,13 @@ export function buildWrapperScript(
   workDir: string,
   paths: JsonStreamSessionPaths,
   environment: Readonly<Record<string, string>> | null = null,
+  configDir: string | null = null,
 ): string {
   const command = [claudePath, ...args].map(shellSingleQuote).join(' ');
+  const configDirAssignment = configDir === null ? [] : [shellSingleQuote(`${claudeConfigDirVariableName}=${configDir}`)];
   const envCommand = environment === null
-    ? 'env -u ANTHROPIC_API_KEY'
-    : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`))].join(' ');
+    ? ['env', '-u', 'ANTHROPIC_API_KEY', ...configDirAssignment].join(' ')
+    : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`)), ...configDirAssignment].join(' ');
   return `#!/bin/sh
 cd ${shellSingleQuote(workDir)} || exit ${wrapperCdFailExitCode}
 ${envCommand} ${command} \\
@@ -169,6 +177,19 @@ echo $CHILD > ${shellSingleQuote(paths.pidFile)}
 wait $CHILD
 echo $? > ${shellSingleQuote(paths.exitCodeFile)}
 `;
+}
+
+/**
+ * @description The `CLAUDE_CONFIG_DIR` a persisted wrapper script starts claude with, `null` for the default
+ * profile or an unreadable script. Read at adopt: the running process keeps the account it was spawned with,
+ * and the bot compares it with the profile its topic has now.
+ */
+export function readWrapperScriptConfigDir(wrapperFile: string): string | null {
+  try {
+    return parseClaudeConfigDirFromCommand(fs.readFileSync(wrapperFile, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 /**

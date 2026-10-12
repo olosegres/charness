@@ -256,6 +256,24 @@ code as the fallback), clearing the pinned logged-out notice on success. The pty
 is a bot child (NOT restart-safe). The tmux backend's `/login` is unchanged (its
 TUI hosts the paste flow itself).
 
+## Account profiles — `CLAUDE_CONFIG_DIR` per process
+
+A topic's Claude session runs on the account profile the topic resolves to (`/account`,
+`utils/claudeProfiles.ts`). Both Claude adapters read the directory through the
+`ClaudeConfigDirReader` registered at boot (`registerClaudeConfigDirReader`, the same
+late-wiring idiom as the launch defaults) at EVERY spawn: json-stream puts
+`CLAUDE_CONFIG_DIR=<dir>` into the wrapper's `env` call (`buildWrapperScript`, default
+profile → the golden shape unchanged), tmux-scrape prefixes the pane command with
+`env CLAUDE_CONFIG_DIR=<dir>`. The variable is in the process environment, so a child
+`claude` the agent starts inherits the account. A running process keeps the account it
+was spawned with — the CLI would re-read swapped credential files live, so the bot
+never swaps files under `~/.claude`. A live change goes through the `/model` re-spawn
+(`applyClaudeConfigDir`: `--resume` of the same id when idle, deferred to the end of
+the turn when the process works, nothing for a sleeping session — its resume reads the
+reader); after a bot restart an adopted process reports the directory recovered from
+its own wrapper script / `pane_start_command` (`getSessionClaudeConfigDir`), and a
+mismatch with the topic's current pick is corrected at the next idle point.
+
 ## Shared session store
 
 Both Claude backends drive the same `claude` binary against

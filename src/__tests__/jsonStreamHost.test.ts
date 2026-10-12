@@ -30,6 +30,7 @@ import {
   buildJsonStreamTmuxSessionName,
   resolveAdoptedTail,
   buildWrapperScript,
+  readWrapperScriptConfigDir,
   createStdoutTailState,
   decodeStdoutTailChunk,
   getJsonStreamSessionPaths,
@@ -44,6 +45,7 @@ import {
   wrapperCdFailExitCode,
   writeFifoText,
 } from '../utils/jsonStreamHost';
+import { parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -90,6 +92,41 @@ echo $? > '/data/dir/jsonstream/-100_1/exitcode'
     );
   });
 });
+
+describe('buildWrapperScript with a Claude account profile', () => {
+  it('adds CLAUDE_CONFIG_DIR to the env call only for a non-default profile, and the value reads back from the script', () => {
+    const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
+    const defaultScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, null);
+    assert.match(defaultScript, /^env -u ANTHROPIC_API_KEY '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.equal(readWrapperScriptConfigDirFromText(defaultScript), null);
+
+    const profileScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, "/data/dir/claude-profiles/it's-work");
+    assert.match(profileScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/it'\\''s-work' '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.equal(readWrapperScriptConfigDirFromText(profileScript), "/data/dir/claude-profiles/it's-work");
+
+    const trackerScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, { HOME: '/home/user' }, '/data/dir/claude-profiles/work');
+    assert.match(trackerScript, /^env -i 'HOME=\/home\/user' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/work' '\/opt\/bin\/claude' '-p' \\$/m);
+  });
+
+  it('readWrapperScriptConfigDir reads a persisted wrapper and tolerates a missing file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wrapper-'));
+    try {
+      const paths = getJsonStreamSessionPaths(dir);
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, '/data/dir/claude-profiles/work'));
+      assert.equal(readWrapperScriptConfigDir(paths.wrapperFile), '/data/dir/claude-profiles/work');
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths));
+      assert.equal(readWrapperScriptConfigDir(paths.wrapperFile), null);
+      assert.equal(readWrapperScriptConfigDir(path.join(dir, 'absent.sh')), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** The parser the adopt path applies to the persisted wrapper, run on an in-memory script. */
+function readWrapperScriptConfigDirFromText(script: string): string | null {
+  return parseClaudeConfigDirFromCommand(script);
+}
 
 describe('pid / exitcode file readers', () => {
   it('parse strict digits and return null for missing or garbage files', () => {
