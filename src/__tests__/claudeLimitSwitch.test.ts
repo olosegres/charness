@@ -1,29 +1,22 @@
 /**
- * @description Unit tests for {@link ../utils/claudeLimitSwitch} — switching a topic to another Claude account
- * profile on a usage limit: the opt-in toggle (OFF by default), who may take the work over (signed in, not
- * limited, fresh usage with room on the model's windows, never the limited profile itself), the auto / offer /
- * none decision, the limited-until mark, and the button codec with its stale-tap guard.
+ * @description Unit tests for {@link ../utils/claudeLimitSwitch} — the within-Claude account ranking a usage
+ * limit falls back to when no fallback chain is configured (`utils/fallbackChain.ts` holds the chain, the
+ * decision and the buttons): the opt-in toggle (OFF by default), who may take the work over (signed in, not
+ * limited, fresh usage with room on the model's windows, never the limited profile itself) and the
+ * limited-until mark.
  *
- * A real usage limit is not inducible on demand, so this table is the proof that the auto-switch can never
- * loop onto an exhausted account and that an old notice's button can never move a topic later.
+ * A real usage limit is not inducible on demand, so this table is the proof that the ranking can never name an
+ * exhausted account.
  */
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
-  buildClaudeLimitSwitchCallbackData,
-  claudeLimitSwitchCallbackPrefix,
-  claudeLimitSwitchCallbackRe,
-  claudeLimitSwitchMaxOffers,
-  decideClaudeLimitSwitch,
-  getClaudeLimitSwitchTapDecision,
-  parseClaudeLimitSwitchCallbackData,
   pickClaudeLimitSwitchCandidates,
   resolveClaudeAutoSwitchOnLimitEnabled,
   resolveClaudeLimitedUntil,
 } from '../utils/claudeLimitSwitch';
 import type { ClaudeProfileUsageView, ClaudeUsageSnapshot } from '../utils/claudeUsage';
-import { checkIsCallbackDataWithinLimit } from '../utils/modelPickerPlan';
 
 const nowMs = Date.parse('2026-10-12T10:00:00.000Z');
 
@@ -119,19 +112,6 @@ test('candidates: the default profile may take over too, when another one is at 
   assert.deepEqual(candidates, ['default']);
 });
 
-test('decision: no candidate → none, whatever the toggle says (the auto-switch never loops)', () => {
-  assert.deepEqual(decideClaudeLimitSwitch({ candidates: [], isAutoSwitchEnabled: true }), { action: 'none' });
-  assert.deepEqual(decideClaudeLimitSwitch({ candidates: [], isAutoSwitchEnabled: false }), { action: 'none' });
-});
-
-test('decision: toggle ON → auto to the best; OFF → an offer capped at the first few', () => {
-  assert.deepEqual(decideClaudeLimitSwitch({ candidates: ['a', 'b', 'c'], isAutoSwitchEnabled: true }), { action: 'auto', to: 'a' });
-  assert.deepEqual(decideClaudeLimitSwitch({ candidates: ['a', 'b', 'c'], isAutoSwitchEnabled: false }), {
-    action: 'offer',
-    candidates: ['a', 'b'].slice(0, claudeLimitSwitchMaxOffers),
-  });
-});
-
 test('limited-until: the error\'s reset wins, else the session window ahead, else the fallback; a later mark is kept', () => {
   const usage = buildUsage({ session: 100, weekly: 10, resetsAt: '2026-10-12T13:00:00.000Z' });
   assert.equal(
@@ -155,27 +135,4 @@ test('limited-until: the error\'s reset wins, else the session window ahead, els
     resolveClaudeLimitedUntil({ resetAtMs: Date.parse('2026-10-12T11:30:00.000Z'), usage, existingLimitedUntil: '2026-10-12T15:00:00.000Z', nowMs, fallbackMs: 3_600_000 }),
     '2026-10-12T15:00:00.000Z',
   );
-});
-
-test('button data: bakes episode and name, round-trips, and the longest name fits Telegram\'s 64-byte cap', () => {
-  const longest = 'a'.repeat(32);
-  const data = buildClaudeLimitSwitchCallbackData(nowMs, longest);
-  assert.ok(data.startsWith(claudeLimitSwitchCallbackPrefix));
-  assert.ok(checkIsCallbackDataWithinLimit(data), `${data.length} bytes`);
-  assert.deepEqual(parseClaudeLimitSwitchCallbackData(data), { episodeId: nowMs, name: longest });
-  assert.deepEqual(parseClaudeLimitSwitchCallbackData(buildClaudeLimitSwitchCallbackData(1, 'default')), { episodeId: 1, name: 'default' });
-  assert.ok(claudeLimitSwitchCallbackRe.test(data));
-});
-
-test('button data: foreign or malformed data is null', () => {
-  assert.equal(parseClaudeLimitSwitchCallbackData('acct_use_work'), null);
-  assert.equal(parseClaudeLimitSwitchCallbackData('acsw_x_work'), null);
-  assert.equal(parseClaudeLimitSwitchCallbackData('acsw_1_Work'), null);
-  assert.equal(parseClaudeLimitSwitchCallbackData('acsw_1_'), null);
-});
-
-test('tap: only the open episode\'s button switches; no open offer or another episode is a stale tap', () => {
-  assert.equal(getClaudeLimitSwitchTapDecision({ openEpisodeId: nowMs, requestedEpisodeId: nowMs }), 'switch');
-  assert.equal(getClaudeLimitSwitchTapDecision({ openEpisodeId: nowMs + 1, requestedEpisodeId: nowMs }), 'expired');
-  assert.equal(getClaudeLimitSwitchTapDecision({ openEpisodeId: null, requestedEpisodeId: nowMs }), 'expired');
 });

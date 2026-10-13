@@ -365,18 +365,23 @@ import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connecto
 import { claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
+import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
 import {
-  buildClaudeLimitSwitchCallbackData,
-  decideClaudeLimitSwitch,
-  getClaudeLimitSwitchTapDecision,
-  pickClaudeLimitSwitchCandidates,
-  resolveClaudeLimitedUntil,
-  type ClaudeLimitSwitchPlan,
-} from './utils/claudeLimitSwitch';
+  buildFallbackSwitchCallbackData,
+  buildOpenCodeModelLabel,
+  decideFallbackSwitch,
+  formatFallbackEntryLabel,
+  getFallbackSwitchTapDecision,
+  parseOpenCodeModelLabel,
+  pickFallbackCandidates,
+  resolveOpenCodeLimitedUntil,
+  type FallbackChainEntry,
+  type FallbackDetection,
+  type FallbackSwitchPlan,
+} from './utils/fallbackChain';
+import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
-import { parseOpenCodeModelLabel, type FallbackChainEntry, type FallbackDetection } from './utils/fallbackChain';
-import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENV parsing & fatal validation
@@ -1314,11 +1319,11 @@ const limitResumeNoticePinnedMessageId = new Map<string, number>();
  */
 const autoContinueOffNoticedThreads = new Set<string>();
 /**
- * The OPEN «switch account» offer per thread (`utils/claudeLimitSwitch.ts`): the limit episode the buttons on
- * the notice were posted for and the profile that hit the limit. A tap is honoured only while the thread's open
- * offer is the button's episode; retired with the episode in {@link cancelApiRetry}.
+ * The OPEN «switch» offer per thread (`utils/fallbackChain.ts`): the limit episode the buttons on the notice
+ * were posted for, the rung the topic was on and the candidate list the buttons index into. A tap is honoured
+ * only while the thread's open offer is the button's episode; retired with the episode in {@link cancelApiRetry}.
  */
-const claudeLimitSwitchOffers = new Map<string, { episodeId: number; from: string }>();
+const fallbackSwitchOffers = new Map<string, { episodeId: number; from: FallbackChainEntry | null; candidates: FallbackChainEntry[] }>();
 const threadModelLists = new Map<string, string[]>();
 const awaitingModelSelection = new Set<string>();
 const statusCoalescers = new Map<string, StatusCoalesceState>();
@@ -1619,7 +1624,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
-    void announceUsageLimitOrSwitchAccount(key, cls, Date.now(), wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
+    void announceUsageLimitOrSwitch(key, cls, Date.now(), wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -1668,7 +1673,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     limitWait = cls.resetAt !== undefined
       ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    void announceUsageLimitOrSwitchAccount(key, cls, action.fireAt, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
+    void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1807,13 +1812,13 @@ async function announceLimitWait(
 }
 
 /**
- * @description A usage limit on a topic, with the account switch in front of the wait (`utils/claudeLimitSwitch.ts`):
- * when another signed-in Claude profile has room, auto-switch ON moves the topic there at once and the wait is
- * never announced (the work continues — one line says so); OFF puts «switch to …» buttons on the wait notice
- * (on a line of their own when an open request's answer replaced the notice). No profile with room, or a
- * backend without profiles: the wait is announced as before.
+ * @description A usage limit on a topic, with the fallback switch in front of the wait (`utils/fallbackChain.ts`):
+ * when a rung of the chain (or, without a chain, another signed-in Claude profile with room) can take the work
+ * over, auto-switch ON moves the topic there at once and the wait is never announced (the work continues — one
+ * line says so); OFF puts «switch to …» buttons on the wait notice (on a line of their own when an open request's
+ * answer replaced the notice). No rung available, or a backend without accounts: the wait is announced as before.
  */
-async function announceUsageLimitOrSwitchAccount(
+async function announceUsageLimitOrSwitch(
   key: SessionKey,
   cls: AgentApiErrorClass,
   episodeId: number,
@@ -1821,27 +1826,27 @@ async function announceUsageLimitOrSwitchAccount(
   texts: LimitWaitTexts,
   isPlainNoticeDue: boolean,
 ): Promise<void> {
-  let plan: ClaudeLimitSwitchPlan & { from: string } = { action: 'none', from: defaultClaudeProfileName };
+  let plan: FallbackSwitchPlan & { from: FallbackChainEntry | null } = { action: 'none', from: null };
   try {
-    plan = await planClaudeLimitSwitch(key, cls, episodeId);
+    plan = await planFallbackSwitch(key, cls, episodeId);
   } catch (e) {
-    console.warn(`[account] ${keyToString(key)}: the limit switch plan failed:`, e instanceof Error ? e.message : e);
+    console.warn(`[fallback] ${keyToString(key)}: the limit switch plan failed:`, e instanceof Error ? e.message : e);
   }
   if (plan.action === 'auto') {
     const to = plan.to;
-    const isSwitched = await switchClaudeAccountAfterLimit(key, plan.from, to, { isAnnounced: true }).catch((e) => {
-      console.warn(`[account] ${keyToString(key)}: the auto-switch to ${to} failed:`, e instanceof Error ? e.message : e);
-      return false;
+    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true }).catch((e) => {
+      console.warn(`[fallback] ${keyToString(key)}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+      return { isSwitched: false };
     });
-    if (isSwitched) return;
+    if (outcome.isSwitched) return;
   }
   const keyboard = plan.action === 'offer'
-    ? Markup.inlineKeyboard(plan.candidates.map((name) => [
-      Markup.button.callback(t('account.limitSwitchButton', { name }), buildClaudeLimitSwitchCallbackData(episodeId, name)),
+    ? Markup.inlineKeyboard(plan.candidates.map((entry, index) => [
+      Markup.button.callback(t('fallback.switchButton', { label: formatFallbackEntry(entry) }), buildFallbackSwitchCallbackData(episodeId, index)),
     ]))
     : undefined;
   const { isPlainNoticePosted } = await announceLimitWait(key, wait, texts, isPlainNoticeDue, keyboard);
-  if (keyboard && !isPlainNoticePosted) await replyToThread(key, t('account.limitSwitchOffer'), keyboard);
+  if (keyboard && !isPlainNoticePosted) await replyToThread(key, t('fallback.switchOffer'), keyboard);
 }
 
 /**
@@ -1919,7 +1924,7 @@ function cancelApiRetry(key: SessionKey): void {
   // error — so neither can re-notify per message.
   clearLimitResumeNotice(key);
   autoContinueOffNoticedThreads.delete(k);
-  claudeLimitSwitchOffers.delete(k);
+  fallbackSwitchOffers.delete(k);
   // NOTE: intentionally does NOT touch the logged-out notice. `cancelApiRetry`
   // fires on EVERY inbound message (user takeover); clearing the auth notice here
   // would drop the one-notice guard so the user's next prompt (into the STILL
@@ -6730,142 +6735,18 @@ function checkIsClaudeProfileBackend(key: SessionKey): boolean {
   return adapter instanceof ClaudeJsonStreamAdapter || adapter instanceof ClaudeCliAdapter;
 }
 
-/**
- * @description The profile the topic's LIVE Claude process runs on (the config directory it was spawned with),
- * which differs from the topic's pick while a switch is deferred or the pick was never applied. The pick when
- * there is no live process or its directory maps to no known profile.
- */
-function resolveLiveClaudeProfileName(key: SessionKey): string {
-  const adapter = getThreadAdapter(key);
-  if (adapter instanceof ClaudeJsonStreamAdapter || adapter instanceof ClaudeCliAdapter) {
-    const dir = adapter.getSessionClaudeConfigDir(key);
-    if (dir !== undefined) {
-      const live = resolveClaudeProfileNameForDir(dir);
-      if (live !== null) return live;
-    }
-  }
-  return state.resolveClaudeProfileName(key);
+// ── the fallback chain (`/fallback`): `utils/fallbackChain.ts`, `utils/fallbackBridge.ts`, `commands/fallbackChain.ts` ──
+
+/** A chain rung for the topic's own language (the picker and the notices name it the same way). */
+function formatFallbackEntry(entry: FallbackChainEntry): string {
+  return formatFallbackEntryLabel(entry, { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel') });
 }
 
 /**
- * @description An `/account` pick on a topic: the plain apply, except while a usage-limit wait is armed and the
- * pick moves the topic off the profile its process runs on. The process cannot work on the limited account, so
- * the pick is applied NOW and the topic resumes like after the limit switch (wait cancelled, continue nudge).
- */
-async function applyClaudePickToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
-  const armed = getArmedApiRetry(key);
-  if (armed?.kind === 'usageLimit' && checkIsClaudeProfileBackend(key)) {
-    const from = resolveLiveClaudeProfileName(key);
-    const to = state.resolveClaudeProfileName(key);
-    if (from !== to) {
-      const isSwitched = await switchClaudeAccountAfterLimit(key, from, to, { isAnnounced: false });
-      return isSwitched ? 'respawned' : 'deferred';
-    }
-  }
-  return applyClaudeProfileToThread(key);
-}
-
-/** Threads whose last limit switch stopped live background work (the tapped button's confirmation says so). */
-const limitSwitchBackgroundStopped = new Set<string>();
-
-/**
- * @description What a usage limit on `key` leads to (`utils/claudeLimitSwitch.ts`): the profile the topic runs
- * on is marked limited until the reset the error named (else its session window, else the retry's blind delay),
- * the usage snapshots are brought up to date, and the other signed-in profiles with room for the topic's
- * model are ranked. An offer is remembered per thread under its episode so only ITS buttons can act on it.
- * `none` for a non-Claude backend, a non-Telegram conversation, or when no profile can take over.
- */
-async function planClaudeLimitSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<ClaudeLimitSwitchPlan & { from: string }> {
-  const from = resolveLiveClaudeProfileName(key);
-  if (!checkIsTelegramKey(key) || !checkIsClaudeProfileBackend(key)) return { action: 'none', from };
-  const nowMs = Date.now();
-  state.setClaudeProfileLimitedUntil(from, resolveClaudeLimitedUntil({
-    resetAtMs: cls.kind === 'usageLimit' ? cls.resetAt : undefined,
-    usage: state.getClaudeProfileInfo(from)?.usage,
-    existingLimitedUntil: state.getClaudeProfileInfo(from)?.limitedUntil ?? null,
-    nowMs,
-    fallbackMs: usageLimitDefaultMs,
-  }));
-  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
-  const candidates = pickClaudeLimitSwitchCandidates({
-    profiles: buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
-    currentName: from,
-    model: getThreadClaudeModel(key),
-    nowMs: Date.now(),
-  });
-  const plan = decideClaudeLimitSwitch({ candidates, isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key) });
-  if (plan.action === 'offer') claudeLimitSwitchOffers.set(keyToString(key), { episodeId, from });
-  else claudeLimitSwitchOffers.delete(keyToString(key));
-  const detail = plan.action === 'auto' ? ` → ${plan.to}` : plan.action === 'offer' ? ` [${plan.candidates.join(', ')}]` : '';
-  console.log(`[account] ${keyToString(key)}: usage limit on ${from}; switch plan: ${plan.action}${detail}`);
-  return { ...plan, from };
-}
-
-/**
- * @description Move a limited topic onto profile `to` and continue the work there: the topic's pick is set,
- * its live session re-spawned under the new directory (the `/account` apply path — same conversation), the armed
- * limit wait disarmed, and the "continue" nudge delivered the way the wait's own resume would deliver it. A
- * session that works keeps its wait: the switch applies at turn end. Returns whether the work continues now (the
- * caller announces the wait otherwise). The one-line outcome is posted only when `isAnnounced` — the auto-switch
- * has no other voice, while a tapped button's notice is edited into the same line by its handler.
- */
-async function switchClaudeAccountAfterLimit(key: SessionKey, from: string, to: string, options: { isAnnounced: boolean }): Promise<boolean> {
-  const k = keyToString(key);
-  await state.setClaudeProfileOverride(key, to);
-  // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
-  const adapter = getThreadAdapter(key);
-  const isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
-  const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
-  if (outcome === 'respawned' && isStoppingBackground) {
-    if (options.isAnnounced) await replyToThread(key, t('account.limitSwitchedBackgroundStopped'));
-    limitSwitchBackgroundStopped.add(k);
-  }
-  if (outcome === 'deferred' || outcome === 'restartRequired') {
-    claudeLimitSwitchOffers.delete(k);
-    if (options.isAnnounced) await replyToThread(key, t('account.limitSwitchedDeferred', { from, to }));
-    return false;
-  }
-  cancelApiRetry(key); // retires the offer too: the switch consumed it
-  console.log(`[account] ${k}: switched from ${from} to ${to} after a usage limit (${outcome}); resuming`);
-  if (options.isAnnounced) await replyToThread(key, t('account.limitSwitched', { from, to }));
-  const ensured = await ensureAgentSession(key);
-  if (!ensured.ok) {
-    await replyToThread(key, ensured.message);
-    return true;
-  }
-  const resume = getLimitResumeMessage({
-    continueNudge: t('apiRetry.continueNudge'),
-    untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
-  });
-  await deliverPromptOrBuffer(key, resume.text, startupPromptBuffer.checkIsStarting(k));
-  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: resume.isRequestPrompt });
-  return true;
-}
-
-/**
- * @description A tap on a «switch to <profile>» button of a limit notice: honoured only while the thread's open
- * offer is the button's episode (a stale notice changes nothing), and only for a profile that still exists and
- * is signed in. The confirmation to edit the notice into, or `null` when the tap expired.
- */
-async function takeClaudeLimitSwitchOffer(key: SessionKey, episodeId: number, to: string): Promise<string | null> {
-  const offer = claudeLimitSwitchOffers.get(keyToString(key));
-  if (!offer || getClaudeLimitSwitchTapDecision({ openEpisodeId: offer.episodeId, requestedEpisodeId: episodeId }) === 'expired') return null;
-  if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to) === undefined) return t('account.unknown', { name: to });
-  if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to)?.loggedIn === false) return t('account.notLoggedIn', { name: to });
-  limitSwitchBackgroundStopped.delete(keyToString(key));
-  const isSwitched = await switchClaudeAccountAfterLimit(key, offer.from, to, { isAnnounced: false });
-  if (!isSwitched) return t('account.limitSwitchedDeferred', { from: offer.from, to });
-  const stopped = limitSwitchBackgroundStopped.delete(keyToString(key)) ? ` ${t('account.limitSwitchedBackgroundStopped')}` : '';
-  return `${t('account.limitSwitched', { from: offer.from, to })}${stopped}`;
-}
-
-// ── the fallback chain (`/fallback`): `utils/fallbackChain.ts`, `commands/fallbackChain.ts` ──
-
-/**
- * @description What is connected NOW — the input of the chain draft and the picker rows: every Claude profile
- * with its usage view, the OpenCode models the server is authenticated for (its live catalog — `opencode models`
- * lists only providers with credentials; an absent or failing CLI yields none), the models topics recently
- * picked (newest first) and the OpenCode limit marks.
+ * @description What is connected NOW — the input of the chain draft, the picker rows and the ranking: every
+ * Claude profile with its usage view, the OpenCode models the server is authenticated for (its live catalog —
+ * `opencode models` lists only providers with credentials; an absent or failing CLI yields none), the models
+ * topics recently picked (newest first) and the OpenCode limit marks.
  */
 async function detectFallbackOptions(): Promise<FallbackDetection> {
   let openCodeModels: string[] = [];
@@ -6896,6 +6777,166 @@ function getTopicFallbackPosition(key: SessionKey): FallbackChainEntry | null {
   return parsed ? { backend: 'opencode', ...parsed } : null;
 }
 
+/**
+ * @description What a usage limit on `key` leads to (`utils/fallbackChain.ts`): the rung the topic is on is
+ * marked limited until the reset the error named (a Claude profile: else its session window, else the retry's
+ * blind delay; an OpenCode model: else the blind delay), the usage snapshots are brought up to date, and the
+ * chain's AVAILABLE rungs are listed in priority order. Without a configured chain a Claude topic falls back to
+ * the within-Claude headroom ranking (`utils/claudeLimitSwitch.ts`) — the behaviour before the chain existed. An
+ * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a non-Telegram
+ * conversation, a topic with no account to switch from, or when no rung can take over.
+ */
+async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null }> {
+  const from = getTopicFallbackPosition(key);
+  if (!checkIsTelegramKey(key) || from === null) return { action: 'none', from };
+  const k = keyToString(key);
+  const nowMs = Date.now();
+  const resetAtMs = cls.kind === 'usageLimit' ? cls.resetAt : undefined;
+  if (from.backend === 'claude') {
+    state.setClaudeProfileLimitedUntil(from.profile, resolveClaudeLimitedUntil({
+      resetAtMs,
+      usage: state.getClaudeProfileInfo(from.profile)?.usage,
+      existingLimitedUntil: state.getClaudeProfileInfo(from.profile)?.limitedUntil ?? null,
+      nowMs,
+      fallbackMs: usageLimitDefaultMs,
+    }));
+  } else {
+    const label = buildOpenCodeModelLabel(from);
+    state.setOpenCodeModelLimitedUntil(label, resolveOpenCodeLimitedUntil({
+      resetAtMs,
+      existingLimitedUntil: state.getOpenCodeModelLimitedUntil(label),
+      nowMs,
+      fallbackMs: usageLimitDefaultMs,
+    }));
+  }
+  // The Claude rungs are judged on fresh figures whatever backend hit the limit (a minute's cache).
+  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+  const detection = await detectFallbackOptions();
+  let chain = state.getFallbackChain();
+  if (chain.length === 0 && from.backend === 'claude') {
+    chain = pickClaudeLimitSwitchCandidates({ profiles: detection.claudeProfiles, currentName: from.profile, model: from.model, nowMs: Date.now() })
+      .map((profile): FallbackChainEntry => ({ backend: 'claude', profile, model: null }));
+  }
+  // Within the topic's backend only, until the cross-backend bridge lands.
+  const candidates = pickFallbackCandidates({ chain, current: from, detection, nowMs: Date.now() }).filter((entry) => entry.backend === from.backend);
+  const plan = decideFallbackSwitch({ candidates, isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key) });
+  if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
+  else fallbackSwitchOffers.delete(k);
+  const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
+  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}`);
+  return { ...plan, from };
+}
+
+/** When the rung that hit the limit comes back, as a clock in the topic's zone; `null` when unknown or past. */
+function getFallbackResetTime(from: FallbackChainEntry | null): string | null {
+  if (from === null) return null;
+  const until = from.backend === 'claude'
+    ? state.getClaudeProfileInfo(from.profile)?.limitedUntil ?? null
+    : state.getOpenCodeModelLimitedUntil(buildOpenCodeModelLabel(from)) ?? null;
+  const untilMs = until === null ? Number.NaN : Date.parse(until);
+  if (!Number.isFinite(untilMs) || untilMs <= Date.now()) return null;
+  return formatLocalClockWithDateIfNotToday(untilMs, Date.now());
+}
+
+/** The one-line «switched» notice, with the reset of the exhausted rung when known (the topic is never moved back by itself). */
+function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry): string {
+  const fromLabel = from ? formatFallbackEntry(from) : '?';
+  const toLabel = formatFallbackEntry(to);
+  const time = getFallbackResetTime(from);
+  const reset = time === null ? '' : t('fallback.switchedReset', { from: fromLabel, to: toLabel, time });
+  return t('fallback.switched', { from: fromLabel, to: toLabel, reset });
+}
+
+/** Whether the topic's Claude session already runs the alias (`fable` against a reported `claude-fable-5-1`). */
+function checkThreadClaudeModelMatches(key: SessionKey, alias: string): boolean {
+  const current = getThreadClaudeModel(key);
+  return current !== null && current.toLowerCase().includes(alias.toLowerCase());
+}
+
+/**
+ * @description Move a limited topic onto rung `to` and continue the work there. WITHIN a backend the
+ * conversation is kept: a Claude rung sets the topic's profile (the `/account` apply path re-spawns the live
+ * session under the new directory, same transcript) and pins the rung's model when it names one; an OpenCode
+ * rung changes the session's per-prompt model. ACROSS backends the topic's adapter changes (the `/claude` /
+ * `/opencode` path: the old session is stopped and its id parked for a switch back), the new session is started
+ * or resumed, and its first prompt is the context bridge instead of the plain "continue" nudge (the next
+ * step; refused for now). Either way the
+ * armed limit wait is disarmed and the prompt goes the way the wait's own resume would deliver it. A Claude
+ * session that works keeps its wait: the switch applies at turn end. Returns whether the work continues now and
+ * the notice that says so (posted here only when `isAnnounced` — the auto-switch has no other voice, while a
+ * tapped button's notice is edited into the same line by its handler).
+ */
+async function switchTopicToFallbackEntry(
+  key: SessionKey,
+  from: FallbackChainEntry | null,
+  to: FallbackChainEntry,
+  options: { isAnnounced: boolean },
+): Promise<{ isSwitched: boolean; notice: string }> {
+  const k = keyToString(key);
+  const fromLabel = from ? formatFallbackEntry(from) : '?';
+  const toLabel = formatFallbackEntry(to);
+  const isSameFamily = from !== null && from.backend === to.backend;
+  const say = async (notice: string): Promise<void> => {
+    if (options.isAnnounced) await replyToThread(key, notice);
+  };
+  const fail = async (error: string): Promise<{ isSwitched: boolean; notice: string }> => {
+    const notice = t('fallback.switchFailed', { to: toLabel, error });
+    await say(notice);
+    return { isSwitched: false, notice };
+  };
+  let firstPrompt: { text: string; isRequestPrompt: boolean } | null = null;
+  if (isSameFamily && to.backend === 'claude') {
+    await state.setClaudeProfileOverride(key, to.profile);
+    const outcome = await applyClaudeProfileToThread(key);
+    if (outcome === 'deferred' || outcome === 'restartRequired') {
+      fallbackSwitchOffers.delete(k);
+      const notice = t('fallback.switchedDeferred', { from: fromLabel, to: toLabel });
+      await say(notice);
+      return { isSwitched: false, notice };
+    }
+  } else if (isSameFamily && to.backend === 'opencode') {
+    const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
+    if (error) return fail(error);
+  } else {
+    // A cross-backend switch (Claude ↔ OpenCode) needs the context bridge, which lands next.
+    return fail('switching between backends is not available yet');
+  }
+  cancelApiRetry(key); // retires the offer too: the switch consumed it
+  const notice = getFallbackSwitchedNotice(from, to);
+  console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
+  await say(notice);
+  const ensured = await ensureAgentSession(key);
+  if (!ensured.ok) {
+    await replyToThread(key, ensured.message);
+    return { isSwitched: true, notice };
+  }
+  if (ensured.message) await replyToThread(key, ensured.message);
+  if (to.backend === 'claude' && to.model !== null && !checkThreadClaudeModelMatches(key, to.model)) {
+    const error = await getThreadAdapter(key).setModel?.(key, to.model);
+    if (error) console.warn(`[fallback] ${k}: pinning the model ${to.model} failed: ${error}`);
+  }
+  const prompt = firstPrompt ?? getLimitResumeMessage({
+    continueNudge: t('apiRetry.continueNudge'),
+    untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+  });
+  await deliverPromptOrBuffer(key, prompt.text, startupPromptBuffer.checkIsStarting(k));
+  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
+  return { isSwitched: true, notice };
+}
+
+/**
+ * @description A tap on a «switch to …» button of a limit notice: honoured only while the thread's open offer
+ * is the button's episode and the index is inside that offer (a stale notice changes nothing). The
+ * confirmation to edit the notice into, or `null` when the tap expired.
+ */
+async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index: number): Promise<string | null> {
+  const offer = fallbackSwitchOffers.get(keyToString(key)) ?? null;
+  const decision = getFallbackSwitchTapDecision({ openOffer: offer, requestedEpisodeId: episodeId, index });
+  if (decision.kind === 'expired' || offer === null) return null;
+  const { notice } = await switchTopicToFallbackEntry(key, offer.from, decision.to, { isAnnounced: false });
+  return notice;
+}
+
 /** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
 async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeProfilesReport> {
   await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
@@ -6920,9 +6961,8 @@ const {
   refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
-  applyClaudeProfile: applyClaudePickToThread,
+  applyClaudeProfile: applyClaudeProfileToThread,
   applyClaudeProfileEverywhere,
-  takeLimitSwitchOffer: takeClaudeLimitSwitchOffer,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
@@ -6933,8 +6973,7 @@ const { registerFallbackChainCommands, registerFallbackChainCallbacks } = create
   getInstanceTimezone: getCurrentTimezone,
   detectFallbackOptions,
   getTopicPosition: getTopicFallbackPosition,
-  // The switch itself lands with the limit-switch planner; until then a notice carries no chain buttons.
-  takeSwitchOffer: async () => null,
+  takeSwitchOffer: takeFallbackSwitchOffer,
 });
 
 registerFallbackChainCommands();

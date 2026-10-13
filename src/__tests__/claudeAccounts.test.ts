@@ -38,9 +38,6 @@ let applyOutcome: ClaudeProfileApplyOutcome = 'inactive';
 const appliedKeys: SessionKey[] = [];
 let applyEverywhereCalls = 0;
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
-const limitSwitchTaps: Array<{ key: SessionKey; episodeId: number; name: string }> = [];
-/** What the stand-in limit-switch port answers: the confirmation, or `null` for a stale tap. */
-let limitSwitchOutcome: string | null = null;
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
 
@@ -72,10 +69,6 @@ describe('claudeAccounts: /account over its ports', () => {
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
       },
-      takeLimitSwitchOffer: async (key, episodeId, name) => {
-        limitSwitchTaps.push({ key, episodeId, name });
-        return limitSwitchOutcome;
-      },
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -102,7 +95,6 @@ describe('claudeAccounts: /account over its ports', () => {
       String(/^acct_rmok_([a-z0-9][a-z0-9_-]{0,31})$/),
       'acct_autosw_on',
       'acct_autosw_off',
-      String(/^acsw_(\d+)_([a-z0-9][a-z0-9_-]{0,31})$/),
     ]);
   });
 
@@ -273,22 +265,5 @@ describe('claudeAccounts: /account over its ports', () => {
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
     isGeneralTopic = false;
-  });
-
-  it('a «switch to …» tap on a limit notice reaches the port with its episode and consumes the notice; a stale tap only answers', async () => {
-    const noticeId = (await harness.core.replyToThread(harness.key, 'limit notice'))!;
-    limitSwitchOutcome = 'switched to work';
-    await harness.tapButton(noticeId, 'acsw_1760000000000_work');
-    assert.deepEqual(limitSwitchTaps.at(-1), { key: harness.key, episodeId: 1760000000000, name: 'work' });
-    const consumed = harness.edits.at(-1);
-    assert.equal(consumed?.messageId, noticeId);
-    assert.equal(consumed?.text, 'switched to work');
-    assert.deepEqual(harness.getKeyboardData(consumed), [], 'the keyboard is dropped with the confirmation');
-
-    const editsBefore = harness.edits.length;
-    limitSwitchOutcome = null;
-    await harness.tapButton(noticeId, 'acsw_1750000000000_work');
-    assert.equal(limitSwitchTaps.at(-1)?.episodeId, 1750000000000);
-    assert.equal(harness.edits.length, editsBefore, 'a stale tap edits nothing');
   });
 });

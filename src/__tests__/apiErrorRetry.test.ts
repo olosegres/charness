@@ -50,6 +50,23 @@ test('classify: rate-limit / overloaded / status-code phrasings → transient', 
   }
 });
 
+test('classify: OpenCode-relayed provider quota codes → usageLimit even with the 429 the transient branch reads', () => {
+  // OpenAI: a used-up monthly quota comes as HTTP 429 with the `insufficient_quota` code.
+  const openAi = 'AI_APICallError: 429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}';
+  assert.equal(classifyAgentApiError(openAi, fixedNow)?.kind, 'usageLimit');
+  // Google: RESOURCE_EXHAUSTED rides a 429 too.
+  assert.equal(classifyAgentApiError('429 RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).', fixedNow)?.kind, 'usageLimit');
+  // The OpenAI Codex subscription limit names a reset.
+  const codex = classifyAgentApiError("usage_limit_reached: You've hit your usage limit. Try again in 3h", fixedNow);
+  assert.equal(codex?.kind, 'usageLimit');
+  assert.equal(codex?.resetAt, fixedNow + 3 * hourMs);
+  // A bare 429 without a quota code stays a transient hiccup.
+  assert.equal(classifyAgentApiError('429 Too Many Requests', fixedNow)?.kind, 'transient');
+  // Underscored window names and the billing hard limit are usage limits as well.
+  assert.equal(classifyAgentApiError('usage_limit exceeded for this key', fixedNow)?.kind, 'usageLimit');
+  assert.equal(classifyAgentApiError('Billing hard limit has been reached', fixedNow)?.kind, 'usageLimit');
+});
+
 test('classify: usage / credit / quota phrasings → usageLimit', () => {
   assert.equal(classifyAgentApiError('Claude usage limit reached', fixedNow)?.kind, 'usageLimit');
   assert.equal(classifyAgentApiError('Credit balance is too low', fixedNow)?.kind, 'usageLimit');

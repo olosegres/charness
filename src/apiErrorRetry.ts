@@ -96,12 +96,23 @@ export const authErrorPhrasesRe = /please run \/login|not logged in|invalid auth
  * "context limit exceeded" is not.
  */
 const usageWindowPhrases = [
-  String.raw`(?:session|usage|weekly|daily|monthly|hourly|\d+-hours?)\s+limit`,
+  String.raw`(?:session|usage|weekly|daily|monthly|hourly|\d+-hours?)[\s_]+limit`,
   String.raw`(?:hit|reached|exceeded)\s+your\s+(?:[\w-]+\s+){0,3}limit`,
   String.raw`credit balance (?:is )?too low`,
   String.raw`out of (?:credits|usage)`,
   String.raw`quota`,
+  String.raw`resource[\s_]+(?:has been )?exhausted`,
+  String.raw`billing\s+(?:hard\s+)?limit`,
 ];
+
+/**
+ * The provider error CODES that mean an exhausted quota or subscription window — what the OpenCode backend
+ * relays verbatim from OpenAI (`insufficient_quota`, `usage_limit_reached`), Google (`RESOURCE_EXHAUSTED`) and
+ * the OpenAI Codex subscription (`You've hit your usage limit`). These arrive with HTTP 429, the status the
+ * transient branch reads as "rate limited", so they are tested BEFORE it: a quota that is used up for the
+ * month is not cleared by a 5-minute retry, and the fallback chain must see a usage limit to switch provider.
+ */
+const exhaustedQuotaCodesRe = /insufficient_quota|exceeded your current quota|usage_limit_reached|resource_exhausted|hit your usage limit/i;
 
 /**
  * @description Alternation SOURCE (no anchors, no flags) of the explicit
@@ -169,11 +180,14 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
- *  2. transient (rate-limited, overloaded, 429/503/529) → `{ kind: 'transient' }`.
- *     Tested BEFORE usage on purpose: the live transient string literally reads
+ *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) → `usageLimit`.
+ *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
+ *     Google `RESOURCE_EXHAUSTED`), which the next branch would read as a hiccup.
+ *  3. transient (rate-limited, overloaded, 429/503/529) → `{ kind: 'transient' }`.
+ *     Tested BEFORE the usage wordings on purpose: the live transient string literally reads
  *     "...(not your usage limit)...", so a naive usage check would false-match it.
  *     Because transient returns here, the usage branch never sees that substring.
- *  3. usage / session / window limit → `{ kind: 'usageLimit', resetAt? }`, decided
+ *  4. usage / session / window limit → `{ kind: 'usageLimit', resetAt? }`, decided
  *     by {@link checkIsUsageLimitText} (explicit wordings + a generic fallback).
  * Anything else (normal prose, unrelated text) → `null`.
  *
@@ -183,6 +197,9 @@ export function checkIsUsageLimitText(text: string): boolean {
 export function classifyAgentApiError(text: string, now: number): AgentApiErrorClass | null {
   if (authErrorPhrasesRe.test(text)) {
     return { kind: 'auth' };
+  }
+  if (exhaustedQuotaCodesRe.test(text)) {
+    return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
   if (/rate.?limited?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
     return { kind: 'transient' };
