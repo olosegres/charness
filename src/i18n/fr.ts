@@ -732,6 +732,7 @@ export const frDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Basculer vers {label}',
   'fallback.switchOffer': '🪜 La chaîne de repli a une entrée avec de la marge — touchez pour y déplacer ce sujet et continuer maintenant.',
   'fallback.switched': '🔁 Limite d\'usage sur {from} — ce sujet est passé à {to} et continue.{reset}',
+  'fallback.backgroundStopped': 'Les tâches d\'arrière-plan encore en cours ont été arrêtées par le changement.',
   'fallback.switchedReset': ' {from} se réinitialise à {time} ; le sujet reste sur {to} jusqu\'à ce que vous le rebasculiez (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Limite d\'usage sur {from} — l\'agent travaille encore, ce sujet passera donc à {to} à la fin de son tour ; l\'attente reste armée d\'ici là.',
   'fallback.switchFailed': '⚠️ La bascule vers {to} a échoué : {error}. L\'attente de la réinitialisation reste armée.',

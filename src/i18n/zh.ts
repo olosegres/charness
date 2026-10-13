@@ -726,6 +726,7 @@ export const zhDict: Record<string, string> = {
   'fallback.switchButton': '🔁 切换到 {label}',
   'fallback.switchOffer': '🪜 备用链中有仍有余量的条目 — 点击把此话题移到它并立即继续。',
   'fallback.switched': '🔁 {from} 触及用量上限 — 此话题已切换到 {to} 并继续。{reset}',
+  'fallback.backgroundStopped': '仍在运行的后台任务已因切换而停止。',
   'fallback.switchedReset': ' {from} 将于 {time} 重置；在你手动切回之前（/account、/model、/claude、/opencode），话题保持在 {to}。',
   'fallback.switchedDeferred': '🔁 {from} 触及用量上限 — 代理仍在工作，此话题将在本轮结束后切换到 {to}；在此之前等待保持生效。',
   'fallback.switchFailed': '⚠️ 切换到 {to} 失败：{error}。重置等待保持生效。',

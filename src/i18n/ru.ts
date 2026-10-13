@@ -736,6 +736,7 @@ export const ruDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Переключить на {label}',
   'fallback.switchOffer': '🪜 В цепочке есть запись с запасом — нажмите, чтобы перевести топик на неё и продолжить сейчас.',
   'fallback.switched': '🔁 Лимит на {from} — топик переключён на {to} и продолжает работу.{reset}',
+  'fallback.backgroundStopped': 'Фоновые задачи, которые ещё работали, остановлены переключением.',
   'fallback.switchedReset': ' {from} сбросится в {time}; топик остаётся на {to}, пока вы не переключите его обратно (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Лимит на {from} — агент ещё работает, поэтому топик переключится на {to} по окончании хода; до тех пор ожидание остаётся.',
   'fallback.switchFailed': '⚠️ Переключение на {to} не удалось: {error}. Ожидание сброса остаётся.',

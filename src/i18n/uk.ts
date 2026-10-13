@@ -738,6 +738,7 @@ export const ukDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Перемкнути на {label}',
   'fallback.switchOffer': '🪜 У ланцюжку є запис із запасом — натисніть, щоб перевести топік на нього й продовжити зараз.',
   'fallback.switched': '🔁 Ліміт на {from} — топік перемкнено на {to}, робота триває.{reset}',
+  'fallback.backgroundStopped': 'Фонові завдання, що ще працювали, зупинено перемиканням.',
   'fallback.switchedReset': ' {from} скинеться о {time}; топік залишається на {to}, доки ви не перемкнете його назад (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Ліміт на {from} — агент ще працює, тому топік перемкнеться на {to} після завершення ходу; доти очікування лишається.',
   'fallback.switchFailed': '⚠️ Перемикання на {to} не вдалося: {error}. Очікування скидання лишається.',

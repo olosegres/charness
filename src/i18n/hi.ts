@@ -731,6 +731,7 @@ export const hiDict: Record<string, string> = {
   'fallback.switchButton': '🔁 {label} पर स्विच करें',
   'fallback.switchOffer': '🪜 फ़ॉलबैक चेन में गुंजाइश वाली प्रविष्टि है — इस टॉपिक को उस पर ले जाकर अभी जारी रखने के लिए टैप करें।',
   'fallback.switched': '🔁 {from} पर उपयोग सीमा — यह टॉपिक {to} पर स्विच हो गया और जारी है।{reset}',
+  'fallback.backgroundStopped': 'जो बैकग्राउंड कार्य चल रहे थे, वे स्विच से रुक गए।',
   'fallback.switchedReset': ' {from} {time} पर रीसेट होगा; जब तक आप वापस न बदलें (/account, /model, /claude, /opencode), टॉपिक {to} पर रहेगा।',
   'fallback.switchedDeferred': '🔁 {from} पर उपयोग सीमा — एजेंट अभी काम कर रहा है, इसलिए यह टॉपिक अपनी बारी खत्म होने पर {to} पर स्विच होगा; तब तक प्रतीक्षा सक्रिय रहेगी।',
   'fallback.switchFailed': '⚠️ {to} पर स्विच विफल: {error}। रीसेट की प्रतीक्षा सक्रिय रहती है।',

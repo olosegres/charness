@@ -780,6 +780,7 @@ export const enDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Switch to {label}',
   'fallback.switchOffer': '🪜 The fallback chain has an entry with room — tap to move this topic to it and continue now.',
   'fallback.switched': '🔁 Usage limit on {from} — this topic switched to {to} and continues.{reset}',
+  'fallback.backgroundStopped': 'Background tasks that were still running were stopped by the switch.',
   'fallback.switchedReset': ' {from} resets at {time}; the topic stays on {to} until you switch it back (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Usage limit on {from} — the agent is still working, so this topic switches to {to} when its turn ends; the wait stays armed until then.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',

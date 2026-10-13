@@ -732,6 +732,7 @@ export const uzDict: Record<string, string> = {
   'fallback.switchButton': '🔁 {label} ga o\'tish',
   'fallback.switchOffer': '🪜 Zaxira zanjirida bo\'sh joyli yozuv bor — bu mavzuni unga o\'tkazib, hozir davom ettirish uchun bosing.',
   'fallback.switched': '🔁 {from} da foydalanish limiti — bu mavzu {to} ga o\'tdi va davom etmoqda.{reset}',
+  'fallback.backgroundStopped': 'Hali ishlayotgan fon vazifalari almashtirish tufayli to‘xtatildi.',
   'fallback.switchedReset': ' {from} {time} da tiklanadi; siz orqaga qaytarmaguningizcha (/account, /model, /claude, /opencode) mavzu {to} da qoladi.',
   'fallback.switchedDeferred': '🔁 {from} da foydalanish limiti — agent hali ishlamoqda, shuning uchun bu mavzu navbati tugagach {to} ga o\'tadi; ungacha kutish saqlanadi.',
   'fallback.switchFailed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}. Tiklanishni kutish saqlanadi.',

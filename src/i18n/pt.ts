@@ -733,6 +733,7 @@ export const ptDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Trocar para {label}',
   'fallback.switchOffer': '🪜 A cadeia de reserva tem uma entrada com folga — toque para mover este tópico para ela e continuar agora.',
   'fallback.switched': '🔁 Limite de uso em {from} — este tópico trocou para {to} e continua.{reset}',
+  'fallback.backgroundStopped': 'As tarefas em segundo plano que ainda estavam a correr foram paradas pela troca.',
   'fallback.switchedReset': ' {from} reinicia às {time}; o tópico fica em {to} até você trocar de volta (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Limite de uso em {from} — o agente ainda está trabalhando, então este tópico troca para {to} quando o turno terminar; a espera continua armada até lá.',
   'fallback.switchFailed': '⚠️ A troca para {to} falhou: {error}. A espera pelo reinício continua armada.',

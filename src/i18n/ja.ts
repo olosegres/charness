@@ -726,6 +726,7 @@ export const jaDict: Record<string, string> = {
   'fallback.switchButton': '🔁 {label} に切替',
   'fallback.switchOffer': '🪜 フォールバックチェーンに余裕のある項目があります — タップしてこのトピックを移し、今すぐ続行します。',
   'fallback.switched': '🔁 {from} が利用上限 — このトピックは {to} に切り替えて続行します。{reset}',
+  'fallback.backgroundStopped': '実行中だったバックグラウンドタスクは切り替えにより停止されました。',
   'fallback.switchedReset': ' {from} は {time} にリセットされます。戻すまで（/account, /model, /claude, /opencode）トピックは {to} のままです。',
   'fallback.switchedDeferred': '🔁 {from} が利用上限 — エージェントはまだ作業中のため、ターン終了時にこのトピックを {to} に切り替えます。それまで待機は維持されます。',
   'fallback.switchFailed': '⚠️ {to} への切替に失敗しました: {error}。リセット待ちは維持されます。',

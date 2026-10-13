@@ -732,6 +732,7 @@ export const kaDict: Record<string, string> = {
   'fallback.switchButton': '🔁 გადართვა: {label}',
   'fallback.switchOffer': '🪜 სათადარიგო ჯაჭვში მარაგიანი ჩანაწერია — დააჭირეთ, რომ ეს თემა მასზე გადავიდეს და ახლავე გააგრძელოს.',
   'fallback.switched': '🔁 გამოყენების ლიმიტი {from}-ზე — ეს თემა {to}-ზე გადაერთო და აგრძელებს.{reset}',
+  'fallback.backgroundStopped': 'ჯერ მიმდინარე ფონური ამოცანები გადართვამ შეაჩერა.',
   'fallback.switchedReset': ' {from} განულდება {time}-ზე; თემა {to}-ზე რჩება, სანამ თავად არ დააბრუნებთ (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 გამოყენების ლიმიტი {from}-ზე — აგენტი ჯერ მუშაობს, ამიტომ ეს თემა სვლის დასრულებისას {to}-ზე გადაერთვება; მანამდე ლოდინი რჩება.',
   'fallback.switchFailed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}. განულების ლოდინი რჩება.',

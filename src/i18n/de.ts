@@ -732,6 +732,7 @@ export const deDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Wechseln zu {label}',
   'fallback.switchOffer': '🪜 Die Fallback-Kette hat einen Eintrag mit Spielraum — antippen, um dieses Topic dorthin zu verschieben und sofort weiterzumachen.',
   'fallback.switched': '🔁 Nutzungslimit auf {from} — dieses Topic ist zu {to} gewechselt und macht weiter.{reset}',
+  'fallback.backgroundStopped': 'Noch laufende Hintergrundaufgaben wurden durch den Wechsel beendet.',
   'fallback.switchedReset': ' {from} wird um {time} zurückgesetzt; das Topic bleibt auf {to}, bis Sie es zurückwechseln (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Nutzungslimit auf {from} — der Agent arbeitet noch, daher wechselt dieses Topic zu {to}, wenn sein Zug endet; bis dahin bleibt das Warten aktiv.',
   'fallback.switchFailed': '⚠️ Wechsel zu {to} fehlgeschlagen: {error}. Das Warten auf das Zurücksetzen bleibt aktiv.',

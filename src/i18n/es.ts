@@ -732,6 +732,7 @@ export const esDict: Record<string, string> = {
   'fallback.switchButton': '🔁 Cambiar a {label}',
   'fallback.switchOffer': '🪜 La cadena de respaldo tiene una entrada con margen — toca para pasar este tema a ella y continuar ahora.',
   'fallback.switched': '🔁 Límite de uso en {from} — este tema cambió a {to} y continúa.{reset}',
+  'fallback.backgroundStopped': 'Las tareas en segundo plano que seguían en curso se detuvieron con el cambio.',
   'fallback.switchedReset': ' {from} se reinicia a las {time}; el tema sigue en {to} hasta que lo cambies de vuelta (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Límite de uso en {from} — el agente sigue trabajando, así que este tema cambia a {to} cuando termine su turno; la espera sigue armada hasta entonces.',
   'fallback.switchFailed': '⚠️ El cambio a {to} falló: {error}. La espera del reinicio sigue armada.',

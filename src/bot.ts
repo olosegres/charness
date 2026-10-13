@@ -6782,12 +6782,47 @@ async function detectFallbackOptions(): Promise<FallbackDetection> {
 }
 
 /**
+ * @description The profile the topic's LIVE Claude process runs on (the config directory it was spawned with),
+ * which differs from the topic's pick while a switch is deferred or the pick was never applied. The pick when
+ * there is no live process or its directory maps to no known profile.
+ */
+function resolveLiveClaudeProfileName(key: SessionKey): string {
+  const adapter = getThreadAdapter(key);
+  if (adapter instanceof ClaudeJsonStreamAdapter || adapter instanceof ClaudeCliAdapter) {
+    const dir = adapter.getSessionClaudeConfigDir(key);
+    if (dir !== undefined) {
+      const live = resolveClaudeProfileNameForDir(dir);
+      if (live !== null) return live;
+    }
+  }
+  return state.resolveClaudeProfileName(key);
+}
+
+/**
+ * @description An `/account` pick on a topic: the plain apply, except while a usage-limit wait is armed and the
+ * pick moves the topic off the profile its process runs on. The process cannot work on the limited account, so
+ * the pick is applied NOW and the topic resumes like after a limit switch (wait cancelled, continue nudge).
+ */
+async function applyClaudePickToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
+  const armed = getArmedApiRetry(key);
+  if (armed?.kind === 'usageLimit' && checkIsClaudeProfileBackend(key)) {
+    const from = getTopicFallbackPosition(key);
+    const to = state.resolveClaudeProfileName(key);
+    if (from !== null && from.backend === 'claude' && from.profile !== to) {
+      const { isSwitched } = await switchTopicToFallbackEntry(key, from, { backend: 'claude', profile: to, model: null }, { isAnnounced: true });
+      return isSwitched ? 'respawned' : 'deferred';
+    }
+  }
+  return applyClaudeProfileToThread(key);
+}
+
+/**
  * @description The rung a topic runs on now: its Claude profile and model on a Claude backend, its
  * `provider/model` on OpenCode (`null` while OpenCode runs the server default — nothing to mark or compare),
  * `null` for a terminal or no agent.
  */
 function getTopicFallbackPosition(key: SessionKey): FallbackChainEntry | null {
-  if (checkIsClaudeProfileBackend(key)) return { backend: 'claude', profile: state.resolveClaudeProfileName(key), model: getThreadClaudeModel(key) };
+  if (checkIsClaudeProfileBackend(key)) return { backend: 'claude', profile: resolveLiveClaudeProfileName(key), model: getThreadClaudeModel(key) };
   const adapter = getThreadAdapter(key);
   if (adapter.name !== openCodeAdapterName) return null;
   const label = adapter.getCurrentModel?.(key);
@@ -6926,9 +6961,13 @@ async function switchTopicToFallbackEntry(
     return { isSwitched: false, notice };
   };
   let firstPrompt: { text: string; isRequestPrompt: boolean } | null = null;
+  let isStoppingBackground = false;
   if (isSameFamily && to.backend === 'claude') {
     await state.setClaudeProfileOverride(key, to.profile);
-    const outcome = await applyClaudeProfileToThread(key);
+    // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
+    const adapter = getThreadAdapter(key);
+    isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
+    const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
     if (outcome === 'deferred' || outcome === 'restartRequired') {
       fallbackSwitchOffers.delete(k);
       const notice = t('fallback.switchedDeferred', { from: fromLabel, to: toLabel });
@@ -6950,7 +6989,7 @@ async function switchTopicToFallbackEntry(
     firstPrompt = { text: bridge, isRequestPrompt: false };
   }
   cancelApiRetry(key); // retires the offer too: the switch consumed it
-  const notice = getFallbackSwitchedNotice(from, to);
+  const notice = `${getFallbackSwitchedNotice(from, to)}${isStoppingBackground ? ` ${t('fallback.backgroundStopped')}` : ''}`;
   console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
   await say(notice);
   const ensured = await ensureAgentSession(key);
@@ -7009,7 +7048,7 @@ const {
   refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
-  applyClaudeProfile: applyClaudeProfileToThread,
+  applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
