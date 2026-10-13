@@ -5,6 +5,7 @@
 import { Markup, type Context } from 'telegraf';
 import type { Message } from 'telegraf/typings/core/types/typegram';
 import { getAdapter, getThreadAdapter } from '../../../adapters/createAdapter';
+import { openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
@@ -29,6 +30,13 @@ import {
   providerHideCallbackRe,
   providerShowCallbackRe,
 } from '../../../utils/modelPickerPlan';
+import {
+  buildRecentModelPickCallback,
+  getRecentModelPick,
+  getRecentModelsInCatalog,
+  recentModelPickCallbackRe,
+  recentModelsOpenCallback,
+} from '../../../utils/modelRecentPlan';
 import {
   buildDisconnectProviderCallback,
   buildDisconnectPickerKey,
@@ -116,11 +124,24 @@ function getCurrentModelLabel(adapter: AgentAdapter, key: SessionKey): string {
  * @description Provider level: one row per provider, each with a 🙈 button that
  * hides it from the picker. Hidden providers follow in their own section with a
  * 👁 button to bring them back — the only way back, so they must always render.
+ *
+ * The FIRST row is the "Recently used" shortcut — the flat cross-provider list
+ * of models picked before — present only when that list (already filtered
+ * against the catalog) has something to offer: an empty level would be a dead
+ * end, so the button is simply absent.
  */
-function buildModelProviderKeyboard(catalog: ModelCatalog) {
+function buildModelProviderKeyboard(catalog: ModelCatalog, recentModels: readonly string[]) {
   const hiddenProviderSet = new Set(catalog.hiddenProviders);
   const visibleRows: ReturnType<typeof Markup.button.callback>[][] = [];
   const hiddenRows: ReturnType<typeof Markup.button.callback>[][] = [];
+  if (recentModels.length > 0) {
+    visibleRows.push([
+      Markup.button.callback(
+        t('model.recent_button', { count: recentModels.length }),
+        recentModelsOpenCallback,
+      ),
+    ]);
+  }
   catalog.providers.forEach((provider, providerIndex) => {
     const count = catalog.byProvider.get(provider)?.length ?? 0;
     if (hiddenProviderSet.has(provider)) {
@@ -176,11 +197,55 @@ export interface ModelPickerRender {
  * the "no render path can outgrow Telegram's message cap" guarantee — the whole
  * point of the two-level picker — is assertable on THIS level too, not just on
  * the paginated model level.
+ *
+ * `recentModels` is the recently-used list ALREADY filtered against `catalog`
+ * (`getRecentModelsInCatalog`); the caller passes nothing for a backend that
+ * has no providers to hop between (the Claude backends).
  */
-export function buildModelProviderRender(catalog: ModelCatalog, current: string): ModelPickerRender {
+export function buildModelProviderRender(
+  catalog: ModelCatalog,
+  current: string,
+  recentModels: readonly string[] = [],
+): ModelPickerRender {
   return {
     text: buildModelProviderText(catalog, current),
-    keyboard: buildModelProviderKeyboard(catalog),
+    keyboard: buildModelProviderKeyboard(catalog, recentModels),
+    pageModels: [],
+    isNumberedPickArmed: false,
+  };
+}
+
+/**
+ * @description The "Recently used" level: one flat list of full
+ * `provider/model` ids (the provider is the point here, so it is NOT
+ * stripped), most recent first, ✓ on the current one, and the way back to the
+ * providers. Buttons only — no numbered list, so it never arms the bare-digit
+ * pick.
+ *
+ * Each button carries its position AND the entry's identity hash
+ * (`mdlr_<i>_<hash>`): the list is reordered by every pick, so an index alone
+ * would let a keyboard left in the history apply a different model than the
+ * one printed on it.
+ *
+ * Returns `null` for an empty list — the row that opens this level is absent
+ * then, so a tap can only come from a stale keyboard.
+ */
+export function buildRecentModelsRender(
+  recentModels: readonly string[],
+  current: string,
+): ModelPickerRender | null {
+  if (recentModels.length === 0) return null;
+  const rows = recentModels.map((modelId, index) => [
+    Markup.button.callback(
+      modelId === current ? `${modelId} ✓` : modelId,
+      buildRecentModelPickCallback(index, modelId),
+    ),
+  ]);
+  rows.push([Markup.button.callback(t('model.back_button'), modelPickerBackCallback)]);
+  const header = t('model.recent_header', { count: recentModels.length, current });
+  return {
+    text: `${header}\n\n${t('model.page_hint_buttons_only')}`,
+    keyboard: Markup.inlineKeyboard(rows),
     pageModels: [],
     isNumberedPickArmed: false,
   };
@@ -371,8 +436,27 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       },
       t,
     );
-    if (decision.isOk) await updatePinnedStatus(key).catch(() => {});
+    if (decision.isOk) {
+      await updatePinnedStatus(key).catch(() => {});
+      // The "Recently used" list is an OpenCode concept (providers to hop
+      // between); a Claude alias has none. `displayLabel` is the adapter's
+      // resolved `provider/model`, not whatever shorthand the user typed.
+      if (adapter.name === openCodeAdapterName && displayLabel.includes('/')) {
+        await getState().addRecentModel(displayLabel);
+      }
+    }
     return { ...decision, setModelError, displayLabel };
+  }
+
+  /**
+   * @description The recently-used entries the picker may offer for `adapter`:
+   * the persisted list filtered against the live catalog (a stale entry must
+   * not render a button that resolves to nothing), and nothing at all for a
+   * backend without providers — the Claude backends never show the row.
+   */
+  function getRecentModelsForPicker(adapter: AgentAdapter, catalog: ModelCatalog): string[] {
+    if (adapter.name !== openCodeAdapterName) return [];
+    return getRecentModelsInCatalog(getState().getRecentModels(), catalog);
   }
 
   function armProviderConnect(key: SessionKey, providerId: string): void {
@@ -639,7 +723,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     }
 
     const render = checkHasProviderLevel(catalog.visibleProviders.length, catalog.hiddenProviders.length)
-      ? buildModelProviderRender(catalog, current)
+      ? buildModelProviderRender(catalog, current, getRecentModelsForPicker(adapter, catalog))
       // Single offered provider → the provider level is a one-button detour;
       // `providers` then holds exactly that one entry, hence index 0.
       : buildModelPageRender(catalog, 0, 0, current, { isWithNumberedList: true });
@@ -657,7 +741,28 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   async function refreshModelProviderLevel(ctx: Context, key: SessionKey): Promise<void> {
     const adapter = getThreadAdapter(key);
     const catalog = await getModelCatalog(adapter);
-    const render = buildModelProviderRender(catalog, getCurrentModelLabel(adapter, key));
+    const render = buildModelProviderRender(
+      catalog,
+      getCurrentModelLabel(adapter, key),
+      getRecentModelsForPicker(adapter, catalog),
+    );
+    applyModelPagePickArming(key, render);
+    await editModelPickerMessage(ctx, render);
+  }
+
+  /**
+   * @description Re-render the "Recently used" level in place. Falls back to the
+   * provider level when the list came out empty (nothing left after the catalog
+   * filter), so the message never shows a level with no buttons.
+   */
+  async function refreshRecentModelsLevel(ctx: Context, key: SessionKey): Promise<void> {
+    const adapter = getThreadAdapter(key);
+    const catalog = await getModelCatalog(adapter);
+    const render = buildRecentModelsRender(
+      getRecentModelsForPicker(adapter, catalog),
+      getCurrentModelLabel(adapter, key),
+    );
+    if (!render) { await refreshModelProviderLevel(ctx, key); return; }
     applyModelPagePickArming(key, render);
     await editModelPickerMessage(ctx, render);
   }
@@ -836,6 +941,45 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       } else {
         clearModelPagePick(key);
       }
+      await replyToThread(key, message);
+    });
+
+    // 🕘 Recently used → the flat cross-provider list of earlier picks.
+    bot.action(recentModelsOpenCallback, async (ctx) => {
+      const key = await authoriseContext(ctx);
+      if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+      await ctx.answerCbQuery();
+      await refreshRecentModelsLevel(ctx, key);
+    });
+
+    // A recent entry tapped → the same apply path as every other pick. Resolved
+    // by the identity hash the button carries, against the list AS IT IS NOW:
+    // an old keyboard can name a model that moved (still applied — it is the
+    // model printed on the button) or one that left the list (refused), never
+    // a different one.
+    bot.action(recentModelPickCallbackRe, async (ctx) => {
+      const key = await authoriseContext(ctx);
+      if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+      const adapter = getThreadAdapter(key);
+      if (!adapter.setModel) {
+        await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
+        return;
+      }
+      const catalog = await getModelCatalog(adapter);
+      const modelId = getRecentModelPick(
+        getRecentModelsForPicker(adapter, catalog),
+        { index: Number(ctx.match[1]), identity: ctx.match[2] },
+      );
+      if (modelId === null) { await ctx.answerCbQuery(t('cb.model_recent_gone')); return; }
+
+      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
+      if (!isOk) {
+        await ctx.answerCbQuery(t('cb.model_error', { error: (setModelError ?? message).slice(0, 50) }));
+        return;
+      }
+      await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
+      // Re-render the SAME level: the pick just moved to the head and takes the ✓.
+      await refreshRecentModelsLevel(ctx, key);
       await replyToThread(key, message);
     });
 

@@ -26,6 +26,7 @@ import { COMMANDS_MENU } from '../bot';
 import {
   buildModelPageRender,
   buildModelProviderRender,
+  buildRecentModelsRender,
   createModelProviders,
   getProviderAuthAdapter,
 } from '../connectors/telegram/commands/modelProviders';
@@ -33,8 +34,10 @@ import { createInertBotCore } from './commandModuleHarness';
 import {
   buildModelCatalog,
   checkIsCallbackDataWithinLimit,
+  modelPickerBackCallback,
   type ModelCatalog,
 } from '../utils/modelPickerPlan';
+import { recentModelPickCallbackRe, recentModelsOpenCallback } from '../utils/modelRecentPlan';
 import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
 import { getAdapter } from '../adapters/createAdapter';
 import type { SessionKey } from '../sessionKey';
@@ -339,6 +342,61 @@ describe('no render path can outgrow Telegram\'s message cap', () => {
         );
       }
     }
+  });
+});
+
+describe('"Recently used" shortcut on the provider level', () => {
+  const recent = ['anthropic/claude-some-model-name-3', 'openai/gpt-some-model-name-7'];
+
+  it('is the FIRST row when the list has entries, absent when it is empty', () => {
+    const catalog = createProductionSizedCatalog();
+    const withRecent = buildModelProviderRender(catalog, 'x', recent);
+    const firstRow = withRecent.keyboard.reply_markup.inline_keyboard[0];
+    assert.equal(firstRow.length, 1, 'no 🙈 beside the shortcut — it is not a provider');
+    assert.equal((firstRow[0] as { callback_data: string }).callback_data, recentModelsOpenCallback);
+    assert.ok('text' in firstRow[0] && firstRow[0].text.includes('2'), 'the count rides on the label');
+
+    const without = buildModelProviderRender(catalog, 'x');
+    assert.equal(
+      without.keyboard.reply_markup.inline_keyboard.length,
+      withRecent.keyboard.reply_markup.inline_keyboard.length - 1,
+    );
+    assert.ok(!getCallbackData(without).includes(recentModelsOpenCallback));
+  });
+
+  it('the recent level lists FULL provider/model ids, ticks the current one, offers the way back', () => {
+    const render = buildRecentModelsRender(recent, 'openai/gpt-some-model-name-7');
+    assert.ok(render);
+    assert.equal(render.isNumberedPickArmed, false, 'buttons only — never arms the bare digit');
+    const labels = render.keyboard.reply_markup.inline_keyboard
+      .flat()
+      .map((button) => ('text' in button ? button.text : ''));
+    assert.deepEqual(labels.slice(0, 2), [
+      'anthropic/claude-some-model-name-3',
+      'openai/gpt-some-model-name-7 ✓',
+    ]);
+    const callbackIds = getCallbackData(render);
+    assert.equal(callbackIds.at(-1), modelPickerBackCallback);
+    for (const callbackData of callbackIds) {
+      assert.ok(checkIsCallbackDataWithinLimit(callbackData), `"${callbackData}" over the cap`);
+    }
+    assert.match(callbackIds[0], recentModelPickCallbackRe);
+    assert.ok(render.text.length < TELEGRAM_HARD_LIMIT);
+  });
+
+  it('an empty list renders nothing — the row that opens it is absent anyway', () => {
+    assert.equal(buildRecentModelsRender([], 'x'), null);
+  });
+
+  it('a full list of the longest ids still fits the message cap', () => {
+    const longest = Array.from(
+      { length: 10 },
+      (_, i) => `openrouter/some-vendor-name/a-fairly-long-model-identifier-${i}:free`,
+    );
+    const render = buildRecentModelsRender(longest, longest[0]);
+    assert.ok(render);
+    assert.ok(render.text.length < TELEGRAM_HARD_LIMIT);
+    assert.equal(render.keyboard.reply_markup.inline_keyboard.length, 11, '10 entries + back');
   });
 });
 

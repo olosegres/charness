@@ -5,7 +5,7 @@
  * recording topic sends). The thread runs the default Claude backend, whose model list needs no process.
  * Pinned:
  *
- *   • WIRING — the commands and the ten buttons the module registers, in order;
+ *   • WIRING — the commands and the twelve buttons the module registers, in order;
  *   • the picker and its per-thread state, which the bot also reads (the numbered-pick arming) and clears
  *     (teardown) — owned by the bot and passed in;
  *   • the provider-credential flow's guards: a key that cannot be real is never taken for a secret, and
@@ -28,6 +28,7 @@ import {
   providerPageCallbackRe,
   providerShowCallbackRe,
 } from '../utils/modelPickerPlan';
+import { recentModelPickCallbackRe, recentModelsOpenCallback } from '../utils/modelRecentPlan';
 import { disconnectProviderCallbackRe } from '../utils/providerDisconnectPlan';
 import { createCommandHarness, harnessThreadId, type CommandHarness } from './commandModuleHarness';
 
@@ -35,6 +36,8 @@ const expectedCommandNames = ['connect', 'disconnect', 'model', 'effort'];
 const expectedActionPatterns = [
   String(providerPageCallbackRe),
   String(modelPickCallbackRe),
+  recentModelsOpenCallback,
+  String(recentModelPickCallbackRe),
   String(providerHideCallbackRe),
   String(providerShowCallbackRe),
   modelPickerBackCallback,
@@ -90,7 +93,7 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     await harness.stop();
   });
 
-  it('registers /connect /disconnect /model /effort and its ten buttons, in the order the bot has always had', () => {
+  it('registers /connect /disconnect /model /effort and its twelve buttons, in the order the bot has always had', () => {
     assert.deepEqual(harness.registeredCommandNames, expectedCommandNames);
     assert.deepEqual(harness.registeredActionPatterns, expectedActionPatterns);
   });

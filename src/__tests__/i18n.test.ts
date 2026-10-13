@@ -152,6 +152,19 @@ test('start-notice model + effort keys exist in every locale', () => {
   }
 });
 
+test('the /model "Recently used" keys exist in every locale and substitute their placeholders', () => {
+  for (const code of ['model.recent_button', 'model.recent_header', 'cb.model_recent_gone']) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  for (const locale of localeCodes) {
+    const button = runWithLocale(locale, () => t('model.recent_button', { count: 7 }));
+    const header = runWithLocale(locale, () => t('model.recent_header', { count: 7, current: 'openai/gpt-5' }));
+    assert.ok(button.includes('7'), `expected the count in ${locale}: "${button}"`);
+    assert.ok(header.includes('7') && header.includes('openai/gpt-5'), `header lost a placeholder in ${locale}: "${header}"`);
+    assert.ok(!button.includes('{') && !header.includes('{'), `placeholder not substituted in ${locale}`);
+  }
+});
+
 test('agent.ready carries the {infoBlock} placeholder in every locale', () => {
   // The block is what makes the notice name the model + effort. A locale that
   // lost the placeholder would silently drop both rows for its users.

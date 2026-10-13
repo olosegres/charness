@@ -34,10 +34,15 @@ must make ONE reminder) and `finishReminderWizard` / `expireReminderWizard`, and
 
 ## `modelProviders.ts`
 
-`/model` (the provider → models picker), `/effort`, `/connect`, `/disconnect` and the ten buttons behind them. The
+`/model` (the provider → models picker), `/effort`, `/connect`, `/disconnect` and the twelve buttons behind them. The
 module registers in THREE places: `registerProviderCommands` (where `/connect` and `/disconnect` sat),
 `registerModelCommands` (`/model`, `/effort`) and `registerModelCallbacks`; the neighbouring `/claude_mode`
-stays in `bot.ts` between the first two. The per-thread picker state (`awaitingModelSelection`,
+stays in `bot.ts` between the first two. On an OpenCode topic the provider level opens with a "Recently used"
+row (`mdlrecent`) — a flat list of the `provider/model` ids picked before, instance-wide, most recent first,
+persisted in `state.json` (`recentModels`, written by the single `applyModelSelection` choke point) and filtered
+against the live catalog at render time (`utils/modelRecentPlan.ts`); the row is absent when nothing is left.
+Its buttons carry the position AND an identity hash of the entry (`mdlr_<i>_<hash>`), so a keyboard left in the
+history applies the model printed on it or is refused, never a reordered neighbour. The per-thread picker state (`awaitingModelSelection`,
 `threadModelLists`, the pending-connect and snapshot maps, the other input-mode sets) is owned by `bot.ts`,
 which clears it on teardown and reads it in the text handler, and is passed in. A bare digit is read as a model
 pick only while `awaitingModelSelection` holds the thread, and every numbered pick — typed or tapped — disarms

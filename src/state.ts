@@ -19,6 +19,7 @@ import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './uti
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
+import { pushRecentModel } from './utils/modelRecentPlan';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
@@ -323,6 +324,18 @@ export interface StateV1 {
    * teardown. Optional so older state files stay valid.
    */
   hiddenModelProviders?: string[];
+  /**
+   * `provider/model` ids picked through `/model` on OpenCode topics, most
+   * recent first, deduplicated and capped (`utils/modelRecentPlan.ts`). GLOBAL
+   * for the whole bot instance: the "Recently used" shortcut of the `/model`
+   * picker exists to hop between favourite models of DIFFERENT providers, and
+   * a favourite is a favourite in every topic. Entries whose provider or model
+   * left the server's catalog are kept on disk (the provider may come back)
+   * and filtered at render time. Dropped when empty so a default install
+   * leaves no trace; only `/model` mutates it, never session teardown.
+   * Optional so older state files stay valid.
+   */
+  recentModels?: string[];
   /**
    * Compact-on-idle toggle (`/compact_on_idle`). `compactOnIdleEnabled` is the
    * INSTANCE-WIDE default, driven from the General topic; absent ⇒ ON (the
@@ -1446,6 +1459,30 @@ export class StateStore {
     const uniqueProviders = [...current].sort();
     if (uniqueProviders.length > 0) this.state.hiddenModelProviders = uniqueProviders;
     else delete this.state.hiddenModelProviders;
+    this.scheduleSave();
+  }
+
+  // ── recently used `/model` picks (global, not per-thread) ──
+
+  /**
+   * @description The recently used `provider/model` ids, most recent first.
+   * Empty on a fresh install. Unfiltered — the picker drops the entries the
+   * live catalog no longer serves (`getRecentModelsInCatalog`).
+   */
+  getRecentModels(): string[] {
+    return this.state.recentModels?.slice() ?? [];
+  }
+
+  /**
+   * @description Record a successful model pick: `modelId` moves to the head of
+   * the list (deduplicated, capped by {@link pushRecentModel}). Same shape
+   * discipline as {@link setModelProviderHidden} — an empty list is dropped —
+   * and, like it, a picker preference rides the debounced save loop.
+   */
+  async addRecentModel(modelId: string): Promise<void> {
+    const next = pushRecentModel(this.state.recentModels ?? [], modelId);
+    if (next.length > 0) this.state.recentModels = next;
+    else delete this.state.recentModels;
     this.scheduleSave();
   }
 
