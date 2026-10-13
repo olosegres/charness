@@ -697,5 +697,6 @@ export const kaDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 სხვა Claude ანგარიშს მარაგი აქვს — დააჭირე, რომ ეს თემა მასზე გადავიდეს და ახლავე გააგრძელოს.',
   'account.limitSwitched': '🔁 ლიმიტი {from}-ზე — ეს თემა {to}-ზე გადაირთო და აგრძელებს.',
   'account.limitSwitchedDeferred': '🔁 ლიმიტი {from}-ზე — აგენტი ჯერ მუშაობს, ამიტომ თემა {to}-ზე სვლის დასრულებისას გადაირთვება; მანამდე ლოდინი რჩება.',
+  'account.limitSwitchedBackgroundStopped': 'ჯერ მიმდინარე ფონური ამოცანები გადართვამ შეაჩერა.',
   'account.limitSwitchExpired': 'ეს ლიმიტი უკვე გავიდა — გადასართავი არაფერია.',
 };

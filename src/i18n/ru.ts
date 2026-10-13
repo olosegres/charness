@@ -701,5 +701,6 @@ export const ruDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 У другого аккаунта Claude есть запас — нажми, чтобы перевести этот топик на него и продолжить сейчас.',
   'account.limitSwitched': '🔁 Лимит на {from} — топик переключён на {to} и продолжает работу.',
   'account.limitSwitchedDeferred': '🔁 Лимит на {from} — агент ещё работает, поэтому топик переключится на {to} по окончании хода; до тех пор ожидание остаётся.',
+  'account.limitSwitchedBackgroundStopped': 'Фоновые задачи, которые ещё работали, остановлены переключением.',
   'account.limitSwitchExpired': 'Этот лимит уже позади — переключать нечего.',
 };

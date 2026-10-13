@@ -698,5 +698,6 @@ export const ptDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Outra conta Claude tem folga — toque para mover este tópico para ela e continuar agora.',
   'account.limitSwitched': '🔁 Limite de uso em {from} — este tópico passou para {to} e continua.',
   'account.limitSwitchedDeferred': '🔁 Limite de uso em {from} — o agente ainda está a trabalhar, por isso este tópico passa para {to} no fim do seu turno; até lá a espera continua armada.',
+  'account.limitSwitchedBackgroundStopped': 'As tarefas em segundo plano que ainda estavam a correr foram paradas pela troca.',
   'account.limitSwitchExpired': 'Este limite já passou — nada para trocar.',
 };

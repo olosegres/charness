@@ -697,5 +697,6 @@ export const uzDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Boshqa Claude akkauntida zaxira bor — bu mavzuni unga o‘tkazib hozir davom ettirish uchun bosing.',
   'account.limitSwitched': '🔁 {from} da limit — bu mavzu {to} ga o‘tdi va davom etmoqda.',
   'account.limitSwitchedDeferred': '🔁 {from} da limit — agent hali ishlamoqda, shuning uchun mavzu navbati tugagach {to} ga o‘tadi; ungacha kutish saqlanadi.',
+  'account.limitSwitchedBackgroundStopped': 'Hali ishlayotgan fon vazifalari almashtirish tufayli to‘xtatildi.',
   'account.limitSwitchExpired': 'Bu limit allaqachon o‘tgan — almashtiradigan narsa yo‘q.',
 };

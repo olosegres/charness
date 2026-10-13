@@ -691,5 +691,6 @@ export const jaDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 別の Claude アカウントに余裕があります — タップしてこのトピックを移し、今すぐ続行します。',
   'account.limitSwitched': '🔁 {from} が使用上限に達しました — このトピックは {to} に切り替わり、続行します。',
   'account.limitSwitchedDeferred': '🔁 {from} が使用上限に達しました — エージェントはまだ作業中のため、ターン終了時に {to} へ切り替わります。それまで待機は維持されます。',
+  'account.limitSwitchedBackgroundStopped': '実行中だったバックグラウンドタスクは切り替えにより停止されました。',
   'account.limitSwitchExpired': 'この上限はすでに終わっています — 切り替えるものはありません。',
 };

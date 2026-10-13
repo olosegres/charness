@@ -691,5 +691,6 @@ export const zhDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 另一个 Claude 账号仍有余量 — 点按即可把此话题转到该账号并立即继续。',
   'account.limitSwitched': '🔁 {from} 达到用量限额 — 此话题已切换到 {to} 并继续。',
   'account.limitSwitchedDeferred': '🔁 {from} 达到用量限额 — 代理仍在工作，此话题将在本轮结束后切换到 {to}；在此之前等待保持不变。',
+  'account.limitSwitchedBackgroundStopped': '仍在运行的后台任务已因切换而停止。',
   'account.limitSwitchExpired': '此限额已经结束 — 无需切换。',
 };

@@ -697,5 +697,6 @@ export const deDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Ein anderes Claude-Konto hat Reserve — tippe, um dieses Topic darauf zu verschieben und jetzt weiterzumachen.',
   'account.limitSwitched': '🔁 Nutzungslimit bei {from} — dieses Topic ist auf {to} gewechselt und macht weiter.',
   'account.limitSwitchedDeferred': '🔁 Nutzungslimit bei {from} — der Agent arbeitet noch, daher wechselt dieses Topic am Ende seines Zuges zu {to}; bis dahin bleibt das Warten aktiv.',
+  'account.limitSwitchedBackgroundStopped': 'Noch laufende Hintergrundaufgaben wurden durch den Wechsel beendet.',
   'account.limitSwitchExpired': 'Dieses Limit ist vorbei — nichts zu wechseln.',
 };

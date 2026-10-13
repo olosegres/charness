@@ -745,5 +745,6 @@ export const enDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Another Claude account has room — tap to move this topic to it and continue now.',
   'account.limitSwitched': '🔁 Usage limit on {from} — this topic switched to {to} and continues.',
   'account.limitSwitchedDeferred': '🔁 Usage limit on {from} — the agent is still working, so this topic switches to {to} when its turn ends; the wait stays armed until then.',
+  'account.limitSwitchedBackgroundStopped': 'Background tasks that were still running were stopped by the switch.',
   'account.limitSwitchExpired': 'This limit is over — nothing to switch.',
 };

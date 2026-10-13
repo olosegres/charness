@@ -697,5 +697,6 @@ export const frDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Un autre compte Claude a de la marge — touchez pour y déplacer ce sujet et continuer maintenant.',
   'account.limitSwitched': '🔁 Limite d\'usage sur {from} — ce sujet est passé à {to} et continue.',
   'account.limitSwitchedDeferred': '🔁 Limite d\'usage sur {from} — l\'agent travaille encore, ce sujet passera donc à {to} à la fin de son tour ; l\'attente reste armée jusque-là.',
+  'account.limitSwitchedBackgroundStopped': 'Les tâches d\'arrière-plan encore en cours ont été arrêtées par le changement.',
   'account.limitSwitchExpired': 'Cette limite est passée — rien à basculer.',
 };

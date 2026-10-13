@@ -703,5 +703,6 @@ export const ukDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 В іншого акаунта Claude є запас — натисни, щоб перевести цей топік на нього й продовжити зараз.',
   'account.limitSwitched': '🔁 Ліміт на {from} — топік перемкнуто на {to}, робота триває.',
   'account.limitSwitchedDeferred': '🔁 Ліміт на {from} — агент ще працює, тож топік перемкнеться на {to} після завершення ходу; до того очікування залишається.',
+  'account.limitSwitchedBackgroundStopped': 'Фонові завдання, що ще працювали, зупинено перемиканням.',
   'account.limitSwitchExpired': 'Цей ліміт уже минув — перемикати нічого.',
 };

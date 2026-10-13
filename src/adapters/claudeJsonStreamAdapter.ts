@@ -1632,6 +1632,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       console.log(`${claudeJsonStreamUsageLogPrefix}${keyToString(session.key)}: input=${inputTokens} cacheRead=${cacheReadTokens} cacheWrite=${cacheWriteTokens} output=${outputTokens}`);
     }
     session.isBusy = false;
+    // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
+    // queued behind it, and a count left above zero would make the session look "working" forever — a pending
+    // account switch would never fire. A message still genuinely queued is echoed later (the decrement clamps
+    // at zero and the echo marks the session busy again), so zeroing here can only under-count briefly.
+    if (action.isError) session.unconsumedInputCount = 0;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
@@ -1955,8 +1960,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * when it already runs there; a re-spawn with `--resume` (the `/model` path — same conversation, model and
    * effort kept) when it is idle; deferred to the end of its turn when it works, since a re-spawn kills the turn
    * and any background task. A sleeping conversation needs nothing: its next resume reads the reader.
+   *
+   * `isAfterLimit`: the switch answers a usage limit (the offer button, auto-switch, a pick during the limit
+   * wait). The turn is dead and the model cannot act on the limited account, so the re-spawn happens NOW even
+   * when the session looks working (busy flag, unconsumed input). Live background tasks (background Bash,
+   * sub-agents) are stopped by it too — a deliberate choice: the user chose to move, and a process on a limited
+   * account cannot make progress; the caller says so when `checkHasBackgroundWork` was true.
    */
-  async applyClaudeConfigDir(key: SessionKey): Promise<ClaudeConfigDirApplyResult> {
+  async applyClaudeConfigDir(key: SessionKey, options: { isAfterLimit?: boolean } = {}): Promise<ClaudeConfigDirApplyResult> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return 'inactive';
     const wanted = this.resolveConfigDir(key);
@@ -1964,7 +1975,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.isConfigDirSwitchPending = false;
       return 'unchanged';
     }
-    if (this.checkIsWorking(key)) {
+    if (!options.isAfterLimit && this.checkIsWorking(key)) {
       session.isConfigDirSwitchPending = true;
       return 'deferred';
     }

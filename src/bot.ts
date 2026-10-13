@@ -6645,14 +6645,15 @@ const claudeAuthStatusProbeTimeoutMs = 5000;
  * pane, same conversation) and left alone when busy — its next start or resume applies the pick. Any other
  * backend has no Claude process to move.
  */
-async function applyClaudeProfileToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
+async function applyClaudeProfileToThread(key: SessionKey, options: { isAfterLimit?: boolean } = {}): Promise<ClaudeProfileApplyOutcome> {
   const adapter = getThreadAdapter(key);
-  if (adapter instanceof ClaudeJsonStreamAdapter) return adapter.applyClaudeConfigDir(key);
+  if (adapter instanceof ClaudeJsonStreamAdapter) return adapter.applyClaudeConfigDir(key, options);
   if (!(adapter instanceof ClaudeCliAdapter)) return 'inactive';
   const current = adapter.getSessionClaudeConfigDir(key);
   if (current === undefined) return 'inactive';
   if (current === resolveThreadClaudeConfigDir(key)) return 'unchanged';
-  if (adapter.checkIsBusy(key)) return 'restartRequired';
+  // After a usage limit the turn is dead: the pane is reopened even though it looks busy.
+  if (!options.isAfterLimit && adapter.checkIsBusy(key)) return 'restartRequired';
   const sessionId = state.getAgent(key)?.claudeSessionId;
   const decision = getWorkDirStartDecision(key);
   if (!sessionId || !decision.ok) return 'restartRequired';
@@ -6728,6 +6729,44 @@ function checkIsClaudeProfileBackend(key: SessionKey): boolean {
 }
 
 /**
+ * @description The profile the topic's LIVE Claude process runs on (the config directory it was spawned with),
+ * which differs from the topic's pick while a switch is deferred or the pick was never applied. The pick when
+ * there is no live process or its directory maps to no known profile.
+ */
+function resolveLiveClaudeProfileName(key: SessionKey): string {
+  const adapter = getThreadAdapter(key);
+  if (adapter instanceof ClaudeJsonStreamAdapter || adapter instanceof ClaudeCliAdapter) {
+    const dir = adapter.getSessionClaudeConfigDir(key);
+    if (dir !== undefined) {
+      const live = resolveClaudeProfileNameForDir(dir);
+      if (live !== null) return live;
+    }
+  }
+  return state.resolveClaudeProfileName(key);
+}
+
+/**
+ * @description An `/account` pick on a topic: the plain apply, except while a usage-limit wait is armed and the
+ * pick moves the topic off the profile its process runs on. The process cannot work on the limited account, so
+ * the pick is applied NOW and the topic resumes like after the limit switch (wait cancelled, continue nudge).
+ */
+async function applyClaudePickToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
+  const armed = getArmedApiRetry(key);
+  if (armed?.kind === 'usageLimit' && checkIsClaudeProfileBackend(key)) {
+    const from = resolveLiveClaudeProfileName(key);
+    const to = state.resolveClaudeProfileName(key);
+    if (from !== to) {
+      const isSwitched = await switchClaudeAccountAfterLimit(key, from, to, { isAnnounced: false });
+      return isSwitched ? 'respawned' : 'deferred';
+    }
+  }
+  return applyClaudeProfileToThread(key);
+}
+
+/** Threads whose last limit switch stopped live background work (the tapped button's confirmation says so). */
+const limitSwitchBackgroundStopped = new Set<string>();
+
+/**
  * @description What a usage limit on `key` leads to (`utils/claudeLimitSwitch.ts`): the profile the topic runs
  * on is marked limited until the reset the error named (else its session window, else the retry's blind delay),
  * the usage snapshots are brought up to date, and the other signed-in profiles with room for the topic's
@@ -6735,7 +6774,7 @@ function checkIsClaudeProfileBackend(key: SessionKey): boolean {
  * `none` for a non-Claude backend, a non-Telegram conversation, or when no profile can take over.
  */
 async function planClaudeLimitSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<ClaudeLimitSwitchPlan & { from: string }> {
-  const from = state.resolveClaudeProfileName(key);
+  const from = resolveLiveClaudeProfileName(key);
   if (!checkIsTelegramKey(key) || !checkIsClaudeProfileBackend(key)) return { action: 'none', from };
   const nowMs = Date.now();
   state.setClaudeProfileLimitedUntil(from, resolveClaudeLimitedUntil({
@@ -6771,7 +6810,14 @@ async function planClaudeLimitSwitch(key: SessionKey, cls: AgentApiErrorClass, e
 async function switchClaudeAccountAfterLimit(key: SessionKey, from: string, to: string, options: { isAnnounced: boolean }): Promise<boolean> {
   const k = keyToString(key);
   await state.setClaudeProfileOverride(key, to);
-  const outcome = await applyClaudeProfileToThread(key);
+  // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
+  const adapter = getThreadAdapter(key);
+  const isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
+  const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
+  if (outcome === 'respawned' && isStoppingBackground) {
+    if (options.isAnnounced) await replyToThread(key, t('account.limitSwitchedBackgroundStopped'));
+    limitSwitchBackgroundStopped.add(k);
+  }
   if (outcome === 'deferred' || outcome === 'restartRequired') {
     claudeLimitSwitchOffers.delete(k);
     if (options.isAnnounced) await replyToThread(key, t('account.limitSwitchedDeferred', { from, to }));
@@ -6804,8 +6850,11 @@ async function takeClaudeLimitSwitchOffer(key: SessionKey, episodeId: number, to
   if (!offer || getClaudeLimitSwitchTapDecision({ openEpisodeId: offer.episodeId, requestedEpisodeId: episodeId }) === 'expired') return null;
   if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to) === undefined) return t('account.unknown', { name: to });
   if (to !== defaultClaudeProfileName && state.getClaudeProfileRecord(to)?.loggedIn === false) return t('account.notLoggedIn', { name: to });
+  limitSwitchBackgroundStopped.delete(keyToString(key));
   const isSwitched = await switchClaudeAccountAfterLimit(key, offer.from, to, { isAnnounced: false });
-  return isSwitched ? t('account.limitSwitched', { from: offer.from, to }) : t('account.limitSwitchedDeferred', { from: offer.from, to });
+  if (!isSwitched) return t('account.limitSwitchedDeferred', { from: offer.from, to });
+  const stopped = limitSwitchBackgroundStopped.delete(keyToString(key)) ? ` ${t('account.limitSwitchedBackgroundStopped')}` : '';
+  return `${t('account.limitSwitched', { from: offer.from, to })}${stopped}`;
 }
 
 /** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
@@ -6832,7 +6881,7 @@ const {
   refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
-  applyClaudeProfile: applyClaudeProfileToThread,
+  applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
   takeLimitSwitchOffer: takeClaudeLimitSwitchOffer,
 });

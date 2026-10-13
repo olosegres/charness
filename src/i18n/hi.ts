@@ -696,5 +696,6 @@ export const hiDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 दूसरे Claude खाते में गुंजाइश है — इस टॉपिक को उस पर ले जाकर अभी जारी रखने के लिए टैप करें।',
   'account.limitSwitched': '🔁 {from} पर उपयोग सीमा — यह टॉपिक {to} पर स्विच हो गया और जारी है।',
   'account.limitSwitchedDeferred': '🔁 {from} पर उपयोग सीमा — एजेंट अभी काम कर रहा है, इसलिए यह टॉपिक उसकी बारी खत्म होने पर {to} पर स्विच होगा; तब तक प्रतीक्षा बनी रहती है।',
+  'account.limitSwitchedBackgroundStopped': 'जो बैकग्राउंड कार्य चल रहे थे, वे स्विच से रुक गए।',
   'account.limitSwitchExpired': 'यह सीमा बीत चुकी है — स्विच करने को कुछ नहीं।',
 };

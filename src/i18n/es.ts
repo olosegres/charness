@@ -697,5 +697,6 @@ export const esDict: Record<string, string> = {
   'account.limitSwitchOffer': '👤 Otra cuenta de Claude tiene margen — toca para pasar este tema a ella y continuar ahora.',
   'account.limitSwitched': '🔁 Límite de uso en {from} — este tema cambió a {to} y continúa.',
   'account.limitSwitchedDeferred': '🔁 Límite de uso en {from} — el agente sigue trabajando, así que este tema cambiará a {to} al terminar su turno; hasta entonces la espera sigue activa.',
+  'account.limitSwitchedBackgroundStopped': 'Las tareas en segundo plano que seguían en curso se detuvieron con el cambio.',
   'account.limitSwitchExpired': 'Este límite ya pasó — no hay nada que cambiar.',
 };
