@@ -96,6 +96,26 @@ function loadSavedModel(key: SessionKey): { providerID: string; modelID: string 
   }
 }
 
+/**
+ * @description Every `provider/model` label a thread ever picked (`/model`), most recently written last — the
+ * «recently used» hint the fallback-chain draft (`utils/fallbackChain.ts`) reads. Legacy numeric-user entries
+ * and malformed values are skipped; an unreadable file is an empty list.
+ */
+export function listSavedOpenCodeModelLabels(): string[] {
+  try {
+    if (!fs.existsSync(modelStateFile)) return [];
+    const data = JSON.parse(fs.readFileSync(modelStateFile, 'utf-8')) as Record<string, unknown>;
+    const labels: string[] = [];
+    for (const [keyStr, value] of Object.entries(data)) {
+      if (!keyStr.includes(':') || typeof value !== 'string' || value.indexOf('/') <= 0) continue;
+      labels.push(value);
+    }
+    return labels;
+  } catch {
+    return [];
+  }
+}
+
 function saveModelPref(key: SessionKey, label: string): void {
   try {
     let data: Record<string, string> = {};

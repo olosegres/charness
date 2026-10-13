@@ -20,6 +20,7 @@ import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnable
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
+import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
@@ -416,6 +417,14 @@ export interface StateV1 {
    */
   claudeAutoSwitchOnLimitEnabled?: boolean;
   claudeAutoSwitchOnLimitOverrides?: Record<string, boolean>;
+  /**
+   * The fallback chain (`/fallback`, `utils/fallbackChain.ts`): the instance-wide priority list of backend +
+   * account / provider + model a topic continues on when its own hits a usage limit. Validated on read
+   * (`normaliseFallbackChain`), so a hand edit never breaks the boot. `openCodeModelLimits` are the limit marks
+   * of OpenCode `provider/model` labels (ISO instants), the twin of `ClaudeProfileRecord.limitedUntil`.
+   */
+  fallbackChain?: FallbackChainEntry[];
+  openCodeModelLimits?: Record<string, string>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -1871,6 +1880,42 @@ export class StateStore {
       (this.state.claudeAutoSwitchOnLimitOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
+  }
+
+  // ── the fallback chain (`/fallback`) ──
+
+  /** The chain as persisted, validated entry by entry; `[]` when none was set. */
+  getFallbackChain(): FallbackChainEntry[] {
+    return normaliseFallbackChain(this.state.fallbackChain);
+  }
+
+  /** Replace the chain (an empty one is removed from the file). Flushed at once: the picker re-reads it right after. */
+  async setFallbackChain(chain: readonly FallbackChainEntry[]): Promise<void> {
+    const next = normaliseFallbackChain(chain);
+    if (next.length === 0) delete this.state.fallbackChain;
+    else this.state.fallbackChain = next;
+    await this.flush();
+  }
+
+  /** The limit marks of OpenCode models (`provider/model` → ISO instant), expired ones included. */
+  getOpenCodeModelLimits(): Readonly<Record<string, string>> {
+    return this.state.openCodeModelLimits ?? {};
+  }
+
+  getOpenCodeModelLimitedUntil(label: string): string | undefined {
+    return this.state.openCodeModelLimits?.[label];
+  }
+
+  /** Mark an OpenCode model limited until the instant (`null` clears). Debounced. */
+  setOpenCodeModelLimitedUntil(label: string, limitedUntil: string | null): void {
+    if (limitedUntil === null) {
+      if (!this.state.openCodeModelLimits?.[label]) return;
+      delete this.state.openCodeModelLimits[label];
+      if (Object.keys(this.state.openCodeModelLimits).length === 0) delete this.state.openCodeModelLimits;
+    } else {
+      (this.state.openCodeModelLimits ??= {})[label] = limitedUntil;
+    }
+    this.scheduleSave();
   }
 
   // ── Claude account profiles (`/account`) ──

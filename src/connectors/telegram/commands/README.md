@@ -98,7 +98,24 @@ weekly — percent used → reset in the instance zone, `getInstanceTimezone`), 
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
 goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The picker's
 last row is the auto-switch-on-limit toggle (`acct_autosw_on` / `acct_autosw_off`, `/account autoswitch on|off`;
-OFF by default; General sets the instance default, a topic its override — `utils/claudeLimitSwitch.ts`). The
-module also owns the `acsw_<episode>_<name>` button a usage-limit notice carries: the tap goes to the
-`takeLimitSwitchOffer` port (the bot checks the episode is still the topic's open one, moves the topic and
-resumes the work) and the notice is edited into the confirmation; a stale tap only answers the callback.
+OFF by default; General sets the instance default, a topic its override). The setting is shared with
+`/fallback`, whose module owns the switch itself and the buttons a usage-limit notice carries.
+
+## `fallbackChain.ts`
+
+`/fallback` and the buttons `fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_rm_<i>_<rev>`, `fbk_add`,
+`fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
+`fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, `fbk_asw_on` / `fbk_asw_off`, plus `fbsw_<episode>_<i>` on a
+usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
+on when its agent hits a usage limit (`utils/fallbackChain.ts`). The chain is edited in General only (a topic
+sees it read-only with ✓ on its own position and the auto-switch toggle for its override); the picker is meant
+for repeated use and re-renders in place. Every edit button BAKES the chain's content revision (8 hex digits of
+an FNV-1a over the entries): a keyboard posted before a later edit is refused as stale and only re-rendered, so
+an old index can never act on another rung. The two-step «add» keeps a snapshot per picker MESSAGE
+(`addSnapshots`: the providers listed, then the chosen provider's models) that the index buttons resolve
+against; a Claude account bakes its name and model in the data. The module owns no detection or switch: it
+asks the bot through ports for what is connected (`detectFallbackOptions` — the profile views, the OpenCode
+catalog, the recent `/model` picks, the limit marks), the topic's current rung (`getTopicPosition`) and the
+switch a notice button triggers (`takeSwitchOffer`: the bot checks the episode is still the topic's open one and
+the index is inside that episode's remembered candidates, moves the topic and resumes the work; the notice is
+edited into the confirmation, a stale tap only answers the callback).

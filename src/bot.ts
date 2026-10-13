@@ -54,7 +54,7 @@ import './connectors/jira/sessionKeyCodec';
 import { parseAgentTrigger as checkIsStartAgentPhrase } from './agentTrigger';
 import { checkSessionPickAction } from './sessionPick';
 import { ClaudeCliAdapter, getClaudeReplyRoute } from './adapters/claudeCliAdapter';
-import { type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
+import { listSavedOpenCodeModelLabels, type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
 import { TerminalAdapter } from './adapters/terminalAdapter';
 import {
   buildQuestionBodyLines,
@@ -375,6 +375,8 @@ import {
 } from './utils/claudeLimitSwitch';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
+import { parseOpenCodeModelLabel, type FallbackChainEntry, type FallbackDetection } from './utils/fallbackChain';
+import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENV parsing & fatal validation
@@ -6857,6 +6859,43 @@ async function takeClaudeLimitSwitchOffer(key: SessionKey, episodeId: number, to
   return `${t('account.limitSwitched', { from: offer.from, to })}${stopped}`;
 }
 
+// ── the fallback chain (`/fallback`): `utils/fallbackChain.ts`, `commands/fallbackChain.ts` ──
+
+/**
+ * @description What is connected NOW — the input of the chain draft and the picker rows: every Claude profile
+ * with its usage view, the OpenCode models the server is authenticated for (its live catalog — `opencode models`
+ * lists only providers with credentials; an absent or failing CLI yields none), the models topics recently
+ * picked (newest first) and the OpenCode limit marks.
+ */
+async function detectFallbackOptions(): Promise<FallbackDetection> {
+  let openCodeModels: string[] = [];
+  try {
+    openCodeModels = (await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? [];
+  } catch (e) {
+    console.warn('[fallback] the OpenCode catalog is unavailable:', e instanceof Error ? e.message : e);
+  }
+  return {
+    claudeProfiles: buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
+    openCodeModels,
+    recentOpenCodeModels: listSavedOpenCodeModelLabels().reverse(),
+    openCodeLimits: state.getOpenCodeModelLimits(),
+  };
+}
+
+/**
+ * @description The rung a topic runs on now: its Claude profile and model on a Claude backend, its
+ * `provider/model` on OpenCode (`null` while OpenCode runs the server default — nothing to mark or compare),
+ * `null` for a terminal or no agent.
+ */
+function getTopicFallbackPosition(key: SessionKey): FallbackChainEntry | null {
+  if (checkIsClaudeProfileBackend(key)) return { backend: 'claude', profile: state.resolveClaudeProfileName(key), model: getThreadClaudeModel(key) };
+  const adapter = getThreadAdapter(key);
+  if (adapter.name !== openCodeAdapterName) return null;
+  const label = adapter.getCurrentModel?.(key);
+  const parsed = label ? parseOpenCodeModelLabel(label) : null;
+  return parsed ? { backend: 'opencode', ...parsed } : null;
+}
+
 /** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
 async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeProfilesReport> {
   await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
@@ -6888,6 +6927,17 @@ const {
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
 registerClaudeAccountCommands();
+
+const { registerFallbackChainCommands, registerFallbackChainCallbacks } = createFallbackChain({
+  ...botCore,
+  getInstanceTimezone: getCurrentTimezone,
+  detectFallbackOptions,
+  getTopicPosition: getTopicFallbackPosition,
+  // The switch itself lands with the limit-switch planner; until then a notice carries no chain buttons.
+  takeSwitchOffer: async () => null,
+});
+
+registerFallbackChainCommands();
 
 registerCompactionCommands();
 
@@ -7525,7 +7575,7 @@ const botCommands = new Set([
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback',
 ]);
 
 /**
@@ -8801,6 +8851,7 @@ registerCompactionCallbacks();
 
 registerAutoContinueLimitsCallbacks();
 registerClaudeAccountCallbacks();
+registerFallbackChainCallbacks();
 
 // «⏭ Skip once» in the `/auto_continue_limits` picker: drop THIS armed resume and
 // leave the on/off setting alone. The episode is identified by the `fireAt` baked
@@ -10564,6 +10615,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'auto_continue_limits', description: '🚧 Auto-resume after a usage limit (toggle)' },
   { command: 'account', description: '👤 Claude account for this topic (picker; add / re-login / remove)' },
+  { command: 'fallback', description: '🪜 Where a topic continues when its agent hits a usage limit' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
   { command: 'status', description: '📊 Show status' },
