@@ -125,7 +125,7 @@ When to use it:
 ${compactConversationInstruction}
 • You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
-${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request.
+${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
 ${claudeProfilesInstruction}
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
@@ -1215,7 +1215,8 @@ function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps
         'the person who made it, on the surface it came from. The requester may not see your plain text, so ' +
         'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
         'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +
-        'note. You may call it several times for one request; only "question" and "final" close it.',
+        'note. You may call it several times for one request; only "question" and "final" close it. Do not ' +
+        'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice.',
       inputSchema: answerRequestShape,
     },
     async (args) => {
