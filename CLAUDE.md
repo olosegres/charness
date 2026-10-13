@@ -130,10 +130,22 @@ per-backend controls are optional methods the bot checks before calling.
   `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
   `announceUsageLimitOrSwitchAccount`): the limited profile gets `limitedUntil`, the ranking names the other
-  signed-in profiles with fresh usage and room; auto-switch ON (`/account` toggle, OFF by default, same
-  default + override pair as `/auto_continue_limits`) moves the topic (`setClaudeProfileOverride` → the apply
-  re-spawn → `cancelApiRetry` → the continue nudge through `deliverPromptOrBuffer`), OFF puts `acsw_<episode>_<name>`
-  buttons on the limit notice; no candidate ⇒ the wait as before.
+  signed-in profiles with fresh usage and room — the implicit chain when `/fallback` is empty.
+- **Fallback chain** (`/fallback`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
+  priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
+  (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog
+  + the recent `/model` picks) and edited in General with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
+  (from `handleApiError` → `announceUsageLimitOrSwitch`) marks the limited rung (`limitedUntil` /
+  `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; auto-switch ON (the `/account`
+  toggle, OFF by default, same default + override pair as `/auto_continue_limits`) switches by itself, OFF puts
+  `fbsw_<episode>_<index>` buttons on the notice (indexes into that episode's remembered candidates); no
+  candidate ⇒ the wait as before. `switchTopicToFallbackEntry`: within a backend the conversation is kept
+  (profile apply re-spawn / OpenCode `setModel`), across backends it is the `switchThreadAdapter` path — the
+  leaving family's session id is PARKED (`parkedSessions`, restored on the way back, released with the ids) and
+  the first prompt is the context bridge (`utils/fallbackBridge.ts`: the old adapter's `getRecentTurns`) instead
+  of the continue nudge; both end in `cancelApiRetry` → `deliverPromptOrBuffer`. Never switched back by itself.
+  OpenCode quota codes (`insufficient_quota`, `RESOURCE_EXHAUSTED`, …) classify as `usageLimit` ahead of the 429
+  transient branch (`apiErrorRetry.ts`).
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
 - **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);

@@ -187,6 +187,16 @@ export interface ClaudeProfileRecord {
   usage?: ClaudeUsageSnapshot;
 }
 
+/** The session id of the backend family a thread switched away from, kept for a switch back. */
+export interface ParkedSession {
+  /** The adapter the id belongs to. */
+  adapterName: string;
+  claudeSessionId?: string;
+  opencodeSessionId?: string;
+  /** ISO instant of the switch. */
+  parkedAt: string;
+}
+
 /**
  * Per-thread compact-on-idle bookkeeping (F2), persisted so a bot restart does
  * not erase the evidence the idle watchdog reasons about. The three instants are
@@ -422,9 +432,13 @@ export interface StateV1 {
    * account / provider + model a topic continues on when its own hits a usage limit. Validated on read
    * (`normaliseFallbackChain`), so a hand edit never breaks the boot. `openCodeModelLimits` are the limit marks
    * of OpenCode `provider/model` labels (ISO instants), the twin of `ClaudeProfileRecord.limitedUntil`.
+   * `parkedSessions` keep, per thread, the session id of the backend family the thread LEFT (a cross-backend
+   * fallback switch, a `/claude` ↔ `/opencode` change), so a later switch back resumes that conversation; a
+   * release (`/new`, `/quit`) drops the parked id with the live ones.
    */
   fallbackChain?: FallbackChainEntry[];
   openCodeModelLimits?: Record<string, string>;
+  parkedSessions?: Record<string, ParkedSession>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -1236,8 +1250,32 @@ export class StateStore {
       }
       const { claudeSessionId, opencodeSessionId, jsonStreamTail, startedAt, mcpToolDigest, ...rest } = existing;
       this.state.agents[k] = rest;
+      // A released conversation is gone for this thread: the other family's parked id goes with it.
+      this.dropParkedSession(k);
       this.scheduleSave();
     });
+  }
+
+  // ── parked session ids (a thread's other backend family, `utils/fallbackChain.ts`) ──
+
+  getParkedSession(key: SessionKey): ParkedSession | null {
+    return this.state.parkedSessions?.[keyToString(key)] ?? null;
+  }
+
+  /** Park the id of the family the thread leaves (`null` clears). Debounced. */
+  async setParkedSession(key: SessionKey, parked: ParkedSession | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (parked === null) this.dropParkedSession(k);
+      else (this.state.parkedSessions ??= {})[k] = parked;
+      this.scheduleSave();
+    });
+  }
+
+  private dropParkedSession(k: string): void {
+    if (!this.state.parkedSessions) return;
+    delete this.state.parkedSessions[k];
+    if (Object.keys(this.state.parkedSessions).length === 0) delete this.state.parkedSessions;
   }
 
   // ── messages (`/clear` support) ──

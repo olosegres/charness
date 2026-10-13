@@ -36,7 +36,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend, openCodeAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -99,7 +99,7 @@ import {
   getUpdateQueueKey,
 } from './connectors/telegram/updateDispatcher';
 import { classifyBoot } from './bootClassifier';
-import { defaultLocale, formatLanguageDisplay, localeCodes, normalizeLocale, runWithLocale, t, type Locale } from './i18n';
+import { defaultLocale, formatLanguageDisplay, getActiveLang, getLocaleEndonym, localeCodes, normalizeLocale, runWithLocale, t, type Locale } from './i18n';
 import { buildLanguagePicker, languageAutoCallback } from './connectors/telegram/languagePicker';
 import {
   applyProcessTimezone,
@@ -379,6 +379,7 @@ import {
   type FallbackDetection,
   type FallbackSwitchPlan,
 } from './utils/fallbackChain';
+import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
@@ -4259,6 +4260,23 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // the SAME conversation (`/claude_mode` live switch).
   if (checkIsClaudeBackend(newName) && agent.claudeSessionId) next.claudeSessionId = agent.claudeSessionId;
   if (newName === openCodeAdapterName && agent.opencodeSessionId) next.opencodeSessionId = agent.opencodeSessionId;
+  // The id of the family the thread LEAVES is parked, and the parked id of the family it RETURNS to is
+  // restored (`state.parkedSessions`): a cross-backend fallback switch — or a plain /claude ↔ /opencode — can
+  // come back to the conversation it left (L-D4: a sleeping conversation is woken, `/new` is the fresh start).
+  // The reattach loop never reads the parked slot, so the audit S12 bug (both ids on the live row) stays fixed.
+  const parked = state.getParkedSession(key);
+  const parkedAt = new Date().toISOString();
+  if (prevName && checkIsClaudeBackend(prevName) && !checkIsClaudeBackend(newName) && agent.claudeSessionId) {
+    await state.setParkedSession(key, { adapterName: prevName, claudeSessionId: agent.claudeSessionId, parkedAt });
+  } else if (prevName === openCodeAdapterName && newName !== openCodeAdapterName && agent.opencodeSessionId) {
+    await state.setParkedSession(key, { adapterName: prevName, opencodeSessionId: agent.opencodeSessionId, parkedAt });
+  } else if (parked && checkIsClaudeBackend(newName) && !next.claudeSessionId && parked.claudeSessionId) {
+    next.claudeSessionId = parked.claudeSessionId;
+    await state.setParkedSession(key, null);
+  } else if (parked && newName === openCodeAdapterName && !next.opencodeSessionId && parked.opencodeSessionId) {
+    next.opencodeSessionId = parked.opencodeSessionId;
+    await state.setParkedSession(key, null);
+  }
   // Overwrite by removing the row first; setAgent then writes only the
   // fields we kept.
   await state.removeAgent(key);
@@ -6817,8 +6835,7 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
     chain = pickClaudeLimitSwitchCandidates({ profiles: detection.claudeProfiles, currentName: from.profile, model: from.model, nowMs: Date.now() })
       .map((profile): FallbackChainEntry => ({ backend: 'claude', profile, model: null }));
   }
-  // Within the topic's backend only, until the cross-backend bridge lands.
-  const candidates = pickFallbackCandidates({ chain, current: from, detection, nowMs: Date.now() }).filter((entry) => entry.backend === from.backend);
+  const candidates = pickFallbackCandidates({ chain, current: from, detection, nowMs: Date.now() });
   const plan = decideFallbackSwitch({ candidates, isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key) });
   if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
   else fallbackSwitchOffers.delete(k);
@@ -6854,13 +6871,37 @@ function checkThreadClaudeModelMatches(key: SessionKey, alias: string): boolean 
 }
 
 /**
+ * @description The context bridge for a cross-backend switch (`utils/fallbackBridge.ts`), built BEFORE the old
+ * adapter is stopped: its last turns off its own transcript (an unreadable one yields a bridge without turns).
+ */
+async function buildFallbackBridge(key: SessionKey, from: FallbackChainEntry | null, to: FallbackChainEntry): Promise<string> {
+  const adapter = getThreadAdapter(key);
+  const decision = getWorkDirStartDecision(key);
+  const sessionId = getPersistedSessionIdForAdapter(state.getAgent(key) ?? null, adapter.name, checkIsClaudeBackend(adapter.name));
+  let turns: RecentTurn[] = [];
+  if (decision.ok && sessionId && adapter.getRecentTurns) {
+    try {
+      turns = await adapter.getRecentTurns(key, decision.workDir, sessionId, fallbackBridgeTurnLimit);
+    } catch (e) {
+      console.warn(`[fallback] ${keyToString(key)}: the previous agent's turns are unreadable:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return buildFallbackBridgePrompt({
+    fromLabel: from ? formatFallbackEntry(from) : t('fallback.backendClaude'),
+    toLabel: formatFallbackEntry(to),
+    turns,
+    resetsAtText: getFallbackResetTime(from),
+    replyLanguage: getLocaleEndonym(getActiveLang()),
+  });
+}
+
+/**
  * @description Move a limited topic onto rung `to` and continue the work there. WITHIN a backend the
  * conversation is kept: a Claude rung sets the topic's profile (the `/account` apply path re-spawns the live
  * session under the new directory, same transcript) and pins the rung's model when it names one; an OpenCode
  * rung changes the session's per-prompt model. ACROSS backends the topic's adapter changes (the `/claude` /
  * `/opencode` path: the old session is stopped and its id parked for a switch back), the new session is started
- * or resumed, and its first prompt is the context bridge instead of the plain "continue" nudge (the next
- * step; refused for now). Either way the
+ * or resumed, and its first prompt is the context bridge instead of the plain "continue" nudge. Either way the
  * armed limit wait is disarmed and the prompt goes the way the wait's own resume would deliver it. A Claude
  * session that works keeps its wait: the switch applies at turn end. Returns whether the work continues now and
  * the notice that says so (posted here only when `isAnnounced` — the auto-switch has no other voice, while a
@@ -6898,8 +6939,15 @@ async function switchTopicToFallbackEntry(
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
   } else {
-    // A cross-backend switch (Claude ↔ OpenCode) needs the context bridge, which lands next.
-    return fail('switching between backends is not available yet');
+    const bridge = await buildFallbackBridge(key, from, to);
+    const targetName = to.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName;
+    if (to.backend === 'claude') await state.setClaudeProfileOverride(key, to.profile);
+    await switchThreadAdapter(key, targetName);
+    if (to.backend === 'opencode') {
+      const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
+      if (error) return fail(error);
+    }
+    firstPrompt = { text: bridge, isRequestPrompt: false };
   }
   cancelApiRetry(key); // retires the offer too: the switch consumed it
   const notice = getFallbackSwitchedNotice(from, to);

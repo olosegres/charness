@@ -1,7 +1,8 @@
 /**
- * @description The fallback chain and the OpenCode limit marks in `state.json` (`StateStore`): the chain is
- * validated on read and flushed at once, a limit mark is kept per `provider/model` label. Reloaded from disk
- * to prove persistence, not just the in-memory view.
+ * @description The fallback chain, the OpenCode limit marks and the parked session ids in `state.json`
+ * (`StateStore`): the chain is validated on read and flushed at once, a limit mark is kept per `provider/model`
+ * label, a parked id survives a reload and is dropped with the live ids when the conversation is released.
+ * Reloaded from disk to prove persistence, not just the in-memory view.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -12,11 +13,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { StateStore } from '../state';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+
+const topic = makeTelegramKey(-1001111111111, 11);
 
 let dataDir: string;
 let store: StateStore;
 
-describe('StateStore: fallback chain, OpenCode limit marks', () => {
+describe('StateStore: fallback chain, OpenCode limit marks, parked sessions', () => {
   before(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fallback-chain-state-'));
     store = new StateStore(dataDir);
@@ -52,5 +56,18 @@ describe('StateStore: fallback chain, OpenCode limit marks', () => {
     assert.deepEqual(store.getOpenCodeModelLimits(), { 'google/gemini-2.5-pro': '2026-10-12T13:00:00.000Z' });
     store.setOpenCodeModelLimitedUntil('google/gemini-2.5-pro', null);
     assert.deepEqual(store.getOpenCodeModelLimits(), {});
+  });
+
+  it('parks a session id per thread, survives a reload, and is released with the live ids', async () => {
+    assert.equal(store.getParkedSession(topic), null);
+    await store.setAgent(topic, { name: 'opencode', opencodeSessionId: 'ses_live' });
+    await store.setParkedSession(topic, { adapterName: 'claude-json-stream', claudeSessionId: '11111111-1111-4111-8111-111111111111', parkedAt: '2026-10-12T10:00:00.000Z' });
+    await store.flush();
+    const reloaded = new StateStore(dataDir);
+    await reloaded.init();
+    assert.equal(reloaded.getParkedSession(topic)?.claudeSessionId, '11111111-1111-4111-8111-111111111111');
+    await store.clearAgentSessionIds(topic);
+    assert.equal(store.getParkedSession(topic), null, 'a released conversation drops its parked id too');
+    assert.equal(store.getAgent(topic)?.opencodeSessionId, undefined);
   });
 });
