@@ -402,7 +402,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       ['fbk_wait_on', 'fbk_wait_off', 'fbk_wait_same'],
     ]);
     await topic.sendAndAwaitReply('/auto_continue_limits', 'Wait for the reset and continue: ON (as in General)');
-    await topic.sendAndAwaitReply('/fallback', 'Backup chain');
+    await topic.sendAndAwaitReply('/fallback', 'Fallback models');
     await topic.tapAndAwaitAnswer(screen, 'fbk_wait_off');
     await topic.waitForMessageText('the screen re-rendered', screen, (text) => text.includes('Wait for the reset and continue: OFF (set for this topic)'));
     await topic.sendAndAwaitReply('/auto_continue_limits off', 'Auto-resume after a usage limit: OFF for this topic');

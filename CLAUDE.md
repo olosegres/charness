@@ -134,12 +134,14 @@ per-backend controls are optional methods the bot checks before calling.
 - **Usage limits / fallback chain** (`/limits`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog
-  + the recent `/model` picks) and edited in General with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
+  + the recent `/model` picks) and edited from any topic with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
   (from `handleApiError` → `announceUsageLimitOrSwitch`) marks the limited rung (`limitedUntil` /
   `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; a rung with `disabled: true` is never a candidate (a rebuild keeps it so); auto-switch ON (a `/limits`
   setting, OFF by default; the wait setting beside it is the old `/auto_continue_limits` pair, a topic's three states are on / off / as General) switches by itself, OFF puts
   `fbsw_<episode>_<index>` buttons on the notice (indexes into that episode's remembered candidates); no
-  candidate ⇒ the wait as before. `switchTopicToFallbackEntry`: within a backend the conversation is kept
+  candidate ⇒ the wait — aimed, when every enabled rung incl. the current one is limited, at the rung whose limit resets
+  EARLIEST (`pickEarliestResetRung`, `retargetLimitWait`): the persisted retry record carries `resumeOn`, and the kick
+  runs `switchTopicToFallbackEntry` onto it before the continue nudge. The list is edited from every topic. `switchTopicToFallbackEntry`: within a backend the conversation is kept
   (profile apply re-spawn / OpenCode `setModel`), across backends it is the `switchThreadAdapter` path — the
   leaving family's session id is PARKED (`parkedSessions`, restored on the way back, released with the ids) and
   the first prompt is the context bridge (`utils/fallbackBridge.ts`: the old adapter's `getRecentTurns`) instead

@@ -40,6 +40,7 @@ import {
   parseFallbackEditCallback,
   parseFallbackSwitchCallbackData,
   parseOpenCodeModelLabel,
+  pickEarliestResetRung,
   pickFallbackCandidates,
   pickPreferredOpenCodeModel,
   proposeFallbackChain,
@@ -391,4 +392,79 @@ test('disabled: a rebuild keeps a provider / account excluded when the operator 
   // A provider with an enabled rung in the old chain is not excluded just because another rung of it was.
   const mixed = proposeFallbackChain(buildDetection(), [{ ...openCode('openai', 'gpt-5'), disabled: true }, openCode('openai', 'o3-mini')]);
   assert.ok(mixed.filter((entry) => entry.backend === 'opencode' && entry.providerId === 'openai').every((entry) => entry.disabled === undefined));
+});
+
+// ── the wait aimed at the rung that resets first ──
+
+const atHours = (hours: number): string => new Date(nowMs + hours * 3_600_000).toISOString();
+
+test('earliest reset: with every rung limited the wait targets the rung that comes back first', () => {
+  const detection = buildDetection({
+    claudeProfiles: [
+      buildProfile('default', { limitedUntil: atHours(5) }),
+      buildProfile('work', { limitedUntil: atHours(2) }),
+    ],
+    openCodeLimits: { 'openai/gpt-5': atHours(3) },
+  });
+  const chain = [claude('default'), claude('work'), openCode('openai', 'gpt-5')];
+  const found = pickEarliestResetRung({ chain, current: claude('default'), detection, nowMs });
+  assert.deepEqual(found && { entry: found.entry, isCurrent: found.isCurrent, untilMs: found.untilMs }, { entry: claude('work'), isCurrent: false, untilMs: nowMs + 2 * 3_600_000 });
+});
+
+test('earliest reset: the current rung resetting first (or within a minute of it) keeps the wait where it is', () => {
+  const chain = [claude('default'), claude('work')];
+  const first = pickEarliestResetRung({
+    chain,
+    current: claude('default'),
+    detection: buildDetection({ claudeProfiles: [buildProfile('default', { limitedUntil: atHours(1) }), buildProfile('work', { limitedUntil: atHours(4) })] }),
+    nowMs,
+  });
+  assert.equal(first?.isCurrent, true);
+  const nearTie = pickEarliestResetRung({
+    chain,
+    current: claude('default'),
+    detection: buildDetection({ claudeProfiles: [buildProfile('default', { limitedUntil: new Date(nowMs + 3_600_000 + 30_000).toISOString() }), buildProfile('work', { limitedUntil: atHours(1) })] }),
+    nowMs,
+  });
+  assert.equal(nearTie?.isCurrent, true, 'within the tolerance the current rung wins: no needless switch');
+});
+
+test('earliest reset: a rung with room, a disabled rung, a signed-out one and one the server dropped do not count', () => {
+  const limited = (name: string, hours: number) => buildProfile(name, { limitedUntil: atHours(hours) });
+  // A rung with room → the normal switch plan applies, not a wait.
+  assert.equal(pickEarliestResetRung({
+    chain: [claude('default'), claude('work')],
+    current: claude('default'),
+    detection: buildDetection({ claudeProfiles: [limited('default', 5), buildProfile('work')] }),
+    nowMs,
+  }), null);
+  // A disabled early rung is not a target; signed-out and missing are skipped.
+  const found = pickEarliestResetRung({
+    chain: [{ ...claude('work'), disabled: true }, claude('out'), openCode('openai', 'gone'), claude('later')],
+    current: claude('default'),
+    detection: buildDetection({
+      claudeProfiles: [limited('default', 6), limited('work', 1), buildProfile('out', { loggedIn: false }), limited('later', 3)],
+    }),
+    nowMs,
+  });
+  assert.deepEqual(found?.entry, claude('later'));
+});
+
+test('earliest reset: an account at 100 % names the reset of the window it exhausted; with no reset to name it is not a target', () => {
+  const exhausted = buildProfile('work', {
+    usage: { fetchedAt: '2026-10-12T09:59:00.000Z', source: 'api', buckets: [
+      { kind: 'session', percent: 100, resetsAt: atHours(2), scopeModel: null },
+      { kind: 'weekly_all', percent: 40, resetsAt: atHours(70), scopeModel: null },
+    ] },
+  });
+  const availability = getFallbackEntryAvailability(claude('work'), buildDetection({ claudeProfiles: [exhausted] }), nowMs);
+  assert.deepEqual(availability, { status: 'limited', until: atHours(2) });
+  const blind = buildProfile('work', { usage: { fetchedAt: '2026-10-12T09:59:00.000Z', source: 'api', buckets: [{ kind: 'session', percent: 100, resetsAt: null, scopeModel: null }] } });
+  const found = pickEarliestResetRung({
+    chain: [claude('work')],
+    current: claude('default'),
+    detection: buildDetection({ claudeProfiles: [buildProfile('default', { limitedUntil: atHours(5) }), blind] }),
+    nowMs,
+  });
+  assert.equal(found?.isCurrent, true, 'only the current rung names a reset');
 });

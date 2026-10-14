@@ -19,12 +19,14 @@ import {
   defaultClaudeProfileName,
   normaliseClaudeProfileName,
   removeClaudeProfileLayout,
+  signOutDefaultClaudeLogin,
   resolveClaudeProfileDir,
   type ClaudeAuthStatus,
 } from '../../../utils/claudeProfiles';
 import {
   formatClaudeUsageBucket,
   formatClaudeUsageResetAt,
+  type ClaudeRelativeResetWords,
   getClaudeUsageBucket,
   type ClaudeUsageBucketKind,
 } from '../../../utils/claudeUsage';
@@ -40,6 +42,7 @@ import {
   accountFollowDefaultCallback,
   accountLoginCallbackRe,
   accountLoginMenuCallback,
+  accountReconnectCallbackRe,
   accountRemoveCallbackRe,
   accountRemoveConfirmCallbackRe,
   accountRemoveMenuCallback,
@@ -48,6 +51,7 @@ import {
   buildAccountDisconnectCallback,
   buildAccountDisconnectConfirmCallback,
   buildAccountPickerRows,
+  buildAccountReconnectCallback,
   buildAccountRemoveCallback,
   buildAccountRemoveConfirmCallback,
   buildAccountUseCallback,
@@ -93,6 +97,8 @@ export interface ClaudeAccountsPorts
   disconnectOpenCodeProvider: (key: SessionKey, providerId: string) => Promise<void>;
   /** Start the `/connect <provider>` flow (the method picker: OAuth or API key), unchanged. */
   startOpenCodeConnect: (key: SessionKey, providerId: string) => Promise<void>;
+  /** `~/.claude`, where the default login lives; injectable so a test signs out a temp directory, never the real one. */
+  getHomeClaudeDir?: () => string;
 }
 
 /** Screens whose provider snapshot is kept (the newest); an older keyboard is refused as expired. */
@@ -107,7 +113,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect,
+    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, getHomeClaudeDir,
   } = ports;
 
   /**
@@ -177,6 +183,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     if (status === null) return;
     if (name !== defaultClaudeProfileName && getState().getClaudeProfileRecord(name) === undefined) return; // removed meanwhile
     await getState().upsertClaudeProfileRecord(name, {
+      // A removed `default` comes back by itself the moment it is signed in again.
+      ...(name === defaultClaudeProfileName && status.loggedIn ? { isRemoved: undefined } : {}),
       loggedIn: status.loggedIn,
       email: status.email ?? undefined,
       subscriptionType: status.subscriptionType ?? undefined,
@@ -202,6 +210,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return `${marker}${row.name} — ${account}${users}${formatUsageLines(row.name)}`;
   }
 
+  /** The localised words of a relative reset («🔄 in 2h»). */
+  function getRelativeWords(): ClaudeRelativeResetWords {
+    return { pattern: t('usage.resetIn'), day: t('usage.unitDay'), hour: t('usage.unitHour'), minute: t('usage.unitMinute') };
+  }
+
   /**
    * The profile's usage under its row: the three windows as `used% → reset` in the instance zone (`—` for a
    * window the account has no figure for — a corporate seat has no Fable window), `(stale)` when the last poll
@@ -213,7 +226,13 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const timezone = getInstanceTimezone();
     const lines: string[] = [];
     if (info?.usage && info.usage.buckets.length > 0) {
-      const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(info.usage, kind), timezone, nowMs);
+      const words = getRelativeWords();
+      // An unknown 5h reset shows the weekly window's instead of «?».
+      const weeklyReset = getClaudeUsageBucket(info.usage, 'weekly_all')?.resetsAt ?? null;
+      const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(info.usage, kind), nowMs, {
+        words,
+        fallbackResetsAt: kind === 'session' ? weeklyReset : null,
+      });
       const stale = info.usage.isStale ? t('account.row.usageStale') : '';
       lines.push(t('account.row.usage', { session: read('session'), weekly: read('weekly_all'), fable: read('weekly_scoped') }) + stale);
     }
@@ -237,6 +256,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const state = getState();
     const topicCounts = countTopicsPerProfile(state.listBindings().map(({ key: boundKey }) => state.resolveClaudeProfileName(boundKey)));
     return buildAccountPickerRows({
+      isDefaultRemoved: state.getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true,
       records: state.getClaudeProfileRecords(),
       defaultStatus: {
         loggedIn: defaultStatus?.loggedIn,
@@ -259,18 +279,21 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const openCodeSection = providers.length === 0
       ? t('accounts.openCodeNone')
       : t('accounts.openCodeSection', { list: providers.map((provider) => `• ${provider}`).join('\n') });
-    const text = `${title}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}\n\n${t('account.autoSwitchHint')}`;
-    // One row per Claude account: pick it (✓ = the current one), sign it in again, remove it (never `default`).
-    const keyboardRows = rows.map((row) => {
-      const buttons = [
-        Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),
-        Markup.button.callback('🔑', buildAccountLoginCallback(row.name)),
-      ];
-      if (row.name !== defaultClaudeProfileName) buttons.push(Markup.button.callback('🗑', buildAccountRemoveCallback(row.name)));
-      return buttons;
-    });
+    const isDefaultRemoved = getState().getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true;
+    const removedNote = isDefaultRemoved ? `\n\n${t('accounts.defaultRemovedNote')}` : '';
+    const text = `${title}${removedNote}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.usageHint')}\n\n${t('account.autoSwitchHint')}`;
+    // One row per Claude account: pick it (✓ = the current one), sign it in again, remove it (`default` too: signs it out).
+    const keyboardRows = rows.map((row) => [
+      Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),
+      Markup.button.callback('🔑', buildAccountLoginCallback(row.name)),
+      Markup.button.callback('🗑', buildAccountRemoveCallback(row.name)),
+    ]);
+    // A provider row mirrors it: what the button does is in its caption, 🔑 connects it again.
     providers.forEach((provider, index) => {
-      keyboardRows.push([Markup.button.callback(t('disconnect.provider_button', { provider }), buildAccountDisconnectCallback(index))]);
+      keyboardRows.push([
+        Markup.button.callback(t('accounts.disconnectButton', { provider }), buildAccountDisconnectCallback(index)),
+        Markup.button.callback('🔑', buildAccountReconnectCallback(index)),
+      ]);
     });
     keyboardRows.push([
       Markup.button.callback(t('accounts.addClaudeButton'), accountAddCallback),
@@ -399,7 +422,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * and the confirmation says how many. The directory (its login with it) goes last, after the registry.
    */
   async function removeProfile(name: string): Promise<string> {
-    if (name === defaultClaudeProfileName) return t('account.removeDefaultRefused');
+    if (name === defaultClaudeProfileName) return signOutDefault();
     if (!checkIsKnownProfile(name)) return t('account.unknown', { name });
     if (getState().getClaudeProfileGlobalDefault() === name) return t('account.removeInstanceDefaultRefused', { name });
     const dropped = await getState().removeClaudeProfileRecord(name);
@@ -412,10 +435,38 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return t('account.removed', { name, count: dropped.length });
   }
 
+  /**
+   * @description «Remove» for `default`: sign `~/.claude` out (delete just its stored subscription login, see
+   * `signOutDefaultClaudeLogin`) and hide it from the list and the rankings until it is signed in again. The
+   * transcripts, settings, skills and memory stay. Running sessions on it stop working at their next request.
+   */
+  async function signOutDefault(): Promise<string> {
+    let isSignedOut = false;
+    try {
+      isSignedOut = signOutDefaultClaudeLogin(getHomeClaudeDir?.());
+    } catch (e) {
+      console.error('[account] signing the default account out failed:', e instanceof Error ? e.message : e);
+      return t('account.removeDefaultFailed');
+    }
+    await getState().upsertClaudeProfileRecord(defaultClaudeProfileName, { isRemoved: true, loggedIn: false });
+    console.log(`[account] the default account was signed out (${isSignedOut ? 'login deleted' : 'no stored login found'})`);
+    return t('account.removedDefault');
+  }
+
   /** The text of a removal confirmation and its Yes / Back keyboard. */
   function buildRemoveConfirmation(name: string): { text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> } {
     const record = getState().getClaudeProfileRecord(name);
     const count = getState().listClaudeProfileOverrideKeys(name).length;
+    if (name === defaultClaudeProfileName) {
+      const email = getState().getClaudeProfileInfo(name)?.email ?? t('account.row.loggedOut');
+      return {
+        text: t('account.confirmRemoveDefault', { email }),
+        keyboard: Markup.inlineKeyboard([
+          [Markup.button.callback(t('account.confirmRemoveButton', { name }), buildAccountRemoveConfirmCallback(name))],
+          [Markup.button.callback(t('account.backButton'), accountBackCallback)],
+        ]),
+      };
+    }
     return {
       text: t('account.confirmRemove', { name, email: record?.email ?? t('account.row.loggedOut'), count }),
       keyboard: Markup.inlineKeyboard([
@@ -585,6 +636,18 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
+    // A provider's «🔑» → connect it again (the method picker); the screen is re-rendered first.
+    bot.action(accountReconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      if (messageId === null || provider === undefined) {
+        await ctx.answerCbQuery(t('accounts.stale'));
+        await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      await ctx.answerCbQuery();
+      await startOpenCodeConnect(key, provider);
+    }));
+
     bot.action(accountLoginMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
       await ctx.answerCbQuery();
       if (messageId !== null) await editThreadMessage(key, messageId, t('account.pickLogin'), buildProfileChoiceKeyboard(buildAccountLoginCallback, true));
@@ -614,7 +677,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountRemoveCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
-      const name = parseAccountCallbackName(ctx.match[0], accountRemoveCallbackRe, { allowDefault: false });
+      const name = parseAccountCallbackName(ctx.match[0], accountRemoveCallbackRe, { allowDefault: true });
       if (name === null || !checkIsKnownProfile(name)) { await ctx.answerCbQuery(t('account.unknown', { name: name ?? '?' })); return; }
       await ctx.answerCbQuery();
       const confirmation = buildRemoveConfirmation(name);
@@ -622,7 +685,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountRemoveConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const name = parseAccountCallbackName(ctx.match[0], accountRemoveConfirmCallbackRe, { allowDefault: false });
+      const name = parseAccountCallbackName(ctx.match[0], accountRemoveConfirmCallbackRe, { allowDefault: true });
       if (name === null) { await ctx.answerCbQuery(); return; }
       const result = await removeProfile(name);
       await answerTap(ctx, key, result);

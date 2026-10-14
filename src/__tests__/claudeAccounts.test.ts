@@ -26,7 +26,8 @@ import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from '../connect
 import type { ClaudeLoginProfile } from '../agentLogin/agentLogin';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
-import type { ClaudeAuthStatus } from '../utils/claudeProfiles';
+import { signOutDefaultClaudeLogin, type ClaudeAuthStatus } from '../utils/claudeProfiles';
+import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
 let harness: CommandHarness;
@@ -79,6 +80,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
       startOpenCodeConnect: async (key, providerId) => {
         startedConnects.push({ key, providerId });
       },
+      // The default login lives in the fixture's `.claude`, never in the real one.
+      getHomeClaudeDir: () => homeClaudeDir,
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -100,6 +103,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       'acct_ocadd',
       String(/^acct_dc_(\d{1,2})$/),
       String(/^acct_dcok_(\d{1,2})$/),
+      String(/^acct_dcre_(\d{1,2})$/),
       'acct_login_menu',
       'acct_rm_menu',
       'acct_back',
@@ -116,15 +120,16 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /✓ default — me@example\.com, personal max/);
     assert.deepEqual(harness.getKeyboardData(picker), [
-      ['acct_use_default', 'acct_login_default'],
+      ['acct_use_default', 'acct_login_default', 'acct_rm_default'],
       ['acct_add', 'acct_ocadd'],
-    ], 'one row per account (pick + re-login; `default` has no remove), then the two adders');
+    ], 'one row per account (pick + re-login + remove, `default` included), then the two adders');
     assert.match(picker?.text ?? '', /OpenCode providers: none connected yet/);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
     assert.equal(harness.state.getClaudeProfileRecord('default'), undefined);
     assert.deepEqual(Object.keys(harness.state.getClaudeProfileRecords()), []);
     assert.match(picker?.text ?? '', /Usage: % of each window used/);
+    assert.match(picker?.text ?? '', /Tap an account to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
   });
 
   it('`add <name>` lays the directory out, records the profile and starts its sign-in under that directory', async () => {
@@ -175,7 +180,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /• work — work@example\.com, corporate team/);
     assert.match(picker?.text ?? '', /• team — not signed in/);
-    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default']);
+    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default', 'acct_rm_default']);
     assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_login_work', 'acct_rm_work']);
     assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_login_team', 'acct_rm_team']);
   });
@@ -218,9 +223,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     isGeneralTopic = false;
   });
 
-  it('`remove`: the default profile and the instance default are refused', async () => {
-    await harness.runCommand('account', 'remove default');
-    assert.match(harness.replies.at(-1)?.text ?? '', /cannot be removed/);
+  it('`remove`: the instance default is refused', async () => {
     await harness.runCommand('account', 'remove work');
     assert.match(harness.replies.at(-1)?.text ?? '', /default for all topics/);
     assert.ok(fs.existsSync(path.join(dataDir, 'claude-profiles', 'work')));
@@ -269,7 +272,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const screen = harness.replies.at(-1)!;
     assert.match(screen.text ?? '', /OpenCode providers \(connected\):\n• openai\n• openrouter/);
     const rows = harness.getKeyboardData(screen);
-    assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0'], ['acct_dc_1']]);
+    assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0', 'acct_dcre_0'], ['acct_dc_1', 'acct_dcre_1']], 'a provider row mirrors an account row: disconnect + 🔑 connect again');
+    assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['🔌 Disconnect openrouter', '🔑'], 'the button says what it does');
     assert.deepEqual(rows.at(-1)?.slice(-2), ['acct_add', 'acct_ocadd']);
     await harness.tapButton(screen.messageId!, 'acct_dc_1');
     assert.match(harness.edits.at(-1)?.text ?? '', /Disconnect openrouter\?/);
@@ -329,5 +333,69 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
     isGeneralTopic = false;
+  });
+
+  it('a «connect again» tap on a provider row starts that provider\'s /connect flow', async () => {
+    openCodeProviders = ['openai'];
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    const before = startedConnects.length;
+    await harness.tapButton(screen.messageId!, 'acct_dcre_0');
+    assert.deepEqual(startedConnects.at(-1), { key: harness.key, providerId: 'openai' });
+    assert.equal(startedConnects.length, before + 1);
+    openCodeProviders = [];
+  });
+
+  it('removing `default` signs ~/.claude out (only the stored login), asks first, hides the account until it is signed in again', async () => {
+    // A decoy home: the login, an MCP token beside it, and the shared entries that must survive.
+    fs.mkdirSync(path.join(homeClaudeDir, 'projects', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(homeClaudeDir, 'projects', 'p', 'chat.jsonl'), 'transcript');
+    fs.writeFileSync(path.join(homeClaudeDir, 'settings.json'), '{"a":1}');
+    fs.writeFileSync(path.join(homeClaudeDir, 'CLAUDE.md'), 'memory');
+    const credentials = path.join(homeClaudeDir, '.credentials.json');
+    fs.writeFileSync(credentials, JSON.stringify({ claudeAiOauth: { accessToken: 'decoy-token' }, mcpOAuth: { server: { token: 'keep' } } }), { mode: 0o600 });
+
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1)!;
+    await harness.tapButton(picker.messageId!, 'acct_rm_default');
+    const ask = harness.edits.at(-1);
+    assert.match(ask?.text ?? '', /Remove the default account \(me@example\.com\)\?.*sessions running on it stop working/);
+    assert.deepEqual(harness.getKeyboardData(ask), [['acct_rmok_default'], ['acct_back']]);
+    assert.equal(fs.existsSync(credentials), true, 'asking removes nothing');
+
+    setStatus(null, { loggedIn: false, email: null, subscriptionType: null, orgName: null }); // what the CLI reports afterwards
+    await harness.tapButton(picker.messageId!, 'acct_rmok_default');
+    const left = JSON.parse(fs.readFileSync(credentials, 'utf8'));
+    assert.deepEqual(left, { mcpOAuth: { server: { token: 'keep' } } }, 'only the subscription login is gone');
+    assert.equal(fs.statSync(credentials).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(path.join(homeClaudeDir, 'projects', 'p', 'chat.jsonl'), 'utf8'), 'transcript');
+    assert.equal(fs.readFileSync(path.join(homeClaudeDir, 'settings.json'), 'utf8'), '{"a":1}');
+    assert.equal(fs.readFileSync(path.join(homeClaudeDir, 'CLAUDE.md'), 'utf8'), 'memory');
+    assert.equal(harness.state.getClaudeProfileInfo('default')?.isRemoved, true);
+
+    const rerendered = harness.edits.at(-1);
+    assert.doesNotMatch(rerendered?.text ?? '', /default — /, 'hidden from the list');
+    assert.match(rerendered?.text ?? '', /\/accounts login default/);
+    assert.equal(harness.getKeyboardData(rerendered).flat().some((data) => data.endsWith('_default')), false);
+    const views = buildClaudeProfileUsageViews({ dataDir, records: harness.state.getAllClaudeProfileInfos() });
+    assert.equal(views.some((view) => view.name === 'default'), false, 'and from the fallback ranking');
+
+    // Signed in again (here: the status probe says so) — the account is back.
+    setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null });
+    await harness.runCommand('account');
+    assert.match(harness.replies.at(-1)?.text ?? '', /default — me@example\.com/);
+    assert.equal(harness.state.getClaudeProfileInfo('default')?.isRemoved, undefined);
+  });
+
+  it('a credentials file that holds only the login is deleted with it; a missing one is a no-op', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-signout-'));
+    try {
+      assert.equal(signOutDefaultClaudeLogin(dir), false);
+      fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+      assert.equal(signOutDefaultClaudeLogin(dir), true);
+      assert.equal(fs.existsSync(path.join(dir, '.credentials.json')), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

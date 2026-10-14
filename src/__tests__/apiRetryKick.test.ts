@@ -40,6 +40,7 @@ import {
   type ApiRetryTopicNotice,
 } from '../apiRetryKick';
 import type { ApiRetryState } from '../types';
+import type { FallbackChainEntry } from '../utils/fallbackChain';
 import { maxTimeoutMs } from '../scheduler/engine';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
@@ -69,6 +70,9 @@ interface World {
   deliveryError: Error | null;
   untakenRequestPrompt: string | undefined;
   kicks: Array<Promise<void>>;
+  /** The rungs the kick moved a topic onto (`resumeOnRung`), and whether that switch took (it ends the retry itself). */
+  resumes: Array<{ key: string; rung: FallbackChainEntry }>;
+  resumeResult: boolean;
 }
 
 let world: World;
@@ -104,6 +108,16 @@ function createKickDeps(): ApiRetryKickDeps {
       );
     },
     trackContinuation: async (key, options) => { world.continuations.push({ key: keyToString(key), ...options }); },
+    resumeOnRung: async (key, rung) => {
+      world.resumes.push({ key: keyToString(key), rung });
+      if (world.resumeResult) {
+        // `switchTopicToFallbackEntry` ends the retry (cancelApiRetry) and delivers its own continue prompt.
+        world.entries.delete(keyToString(key));
+        delete world.saved[keyToString(key)];
+        world.nudges.push({ key: keyToString(key), text: 'bridge-or-continue-on-the-new-rung' });
+      }
+      return world.resumeResult;
+    },
     clearSavedRetry: (key) => {
       world.clears.push(keyToString(key));
       delete world.saved[keyToString(key)];
@@ -159,6 +173,8 @@ beforeEach(() => {
     deliveryError: null,
     untakenRequestPrompt: undefined,
     kicks: [],
+    resumes: [],
+    resumeResult: true,
   };
 });
 
@@ -549,7 +565,9 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     // One place talks to the store.
     assert.ok(getFunction('function clearSavedApiRetry(').includes('state.clearApiRetry(key)'));
     assert.equal(botSource.match(/state\.clearApiRetry\(/g)?.length, 1, 'the only clear of the saved record');
-    assert.equal(botSource.match(/state\s*\.setApiRetry\(/g)?.length, 1, 'the only save of the saved record');
+    // Two writers: the arm, and the re-target of a wait onto the rung that resets first (which keeps the target in the record).
+    assert.equal(botSource.match(/state\s*\.setApiRetry\(/g)?.length, 2, 'the saves of the saved record');
+    assert.ok(/function retargetLimitWait\([\s\S]*?\.setApiRetry\(key, \{[^}]*resumeOn: earliest\.entry/.test(botSource), 'the re-target persists the target rung');
   });
 
   it('the boot restore re-arms what the state file holds, on the same map, and a due timer runs the kick', () => {
@@ -557,5 +575,51 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.ok(restore.includes('entries: apiRetryTimers,'));
     assert.ok(restore.includes('state.getApiRetries(),'));
     assert.match(restore, /fire: \(key\) => \{\n\s*void fireApiRetry\(key\);\n\s*\},/);
+  });
+});
+
+describe('a limit wait aimed at another rung (the one that resets first)', () => {
+  const target: FallbackChainEntry = { backend: 'claude', profile: 'work', model: null };
+
+  it('the restart keeps the target: the record carries it and the restored entry holds it', () => {
+    saveRetry(topicKey, { resumeOn: target });
+    assert.equal(boot(), 1);
+    assert.deepEqual(world.entries.get(keyToString(topicKey))?.resumeOn, target);
+  });
+
+  it('a malformed saved target is dropped: the plain resume applies', () => {
+    saveRetry(topicKey, { resumeOn: { backend: 'claude', profile: 'Bad Name!', model: null } });
+    boot();
+    assert.equal(world.entries.get(keyToString(topicKey))?.resumeOn, undefined);
+  });
+
+  it('the kick moves the topic onto the target BEFORE anything else, and a switch that took ends the kick (no second nudge)', async () => {
+    saveRetry(topicKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.resumes, [{ key: keyToString(topicKey), rung: target }]);
+    assert.deepEqual(world.sessionSteps, [], 'the switch brings its own session up');
+    assert.deepEqual(world.nudges.map((nudge) => nudge.text), ['bridge-or-continue-on-the-new-rung'], 'one prompt only');
+    assert.deepEqual(world.notices, [], 'and no extra «resuming» notice from the plain path');
+    assert.deepEqual(world.saved, {});
+    assert.equal(world.kicksInFlight.size, 0);
+  });
+
+  it('a switch that did not take (already on that account, deferred, failed) falls back to the plain resume on the current rung', async () => {
+    world.resumeResult = false;
+    saveRetry(topicKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.equal(world.resumes.length, 1);
+    assert.deepEqual(world.nudges, [{ key: keyToString(topicKey), text: continueNudge }]);
+    assert.deepEqual(world.saved, {});
+  });
+
+  it('a record without a target never asks for a switch, and a transient retry ignores one', async () => {
+    saveRetry(topicKey);
+    saveRetry(issueKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.resumes, [], 'no target, and a tracker issue has no topic to move');
   });
 });

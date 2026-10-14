@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { formatClaudeProfileCliLine } from '../cli/claudeProfiles';
 import {
   buildBucketsFromRateLimitWindows,
   buildClaudeProfileUsageViews,
@@ -17,6 +18,7 @@ import {
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
   formatClaudeUsageBucket,
+  formatClaudeUsageRelativeReset,
   formatClaudeUsageResetAt,
   getRelevantClaudeUsageKinds,
   markClaudeUsageSnapshotStale,
@@ -255,8 +257,50 @@ describe('the human formats', () => {
     assert.equal(formatClaudeUsageResetAt('2026-10-12T23:30:00Z', zone, nowMs), 'Tue 02:30', 'already tomorrow in Kyiv');
   });
 
-  it('a bucket renders as percent → reset, a missing one as a dash', () => {
-    assert.equal(formatClaudeUsageBucket({ kind: 'session', percent: 81, resetsAt: '2026-10-12T13:00:00Z', scopeModel: null }, 'UTC', nowMs), '81% → 13:00');
-    assert.equal(formatClaudeUsageBucket(null, 'UTC', nowMs), '—');
+  it('a bucket renders as percent → relative reset, a missing one as a dash', () => {
+    assert.equal(formatClaudeUsageBucket({ kind: 'session', percent: 81, resetsAt: '2026-10-12T13:00:00Z', scopeModel: null }, nowMs), `81% → ${formatClaudeUsageRelativeReset('2026-10-12T13:00:00Z', nowMs)}`);
+    assert.equal(formatClaudeUsageBucket(null, nowMs), '—');
+  });
+
+  it('a relative reset keeps the two largest units, minutes only under an hour', () => {
+    const at = (minutes: number) => new Date(nowMs + minutes * 60_000).toISOString();
+    assert.equal(formatClaudeUsageRelativeReset(at(30), nowMs), '🔄 in 30m');
+    assert.equal(formatClaudeUsageRelativeReset(at(0), nowMs), '🔄 in 1m', 'never «0m»');
+    assert.equal(formatClaudeUsageRelativeReset(at(59), nowMs), '🔄 in 59m');
+    assert.equal(formatClaudeUsageRelativeReset(at(60), nowMs), '🔄 in 1h');
+    assert.equal(formatClaudeUsageRelativeReset(at(125), nowMs), '🔄 in 2h', 'minutes are dropped from an hour up');
+    assert.equal(formatClaudeUsageRelativeReset(at(23 * 60 + 50), nowMs), '🔄 in 1d', '23h50m is a day');
+    assert.equal(formatClaudeUsageRelativeReset(at(2 * 1440 + 60), nowMs), '🔄 in 2d 1h');
+    assert.equal(formatClaudeUsageRelativeReset(at(2 * 1440 + 10), nowMs), '🔄 in 2d', 'zero hours are dropped');
+    assert.equal(formatClaudeUsageRelativeReset(null, nowMs), '?');
+    assert.equal(formatClaudeUsageRelativeReset('garbage', nowMs), '?');
+    assert.equal(
+      formatClaudeUsageRelativeReset(at(2 * 1440 + 60), nowMs, { pattern: '🔄 через {time}', day: 'д', hour: 'ч', minute: 'м' }),
+      '🔄 через 2д 1ч',
+    );
+  });
+
+  it('an unknown reset takes the fallback (the weekly window for the 5h one)', () => {
+    const weekly = new Date(nowMs + 2 * 86_400_000).toISOString();
+    const session = { kind: 'session' as const, percent: 10, resetsAt: null, scopeModel: null };
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackResetsAt: weekly }), '10% → 🔄 in 2d');
+    assert.equal(formatClaudeUsageBucket(session, nowMs), '10% → ?');
+    const known = { ...session, resetsAt: new Date(nowMs + 3_600_000).toISOString() };
+    assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackResetsAt: weekly }), '10% → 🔄 in 1h', 'a known reset wins');
+  });
+});
+
+describe('the claude-profiles CLI line', () => {
+  it('shows relative resets and the weekly reset in place of an unknown 5h one', () => {
+    const entry = {
+      name: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
+      buckets: [
+        { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
+        { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
+      ],
+      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 60, isRecommended: true,
+    } as const;
+    const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
+    assert.match(line, /5h 12% → 🔄 in 2d 1h · week 40% → 🔄 in 2d 1h · Fable —/);
   });
 });

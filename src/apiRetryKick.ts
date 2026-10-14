@@ -5,6 +5,7 @@ import type { UsageLimitWait } from './requests/limitWaitAnswer';
 import type { BufferedPromptSettled } from './startupPromptBuffer';
 import type { PromptDelivery } from './utils/promptDelivery';
 import type { AgentApiErrorClass, ApiRetryState } from './types';
+import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 
 /**
  * The retry kick and the boot restore of the API-error auto-retry (plan S4–S6),
@@ -45,6 +46,8 @@ export interface ApiRetryTimerEntry {
   /** How a usage-limit wait ends, for the limit answer of a request opened during it.
    *  Absent for a record re-armed at boot (`state.json` keeps only the instant). */
   limitWait?: UsageLimitWait;
+  /** The chain rung a usage-limit wait ends on (the earliest-resetting one): the kick moves the topic there first. */
+  resumeOn?: FallbackChainEntry;
 }
 
 /** What the kick needs to know of {@link ensureAgentSession}'s answer. */
@@ -75,6 +78,12 @@ export interface ApiRetryKickDeps {
    *  tells `onBufferedSettled` how its wait ended. */
   deliverNudge: (key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled) => Promise<PromptDelivery>;
   trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt: boolean }) => Promise<void>;
+  /**
+   * Move the topic onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
+   * continue prompt and ends the retry). `true` when it did — the kick is then done; `false` (already on that
+   * account, the switch deferred or failed) leaves the plain resume on the topic's current rung.
+   */
+  resumeOnRung?: (key: SessionKey, rung: FallbackChainEntry) => Promise<boolean>;
   /** Drop the retry's saved twin (`state.json`). */
   clearSavedRetry: (key: SessionKey) => void;
 }
@@ -124,6 +133,10 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
   let isNudgeBuffered = false;
 
   try {
+    // A wait aimed at another rung (the one whose limit reset first): the topic moves there before anything else.
+    if (entry.resumeOn && entry.kind === 'usageLimit' && deps.resumeOnRung && checkIsTelegramKey(key)) {
+      if (await deps.resumeOnRung(key, entry.resumeOn)) return;
+    }
     // R26: the conversation the limit interrupted is the one resumed — the ensure brings a sleeping
     // session back by its id, for a topic as for a tracker issue (a fresh session would not know the work).
     const ensured = await deps.ensureSession(key);
@@ -216,8 +229,15 @@ export function restoreApiRetryTimers(deps: ApiRetryRestoreDeps, records: Readon
       kind: record.kind,
       firedAt: null,
       fireAt: record.fireAt,
+      ...(record.resumeOn ? readResumeOn(record.resumeOn) : {}),
     });
     restored += 1;
   }
   return restored;
+}
+
+/** The persisted rung of a record, validated like a chain entry; a malformed one is dropped (the plain resume applies). */
+function readResumeOn(raw: unknown): { resumeOn: FallbackChainEntry } | Record<string, never> {
+  const [entry] = normaliseFallbackChain([raw]);
+  return entry ? { resumeOn: entry } : {};
 }

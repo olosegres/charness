@@ -38,6 +38,8 @@ export const accountAddProviderCallback = 'acct_ocadd';
  */
 export const accountDisconnectCallbackRe = /^acct_dc_(\d{1,2})$/;
 export const accountDisconnectConfirmCallbackRe = /^acct_dcok_(\d{1,2})$/;
+/** Connect an OpenCode provider again (the `/connect <provider>` method picker); same snapshot index. */
+export const accountReconnectCallbackRe = /^acct_dcre_(\d{1,2})$/;
 /** Back to the main picker from a sub-picker. */
 export const accountBackCallback = 'acct_back';
 /** Flip the auto-switch-on-limit setting (`utils/claudeLimitSwitch.ts`): the topic's override, in General the instance default. */
@@ -56,6 +58,10 @@ export function buildAccountDisconnectCallback(index: number): string {
   return `acct_dc_${index}`;
 }
 
+export function buildAccountReconnectCallback(index: number): string {
+  return `acct_dcre_${index}`;
+}
+
 export function buildAccountDisconnectConfirmCallback(index: number): string {
   return `acct_dcok_${index}`;
 }
@@ -70,7 +76,7 @@ export function buildAccountRemoveConfirmCallback(name: string): string {
 
 /**
  * @description The name a callback's data carries, or `null` when the data is not that button's or names an
- * impossible profile (`default` is a valid target for use / login, never for a removal).
+ * impossible profile (`default` is a valid target for use / login / removal only where `allowDefault`).
  */
 export function parseAccountCallbackName(data: string, re: RegExp, options: { allowDefault: boolean }): string | null {
   const match = data.match(re);
@@ -104,8 +110,10 @@ export function buildAccountPickerRows(input: {
   defaultStatus: { loggedIn: boolean | undefined; email: string | null; subscriptionType: string | null };
   activeName: string;
   topicCounts: ReadonlyMap<string, number>;
+  /** The operator removed (signed out) `default`: it has no row until it is signed in again. */
+  isDefaultRemoved?: boolean;
 }): AccountPickerRow[] {
-  const rows: AccountPickerRow[] = [{
+  const rows: AccountPickerRow[] = input.isDefaultRemoved ? [] : [{
     name: defaultClaudeProfileName,
     isActive: input.activeName === defaultClaudeProfileName,
     loggedIn: input.defaultStatus.loggedIn,

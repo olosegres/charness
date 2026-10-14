@@ -15,8 +15,6 @@
  * (`~/.config/telegramcode/.env`, `$PWD/.env`, or `ENV_FILE`).
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { loadEnvFiles } from './envLoader';
 import { resolveDataDir } from '../state';
 import {
@@ -27,7 +25,6 @@ import {
   type ClaudeProfileReportEntry,
   type ClaudeUsageBucketKind,
 } from '../utils/claudeUsage';
-import { getEffectiveTimezone } from '../utils/timezone';
 
 export interface ClaudeProfilesCliArgs {
   isBest: boolean;
@@ -54,9 +51,11 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
   return { ok: true, args };
 }
 
-/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% → 16:00 · week 40% → Sat 00:00 · Fable 3% → Sat 00:00`. */
-export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, timezone: string, nowMs: number): string {
-  const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(entry.buckets.find((bucket) => bucket.kind === kind) ?? null, timezone, nowMs);
+/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% → 🔄 in 2h · week 40% → 🔄 in 2d 1h · Fable 3% → 🔄 in 2d 1h`. */
+export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number): string {
+  const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
+  const weeklyReset = find('weekly_all')?.resetsAt ?? null;
+  const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(find(kind), nowMs, { fallbackResetsAt: kind === 'session' ? weeklyReset : null });
   const marker = entry.isRecommended ? '✓' : entry.isEligible ? '•' : '✗';
   const account = entry.loggedIn === false
     ? 'not signed in'
@@ -108,18 +107,7 @@ export async function runClaudeProfilesCli(
     stdout(`${entry?.configDir ?? ''}\n`);
     return 0;
   }
-  const timezone = getEffectiveTimezone(readStoredTimezone(dataDir));
-  stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, timezone, nowMs)).join('\n')}\n`);
+  stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs)).join('\n')}\n`);
   stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'}\n`);
   return 0;
-}
-
-/** The instance `/timezone` pick off `state.json` (the bot's own store is not opened here); `null` = host zone. */
-function readStoredTimezone(dataDir: string): string | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as { timezone?: unknown };
-    return typeof raw.timezone === 'string' ? raw.timezone : null;
-  } catch {
-    return null;
-  }
 }

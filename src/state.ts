@@ -185,6 +185,11 @@ export interface ClaudeProfileRecord {
   limitedUntil?: string;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
+  /**
+   * Only on the hidden `default` record: the operator signed `~/.claude` out through `/accounts`. The account
+   * is left out of the list and every ranking until a probe finds it signed in again.
+   */
+  isRemoved?: boolean;
 }
 
 /** The session id of the backend family a thread switched away from, kept for a switch back. */

@@ -355,6 +355,8 @@ export function buildClaudeProfileUsageViews(input: {
   /** Every record, the hidden `default` one included (`StateStore.getClaudeProfileInfo` / the raw file). */
   records: Readonly<Record<string, ClaudeProfileRecord>>;
 }): ClaudeProfileUsageView[] {
+  // A `default` the operator signed out through /accounts stays out of every ranking until it is signed in again.
+  const isDefaultRemoved = input.records.default?.isRemoved === true;
   const toView = (name: string, record: ClaudeProfileRecord | undefined): ClaudeProfileUsageView => ({
     name,
     configDir: resolveClaudeProfileDir(input.dataDir, name),
@@ -367,7 +369,7 @@ export function buildClaudeProfileUsageViews(input: {
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')
     .sort(([, a], [, b]) => a.createdAt.localeCompare(b.createdAt));
-  return [toView('default', input.records.default), ...added.map(([name, record]) => toView(name, record))];
+  return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
 }
 
 /** The profile registry as `state.json` holds it — the CLI's read, no `StateStore` (which would migrate and lock). */
@@ -409,10 +411,56 @@ export function formatClaudeUsageResetAt(resetsAt: string | null, timezone: stri
   return `${read({ day: '2-digit' }, at)}.${read({ month: '2-digit' }, at)} ${time}`;
 }
 
-/** `81% → 16:00` for a bucket, `—` for a missing one. */
-export function formatClaudeUsageBucket(bucket: ClaudeUsageBucket | null, timezone: string, nowMs: number): string {
+/** The words a relative reset is spelled with: `pattern` carries `{time}`, the units are appended to their numbers. */
+export interface ClaudeRelativeResetWords {
+  pattern: string;
+  day: string;
+  hour: string;
+  minute: string;
+}
+
+/** English words, the CLI's (the bot passes its localised ones). */
+export const englishRelativeResetWords: ClaudeRelativeResetWords = { pattern: '🔄 in {time}', day: 'd', hour: 'h', minute: 'm' };
+
+/**
+ * @description A reset instant as a time from now: `🔄 in 2d 1h`, `🔄 in 2h`, `🔄 in 30m`. The two largest
+ * units at most, minutes only under an hour: from a day up it is days + hours (hours dropped when zero), from
+ * an hour up whole hours (rounded), below that minutes (at least one). An instant already past reads as
+ * `🔄 in 1m` (the window is about to roll over). `?` for a missing or unparseable instant.
+ */
+export function formatClaudeUsageRelativeReset(resetsAt: string | null, nowMs: number, words: ClaudeRelativeResetWords = englishRelativeResetWords): string {
+  if (resetsAt === null) return '?';
+  const at = Date.parse(resetsAt);
+  if (Number.isNaN(at)) return '?';
+  const totalMinutes = Math.max(1, Math.round((at - nowMs) / 60_000));
+  let time: string;
+  if (totalMinutes < 60) {
+    time = `${totalMinutes}${words.minute}`;
+  } else if (totalMinutes < 24 * 60) {
+    // 23h40m rounds to 24h: that is a day.
+    time = totalMinutes / 60 >= 23.5 ? `1${words.day}` : `${Math.round(totalMinutes / 60)}${words.hour}`;
+  } else {
+    let days = Math.floor(totalMinutes / 1440);
+    let hours = Math.round((totalMinutes % 1440) / 60);
+    if (hours === 24) { days += 1; hours = 0; }
+    time = hours === 0 ? `${days}${words.day}` : `${days}${words.day} ${hours}${words.hour}`;
+  }
+  return words.pattern.replace('{time}', time);
+}
+
+/**
+ * @description `81% → 🔄 in 2h` for a bucket, `—` for a missing one. A bucket whose reset is unknown shows
+ * `fallbackResetsAt` instead (the session window's reset is often missing while the weekly one is known).
+ */
+export function formatClaudeUsageBucket(
+  bucket: ClaudeUsageBucket | null,
+  nowMs: number,
+  options: { fallbackResetsAt?: string | null; words?: ClaudeRelativeResetWords } = {},
+): string {
   if (bucket === null) return '—';
-  return `${bucket.percent}% → ${formatClaudeUsageResetAt(bucket.resetsAt, timezone, nowMs)}`;
+  const known = bucket.resetsAt !== null && !Number.isNaN(Date.parse(bucket.resetsAt));
+  const resetsAt = known ? bucket.resetsAt : options.fallbackResetsAt ?? null;
+  return `${bucket.percent}% → ${formatClaudeUsageRelativeReset(resetsAt, nowMs, options.words)}`;
 }
 
 // ── small readers ──

@@ -41,6 +41,8 @@ import {
   fallbackClaudeModelAliases,
   fallbackClearCallback,
   fallbackMoveDownCallbackRe,
+  fallbackOpenCallbackRe,
+  buildFallbackOpenCallback,
   fallbackMoveUpCallbackRe,
   fallbackProposeCallback,
   fallbackProposeConfirmCallback,
@@ -125,14 +127,60 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return formatFallbackEntryLabel(entry, getLabelWords());
   }
 
-  function formatRow(index: number, entry: FallbackChainEntry, detection: FallbackDetection, current: FallbackChainEntry | null, nowMs: number): string {
+  /**
+   * A rung on its label button: `3. Claude · perf ⛔ 14:00` / `1. openai / gpt-6.1 🚫` — the FULL name (Telegram
+   * sizes and truncates the button as it sees fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not
+   * signed in, ❓ not offered any more, 🚫 left out of switching, ✓ where the topic runs now). The one place the
+   * label is built: a two-row layout (label on its own row) only changes how `buildPicker` assembles the row.
+   */
+  function formatRowButtonLabel(index: number, entry: FallbackChainEntry, detection: FallbackDetection, current: FallbackChainEntry | null, nowMs: number): string {
+    const base = entry.backend === 'claude'
+      ? formatEntry(entry)
+      : `${entry.providerId} / ${entry.modelId}`;
     const availability = getFallbackEntryAvailability(entry, detection, nowMs);
-    let status = '';
-    if (availability.status === 'limited') status = t('fallback.row.limited', { until: formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs) });
-    else if (availability.status === 'signedOut') status = t('fallback.row.signedOut');
-    else if (availability.status === 'missing') status = t('fallback.row.missing');
-    const marker = current && checkIsSameFallbackAccount(entry, current) ? t('fallback.row.current') : '';
-    return `${index + 1}. ${checkIsFallbackEntryDisabled(entry) ? '🚫' : '✅'} ${formatEntry(entry)}${status}${marker}`;
+    let suffix = '';
+    if (availability.status === 'limited') suffix += ` ⛔ ${formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs)}`;
+    else if (availability.status === 'signedOut') suffix += ' 🔒';
+    else if (availability.status === 'missing') suffix += ' ❓';
+    if (checkIsFallbackEntryDisabled(entry)) suffix += ' 🚫';
+    if (current && checkIsSameFallbackAccount(entry, current)) suffix += ' ✓';
+    return `${index + 1}. ${base}${suffix}`;
+  }
+
+  /**
+   * A rung's detail view, in the message the list sits in: its name and state, then ⬆️ Up / ⬇️ Down (hidden at
+   * the ends), Use / Don't use, Remove and Back. Every edit button bakes the chain revision and the index, so a
+   * stale tap re-renders the list instead of acting.
+   */
+  async function renderRungDetail(key: SessionKey, messageId: number | null, index: number, isGeneral: boolean): Promise<void> {
+    if (messageId === null) return;
+    const chain = getState().getFallbackChain();
+    const entry = chain[index];
+    if (!entry) { await rerenderPicker(key, messageId, isGeneral); return; }
+    const detection = await detectFallbackOptions();
+    const current = isGeneral ? null : getTopicPosition(key);
+    const nowMs = Date.now();
+    const availability = getFallbackEntryAvailability(entry, detection, nowMs);
+    const lines = [t('limits.rungTitle', { n: index + 1, total: chain.length, label: formatEntry(entry) })];
+    if (availability.status === 'limited') lines.push(t('limits.rungLimited', { until: formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs) }));
+    else if (availability.status === 'signedOut') lines.push(t('limits.rungSignedOut'));
+    else if (availability.status === 'missing') lines.push(t('limits.rungMissing'));
+    else lines.push(t('limits.rungReady'));
+    if (checkIsFallbackEntryDisabled(entry)) lines.push(t('limits.rungDisabled'));
+    if (current && checkIsSameFallbackAccount(entry, current)) lines.push(t('limits.rungHere'));
+    const revision = getFallbackChainRevision(chain);
+    const move: ReturnType<typeof Markup.button.callback>[] = [];
+    if (index > 0) move.push(Markup.button.callback(t('limits.btnUp'), buildFallbackMoveUpCallback(index, revision)));
+    if (index < chain.length - 1) move.push(Markup.button.callback(t('limits.btnDown'), buildFallbackMoveDownCallback(index, revision)));
+    const rows = [
+      ...(move.length > 0 ? [move] : []),
+      [
+        Markup.button.callback(t(checkIsFallbackEntryDisabled(entry) ? 'limits.btnUse' : 'limits.btnDontUse'), buildFallbackToggleCallback(index, revision)),
+        Markup.button.callback(t('account.removeButton'), buildFallbackRemoveCallback(index, revision)),
+      ],
+      buildBackRow(),
+    ];
+    await editThreadMessage(key, messageId, lines.join('\n'), Markup.inlineKeyboard(rows));
   }
 
   /** The auto-switch value the topic (General: the instance) effectively has. */
@@ -191,38 +239,31 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const detection = await detectFallbackOptions();
     const current = isGeneral ? null : getTopicPosition(key);
     const nowMs = Date.now();
-    const list = chain.map((entry, index) => formatRow(index, entry, detection, current, nowMs)).join('\n');
     const switchOverride = isGeneral ? undefined : getState().getClaudeAutoSwitchOnLimitOverride(key);
     const waitOverride = isGeneral ? undefined : getState().getAutoContinueOnLimitOverride(key);
     const switchEnabled = resolveAutoSwitchEnabled(key, isGeneral);
     const waitEnabled = resolveWaitEnabled(key, isGeneral);
     const parts: string[] = [];
     if (!isGeneral) parts.push(t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }));
-    parts.push(chain.length === 0 ? t('limits.chainEmpty') : t('limits.chainTitle', { list }));
-    if (isGeneral) parts.push(t('limits.chainHintGeneral'));
+    parts.push(t('limits.chainHint'));
     parts.push(`${isGeneral ? `${t('limits.settingsGeneral')}\n` : ''}${t('limits.settings', {
       switch: formatSettingValue(switchEnabled, switchOverride, isGeneral),
       wait: formatSettingValue(waitEnabled, waitOverride, isGeneral),
     })}`);
     parts.push(t('limits.howItWorks'));
+    parts.push(chain.length === 0 ? t('limits.listNoteEmpty') : t('limits.listNote'));
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-    if (isGeneral) {
-      const revision = getFallbackChainRevision(chain);
-      chain.forEach((entry, index) => {
-        rows.push([
-          Markup.button.callback(`⬆️ ${index + 1}`, buildFallbackMoveUpCallback(index, revision)),
-          Markup.button.callback(`⬇️ ${index + 1}`, buildFallbackMoveDownCallback(index, revision)),
-          Markup.button.callback(`${checkIsFallbackEntryDisabled(entry) ? '🚫' : '✅'} ${index + 1}`, buildFallbackToggleCallback(index, revision)),
-          Markup.button.callback(`🗑 ${index + 1}`, buildFallbackRemoveCallback(index, revision)),
-        ]);
-      });
-      const actions = [
-        Markup.button.callback(t('fallback.addButton'), fallbackAddCallback),
-        Markup.button.callback(t('limits.rebuildButton'), fallbackProposeCallback),
-      ];
-      if (chain.length > 0) actions.push(Markup.button.callback(t('fallback.clearButton'), fallbackClearCallback));
-      rows.push(actions);
-    }
+    const revision = getFallbackChainRevision(chain);
+    // One full-width button per rung; a tap opens the rung's detail view in the same message.
+    chain.forEach((entry, index) => {
+      rows.push([Markup.button.callback(formatRowButtonLabel(index, entry, detection, current, nowMs), buildFallbackOpenCallback(index, revision))]);
+    });
+    const actions = [
+      Markup.button.callback(t('fallback.addButton'), fallbackAddCallback),
+      Markup.button.callback(t('limits.rebuildButton'), fallbackProposeCallback),
+    ];
+    if (chain.length > 0) actions.push(Markup.button.callback(t('fallback.clearButton'), fallbackClearCallback));
+    rows.push(actions);
     rows.push(buildSettingRow({
       icon: '🔁', labelKey: 'limits.switchButton', isGeneral, effective: switchEnabled, override: switchOverride,
       generalValue: getState().getClaudeAutoSwitchOnLimitGlobalDefault(),
@@ -380,13 +421,11 @@ export function createFallbackChain(ports: FallbackChainPorts) {
         return;
       case 'propose':
       case 'rebuild': {
-        if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
         await replyToThread(key, await applyPropose());
         await openLimitsView(key);
         return;
       }
       case 'clear': {
-        if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
         await replyToThread(key, await applyClear());
         return;
       }
@@ -422,10 +461,15 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     await replyToThread(key, text);
   }
 
-  /** An edit tap: refused outside General; a stale revision only re-renders. */
-  function registerEdit(re: RegExp, edit: (chain: FallbackChainEntry[], index: number) => ReturnType<typeof removeFallbackEntry>, confirm: (chain: FallbackChainEntry[], index: number) => string): void {
+  /** An edit tap: a stale revision only re-renders. */
+  function registerEdit(
+    re: RegExp,
+    edit: (chain: FallbackChainEntry[], index: number) => ReturnType<typeof removeFallbackEntry>,
+    confirm: (chain: FallbackChainEntry[], index: number) => string,
+    /** Where the rung sits after the edit (the detail view follows it); `null` = back to the list. */
+    nextIndex: (index: number) => number | null,
+  ): void {
     bot.action(re, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       const chain = getState().getFallbackChain();
       const parsed = parseFallbackEditCallback(ctx.match[0], re, getFallbackChainRevision(chain));
       if (parsed === null) { await ctx.answerCbQuery(); return; }
@@ -438,40 +482,52 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       if (!result.ok) { await ctx.answerCbQuery(t('fallback.stale')); await rerenderPicker(key, messageId, isGeneral); return; }
       await getState().setFallbackChain(result.chain);
       await answerTap(ctx, key, confirm(chain, parsed.index));
-      await rerenderPicker(key, messageId, isGeneral);
+      const next = nextIndex(parsed.index);
+      if (next === null) await rerenderPicker(key, messageId, isGeneral);
+      else await renderRungDetail(key, messageId, next, isGeneral);
     }));
   }
 
   function registerFallbackChainCallbacks(): void {
-    registerEdit(fallbackMoveUpCallbackRe, (chain, index) => moveFallbackEntry(chain, index, -1), () => t('fallback.moved'));
-    registerEdit(fallbackMoveDownCallbackRe, (chain, index) => moveFallbackEntry(chain, index, 1), () => t('fallback.moved'));
+    registerEdit(fallbackMoveUpCallbackRe, (chain, index) => moveFallbackEntry(chain, index, -1), () => t('fallback.moved'), (index) => Math.max(0, index - 1));
+    registerEdit(fallbackMoveDownCallbackRe, (chain, index) => moveFallbackEntry(chain, index, 1), () => t('fallback.moved'), (index) => index + 1);
     registerEdit(fallbackToggleCallbackRe, toggleFallbackEntryDisabled, (chain, index) => t(
       checkIsFallbackEntryDisabled(chain[index]) ? 'limits.entryEnabled' : 'limits.entryDisabled',
       { label: formatEntry(chain[index]) },
-    ));
-    registerEdit(fallbackRemoveCallbackRe, removeFallbackEntry, (chain, index) => t('fallback.removed', { label: formatEntry(chain[index]) }));
+    ), (index) => index);
+    registerEdit(fallbackRemoveCallbackRe, removeFallbackEntry, (chain, index) => t('fallback.removed', { label: formatEntry(chain[index]) }), () => null);
 
-    bot.action(fallbackAddCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
+    // A rung's button on the list: open its detail view (a stale revision only re-renders the list).
+    bot.action(fallbackOpenCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+      const chain = getState().getFallbackChain();
+      const parsed = parseFallbackEditCallback(ctx.match[0], fallbackOpenCallbackRe, getFallbackChainRevision(chain));
+      if (parsed === null) { await ctx.answerCbQuery(); return; }
+      if (!parsed.isCurrent || parsed.index >= chain.length) {
+        await ctx.answerCbQuery(t('fallback.stale'));
+        await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      await ctx.answerCbQuery();
+      await renderRungDetail(key, messageId, parsed.index, isGeneral);
+    }));
+
+    bot.action(fallbackAddCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
       await ctx.answerCbQuery();
       if (messageId !== null) await renderAddAccountStep(key, messageId);
     }));
 
-    bot.action(fallbackAddClaudeCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
+    bot.action(fallbackAddClaudeCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
       await ctx.answerCbQuery();
       if (messageId !== null) await renderAddClaudeModelStep(key, messageId, ctx.match[1]);
     }));
 
     bot.action(fallbackAddClaudeModelCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       const model = ctx.match[2] === '-' ? null : ctx.match[2];
       await answerTap(ctx, key, await applyAdd({ backend: 'claude', profile: ctx.match[1], model }));
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(fallbackAddProviderCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       const snapshot = messageId === null ? undefined : addSnapshots.get(messageId);
       const providerId = snapshot?.providers[Number(ctx.match[1])];
       if (messageId === null || !snapshot || providerId === undefined) {
@@ -499,7 +555,6 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackAddModelCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       const snapshot = messageId === null ? undefined : addSnapshots.get(messageId);
       const modelId = snapshot?.models[Number(ctx.match[1])];
       if (!snapshot || snapshot.providerId === null || modelId === undefined) {
@@ -512,7 +567,6 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackProposeCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       if (getState().getFallbackChain().length === 0) {
         await answerTap(ctx, key, await applyPropose());
         await rerenderPicker(key, messageId, isGeneral);
@@ -528,13 +582,11 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackProposeConfirmCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       await answerTap(ctx, key, await applyPropose());
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(fallbackClearCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (!isGeneral) { await ctx.answerCbQuery(t('fallback.generalOnly')); return; }
       await answerTap(ctx, key, await applyClear());
       await rerenderPicker(key, messageId, isGeneral);
     }));

@@ -18,7 +18,7 @@
  */
 
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { buildClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeProfileUsageView } from './claudeUsage';
 
 /**
  * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
@@ -322,7 +322,7 @@ export function getFallbackEntryAvailability(entry: FallbackChainEntry, detectio
     if (profile.loggedIn === false) return { status: 'signedOut' };
     if (profile.limitedUntil !== null && Date.parse(profile.limitedUntil) > nowMs) return { status: 'limited', until: profile.limitedUntil };
     const report = buildClaudeProfilesReport([profile], entry.model, nowMs);
-    if (!report.profiles[0]?.isEligible) return { status: 'limited', until: new Date(nowMs).toISOString() };
+    if (!report.profiles[0]?.isEligible) return { status: 'limited', until: getExhaustedWindowReset(profile, entry.model, nowMs) ?? new Date(nowMs).toISOString() };
     return { status: 'available' };
   }
   const label = buildOpenCodeModelLabel(entry);
@@ -330,6 +330,57 @@ export function getFallbackEntryAvailability(entry: FallbackChainEntry, detectio
   const limitedUntil = detection.openCodeLimits[label];
   if (limitedUntil !== undefined && Date.parse(limitedUntil) > nowMs) return { status: 'limited', until: limitedUntil };
   return { status: 'available' };
+}
+
+/** The latest reset among the windows a model drains that are at 100 % and still ahead; `null` when none names one. */
+function getExhaustedWindowReset(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): string | null {
+  let latest: number | null = null;
+  for (const kind of getRelevantClaudeUsageKinds(model)) {
+    const bucket = getClaudeUsageBucket(profile.usage, kind);
+    if (!bucket || bucket.percent < 100 || bucket.resetsAt === null) continue;
+    const at = Date.parse(bucket.resetsAt);
+    if (Number.isFinite(at) && at > nowMs && (latest === null || at > latest)) latest = at;
+  }
+  return latest === null ? null : new Date(latest).toISOString();
+}
+
+/** Two resets closer than this count as the same moment (the current rung then wins: no needless switch). */
+export const fallbackEarliestResetToleranceMs = 60_000;
+
+/**
+ * @description The rung a usage-limit WAIT should end on when nothing has room now: of the enabled rungs of
+ * `chain` and the rung the topic is on (`current`), the one whose limit resets EARLIEST. `null` when some rung
+ * is still available (the normal switch plan applies) or none names a future reset. `isCurrent` says the topic's
+ * own rung resets first (or within {@link fallbackEarliestResetToleranceMs} of the first): the wait stays as it
+ * is. Signed-out and missing rungs are skipped; rungs of the current account count as the current rung.
+ */
+export function pickEarliestResetRung(input: {
+  chain: readonly FallbackChainEntry[];
+  current: FallbackChainEntry | null;
+  detection: FallbackDetection;
+  nowMs: number;
+}): { entry: FallbackChainEntry; untilMs: number; isCurrent: boolean } | null {
+  const rungs = input.chain.filter((entry) => !checkIsFallbackEntryDisabled(entry));
+  const found: Array<{ entry: FallbackChainEntry; untilMs: number; isCurrent: boolean }> = [];
+  const consider = (entry: FallbackChainEntry, isCurrent: boolean): boolean => {
+    const availability = getFallbackEntryAvailability(entry, input.detection, input.nowMs);
+    if (availability.status === 'available') return !isCurrent;
+    if (availability.status !== 'limited') return false;
+    const untilMs = Date.parse(availability.until);
+    if (Number.isFinite(untilMs) && untilMs > input.nowMs) found.push({ entry, untilMs, isCurrent });
+    return false;
+  };
+  if (input.current) consider(input.current, true);
+  for (const entry of rungs) {
+    const isCurrent = input.current !== null && checkIsSameFallbackAccount(entry, input.current);
+    if (isCurrent) continue;
+    if (consider(entry, false)) return null;
+  }
+  if (found.length === 0) return null;
+  const earliest = found.reduce((best, item) => (item.untilMs < best.untilMs ? item : best));
+  const current = found.find((item) => item.isCurrent);
+  if (current && current.untilMs - earliest.untilMs <= fallbackEarliestResetToleranceMs) return current;
+  return earliest;
 }
 
 /**
@@ -432,8 +483,11 @@ export const fallbackMoveDownCallbackRe = new RegExp(`^fbk_dn_${indexGroup}_${re
 export const fallbackRemoveCallbackRe = new RegExp(`^fbk_rm_${indexGroup}_${revisionGroup}$`);
 /** Include / exclude a rung from automatic switching (revision baked like the other edits). */
 export const fallbackToggleCallbackRe = new RegExp(`^fbk_tg_${indexGroup}_${revisionGroup}$`);
+/** Open a rung's detail view from the list (same baked revision + index). */
+export const fallbackOpenCallbackRe = new RegExp(`^fbk_op_${indexGroup}_${revisionGroup}$`);
 /** Open the «add» sub-picker (accounts and providers), then a Claude account's model list. */
 export const fallbackAddCallback = 'fbk_add';
+
 export const fallbackAddClaudeCallbackRe = new RegExp(`^fbk_addc_([a-z0-9][a-z0-9_-]{0,31})$`);
 /** A Claude account + model: `-` = keep the topic's model. */
 export const fallbackAddClaudeModelCallbackRe = new RegExp(`^fbk_addcm_([a-z0-9][a-z0-9_-]{0,31})_(-|[a-z0-9][a-z0-9._-]{0,31})$`);
@@ -466,6 +520,10 @@ export function buildFallbackMoveDownCallback(index: number, revision: string): 
 
 export function buildFallbackRemoveCallback(index: number, revision: string): string {
   return `fbk_rm_${index}_${revision}`;
+}
+
+export function buildFallbackOpenCallback(index: number, revision: string): string {
+  return `fbk_op_${index}_${revision}`;
 }
 
 export function buildFallbackToggleCallback(index: number, revision: string): string {

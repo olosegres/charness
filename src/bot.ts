@@ -334,7 +334,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError, usageLimitDefaultMs } from './apiErrorRetry';
+import { decideRetryAction, classifyAgentApiError, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -374,7 +374,9 @@ import {
   getFallbackSwitchTapDecision,
   parseOpenCodeModelLabel,
   listOpenCodeProviders,
+  pickEarliestResetRung,
   pickFallbackCandidates,
+  checkIsSameFallbackAccount,
   resolveOpenCodeLimitedUntil,
   type FallbackChainEntry,
   type FallbackDetection,
@@ -1626,7 +1628,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
-    void announceUsageLimitOrSwitch(key, cls, Date.now(), wait, getLimitWaitTexts(key, wait, 0), isFirstOffNotice);
+    void announceUsageLimitOrSwitch(key, cls, Date.now(), wait, 0, isFirstOffNotice);
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -1675,7 +1677,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     limitWait = cls.resetAt !== undefined
       ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, getLimitWaitTexts(key, limitWait, action.attempt), true);
+    void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1783,6 +1785,12 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   trackContinuation: async (key, options) => {
     await requestWakeUpEngine?.trackContinuationTurn(key, options);
   },
+  resumeOnRung: async (key, rung) => {
+    const from = getTopicFallbackPosition(key);
+    if (from !== null && checkIsSameFallbackAccount(from, rung)) return false; // already there
+    const outcome = await switchTopicToFallbackEntry(key, from, rung, { isAnnounced: true });
+    return outcome.isSwitched;
+  },
   clearSavedRetry: clearSavedApiRetry,
 };
 
@@ -1824,11 +1832,12 @@ async function announceUsageLimitOrSwitch(
   key: SessionKey,
   cls: AgentApiErrorClass,
   episodeId: number,
-  wait: UsageLimitWait,
-  texts: LimitWaitTexts,
+  initialWait: UsageLimitWait,
+  attempt: number,
   isPlainNoticeDue: boolean,
 ): Promise<void> {
-  let plan: FallbackSwitchPlan & { from: FallbackChainEntry | null } = { action: 'none', from: null };
+  let wait = initialWait;
+  let plan: Awaited<ReturnType<typeof planFallbackSwitch>> = { action: 'none', from: null, earliest: null };
   try {
     plan = await planFallbackSwitch(key, cls, episodeId);
   } catch (e) {
@@ -1842,6 +1851,17 @@ async function announceUsageLimitOrSwitch(
     });
     if (outcome.isSwitched) return;
   }
+  // Every rung is limited and another one comes back before this one: the wait (armed for this rung's reset)
+  // is re-targeted to that rung — the resume moves the topic there first.
+  let resumeOn: FallbackChainEntry | undefined;
+  if (plan.earliest && wait.kind !== 'autoResumeOff') {
+    const retargeted = retargetLimitWait(key, episodeId, plan.earliest);
+    if (retargeted) {
+      wait = retargeted;
+      resumeOn = plan.earliest.entry;
+    }
+  }
+  const texts = getLimitWaitTexts(key, wait, attempt, resumeOn);
   const keyboard = plan.action === 'offer'
     ? Markup.inlineKeyboard(plan.candidates.map((entry, index) => [
       Markup.button.callback(t('fallback.switchButton', { label: formatFallbackEntry(entry) }), buildFallbackSwitchCallbackData(episodeId, index)),
@@ -1849,6 +1869,30 @@ async function announceUsageLimitOrSwitch(
     : undefined;
   const { isPlainNoticePosted } = await announceLimitWait(key, wait, texts, isPlainNoticeDue, keyboard);
   if (keyboard && !isPlainNoticePosted) await replyToThread(key, t('fallback.switchOffer'), keyboard);
+}
+
+/**
+ * @description Re-aim the ARMED usage-limit wait of `key` at the rung that comes back first: the timer moves to
+ * that rung's reset (+ the usual buffer), and the persisted retry record carries the rung (`resumeOn`), so the
+ * resume — also after a restart — moves the topic there before the continue nudge. `null` (nothing changed)
+ * when the wait the episode armed is gone or was replaced meanwhile.
+ */
+function retargetLimitWait(key: SessionKey, episodeId: number, earliest: { entry: FallbackChainEntry; untilMs: number }): UsageLimitWait | null {
+  const k = keyToString(key);
+  const entry = apiRetryTimers.get(k);
+  if (!entry || entry.timer === null || entry.fireAt !== episodeId || entry.kind !== 'usageLimit') return null;
+  const fireAt = earliest.untilMs + resetBufferMs;
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => { void fireApiRetry(key); }, Math.min(Math.max(fireAt - Date.now(), 0), maxTimeoutMs));
+  entry.timer.unref?.();
+  entry.fireAt = fireAt;
+  entry.resumeOn = earliest.entry;
+  const wait: UsageLimitWait = { kind: 'afterReset', resetAt: earliest.untilMs, fireAt };
+  entry.limitWait = wait;
+  void state
+    .setApiRetry(key, { kind: 'usageLimit', attempt: entry.attempt, fireAt, resumeOn: earliest.entry })
+    .catch((e) => console.error('[apiRetry] persist failed:', e));
+  return wait;
 }
 
 /**
@@ -1867,7 +1911,7 @@ function announceLimitWaitToNewRequest(key: SessionKey): void {
   });
   if (!wait) return;
   void withThreadLocale(key, () =>
-    announceLimitWait(key, wait, getLimitWaitTexts(key, wait, armedLimit?.attempt ?? 0), false),
+    announceLimitWait(key, wait, getLimitWaitTexts(key, wait, armedLimit?.attempt ?? 0, armedLimit?.resumeOn), false),
   );
 }
 
@@ -1883,7 +1927,7 @@ interface LimitWaitTexts {
  * `/auto_continue_limits` pointer names a Telegram command — elsewhere it would
  * be noise; the "auto-resume is off" text carries its own.
  */
-function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number): LimitWaitTexts {
+function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number, resumeOn?: FallbackChainEntry): LimitWaitTexts {
   if (wait.kind === 'autoResumeOff') {
     const text = t('autoContinueLimits.limitReachedDisabled');
     // The topic text names a Telegram command; another surface's requester gets the neutral wording (Jira plan J6).
@@ -1893,7 +1937,10 @@ function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: numbe
   // R31: a tracker's requester may sit in another zone — the time names the instance's.
   const zoneSuffix = checkIsTelegramKey(key) ? '' : ` ${getCurrentTimezone()}`;
   const time = `${formatLocalClockWithDateIfNotToday(wait.kind === 'afterReset' ? wait.resetAt : wait.fireAt, nowMs)}${zoneSuffix}`;
-  const [noticeText, answerText] = wait.kind === 'afterReset'
+  const model = resumeOn ? formatFallbackEntry(resumeOn) : '';
+  const [noticeText, answerText] = wait.kind === 'afterReset' && resumeOn
+    ? [t('apiRetry.usageLimitResetOnRungNotice', { time, model }), t('requests.limit.answerAfterResetOnRungNotice', { time, model })]
+    : wait.kind === 'afterReset'
     ? [t('apiRetry.usageLimitResetNotice', { time }), t('requests.limit.answerAfterResetNotice', { time })]
     : [
       t('apiRetry.usageLimitDelayNotice', { minutes: Math.round((wait.fireAt - nowMs) / apiRetryMsPerMinute), attempt }),
@@ -6844,9 +6891,9 @@ function getTopicFallbackPosition(key: SessionKey): FallbackChainEntry | null {
  * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a non-Telegram
  * conversation, a topic with no account to switch from, or when no rung can take over.
  */
-async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null }> {
+async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null; earliest: { entry: FallbackChainEntry; untilMs: number } | null }> {
   const from = getTopicFallbackPosition(key);
-  if (!checkIsTelegramKey(key) || from === null) return { action: 'none', from };
+  if (!checkIsTelegramKey(key) || from === null) return { action: 'none', from, earliest: null };
   const k = keyToString(key);
   const nowMs = Date.now();
   const resetAtMs = cls.kind === 'usageLimit' ? cls.resetAt : undefined;
@@ -6880,8 +6927,18 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
   else fallbackSwitchOffers.delete(k);
   const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
-  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}`);
-  return { ...plan, from };
+  // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one.
+  let earliest: { entry: FallbackChainEntry; untilMs: number } | null = null;
+  if (plan.action === 'none') {
+    const explicit = state.getFallbackChain();
+    const rungs: FallbackChainEntry[] = explicit.length > 0 ? explicit : from.backend === 'claude'
+      ? detection.claudeProfiles.filter((profile) => profile.loggedIn !== false).map((profile): FallbackChainEntry => ({ backend: 'claude', profile: profile.name, model: null }))
+      : [];
+    const found = pickEarliestResetRung({ chain: rungs, current: from, detection, nowMs: Date.now() });
+    if (found && !found.isCurrent) earliest = { entry: found.entry, untilMs: found.untilMs };
+  }
+  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}${earliest ? `; earliest reset: ${formatFallbackEntry(earliest.entry)} at ${new Date(earliest.untilMs).toISOString()}` : ''}`);
+  return { ...plan, from, earliest };
 }
 
 /** When the rung that hit the limit comes back, as a clock in the topic's zone; `null` when unknown or past. */

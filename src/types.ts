@@ -4,6 +4,7 @@ import type { OpenCodeAuthMethod } from './utils/openCodeAuthLogin';
 import type { McpHealOutcome } from './utils/claudeMcpHeal';
 import type { SessionKey } from './sessionKey';
 import type { OutboundHints } from './platform/outbound';
+import type { FallbackChainEntry } from './utils/fallbackChain';
 
 export interface AgentSession {
   id: string;
@@ -256,6 +257,12 @@ export interface ApiRetryState {
   attempt: number;
   /** Epoch ms when the retry timer should fire. */
   fireAt: number;
+  /**
+   * A usage-limit wait that ends on ANOTHER rung of the fallback chain (the one whose limit resets earliest,
+   * `utils/fallbackChain.ts`): the resume moves the topic there before the continue nudge. Absent = the topic
+   * continues where it is. Persisted, so a restart keeps the target.
+   */
+  resumeOn?: FallbackChainEntry;
 }
 
 /**

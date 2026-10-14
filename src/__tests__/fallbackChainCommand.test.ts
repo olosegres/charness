@@ -81,6 +81,7 @@ describe('fallbackChain: /limits over its ports', () => {
       String(/^fbk_dn_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_tg_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_rm_(\d{1,2})_([0-9a-f]{8})$/),
+      String(/^fbk_op_(\d{1,2})_([0-9a-f]{8})$/),
       'fbk_add',
       String(/^fbk_addc_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^fbk_addcm_([a-z0-9][a-z0-9_-]{0,31})_(-|[a-z0-9][a-z0-9._-]{0,31})$/),
@@ -104,8 +105,12 @@ describe('fallbackChain: /limits over its ports', () => {
   it('the bare command in General renders the empty screen with add / rebuild and the two instance-default toggles', async () => {
     await harness.runCommand('limits');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /Backup chain: empty/);
-    assert.match(picker?.text ?? '', /Switch to a backup by itself: OFF\n.*Wait for the reset and continue: ON/);
+    assert.match(picker?.text ?? '', /Fallback models — when an agent hits a usage limit/);
+    assert.match(picker?.text ?? '', /Auto switch to a fallback model: OFF\n.*Wait for the reset and continue: ON/);
+    assert.match(picker?.text ?? '', /How it works: .*earliest reset/);
+    assert.match(picker?.text ?? '', /list of fallback models is empty \(the default\): .*only switches between signed-in Claude accounts.*➕.*Fill from connected/);
+    assert.doesNotMatch(picker?.text ?? '', /^\d\. /m, 'no numbered list in the text');
+    assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['➕ Add', '🔄 Fill from connected']);
     assert.deepEqual(harness.getKeyboardData(picker), [['fbk_add', 'fbk_prop'], ['fbk_asw_on'], ['fbk_wait_off']]);
   });
 
@@ -117,27 +122,55 @@ describe('fallbackChain: /limits over its ports', () => {
     ]);
     const rerender = harness.edits.at(-1);
     assert.equal(rerender?.messageId, pickerId);
-    assert.match(rerender?.text ?? '', /1\. ✅ Claude · default · topic's model\n2\. ✅ Claude · work · topic's model\n3\. ✅ OpenCode · openai\/gpt-5-mini/);
-    assert.match(rerender?.text ?? '', /5\. ✅ OpenCode · google\/gemini-2\.5-pro — ⛔ limited until/);
+    assert.doesNotMatch(rerender?.text ?? '', /^\d\. /m, 'the list is on the buttons, not in the text');
+    assert.match(rerender?.text ?? '', /buttons above are the fallback models in priority order, top first/);
     const revision = getFallbackChainRevision(harness.state.getFallbackChain());
     const rows = harness.getKeyboardData(rerender);
-    assert.deepEqual(rows[0], [`fbk_up_0_${revision}`, `fbk_dn_0_${revision}`, `fbk_tg_0_${revision}`, `fbk_rm_0_${revision}`]);
+    const labels = harness.getKeyboardLabels(rerender);
+    assert.deepEqual(rows.slice(0, 5), [0, 1, 2, 3, 4].map((i) => [`fbk_op_${i}_${revision}`]), 'one full-width button per rung');
+    assert.equal(labels[0][0], "1. Claude · default · topic's model");
+    assert.equal(labels[2][0], '3. openai / gpt-5-mini');
+    assert.match(labels[4][0], /^5\. google \/ gemini-2\.5-pro ⛔ /);
     assert.deepEqual(rows.at(-3), ['fbk_add', 'fbk_prop', 'fbk_clear']);
     assert.deepEqual(rows.slice(-2), [['fbk_asw_on'], ['fbk_wait_off']]);
+    for (const row of rows) for (const data of row) assert.ok(Buffer.byteLength(data) <= 64, data);
   });
 
-  it('reorder and remove go through the revision-baked buttons; a stale revision changes nothing and re-renders', async () => {
+  it('a rung opens in its own view in the same message; up / down / toggle stay there, remove goes back to the list; a stale revision only re-renders', async () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     const revision = getFallbackChainRevision(harness.state.getFallbackChain());
+    await harness.tapButton(pickerId, `fbk_op_0_${revision}`);
+    let detail = harness.edits.at(-1)!;
+    assert.equal(detail.messageId, pickerId);
+    assert.match(detail.text ?? '', /^🪜 1 of 5: Claude · default · topic's model\n✅ Ready/);
+    assert.deepEqual(harness.getKeyboardData(detail), [
+      [`fbk_dn_0_${revision}`], [`fbk_tg_0_${revision}`, `fbk_rm_0_${revision}`], ['fbk_back'],
+    ], 'the first rung has no «up»');
+    assert.deepEqual(harness.getKeyboardLabels(detail), [['⬇️ Down'], ["🚫 Don't use", '🗑 Remove'], ['⬅️ Back']]);
+
     await harness.tapButton(pickerId, `fbk_dn_0_${revision}`);
     assert.deepEqual(harness.state.getFallbackChain().slice(0, 2), [claude('work'), claude('default')]);
+    detail = harness.edits.at(-1)!;
+    assert.match(detail.text ?? '', /^🪜 2 of 5: Claude · default/, 'the view follows the rung to its new place');
+    const fresh = getFallbackChainRevision(harness.state.getFallbackChain());
+    assert.deepEqual(harness.getKeyboardData(detail)[0], [`fbk_up_1_${fresh}`, `fbk_dn_1_${fresh}`]);
+
     const editsBefore = harness.edits.length;
     await harness.tapButton(pickerId, `fbk_rm_0_${revision}`); // the old revision: the chain moved on
     assert.equal(harness.state.getFallbackChain().length, 5, 'a stale keyboard removes nothing');
     assert.equal(harness.edits.length, editsBefore + 1, 'but the picker is re-rendered');
-    const fresh = getFallbackChainRevision(harness.state.getFallbackChain());
+    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /, 'as the list');
+    await harness.tapButton(pickerId, `fbk_op_0_${revision}`); // a stale open
+    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /);
+
     await harness.tapButton(pickerId, `fbk_rm_4_${fresh}`);
     assert.deepEqual(harness.state.getFallbackChain().at(-1), openCode('openai', 'gpt-5'));
+    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /, 'after a removal: back to the list');
+    // The last rung has no «down».
+    const last = harness.state.getFallbackChain().length - 1;
+    const now = getFallbackChainRevision(harness.state.getFallbackChain());
+    await harness.tapButton(pickerId, `fbk_op_${last}_${now}`);
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1))[0], ['⬆️ Up']);
   });
 
   it('«add» → a Claude account → a model: the entry lands with the model; the topic-model choice stores null', async () => {
@@ -225,24 +258,30 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(harness.state.getAutoContinueOnLimitGlobalDefault(), true);
   });
 
-  it('in a regular topic the picker is read-only and names the topic\'s position; edits are refused', async () => {
+  it('in a regular topic the list is editable too and the topic\'s position is named', async () => {
     await harness.state.setFallbackChain([claude('work', 'opus'), openCode('openai', 'gpt-5')]);
     isGeneralTopic = false;
     topicPosition = claude('work', 'claude-opus-4-1');
     await harness.runCommand('fallback');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /1\. ✅ Claude · work · opus ✓/);
+    assert.equal(harness.getKeyboardLabels(picker)[0][0], '1. Claude · work · opus ✓');
     assert.match(picker?.text ?? '', /This topic runs on: Claude · work · claude-opus-4-1/);
+    const revision = getFallbackChainRevision(harness.state.getFallbackChain());
     assert.deepEqual(harness.getKeyboardData(picker), [
+      [`fbk_op_0_${revision}`],
+      [`fbk_op_1_${revision}`],
+      ['fbk_add', 'fbk_prop', 'fbk_clear'],
       ['fbk_asw_on', 'fbk_asw_off', 'fbk_asw_same'],
       ['fbk_wait_on', 'fbk_wait_off', 'fbk_wait_same'],
-    ], 'a topic gets the three-state rows only: no chain edits');
-    const revision = getFallbackChainRevision(harness.state.getFallbackChain());
-    await harness.tapButton(picker!.messageId!, `fbk_rm_0_${revision}`);
-    assert.equal(harness.state.getFallbackChain().length, 2, 'a topic cannot edit the chain');
-    await harness.runCommand('fallback', 'clear');
-    assert.equal(harness.state.getFallbackChain().length, 2);
-    assert.match(harness.replies.at(-1)?.text ?? '', /edited in the General topic/);
+    ], 'the same list and actions as in General, then the three-state rows');
+    await harness.tapButton(picker!.messageId!, `fbk_op_1_${revision}`);
+    await harness.tapButton(picker!.messageId!, `fbk_tg_1_${revision}`);
+    assert.equal(harness.state.getFallbackChain()[1].disabled, true, 'a topic edits the one instance-wide list');
+    await harness.tapButton(picker!.messageId!, 'fbk_clear');
+    assert.deepEqual(harness.state.getFallbackChain(), [], 'clear works from a topic');
+    await harness.runCommand('fallback', 'propose');
+    assert.equal(harness.state.getFallbackChain().length > 0, true, 'so does the text verb');
+    await harness.state.setFallbackChain([]);
     isGeneralTopic = true;
   });
 
@@ -262,7 +301,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, 'fbk_asw_on');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
-    assert.match(harness.edits.at(-1)?.text ?? '', /Switch to a backup by itself: ON \(set for this topic\)/);
+    assert.match(harness.edits.at(-1)?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
     assert.deepEqual(labels(harness.edits.at(-1)).at(-2), ['🔁 ON ✓', '🔁 OFF', '🔁 As General: OFF']);
     await harness.tapButton(pickerId, 'fbk_wait_off');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), false);
@@ -293,9 +332,10 @@ describe('fallbackChain: /limits over its ports', () => {
     const stale = getFallbackChainRevision(harness.state.getFallbackChain());
     await harness.tapButton(pickerId, `fbk_tg_1_${stale}`);
     assert.deepEqual(harness.state.getFallbackChain()[1], { ...openCode('openai', 'gpt-5'), disabled: true });
-    assert.match(harness.edits.at(-1)?.text ?? '', /2\. 🚫 OpenCode · openai\/gpt-5/);
-    const row = harness.getKeyboardData(harness.edits.at(-1))[1];
-    assert.equal(row[2], `fbk_tg_1_${getFallbackChainRevision(harness.state.getFallbackChain())}`);
+    assert.match(harness.edits.at(-1)?.text ?? '', /🚫 Left out of automatic switching/);
+    const detailRows = harness.getKeyboardData(harness.edits.at(-1));
+    assert.equal(detailRows[1][0], `fbk_tg_1_${getFallbackChainRevision(harness.state.getFallbackChain())}`);
+    assert.equal(harness.getKeyboardLabels(harness.edits.at(-1))[1][0], '✅ Use', 'the view stays and flips its button');
     await harness.tapButton(pickerId, `fbk_tg_1_${stale}`); // the revision moved on with the exclusion
     assert.deepEqual(harness.state.getFallbackChain()[1], { ...openCode('openai', 'gpt-5'), disabled: true }, 'a stale keyboard changes nothing');
     await harness.tapButton(pickerId, 'fbk_prop');

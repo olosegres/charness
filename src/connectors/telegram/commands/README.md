@@ -104,26 +104,29 @@ list shows the CLI's truth), to start the sign-in relay for a profile (`startCla
 `applyClaudeProfileEverywhere` after a General pick, a removal or a finished sign-in). «Add» without a name arms a
 per-topic name capture the text handler consults (`checkIsAwaitingProfileName` / `submitProfileName`; a slash
 command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
-picked; `default` is never removed; the instance default is refused until General picks another; removing a
+picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
 Under each row the picker prints the profile's usage windows (`utils/claudeUsage.ts`: session, weekly, Fable
-weekly — percent used → reset in the instance zone, `getInstanceTimezone`), read off the record's snapshot
+weekly — percent used → a relative reset `🔄 in 2d 1h` (`formatClaudeUsageBucket`; an unknown 5h reset shows the weekly one)), read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
 goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
 on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting, which
-`/limits` shows.
+`/limits` shows. A provider row mirrors an account row: «🔌 Disconnect <provider>» (`acct_dc_<i>`, asks first) and 🔑
+(`acct_dcre_<i>`, the `/connect` method picker); both index the provider list snapshotted per screen message.
 
 ## `fallbackChain.ts`
 
 `/limits` (hidden alias `/fallback`; `/auto_continue_limits` opens the same screen) and the buttons
-`fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_tg_<i>_<rev>` (include / leave out of automatic switching), `fbk_rm_<i>_<rev>`,
+`fbk_op_<i>_<rev>` (open a rung's detail view in the same message), and in that view `fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_tg_<i>_<rev>` (include / leave out of automatic switching), `fbk_rm_<i>_<rev>`,
 `fbk_add`, `fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
-`fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, the two settings `fbk_asw_on|off|same` (switch to a backup by
-itself) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port), plus `fbsw_<episode>_<i>` on a
+`fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, the two settings `fbk_asw_on|off|same` (auto switch to a fallback
+model) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port), plus `fbsw_<episode>_<i>` on a
 usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
-on when its agent hits a usage limit (`utils/fallbackChain.ts`). The chain is edited in General only (a topic
-sees it read-only with ✓ on its own position and three-state rows — on / off / as General — for the two settings'
-overrides, plus «skip once» while a limit wait is armed); a rung with `disabled: true` is skipped by
+on when its agent hits a usage limit (`utils/fallbackChain.ts`). The list is edited from EVERY topic (one instance-wide list; a topic also gets ✓ on its own position, the
+three-state rows — on / off / as General — for the two settings' overrides, and «skip once» while a limit wait is
+armed). The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built) and the
+closing priority paragraph; the message text carries no numbered list. A tap opens `renderRungDetail` in the same message (⬆️ hidden on
+the first rung, ⬇️ on the last; up / down / toggle re-render the view at the rung's new place, remove returns to the list); a rung with `disabled: true` is skipped by
 `pickFallbackCandidates` and kept disabled by a rebuild (`proposeFallbackChain(detection, previous)`); the screen is meant
 for repeated use and re-renders in place. Every edit button BAKES the chain's content revision (8 hex digits of
 an FNV-1a over the entries): a keyboard posted before a later edit is refused as stale and only re-rendered, so

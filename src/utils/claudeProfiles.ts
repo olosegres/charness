@@ -122,6 +122,34 @@ export function removeClaudeProfileLayout(dataDir: string, name: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+/**
+ * @description Sign `~/.claude` (the `default` account) out by deleting ONLY its subscription login: the
+ * `claudeAiOauth` entry of `<homeClaudeDir>/.credentials.json`. The file's other entries (`mcpOAuth` tokens
+ * of MCP servers) stay; a file left with nothing else is deleted. `projects/`, settings, skills, plugins, the
+ * user memory and `~/.claude.json` are never touched. Returns whether a login was found and removed.
+ */
+export function signOutDefaultClaudeLogin(homeClaudeDir: string = resolveHomeClaudeDir()): boolean {
+  const file = path.join(homeClaudeDir, '.credentials.json');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('claudeAiOauth' in parsed)) return false;
+  const rest = { ...(parsed as Record<string, unknown>) };
+  delete rest.claudeAiOauth;
+  if (Object.keys(rest).length === 0) {
+    fs.rmSync(file, { force: true });
+    return true;
+  }
+  const mode = fs.statSync(file).mode & 0o777;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(rest), { mode });
+  fs.renameSync(tmp, file);
+  return true;
+}
+
 /** Whether a profile's directory exists on disk (the login may still be missing — see the auth status). */
 export function checkClaudeProfileDirExists(dataDir: string, name: string): boolean {
   const dir = resolveClaudeProfileDir(dataDir, name);
