@@ -717,7 +717,7 @@ export const zhDict: Record<string, string> = {
   'limits.howItWorks': '工作方式：自动切换为开时，话题立即移到第一个可用的备用模型。为关时，限制通知会带切换按钮；如果一个都不点，且等待为开，机器人会等到重置后自行继续。两者都关时只报告限制。当所有已启用的模型（包括当前模型）都受限时，会等到最早的重置，并在该模型上继续。',
   'limits.switchButton': '🔁 自动切换到备用模型：{state}',
   'limits.waitButton': '⏳ 等待重置后继续：{state}',
-  'limits.optSame': '同 General：{state}',
+  'limits.settingSameButton': '同 General（{state}）',
   'limits.rebuildButton': '🔄 用已连接项填充',
   'limits.rebuildConfirm': '🔄 用已连接项重新生成并替换列表？已从切换中排除的模型（🚫）仍保持排除。',
   'limits.entryEnabled': '✅ 已纳入自动切换：{label}',

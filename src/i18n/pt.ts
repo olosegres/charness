@@ -724,7 +724,7 @@ export const ptDict: Record<string, string> = {
   'limits.howItWorks': 'Como funciona: com a mudança automática LIGADA, o tópico passa logo ao primeiro modelo de reserva disponível. DESLIGADA, o aviso de limite traz botões de mudança e, se não carregar em nenhum, o bot espera o reinício e continua sozinho se a espera estiver LIGADA. Com ambas DESLIGADAS só avisa do limite. Se todos os modelos ativados, incluindo o atual, estiverem no limite, a espera termina no reinício mais próximo e o tópico continua nesse modelo.',
   'limits.switchButton': '🔁 Mudança automática para um modelo de reserva: {state}',
   'limits.waitButton': '⏳ Esperar o reinício e continuar: {state}',
-  'limits.optSame': 'Como General: {state}',
+  'limits.settingSameButton': 'Como em General ({state})',
   'limits.rebuildButton': '🔄 Preencher com o ligado',
   'limits.rebuildConfirm': '🔄 Substituir a lista por uma nova com o que está ligado? Os modelos excluídos da mudança (🚫) continuam excluídos.',
   'limits.entryEnabled': '✅ Incluída na mudança automática: {label}',

@@ -723,7 +723,7 @@ export const esDict: Record<string, string> = {
   'limits.howItWorks': 'Cómo funciona: con el cambio automático ACTIVADO el tema pasa de inmediato al primer modelo de respaldo disponible. Con DESACTIVADO el aviso de límite trae botones de cambio y, si no pulsas ninguno, el bot espera al reinicio y continúa solo si la espera está ACTIVADA. Con ambos DESACTIVADOS solo informa del límite. Si todos los modelos activados, incluido el actual, están limitados, la espera termina en el reinicio más temprano y el tema continúa en ese modelo.',
   'limits.switchButton': '🔁 Cambio automático a un modelo de respaldo: {state}',
   'limits.waitButton': '⏳ Esperar al reinicio y continuar: {state}',
-  'limits.optSame': 'Como General: {state}',
+  'limits.settingSameButton': 'Como en General ({state})',
   'limits.rebuildButton': '🔄 Rellenar con lo conectado',
   'limits.rebuildConfirm': '🔄 ¿Reemplazar la lista por una nueva con lo conectado? Los modelos excluidos del cambio (🚫) siguen excluidos.',
   'limits.entryEnabled': '✅ Incluida en el cambio automático: {label}',

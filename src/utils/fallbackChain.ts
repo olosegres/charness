@@ -509,6 +509,12 @@ export const fallbackAutoSwitchSameCallback = 'fbk_asw_same';
 export const fallbackWaitOnCallback = 'fbk_wait_on';
 export const fallbackWaitOffCallback = 'fbk_wait_off';
 export const fallbackWaitSameCallback = 'fbk_wait_same';
+/**
+ * A topic's button of a setting on the main screen: opens that setting's sub-menu (on / off / as in General,
+ * whose buttons are the callbacks above) in the same message. General has no sub-menu — its button flips the value.
+ */
+export const fallbackAutoSwitchOpenCallback = 'fbk_set_asw';
+export const fallbackWaitOpenCallback = 'fbk_set_wait';
 
 export function buildFallbackMoveUpCallback(index: number, revision: string): string {
   return `fbk_up_${index}_${revision}`;

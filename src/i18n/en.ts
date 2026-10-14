@@ -767,7 +767,7 @@ export const enDict: Record<string, string> = {
   'limits.howItWorks': 'How it works: with auto switch ON the topic moves to the first available fallback model at once. With it OFF the limit notice carries switch buttons, and if you press none the bot waits for the reset and continues by itself when waiting is ON. With both OFF it only reports the limit. When every enabled model, the current one included, is limited, the wait ends at the earliest reset and the topic continues on that model.',
   'limits.switchButton': '🔁 Auto switch to a fallback model: {state}',
   'limits.waitButton': '⏳ Wait for the reset and continue: {state}',
-  'limits.optSame': 'As General: {state}',
+  'limits.settingSameButton': 'As in General ({state})',
   'limits.rebuildButton': '🔄 Fill from connected',
   'limits.rebuildConfirm': '🔄 Replace the list with a fresh one built from what is connected? Models you left out of switching (🚫) stay left out.',
   'limits.entryEnabled': '✅ Included in automatic switching: {label}',

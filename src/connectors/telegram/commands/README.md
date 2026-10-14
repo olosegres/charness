@@ -120,11 +120,17 @@ on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and 
 `fbk_op_<i>_<rev>` (open a rung's detail view in the same message), and in that view `fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_tg_<i>_<rev>` (include / leave out of automatic switching), `fbk_rm_<i>_<rev>`,
 `fbk_add`, `fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
 `fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, the two settings `fbk_asw_on|off|same` (auto switch to a fallback
-model) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port), plus `fbsw_<episode>_<i>` on a
+model) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port) with `fbk_set_asw` /
+`fbk_set_wait` (a topic's button that opens the setting's sub-menu), plus `fbsw_<episode>_<i>` on a
 usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
-on when its agent hits a usage limit (`utils/fallbackChain.ts`). The list is edited from EVERY topic (one instance-wide list; a topic also gets ✓ on its own position, the
-three-state rows — on / off / as General — for the two settings' overrides, and «skip once» while a limit wait is
-armed). The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built) and the
+on when its agent hits a usage limit (`utils/fallbackChain.ts`). The list is edited from EVERY topic (one instance-wide list; a topic also gets ✓ on its own position, a
+sub-menu per setting — on / off / as General — for the two settings' overrides, and «skip once» while a limit wait is
+armed). Each setting is ONE full-width button on the main screen (`buildSettingRow`; the line is the setting's name and
+its effective value with its source, `limits.switchButton` / `limits.waitButton`): in General a tap flips the value, in a
+topic it opens `renderSettingMenu` in the same message — the line, then ON / OFF / «As in General (<General value>)» as full-width buttons
+(the topic's own choice marked ✓) and Back. The three options are the setting's own `fbk_asw_*` / `fbk_wait_*` callbacks, which
+apply the choice and re-render the main screen; three buttons on one row would split the width evenly and cut every label.
+The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built) and the
 closing priority paragraph; the message text carries no numbered list. A tap opens `renderRungDetail` in the same message (⬆️ hidden on
 the first rung, ⬇️ on the last; up / down / toggle re-render the view at the rung's new place, remove returns to the list); a rung with `disabled: true` is skipped by
 `pickFallbackCandidates` and kept disabled by a rebuild (`proposeFallbackChain(detection, previous)`); the screen is meant

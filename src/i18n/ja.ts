@@ -717,7 +717,7 @@ export const jaDict: Record<string, string> = {
   'limits.howItWorks': '仕組み: 自動切り替えが ON なら、トピックはすぐに利用可能な最初の予備モデルへ移ります。OFF の場合、制限通知に切り替えボタンが付き、どれも押さなければ、待機が ON のときボットがリセットを待って自動で続行します。両方 OFF なら制限を知らせるだけです。現在のモデルを含め有効なモデルがすべて制限中のときは、最も早いリセットまで待ち、そのモデルで続行します。',
   'limits.switchButton': '🔁 予備モデルへ自動切り替え: {state}',
   'limits.waitButton': '⏳ リセットを待って続行: {state}',
-  'limits.optSame': 'General に合わせる: {state}',
+  'limits.settingSameButton': 'General に合わせる（{state}）',
   'limits.rebuildButton': '🔄 接続済みから作成',
   'limits.rebuildConfirm': '🔄 リストを接続済みのものから作り直して置き換えますか？切り替えから除外したモデル（🚫）は除外のままです。',
   'limits.entryEnabled': '✅ 自動切り替えに含めました: {label}',

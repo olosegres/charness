@@ -723,7 +723,7 @@ export const uzDict: Record<string, string> = {
   'limits.howItWorks': 'Qanday ishlaydi: avtomatik o‘tish YOQILGAN bo‘lsa, mavzu darhol birinchi mavjud zaxira modelga o‘tadi. O‘CHIQ bo‘lsa, limit xabarida o‘tish tugmalari bo‘ladi, birortasini bosmasangiz, kutish YOQILGAN holda bot tiklanishni kutib o‘zi davom ettiradi. Ikkalasi o‘chiq bo‘lsa, faqat limit haqida xabar beradi. Hozirgisi bilan birga barcha yoqilgan modellar limitda bo‘lsa, kutish eng erta tiklanishgacha davom etadi va mavzu shu modelda davom etadi.',
   'limits.switchButton': '🔁 Zaxira modelga avtomatik o‘tish: {state}',
   'limits.waitButton': '⏳ Tiklanishni kutib davom etish: {state}',
-  'limits.optSame': 'General kabi: {state}',
+  'limits.settingSameButton': 'General kabi ({state})',
   'limits.rebuildButton': '🔄 Ulanganlardan to‘ldirish',
   'limits.rebuildConfirm': '🔄 Ro‘yxat ulanganlardan tuzilgan yangisiga almashtirilsinmi? O‘tishdan chiqarilgan modellar (🚫) chetda qoladi.',
   'limits.entryEnabled': '✅ Avtomatik o‘tishga kiritildi: {label}',

@@ -395,14 +395,14 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
 
   // ── compaction and the limit-resume switch ───────────────────────────
 
-  it('/limits shows the screen (the old /auto_continue_limits and /fallback open it too); a tap on «OFF» turns waiting off for the topic', async () => {
+  it('/limits shows the screen (the old /auto_continue_limits and /fallback open it too); a setting button opens its sub-menu and «OFF» there turns waiting off for the topic', async () => {
     const screen = await topic.sendAndAwaitReply('/limits', 'Wait for the reset and continue: ON (as in General)');
-    assert.deepEqual(topic.getKeyboardData(screen).slice(-2), [
-      ['fbk_asw_on', 'fbk_asw_off', 'fbk_asw_same'],
-      ['fbk_wait_on', 'fbk_wait_off', 'fbk_wait_same'],
-    ]);
+    assert.deepEqual(topic.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
     await topic.sendAndAwaitReply('/auto_continue_limits', 'Wait for the reset and continue: ON (as in General)');
     await topic.sendAndAwaitReply('/fallback', 'Fallback models');
+    await topic.tapAndAwaitAnswer(screen, 'fbk_set_wait');
+    await topic.waitForMessageText('the setting sub-menu', screen, (text) => text === '⏳ Wait for the reset and continue: ON (as in General)');
+    assert.deepEqual(topic.getKeyboardLabels(screen), [['ON'], ['OFF'], ['As in General (ON) ✓'], ['⬅️ Back']]);
     await topic.tapAndAwaitAnswer(screen, 'fbk_wait_off');
     await topic.waitForMessageText('the screen re-rendered', screen, (text) => text.includes('Wait for the reset and continue: OFF (set for this topic)'));
     await topic.sendAndAwaitReply('/auto_continue_limits off', 'Auto-resume after a usage limit: OFF for this topic');

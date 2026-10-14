@@ -8,8 +8,10 @@
  *   • «propose» drafts the chain from the detection and persists it; the rows show availability;
  *   • reorder / remove through the buttons, and a stale keyboard (old revision) only re-renders;
  *   • the two-step «add»: a Claude account + model, an OpenCode provider + model off the message's snapshot;
- *   • the auto-switch toggle writes the shared setting; the limit-notice switch button reaches the port
- *     with its episode and index and consumes the notice, a stale tap only answers.
+ *   • the auto-switch toggle writes the shared setting; in a topic each setting is ONE full-width button
+ *     opening a sub-menu (ON / OFF / As in General + Back) whose choice applies and returns to the screen;
+ *   • the limit-notice switch button reaches the port with its episode and index and consumes the notice,
+ *     a stale tap only answers.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -92,6 +94,8 @@ describe('fallbackChain: /limits over its ports', () => {
       'fbk_propok',
       'fbk_clear',
       'fbk_back',
+      'fbk_set_asw',
+      'fbk_set_wait',
       'fbk_asw_on',
       'fbk_asw_off',
       'fbk_asw_same',
@@ -271,9 +275,9 @@ describe('fallbackChain: /limits over its ports', () => {
       [`fbk_op_0_${revision}`],
       [`fbk_op_1_${revision}`],
       ['fbk_add', 'fbk_prop', 'fbk_clear'],
-      ['fbk_asw_on', 'fbk_asw_off', 'fbk_asw_same'],
-      ['fbk_wait_on', 'fbk_wait_off', 'fbk_wait_same'],
-    ], 'the same list and actions as in General, then the three-state rows');
+      ['fbk_set_asw'],
+      ['fbk_set_wait'],
+    ], 'the same list and actions as in General, then one full-width button per setting (its sub-menu)');
     await harness.tapButton(picker!.messageId!, `fbk_op_1_${revision}`);
     await harness.tapButton(picker!.messageId!, `fbk_tg_1_${revision}`);
     assert.equal(harness.state.getFallbackChain()[1].disabled, true, 'a topic edits the one instance-wide list');
@@ -285,7 +289,33 @@ describe('fallbackChain: /limits over its ports', () => {
     isGeneralTopic = true;
   });
 
-  it('a topic\'s three-state rows: on / off / same as General, the effective value and the choice marked; same drops the override', async () => {
+  it('a topic\'s setting buttons: one full-width button each with the effective value and its source; General keeps its single flip button', async () => {
+    isGeneralTopic = false;
+    await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
+    await harness.state.setAutoContinueOnLimitGlobalDefault(true);
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
+    await harness.state.setAutoContinueOnLimitOverride(harness.key, null);
+    await harness.runCommand('limits');
+    const screen = harness.replies.at(-1);
+    assert.deepEqual(harness.getKeyboardLabels(screen).slice(-2), [
+      ['🔁 Auto switch to a fallback model: OFF (as in General)'],
+      ['⏳ Wait for the reset and continue: ON (as in General)'],
+    ]);
+    assert.deepEqual(harness.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, true);
+    await harness.runCommand('limits');
+    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).at(-2), ['🔁 Auto switch to a fallback model: ON (set for this topic)']);
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
+    isGeneralTopic = true;
+    await harness.runCommand('limits');
+    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).slice(-2), [
+      ['🔁 Auto switch to a fallback model: OFF'],
+      ['⏳ Wait for the reset and continue: ON'],
+    ], 'General: the value alone, no source');
+    assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']], 'General: a tap flips');
+  });
+
+  it('a topic\'s setting sub-menu: opens in the same message with ON / OFF / As in General and Back; a choice applies and returns to the screen', async () => {
     isGeneralTopic = false;
     await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
     await harness.state.setAutoContinueOnLimitGlobalDefault(true);
@@ -293,25 +323,73 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.state.setAutoContinueOnLimitOverride(harness.key, null);
     await harness.runCommand('limits');
     const pickerId = harness.replies.at(-1)!.messageId!;
-    const labels = (message: Parameters<typeof harness.getKeyboardLabels>[0]) => harness.getKeyboardLabels(message);
-    assert.deepEqual(labels(harness.replies.at(-1)).slice(-2), [
-      ['🔁 ON', '🔁 OFF', '🔁 As General: OFF ✓'],
-      ['⏳ ON', '⏳ OFF', '⏳ As General: ON ✓'],
-    ]);
+
+    await harness.tapButton(pickerId, 'fbk_set_asw');
+    const menu = harness.edits.at(-1);
+    assert.equal(menu?.messageId, pickerId, 'the sub-menu replaces the screen in the same message');
+    assert.equal(menu?.text, '🔁 Auto switch to a fallback model: OFF (as in General)');
+    assert.deepEqual(harness.getKeyboardLabels(menu), [['ON'], ['OFF'], ['As in General (OFF) ✓'], ['⬅️ Back']]);
+    assert.deepEqual(harness.getKeyboardData(menu), [['fbk_asw_on'], ['fbk_asw_off'], ['fbk_asw_same'], ['fbk_back']]);
+    for (const data of harness.getKeyboardData(menu).flat()) assert.ok(Buffer.byteLength(data) <= 64, `${data} fits callback_data`);
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), undefined, 'opening the menu changes nothing');
+
     await harness.tapButton(pickerId, 'fbk_asw_on');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
-    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
-    assert.match(harness.edits.at(-1)?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
-    assert.deepEqual(labels(harness.edits.at(-1)).at(-2), ['🔁 ON ✓', '🔁 OFF', '🔁 As General: OFF']);
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic choice never touches the instance default');
+    const backOnScreen = harness.edits.at(-1);
+    assert.match(backOnScreen?.text ?? '', /Fallback models — when an agent hits a usage limit/, 'the choice returns to the main screen');
+    assert.match(backOnScreen?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
+    assert.deepEqual(harness.getKeyboardLabels(backOnScreen).at(-2), ['🔁 Auto switch to a fallback model: ON (set for this topic)']);
+
+    await harness.tapButton(pickerId, 'fbk_set_asw');
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON ✓'], ['OFF'], ['As in General (OFF)'], ['⬅️ Back']], 'the topic\'s own choice is marked');
+    await harness.tapButton(pickerId, 'fbk_asw_off');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false);
+    await harness.tapButton(pickerId, 'fbk_set_asw');
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON'], ['OFF ✓'], ['As in General (OFF)'], ['⬅️ Back']]);
+    await harness.tapButton(pickerId, 'fbk_asw_same');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), undefined, '«as in General» drops the override');
+
+    await harness.tapButton(pickerId, 'fbk_set_wait');
+    assert.equal(harness.edits.at(-1)?.text, '⏳ Wait for the reset and continue: ON (as in General)');
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON'], ['OFF'], ['As in General (ON) ✓'], ['⬅️ Back']]);
+    assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['fbk_wait_on'], ['fbk_wait_off'], ['fbk_wait_same'], ['fbk_back']]);
     await harness.tapButton(pickerId, 'fbk_wait_off');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), false);
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), false);
-    await harness.tapButton(pickerId, 'fbk_asw_same');
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).at(-1), ['⏳ Wait for the reset and continue: OFF (set for this topic)']);
+    await harness.tapButton(pickerId, 'fbk_set_wait');
     await harness.tapButton(pickerId, 'fbk_wait_same');
-    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), undefined);
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), undefined);
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), true, 'back to the General value');
     isGeneralTopic = true;
+  });
+
+  it('the sub-menu\'s «as in General» names the General value it would give; Back returns to the screen without changing anything', async () => {
+    isGeneralTopic = false;
+    await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(true);
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, false);
+    await harness.runCommand('limits');
+    const pickerId = harness.replies.at(-1)!.messageId!;
+    await harness.tapButton(pickerId, 'fbk_set_asw');
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON'], ['OFF ✓'], ['As in General (ON)'], ['⬅️ Back']]);
+    await harness.tapButton(pickerId, 'fbk_back');
+    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — when an agent hits a usage limit/);
+    assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false, 'Back applies nothing');
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
+    await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
+    isGeneralTopic = true;
+  });
+
+  it('a sub-menu tap that reaches General only re-renders the screen (General has no «as in General»)', async () => {
+    isGeneralTopic = true;
+    await harness.runCommand('limits');
+    const pickerId = harness.replies.at(-1)!.messageId!;
+    await harness.tapButton(pickerId, 'fbk_set_wait');
+    const rerender = harness.edits.at(-1);
+    assert.match(rerender?.text ?? '', /Fallback models — when an agent hits a usage limit/);
+    assert.deepEqual(harness.getKeyboardData(rerender).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']]);
   });
 
   it('the topic screen offers «skip once» only while a limit wait is armed', async () => {
@@ -321,7 +399,7 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)).at(-1), [buildSkipArmedRetryCallbackData(1_800_000_000_000)]);
     armedFireAt = null;
     await harness.runCommand('limits');
-    assert.equal(harness.getKeyboardData(harness.replies.at(-1)).at(-1)?.[0], 'fbk_wait_on');
+    assert.equal(harness.getKeyboardData(harness.replies.at(-1)).at(-1)?.[0], 'fbk_set_wait', 'without an armed wait the setting button is last');
     isGeneralTopic = true;
   });
 

@@ -723,7 +723,7 @@ export const frDict: Record<string, string> = {
   'limits.howItWorks': 'Comment ça marche : bascule automatique ACTIVÉE, le sujet passe aussitôt au premier modèle de secours disponible. DÉSACTIVÉE, l’avis de limite porte des boutons de bascule et, si vous n’en pressez aucun, le bot attend la réinitialisation et continue seul si l’attente est ACTIVÉE. Les deux DÉSACTIVÉES, il signale seulement la limite. Si tous les modèles activés, l’actuel compris, sont limités, l’attente se termine à la réinitialisation la plus proche et le sujet continue sur ce modèle.',
   'limits.switchButton': '🔁 Bascule automatique vers un modèle de secours : {state}',
   'limits.waitButton': '⏳ Attendre la réinitialisation et continuer : {state}',
-  'limits.optSame': 'Comme General : {state}',
+  'limits.settingSameButton': 'Comme dans General ({state})',
   'limits.rebuildButton': '🔄 Remplir avec le connecté',
   'limits.rebuildConfirm': '🔄 Remplacer la liste par une nouvelle construite avec ce qui est connecté ? Les modèles exclus du basculement (🚫) restent exclus.',
   'limits.entryEnabled': '✅ Inclus dans le basculement automatique : {label}',

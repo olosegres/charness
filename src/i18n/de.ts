@@ -723,7 +723,7 @@ export const deDict: Record<string, string> = {
   'limits.howItWorks': 'So funktioniert es: Bei AN wechselt das Thema sofort zum ersten verfügbaren Ersatzmodell. Bei AUS trägt die Limit-Meldung Wechsel-Buttons, und drückst du keinen, wartet der Bot auf das Zurücksetzen und macht selbst weiter, sofern Warten AN ist. Bei beidem AUS meldet er nur das Limit. Sind alle aktivierten Modelle, auch das aktuelle, am Limit, endet das Warten beim frühesten Reset und das Thema läuft auf diesem Modell weiter.',
   'limits.switchButton': '🔁 Automatisch auf ein Ersatzmodell wechseln: {state}',
   'limits.waitButton': '⏳ Auf Zurücksetzen warten und fortsetzen: {state}',
-  'limits.optSame': 'Wie General: {state}',
+  'limits.settingSameButton': 'Wie in General ({state})',
   'limits.rebuildButton': '🔄 Aus Verbundenem füllen',
   'limits.rebuildConfirm': '🔄 Die Liste durch eine neue aus dem Verbundenen ersetzen? Vom Wechsel ausgenommene Modelle (🚫) bleiben ausgenommen.',
   'limits.entryEnabled': '✅ Im automatischen Wechsel enthalten: {label}',

@@ -3,9 +3,9 @@
  * account / provider + model a topic continues on (reorder, include / exclude, remove, add through a two-step
  * sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide what a
  * limit does (auto switch to a fallback model, wait for the reset and continue — instance defaults in General,
- * on / off / same-as-General overrides in a topic) — and the «🔁 Switch to …» buttons a usage-limit notice
- * carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this screen. See README.md in this
- * folder and `utils/fallbackChain.ts`.
+ * on / off / same-as-General overrides in a topic, chosen in a per-setting sub-menu) — and the «🔁 Switch to …»
+ * buttons a usage-limit notice carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this
+ * screen. See README.md in this folder and `utils/fallbackChain.ts`.
  */
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
@@ -35,6 +35,7 @@ import {
   fallbackAddProviderCallbackRe,
   fallbackAutoSwitchOffCallback,
   fallbackAutoSwitchOnCallback,
+  fallbackAutoSwitchOpenCallback,
   fallbackAutoSwitchSameCallback,
   fallbackBackCallback,
   fallbackChainMaxLength,
@@ -51,6 +52,7 @@ import {
   fallbackToggleCallbackRe,
   fallbackWaitOffCallback,
   fallbackWaitOnCallback,
+  fallbackWaitOpenCallback,
   fallbackWaitSameCallback,
   formatFallbackEntryLabel,
   getFallbackChainRevision,
@@ -71,6 +73,37 @@ import type { BotCore } from './botCore';
 
 /** Models per page in the «add an OpenCode model» step (the `/model` picker's density). */
 const addModelPageSize = 8;
+
+/** The two settings of the screen: the ids the setting rows, the sub-menu and its callbacks are keyed by. */
+type SettingId = 'switch' | 'wait';
+
+const settingIds: readonly SettingId[] = ['switch', 'wait'];
+
+/** A setting's value as a screen reads it: what is in force, the topic's own choice (`undefined` = follows General) and the General value. */
+interface SettingValue {
+  effective: boolean;
+  override: boolean | undefined;
+  generalValue: boolean;
+}
+
+/** One setting's callbacks: the topic button that opens its sub-menu, and the sub-menu's on / off / same-as-General options. */
+interface SettingCallbacks {
+  open: string;
+  on: string;
+  off: string;
+  same: string;
+}
+
+const settingCallbacks: Record<SettingId, SettingCallbacks> = {
+  switch: { open: fallbackAutoSwitchOpenCallback, on: fallbackAutoSwitchOnCallback, off: fallbackAutoSwitchOffCallback, same: fallbackAutoSwitchSameCallback },
+  wait: { open: fallbackWaitOpenCallback, on: fallbackWaitOnCallback, off: fallbackWaitOffCallback, same: fallbackWaitSameCallback },
+};
+
+/** The line naming a setting with its value (`{state}`): the main screen's button and the sub-menu's text. */
+const settingLabelKeys: Record<SettingId, 'limits.switchButton' | 'limits.waitButton'> = {
+  switch: 'limits.switchButton',
+  wait: 'limits.waitButton',
+};
 
 /**
  * What the chain picker needs from the bot: the shared core, the detection of what is signed in, the topic's
@@ -183,14 +216,20 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     await editThreadMessage(key, messageId, lines.join('\n'), Markup.inlineKeyboard(rows));
   }
 
-  /** The auto-switch value the topic (General: the instance) effectively has. */
-  function resolveAutoSwitchEnabled(key: SessionKey, isGeneral: boolean): boolean {
-    return isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key);
-  }
-
-  /** The wait-for-the-reset value the topic (General: the instance) effectively has. */
-  function resolveWaitEnabled(key: SessionKey, isGeneral: boolean): boolean {
-    return isGeneral ? getState().getAutoContinueOnLimitGlobalDefault() : getState().checkIsAutoContinueOnLimitEnabled(key);
+  /** A setting's value for the topic (General: the instance default, where there is no override). */
+  function readSetting(id: SettingId, key: SessionKey, isGeneral: boolean): SettingValue {
+    if (id === 'switch') {
+      return {
+        effective: isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key),
+        override: isGeneral ? undefined : getState().getClaudeAutoSwitchOnLimitOverride(key),
+        generalValue: getState().getClaudeAutoSwitchOnLimitGlobalDefault(),
+      };
+    }
+    return {
+      effective: isGeneral ? getState().getAutoContinueOnLimitGlobalDefault() : getState().checkIsAutoContinueOnLimitEnabled(key),
+      override: isGeneral ? undefined : getState().getAutoContinueOnLimitOverride(key),
+      generalValue: getState().getAutoContinueOnLimitGlobalDefault(),
+    };
   }
 
   function formatState(enabled: boolean): string {
@@ -203,30 +242,42 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return `${formatState(enabled)}${override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic')}`;
   }
 
+  /** The setting's name and its effective value with where it comes from: `🔁 Auto switch to a fallback model: ON (as in General)`. */
+  function formatSettingLine(id: SettingId, setting: SettingValue, isGeneral: boolean): string {
+    return t(settingLabelKeys[id], { state: formatSettingValue(setting.effective, setting.override, isGeneral) });
+  }
+
   /**
-   * One setting's buttons. General: a single flip button (shows the value, taps to the other). A topic: three
-   * buttons — on / off / same as General (with the General value) — the current choice marked `✓`.
+   * One setting's button on the main screen, always one full-width button with the setting's line. General: a tap
+   * flips the value. A topic: a tap opens the setting's sub-menu ({@link renderSettingMenu}) in the same message —
+   * three choices on one row would split the width evenly and cut every label.
    */
-  function buildSettingRow(input: {
-    icon: string;
-    labelKey: 'limits.switchButton' | 'limits.waitButton';
-    isGeneral: boolean;
-    effective: boolean;
-    override: boolean | undefined;
-    generalValue: boolean;
-    onData: string;
-    offData: string;
-    sameData: string;
-  }) {
-    if (input.isGeneral) {
-      return [Markup.button.callback(t(input.labelKey, { state: formatState(input.effective) }), input.effective ? input.offData : input.onData)];
-    }
+  function buildSettingRow(id: SettingId, setting: SettingValue, isGeneral: boolean) {
+    const callbacks = settingCallbacks[id];
+    const tapData = isGeneral ? (setting.effective ? callbacks.off : callbacks.on) : callbacks.open;
+    return [Markup.button.callback(formatSettingLine(id, setting, isGeneral), tapData)];
+  }
+
+  /**
+   * A topic's setting sub-menu, in the message the screen sits in: the setting's line, then ON / OFF / As in
+   * General (with the General value it would give) as full-width buttons — the current choice marked `✓` — and
+   * Back. The options are the setting's own callbacks, which apply the choice and return to the main screen.
+   */
+  async function renderSettingMenu(key: SessionKey, messageId: number | null, id: SettingId): Promise<void> {
+    if (messageId === null) return;
+    const setting = readSetting(id, key, false);
+    const callbacks = settingCallbacks[id];
     const mark = (isCurrent: boolean): string => (isCurrent ? ' ✓' : '');
-    return [
-      Markup.button.callback(`${input.icon} ${formatState(true)}${mark(input.override === true)}`, input.onData),
-      Markup.button.callback(`${input.icon} ${formatState(false)}${mark(input.override === false)}`, input.offData),
-      Markup.button.callback(`${input.icon} ${t('limits.optSame', { state: formatState(input.generalValue) })}${mark(input.override === undefined)}`, input.sameData),
+    const rows = [
+      [Markup.button.callback(`${formatState(true)}${mark(setting.override === true)}`, callbacks.on)],
+      [Markup.button.callback(`${formatState(false)}${mark(setting.override === false)}`, callbacks.off)],
+      [Markup.button.callback(
+        `${t('limits.settingSameButton', { state: formatState(setting.generalValue) })}${mark(setting.override === undefined)}`,
+        callbacks.same,
+      )],
+      buildBackRow(),
     ];
+    await editThreadMessage(key, messageId, formatSettingLine(id, setting, false), Markup.inlineKeyboard(rows));
   }
 
   /**
@@ -239,16 +290,14 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const detection = await detectFallbackOptions();
     const current = isGeneral ? null : getTopicPosition(key);
     const nowMs = Date.now();
-    const switchOverride = isGeneral ? undefined : getState().getClaudeAutoSwitchOnLimitOverride(key);
-    const waitOverride = isGeneral ? undefined : getState().getAutoContinueOnLimitOverride(key);
-    const switchEnabled = resolveAutoSwitchEnabled(key, isGeneral);
-    const waitEnabled = resolveWaitEnabled(key, isGeneral);
+    const switchSetting = readSetting('switch', key, isGeneral);
+    const waitSetting = readSetting('wait', key, isGeneral);
     const parts: string[] = [];
     if (!isGeneral) parts.push(t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }));
     parts.push(t('limits.chainHint'));
     parts.push(`${isGeneral ? `${t('limits.settingsGeneral')}\n` : ''}${t('limits.settings', {
-      switch: formatSettingValue(switchEnabled, switchOverride, isGeneral),
-      wait: formatSettingValue(waitEnabled, waitOverride, isGeneral),
+      switch: formatSettingValue(switchSetting.effective, switchSetting.override, isGeneral),
+      wait: formatSettingValue(waitSetting.effective, waitSetting.override, isGeneral),
     })}`);
     parts.push(t('limits.howItWorks'));
     parts.push(chain.length === 0 ? t('limits.listNoteEmpty') : t('limits.listNote'));
@@ -264,16 +313,8 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     ];
     if (chain.length > 0) actions.push(Markup.button.callback(t('fallback.clearButton'), fallbackClearCallback));
     rows.push(actions);
-    rows.push(buildSettingRow({
-      icon: '🔁', labelKey: 'limits.switchButton', isGeneral, effective: switchEnabled, override: switchOverride,
-      generalValue: getState().getClaudeAutoSwitchOnLimitGlobalDefault(),
-      onData: fallbackAutoSwitchOnCallback, offData: fallbackAutoSwitchOffCallback, sameData: fallbackAutoSwitchSameCallback,
-    }));
-    rows.push(buildSettingRow({
-      icon: '⏳', labelKey: 'limits.waitButton', isGeneral, effective: waitEnabled, override: waitOverride,
-      generalValue: getState().getAutoContinueOnLimitGlobalDefault(),
-      onData: fallbackWaitOnCallback, offData: fallbackWaitOffCallback, sameData: fallbackWaitSameCallback,
-    }));
+    rows.push(buildSettingRow('switch', switchSetting, isGeneral));
+    rows.push(buildSettingRow('wait', waitSetting, isGeneral));
     const armedFireAt = isGeneral ? null : getArmedLimitRetryFireAt(key);
     if (armedFireAt !== null) rows.push([Markup.button.callback(t('autoContinueLimits.skipButton'), buildSkipArmedRetryCallbackData(armedFireAt))]);
     return { text: parts.join('\n\n'), keyboard: Markup.inlineKeyboard(rows) };
@@ -595,6 +636,16 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       await ctx.answerCbQuery();
       await rerenderPicker(key, messageId, isGeneral);
     }));
+
+    // A topic's setting button: open its sub-menu. General has no sub-menu (its button flips the value), so a tap
+    // that still arrives there only re-renders the screen.
+    for (const id of settingIds) {
+      bot.action(settingCallbacks[id].open, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+        await ctx.answerCbQuery();
+        if (isGeneral) await rerenderPicker(key, messageId, isGeneral);
+        else await renderSettingMenu(key, messageId, id);
+      }));
+    }
 
     const settingTaps: ReadonlyArray<[string, (key: SessionKey, isGeneral: boolean, enabled: boolean | null) => Promise<string>, boolean | null]> = [
       [fallbackAutoSwitchOnCallback, applyAutoSwitch, true], [fallbackAutoSwitchOffCallback, applyAutoSwitch, false], [fallbackAutoSwitchSameCallback, applyAutoSwitch, null],
