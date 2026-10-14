@@ -164,7 +164,7 @@ export const enDict: Record<string, string> = {
   'status.global_empty': '📊 No threads yet.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nFolder: {subdir}\nSession: {session}',
   'status.thread_view': 'View: {view}',
-  'status.thread_account': 'Account: {account}{limited}',
+  'status.thread_account': 'Account: {account}',
   'status.thread_account_limited': ' · ⛔ at its limit until {until}',
   'status.thread_account_pending': "Switch pending: {account} — applies when the agent's turn ends or at the next start",
   'status.thread_model': 'Model: {model}',

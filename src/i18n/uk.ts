@@ -166,7 +166,7 @@ export const ukDict: Record<string, string> = {
   'status.global_empty': '📊 Тредів поки немає.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nТека: {subdir}\nСесія: {session}',
   'status.thread_view': 'Вигляд: {view}',
-  'status.thread_account': 'Обліковий запис: {account}{limited}',
+  'status.thread_account': 'Обліковий запис: {account}',
   'status.thread_account_limited': ' · ⛔ на ліміті до {until}',
   'status.thread_account_pending': 'Очікує перемикання: {account} — застосується, коли завершиться хід агента або під час наступного запуску',
   'status.thread_model': 'Модель: {model}',

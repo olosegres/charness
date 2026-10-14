@@ -160,7 +160,7 @@ export const frDict: Record<string, string> = {
   'status.global_empty': '📊 Aucun fil pour l\'instant.',
   'status.thread_report': 'Statut :\n\nAgent : {agent}\nDossier : {subdir}\nSession : {session}',
   'status.thread_view': 'Vue : {view}',
-  'status.thread_account': 'Compte : {account}{limited}',
+  'status.thread_account': 'Compte : {account}',
   'status.thread_account_limited': ' · ⛔ à la limite jusqu’à {until}',
   'status.thread_account_pending': 'Bascule en attente : {account} — appliquée à la fin du tour de l’agent ou au prochain démarrage',
   'status.thread_model': 'Modèle : {model}',

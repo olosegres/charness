@@ -160,7 +160,7 @@ export const deDict: Record<string, string> = {
   'status.global_empty': '📊 Noch keine Threads.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nOrdner: {subdir}\nSitzung: {session}',
   'status.thread_view': 'Ansicht: {view}',
-  'status.thread_account': 'Konto: {account}{limited}',
+  'status.thread_account': 'Konto: {account}',
   'status.thread_account_limited': ' · ⛔ am Limit bis {until}',
   'status.thread_account_pending': 'Wechsel ausstehend: {account} — gilt, sobald der Zug des Agenten endet oder beim nächsten Start',
   'status.thread_model': 'Modell: {model}',

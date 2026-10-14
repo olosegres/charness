@@ -160,7 +160,7 @@ export const zhDict: Record<string, string> = {
   'status.global_empty': '📊 暂无话题。',
   'status.thread_report': '状态：\n\n代理：{agent}\n文件夹：{subdir}\n会话：{session}',
   'status.thread_view': '视图：{view}',
-  'status.thread_account': '账号：{account}{limited}',
+  'status.thread_account': '账号：{account}',
   'status.thread_account_limited': ' · ⛔ 已达上限，直到 {until}',
   'status.thread_account_pending': '待切换：{account} — 在代理本轮结束或下次启动时生效',
   'status.thread_model': '模型：{model}',

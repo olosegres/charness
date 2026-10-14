@@ -160,7 +160,7 @@ export const hiDict: Record<string, string> = {
   'status.global_empty': '📊 अभी तक कोई थ्रेड नहीं।',
   'status.thread_report': 'स्थिति:\n\nएजेंट: {agent}\nफ़ोल्डर: {subdir}\nसत्र: {session}',
   'status.thread_view': 'व्यू: {view}',
-  'status.thread_account': 'खाता: {account}{limited}',
+  'status.thread_account': 'खाता: {account}',
   'status.thread_account_limited': ' · ⛔ सीमा पर, {until} तक',
   'status.thread_account_pending': 'स्विच लंबित: {account} — एजेंट की बारी खत्म होने पर या अगली शुरुआत पर लागू होगा',
   'status.thread_model': 'मॉडल: {model}',

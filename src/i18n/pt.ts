@@ -160,7 +160,7 @@ export const ptDict: Record<string, string> = {
   'status.global_empty': '📊 Ainda sem tópicos.',
   'status.thread_report': 'Status:\n\nAgente: {agent}\nPasta: {subdir}\nSessão: {session}',
   'status.thread_view': 'Vista: {view}',
-  'status.thread_account': 'Conta: {account}{limited}',
+  'status.thread_account': 'Conta: {account}',
   'status.thread_account_limited': ' · ⛔ no limite até {until}',
   'status.thread_account_pending': 'Troca pendente: {account} — aplica-se ao fim do turno do agente ou no próximo início',
   'status.thread_model': 'Modelo: {model}',

@@ -160,7 +160,7 @@ export const jaDict: Record<string, string> = {
   'status.global_empty': '📊 まだスレッドがありません。',
   'status.thread_report': 'ステータス:\n\nエージェント: {agent}\nフォルダ: {subdir}\nセッション: {session}',
   'status.thread_view': '表示: {view}',
-  'status.thread_account': 'アカウント: {account}{limited}',
+  'status.thread_account': 'アカウント: {account}',
   'status.thread_account_limited': ' · ⛔ 上限中、{until} まで',
   'status.thread_account_pending': '切り替え待ち: {account} — エージェントのターン終了時、または次回の起動時に適用されます',
   'status.thread_model': 'モデル: {model}',

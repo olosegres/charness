@@ -160,7 +160,7 @@ export const esDict: Record<string, string> = {
   'status.global_empty': '📊 Aún no hay hilos.',
   'status.thread_report': 'Estado:\n\nAgente: {agent}\nCarpeta: {subdir}\nSesión: {session}',
   'status.thread_view': 'Vista: {view}',
-  'status.thread_account': 'Cuenta: {account}{limited}',
+  'status.thread_account': 'Cuenta: {account}',
   'status.thread_account_limited': ' · ⛔ en el límite hasta {until}',
   'status.thread_account_pending': 'Cambio pendiente: {account} — se aplica al terminar el turno del agente o en el próximo inicio',
   'status.thread_model': 'Modelo: {model}',

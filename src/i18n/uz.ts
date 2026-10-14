@@ -160,7 +160,7 @@ export const uzDict: Record<string, string> = {
   'status.global_empty': '📊 Hali mavzular yo‘q.',
   'status.thread_report': 'Holat:\n\nAgent: {agent}\nJild: {subdir}\nSessiya: {session}',
   'status.thread_view': "Ko'rinish: {view}",
-  'status.thread_account': 'Hisob: {account}{limited}',
+  'status.thread_account': 'Hisob: {account}',
   'status.thread_account_limited': ' · ⛔ limitda, {until} gacha',
   'status.thread_account_pending': 'O‘tish kutilmoqda: {account} — agent navbati tugaganda yoki keyingi ishga tushirishda qo‘llanadi',
   'status.thread_model': 'Model: {model}',

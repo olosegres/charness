@@ -164,7 +164,7 @@ export const ruDict: Record<string, string> = {
   'status.global_empty': '📊 Тредов пока нет.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nПапка: {subdir}\nСессия: {session}',
   'status.thread_view': 'Вид: {view}',
-  'status.thread_account': 'Аккаунт: {account}{limited}',
+  'status.thread_account': 'Аккаунт: {account}',
   'status.thread_account_limited': ' · ⛔ на лимите до {until}',
   'status.thread_account_pending': 'Ожидает переключения: {account} — применится, когда закончится ход агента или при следующем запуске',
   'status.thread_model': 'Модель: {model}',

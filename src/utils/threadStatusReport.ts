@@ -1,13 +1,14 @@
 import { t } from '../i18n';
 import type { AgentRuntimeInfo } from '../types';
 import { formatClaudeUsageResetAt } from './claudeUsage';
-import { parseOpenCodeModelLabel } from './fallbackChain';
 
-/** One account as `/status` names it: a Claude profile (name + email) or an OpenCode provider (id only). */
+/** One Claude account profile as `/status` names it. */
 export interface ThreadStatusAccountSource {
   name: string;
-  /** What the last `claude auth status` read said; `null` when never probed (and always for a provider). */
+  /** What the last `claude auth status` read said; `null` when never probed. */
   email: string | null;
+  /** That read's sign-in answer; `undefined` when never probed. A signed-out profile may keep an old email. */
+  loggedIn: boolean | undefined;
   /** Raw ISO limit mark of the profile record; a mark in the past reads as no limit. */
   limitedUntil: string | null;
 }
@@ -31,7 +32,10 @@ export interface ThreadStatusReportInput {
   effort: string | null;
   startedAt: string | null;
   runtime: AgentRuntimeInfo | null;
-  /** The account the topic's agent runs on; `null`/absent for a topic with no agent or no account notion. */
+  /**
+   * The Claude profile the topic's agent runs on; `null`/absent for a topic with no agent or a non-Claude one
+   * (an OpenCode model label already names its provider).
+   */
   account?: ThreadStatusAccount | null;
   /** The topic's view, already localized (`verbosity.view.*`). */
   view: string;
@@ -96,34 +100,23 @@ export function getThreadStatusReport({
   return lines.join('\n');
 }
 
-/** `name · email`, or just the name when the email is unknown. */
-function formatAccountName({ name, email }: ThreadStatusAccountSource): string {
-  return email ? `${name} · ${email}` : name;
-}
-
 /**
- * @description The `Account:` row (plus a pending-switch row) of the `/status` report. The limit mark follows
- * `/accounts`: the ⛔ suffix shows only while the mark lies in the future, with the reset in the instance zone.
+ * @description `name · email` like an `/accounts` row (`name · not signed in` once a probe said so, the name
+ * alone when never probed), plus the `/accounts` limit mark while it lies in the future, reset in the instance zone.
  */
-export function formatThreadStatusAccountLines(
-  { current, pending, nowMs }: ThreadStatusAccount,
-  timezone: string,
-): string[] {
-  const limited = current.limitedUntil !== null && Date.parse(current.limitedUntil) > nowMs
-    ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(current.limitedUntil, timezone, nowMs) })
+function formatAccount({ name, email, loggedIn, limitedUntil }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
+  const detail = loggedIn === false ? t('account.row.loggedOut') : email;
+  const limited = limitedUntil !== null && Date.parse(limitedUntil) > nowMs
+    ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(limitedUntil, timezone, nowMs) })
     : '';
-  const lines = [t('status.thread_account', { account: formatAccountName(current), limited })];
-  if (pending !== null) lines.push(t('status.thread_account_pending', { account: formatAccountName(pending) }));
-  return lines;
+  return `${detail ? `${name} · ${detail}` : name}${limited}`;
 }
 
-/**
- * @description The OpenCode account notion: the provider the model label (`provider/model`) runs on. `null`
- * for no model or a label without a provider segment — the row is then omitted, never guessed.
- */
-export function getOpenCodeStatusAccount(model: string | null, nowMs: number): ThreadStatusAccount | null {
-  const parsed = model === null ? null : parseOpenCodeModelLabel(model);
-  return parsed === null ? null : { current: { name: parsed.providerId, email: null, limitedUntil: null }, pending: null, nowMs };
+/** @description The `Account:` row (plus a pending-switch row) of the `/status` report. */
+export function formatThreadStatusAccountLines({ current, pending, nowMs }: ThreadStatusAccount, timezone: string): string[] {
+  const lines = [t('status.thread_account', { account: formatAccount(current, timezone, nowMs) })];
+  if (pending !== null) lines.push(t('status.thread_account_pending', { account: formatAccount(pending, timezone, nowMs) }));
+  return lines;
 }
 
 export interface ThreadStatusModelSources {

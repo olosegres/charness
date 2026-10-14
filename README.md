@@ -353,7 +353,7 @@ actually start an agent or terminal in the folder.
 | `/rename_session` | Rename the current live session (OpenCode; Claude transcripts have no title) |
 | `/quit`, `/q` | End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way |
 | `/new`, `/clear_session` | End the current session and start a fresh one (same adapter) |
-| `/status` | This thread's status: agent, bound folder, the account it runs on and the resolved workdir; a live session also shows the model it is actually running, effort, start time, runtime version and context use (anything the backend cannot report renders as unknown). The account is the Claude profile (name · email, marked ⛔ while it is at its limit, with a second row for a switch still pending) or the OpenCode provider of the model |
+| `/status` | This thread's status: agent, bound folder, the Claude account it runs on and the resolved workdir; a live session also shows the model it is actually running, effort, start time, runtime version and context use (anything the backend cannot report renders as unknown). On a Claude topic the account is its profile (name · email as in `/accounts`, marked ⛔ while it is at its limit, with a second row for a switch still pending); an OpenCode topic's model already names its provider |
 | `/output` | Last 500 lines of agent output (sent as at most 5 chunks; the overflow is reported as omitted) |
 | `/c`, `/y`, `/n` | Ctrl+C / "y" / "n" |
 | `/enter`, `/up`, `/down`, `/tab` | tmux key passthrough |
@@ -377,7 +377,7 @@ actually start an agent or terminal in the folder.
 | `/help` | Context-aware help |
 | `/ls` | List the project subfolders of the folder the bot was launched from |
 | `/list` | List existing topics and their bindings |
-| `/status` | This topic's status; in General — a global view of all topics + active agents. A non-General topic also reports the account it runs on (Claude profile · email, ⛔ at its limit; OpenCode: the model's provider) and the resolved workdir; a live one the model actually running, runtime version and context use (unknown when the backend cannot report it) |
+| `/status` | This topic's status; in General — a global view of all topics + active agents. A non-General topic also reports the account it runs on (Claude profile · email, ⛔ at its limit) and the resolved workdir; a live one the model actually running, runtime version and context use (unknown when the backend cannot report it) |
 | `/doctor` | Self-diagnose: admin rights, privacy mode, paths, CLIs |
 | `/version` | Versions: bot, claude, opencode, node, tmux |
 | `/whoami` | Show userId, chatId, threadId, isAllowed, binding |
