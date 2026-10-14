@@ -97,6 +97,11 @@ export interface ClaudeAccountsPorts
   disconnectOpenCodeProvider: (key: SessionKey, providerId: string) => Promise<void>;
   /** Start the `/connect <provider>` flow (the method picker: OAuth or API key), unchanged. */
   startOpenCodeConnect: (key: SessionKey, providerId: string) => Promise<void>;
+  /**
+   * The «auto switch to a fallback model» setting (`fallbackChain.ts` owns it and its confirmation): the legacy
+   * `autoswitch on|off` verb and the old `acct_autosw_*` buttons write it through here.
+   */
+  applyAutoSwitch: (key: SessionKey, isGeneral: boolean, enabled: boolean) => Promise<string>;
   /** `~/.claude`, where the default login lives; injectable so a test signs out a temp directory, never the real one. */
   getHomeClaudeDir?: () => string;
 }
@@ -113,7 +118,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, getHomeClaudeDir,
+    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
   } = ports;
 
   /**
@@ -332,22 +337,6 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
   function describeApplyOutcome(outcome: ClaudeProfileApplyOutcome): string {
     return t(`account.applied.${outcome}`);
-  }
-
-  /**
-   * @description Set whether the bot moves a limited topic to the next rung of the fallback chain — another
-   * account, or another backend / provider (`/limits`) — by itself (OFF by default: an account-policy decision
-   * the operator opts into) and RETURN the confirmation. The same setting `/fallback` shows; General sets the
-   * instance default, a topic its override.
-   */
-  async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
-    const stateWord = enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
-    if (isGeneral) {
-      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled);
-      return t('account.autoSwitchSetGlobal', { state: stateWord });
-    }
-    await getState().setClaudeAutoSwitchOnLimitOverride(key, enabled);
-    return t('account.autoSwitchSetThisTopic', { state: stateWord });
   }
 
   /**

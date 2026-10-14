@@ -45,6 +45,7 @@ import { maxTimeoutMs } from '../scheduler/engine';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
+const otherTopicKey: SessionKey = makeTelegramKey(-1001234567890, 43);
 const continueNudge = 'continue';
 const fireAtInThePast = 1_000;
 const clockMs = 1_000_000;
@@ -618,8 +619,10 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
   it('a record without a target never asks for a switch, and a transient retry ignores one', async () => {
     saveRetry(topicKey);
     saveRetry(issueKey, { resumeOn: target });
+    saveRetry(otherTopicKey, { kind: 'transient', resumeOn: target });
     boot();
     await runDueTimers();
-    assert.deepEqual(world.resumes, [], 'no target, and a tracker issue has no topic to move');
+    assert.deepEqual(world.resumes, [], 'no target, a tracker issue has no topic to move, and a transient retry never switches');
+    assert.ok(world.nudges.some((nudge) => nudge.key === keyToString(otherTopicKey)), 'the transient retry still resumed in place');
   });
 });

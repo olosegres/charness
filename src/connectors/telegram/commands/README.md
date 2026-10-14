@@ -110,8 +110,8 @@ Under each row the picker prints the profile's usage windows (`utils/claudeUsage
 weekly — percent used → a relative reset `🔄 in 2d 1h` (`formatClaudeUsageBucket`; an unknown 5h reset shows the weekly one)), read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
 goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
-on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting, which
-`/limits` shows. A provider row mirrors an account row: «🔌 Disconnect <provider>» (`acct_dc_<i>`, asks first) and 🔑
+on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting through the
+`applyAutoSwitch` port (`fallbackChain.ts` owns the write and the confirmation). A provider row mirrors an account row: «🔌 Disconnect <provider>» (`acct_dc_<i>`, asks first) and 🔑
 (`acct_dcre_<i>`, the `/connect` method picker); both index the provider list snapshotted per screen message.
 
 ## `fallbackChain.ts`

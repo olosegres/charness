@@ -80,6 +80,12 @@ describe('claudeAccounts: /accounts over its ports', () => {
       startOpenCodeConnect: async (key, providerId) => {
         startedConnects.push({ key, providerId });
       },
+      // The setting is `/limits`'s (`fallbackChain.ts`); here a stand-in writes the same state and words it tersely.
+      applyAutoSwitch: async (key, isGeneral, enabled) => {
+        if (isGeneral) await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(enabled);
+        else await harness.state.setClaudeAutoSwitchOnLimitOverride(key, enabled);
+        return `auto switch ${enabled ? 'ON' : 'OFF'} for ${isGeneral ? 'ALL topics' : 'this topic'}`;
+      },
       // The default login lives in the fixture's `.claude`, never in the real one.
       getHomeClaudeDir: () => homeClaudeDir,
     });
@@ -261,7 +267,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false);
-    assert.match(harness.replies.at(-1)?.text ?? '', /Auto-switch to another account on a usage limit: OFF for this topic/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /auto switch OFF for this topic/, 'the verb goes through the /limits port');
     await harness.runCommand('account', 'autoswitch maybe');
     assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: /);
   });

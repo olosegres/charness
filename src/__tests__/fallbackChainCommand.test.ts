@@ -123,7 +123,7 @@ describe('fallbackChain: /limits over its ports', () => {
     const rerender = harness.edits.at(-1);
     assert.equal(rerender?.messageId, pickerId);
     assert.doesNotMatch(rerender?.text ?? '', /^\d\. /m, 'the list is on the buttons, not in the text');
-    assert.match(rerender?.text ?? '', /buttons above are the fallback models in priority order, top first/);
+    assert.match(rerender?.text ?? '', /buttons below are the fallback models in priority order, top first/);
     const revision = getFallbackChainRevision(harness.state.getFallbackChain());
     const rows = harness.getKeyboardData(rerender);
     const labels = harness.getKeyboardLabels(rerender);

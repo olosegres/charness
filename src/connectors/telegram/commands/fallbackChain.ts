@@ -1,7 +1,7 @@
 /**
  * `/limits` — everything about a usage limit on one screen: the instance-wide priority chain of backend +
  * account / provider + model a topic continues on (reorder, include / exclude, remove, add through a two-step
- * sub-picker, rebuild a draft, clear — in General; read-only in a topic), the two settings that decide what a
+ * sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide what a
  * limit does (switch to a backup by itself, wait for the reset and continue — instance defaults in General,
  * on / off / same-as-General overrides in a topic) — and the «🔁 Switch to …» buttons a usage-limit notice
  * carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this screen. See README.md in this
@@ -230,7 +230,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * The `/limits` screen: the chain with its availability (editable rows in General), the two settings with
+   * The `/limits` screen: the chain with its availability (editable from every topic), the two settings with
    * their effective values, and how they combine. A topic also sees what it runs on now, and «skip once»
    * while a limit wait is armed for it.
    */
@@ -390,7 +390,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   // ── the command ──
 
   function registerFallbackChainCommands(): void {
-    // `/limits` — bare: the screen (editable chain in General, read-only elsewhere). `propose` / `rebuild`
+    // `/limits` — bare: the screen (the chain is edited from every topic). `propose` / `rebuild`
     // drafts the chain, `clear` empties it, `switch|autoswitch on|off|same` and `wait on|off|same` flip the two
     // settings. `/fallback` is the same command under its old name (hidden alias). Not gated on a session:
     // the chain must be settable before any limit hits.
@@ -620,5 +620,5 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
   }
 
-  return { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, formatFallbackEntry: formatEntry };
+  return { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, applyAutoSwitch, formatFallbackEntry: formatEntry };
 }

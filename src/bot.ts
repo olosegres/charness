@@ -7096,6 +7096,16 @@ async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeP
   );
 }
 
+const { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, applyAutoSwitch } = createFallbackChain({
+  ...botCore,
+  applyAutoContinue: applyAutoContinueLimits,
+  getArmedLimitRetryFireAt,
+  getInstanceTimezone: getCurrentTimezone,
+  detectFallbackOptions,
+  getTopicPosition: getTopicFallbackPosition,
+  takeSwitchOffer: takeFallbackSwitchOffer,
+});
+
 const {
   registerClaudeAccountCommands,
   registerClaudeAccountCallbacks,
@@ -7115,20 +7125,11 @@ const {
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   disconnectOpenCodeProvider: applyProviderDisconnect,
   startOpenCodeConnect: showConnectMethodPicker,
+  applyAutoSwitch,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
 registerClaudeAccountCommands();
-
-const { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView } = createFallbackChain({
-  ...botCore,
-  applyAutoContinue: applyAutoContinueLimits,
-  getArmedLimitRetryFireAt,
-  getInstanceTimezone: getCurrentTimezone,
-  detectFallbackOptions,
-  getTopicPosition: getTopicFallbackPosition,
-  takeSwitchOffer: takeFallbackSwitchOffer,
-});
 
 registerFallbackChainCommands();
 
