@@ -16,6 +16,11 @@
  * - every step of that chain treats an EMPTY STRING as "source knows nothing"
  *   and falls through: with `??` an empty adapter answer won over a real
  *   runtime-reported model and `/status` rendered a blank model row;
+ * - the `Account:` row names the Claude profile (name + email when probed, the
+ *   name alone otherwise) and marks it with the `/accounts` limit wording only
+ *   while its limit mark lies in the future; a deferred switch adds a second row
+ *   for the pick, and a stopped topic still names the profile its next start
+ *   uses. An OpenCode topic names the provider of its model label;
  * - General `/status` still returns its global report BEFORE any per-thread
  *   runtime read (asserted against the `bot.ts` source: that ordering has no
  *   runtime seam to drive from a unit test).
@@ -31,7 +36,13 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getThreadStatusModel, getThreadStatusReport } from '../utils/threadStatusReport';
+import {
+  getOpenCodeStatusAccount,
+  getThreadStatusModel,
+  getThreadStatusReport,
+  type ThreadStatusAccount,
+  type ThreadStatusReportInput,
+} from '../utils/threadStatusReport';
 import { runWithLocale } from '../i18n';
 
 test('a sleeping thread (no process, session kept) says so instead of "stopped" (L3)', () => {
@@ -214,4 +225,119 @@ test('General /status returns its global report before thread runtime metadata i
   assert.ok(globalReturnIndex >= 0, 'General /status must return after its global-only report');
   assert.ok(adapterLookupIndex > globalReturnIndex, 'thread adapter access must happen only after the General return');
   assert.ok(runtimeLookupIndex > globalReturnIndex, 'General /status must not fetch runtime metadata');
+});
+
+// ── the account row ──
+
+const accountNowMs = Date.parse('2026-10-14T12:00:00Z');
+
+const accountReportBase: ThreadStatusReportInput = {
+  agentLine: 'Claude Code (stream) (claude-json-stream)',
+  subdir: 'project',
+  isActive: true,
+  isSleeping: false,
+  workDir: '/work/project',
+  model: 'claude-opus-4-5',
+  effort: null,
+  startedAt: null,
+  runtime: null,
+  view: 'default',
+  timezone: 'UTC',
+  timezoneNow: '12:00',
+};
+
+function buildClaudeAccount(overrides: Partial<ThreadStatusAccount> = {}): ThreadStatusAccount {
+  return {
+    current: { name: 'perf', email: 'me@example.com', limitedUntil: null },
+    pending: null,
+    nowMs: accountNowMs,
+    ...overrides,
+  };
+}
+
+function renderReport(locale: 'en' | 'ru', input: Partial<ThreadStatusReportInput>): string {
+  return runWithLocale(locale, () => getThreadStatusReport({ ...accountReportBase, ...input }));
+}
+
+test('a Claude topic names its account profile with the email, right under the header', () => {
+  const report = renderReport('en', { account: buildClaudeAccount() });
+  assert.match(report, /^Status:\n\nAgent: .*\nFolder: project\nSession: running\nAccount: perf · me@example\.com\nWorking directory: /);
+  assert.doesNotMatch(report, /at its limit|Switch pending/);
+});
+
+test('an account whose email was never probed is named alone', () => {
+  const report = renderReport('en', { account: buildClaudeAccount({ current: { name: 'default', email: null, limitedUntil: null } }) });
+  assert.match(report, /^Account: default$/m);
+});
+
+test('a stopped Claude topic still names the profile its next start uses', () => {
+  const report = renderReport('en', { isActive: false, account: buildClaudeAccount() });
+  assert.match(report, /Session: stopped/);
+  assert.match(report, /^Account: perf · me@example\.com$/m);
+  assert.doesNotMatch(report, /Model:/);
+});
+
+test('an account at its limit carries the /accounts mark with the reset in the instance zone', () => {
+  const report = renderReport('en', {
+    account: buildClaudeAccount({ current: { name: 'perf', email: 'me@example.com', limitedUntil: '2026-10-14T18:00:00Z' } }),
+  });
+  assert.match(report, /^Account: perf · me@example\.com · ⛔ at its limit until 18:00$/m);
+});
+
+test('a limit mark that already passed is not shown', () => {
+  const report = renderReport('en', {
+    account: buildClaudeAccount({ current: { name: 'perf', email: 'me@example.com', limitedUntil: '2026-10-14T11:59:00Z' } }),
+  });
+  assert.match(report, /^Account: perf · me@example\.com$/m);
+  assert.doesNotMatch(report, /⛔/);
+});
+
+test('a deferred switch shows the live account and names the pending pick on its own row', () => {
+  const report = renderReport('en', {
+    account: buildClaudeAccount({
+      current: { name: 'perf', email: 'me@example.com', limitedUntil: '2026-10-14T18:00:00Z' },
+      pending: { name: 'work', email: 'you@example.com', limitedUntil: null },
+    }),
+  });
+  assert.match(report, /^Account: perf · me@example\.com · ⛔ at its limit until 18:00\nSwitch pending: work · you@example\.com — applies when/m);
+});
+
+test('a topic without an account renders no account row', () => {
+  assert.doesNotMatch(renderReport('en', {}), /Account:/);
+  assert.doesNotMatch(renderReport('en', { account: null }), /Account:/);
+});
+
+test('the account row is localised', () => {
+  const report = renderReport('ru', {
+    account: buildClaudeAccount({
+      current: { name: 'perf', email: 'me@example.com', limitedUntil: '2026-10-14T18:00:00Z' },
+      pending: { name: 'work', email: null, limitedUntil: null },
+    }),
+  });
+  assert.match(report, /^Аккаунт: perf · me@example\.com · ⛔ на лимите до 18:00$/m);
+  assert.match(report, /^Ожидает переключения: work — /m);
+});
+
+test('an OpenCode topic names the provider its model label runs on, next to the model', () => {
+  const account = getOpenCodeStatusAccount('openrouter/anthropic/claude-test', accountNowMs);
+  assert.deepEqual(account?.current, { name: 'openrouter', email: null, limitedUntil: null });
+  assert.equal(account?.pending, null);
+  const report = renderReport('en', { agentLine: 'OpenCode (opencode)', model: 'openrouter/anthropic/claude-test', account });
+  assert.match(report, /^Account: openrouter$/m);
+  assert.match(report, /^Model: openrouter\/anthropic\/claude-test$/m);
+});
+
+test('an OpenCode label without a provider segment yields no account instead of a guess', () => {
+  assert.equal(getOpenCodeStatusAccount(null, accountNowMs), null);
+  assert.equal(getOpenCodeStatusAccount('gpt-test', accountNowMs), null);
+  assert.equal(getOpenCodeStatusAccount('openai/', accountNowMs), null);
+});
+
+test('/status resolves an account only for a topic that has an agent', () => {
+  // `getThreadAdapter` falls back to the Claude backend for a topic with NO agent chosen, so the Claude branch
+  // must be gated on the raw adapter name — otherwise a fresh topic would claim an account it never runs on.
+  const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+  const statusCommandStart = botSource.indexOf("command('status'");
+  const statusCommand = botSource.slice(statusCommandStart, botSource.indexOf('\nfunction getLanguageCommandArg', statusCommandStart));
+  assert.match(statusCommand, /adapterName\s*&&\s*checkIsClaudeProfileBackend\(key\)/);
 });

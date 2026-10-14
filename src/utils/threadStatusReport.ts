@@ -1,5 +1,24 @@
 import { t } from '../i18n';
 import type { AgentRuntimeInfo } from '../types';
+import { formatClaudeUsageResetAt } from './claudeUsage';
+import { parseOpenCodeModelLabel } from './fallbackChain';
+
+/** One account as `/status` names it: a Claude profile (name + email) or an OpenCode provider (id only). */
+export interface ThreadStatusAccountSource {
+  name: string;
+  /** What the last `claude auth status` read said; `null` when never probed (and always for a provider). */
+  email: string | null;
+  /** Raw ISO limit mark of the profile record; a mark in the past reads as no limit. */
+  limitedUntil: string | null;
+}
+
+export interface ThreadStatusAccount {
+  /** The account the live process runs on — or, with no live process, the one its next start uses. */
+  current: ThreadStatusAccountSource;
+  /** The account the topic is now set to while the live process still runs on another (a deferred switch). */
+  pending: ThreadStatusAccountSource | null;
+  nowMs: number;
+}
 
 export interface ThreadStatusReportInput {
   agentLine: string;
@@ -12,6 +31,8 @@ export interface ThreadStatusReportInput {
   effort: string | null;
   startedAt: string | null;
   runtime: AgentRuntimeInfo | null;
+  /** The account the topic's agent runs on; `null`/absent for a topic with no agent or no account notion. */
+  account?: ThreadStatusAccount | null;
   /** The topic's view, already localized (`verbosity.view.*`). */
   view: string;
   /** Instance timezone, already resolved (stored pick, else the host zone). */
@@ -40,6 +61,7 @@ export function getThreadStatusReport({
   effort,
   startedAt,
   runtime,
+  account,
   view,
   timezone,
   timezoneNow,
@@ -51,6 +73,8 @@ export function getThreadStatusReport({
       session: isActive ? t('status.thread_running') : isSleeping ? t('status.thread_sleeping') : t('status.thread_stopped'),
     }),
   ];
+  // A topic property like the folder: a stopped Claude topic still names the profile its next start uses.
+  if (account) lines.push(...formatThreadStatusAccountLines(account, timezone));
   if (workDir !== null) lines.push(t('status.thread_workdir', { workDir }));
   // A topic property, not a session one (S6): named whether or not an agent runs.
   lines.push(t('status.thread_view', { view }));
@@ -70,6 +94,36 @@ export function getThreadStatusReport({
   }));
 
   return lines.join('\n');
+}
+
+/** `name · email`, or just the name when the email is unknown. */
+function formatAccountName({ name, email }: ThreadStatusAccountSource): string {
+  return email ? `${name} · ${email}` : name;
+}
+
+/**
+ * @description The `Account:` row (plus a pending-switch row) of the `/status` report. The limit mark follows
+ * `/accounts`: the ⛔ suffix shows only while the mark lies in the future, with the reset in the instance zone.
+ */
+export function formatThreadStatusAccountLines(
+  { current, pending, nowMs }: ThreadStatusAccount,
+  timezone: string,
+): string[] {
+  const limited = current.limitedUntil !== null && Date.parse(current.limitedUntil) > nowMs
+    ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(current.limitedUntil, timezone, nowMs) })
+    : '';
+  const lines = [t('status.thread_account', { account: formatAccountName(current), limited })];
+  if (pending !== null) lines.push(t('status.thread_account_pending', { account: formatAccountName(pending) }));
+  return lines;
+}
+
+/**
+ * @description The OpenCode account notion: the provider the model label (`provider/model`) runs on. `null`
+ * for no model or a label without a provider segment — the row is then omitted, never guessed.
+ */
+export function getOpenCodeStatusAccount(model: string | null, nowMs: number): ThreadStatusAccount | null {
+  const parsed = model === null ? null : parseOpenCodeModelLabel(model);
+  return parsed === null ? null : { current: { name: parsed.providerId, email: null, limitedUntil: null }, pending: null, nowMs };
 }
 
 export interface ThreadStatusModelSources {

@@ -221,7 +221,7 @@ import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
 import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
 import { getStatusFlushAction } from './utils/statusFlushDecision';
-import { getThreadStatusModel, getThreadStatusReport } from './utils/threadStatusReport';
+import { getOpenCodeStatusAccount, getThreadStatusModel, getThreadStatusReport, type ThreadStatusAccount, type ThreadStatusAccountSource } from './utils/threadStatusReport';
 import { createIdenticalOutputGuard } from './utils/identicalOutputGuard';
 import { getTransientFrameIds, clearTransientFramesForShutdown } from './utils/transientFrames';
 import {
@@ -5409,11 +5409,22 @@ command('status', async (_ctx, key) => {
     });
   }
   const timezone = getCurrentTimezone();
+  const nowMs = Date.now();
+  // The account notion per backend: a Claude topic runs on an account PROFILE (the live process's, which a
+  // deferred switch keeps apart from the topic's pick), an OpenCode topic on the provider of its model.
+  let account: ThreadStatusAccount | null = null;
+  if (adapterName && checkIsClaudeProfileBackend(key)) {
+    const live = resolveLiveClaudeProfileName(key);
+    const picked = state.resolveClaudeProfileName(key);
+    account = { current: readStatusAccountSource(live), pending: picked === live ? null : readStatusAccountSource(picked), nowMs };
+  } else if (adapterName === openCodeAdapterName) {
+    account = getOpenCodeStatusAccount(model, nowMs);
+  }
   await replyToThread(key, getThreadStatusReport({
-    agentLine, subdir, isActive, isSleeping: !isActive && getResumableSessionId(key) !== null, workDir, model, effort, startedAt, runtime,
+    agentLine, subdir, isActive, isSleeping: !isActive && getResumableSessionId(key) !== null, workDir, model, effort, startedAt, runtime, account,
     view: formatTopicView(state.getDisplayPrefs(key).view),
     timezone,
-    timezoneNow: formatZoneNow(timezone, Date.now()),
+    timezoneNow: formatZoneNow(timezone, nowMs),
   }));
 });
 
@@ -6797,6 +6808,12 @@ function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimit
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
 function getThreadClaudeModel(key: SessionKey): string | null {
   return getThreadAdapter(key).getCurrentModel?.(key) ?? state.getAgent(key)?.model ?? null;
+}
+
+/** What `/status` names of a Claude profile: its last probed email and limit mark (none until `/accounts` probed it). */
+function readStatusAccountSource(name: string): ThreadStatusAccountSource {
+  const info = state.getClaudeProfileInfo(name);
+  return { name, email: info?.email ?? null, limitedUntil: info?.limitedUntil ?? null };
 }
 
 /** Whether the topic's agent is a Claude backend (a usage limit there is a limit of its account profile). */
