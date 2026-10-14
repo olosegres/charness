@@ -700,7 +700,7 @@ test('an exhausted-usage-limit provider retry is aborted and reported once as a 
 
   assert.deepEqual(requests.map(r => [r.method, r.path]), [['POST', `/session/${own}/abort`]]);
   assert.equal(apiErrors.length, 1, 'one apiError per retry episode, not per attempt');
-  // The wording names no reset time: the provider's retry deadline is the window reset.
+  // With no explicit reset, preserve the long retry deadline as a conservative wait hint.
   assert.deepEqual(apiErrors[0], { kind: 'usageLimit', resetAt });
   assert.equal(outputs.length, 0, 'no transient notice for an exhausted limit');
   assert.equal(adapter.checkIsBusy(key), false, 'the aborted retry no longer owns the turn');
@@ -722,13 +722,60 @@ test('a transient provider retry posts the neutral notice, not on every attempt'
   assert.equal(requests.length, 0);
 });
 
+test('ordinary rate throttling stays in the provider retry loop', () => {
+  const { adapter, outputs, apiErrors, requests, key } = createBareRetryAdapter();
+  feedRetryStatus(adapter, 1, 'Rate limit exceeded. Please try again later.');
+  assert.equal(adapter.checkIsBusy(key), true);
+  assert.equal(outputs.length, 1);
+  assert.match(outputs[0], /Provider error.*Rate limit exceeded/);
+  assert.deepEqual(apiErrors, []);
+  assert.deepEqual(requests, []);
+});
+
 test('a prompt posted during the limit abort (the fallback switch) keeps the turn busy', async () => {
   const { adapter, requests, key } = createBareRetryAdapter();
+  let resolveAbort = () => {};
+  const abortResult = new Promise<void>(resolve => { resolveAbort = resolve; });
+  adapter['apiRequest'] = (async (method: string, path: string) => {
+    requests.push({ method, path });
+    if (path.endsWith('/abort')) await abortResult;
+  }) as OpenCodeAdapter['apiRequest'];
   adapter.on('apiError', () => adapter.sendInput(key, 'continue with the next rung'));
   feedRetryStatus(adapter, 1, liveSubscriptionLimitMessage, Date.now() + 4881 * 60_000);
   await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`], 'replacement must wait for the abort');
+  assert.equal(adapter.checkIsBusy(key), true);
+  resolveAbort();
   await new Promise(resolve => setImmediate(resolve));
 
   assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`, `/session/${own}/prompt_async`]);
   assert.equal(adapter.checkIsBusy(key), true, 'the replacement prompt owns the turn once the abort resolves');
+  adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
+});
+
+test('a quota retry backoff is not promoted to a window reset', async () => {
+  for (const next of [Date.now() + 2_000, Date.now() - 60_000, Number.POSITIVE_INFINITY]) {
+    const { adapter, apiErrors } = createBareRetryAdapter();
+    adapter['handleSessionStatus'](getOpenCodeSession(adapter, '-100123:42').key, own, {
+      status: { type: 'retry', attempt: 1, message: 'usage_limit_reached', next },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(apiErrors, [{ kind: 'usageLimit', resetAt: undefined }]);
+  }
+});
+
+test('an explicit quota reset wins over the server retry deadline', async () => {
+  const { adapter, apiErrors } = createBareRetryAdapter();
+  const resetAt = Date.parse('2099-01-01T12:00:00.000Z');
+  feedRetryStatus(adapter, 1, 'usage_limit_reached resets 2099-01-01T12:00:00.000Z', Date.now() + 2_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(apiErrors, [{ kind: 'usageLimit', resetAt }]);
+});
+
+test('an auth retry never inherits a quota reset from the server deadline', async () => {
+  const { adapter, apiErrors, requests } = createBareRetryAdapter();
+  feedRetryStatus(adapter, 1, 'Invalid authentication credentials', Date.now() + providerRetryDelayMs);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(apiErrors, [{ kind: 'auth', resetAt: undefined }]);
+  assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`]);
 });

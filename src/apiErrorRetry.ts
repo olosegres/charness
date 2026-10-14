@@ -114,6 +114,9 @@ const usageWindowPhrases = [
  */
 const exhaustedQuotaCodesRe = /insufficient_quota|exceeded your current quota|usage_limit_reached|resource_exhausted|hit your usage limit/i;
 
+/** Observed subscription-window wording; do not generalize it to every bare rate limit. */
+const subscriptionLimitMessageRe = /this request would exceed your account's rate limit\.\s*please try again later\./i;
+
 /**
  * @description Alternation SOURCE (no anchors, no flags) of the explicit
  * usage/session-limit wordings — {@link usageWindowPhrases} plus a bare
@@ -180,7 +183,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
- *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) → `usageLimit`.
+ *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) or the observed
+ *     subscription wording ({@link subscriptionLimitMessageRe}) → `usageLimit`.
  *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
  *     Google `RESOURCE_EXHAUSTED`), which the next branch would read as a hiccup.
  *  3. transient (rate-limited, overloaded, 429/503/529) → `{ kind: 'transient' }`.
@@ -198,13 +202,12 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   if (authErrorPhrasesRe.test(text)) {
     return { kind: 'auth' };
   }
-  if (exhaustedQuotaCodesRe.test(text)) {
+  if (exhaustedQuotaCodesRe.test(text) || subscriptionLimitMessageRe.test(text)) {
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
-  // `rate limited`, never a bare `rate limit`: the Anthropic subscription window reads
-  // "This request would exceed your account's rate limit. Please try again later." and
-  // must fall through to the usage branch (a limit mention plus a retry hint).
-  if (/rate.?limited?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
+  // The observed subscription wording is handled above, including a 429 wrapper.
+  // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch.
+  if (/rate.?limit(?:ed)?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
     return { kind: 'transient' };
   }
   if (checkIsUsageLimitText(text)) {

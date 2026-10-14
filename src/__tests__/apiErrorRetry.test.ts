@@ -40,6 +40,8 @@ test('classify: verbatim live transient string → transient, NOT usageLimit (th
 test('classify: rate-limit / overloaded / status-code phrasings → transient', () => {
   for (const text of [
     'Error: rate limited, please retry',
+    'Rate limit exceeded. Please try again later.',
+    'rate_limit_error: request rate limit reached',
     'The model is overloaded',
     'Too Many Requests',
     'HTTP 429 returned by provider',
@@ -51,10 +53,11 @@ test('classify: rate-limit / overloaded / status-code phrasings → transient', 
 });
 
 test('classify: the Anthropic subscription window relayed by OpenCode → usageLimit, not a "rate limit" hiccup', () => {
-  // Verbatim live wording (2026-10-14); OpenCode's retry deadline was days away. The bare
-  // "rate limit" must NOT win the transient branch — only "rate limited" is a hiccup.
+  // Verbatim live wording (2026-10-14); OpenCode's retry deadline was days away.
+  // This observed wording is an exception, not evidence that all bare rate limits are quota errors.
   const live = "This request would exceed your account's rate limit. Please try again later.";
   assert.deepEqual(classifyAgentApiError(live, fixedNow), { kind: 'usageLimit', resetAt: undefined });
+  assert.deepEqual(classifyAgentApiError(`429 rate_limit_error: ${live}`, fixedNow), { kind: 'usageLimit', resetAt: undefined });
 });
 
 test('classify: OpenCode-relayed provider quota codes → usageLimit even with the 429 the transient branch reads', () => {

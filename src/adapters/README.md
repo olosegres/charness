@@ -306,8 +306,10 @@ resumable in the other.
   `noResponse` escalation runs.
   OpenCode's own retry loop is classified (`classifyAgentApiError` on the status message): an exhausted usage
   limit (or auth failure) never retries to success, so the adapter aborts the loop and emits `apiError` ONCE per
-  episode (the bot's limit wait / fallback switch takes over; a limit wording naming no reset takes the provider's
-  retry deadline as the reset) instead of a notice per attempt; a transient one
+  episode (the bot's limit wait / fallback switch takes over). If no reset is named, a retry deadline beyond
+  the normal unknown-reset wait is honored as a conservative wait hint, not a confirmed quota reset;
+  short server backoffs never shorten that wait. The observed account subscription wording is a narrow
+  usage-limit exception; ordinary rate-limit and overload errors remain transient. A transient retry
   posts a neutral "Provider error — OpenCode retries" notice with the sanitized reason, on attempt 1 or when the
   reason changes.
 - **Wedged turns.** A bloated session can accept every prompt (`prompt_async` 204) while its agent loop exits at
@@ -343,4 +345,3 @@ resumable in the other.
 - **Interrupt.** An interrupt the bot issued yields a contentless `is_error` result on json-stream; it is
   swallowed once (`swallowNextAbortError`, armed in `sendInterrupt`) instead of surfacing a bogus
   `Claude error: API error`.
-

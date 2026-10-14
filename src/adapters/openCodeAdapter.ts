@@ -7,7 +7,7 @@ import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, 
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
-import { classifyAgentApiError } from '../apiErrorRetry';
+import { classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
 import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
@@ -5035,9 +5035,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         },
         (e) => console.error(`[OpenCode] Failed to abort exhausted-limit provider retry:`, e),
       );
-      // The provider's retry deadline IS the window reset when the message names
-      // none (the live subscription wording only says "try again later").
-      const resetAt = retryClass.kind === 'usageLimit' && retryClass.resetAt === undefined && retryAt > now
+      // `next` can be OpenCode's exponential backoff, not a provider reset.
+      // Honor a longer wait as a conservative scheduling hint, but never let a
+      // short backoff shrink the normal unknown-reset wait and exhaust retries.
+      const resetAt = retryClass.kind === 'usageLimit'
+        && retryClass.resetAt === undefined
+        && Number.isFinite(retryAt)
+        && retryAt > now + usageLimitDefaultMs
         ? retryAt
         : retryClass.resetAt;
       this.emit('apiError', key, { ...retryClass, resetAt });
