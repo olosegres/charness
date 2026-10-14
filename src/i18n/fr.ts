@@ -608,6 +608,8 @@ export const frDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API limité en débit — nouvelle tentative automatique dans {minutes} min (tentative {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Erreur du fournisseur — OpenCode réessaie dans {minutes} min (tentative {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Limite d\'utilisation atteinte — nouvelle tentative dans {minutes} min (tentative {attempt}).',
   'apiRetry.usageLimitResetNotice':

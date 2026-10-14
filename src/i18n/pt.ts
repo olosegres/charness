@@ -609,6 +609,8 @@ export const ptDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API limitada por taxa — nova tentativa automática em {minutes} min (tentativa {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Erro do provedor — o OpenCode tenta de novo em {minutes} min (tentativa {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Limite de uso atingido — nova tentativa em {minutes} min (tentativa {attempt}).',
   'apiRetry.usageLimitResetNotice':

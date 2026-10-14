@@ -607,6 +607,8 @@ export const hiDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API दर-सीमित — {minutes} मिनट में स्वतः पुनः प्रयास (प्रयास {attempt})।',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ प्रदाता त्रुटि — OpenCode {minutes} मिनट में पुनः प्रयास करेगा (प्रयास {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 उपयोग सीमा पहुँची — {minutes} मिनट में पुनः प्रयास (प्रयास {attempt})।',
   'apiRetry.usageLimitResetNotice':

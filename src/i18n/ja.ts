@@ -602,6 +602,8 @@ export const jaDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API レート制限 — {minutes} 分後に自動再試行します（試行 {attempt}）。',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ プロバイダーエラー — OpenCode が {minutes} 分後に再試行します（試行 {attempt}）{detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 利用量制限に到達 — {minutes} 分後に再試行します（試行 {attempt}）。',
   'apiRetry.usageLimitResetNotice':

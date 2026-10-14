@@ -608,6 +608,8 @@ export const kaDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API სიხშირით შეზღუდული — ავტომატური ხელახლე ცდა {minutes} წუთში (მცდელობა {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ პროვაიდერის შეცდომა — OpenCode ხელახლა სცდის {minutes} წუთში (მცდელობა {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 გამოყენების ზღვარს მიაღწია — ხელახლე ცდა {minutes} წუთში (მცდელობა {attempt}).',
   'apiRetry.usageLimitResetNotice':

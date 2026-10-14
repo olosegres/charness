@@ -182,7 +182,7 @@ test('provider retry stays busy and is surfaced once instead of looking silently
 
   assert.equal(adapter.checkIsBusy(key), true, 'a provider-managed retry is still an in-flight turn');
   assert.equal(outputs.length, 1, 'duplicate retry status frames must not repeat the user notice');
-  assert.match(outputs[0], /API rate-limited.*auto-retrying in 60 min.*attempt 1/);
+  assert.match(outputs[0], /Provider error.*OpenCode retries in 60 min.*attempt 1.*rate limit/);
 });
 
 test('a prompt during provider retry aborts the old turn before using the current model', async () => {
@@ -653,4 +653,64 @@ test('a replacement idle still recovers when the aborted retry never emits idle'
   adapter['handleSessionIdle'](key, { sessionID: own });
 
   assert.equal(noResponseCount, 1, 'the replacement idle must not be consumed as the absent old idle');
+});
+
+function feedRetryStatus(adapter: OpenCodeAdapter, attempt: number, message: string): void {
+  adapter['routeSseData'](JSON.stringify({
+    directory: '/tmp/work',
+    payload: {
+      type: 'session.status',
+      properties: {
+        sessionID: own,
+        status: { type: 'retry', attempt, message, next: Date.now() + 60_000 },
+      },
+    },
+  }));
+}
+
+function createBareRetryAdapter() {
+  const key = makeTelegramKey(-100123, 42);
+  const adapter = new OpenCodeAdapter();
+  adapter['sessions'].set('-100123:42', createOpenCodeSessionFixture({
+    key, sessionId: own, workDir: '/tmp/work', isModelInfoShown: true, isBusy: true,
+  }));
+  const outputs: string[] = [];
+  const apiErrors: unknown[] = [];
+  const requests: { method: string; path: string }[] = [];
+  adapter.on('output', (_k, o: string) => outputs.push(o));
+  adapter.on('apiError', (_k, e: unknown) => apiErrors.push(e));
+  adapter['apiRequest'] = (async (method: string, path: string) => {
+    requests.push({ method, path });
+  }) as OpenCodeAdapter['apiRequest'];
+  return { adapter, outputs, apiErrors, requests, key };
+}
+
+test('an exhausted-usage-limit provider retry is aborted and reported once as a usage limit', async () => {
+  const { adapter, outputs, apiErrors, requests, key } = createBareRetryAdapter();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    feedRetryStatus(adapter, attempt, 'The usage limit has been reached');
+  }
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(requests.map(r => [r.method, r.path]), [['POST', `/session/${own}/abort`]]);
+  assert.equal(apiErrors.length, 1, 'one apiError per retry episode, not per attempt');
+  assert.equal((apiErrors[0] as { kind: string }).kind, 'usageLimit');
+  assert.equal(outputs.length, 0, 'no transient notice for an exhausted limit');
+  assert.equal(adapter.checkIsBusy(key), false, 'the aborted retry no longer owns the turn');
+
+  // A later nudge posts normally: nothing is left awaiting a replacement.
+  adapter.sendInput(key, 'continue');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`, `/session/${own}/prompt_async`]);
+});
+
+test('a transient provider retry posts the neutral notice, not on every attempt', () => {
+  const { adapter, outputs, apiErrors, requests } = createBareRetryAdapter();
+  feedRetryStatus(adapter, 1, 'Our servers are currently overloaded. Please try again later.');
+  feedRetryStatus(adapter, 2, 'Our servers are currently overloaded. Please try again later.');
+  assert.equal(outputs.length, 1);
+  assert.match(outputs[0], /Provider error.*retries in 1 min \(attempt 1\): Our servers are currently overloaded/);
+  assert.doesNotMatch(outputs[0], /rate-limited/);
+  assert.equal(apiErrors.length, 0);
+  assert.equal(requests.length, 0);
 });

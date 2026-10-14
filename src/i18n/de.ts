@@ -608,6 +608,8 @@ export const deDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API rate-limited — automatischer Wiederholungsversuch in {minutes} Min (Versuch {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Anbieterfehler — OpenCode versucht es in {minutes} Min erneut (Versuch {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Nutzungslimit erreicht — Wiederholung in {minutes} Min (Versuch {attempt}).',
   'apiRetry.usageLimitResetNotice':

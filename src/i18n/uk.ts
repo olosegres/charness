@@ -614,6 +614,8 @@ export const ukDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API перевантажено (rate limit) — повторю автоматично через {minutes} хв (спроба {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Помилка провайдера — OpenCode повторить через {minutes} хв (спроба {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Ліміт вичерпано — повторю через {minutes} хв (спроба {attempt}).',
   'apiRetry.usageLimitResetNotice':

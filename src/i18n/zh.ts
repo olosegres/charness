@@ -602,6 +602,8 @@ export const zhDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API 速率受限 — {minutes} 分钟后自动重试（第 {attempt} 次）。',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ 提供方错误 — OpenCode 将在 {minutes} 分钟后重试（第 {attempt} 次）{detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 用量限制已达到 — {minutes} 分钟后重试（第 {attempt} 次）。',
   'apiRetry.usageLimitResetNotice':

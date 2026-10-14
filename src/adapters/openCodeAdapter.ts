@@ -336,6 +336,18 @@ export interface OpenCodeSession {
    * user prompt must interrupt the wait instead of queueing behind it.
    */
   providerRetrySignature: string | null;
+  /**
+   * Reason text of the last provider-retry notice posted: a retry loop repeats
+   * its attempt counter, so a notice goes out on attempt 1 or when this text
+   * changes — never once per attempt. Cleared when the retry ends.
+   */
+  providerRetryNoticeMessage?: string | null;
+  /**
+   * Set once an exhausted-limit / auth retry was aborted and reported as an
+   * `apiError`: the remaining retry frames of that episode neither re-abort nor
+   * re-report. Cleared by the first non-retry status.
+   */
+  isProviderRetryEscalated?: boolean;
   /** Ignore stale model updates until the post-abort selected-model turn starts. */
   isAwaitingModelAfterProviderRetryAbort: boolean;
   /** Consume the idle emitted by an aborted provider-retry turn before handling the replacement turn. */
@@ -849,6 +861,18 @@ const ignoredSseEventTypes = new Set<string>(['sync', 'session.diff']);
 const fallbackRenameGraceMs = 8000;
 /** Milliseconds per minute for rendering OpenCode's provider-retry notice. */
 const providerRetryMsPerMinute = 60_000;
+const providerRetryReasonMaxChars = 120;
+
+/**
+ * @description One-line, length-bounded form of a provider's retry message for
+ * the user notice.
+ */
+export function summarizeProviderRetryReason(message: string): string {
+  const oneLine = message.replace(/\s+/g, ' ').trim();
+  return oneLine.length > providerRetryReasonMaxChars
+    ? `${oneLine.slice(0, providerRetryReasonMaxChars - 1)}…`
+    : oneLine;
+}
 /**
  * @description Headroom on top of the worst-case event-stream gap before a
  * replacement prompt is declared never-started.
@@ -4969,22 +4993,61 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       if (!session.providerRetryAbortPromise) {
         session.providerRetrySignature = null;
       }
+      session.providerRetryNoticeMessage = null;
+      session.isProviderRetryEscalated = false;
       return;
     }
 
     const retryAttempt = typeof status.attempt === 'number' ? status.attempt : 1;
     const retryAt = typeof status.next === 'number' ? status.next : Date.now();
     const retryMessage = typeof status.message === 'string' ? status.message : '';
+    if (session.isProviderRetryEscalated) return;
     const retrySignature = `${retryAttempt}:${retryAt}:${retryMessage}`;
     if (session.providerRetrySignature === retrySignature) return;
 
     session.providerRetrySignature = retrySignature;
     const retryMinutes = Math.max(1, Math.ceil((retryAt - Date.now()) / providerRetryMsPerMinute));
     console.warn(`[OpenCode] Provider retry attempt=${retryAttempt} in=${retryMinutes}m: ${retryMessage}`);
+
+    // OpenCode's own retry loop never ends for an exhausted subscription (it
+    // retries every minute, attempt 1..N, forever) and would never reach the
+    // bot's usage-limit path (limit wait, auto-continue, /fallback switch).
+    // So an exhausted limit / auth failure aborts OpenCode's loop and is
+    // reported ONCE per episode as an `apiError`; the session stays active and
+    // the later continue nudge / switch prompt goes through the normal send
+    // path (the abort's idle and "Aborted" error are swallowed as for any
+    // bot-issued provider-retry abort).
+    const retryClass = classifyAgentApiError(retryMessage, Date.now());
+    if (retryClass && (retryClass.kind === 'usageLimit' || retryClass.kind === 'auth')) {
+      session.isProviderRetryEscalated = true;
+      const abortPromise = this.getProviderRetryAbortPromise(session);
+      abortPromise?.then(
+        () => {
+          const current = this.sessions.get(keyToString(key));
+          if (current === session) {
+            // The abort's idle is swallowed (it never clears busy itself).
+            current.isBusy = false;
+            current.awaitingTurnResponse = false;
+          }
+        },
+        (e) => console.error(`[OpenCode] Failed to abort exhausted-limit provider retry:`, e),
+      );
+      this.emit('apiError', key, retryClass);
+      return;
+    }
+
+    // Transient: keep the user informed, but not once per attempt.
+    if (retryAttempt !== 1 && session.providerRetryNoticeMessage === retryMessage) return;
+    session.providerRetryNoticeMessage = retryMessage;
+    const reason = summarizeProviderRetryReason(retryMessage);
     this.emit(
       'output',
       key,
-      this.tl(key, () => t('apiRetry.transientNotice', { minutes: retryMinutes, attempt: retryAttempt })),
+      this.tl(key, () => t('apiRetry.openCodeRetryNotice', {
+        minutes: retryMinutes,
+        attempt: retryAttempt,
+        detail: reason ? `: ${reason}` : '',
+      })),
       { isComplete: true } satisfies OutboundHints,
     );
   }

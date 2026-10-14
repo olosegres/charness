@@ -608,6 +608,8 @@ export const uzDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API tezlik bilan cheklangan — {minutes} daqiqadan keyin avtomatik qayta urinish (urinish {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Provayder xatosi — OpenCode {minutes} daqiqadan keyin qayta urinadi (urinish {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Foydalanish chegarasiga yetdi — {minutes} daqiqadan keyin qayta urinish (urinish {attempt}).',
   'apiRetry.usageLimitResetNotice':

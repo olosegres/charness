@@ -608,6 +608,8 @@ export const esDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API limitada por tasa — reintentando automáticamente en {minutes} min (intento {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Error del proveedor — OpenCode reintenta en {minutes} min (intento {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Límite de uso alcanzado — reintentando en {minutes} min (intento {attempt}).',
   'apiRetry.usageLimitResetNotice':

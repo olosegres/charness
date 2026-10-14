@@ -655,6 +655,8 @@ export const enDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API rate-limited — auto-retrying in {minutes} min (attempt {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Provider error — OpenCode retries in {minutes} min (attempt {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Usage limit reached — retrying in {minutes} min (attempt {attempt}).',
   'apiRetry.usageLimitResetNotice':

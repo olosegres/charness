@@ -612,6 +612,8 @@ export const ruDict: Record<string, string> = {
 
   'apiRetry.transientNotice':
     '⏳ API перегружен (rate limit) — повторю автоматически через {minutes} мин (попытка {attempt}).',
+  'apiRetry.openCodeRetryNotice':
+    '⏳ Ошибка провайдера — OpenCode повторит через {minutes} мин (попытка {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Лимит исчерпан — повторю через {minutes} мин (попытка {attempt}).',
   'apiRetry.usageLimitResetNotice':
