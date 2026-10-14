@@ -652,8 +652,6 @@ export const ptDict: Record<string, string> = {
   'account.kind.personal': 'pessoal {plan}',
   'account.kind.corporate': 'corporativo {plan}',
   'account.kind.unknown': 'plano {plan}',
-  'account.addButton': '➕ Adicionar',
-  'account.loginButton': '🔑 Entrar de novo',
   'account.removeButton': '🗑 Remover',
   'account.backButton': '⬅️ Voltar',
   'account.followButton': '↩ Seguir o padrão ({name})',

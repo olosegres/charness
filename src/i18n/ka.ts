@@ -651,8 +651,6 @@ export const kaDict: Record<string, string> = {
   'account.kind.personal': 'პირადი {plan}',
   'account.kind.corporate': 'კორპორატიული {plan}',
   'account.kind.unknown': 'გეგმა {plan}',
-  'account.addButton': '➕ დამატება',
-  'account.loginButton': '🔑 ხელახლა შესვლა',
   'account.removeButton': '🗑 წაშლა',
   'account.backButton': '⬅️ უკან',
   'account.followButton': '↩ ნაგულისხმევის მიყოლა ({name})',

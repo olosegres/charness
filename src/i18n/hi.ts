@@ -650,8 +650,6 @@ export const hiDict: Record<string, string> = {
   'account.kind.personal': 'व्यक्तिगत {plan}',
   'account.kind.corporate': 'कॉर्पोरेट {plan}',
   'account.kind.unknown': 'प्लान {plan}',
-  'account.addButton': '➕ जोड़ें',
-  'account.loginButton': '🔑 फिर से लॉगिन',
   'account.removeButton': '🗑 हटाएँ',
   'account.backButton': '⬅️ वापस',
   'account.followButton': '↩ डिफ़ॉल्ट का पालन करें ({name})',

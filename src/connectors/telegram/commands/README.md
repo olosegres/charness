@@ -83,10 +83,10 @@ a keyboard-less confirmation. The usage-limit notice appends the shared pointer 
 
 `/accounts` (hidden alias `/account`; `/connect` and `/disconnect` are hidden aliases of its OpenCode half, still
 registered by `modelProviders.ts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_ocadd`,
-`acct_dc_<i>`, `acct_dcok_<i>`, `acct_login_menu`, `acct_rm_menu`, `acct_back`, `acct_login_<name>`,
+`acct_dc_<i>`, `acct_dcok_<i>`, `acct_dcre_<i>`, `acct_login_menu`, `acct_rm_menu`, `acct_back`, `acct_login_<name>`,
 `acct_rm_<name>`, `acct_rmok_<name>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
 sessions run on, and the OpenCode providers the server is authenticated for. One screen: a row per Claude account
-(pick, 🔑 re-login, 🗑 remove — `default` has no remove), a 🔌 row per connected provider, «➕ Claude account» and
+(pick, 🔑 re-login, 🗑 remove — for `default` a sign-out), a 🔌 row per connected provider, «➕ Claude account» and
 «➕ OpenCode provider». The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
 (`providerSnapshots`, the newest 50): a tap asks for confirmation, the confirmation disconnects through the
 `disconnectOpenCodeProvider` port (`applyProviderDisconnect` of `modelProviders.ts`, flow unchanged), and an

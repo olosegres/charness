@@ -651,8 +651,6 @@ export const esDict: Record<string, string> = {
   'account.kind.personal': 'personal {plan}',
   'account.kind.corporate': 'corporativo {plan}',
   'account.kind.unknown': 'plan {plan}',
-  'account.addButton': '➕ Añadir',
-  'account.loginButton': '🔑 Volver a entrar',
   'account.removeButton': '🗑 Eliminar',
   'account.backButton': '⬅️ Atrás',
   'account.followButton': '↩ Seguir el predeterminado ({name})',

@@ -134,8 +134,13 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
 
   try {
     // A wait aimed at another rung (the one whose limit reset first): the topic moves there before anything else.
+    // The switch posts its own plain notice and continue prompt; the pinned «resuming» notice still follows, so a
+    // muted topic hears that the work resumed after the wait, as on the plain path.
     if (entry.resumeOn && entry.kind === 'usageLimit' && deps.resumeOnRung && checkIsTelegramKey(key)) {
-      if (await deps.resumeOnRung(key, entry.resumeOn)) return;
+      if (await deps.resumeOnRung(key, entry.resumeOn)) {
+        deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+        return;
+      }
     }
     // R26: the conversation the limit interrupted is the one resumed — the ensure brings a sleeping
     // session back by its id, for a topic as for a tracker issue (a fresh session would not know the work).

@@ -601,7 +601,7 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
     assert.deepEqual(world.resumes, [{ key: keyToString(topicKey), rung: target }]);
     assert.deepEqual(world.sessionSteps, [], 'the switch brings its own session up');
     assert.deepEqual(world.nudges.map((nudge) => nudge.text), ['bridge-or-continue-on-the-new-rung'], 'one prompt only');
-    assert.deepEqual(world.notices, [], 'and no extra «resuming» notice from the plain path');
+    assert.deepEqual(world.notices, [{ key: keyToString(topicKey), notice: { kind: 'resuming', retryKind: 'usageLimit' } }], 'the pinned «resuming» notice still reaches a muted topic, once');
     assert.deepEqual(world.saved, {});
     assert.equal(world.kicksInFlight.size, 0);
   });

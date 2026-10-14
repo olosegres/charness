@@ -651,8 +651,6 @@ export const frDict: Record<string, string> = {
   'account.kind.personal': 'personnel {plan}',
   'account.kind.corporate': 'entreprise {plan}',
   'account.kind.unknown': 'offre {plan}',
-  'account.addButton': '➕ Ajouter',
-  'account.loginButton': '🔑 Se reconnecter',
   'account.removeButton': '🗑 Supprimer',
   'account.backButton': '⬅️ Retour',
   'account.followButton': '↩ Suivre la valeur par défaut ({name})',

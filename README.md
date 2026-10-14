@@ -365,7 +365,7 @@ actually start an agent or terminal in the folder.
 | `/compact` | Compact the agent's context — a real, confirmed compaction on OpenCode and on the default (stream) Claude backend; the tmux Claude backend has the literal command forwarded (its TUI compacts); terminal: not supported |
 | `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so) |
 | `/compact_summary` | Toggle posting the agent's full summary after a compaction — `/compact`, the idle compaction and the agent's own `compact_conversation` (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. Off by default: a compaction ends in a short line. On OpenCode it also hides the summary OpenCode streams itself |
-| `/limits` | Everything about a usage limit on one screen. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`1. Claude · work · opus ⛔ 14:00` — limited until, 🔒 not signed in, ❓ no longer offered, 🚫 left out of automatic switching, ✓ where the topic runs); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch to a fallback model» (OFF by default: the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for the reset and continue» (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics; in a regular topic each has three states — on / off / as General — and the screen shows the effective value. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits rebuild`, `/limits clear`, `/limits switch on\|off\|same`, `/limits wait on\|off\|same`. `/fallback` and `/auto_continue_limits [on\|off]` still work as hidden aliases. See [Usage limits and the fallback models](#usage-limits-and-the-fallback-chain-limits) |
+| `/limits` | Everything about a usage limit on one screen. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`1. Claude · work · opus ⛔ 14:00` — limited until, 🔒 not signed in, ❓ no longer offered, 🚫 left out of automatic switching, ✓ where the topic runs); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch to a fallback model» (OFF by default: the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for the reset and continue» (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics; in a regular topic each has three states — on / off / as General — and the screen shows the effective value. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits rebuild`, `/limits clear`, `/limits switch on\|off\|same`, `/limits wait on\|off\|same`. `/fallback` and `/auto_continue_limits [on\|off]` still work as hidden aliases. See [Usage limits and the fallback models](#usage-limits-and-the-fallback-models-limits) |
 | `/bind` | Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons |
 | `/mcp` | List MCP servers active for this thread |
 
@@ -462,7 +462,7 @@ so one account's usage limit does not stop every topic.
   settings, skills, plugins and your user memory are symlinks back into
   `~/.claude` — every account sees the same hooks and skills, and a conversation
   started under one account resumes under another.
-- **Adding an account:** `/accounts` → «➕ Add» (or `/accounts add work`) — give it
+- **Adding an account:** `/accounts` → «➕ Claude account» (or `/accounts add work`) — give it
   a short name, then open the sign-in link the bot posts **in a browser that is
   signed in as that other account** (an incognito window or another browser
   profile keeps your current login out of the way), finish the sign-in and paste
@@ -489,7 +489,7 @@ so one account's usage limit does not stop every topic.
 - A child `claude` the agent starts inherits the same `CLAUDE_CONFIG_DIR`, so
   it runs on the topic's account too.
 - **Usage per account.** Under each profile `/accounts` shows how much of each
-  subscription window is used and when it resets, in the instance timezone:
+  subscription window is used and when it resets:
   the 5-hour session window, the weekly window (all models) and Fable's own
   weekly window (`—` on a plan without one). A reset is shown as a time from
   now (`🔄 in 2d 1h`; the two largest units, minutes only under an hour); an
@@ -501,14 +501,14 @@ so one account's usage limit does not stop every topic.
   `(stale)`; a profile whose session was refused on a window is marked
   `⛔ at its limit until …` and is skipped by the recommendation below.
 - **Another account takes over on a limit.** When a topic's account hits a
-  usage limit the bot looks at the [fallback chain](#usage-limits-and-the-fallback-chain-limits);
+  usage limit the bot looks at the [fallback chain](#usage-limits-and-the-fallback-models-limits);
   without one it ranks the other signed-in profiles by headroom on the windows
   the topic's model drains (fresh figures, not marked limited). The limit
   notice carries «🔁 Switch to <entry>» buttons, best first: a tap moves the
   topic there (the running session is restarted under the new account with the
   same conversation), drops the wait for the reset and tells the agent to
-  continue right away. With **switching** on («🔁 Switch to a backup by
-  itself» in `/limits`, or `/limits switch on`; in General the default for all
+  continue right away. With **switching** on («🔁 Auto switch to a
+  fallback model» in `/limits`, or `/limits switch on`; in General the default for all
   topics) the bot does the same by itself and posts one line — «Usage
   limit on a — this topic switched to b and continues», naming when the
   exhausted account resets. It is OFF by default: moving work between

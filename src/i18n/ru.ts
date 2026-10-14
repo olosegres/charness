@@ -655,8 +655,6 @@ export const ruDict: Record<string, string> = {
   'account.kind.personal': 'личный {plan}',
   'account.kind.corporate': 'корпоративный {plan}',
   'account.kind.unknown': 'план {plan}',
-  'account.addButton': '➕ Добавить',
-  'account.loginButton': '🔑 Войти заново',
   'account.removeButton': '🗑 Удалить',
   'account.backButton': '⬅️ Назад',
   'account.followButton': '↩ Как по умолчанию ({name})',

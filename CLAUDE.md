@@ -127,9 +127,9 @@ per-backend controls are optional methods the bot checks before calling.
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
   endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot) plus the
   json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
-  `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
+  `/accounts` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
-  `announceUsageLimitOrSwitchAccount`): the limited profile gets `limitedUntil`, the ranking names the other
+  `announceUsageLimitOrSwitch`): the limited profile gets `limitedUntil`, the ranking names the other
   signed-in profiles with fresh usage and room — the implicit chain when the `/limits` chain is empty.
 - **Usage limits / fallback chain** (`/limits`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`

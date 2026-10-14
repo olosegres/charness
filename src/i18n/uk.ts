@@ -657,8 +657,6 @@ export const ukDict: Record<string, string> = {
   'account.kind.personal': 'особистий {plan}',
   'account.kind.corporate': 'корпоративний {plan}',
   'account.kind.unknown': 'план {plan}',
-  'account.addButton': '➕ Додати',
-  'account.loginButton': '🔑 Увійти знову',
   'account.removeButton': '🗑 Видалити',
   'account.backButton': '⬅️ Назад',
   'account.followButton': '↩ Як типовий ({name})',

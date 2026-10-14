@@ -651,8 +651,6 @@ export const uzDict: Record<string, string> = {
   'account.kind.personal': 'shaxsiy {plan}',
   'account.kind.corporate': 'korporativ {plan}',
   'account.kind.unknown': 'reja {plan}',
-  'account.addButton': '➕ Qo‘shish',
-  'account.loginButton': '🔑 Qayta kirish',
   'account.removeButton': '🗑 O‘chirish',
   'account.backButton': '⬅️ Orqaga',
   'account.followButton': '↩ Standartga ergashish ({name})',

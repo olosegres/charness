@@ -645,8 +645,6 @@ export const zhDict: Record<string, string> = {
   'account.kind.personal': '个人 {plan}',
   'account.kind.corporate': '企业 {plan}',
   'account.kind.unknown': '套餐 {plan}',
-  'account.addButton': '➕ 添加',
-  'account.loginButton': '🔑 重新登录',
   'account.removeButton': '🗑 删除',
   'account.backButton': '⬅️ 返回',
   'account.followButton': '↩ 跟随默认值（{name}）',

@@ -258,7 +258,7 @@ TUI hosts the paste flow itself).
 
 ## Account profiles — `CLAUDE_CONFIG_DIR` per process
 
-A topic's Claude session runs on the account profile the topic resolves to (`/account`,
+A topic's Claude session runs on the account profile the topic resolves to (`/accounts`,
 `utils/claudeProfiles.ts`). Both Claude adapters read the directory through the
 `ClaudeConfigDirReader` registered at boot (`registerClaudeConfigDirReader`, the same
 late-wiring idiom as the launch defaults) at EVERY spawn: json-stream puts

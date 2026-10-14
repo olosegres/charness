@@ -645,8 +645,6 @@ export const jaDict: Record<string, string> = {
   'account.kind.personal': '個人 {plan}',
   'account.kind.corporate': '法人 {plan}',
   'account.kind.unknown': 'プラン {plan}',
-  'account.addButton': '➕ 追加',
-  'account.loginButton': '🔑 再ログイン',
   'account.removeButton': '🗑 削除',
   'account.backButton': '⬅️ 戻る',
   'account.followButton': '↩ 既定に従う ({name})',

@@ -2,7 +2,7 @@
  * `/limits` — everything about a usage limit on one screen: the instance-wide priority chain of backend +
  * account / provider + model a topic continues on (reorder, include / exclude, remove, add through a two-step
  * sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide what a
- * limit does (switch to a backup by itself, wait for the reset and continue — instance defaults in General,
+ * limit does (auto switch to a fallback model, wait for the reset and continue — instance defaults in General,
  * on / off / same-as-General overrides in a topic) — and the «🔁 Switch to …» buttons a usage-limit notice
  * carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this screen. See README.md in this
  * folder and `utils/fallbackChain.ts`.
@@ -128,7 +128,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * A rung on its label button: `3. Claude · perf ⛔ 14:00` / `1. openai / gpt-6.1 🚫` — the FULL name (Telegram
+   * A rung on its label button: `3. Claude · work ⛔ 14:00` / `1. openai / gpt-6.1 🚫` — the FULL name (Telegram
    * sizes and truncates the button as it sees fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not
    * signed in, ❓ not offered any more, 🚫 left out of switching, ✓ where the topic runs now). The one place the
    * label is built: a two-row layout (label on its own row) only changes how `buildPicker` assembles the row.

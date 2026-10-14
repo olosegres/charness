@@ -651,8 +651,6 @@ export const deDict: Record<string, string> = {
   'account.kind.personal': 'persönlich {plan}',
   'account.kind.corporate': 'Firma {plan}',
   'account.kind.unknown': 'Plan {plan}',
-  'account.addButton': '➕ Hinzufügen',
-  'account.loginButton': '🔑 Neu anmelden',
   'account.removeButton': '🗑 Entfernen',
   'account.backButton': '⬅️ Zurück',
   'account.followButton': '↩ Dem Standard folgen ({name})',

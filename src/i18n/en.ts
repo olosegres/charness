@@ -695,8 +695,6 @@ export const enDict: Record<string, string> = {
   'account.kind.personal': 'personal {plan}',
   'account.kind.corporate': 'corporate {plan}',
   'account.kind.unknown': 'plan {plan}',
-  'account.addButton': '➕ Add',
-  'account.loginButton': '🔑 Re-login',
   'account.removeButton': '🗑 Remove',
   'account.backButton': '⬅️ Back',
   'account.followButton': '↩ Follow the default ({name})',
