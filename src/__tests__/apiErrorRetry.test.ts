@@ -50,6 +50,13 @@ test('classify: rate-limit / overloaded / status-code phrasings → transient', 
   }
 });
 
+test('classify: the Anthropic subscription window relayed by OpenCode → usageLimit, not a "rate limit" hiccup', () => {
+  // Verbatim live wording (2026-10-14); OpenCode's retry deadline was days away. The bare
+  // "rate limit" must NOT win the transient branch — only "rate limited" is a hiccup.
+  const live = "This request would exceed your account's rate limit. Please try again later.";
+  assert.deepEqual(classifyAgentApiError(live, fixedNow), { kind: 'usageLimit', resetAt: undefined });
+});
+
 test('classify: OpenCode-relayed provider quota codes → usageLimit even with the 429 the transient branch reads', () => {
   // OpenAI: a used-up monthly quota comes as HTTP 429 with the `insufficient_quota` code.
   const openAi = 'AI_APICallError: 429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}';

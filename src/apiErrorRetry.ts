@@ -201,7 +201,10 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   if (exhaustedQuotaCodesRe.test(text)) {
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
-  if (/rate.?limit(?:ed)?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
+  // `rate limited`, never a bare `rate limit`: the Anthropic subscription window reads
+  // "This request would exceed your account's rate limit. Please try again later." and
+  // must fall through to the usage branch (a limit mention plus a retry hint).
+  if (/rate.?limited?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
     return { kind: 'transient' };
   }
   if (checkIsUsageLimitText(text)) {

@@ -5017,22 +5017,30 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // the later continue nudge / switch prompt goes through the normal send
     // path (the abort's idle and "Aborted" error are swallowed as for any
     // bot-issued provider-retry abort).
-    const retryClass = classifyAgentApiError(retryMessage, Date.now());
+    const now = Date.now();
+    const retryClass = classifyAgentApiError(retryMessage, now);
     if (retryClass && (retryClass.kind === 'usageLimit' || retryClass.kind === 'auth')) {
       session.isProviderRetryEscalated = true;
       const abortPromise = this.getProviderRetryAbortPromise(session);
       abortPromise?.then(
         () => {
           const current = this.sessions.get(keyToString(key));
-          if (current === session) {
-            // The abort's idle is swallowed (it never clears busy itself).
+          // The abort's idle is swallowed (it never clears busy itself). A prompt
+          // posted meanwhile (the fallback switch's first prompt) owns the turn
+          // now and is still awaiting its echo: leave its busy mark alone.
+          if (current === session && current.unconsumedInputCount === 0) {
             current.isBusy = false;
             current.awaitingTurnResponse = false;
           }
         },
         (e) => console.error(`[OpenCode] Failed to abort exhausted-limit provider retry:`, e),
       );
-      this.emit('apiError', key, retryClass);
+      // The provider's retry deadline IS the window reset when the message names
+      // none (the live subscription wording only says "try again later").
+      const resetAt = retryClass.kind === 'usageLimit' && retryClass.resetAt === undefined && retryAt > now
+        ? retryAt
+        : retryClass.resetAt;
+      this.emit('apiError', key, { ...retryClass, resetAt });
       return;
     }
 

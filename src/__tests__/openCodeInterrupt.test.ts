@@ -70,7 +70,9 @@ function createRetryingAdapter(): {
         status: {
           type: 'retry',
           attempt: 1,
-          message: "This request would exceed your account's rate limit. Please try again later.",
+          // A genuinely transient retry (live overloaded wording); the subscription-limit
+          // wording is NOT one — it escalates, see the exhausted-usage-limit test below.
+          message: 'Our servers are currently overloaded. Please try again later.',
           next: retryAt,
         },
       },
@@ -182,7 +184,7 @@ test('provider retry stays busy and is surfaced once instead of looking silently
 
   assert.equal(adapter.checkIsBusy(key), true, 'a provider-managed retry is still an in-flight turn');
   assert.equal(outputs.length, 1, 'duplicate retry status frames must not repeat the user notice');
-  assert.match(outputs[0], /Provider error.*OpenCode retries in 60 min.*attempt 1.*rate limit/);
+  assert.match(outputs[0], /Provider error.*OpenCode retries in 60 min.*attempt 1.*overloaded/);
 });
 
 test('a prompt during provider retry aborts the old turn before using the current model', async () => {
@@ -655,14 +657,17 @@ test('a replacement idle still recovers when the aborted retry never emits idle'
   assert.equal(noResponseCount, 1, 'the replacement idle must not be consumed as the absent old idle');
 });
 
-function feedRetryStatus(adapter: OpenCodeAdapter, attempt: number, message: string): void {
+/** The verbatim exhausted-subscription wording OpenCode relays (live 2026-10-14, retry deadline days away). */
+const liveSubscriptionLimitMessage = "This request would exceed your account's rate limit. Please try again later.";
+
+function feedRetryStatus(adapter: OpenCodeAdapter, attempt: number, message: string, next = Date.now() + 60_000): void {
   adapter['routeSseData'](JSON.stringify({
     directory: '/tmp/work',
     payload: {
       type: 'session.status',
       properties: {
         sessionID: own,
-        status: { type: 'retry', attempt, message, next: Date.now() + 60_000 },
+        status: { type: 'retry', attempt, message, next },
       },
     },
   }));
@@ -687,14 +692,16 @@ function createBareRetryAdapter() {
 
 test('an exhausted-usage-limit provider retry is aborted and reported once as a usage limit', async () => {
   const { adapter, outputs, apiErrors, requests, key } = createBareRetryAdapter();
+  const resetAt = Date.now() + 4881 * 60_000;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    feedRetryStatus(adapter, attempt, 'The usage limit has been reached');
+    feedRetryStatus(adapter, attempt, liveSubscriptionLimitMessage, resetAt);
   }
   await new Promise(resolve => setImmediate(resolve));
 
   assert.deepEqual(requests.map(r => [r.method, r.path]), [['POST', `/session/${own}/abort`]]);
   assert.equal(apiErrors.length, 1, 'one apiError per retry episode, not per attempt');
-  assert.equal((apiErrors[0] as { kind: string }).kind, 'usageLimit');
+  // The wording names no reset time: the provider's retry deadline is the window reset.
+  assert.deepEqual(apiErrors[0], { kind: 'usageLimit', resetAt });
   assert.equal(outputs.length, 0, 'no transient notice for an exhausted limit');
   assert.equal(adapter.checkIsBusy(key), false, 'the aborted retry no longer owns the turn');
 
@@ -713,4 +720,15 @@ test('a transient provider retry posts the neutral notice, not on every attempt'
   assert.doesNotMatch(outputs[0], /rate-limited/);
   assert.equal(apiErrors.length, 0);
   assert.equal(requests.length, 0);
+});
+
+test('a prompt posted during the limit abort (the fallback switch) keeps the turn busy', async () => {
+  const { adapter, requests, key } = createBareRetryAdapter();
+  adapter.on('apiError', () => adapter.sendInput(key, 'continue with the next rung'));
+  feedRetryStatus(adapter, 1, liveSubscriptionLimitMessage, Date.now() + 4881 * 60_000);
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`, `/session/${own}/prompt_async`]);
+  assert.equal(adapter.checkIsBusy(key), true, 'the replacement prompt owns the turn once the abort resolves');
 });
