@@ -58,6 +58,15 @@ test('classify: the Anthropic subscription window relayed by OpenCode → usageL
   const live = "This request would exceed your account's rate limit. Please try again later.";
   assert.deepEqual(classifyAgentApiError(live, fixedNow), { kind: 'usageLimit', resetAt: undefined });
   assert.deepEqual(classifyAgentApiError(`429 rate_limit_error: ${live}`, fixedNow), { kind: 'usageLimit', resetAt: undefined });
+  // A relay that drops the tail or types a typographic apostrophe is the same window.
+  for (const variant of ["This request would exceed your account's rate limit", 'This request would exceed your account\u2019s rate limit. Please try again later.']) {
+    assert.equal(classifyAgentApiError(variant, fixedNow)?.kind, 'usageLimit', variant);
+  }
+});
+
+test('classify: a bare "rate limit" next to an explicit usage-window wording → usageLimit', () => {
+  const text = "Rate limit reached: You've hit your weekly limit · resets in 2h";
+  assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 2 * hourMs });
 });
 
 test('classify: OpenCode-relayed provider quota codes → usageLimit even with the 429 the transient branch reads', () => {

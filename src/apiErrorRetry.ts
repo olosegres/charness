@@ -114,8 +114,18 @@ const usageWindowPhrases = [
  */
 const exhaustedQuotaCodesRe = /insufficient_quota|exceeded your current quota|usage_limit_reached|resource_exhausted|hit your usage limit/i;
 
-/** Observed subscription-window wording; do not generalize it to every bare rate limit. */
-const subscriptionLimitMessageRe = /this request would exceed your account's rate limit\.\s*please try again later\./i;
+/**
+ * Observed subscription-window wording ("This request would exceed your account's rate limit. Please try
+ * again later."); do not generalize it to every bare rate limit. Keyed on the distinctive head only, so a
+ * relay that truncates the tail or types a curly apostrophe still matches.
+ */
+const subscriptionLimitMessageRe = /would exceed your account['\u2019]?s rate limit/i;
+
+/** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
+const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;
+
+/** A bare "rate limit" (no "-ed"): transient only when no explicit usage-window wording rides along. */
+const bareRateLimitRe = /rate.?limit/i;
 
 /**
  * @description Alternation SOURCE (no anchors, no flags) of the explicit
@@ -187,7 +197,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *     subscription wording ({@link subscriptionLimitMessageRe}) → `usageLimit`.
  *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
  *     Google `RESOURCE_EXHAUSTED`), which the next branch would read as a hiccup.
- *  3. transient (rate-limited, overloaded, 429/503/529) → `{ kind: 'transient' }`.
+ *  3. transient (rate-limited, overloaded, 429/503/529, or a bare "rate limit" without an explicit
+ *     usage-window wording) → `{ kind: 'transient' }`.
  *     Tested BEFORE the usage wordings on purpose: the live transient string literally reads
  *     "...(not your usage limit)...", so a naive usage check would false-match it.
  *     Because transient returns here, the usage branch never sees that substring.
@@ -206,8 +217,9 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
   // The observed subscription wording is handled above, including a 429 wrapper.
-  // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch.
-  if (/rate.?limit(?:ed)?|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i.test(text)) {
+  // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch,
+  // but "rate limit reached: you've hit your weekly limit" still names a usage window.
+  if (transientMarkersRe.test(text) || (bareRateLimitRe.test(text) && !usageWindowPhrasesRe.test(text))) {
     return { kind: 'transient' };
   }
   if (checkIsUsageLimitText(text)) {
