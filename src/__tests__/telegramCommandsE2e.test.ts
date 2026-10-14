@@ -366,9 +366,9 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
   // ── /model /effort ───────────────────────────────────────────────────
 
   it('/model lists the agent\'s models; a tap and a typed number are answered while no agent runs', async () => {
-    const picker = await topic.sendAndAwaitReply('/model', 'Claude Code (stream) — 3 models');
-    assert.match(picker.text, /1\. sonnet\n2\. opus\n3\. haiku/);
-    assert.deepEqual(topic.getKeyboardData(picker), [['mdl_0_0'], ['mdl_0_1'], ['mdl_0_2']]);
+    const picker = await topic.sendAndAwaitReply('/model', 'Claude Code (stream) — 4 models');
+    assert.match(picker.text, /1\. fable\n2\. opus\n3\. sonnet\n4\. haiku/);
+    assert.deepEqual(topic.getKeyboardData(picker), [['mdl_0_0'], ['mdl_0_1'], ['mdl_0_2'], ['mdl_0_3']]);
 
     const tapAnswer = await topic.tapAndAwaitAnswer(picker, 'mdl_0_1');
     assert.match(tapAnswer, /No active session/);

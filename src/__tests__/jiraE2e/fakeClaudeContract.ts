@@ -5,9 +5,21 @@
  * executable script, which starts running when it is loaded.
  */
 
+import * as path from 'path';
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
 
 export const argvViolationExitCode = 3;
+/**
+ * Where the fake holds a conversation: the real CLI's transcript, `<config dir>/projects/<work dir slug>/<id>.jsonl`
+ * (`CLAUDE_CONFIG_DIR`, else `<home>/.claude`). The bot reads that location before a resume — a conversation without a
+ * transcript is started again under the same id — so the fake keeps its conversations exactly there. The fake writes a
+ * line per message; a transcript left EMPTY is a conversation the CLI cannot resume (`No conversation found`).
+ */
+export function getFakeClaudeTranscriptPath(options: { homeDir: string; configDir?: string | undefined; workDir: string; sessionId: string }): string {
+  const configDir = options.configDir || path.join(options.homeDir, '.claude');
+  return path.join(configDir, 'projects', options.workDir.replace(/[^a-zA-Z0-9]/g, '-'), `${options.sessionId}.jsonl`);
+}
+
 /** What the real CLI exits with when it refuses a `--resume` / `--session-id` it cannot serve. */
 export const sessionViolationExitCode = 1;
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */

@@ -78,6 +78,7 @@ import {
   fakeClaudeLogFileNames,
   fakeCompactionModelUsage,
   fakeTurnUsage,
+  getFakeClaudeTranscriptPath,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
@@ -834,8 +835,9 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
     assert.ok(sessionId);
     await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
-    // The conversation is lost: the real CLI would answer `No conversation found with session ID`.
-    fs.rmSync(path.join(getLayout().fakeStateDir, `session-${sessionId}`));
+    // The conversation is lost though its transcript file remains (the bot resumes only a conversation with a
+    // transcript on disk): the real CLI answers `No conversation found with session ID`.
+    fs.truncateSync(getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, projectFolder), sessionId }));
     const text = await handOverAndAwaitAnswer(issueKey);
     assert.ok(isWholePrompt(text), `a fresh session knows nothing of the issue:\n${text}`);
     assert.ok(text.includes('Fake final answer for PROJ-14'), 'it learns what its predecessor already answered');

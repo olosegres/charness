@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 import { spawnSync } from 'child_process';
@@ -18,6 +19,7 @@ import {
   fakeCompactionModelUsage,
   fakeCompactionResultUsage,
   fakeTurnUsage,
+  getFakeClaudeTranscriptPath,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
@@ -210,19 +212,31 @@ function getReportedClaudeCodeVersion(): string {
   return fs.existsSync(overridePath) ? fs.readFileSync(overridePath, 'utf8').trim() : fakeClaudeCodeVersion;
 }
 
-/** Marks a conversation as held — the real CLI's on-disk transcript, written once its first message arrives. */
-function getConversationMarkerPath(sessionId: string): string {
-  return path.join(getStateDir(), `session-${sessionId}`);
+/** The real CLI's on-disk transcript of a conversation ({@link getFakeClaudeTranscriptPath}), a line per message. */
+function getTranscriptPath(sessionId: string): string {
+  return getFakeClaudeTranscriptPath({ homeDir: os.homedir(), configDir: process.env.CLAUDE_CONFIG_DIR, workDir: process.cwd(), sessionId });
+}
+
+/** A conversation is held once its transcript has a message; an emptied transcript is a lost conversation. */
+function checkIsConversationHeld(sessionId: string): boolean {
+  const transcriptPath = getTranscriptPath(sessionId);
+  return fs.existsSync(transcriptPath) && fs.statSync(transcriptPath).size > 0;
+}
+
+function recordTranscriptMessage(sessionId: string, content: string): void {
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'user', sessionId, message: { role: 'user', content } })}\n`);
 }
 
 /** @description What the real CLI says when it refuses this launch's conversation id, or `null` when it would run. */
 function getSessionViolation(argv: readonly string[]): string | null {
   const resumeId = getFlagValues(argv, '--resume')[0];
-  if (resumeId !== undefined && !fs.existsSync(getConversationMarkerPath(resumeId))) {
+  if (resumeId !== undefined && !checkIsConversationHeld(resumeId)) {
     return `No conversation found with session ID: ${resumeId}`;
   }
   const freshId = getFlagValues(argv, '--session-id')[0];
-  if (freshId !== undefined && fs.existsSync(getConversationMarkerPath(freshId))) {
+  if (freshId !== undefined && checkIsConversationHeld(freshId)) {
     return `Session ID ${freshId} is already in use.`;
   }
   return null;
@@ -322,7 +336,7 @@ function runCompactionTurn(sessionId: string): void {
 }
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
-  fs.writeFileSync(getConversationMarkerPath(sessionId), '');
+  recordTranscriptMessage(sessionId, content);
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const requestId = requestIdRe.exec(content)?.[0];
