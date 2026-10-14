@@ -1,8 +1,11 @@
 /**
- * `/fallback` — the instance-wide priority chain of backend + account / provider + model a topic continues on
- * when its agent hits a usage limit, with its buttons: reorder, remove, add (a two-step sub-picker), propose a
- * draft, clear, the auto-switch toggle — and the «🔁 Switch to …» buttons a usage-limit notice carries. See
- * README.md in this folder and `utils/fallbackChain.ts`.
+ * `/limits` — everything about a usage limit on one screen: the instance-wide priority chain of backend +
+ * account / provider + model a topic continues on (reorder, include / exclude, remove, add through a two-step
+ * sub-picker, rebuild a draft, clear — in General; read-only in a topic), the two settings that decide what a
+ * limit does (switch to a backup by itself, wait for the reset and continue — instance defaults in General,
+ * on / off / same-as-General overrides in a topic) — and the «🔁 Switch to …» buttons a usage-limit notice
+ * carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this screen. See README.md in this
+ * folder and `utils/fallbackChain.ts`.
  */
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
@@ -10,6 +13,7 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { paginateList } from '../../../utils/paginateList';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
+import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import {
   addFallbackEntry,
   buildFallbackAddClaudeCallback,
@@ -20,6 +24,8 @@ import {
   buildFallbackMoveDownCallback,
   buildFallbackMoveUpCallback,
   buildFallbackRemoveCallback,
+  buildFallbackToggleCallback,
+  checkIsFallbackEntryDisabled,
   checkIsSameFallbackAccount,
   fallbackAddCallback,
   fallbackAddClaudeCallbackRe,
@@ -29,6 +35,7 @@ import {
   fallbackAddProviderCallbackRe,
   fallbackAutoSwitchOffCallback,
   fallbackAutoSwitchOnCallback,
+  fallbackAutoSwitchSameCallback,
   fallbackBackCallback,
   fallbackChainMaxLength,
   fallbackClaudeModelAliases,
@@ -39,6 +46,10 @@ import {
   fallbackProposeConfirmCallback,
   fallbackRemoveCallbackRe,
   fallbackSwitchCallbackRe,
+  fallbackToggleCallbackRe,
+  fallbackWaitOffCallback,
+  fallbackWaitOnCallback,
+  fallbackWaitSameCallback,
   formatFallbackEntryLabel,
   getFallbackChainRevision,
   getFallbackEntryAvailability,
@@ -49,6 +60,7 @@ import {
   parseFallbackSwitchCallbackData,
   proposeFallbackChain,
   removeFallbackEntry,
+  toggleFallbackEntryDisabled,
   type FallbackChainEntry,
   type FallbackDetection,
 } from '../../../utils/fallbackChain';
@@ -78,6 +90,14 @@ export interface FallbackChainPorts
    * continue its work. The confirmation the notice is edited into, or `null` when the tap is stale.
    */
   takeSwitchOffer: (key: SessionKey, episodeId: number, index: number) => Promise<string | null>;
+  /**
+   * Apply the «wait for the reset and continue» setting (`autoContinueLimits.ts`, which also drops an armed
+   * wait that the new value contradicts): `null` = a topic follows General again. The confirmation is ignored
+   * here — `/limits` words its own.
+   */
+  applyAutoContinue: (key: SessionKey, isGeneral: boolean, enabled: boolean | null) => Promise<string>;
+  /** The fire time of the limit wait armed for the topic, or `null` — the screen then offers «skip once». */
+  getArmedLimitRetryFireAt: (key: SessionKey) => number | null;
 }
 
 /** The «add» sub-picker's own snapshot, per picker MESSAGE: the providers it listed and the chosen provider's models. */
@@ -87,11 +107,11 @@ interface AddSnapshot {
   models: string[];
 }
 
-/** @description Build the `/fallback` feature over its ports: the command, its buttons, the limit-notice switch button. */
+/** @description Build the `/limits` feature over its ports: the command (+ the hidden aliases), its buttons, the limit-notice switch button. */
 export function createFallbackChain(ports: FallbackChainPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
-    getInstanceTimezone, detectFallbackOptions, getTopicPosition, takeSwitchOffer,
+    getInstanceTimezone, detectFallbackOptions, getTopicPosition, takeSwitchOffer, applyAutoContinue, getArmedLimitRetryFireAt,
   } = ports;
 
   const addSnapshots = new Map<number, AddSnapshot>();
@@ -112,7 +132,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     else if (availability.status === 'signedOut') status = t('fallback.row.signedOut');
     else if (availability.status === 'missing') status = t('fallback.row.missing');
     const marker = current && checkIsSameFallbackAccount(entry, current) ? t('fallback.row.current') : '';
-    return `${index + 1}. ${formatEntry(entry)}${status}${marker}`;
+    return `${index + 1}. ${checkIsFallbackEntryDisabled(entry) ? '🚫' : '✅'} ${formatEntry(entry)}${status}${marker}`;
   }
 
   /** The auto-switch value the topic (General: the instance) effectively has. */
@@ -120,41 +140,102 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key);
   }
 
-  /** The main picker: the chain with its availability, the edit rows (General only) and the auto-switch toggle. */
+  /** The wait-for-the-reset value the topic (General: the instance) effectively has. */
+  function resolveWaitEnabled(key: SessionKey, isGeneral: boolean): boolean {
+    return isGeneral ? getState().getAutoContinueOnLimitGlobalDefault() : getState().checkIsAutoContinueOnLimitEnabled(key);
+  }
+
+  function formatState(enabled: boolean): string {
+    return enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
+  }
+
+  /** `ON` for General; `ON (as in General)` / `OFF (set for this topic)` in a topic. */
+  function formatSettingValue(enabled: boolean, override: boolean | undefined, isGeneral: boolean): string {
+    if (isGeneral) return formatState(enabled);
+    return `${formatState(enabled)}${override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic')}`;
+  }
+
+  /**
+   * One setting's buttons. General: a single flip button (shows the value, taps to the other). A topic: three
+   * buttons — on / off / same as General (with the General value) — the current choice marked `✓`.
+   */
+  function buildSettingRow(input: {
+    icon: string;
+    labelKey: 'limits.switchButton' | 'limits.waitButton';
+    isGeneral: boolean;
+    effective: boolean;
+    override: boolean | undefined;
+    generalValue: boolean;
+    onData: string;
+    offData: string;
+    sameData: string;
+  }) {
+    if (input.isGeneral) {
+      return [Markup.button.callback(t(input.labelKey, { state: formatState(input.effective) }), input.effective ? input.offData : input.onData)];
+    }
+    const mark = (isCurrent: boolean): string => (isCurrent ? ' ✓' : '');
+    return [
+      Markup.button.callback(`${input.icon} ${formatState(true)}${mark(input.override === true)}`, input.onData),
+      Markup.button.callback(`${input.icon} ${formatState(false)}${mark(input.override === false)}`, input.offData),
+      Markup.button.callback(`${input.icon} ${t('limits.optSame', { state: formatState(input.generalValue) })}${mark(input.override === undefined)}`, input.sameData),
+    ];
+  }
+
+  /**
+   * The `/limits` screen: the chain with its availability (editable rows in General), the two settings with
+   * their effective values, and how they combine. A topic also sees what it runs on now, and «skip once»
+   * while a limit wait is armed for it.
+   */
   async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
     const chain = getState().getFallbackChain();
     const detection = await detectFallbackOptions();
     const current = isGeneral ? null : getTopicPosition(key);
     const nowMs = Date.now();
     const list = chain.map((entry, index) => formatRow(index, entry, detection, current, nowMs)).join('\n');
-    const parts = [chain.length === 0 ? t('fallback.empty') : t('fallback.title', { list })];
-    if (isGeneral) parts.push(t('fallback.generalHint'));
-    else parts.push(t('fallback.topicNote', { current: current ? formatEntry(current) : t('fallback.noAgent') }));
+    const switchOverride = isGeneral ? undefined : getState().getClaudeAutoSwitchOnLimitOverride(key);
+    const waitOverride = isGeneral ? undefined : getState().getAutoContinueOnLimitOverride(key);
+    const switchEnabled = resolveAutoSwitchEnabled(key, isGeneral);
+    const waitEnabled = resolveWaitEnabled(key, isGeneral);
+    const parts: string[] = [];
+    if (!isGeneral) parts.push(t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }));
+    parts.push(chain.length === 0 ? t('limits.chainEmpty') : t('limits.chainTitle', { list }));
+    if (isGeneral) parts.push(t('limits.chainHintGeneral'));
+    parts.push(`${isGeneral ? `${t('limits.settingsGeneral')}\n` : ''}${t('limits.settings', {
+      switch: formatSettingValue(switchEnabled, switchOverride, isGeneral),
+      wait: formatSettingValue(waitEnabled, waitOverride, isGeneral),
+    })}`);
+    parts.push(t('limits.howItWorks'));
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
     if (isGeneral) {
       const revision = getFallbackChainRevision(chain);
-      chain.forEach((_, index) => {
+      chain.forEach((entry, index) => {
         rows.push([
           Markup.button.callback(`⬆️ ${index + 1}`, buildFallbackMoveUpCallback(index, revision)),
           Markup.button.callback(`⬇️ ${index + 1}`, buildFallbackMoveDownCallback(index, revision)),
+          Markup.button.callback(`${checkIsFallbackEntryDisabled(entry) ? '🚫' : '✅'} ${index + 1}`, buildFallbackToggleCallback(index, revision)),
           Markup.button.callback(`🗑 ${index + 1}`, buildFallbackRemoveCallback(index, revision)),
         ]);
       });
       const actions = [
         Markup.button.callback(t('fallback.addButton'), fallbackAddCallback),
-        Markup.button.callback(t('fallback.proposeButton'), fallbackProposeCallback),
+        Markup.button.callback(t('limits.rebuildButton'), fallbackProposeCallback),
       ];
       if (chain.length > 0) actions.push(Markup.button.callback(t('fallback.clearButton'), fallbackClearCallback));
       rows.push(actions);
     }
-    const isAutoSwitchOn = resolveAutoSwitchEnabled(key, isGeneral);
-    rows.push([
-      Markup.button.callback(
-        t('fallback.autoSwitchButton', { state: isAutoSwitchOn ? t('autoContinueLimits.on') : t('autoContinueLimits.off') }),
-        isAutoSwitchOn ? fallbackAutoSwitchOffCallback : fallbackAutoSwitchOnCallback,
-      ),
-    ]);
-    return { text: `${parts.join('\n\n')}\n\n${t('fallback.autoSwitchHint')}`, keyboard: Markup.inlineKeyboard(rows) };
+    rows.push(buildSettingRow({
+      icon: '🔁', labelKey: 'limits.switchButton', isGeneral, effective: switchEnabled, override: switchOverride,
+      generalValue: getState().getClaudeAutoSwitchOnLimitGlobalDefault(),
+      onData: fallbackAutoSwitchOnCallback, offData: fallbackAutoSwitchOffCallback, sameData: fallbackAutoSwitchSameCallback,
+    }));
+    rows.push(buildSettingRow({
+      icon: '⏳', labelKey: 'limits.waitButton', isGeneral, effective: waitEnabled, override: waitOverride,
+      generalValue: getState().getAutoContinueOnLimitGlobalDefault(),
+      onData: fallbackWaitOnCallback, offData: fallbackWaitOffCallback, sameData: fallbackWaitSameCallback,
+    }));
+    const armedFireAt = isGeneral ? null : getArmedLimitRetryFireAt(key);
+    if (armedFireAt !== null) rows.push([Markup.button.callback(t('autoContinueLimits.skipButton'), buildSkipArmedRetryCallbackData(armedFireAt))]);
+    return { text: parts.join('\n\n'), keyboard: Markup.inlineKeyboard(rows) };
   }
 
   /** Re-render the picker IN PLACE (it is meant for repeated use, like `/account`); best-effort. */
@@ -227,7 +308,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
 
   /** Replace the chain with the draft and RETURN the confirmation. */
   async function applyPropose(): Promise<string> {
-    const chain = proposeFallbackChain(await detectFallbackOptions());
+    const chain = proposeFallbackChain(await detectFallbackOptions(), getState().getFallbackChain());
     if (chain.length === 0) return t('fallback.proposeNothing');
     await getState().setFallbackChain(chain);
     return t('fallback.proposed', { count: chain.length });
@@ -240,56 +321,91 @@ export function createFallbackChain(ports: FallbackChainPorts) {
 
   /**
    * @description Set whether the bot moves a limited topic to the next rung by itself (OFF by default: moving
-   * work between accounts and providers is an operator decision) and RETURN the confirmation. The same setting
-   * `/account` shows: General sets the instance default, a topic its override.
+   * work between accounts and providers is an operator decision) and RETURN the confirmation. General sets the
+   * instance default, a topic its override (`null` = follow General again).
    */
-  async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
-    const stateWord = enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
+  async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {
+    const what = t('limits.whatSwitch');
     if (isGeneral) {
-      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled);
-      return t('account.autoSwitchSetGlobal', { state: stateWord });
+      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled ?? false);
+      return t('limits.setGlobal', { what, state: formatState(enabled ?? false) });
     }
     await getState().setClaudeAutoSwitchOnLimitOverride(key, enabled);
-    return t('account.autoSwitchSetThisTopic', { state: stateWord });
+    return enabled === null
+      ? t('limits.setSame', { what, state: formatState(getState().getClaudeAutoSwitchOnLimitGlobalDefault()) })
+      : t('limits.setThisTopic', { what, state: formatState(enabled) });
+  }
+
+  /** The «wait for the reset» twin of {@link applyAutoSwitch}; the write (and the armed-wait cleanup) is `autoContinueLimits.ts`'s. */
+  async function applyWait(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {
+    const what = t('limits.whatWait');
+    await applyAutoContinue(key, isGeneral, isGeneral ? (enabled ?? true) : enabled);
+    if (isGeneral) return t('limits.setGlobal', { what, state: formatState(enabled ?? true) });
+    return enabled === null
+      ? t('limits.setSame', { what, state: formatState(getState().getAutoContinueOnLimitGlobalDefault()) })
+      : t('limits.setThisTopic', { what, state: formatState(enabled) });
   }
 
   // ── the command ──
 
   function registerFallbackChainCommands(): void {
-    // `/fallback` — bare: the picker (editable in General, read-only elsewhere). `propose` drafts the chain,
-    // `clear` empties it, `autoswitch on|off` flips the toggle. Not gated on a session: the chain must be
-    // settable before any limit hits.
-    command('fallback', async (_ctx, key, parsed: InboundCommand) => {
-      const isGeneral = checkIsGeneral(key);
+    // `/limits` — bare: the screen (editable chain in General, read-only elsewhere). `propose` / `rebuild`
+    // drafts the chain, `clear` empties it, `switch|autoswitch on|off|same` and `wait on|off|same` flip the two
+    // settings. `/fallback` is the same command under its old name (hidden alias). Not gated on a session:
+    // the chain must be settable before any limit hits.
+    command(['limits', 'fallback'], async (_ctx, key, parsed: InboundCommand) => {
       const [verb = '', value = ''] = parsed.args;
-      switch (verb.toLowerCase()) {
-        case '': {
-          const picker = await buildPicker(key, isGeneral);
-          await replyToThread(key, picker.text, picker.keyboard);
-          return;
-        }
-        case 'propose': {
-          if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
-          await replyToThread(key, await applyPropose());
-          const picker = await buildPicker(key, isGeneral);
-          await replyToThread(key, picker.text, picker.keyboard);
-          return;
-        }
-        case 'clear': {
-          if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
-          await replyToThread(key, await applyClear());
-          return;
-        }
-        case 'autoswitch': {
-          const word = value.toLowerCase();
-          if (word !== 'on' && word !== 'off') { await replyToThread(key, t('fallback.usage')); return; }
-          await replyToThread(key, await applyAutoSwitch(key, isGeneral, word === 'on'));
-          return;
-        }
-        default:
-          await replyToThread(key, t('fallback.usage'));
-      }
+      await runLimitsCommand(key, verb, value);
     });
+  }
+
+  /** Open the screen as a fresh message (the `/auto_continue_limits` alias lands here). */
+  async function openLimitsView(key: SessionKey): Promise<void> {
+    const picker = await buildPicker(key, checkIsGeneral(key));
+    await replyToThread(key, picker.text, picker.keyboard);
+  }
+
+  async function runLimitsCommand(key: SessionKey, verb: string, value: string): Promise<void> {
+    const isGeneral = checkIsGeneral(key);
+    const word = value.toLowerCase();
+    const parseState = (): boolean | null | undefined => {
+      if (word === 'on') return true;
+      if (word === 'off') return false;
+      if (word === 'same' && !isGeneral) return null;
+      return undefined;
+    };
+    switch (verb.toLowerCase()) {
+      case '':
+        await openLimitsView(key);
+        return;
+      case 'propose':
+      case 'rebuild': {
+        if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
+        await replyToThread(key, await applyPropose());
+        await openLimitsView(key);
+        return;
+      }
+      case 'clear': {
+        if (!isGeneral) { await replyToThread(key, t('fallback.generalOnly')); return; }
+        await replyToThread(key, await applyClear());
+        return;
+      }
+      case 'switch':
+      case 'autoswitch': {
+        const enabled = parseState();
+        if (enabled === undefined) { await replyToThread(key, t('limits.usage')); return; }
+        await replyToThread(key, await applyAutoSwitch(key, isGeneral, enabled));
+        return;
+      }
+      case 'wait': {
+        const enabled = parseState();
+        if (enabled === undefined) { await replyToThread(key, t('limits.usage')); return; }
+        await replyToThread(key, await applyWait(key, isGeneral, enabled));
+        return;
+      }
+      default:
+        await replyToThread(key, t('limits.usage'));
+    }
   }
 
   /** The shared tap prologue: authorise, resolve the topic, run under its locale. */
@@ -329,6 +445,10 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   function registerFallbackChainCallbacks(): void {
     registerEdit(fallbackMoveUpCallbackRe, (chain, index) => moveFallbackEntry(chain, index, -1), () => t('fallback.moved'));
     registerEdit(fallbackMoveDownCallbackRe, (chain, index) => moveFallbackEntry(chain, index, 1), () => t('fallback.moved'));
+    registerEdit(fallbackToggleCallbackRe, toggleFallbackEntryDisabled, (chain, index) => t(
+      checkIsFallbackEntryDisabled(chain[index]) ? 'limits.entryEnabled' : 'limits.entryDisabled',
+      { label: formatEntry(chain[index]) },
+    ));
     registerEdit(fallbackRemoveCallbackRe, removeFallbackEntry, (chain, index) => t('fallback.removed', { label: formatEntry(chain[index]) }));
 
     bot.action(fallbackAddCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
@@ -400,7 +520,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       }
       await ctx.answerCbQuery();
       if (messageId !== null) {
-        await editThreadMessage(key, messageId, t('fallback.proposeConfirm'), Markup.inlineKeyboard([
+        await editThreadMessage(key, messageId, t('limits.rebuildConfirm'), Markup.inlineKeyboard([
           [Markup.button.callback(t('fallback.proposeConfirmButton'), fallbackProposeConfirmCallback)],
           buildBackRow(),
         ]));
@@ -424,9 +544,14 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
-    for (const [callback, enabled] of [[fallbackAutoSwitchOnCallback, true], [fallbackAutoSwitchOffCallback, false]] as const) {
+    const settingTaps: ReadonlyArray<[string, (key: SessionKey, isGeneral: boolean, enabled: boolean | null) => Promise<string>, boolean | null]> = [
+      [fallbackAutoSwitchOnCallback, applyAutoSwitch, true], [fallbackAutoSwitchOffCallback, applyAutoSwitch, false], [fallbackAutoSwitchSameCallback, applyAutoSwitch, null],
+      [fallbackWaitOnCallback, applyWait, true], [fallbackWaitOffCallback, applyWait, false], [fallbackWaitSameCallback, applyWait, null],
+    ];
+    for (const [callback, apply, enabled] of settingTaps) {
       bot.action(callback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-        await answerTap(ctx, key, await applyAutoSwitch(key, isGeneral, enabled));
+        if (enabled === null && isGeneral) { await ctx.answerCbQuery(); return; }
+        await answerTap(ctx, key, await apply(key, isGeneral, enabled));
         await rerenderPicker(key, messageId, isGeneral);
       }));
     }
@@ -443,5 +568,5 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
   }
 
-  return { registerFallbackChainCommands, registerFallbackChainCallbacks, formatFallbackEntry: formatEntry };
+  return { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, formatFallbackEntry: formatEntry };
 }

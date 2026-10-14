@@ -81,7 +81,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
-    '/auto_continue_limits — auto-resume after a usage limit (toggle)\n' +
+    '/limits — what happens when an agent hits a usage limit (backup chain, switch, wait)\n' +
     '/account — Claude account for this topic (picker; add / re-login / remove)\n' +
     '/clear — delete thread messages\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
@@ -364,23 +364,15 @@ export const enDict: Record<string, string> = {
 
   'autoContinueLimits.on': 'ON',
   'autoContinueLimits.off': 'OFF',
-  'autoContinueLimits.title':
-    '🚧 Auto-resume after a usage limit for this topic: {state}\n\nWhen the agent hits a usage / session limit, the bot waits for the window to reset and then tells the agent to continue by itself (the resume message is pinned, so a muted topic still notifies you).\n\nTo switch it for ALL topics at once, run this in the General topic.',
-  'autoContinueLimits.titleGeneral':
-    '🚧 Auto-resume after a usage limit — default for ALL topics: {state}\n\nWhen an agent hits a usage / session limit, the bot waits for the window to reset and then tells the agent to continue by itself.\n\nEach topic can still override this with its own /auto_continue_limits.',
-  'autoContinueLimits.enableButton': 'Enable',
-  'autoContinueLimits.disableButton': 'Disable',
   'autoContinueLimits.skipButton': '⏭ Skip once',
   'autoContinueLimits.skipDone': 'This resume was skipped.',
   'autoContinueLimits.skipExpired': 'Nothing to skip — this wait is already over.',
   'autoContinueLimits.skippedNotice':
     '⏭ Skipped: I will not resume this one by myself. Write to me when to continue — auto-resume stays on for this topic.',
-  'autoContinueLimits.noticeHint':
-    'Run /auto_continue_limits to skip this one resume or to turn auto-resume off for this topic.',
+  'autoContinueLimits.noticeHint': 'Run /limits to skip this one resume or to turn waiting off for this topic.',
   'autoContinueLimits.setThisTopic': '✅ Auto-resume after a usage limit: {state} for this topic.',
   'autoContinueLimits.setGlobal': '✅ Auto-resume after a usage limit: {state} for ALL topics (per-topic overrides still apply).',
-  'autoContinueLimits.limitReachedDisabled':
-    '🚧 Usage limit reached. Auto-resume is off for this topic, so I will wait — write to me when to continue (/auto_continue_limits on to resume automatically).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Usage limit reached. Waiting for the reset is off for this topic, so I will wait — write to me when to continue (/limits to turn waiting on).',
 
   'connect.prompt_key': '🔑 Send the API key for `{provider}` as the next message. I will delete the key message from history.',
   'connect.empty_key': '❌ API key is empty. Send the key as the next message.',
@@ -739,8 +731,7 @@ export const enDict: Record<string, string> = {
   'account.row.usageStale': ' (stale)',
   'account.row.limited': '    ⛔ at its limit until {until}',
   'account.usageHint': 'Usage: % of each window used → when it resets ({timezone}). Fable has a weekly window of its own; «—» = no such window on that plan.',
-  'account.autoSwitchButton': '🔁 Auto-switch on limit: {state}',
-  'account.autoSwitchHint': 'Auto-switch on limit: when this topic\'s account hits a usage limit, the bot moves the topic to another signed-in account with room and continues at once (OFF: the limit notice offers the switch as a button). /account autoswitch on|off.',
+  'account.autoSwitchHint': 'What happens on a usage limit — switch to a backup account, or wait for the reset — is set in /limits.',
   'account.autoSwitchSetThisTopic': '✅ Auto-switch to another account on a usage limit: {state} for this topic.',
   'account.autoSwitchSetGlobal': '✅ Auto-switch to another account on a usage limit: {state} for ALL topics (per-topic overrides still apply).',
   'fallback.backendClaude': 'Claude',
@@ -751,18 +742,11 @@ export const enDict: Record<string, string> = {
   'fallback.row.signedOut': ' — not signed in',
   'fallback.row.missing': ' — not available',
   'fallback.row.current': ' ✓',
-  'fallback.empty': '🪜 Fallback chain — where a topic continues when its agent hits a usage limit. It is empty: tap «✨ Propose» to draft one from what is signed in, or «➕ Add» an entry by hand.',
-  'fallback.title': '🪜 Fallback chain — when a topic\'s agent hits a usage limit, the bot continues the work on the first available entry below (top = preferred):\n\n{list}',
-  'fallback.generalHint': '⬆️ ⬇️ reorder, 🗑 remove, ➕ add a Claude account or an OpenCode provider with a model. The entry that hit the limit is skipped until its window resets; the topic is not moved back by itself. An entry that is not signed in or no longer offered is skipped too.',
-  'fallback.topicNote': 'This topic runs on: {current}. The chain is edited in the General topic.',
   'fallback.noAgent': 'no agent',
   'fallback.addButton': '➕ Add',
-  'fallback.proposeButton': '✨ Propose',
   'fallback.clearButton': '🗑 Clear',
   'fallback.backButton': '⬅️ Back',
-  'fallback.autoSwitchButton': '🔁 Auto-switch on limit: {state}',
-  'fallback.autoSwitchHint': 'Auto-switch on limit: when the topic\'s account or provider hits a usage limit, the bot moves the topic to the next available entry and continues at once (OFF: the limit notice offers the switch as buttons). /fallback autoswitch on|off — the same setting as in /account.',
-  'fallback.nothingDetected': 'Nothing to add: no signed-in Claude account and no OpenCode provider was detected. Sign in with /account or /connect first.',
+  'fallback.nothingDetected': 'Nothing to add: no signed-in Claude account and no OpenCode provider was detected. Sign in with /accounts first.',
   'fallback.pickAccount': '➕ Add an entry — pick the account or provider:',
   'fallback.pickModel': '➕ {account} — pick the model:',
   'fallback.full': 'The chain holds at most {max} entries.',
@@ -772,11 +756,9 @@ export const enDict: Record<string, string> = {
   'fallback.proposed': '✨ Proposed a chain from what is signed in: {count} entries. Reorder or remove them with the buttons.',
   'fallback.cleared': '🗑 The fallback chain is empty now.',
   'fallback.generalOnly': 'The fallback chain is edited in the General topic; here it is read-only.',
-  'fallback.usage': 'Usage: /fallback — the chain; /fallback propose; /fallback clear; /fallback autoswitch on|off.',
   'fallback.stale': 'The chain changed since this keyboard was posted — it is re-rendered.',
   'fallback.moved': 'Moved.',
   'fallback.removed': '🗑 Removed: {label}',
-  'fallback.proposeConfirm': '✨ Replace the current chain with a fresh proposal from what is signed in?',
   'fallback.proposeConfirmButton': '✨ Yes, replace',
   'fallback.switchExpired': 'This limit is over — nothing to switch.',
   'fallback.switchButton': '🔁 Switch to {label}',
@@ -786,4 +768,26 @@ export const enDict: Record<string, string> = {
   'fallback.switchedReset': ' {from} resets at {time}; the topic stays on {to} until you switch it back (/account, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Usage limit on {from} — the agent is still working, so this topic switches to {to} when its turn ends; the wait stays armed until then.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',
+  'limits.topicRuns': 'This topic runs on: {current}.',
+  'limits.chainEmpty': '🪜 Backup chain: empty. Tap «✨ Rebuild» to draft it from what is signed in, or «➕ Add» an entry by hand.',
+  'limits.chainTitle': '🪜 Backup chain — when an agent hits a usage limit, work moves to the first ✅ entry with room (top = preferred):\n\n{list}',
+  'limits.chainHintGeneral': '⬆️ ⬇️ reorder, ✅/🚫 include or leave out of automatic switching (a 🚫 entry stays usable by hand via /model and /accounts), 🗑 remove, ➕ add a Claude account or an OpenCode provider with a model. The entry that hit the limit is skipped until it resets; the topic is not moved back by itself.',
+  'limits.settingsGeneral': 'Defaults for all topics (each topic can override them in its own /limits):',
+  'limits.settings': '🔁 Switch to a backup by itself: {switch}\n⏳ Wait for the reset and continue: {wait}',
+  'limits.sourceGeneral': ' (as in General)',
+  'limits.sourceTopic': ' (set for this topic)',
+  'limits.howItWorks': 'How they combine: with switching ON the topic moves to the first available backup at once. With it OFF the limit notice carries switch buttons, and if you press none the bot waits for the reset and continues by itself when waiting is ON. With both OFF it only reports the limit.',
+  'limits.switchButton': '🔁 Switch to a backup by itself: {state}',
+  'limits.waitButton': '⏳ Wait for the reset and continue: {state}',
+  'limits.optSame': 'As General: {state}',
+  'limits.rebuildButton': '✨ Rebuild',
+  'limits.rebuildConfirm': '✨ Replace the chain with a fresh draft from what is signed in? Entries you left out of switching (🚫) stay left out.',
+  'limits.entryEnabled': '✅ Included in automatic switching: {label}',
+  'limits.entryDisabled': '🚫 Left out of automatic switching: {label}',
+  'limits.setThisTopic': '✅ {what}: {state} for this topic.',
+  'limits.setGlobal': '✅ {what}: {state} for ALL topics (per-topic overrides still apply).',
+  'limits.setSame': '✅ {what}: this topic follows General ({state}).',
+  'limits.whatSwitch': 'Switch to a backup by itself',
+  'limits.whatWait': 'Wait for the reset and continue',
+  'limits.usage': 'Usage: /limits — the screen; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = follow General, in a topic).',
 };

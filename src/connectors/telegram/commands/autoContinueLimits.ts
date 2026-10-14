@@ -1,8 +1,10 @@
 /**
- * `/auto_continue_limits` — whether the bot resumes an agent by itself when a usage-limit window resets, per topic
- * or (in General) for the instance — with its buttons. See README.md in this folder.
+ * The «wait for the reset and continue» setting — whether the bot resumes an agent by itself when a usage-limit
+ * window resets, per topic or (in General) for the instance. Its screen is `/limits` (`fallbackChain.ts`);
+ * `/auto_continue_limits` stays as a hidden alias (`on|off` apply, bare opens `/limits`) and the old
+ * `acl_on` / `acl_off` buttons keep working. See README.md in this folder.
  */
-import { Markup, type Context } from 'telegraf';
+import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/typings/core/types/typegram';
 import type { SessionKey } from '../../../sessionKey';
 import { getTelegramChatId } from '../sessionKeyCodec';
@@ -10,7 +12,6 @@ import { enqueueSend } from '../../../rateLimiter';
 import { t } from '../../../i18n';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { RequestWakeUpEngine } from '../../../requests/wakeUpEngine';
-import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import type { BotCore } from './botCore';
 
 /**
@@ -25,25 +26,6 @@ export function appendAutoContinueLimitsHint(noticeText: string): string {
 }
 
 /**
- * @description Build the `/auto_continue_limits` picker keyboard: Enable / Disable
- * with `✓` on the current value, plus a «skip once» row ONLY while a limit resume
- * is actually armed for the topic. A skip row with nothing to skip would be a dead
- * end (same reasoning as the `/model` re-render never offering an empty list).
- */
-function buildAutoContinueLimitsKeyboard(isEnabled: boolean, armedFireAt: number | null) {
-  const rows = [[
-    Markup.button.callback(t('autoContinueLimits.enableButton') + (isEnabled ? ' ✓' : ''), 'acl_on'),
-    Markup.button.callback(t('autoContinueLimits.disableButton') + (!isEnabled ? ' ✓' : ''), 'acl_off'),
-  ]];
-  if (armedFireAt !== null) {
-    rows.push([
-      Markup.button.callback(t('autoContinueLimits.skipButton'), buildSkipArmedRetryCallbackData(armedFireAt)),
-    ]);
-  }
-  return Markup.inlineKeyboard(rows);
-}
-
-/**
  * What the auto-resume switch needs from the bot: the shared core, the armed usage-limit retry it reads and
  * cancels, and the request wake-up engine, which exists only after the boot built it.
  */
@@ -52,6 +34,8 @@ export interface AutoContinueLimitsPorts
     BotCore,
     'bot' | 'command' | 'getState' | 'replyToThread' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
+  /** Open the `/limits` screen in the topic (the bare alias lands there). */
+  openLimitsView: (key: SessionKey) => Promise<void>;
   getArmedLimitRetryFireAt: (key: SessionKey) => number | null;
   cancelApiRetry: (key: SessionKey) => void;
   getRequestWakeUpEngine: () => Pick<RequestWakeUpEngine, 'stopWakingForLimitWait'> | null;
@@ -62,7 +46,7 @@ export interface AutoContinueLimitsPorts
  * notice's own buttons call, and the `register…()` calls.
  */
 export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
-  const { getArmedLimitRetryFireAt, cancelApiRetry, getRequestWakeUpEngine, bot, command, getState, replyToThread, authoriseContext, withThreadLocale, checkIsGeneral } = ports;
+  const { openLimitsView, getArmedLimitRetryFireAt, cancelApiRetry, getRequestWakeUpEngine, bot, command, getState, replyToThread, authoriseContext, withThreadLocale, checkIsGeneral } = ports;
 
   /**
    * @description Apply the `/auto_continue_limits` setting and RETURN the
@@ -76,14 +60,17 @@ export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
    * `/compact_on_idle` there is no timer to re-arm — the toggle is read at the
    * moment a limit error arrives.
    */
-  async function applyAutoContinueLimits(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
-    const stateWord = enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
+  async function applyAutoContinueLimits(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {
     if (isGeneral) {
-      await getState().setAutoContinueOnLimitGlobalDefault(enabled);
-      return t('autoContinueLimits.setGlobal', { state: stateWord });
+      const value = enabled ?? true;
+      await getState().setAutoContinueOnLimitGlobalDefault(value);
+      return t('autoContinueLimits.setGlobal', { state: value ? t('autoContinueLimits.on') : t('autoContinueLimits.off') });
     }
     await getState().setAutoContinueOnLimitOverride(key, enabled);
-    if (!enabled) {
+    // `null` drops the override: what the topic follows now is the instance default.
+    const effective = getState().checkIsAutoContinueOnLimitEnabled(key);
+    const stateWord = effective ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
+    if (!effective) {
       const isLimitWaitArmed = getArmedLimitRetryFireAt(key) !== null;
       cancelApiRetry(key);
       // Nothing resumes this wait any more: its request must not be woken into the same limit.
@@ -120,29 +107,17 @@ export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
   }
 
   function registerAutoContinueLimitsCommands(): void {
-    // `/auto_continue_limits` — toggle waiting out a usage/session limit and resuming by
-    // itself. Regular topic → per-thread override; General → the instance-wide
-    // default. Bare → an Enable/Disable picker (✓ on current) plus a «skip once» row
-    // while a resume is armed. Deliberately NOT gated on an adapter/session (unlike
-    // `/compact_on_idle`): a limit can hit any topic at any time, and the operator must
-    // be able to set the preference before that.
+    // `/auto_continue_limits` — hidden alias of `/limits`. `on` / `off` set the setting (regular topic →
+    // per-thread override; General → the instance-wide default); bare opens the `/limits` screen. Deliberately
+    // NOT gated on an adapter/session: a limit can hit any topic at any time, and the operator must be able to
+    // set the preference before that.
     command('auto_continue_limits', async (ctx, key) => {
       const arg = ctx.message.text.split(/\s+/).slice(1).join(' ').trim().toLowerCase();
-      const isGeneral = checkIsGeneral(key);
-
       if (arg === 'on' || arg === 'off') {
-        await replyToThread(key, await applyAutoContinueLimits(key, isGeneral, arg === 'on'));
+        await replyToThread(key, await applyAutoContinueLimits(key, checkIsGeneral(key), arg === 'on'));
         return;
       }
-
-      const isEnabled = isGeneral
-        ? getState().getAutoContinueOnLimitGlobalDefault()
-        : getState().checkIsAutoContinueOnLimitEnabled(key);
-      const stateWord = isEnabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
-      const title = isGeneral
-        ? t('autoContinueLimits.titleGeneral', { state: stateWord })
-        : t('autoContinueLimits.title', { state: stateWord });
-      await replyToThread(key, title, buildAutoContinueLimitsKeyboard(isEnabled, getArmedLimitRetryFireAt(key)));
+      await openLimitsView(key);
     });
   }
 
@@ -153,6 +128,7 @@ export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
   }
 
   return {
+    applyAutoContinueLimits,
     consumeAutoContinueLimitsPicker,
     registerAutoContinueLimitsCommands,
     registerAutoContinueLimitsCallbacks,

@@ -134,6 +134,14 @@ export class CommandHarness {
     return markup.inline_keyboard.map((row) => row.map((button) => button.callback_data));
   }
 
+  /** @description The button captions of the inline keyboard a send or edit carried, row by row. */
+  getKeyboardLabels(sent: RecordedSend | undefined): string[][] {
+    const extra = sent?.extra;
+    if (!extra || !('reply_markup' in extra)) return [];
+    const markup = extra.reply_markup as { inline_keyboard: Array<Array<{ text: string }>> };
+    return markup.inline_keyboard.map((row) => row.map((button) => button.text));
+  }
+
   async stop(): Promise<void> {
     await this.fakeTelegram.stop();
   }

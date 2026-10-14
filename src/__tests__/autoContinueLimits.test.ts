@@ -3,8 +3,8 @@
  * (`commandModuleHarness.ts`: a real telegraf instance against the fake Bot API, the real state store,
  * recording topic sends) and recording stand-ins for the armed usage-limit wait. Pinned:
  *
- *   • WIRING — the command and the two buttons it registers, in order;
- *   • the picker: Enable / Disable, a «skip once» row only while a resume is armed;
+ *   • WIRING — the hidden alias command and the two old buttons it registers, in order;
+ *   • the bare alias opens the `/limits` screen (its port), it no longer owns a picker;
  *   • the switch for a regular topic (its own override) and for General (the instance-wide default);
  *   • turning it off drops the topic's armed resume — and stops waking its request only when one WAS armed;
  *   • a tap consumes the picker: it becomes a keyboard-less confirmation.
@@ -16,7 +16,6 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAutoContinueLimits } from '../connectors/telegram/commands/autoContinueLimits';
 import type { SessionKey } from '../sessionKey';
-import { buildSkipArmedRetryCallbackData } from '../utils/autoContinueOnLimit';
 import { createCommandHarness, harnessThreadId, type CommandHarness } from './commandModuleHarness';
 
 const armedFireAt = 1_800_000_000_000;
@@ -29,6 +28,7 @@ let isGeneralTopic = false;
 let armedFireAtForTopic: number | null = null;
 const cancelledRetryKeys: SessionKey[] = [];
 const stoppedLimitWaitKeys: SessionKey[] = [];
+const openedLimitsViews: SessionKey[] = [];
 
 async function waitUntil(description: string, check: () => boolean): Promise<void> {
   const deadline = Date.now() + waitTimeoutMs;
@@ -44,6 +44,7 @@ describe('autoContinueLimits: the auto-resume switch over its ports', () => {
     autoContinueLimits = createAutoContinueLimits({
       ...harness.core,
       checkIsGeneral: () => isGeneralTopic,
+      openLimitsView: async (key) => { openedLimitsViews.push(key); },
       getArmedLimitRetryFireAt: () => armedFireAtForTopic,
       cancelApiRetry: (key) => {
         cancelledRetryKeys.push(key);
@@ -68,20 +69,15 @@ describe('autoContinueLimits: the auto-resume switch over its ports', () => {
     assert.deepEqual(harness.registeredActionPatterns, ['acl_on', 'acl_off']);
   });
 
-  it('the bare command offers Enable / Disable with ✓ on the current value, and no «skip once» without an armed resume', async () => {
+  it('the bare alias opens the /limits screen instead of its own picker', async () => {
+    const repliesBefore = harness.replies.length;
     await harness.runCommand('auto_continue_limits');
-    const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /: ON/);
-    assert.deepEqual(harness.getKeyboardData(picker), [['acl_on', 'acl_off']]);
-  });
-
-  it('while a resume is armed the picker adds its «skip once» row', async () => {
-    armedFireAtForTopic = armedFireAt;
-    await harness.runCommand('auto_continue_limits');
-    assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [['acl_on', 'acl_off'], [buildSkipArmedRetryCallbackData(armedFireAt)]]);
+    assert.deepEqual(openedLimitsViews, [harness.key]);
+    assert.equal(harness.replies.length, repliesBefore, 'the alias posts nothing itself');
   });
 
   it('«off» in a regular topic sets that topic\'s override, drops its armed resume and stops waking its request', async () => {
+    armedFireAtForTopic = armedFireAt;
     await harness.runCommand('auto_continue_limits', 'off');
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), false);
     assert.deepEqual(cancelledRetryKeys, [harness.key]);
@@ -116,6 +112,19 @@ describe('autoContinueLimits: the auto-resume switch over its ports', () => {
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), true);
     await waitUntil('the picker to become its confirmation', () => (harness.fakeTelegram.getMessage(picker)?.text ?? '').includes('ON'));
     assert.match(harness.fakeTelegram.getMessage(picker)?.text ?? '', /Auto-resume after a usage limit: ON for this topic/);
+  });
+
+  it('a topic can drop its override (null) and follow the instance default again; an OFF default then cancels the armed wait', async () => {
+    isGeneralTopic = false;
+    await harness.state.setAutoContinueOnLimitGlobalDefault(false);
+    await autoContinueLimits.applyAutoContinueLimits(harness.key, false, true);
+    assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), true);
+    armedFireAtForTopic = armedFireAt;
+    cancelledRetryKeys.length = 0;
+    await autoContinueLimits.applyAutoContinueLimits(harness.key, false, null);
+    assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), undefined);
+    assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), false);
+    assert.deepEqual(cancelledRetryKeys, [harness.key]);
   });
 
   it('consuming a picker with no message to rewrite is a no-op', async () => {

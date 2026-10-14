@@ -34,7 +34,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Time-aware prompts** — `/timestamps on` prepends each forwarded prompt's send time (local-offset ISO), so a days-long session knows what "yesterday" or "2 days ago" means; agent-facing only, per topic
 - **Reply context** — reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text, voice and files (a photo, a document, an album…), both agents; a reply TO a photo, file or voice note names it, with the path of the bot's saved copy when it has one
 - **Your timezone** — `/timezone Europe/Moscow` once, and schedules fire at your wall-clock time while the agent is told what time it actually is; no server-clock guessing
-- **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/auto_continue_limits` turns it off per topic or skips a single resume. With a **fallback chain** (`/fallback`: other Claude accounts, OpenCode providers and models, in your order of preference) the limit notice offers «🔁 Switch to …» buttons to move the topic to the next entry with room and continue at once — or the bot does it by itself when you turn auto-switch on; across backends the new agent gets a context bridge with the previous one's last turns
+- **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/limits` turns waiting off per topic or skips a single resume. With a **fallback chain** (`/limits`: other Claude accounts, OpenCode providers and models, in your order of preference) the limit notice offers «🔁 Switch to …» buttons to move the topic to the next entry with room and continue at once — or the bot does it by itself when you turn switching on; across backends the new agent gets a context bridge with the previous one's last turns
 
 ## Two surfaces: group topics, bot DM, or both
 
@@ -366,9 +366,8 @@ actually start an agent or terminal in the folder.
 | `/compact` | Compact the agent's context — a real, confirmed compaction on OpenCode and on the default (stream) Claude backend; the tmux Claude backend has the literal command forwarded (its TUI compacts); terminal: not supported |
 | `/compact_on_idle` | Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so) |
 | `/compact_summary` | Toggle posting the agent's full summary after a compaction — `/compact`, the idle compaction and the agent's own `compact_conversation` (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. Off by default: a compaction ends in a short line. On OpenCode it also hides the summary OpenCode streams itself |
-| `/auto_continue_limits` | Toggle waiting out a usage / session limit and resuming this topic by itself (Enable/Disable picker). Per topic; run it in **General** to set the default for all topics. On by default. While a resume is waiting the picker also offers «⏭ Skip once» — drop that one resume without turning the mode off |
-| `/account` | Which Claude account this topic's Claude sessions run on, when you keep several subscriptions signed in (`/accounts` is an alias). Bare: the picker — every profile with its email, plan (personal Pro/Max or corporate Team/Enterprise) and how many topics use it, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working). In **General** the pick becomes the default for all topics. «➕ Add» asks for a name and runs the sign-in for the new account; «🔑 Re-login» and «🗑 Remove» pick a profile. The «🔁 Auto-switch on limit» button (or `/account autoswitch on\|off`, OFF by default) lets the bot move a topic to another signed-in account with room when its own hits a usage limit. Text forms: `/account add <name>`, `/account use <name>`, `/account login <name>`, `/account remove <name>`. See [Several Claude accounts](#several-claude-accounts-account) |
-| `/fallback` | The instance-wide **fallback chain**: where a topic continues when its agent hits a usage limit — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred. Bare: the chain with each entry's availability (limited until, not signed in, no longer offered) and, in **General**, the edit buttons — ⬆️ ⬇️ reorder, 🗑 remove, «➕ Add» (account or provider, then the model), «✨ Propose» (a draft from what is signed in), «🗑 Clear» — plus the «🔁 Auto-switch on limit» toggle (the same setting `/account` shows). In a regular topic the chain is read-only and the toggle sets that topic's override. Text forms: `/fallback propose`, `/fallback clear`, `/fallback autoswitch on\|off`. See [Fallback chain](#fallback-chain-fallback) |
+| `/account` | Which Claude account this topic's Claude sessions run on, when you keep several subscriptions signed in (`/accounts` is an alias). Bare: the picker — every profile with its email, plan (personal Pro/Max or corporate Team/Enterprise) and how many topics use it, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working). In **General** the pick becomes the default for all topics. «➕ Add» asks for a name and runs the sign-in for the new account; «🔑 Re-login» and «🗑 Remove» pick a profile. What happens when the account hits a usage limit (switch to a backup, wait for the reset) is set in `/limits`; `/account autoswitch on\|off` still works. Text forms: `/account add <name>`, `/account use <name>`, `/account login <name>`, `/account remove <name>`. See [Several Claude accounts](#several-claude-accounts-account) |
+| `/limits` | Everything about a usage limit on one screen. **The backup chain** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit: each entry shows its availability (limited until, not signed in, no longer offered) and ✅ / 🚫 (left out of automatic switching — it stays usable by hand through `/model` and `/accounts`). In **General** the chain is editable: ⬆️ ⬇️ reorder, ✅/🚫 include or leave out, 🗑 remove, «➕ Add» (account or provider, then the model), «✨ Rebuild» (a draft from what is signed in; entries you left out stay left out), «🗑 Clear». **Two settings** decide what a limit does: «🔁 Switch to a backup by itself» (OFF by default: the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for the reset and continue» (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics; in a regular topic each has three states — on / off / as General — and the screen shows the effective value. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. Text forms: `/limits rebuild`, `/limits clear`, `/limits switch on\|off\|same`, `/limits wait on\|off\|same`. `/fallback` and `/auto_continue_limits [on\|off]` still work as hidden aliases. See [Usage limits and the fallback chain](#usage-limits-and-the-fallback-chain-limits) |
 | `/bind` | Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons |
 | `/mcp` | List MCP servers active for this thread |
 
@@ -495,15 +494,15 @@ so one account's usage limit does not stop every topic.
   `(stale)`; a profile whose session was refused on a window is marked
   `⛔ at its limit until …` and is skipped by the recommendation below.
 - **Another account takes over on a limit.** When a topic's account hits a
-  usage limit the bot looks at the [fallback chain](#fallback-chain-fallback);
+  usage limit the bot looks at the [fallback chain](#usage-limits-and-the-fallback-chain-limits);
   without one it ranks the other signed-in profiles by headroom on the windows
   the topic's model drains (fresh figures, not marked limited). The limit
   notice carries «🔁 Switch to <entry>» buttons, best first: a tap moves the
   topic there (the running session is restarted under the new account with the
   same conversation), drops the wait for the reset and tells the agent to
-  continue right away. With **auto-switch** on («🔁 Auto-switch on limit» in
-  `/account` or `/fallback`, or `/account autoswitch on`; in General the default
-  for all topics) the bot does the same by itself and posts one line — «Usage
+  continue right away. With **switching** on («🔁 Switch to a backup by
+  itself» in `/limits`, or `/limits switch on`; in General the default for all
+  topics) the bot does the same by itself and posts one line — «Usage
   limit on a — this topic switched to b and continues», naming when the
   exhausted account resets. It is OFF by default: moving work between
   subscriptions is your call. The exhausted profile is marked limited until its
@@ -524,22 +523,30 @@ so one account's usage limit does not stop every topic.
   `CLAUDE_CONFIG_DIR="$(telegramcode claude-profiles --best --model fable)"`
   works as is; it reads the bot's cache off `DATA_DIR/state.json`.
 
-### Fallback chain (`/fallback`)
+### Usage limits and the fallback chain (`/limits`)
 
 When a topic's agent stops on a usage limit — a Claude account window, an
 OpenAI quota through OpenCode, a Google `RESOURCE_EXHAUSTED` — the bot can keep
-the work going somewhere else instead of waiting. `/fallback` holds ONE
+the work going somewhere else instead of waiting. `/limits` holds ONE
 instance-wide, ordered list of where to go, top = preferred:
 
+- **Left out of switching.** ✅ / 🚫 on a row includes or excludes that entry from
+  automatic switching and from the notice's switch buttons. A connected
+  provider (say OpenAI on OpenCode) can stay usable by hand through `/model`
+  while the bot never moves a limited topic onto it. With an EMPTY chain the
+  bot still ranks the other signed-in Claude accounts by headroom; once the
+  chain has entries, only its ✅ entries count — all of them left out means
+  no switch, the wait stands.
 - **Entries.** A Claude account profile (`/account`) with an optional model
   (`fable`, `opus`, `sonnet`, `haiku`; «keep the topic's model» otherwise), or
   an OpenCode provider with a model (`openai/gpt-5`, `google/gemini-2.5-pro`,
   …). Only what is actually connected is offered: the signed-in profiles, and
   the providers the OpenCode server is authenticated for (its live catalog).
-- **Drafting.** «✨ Propose» (or `/fallback propose`) writes a draft from what
+- **Drafting.** «✨ Rebuild» (or `/limits rebuild`) writes a draft from what
   is signed in: the Claude accounts in their `/account` order (keeping the
   topic's model), then the OpenCode models topics picked recently, then every
-  other provider's strongest model. Reorder with ⬆️ ⬇️, drop with 🗑, add with
+  other provider's strongest model; an account or provider you had left out of
+  switching (🚫) stays left out. Reorder with ⬆️ ⬇️, drop with 🗑, add with
   «➕ Add» (pick the account or provider, then the model). Editing happens in
   the **General** topic; a regular topic sees the chain read-only, with ✓ on
   the entry it runs on now.
@@ -548,9 +555,10 @@ instance-wide, ordered list of where to go, top = preferred:
   an hour), skips entries that are limited, not signed in or no longer offered,
   and takes the first remaining one. A topic whose account or model was picked
   by hand (`/account`, `/model`) is left alone until it hits its own limit —
-  then the chain decides, from the top. The same auto-switch toggle as in
-  `/account` applies: OFF (the default) puts «🔁 Switch to …» buttons on the
-  limit notice, ON switches by itself. No entry available → the usual wait.
+  then the chain decides, from the top. The «🔁 Switch to a backup by itself»
+  setting applies: OFF (the default) puts «🔁 Switch to …» buttons on the
+  limit notice, ON switches by itself. No entry available → the usual wait
+  (when «⏳ Wait for the reset and continue» is ON).
 - **Within a backend** the conversation is kept: Claude account → account keeps
   the transcript (`--resume` under the other account), OpenCode provider →
   provider keeps the session and changes the model. **Across backends**

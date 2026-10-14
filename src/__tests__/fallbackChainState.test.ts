@@ -47,6 +47,38 @@ describe('StateStore: fallback chain, OpenCode limit marks, parked sessions', ()
     assert.equal('fallbackChain' in raw, false, 'an empty chain leaves no field behind');
   });
 
+  it('round-trips the disabled flag through state.json; an enabled rung stays field-less (older files read back as enabled)', async () => {
+    await store.setFallbackChain([
+      { backend: 'claude', profile: 'work', model: null, disabled: true },
+      { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' },
+    ]);
+    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as { fallbackChain: Array<Record<string, unknown>> };
+    assert.equal(raw.fallbackChain[0].disabled, true);
+    assert.equal('disabled' in raw.fallbackChain[1], false);
+    const reloaded = new StateStore(dataDir);
+    await reloaded.init();
+    assert.deepEqual(reloaded.getFallbackChain(), [
+      { backend: 'claude', profile: 'work', model: null, disabled: true },
+      { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' },
+    ]);
+    await store.setFallbackChain([]);
+  });
+
+  it('a per-topic limit override can be set, read and dropped again (null = follow the instance default); an emptied map leaves no field', async () => {
+    await store.setClaudeAutoSwitchOnLimitOverride(topic, true);
+    await store.setAutoContinueOnLimitOverride(topic, false);
+    assert.equal(store.getClaudeAutoSwitchOnLimitOverride(topic), true);
+    assert.equal(store.getAutoContinueOnLimitOverride(topic), false);
+    await store.setClaudeAutoSwitchOnLimitOverride(topic, null);
+    await store.setAutoContinueOnLimitOverride(topic, null);
+    assert.equal(store.getClaudeAutoSwitchOnLimitOverride(topic), undefined);
+    assert.equal(store.getAutoContinueOnLimitOverride(topic), undefined);
+    await store.flush();
+    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
+    assert.equal('claudeAutoSwitchOnLimitOverrides' in raw, false);
+    assert.equal('autoContinueOnLimitOverrides' in raw, false);
+  });
+
   it('keeps one limit mark per OpenCode model label and drops it on clear', async () => {
     assert.equal(store.getOpenCodeModelLimitedUntil('openai/gpt-5'), undefined);
     store.setOpenCodeModelLimitedUntil('openai/gpt-5', '2026-10-12T12:00:00.000Z');

@@ -68,12 +68,14 @@ its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted li
 
 ## `autoContinueLimits.ts`
 
-`/auto_continue_limits` and its buttons `acl_on` / `acl_off`: whether the bot waits out a usage-limit window and
-resumes the agent by itself. A regular topic sets its own override, General the instance-wide default. The
-command is deliberately not gated on a session — a limit can hit any topic and the preference must be settable
-before it does. Turning it off drops the topic's armed resume and stops waking its request, but only when a wait
-WAS armed. The picker shows a «skip once» row only while a resume is armed; a tap consumes the picker into a
-keyboard-less confirmation. The usage-limit notice appends the shared pointer through
+The «wait for the reset and continue» setting (the `/auto_continue_limits` alias and the old buttons `acl_on` /
+`acl_off`): whether the bot waits out a usage-limit window and resumes the agent by itself. Its screen is
+`/limits` (`fallbackChain.ts`); here live the write path (`applyAutoContinueLimits`, exported to that module
+through a port) and the alias: `on|off` apply, a bare `/auto_continue_limits` opens the `/limits` view
+(`openLimitsView` port). A regular topic sets its own override (`null` drops it, back to the instance
+default), General the instance-wide default. Turning the EFFECTIVE value off drops the topic's armed resume and
+stops waking its request, but only when a wait WAS armed. A tap on an old `acl_*` button consumes its picker into
+a keyboard-less confirmation. The usage-limit notice appends the shared pointer through
 `appendAutoContinueLimitsHint` and its own «skip once» button consumes the picker through the returned
 `consumeAutoContinueLimitsPicker`.
 
@@ -96,19 +98,22 @@ profile drops the topic picks that named it (the state returns them, so their se
 Under each row the picker prints the profile's usage windows (`utils/claudeUsage.ts`: session, weekly, Fable
 weekly — percent used → reset in the instance zone, `getInstanceTimezone`), read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
-goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The picker's
-last row is the auto-switch-on-limit toggle (`acct_autosw_on` / `acct_autosw_off`, `/account autoswitch on|off`;
-OFF by default; General sets the instance default, a topic its override). The setting is shared with
-`/fallback`, whose module owns the switch itself and the buttons a usage-limit notice carries.
+goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
+on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting, which
+`/limits` shows.
 
 ## `fallbackChain.ts`
 
-`/fallback` and the buttons `fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_rm_<i>_<rev>`, `fbk_add`,
-`fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
-`fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, `fbk_asw_on` / `fbk_asw_off`, plus `fbsw_<episode>_<i>` on a
+`/limits` (hidden alias `/fallback`; `/auto_continue_limits` opens the same screen) and the buttons
+`fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_tg_<i>_<rev>` (include / leave out of automatic switching), `fbk_rm_<i>_<rev>`,
+`fbk_add`, `fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
+`fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, the two settings `fbk_asw_on|off|same` (switch to a backup by
+itself) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port), plus `fbsw_<episode>_<i>` on a
 usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
 on when its agent hits a usage limit (`utils/fallbackChain.ts`). The chain is edited in General only (a topic
-sees it read-only with ✓ on its own position and the auto-switch toggle for its override); the picker is meant
+sees it read-only with ✓ on its own position and three-state rows — on / off / as General — for the two settings'
+overrides, plus «skip once» while a limit wait is armed); a rung with `disabled: true` is skipped by
+`pickFallbackCandidates` and kept disabled by a rebuild (`proposeFallbackChain(detection, previous)`); the screen is meant
 for repeated use and re-renders in place. Every edit button BAKES the chain's content revision (8 hex digits of
 an FNV-1a over the entries): a keyboard posted before a later edit is refused as stale and only re-rendered, so
 an old index can never act on another rung. The two-step «add» keeps a snapshot per picker MESSAGE

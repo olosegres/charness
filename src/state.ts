@@ -1872,15 +1872,27 @@ export class StateStore {
    * default); the map is created lazily on the first override, so an all-default
    * instance leaves a clean `state.json`. Debounced.
    */
-  async setAutoContinueOnLimitOverride(key: SessionKey, enabled: boolean): Promise<void> {
+  async setAutoContinueOnLimitOverride(key: SessionKey, enabled: boolean | null): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
+      if (enabled === null) {
+        this.dropLimitOverride(this.state.autoContinueOnLimitOverrides, k, () => { delete this.state.autoContinueOnLimitOverrides; });
+        return;
+      }
       if (this.state.autoContinueOnLimitOverrides?.[k] === enabled) {
         return;
       }
       (this.state.autoContinueOnLimitOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
+  }
+
+  /** Remove one thread's override from a toggle map (`null` enabled = back to the instance default); drops an emptied map. */
+  private dropLimitOverride(map: Record<string, boolean> | undefined, k: string, dropMap: () => void): void {
+    if (!map || !(k in map)) return;
+    delete map[k];
+    if (Object.keys(map).length === 0) dropMap();
+    this.scheduleSave();
   }
 
   // ── Claude account auto-switch on a usage limit (`/account`) ──
@@ -1910,10 +1922,14 @@ export class StateStore {
     this.scheduleSave();
   }
 
-  /** Set the per-thread auto-switch override (from a regular topic); the map is created on the first override. */
-  async setClaudeAutoSwitchOnLimitOverride(key: SessionKey, enabled: boolean): Promise<void> {
+  /** Set the per-thread auto-switch override (from a regular topic; `null` = follow the instance default again); the map is created on the first override. */
+  async setClaudeAutoSwitchOnLimitOverride(key: SessionKey, enabled: boolean | null): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
+      if (enabled === null) {
+        this.dropLimitOverride(this.state.claudeAutoSwitchOnLimitOverrides, k, () => { delete this.state.claudeAutoSwitchOnLimitOverrides; });
+        return;
+      }
       if (this.state.claudeAutoSwitchOnLimitOverrides?.[k] === enabled) return;
       (this.state.claudeAutoSwitchOnLimitOverrides ??= {})[k] = enabled;
       this.scheduleSave();

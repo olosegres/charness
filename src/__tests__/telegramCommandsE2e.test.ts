@@ -17,7 +17,7 @@
  *   → `/model` `/effort`: the pickers, a tap and a typed pick answered while no
  *     agent runs
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
- *   → `/auto_continue_limits` `/compact` `/compact_on_idle`: the picker and its tap,
+ *   → `/limits` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs
  *   → `/claude` starts the fake agent; `/login` drives the out-of-band sign-in
  *     (`claude auth login` in a pty): the URL out, the pasted code in and its
@@ -395,12 +395,18 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
 
   // ── compaction and the limit-resume switch ───────────────────────────
 
-  it('/auto_continue_limits shows the switch; a tap on «Disable» turns it off for the topic', async () => {
-    const picker = await topic.sendAndAwaitReply('/auto_continue_limits', 'Auto-resume after a usage limit for this topic: ON');
-    assert.deepEqual(topic.getKeyboardData(picker), [['acl_on', 'acl_off']]);
-    await topic.tapAndAwaitAnswer(picker, 'acl_off');
-    await topic.waitForMessageText('the switch turned off', picker, (text) => text.includes('OFF for this topic'));
-    await topic.sendAndAwaitReply('/auto_continue_limits', 'Auto-resume after a usage limit for this topic: OFF');
+  it('/limits shows the screen (the old /auto_continue_limits and /fallback open it too); a tap on «OFF» turns waiting off for the topic', async () => {
+    const screen = await topic.sendAndAwaitReply('/limits', 'Wait for the reset and continue: ON (as in General)');
+    assert.deepEqual(topic.getKeyboardData(screen).slice(-2), [
+      ['fbk_asw_on', 'fbk_asw_off', 'fbk_asw_same'],
+      ['fbk_wait_on', 'fbk_wait_off', 'fbk_wait_same'],
+    ]);
+    await topic.sendAndAwaitReply('/auto_continue_limits', 'Wait for the reset and continue: ON (as in General)');
+    await topic.sendAndAwaitReply('/fallback', 'Backup chain');
+    await topic.tapAndAwaitAnswer(screen, 'fbk_wait_off');
+    await topic.waitForMessageText('the screen re-rendered', screen, (text) => text.includes('Wait for the reset and continue: OFF (set for this topic)'));
+    await topic.sendAndAwaitReply('/auto_continue_limits off', 'Auto-resume after a usage limit: OFF for this topic');
+    await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
   });
 
   it('/compact and /compact_on_idle say an agent session is needed', async () => {

@@ -6618,11 +6618,13 @@ command('rename_session', async (_ctx, key, parsed) => {
 });
 
 const {
+  applyAutoContinueLimits,
   consumeAutoContinueLimitsPicker,
   registerAutoContinueLimitsCommands,
   registerAutoContinueLimitsCallbacks,
 } = createAutoContinueLimits({
   ...botCore,
+  openLimitsView: (key) => openLimitsView(key),
   getArmedLimitRetryFireAt,
   cancelApiRetry,
   getRequestWakeUpEngine: () => requestWakeUpEngine,
@@ -7055,8 +7057,10 @@ claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
 registerClaudeAccountCommands();
 
-const { registerFallbackChainCommands, registerFallbackChainCallbacks } = createFallbackChain({
+const { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView } = createFallbackChain({
   ...botCore,
+  applyAutoContinue: applyAutoContinueLimits,
+  getArmedLimitRetryFireAt,
   getInstanceTimezone: getCurrentTimezone,
   detectFallbackOptions,
   getTopicPosition: getTopicFallbackPosition,
@@ -7700,7 +7704,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback',
 ]);
 
@@ -10739,9 +10743,8 @@ export const COMMANDS_MENU = [
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
-  { command: 'auto_continue_limits', description: '🚧 Auto-resume after a usage limit (toggle)' },
   { command: 'account', description: '👤 Claude account for this topic (picker; add / re-login / remove)' },
-  { command: 'fallback', description: '🪜 Where a topic continues when its agent hits a usage limit' },
+  { command: 'limits', description: '🚧 What happens when an agent hits a usage limit' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
   { command: 'status', description: '📊 Show status' },

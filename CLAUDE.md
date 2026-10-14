@@ -92,7 +92,7 @@ per-backend controls are optional methods the bot checks before calling.
   preamble (only when it changed), the reply-quote block, the optional `/timestamps` line. Files sent to a
   topic land in `DATA_DIR/files/…` (never inside the project folder); albums are batched into one prompt.
 - **Auto-retry on provider errors** (`apiErrorRetry.ts`, `apiRetryKick.ts`): transient → backoff retry;
-  usage limit → wait for the reset and resume by itself (`/auto_continue_limits`); auth → never retried,
+  usage limit → wait for the reset and resume by itself (`/limits`, the wait setting); auth → never retried,
   surfaced as a pinned logged-out notice. A saved retry record means ARMED; the "continue" nudge goes through
   `deliverPromptOrBuffer`, never a wait-for-idle path; nothing is posted INTO an armed limit wait (scheduled
   runs are held and ride the resume). Detector guards: see `getClaudeAgentErrorLine` /
@@ -130,14 +130,14 @@ per-backend controls are optional methods the bot checks before calling.
   `/account` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
   `announceUsageLimitOrSwitchAccount`): the limited profile gets `limitedUntil`, the ranking names the other
-  signed-in profiles with fresh usage and room — the implicit chain when `/fallback` is empty.
-- **Fallback chain** (`/fallback`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
+  signed-in profiles with fresh usage and room — the implicit chain when the `/limits` chain is empty.
+- **Usage limits / fallback chain** (`/limits`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog
   + the recent `/model` picks) and edited in General with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
   (from `handleApiError` → `announceUsageLimitOrSwitch`) marks the limited rung (`limitedUntil` /
-  `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; auto-switch ON (the `/account`
-  toggle, OFF by default, same default + override pair as `/auto_continue_limits`) switches by itself, OFF puts
+  `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; a rung with `disabled: true` is never a candidate (a rebuild keeps it so); auto-switch ON (a `/limits`
+  setting, OFF by default; the wait setting beside it is the old `/auto_continue_limits` pair, a topic's three states are on / off / as General) switches by itself, OFF puts
   `fbsw_<episode>_<index>` buttons on the notice (indexes into that episode's remembered candidates); no
   candidate ⇒ the wait as before. `switchTopicToFallbackEntry`: within a backend the conversation is kept
   (profile apply re-spawn / OpenCode `setModel`), across backends it is the `switchThreadAdapter` path — the

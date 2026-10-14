@@ -10,7 +10,7 @@
  *   • `use <name>` in a topic sets the pick and moves the live session (the apply port's outcome is reported);
  *     in General it sets the instance default and moves every session; a logged-out profile is refused;
  *   • `remove`: default refused, the instance default refused, otherwise the picks that named it are dropped;
- *   • the auto-switch-on-limit toggle (OFF by default): the picker's button flips it, `autoswitch on|off` too,
+ *   • the auto-switch-on-limit toggle (OFF by default; its screen is /limits now): `autoswitch on|off` and the old buttons still work,
  *     General sets the instance default; a «switch to …» tap on a limit notice goes to its port and consumes the
  *     notice, a stale one only answers the callback.
  */
@@ -105,7 +105,6 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(picker), [
       ['acct_use_default'],
       ['acct_add', 'acct_login_menu', 'acct_rm_menu'],
-      ['acct_autosw_on'], // OFF by default, so the button offers ON
     ]);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
@@ -234,19 +233,15 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.equal(keyToString(appliedKeys[0]), keyToString(harness.key));
   });
 
-  it('the auto-switch toggle is OFF by default; the picker button flips the topic override and re-renders with the other button', async () => {
+  it('the auto-switch setting moved to /limits: the picker has no toggle button, only a pointer; the old buttons and the text verb still work', async () => {
     assert.equal(harness.state.checkIsClaudeAutoSwitchOnLimitEnabled(harness.key), false);
     await harness.runCommand('account');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /Auto-switch on limit/);
-    const toggleRow = harness.getKeyboardData(picker).find((row) => row[0].startsWith('acct_autosw_'));
-    assert.deepEqual(toggleRow, ['acct_autosw_on']);
-    await harness.tapButton(picker!.messageId!, 'acct_autosw_on');
+    assert.match(picker?.text ?? '', /\/limits/);
+    assert.equal(harness.getKeyboardData(picker).some((row) => row[0].startsWith('acct_autosw_')), false);
+    await harness.tapButton(picker!.messageId!, 'acct_autosw_on'); // an old keyboard
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
-    const rerender = harness.edits.at(-1);
-    assert.equal(rerender?.messageId, picker!.messageId);
-    assert.ok(harness.getKeyboardData(rerender).some((row) => row[0] === 'acct_autosw_off'), 'ON now, so the button offers OFF');
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false);
     assert.match(harness.replies.at(-1)?.text ?? '', /Auto-switch to another account on a usage limit: OFF for this topic/);
@@ -259,9 +254,6 @@ describe('claudeAccounts: /account over its ports', () => {
     await harness.runCommand('account', 'autoswitch on');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
     assert.match(harness.replies.at(-1)?.text ?? '', /ON for ALL topics/);
-    await harness.runCommand('account');
-    const toggleRow = harness.getKeyboardData(harness.replies.at(-1)).find((row) => row[0].startsWith('acct_autosw_'));
-    assert.deepEqual(toggleRow, ['acct_autosw_off']);
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
     isGeneralTopic = false;

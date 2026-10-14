@@ -1,15 +1,15 @@
 /**
- * @description The FALLBACK CHAIN (`/fallback`): one instance-wide, ordered list of «where a topic's main agent
+ * @description The FALLBACK CHAIN (`/limits`, formerly `/fallback`): one instance-wide, ordered list of «where a topic's main agent
  * continues when its own account / provider hits a usage limit». An entry names a backend and what it runs on —
  * a Claude account profile (`utils/claudeProfiles.ts`) with an optional model, or an OpenCode provider with a
  * model — and the list is the operator's PRIORITY (top = preferred). The bot drafts it from what is actually
  * signed in (`proposeFallbackChain`), the operator reorders / removes / adds with buttons, and a limit on a
- * topic picks the first AVAILABLE entry (`pickFallbackCandidates`): signed in, present in the live catalog,
+ * topic picks the first AVAILABLE entry (`pickFallbackCandidates`): not disabled, signed in, present in the live catalog,
  * not marked limited, and not the account the topic is already on.
  *
  * This module is the pure layer: the chain shape, its edit operations, the draft, the ranking, the
  * auto / offer / none decision and the `callback_data` codecs. The chain lives in `state.json`
- * (`StateStore.getFallbackChain`), the detection and the switch itself in `bot.ts`, the picker in
+ * (`StateStore.getFallbackChain`), the detection and the switch itself in `bot.ts`, the `/limits` screen in
  * `connectors/telegram/commands/fallbackChain.ts`. The within-Claude ranking by headroom
  * (`claudeLimitSwitch.ts`) is what an EMPTY chain falls back to, so a bot without a configured chain behaves
  * exactly as before.
@@ -20,10 +20,15 @@
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
 import { buildClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
-/** One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. */
+/**
+ * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
+ * EXCLUDES the rung from automatic switching and from the limit notice's switch offers (the account / provider
+ * stays usable by hand through `/model` and `/accounts`); absent means enabled, so older `state.json` files
+ * read back unchanged.
+ */
 export type FallbackChainEntry =
-  | { backend: 'claude'; profile: string; model: string | null }
-  | { backend: 'opencode'; providerId: string; modelId: string };
+  | { backend: 'claude'; profile: string; model: string | null; disabled?: boolean }
+  | { backend: 'opencode'; providerId: string; modelId: string; disabled?: boolean };
 
 /** The chain is a short priority list; a longer one is never consulted past the first available entry anyway. */
 export const fallbackChainMaxLength = 12;
@@ -126,14 +131,40 @@ function readFallbackEntry(item: unknown): FallbackChainEntry | null {
     if (typeof profile !== 'string' || (profile !== defaultClaudeProfileName && !checkIsValidClaudeProfileName(profile))) return null;
     const model = record.model;
     if (model !== null && model !== undefined && (typeof model !== 'string' || !claudeModelAliasRe.test(model))) return null;
-    return { backend: 'claude', profile, model: typeof model === 'string' ? model : null };
+    return withDisabledFlag({ backend: 'claude', profile, model: typeof model === 'string' ? model : null }, record.disabled);
   }
   if (record.backend === 'opencode') {
     if (typeof record.providerId !== 'string' || typeof record.modelId !== 'string' || record.modelId === '') return null;
     if (!openCodeProviderIdRe.test(record.providerId)) return null;
-    return { backend: 'opencode', providerId: record.providerId, modelId: record.modelId };
+    return withDisabledFlag({ backend: 'opencode', providerId: record.providerId, modelId: record.modelId }, record.disabled);
   }
   return null;
+}
+
+/** Keep `disabled` only when it is `true`: an enabled rung is persisted without the field. */
+function withDisabledFlag(entry: FallbackChainEntry, disabled: unknown): FallbackChainEntry {
+  return disabled === true ? { ...entry, disabled: true } : entry;
+}
+
+/** Whether the rung is excluded from automatic switching. */
+export function checkIsFallbackEntryDisabled(entry: FallbackChainEntry): boolean {
+  return entry.disabled === true;
+}
+
+/** Flip the rung at `index` between included and excluded (a NEW chain). */
+export function toggleFallbackEntryDisabled(chain: readonly FallbackChainEntry[], index: number): FallbackChainEditResult {
+  if (!Number.isInteger(index) || index < 0 || index >= chain.length) return { ok: false, reason: 'outOfRange' };
+  return {
+    ok: true,
+    chain: chain.map((entry, i) => {
+      if (i !== index) return entry;
+      if (entry.disabled === true) {
+        const { disabled: _dropped, ...enabled } = entry;
+        return enabled as FallbackChainEntry;
+      }
+      return { ...entry, disabled: true };
+    }),
+  };
 }
 
 // ── edits (each returns a NEW chain; the caller persists it) ──
@@ -169,7 +200,7 @@ export function moveFallbackEntry(chain: readonly FallbackChainEntry[], index: n
  * keyboard posted before a later edit, and its index would point at another rung — it is refused as stale.
  */
 export function getFallbackChainRevision(chain: readonly FallbackChainEntry[]): string {
-  const text = chain.map(formatFallbackEntryKey).join('\n');
+  const text = chain.map((entry) => `${formatFallbackEntryKey(entry)}${entry.disabled === true ? '!' : ''}`).join('\n');
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
@@ -233,7 +264,7 @@ export function pickPreferredOpenCodeModel(models: readonly string[], providerId
  * in the catalog, then every other provider's preferred model. Only what is actually available is proposed; a
  * profile never probed counts as signed in (the CLI reports a signed-out one as `false`).
  */
-export function proposeFallbackChain(detection: FallbackDetection): FallbackChainEntry[] {
+export function proposeFallbackChain(detection: FallbackDetection, previous: readonly FallbackChainEntry[] = []): FallbackChainEntry[] {
   let chain: FallbackChainEntry[] = [];
   const push = (entry: FallbackChainEntry): void => {
     const added = addFallbackEntry(chain, entry);
@@ -252,7 +283,20 @@ export function proposeFallbackChain(detection: FallbackDetection): FallbackChai
     const modelId = pickPreferredOpenCodeModel(detection.openCodeModels, providerId);
     if (modelId !== null) push({ backend: 'opencode', providerId, modelId });
   }
-  return chain;
+  return chain.map((entry) => (checkIsExcludedByPrevious(entry, previous) ? { ...entry, disabled: true } : entry));
+}
+
+/**
+ * Whether the operator had EXCLUDED this draft rung from switching in the chain being replaced: the Claude
+ * account (any model) or the OpenCode provider (the draft may prefer another model of it) has a disabled rung
+ * there and no enabled one. A rebuild never silently re-enables what was switched off.
+ */
+function checkIsExcludedByPrevious(entry: FallbackChainEntry, previous: readonly FallbackChainEntry[]): boolean {
+  const sameOwner = (other: FallbackChainEntry): boolean => (entry.backend === 'claude'
+    ? other.backend === 'claude' && other.profile === entry.profile
+    : other.backend === 'opencode' && other.providerId === entry.providerId);
+  const related = previous.filter(sameOwner);
+  return related.length > 0 && related.every(checkIsFallbackEntryDisabled);
 }
 
 // ── availability and the ranking ──
@@ -302,6 +346,7 @@ export function pickFallbackCandidates(input: {
   nowMs: number;
 }): FallbackChainEntry[] {
   return input.chain.filter((entry) => {
+    if (checkIsFallbackEntryDisabled(entry)) return false;
     if (input.current && checkIsSameFallbackAccount(entry, input.current)) return false;
     return getFallbackEntryAvailability(entry, input.detection, input.nowMs).status === 'available';
   });
@@ -385,6 +430,8 @@ const indexGroup = '(\\d{1,2})';
 export const fallbackMoveUpCallbackRe = new RegExp(`^fbk_up_${indexGroup}_${revisionGroup}$`);
 export const fallbackMoveDownCallbackRe = new RegExp(`^fbk_dn_${indexGroup}_${revisionGroup}$`);
 export const fallbackRemoveCallbackRe = new RegExp(`^fbk_rm_${indexGroup}_${revisionGroup}$`);
+/** Include / exclude a rung from automatic switching (revision baked like the other edits). */
+export const fallbackToggleCallbackRe = new RegExp(`^fbk_tg_${indexGroup}_${revisionGroup}$`);
 /** Open the «add» sub-picker (accounts and providers), then a Claude account's model list. */
 export const fallbackAddCallback = 'fbk_add';
 export const fallbackAddClaudeCallbackRe = new RegExp(`^fbk_addc_([a-z0-9][a-z0-9_-]{0,31})$`);
@@ -402,6 +449,12 @@ export const fallbackBackCallback = 'fbk_back';
 /** Flip the auto-switch-on-limit setting (shared with `/account`): the topic's override, in General the instance default. */
 export const fallbackAutoSwitchOnCallback = 'fbk_asw_on';
 export const fallbackAutoSwitchOffCallback = 'fbk_asw_off';
+/** A topic returns to the General value of the switch setting (drops its override). */
+export const fallbackAutoSwitchSameCallback = 'fbk_asw_same';
+/** The «wait for the reset and continue» setting (`/auto_continue_limits`, shown in `/limits`): on / off / same as General. */
+export const fallbackWaitOnCallback = 'fbk_wait_on';
+export const fallbackWaitOffCallback = 'fbk_wait_off';
+export const fallbackWaitSameCallback = 'fbk_wait_same';
 
 export function buildFallbackMoveUpCallback(index: number, revision: string): string {
   return `fbk_up_${index}_${revision}`;
@@ -413,6 +466,10 @@ export function buildFallbackMoveDownCallback(index: number, revision: string): 
 
 export function buildFallbackRemoveCallback(index: number, revision: string): string {
   return `fbk_rm_${index}_${revision}`;
+}
+
+export function buildFallbackToggleCallback(index: number, revision: string): string {
+  return `fbk_tg_${index}_${revision}`;
 }
 
 export function buildFallbackAddClaudeCallback(profile: string): string {

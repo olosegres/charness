@@ -220,15 +220,6 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       Markup.button.callback(t('account.loginButton'), accountLoginMenuCallback),
       Markup.button.callback(t('account.removeButton'), accountRemoveMenuCallback),
     ]);
-    // The auto-switch toggle: one button that flips the setting (in General the instance default, else the
-    // topic's override); the picker re-renders in place, so the label follows the value.
-    const isAutoSwitchOn = resolveAutoSwitchEnabled(key, isGeneral);
-    keyboardRows.push([
-      Markup.button.callback(
-        t('account.autoSwitchButton', { state: isAutoSwitchOn ? t('autoContinueLimits.on') : t('autoContinueLimits.off') }),
-        isAutoSwitchOn ? accountAutoSwitchOffCallback : accountAutoSwitchOnCallback,
-      ),
-    ]);
     if (!isGeneral && getState().getClaudeProfileOverride(key) !== undefined) {
       keyboardRows.push([
         Markup.button.callback(t('account.followButton', { name: getState().getClaudeProfileGlobalDefault() }), accountFollowDefaultCallback),
@@ -256,14 +247,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return t(`account.applied.${outcome}`);
   }
 
-  /** The auto-switch value the topic (General: the instance) effectively has. */
-  function resolveAutoSwitchEnabled(key: SessionKey, isGeneral: boolean): boolean {
-    return isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key);
-  }
-
   /**
    * @description Set whether the bot moves a limited topic to the next rung of the fallback chain — another
-   * account, or another backend / provider (`/fallback`) — by itself (OFF by default: an account-policy decision
+   * account, or another backend / provider (`/limits`) — by itself (OFF by default: an account-policy decision
    * the operator opts into) and RETURN the confirmation. The same setting `/fallback` shows; General sets the
    * instance default, a topic its override.
    */

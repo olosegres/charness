@@ -14,6 +14,10 @@ import * as assert from 'node:assert/strict';
 import {
   addFallbackEntry,
   buildFallbackAddClaudeModelCallback,
+  buildFallbackToggleCallback,
+  checkIsFallbackEntryDisabled,
+  fallbackToggleCallbackRe,
+  toggleFallbackEntryDisabled,
   buildFallbackMoveUpCallback,
   buildFallbackSwitchCallbackData,
   checkIsSameFallbackAccount,
@@ -313,4 +317,78 @@ test('tap: only the open episode\'s button switches, to the rung its index named
   assert.deepEqual(getFallbackSwitchTapDecision({ openOffer, requestedEpisodeId: nowMs, index: 2 }), { kind: 'expired' });
   assert.deepEqual(getFallbackSwitchTapDecision({ openOffer, requestedEpisodeId: nowMs + 1, index: 0 }), { kind: 'expired' });
   assert.deepEqual(getFallbackSwitchTapDecision({ openOffer: null, requestedEpisodeId: nowMs, index: 0 }), { kind: 'expired' });
+});
+
+// ── the per-rung «left out of switching» flag ──
+
+test('disabled: only `true` is kept on read; an enabled rung carries no field; garbage values read as enabled', () => {
+  const chain = normaliseFallbackChain([
+    { backend: 'claude', profile: 'work', model: null, disabled: true },
+    { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5', disabled: false },
+    { backend: 'opencode', providerId: 'google', modelId: 'gemini-2.5-pro', disabled: 'yes' },
+    { backend: 'claude', profile: 'default', model: null },
+  ]);
+  assert.deepEqual(chain, [
+    { backend: 'claude', profile: 'work', model: null, disabled: true },
+    openCode('openai', 'gpt-5'),
+    openCode('google', 'gemini-2.5-pro'),
+    claude('default'),
+  ]);
+  assert.equal(checkIsFallbackEntryDisabled(chain[0]), true);
+  assert.equal(checkIsFallbackEntryDisabled(chain[1]), false);
+  assert.equal('disabled' in chain[1], false);
+});
+
+test('disabled: the toggle flips one rung in a new chain, restores the plain shape, and refuses an index outside', () => {
+  const chain = [claude('work'), openCode('openai', 'gpt-5')];
+  const off = toggleFallbackEntryDisabled(chain, 1);
+  assert.ok(off.ok);
+  if (off.ok) {
+    assert.deepEqual(off.chain, [claude('work'), { ...openCode('openai', 'gpt-5'), disabled: true }]);
+    assert.deepEqual(chain[1], openCode('openai', 'gpt-5'), 'the input chain is untouched');
+    const on = toggleFallbackEntryDisabled(off.chain, 1);
+    assert.ok(on.ok);
+    if (on.ok) assert.deepEqual(on.chain, chain);
+  }
+  assert.deepEqual(toggleFallbackEntryDisabled(chain, 2), { ok: false, reason: 'outOfRange' });
+});
+
+test('disabled: the flag does not make a rung a different rung, but it changes the revision (a stale keyboard is refused)', () => {
+  const chain = [claude('work'), openCode('openai', 'gpt-5')];
+  const off = toggleFallbackEntryDisabled(chain, 0);
+  assert.ok(off.ok);
+  if (!off.ok) return;
+  assert.equal(checkIsSameFallbackEntry(chain[0], off.chain[0]), true);
+  assert.notEqual(getFallbackChainRevision(chain), getFallbackChainRevision(off.chain));
+  assert.equal(addFallbackEntry(off.chain, claude('work')).ok, false, 'adding the same rung is still a duplicate');
+  const data = buildFallbackToggleCallback(11, getFallbackChainRevision(off.chain));
+  assert.ok(checkIsCallbackDataWithinLimit(data));
+  assert.equal(parseFallbackEditCallback(data, fallbackToggleCallbackRe, getFallbackChainRevision(chain))?.isCurrent, false);
+  assert.equal(parseFallbackEditCallback(data, fallbackToggleCallbackRe, getFallbackChainRevision(off.chain))?.isCurrent, true);
+});
+
+test('disabled: the candidates (and so the auto switch and the offers) skip a disabled rung, in chain order', () => {
+  const chain: FallbackChainEntry[] = [{ ...claude('work'), disabled: true }, claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }, openCode('google', 'gemini-2.5-pro')];
+  const candidates = pickFallbackCandidates({ chain, current: claude('team'), detection: buildDetection({ claudeProfiles: [buildProfile('default'), buildProfile('work'), buildProfile('team')] }), nowMs });
+  assert.deepEqual(candidates, [claude('default'), openCode('google', 'gemini-2.5-pro')]);
+  assert.deepEqual(decideFallbackSwitch({ candidates, isAutoSwitchEnabled: true }), { action: 'auto', to: claude('default') });
+  const allOff = pickFallbackCandidates({ chain: chain.map((entry) => ({ ...entry, disabled: true })), current: null, detection: buildDetection(), nowMs });
+  assert.deepEqual(allOff, [], 'a chain with every rung left out switches nowhere (the wait stands)');
+  assert.deepEqual(decideFallbackSwitch({ candidates: allOff, isAutoSwitchEnabled: true }), { action: 'none' });
+});
+
+test('disabled: a rebuild keeps a provider / account excluded when the operator had left it out, and re-enables nothing', () => {
+  const previous: FallbackChainEntry[] = [claude('default'), { ...claude('work'), disabled: true }, { ...openCode('openai', 'gpt-5-mini'), disabled: true }, openCode('google', 'gemini-2.5-pro')];
+  const rebuilt = proposeFallbackChain(buildDetection({ recentOpenCodeModels: ['openai/gpt-5-mini'] }), previous);
+  const byKey = new Map(rebuilt.map((entry) => [formatFallbackEntryKey(entry), entry.disabled === true]));
+  assert.equal(byKey.get('claude:default:-'), false);
+  assert.equal(byKey.get('claude:work:-'), true, 'the excluded account stays excluded');
+  assert.equal(byKey.get('opencode:openai/gpt-5-mini'), true);
+  assert.equal(byKey.get('opencode:openai/gpt-5'), true, 'the draft may pick another model of an excluded provider: still excluded');
+  assert.equal(byKey.get('opencode:google/gemini-2.5-pro'), false);
+  // With no previous chain the draft is all enabled, exactly as before the flag existed.
+  assert.ok(proposeFallbackChain(buildDetection()).every((entry) => entry.disabled === undefined));
+  // A provider with an enabled rung in the old chain is not excluded just because another rung of it was.
+  const mixed = proposeFallbackChain(buildDetection(), [{ ...openCode('openai', 'gpt-5'), disabled: true }, openCode('openai', 'o3-mini')]);
+  assert.ok(mixed.filter((entry) => entry.backend === 'opencode' && entry.providerId === 'openai').every((entry) => entry.disabled === undefined));
 });
