@@ -289,7 +289,7 @@ describe('fallbackChain: /limits over its ports', () => {
     isGeneralTopic = true;
   });
 
-  it('a topic\'s setting buttons: one full-width button each with the effective value and its source; General keeps its single flip button', async () => {
+  it('a topic\'s setting buttons: one full-width button each with the effective value (its source stays in the text, a phone would cut it); General keeps its single flip button', async () => {
     isGeneralTopic = false;
     await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
     await harness.state.setAutoContinueOnLimitGlobalDefault(true);
@@ -298,20 +298,22 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.runCommand('limits');
     const screen = harness.replies.at(-1);
     assert.deepEqual(harness.getKeyboardLabels(screen).slice(-2), [
-      ['🔁 Auto switch to a fallback model: OFF (as in General)'],
-      ['⏳ Wait for the reset and continue: ON (as in General)'],
+      ['🔁 Auto switch to a fallback model: OFF'],
+      ['⏳ Wait for the reset and continue: ON'],
     ]);
+    assert.match(screen?.text ?? '', /Auto switch to a fallback model: OFF \(as in General\)/, 'the source is in the text');
     assert.deepEqual(harness.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, true);
     await harness.runCommand('limits');
-    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).at(-2), ['🔁 Auto switch to a fallback model: ON (set for this topic)']);
+    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).at(-2), ['🔁 Auto switch to a fallback model: ON']);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
     isGeneralTopic = true;
     await harness.runCommand('limits');
     assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).slice(-2), [
       ['🔁 Auto switch to a fallback model: OFF'],
       ['⏳ Wait for the reset and continue: ON'],
-    ], 'General: the value alone, no source');
+    ], 'General: the same shape');
     assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']], 'General: a tap flips');
   });
 
@@ -339,7 +341,7 @@ describe('fallbackChain: /limits over its ports', () => {
     const backOnScreen = harness.edits.at(-1);
     assert.match(backOnScreen?.text ?? '', /Fallback models — when an agent hits a usage limit/, 'the choice returns to the main screen');
     assert.match(backOnScreen?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
-    assert.deepEqual(harness.getKeyboardLabels(backOnScreen).at(-2), ['🔁 Auto switch to a fallback model: ON (set for this topic)']);
+    assert.deepEqual(harness.getKeyboardLabels(backOnScreen).at(-2), ['🔁 Auto switch to a fallback model: ON']);
 
     await harness.tapButton(pickerId, 'fbk_set_asw');
     assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON ✓'], ['OFF'], ['As in General (OFF)'], ['⬅️ Back']], 'the topic\'s own choice is marked');
@@ -357,7 +359,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, 'fbk_wait_off');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), false);
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), false);
-    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).at(-1), ['⏳ Wait for the reset and continue: OFF (set for this topic)']);
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).at(-1), ['⏳ Wait for the reset and continue: OFF']);
     await harness.tapButton(pickerId, 'fbk_set_wait');
     await harness.tapButton(pickerId, 'fbk_wait_same');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), undefined);

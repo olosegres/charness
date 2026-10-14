@@ -99,7 +99,7 @@ const settingCallbacks: Record<SettingId, SettingCallbacks> = {
   wait: { open: fallbackWaitOpenCallback, on: fallbackWaitOnCallback, off: fallbackWaitOffCallback, same: fallbackWaitSameCallback },
 };
 
-/** The line naming a setting with its value (`{state}`): the main screen's button and the sub-menu's text. */
+/** The line naming a setting with its value (`{state}`): the main screen's button (the value alone) and the sub-menu's text (with its source). */
 const settingLabelKeys: Record<SettingId, 'limits.switchButton' | 'limits.waitButton'> = {
   switch: 'limits.switchButton',
   wait: 'limits.waitButton',
@@ -242,20 +242,17 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return `${formatState(enabled)}${override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic')}`;
   }
 
-  /** The setting's name and its effective value with where it comes from: `🔁 Auto switch to a fallback model: ON (as in General)`. */
-  function formatSettingLine(id: SettingId, setting: SettingValue, isGeneral: boolean): string {
-    return t(settingLabelKeys[id], { state: formatSettingValue(setting.effective, setting.override, isGeneral) });
-  }
-
   /**
-   * One setting's button on the main screen, always one full-width button with the setting's line. General: a tap
+   * One setting's button on the main screen: one full-width button with the setting's name and its effective value
+   * (`🔁 Auto switch to a fallback model: ON`). Where a topic's value comes from is in the message text above and in
+   * the sub-menu, not on the button — the worded source made it too long for a phone and cut it again. General: a tap
    * flips the value. A topic: a tap opens the setting's sub-menu ({@link renderSettingMenu}) in the same message —
    * three choices on one row would split the width evenly and cut every label.
    */
   function buildSettingRow(id: SettingId, setting: SettingValue, isGeneral: boolean) {
     const callbacks = settingCallbacks[id];
     const tapData = isGeneral ? (setting.effective ? callbacks.off : callbacks.on) : callbacks.open;
-    return [Markup.button.callback(formatSettingLine(id, setting, isGeneral), tapData)];
+    return [Markup.button.callback(t(settingLabelKeys[id], { state: formatState(setting.effective) }), tapData)];
   }
 
   /**
@@ -277,7 +274,8 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       )],
       buildBackRow(),
     ];
-    await editThreadMessage(key, messageId, formatSettingLine(id, setting, false), Markup.inlineKeyboard(rows));
+    const line = t(settingLabelKeys[id], { state: formatSettingValue(setting.effective, setting.override, false) });
+    await editThreadMessage(key, messageId, line, Markup.inlineKeyboard(rows));
   }
 
   /**
