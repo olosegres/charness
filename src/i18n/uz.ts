@@ -67,8 +67,6 @@ export const uzDict: Record<string, string> = {
   'help.thread_bound':
     '*Mavzu `{subdir}` ga bog‘langan.*\n' +
     '/claude /opencode — agentni boshlash\n' +
-    '/connect — OpenCode provayder API kalitini ulash (default OpenAI)\n' +
-    '/disconnect — provayderning saqlangan hisob ma\'lumotlarini o\'chirish\n' +
     '/terminal — bu papkada shell ochish\n' +
     '/new — seansni qayta boshlash (eskisi → /sessions)\n' +
     '/model /sessions — almashtirish\n' +
@@ -78,7 +76,7 @@ export const uzDict: Record<string, string> = {
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
     '/limits — foydalanish limitida nima bo‘ladi (zaxira zanjiri, o‘tish, kutish)\n' +
-    '/account — bu mavzu uchun Claude hisobi (tanlov; qo‘shish / qayta kirish / o‘chirish)\n' +
+    '/accounts — Claude hisoblari va OpenCode provayderlari (tanlash, qo‘shish, qayta kirish, o‘chirish, ulash, uzish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
     '/bind — bog‘lanishni boshqarish',
@@ -663,20 +661,20 @@ export const uzDict: Record<string, string> = {
   'account.removed': '✅ {name} profili o‘chirildi. {count} ta mavzu endi standartga ergashadi.',
   'account.removeDefaultRefused': 'default profili ~/.claude ning o‘zi va uni o‘chirib bo‘lmaydi.',
   'account.removeInstanceDefaultRefused': '{name} barcha mavzular uchun standart. Avval General mavzusida boshqa standartni tanlang.',
-  'account.unknown': '❌ {name} nomli profil yo‘q. Ro‘yxat uchun /account ni ishga tushiring.',
-  'account.notLoggedIn': '⚠️ {name} profiliga kirilmagan. Avval /account login {name} ni bajaring.',
-  'account.askName': '➕ Yangi profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi (masalan, work). Uni keyingi xabar qilib yuboring yoki /account add <nom> ni bajaring.',
+  'account.unknown': '❌ {name} nomli profil yo‘q. Ro‘yxat uchun /accounts ni ishga tushiring.',
+  'account.notLoggedIn': '⚠️ {name} profiliga kirilmagan. Avval /accounts login {name} ni bajaring.',
+  'account.askName': '➕ Yangi profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi (masalan, work). Uni keyingi xabar qilib yuboring yoki /accounts add <nom> ni bajaring.',
   'account.invalidName': '❌ Profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi, va "default" emas.',
   'account.exists': '{name} nomli profil allaqachon bor.',
   'account.created': '✅ {name} profili yaratildi. Kirish boshlanmoqda…',
   'account.createFailed': '⚠️ {name} profili uchun katalog yaratib bo‘lmadi. Bot jurnaliga qarang.',
   'account.login_url': '🔐 {name} profili uchun Claude ga kirish. Bu havolani O‘SHA hisob bilan kirilgan brauzerda oching — inkognito oynasi yoki boshqa brauzer profili joriy kirishingizni chetda qoldiradi — kirishni yakunlang va kodni shu yerga joylang:\n{url}',
   'account.login_success': '✅ {name} profiliga kirildi: {email} ({plan}).',
-  'account.login_failed': '⚠️ {name} profiliga kirish muvaffaqiyatsiz. Qayta urinish uchun /account login {name}.',
+  'account.login_failed': '⚠️ {name} profiliga kirish muvaffaqiyatsiz. Qayta urinish uchun /accounts login {name}.',
   'account.setThisTopic': '✅ Bu mavzu uchun Claude hisobi: {name}.{apply}',
   'account.setGlobal': '✅ BARCHA mavzular uchun standart Claude hisobi: {name}. O‘z tanloviga ega mavzular uni saqlaydi; qolganlari hozir yoki keyingi ishga tushishda o‘tadi.',
   'account.followSet': '✅ Bu mavzu standart Claude hisobiga ({name}) ergashadi.{apply}',
-  'account.usage': 'Foydalanish: /account — tanlov; /account add <nom>; /account use <nom>; /account login <nom>; /account remove <nom>; /account autoswitch on|off.',
+  'account.usage': 'Foydalanish: /accounts — tanlov; /accounts add <nom>; /accounts use <nom>; /accounts login <nom>; /accounts remove <nom>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Seans keyingi safar ishga tushganda yoki davom etganda qo‘llanadi.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Ishlayotgan seans u bilan qayta ishga tushirildi — o‘sha suhbat.',
@@ -721,7 +719,7 @@ export const uzDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 Zaxira zanjirida bo\'sh joyli yozuv bor — bu mavzuni unga o\'tkazib, hozir davom ettirish uchun bosing.',
   'fallback.switched': '🔁 {from} da foydalanish limiti — bu mavzu {to} ga o\'tdi va davom etmoqda.{reset}',
   'fallback.backgroundStopped': 'Hali ishlayotgan fon vazifalari almashtirish tufayli to‘xtatildi.',
-  'fallback.switchedReset': ' {from} {time} da tiklanadi; siz orqaga qaytarmaguningizcha (/account, /model, /claude, /opencode) mavzu {to} da qoladi.',
+  'fallback.switchedReset': ' {from} {time} da tiklanadi; siz orqaga qaytarmaguningizcha (/accounts, /model, /claude, /opencode) mavzu {to} da qoladi.',
   'fallback.switchedDeferred': '🔁 {from} da foydalanish limiti — agent hali ishlamoqda, shuning uchun bu mavzu navbati tugagach {to} ga o\'tadi; ungacha kutish saqlanadi.',
   'fallback.switchFailed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}. Tiklanishni kutish saqlanadi.',
   'limits.topicRuns': 'Bu mavzu hozir shunda ishlayapti: {current}.',
@@ -746,4 +744,13 @@ export const uzDict: Record<string, string> = {
   'limits.whatSwitch': 'Zaxiraga o‘zi o‘tish',
   'limits.whatWait': 'Tiklanishni kutib davom etish',
   'limits.usage': 'Foydalanish: /limits — ekran; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (mavzuda «same» = General ga ergashish).',
+  'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode provayderlari: hozircha hech biri ulanmagan. «➕ OpenCode provayderi» bittasini ulaydi.',
+  'accounts.buttonsHint': '🔑 hisobga qayta kiradi, 🗑 uni o‘chiradi, 🔌 provayderni uzadi.',
+  'accounts.addClaudeButton': '➕ Claude hisobi',
+  'accounts.addProviderButton': '➕ OpenCode provayderi',
+  'accounts.askProvider': '➕ Qaysi OpenCode provayderi? Keyingi xabarda uning id sini yuboring (masalan, openai yoki openrouter).',
+  'accounts.stale': 'Bu ekran eskirgan — qayta chizildi.',
+  'accounts.confirmDisconnect': '🔌 {provider} uzilsinmi? Saqlangan hisob ma’lumotlari o‘chiriladi.',
+  'accounts.confirmDisconnectButton': '🔌 Ha, {provider} ni uzish',
 };

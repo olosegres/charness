@@ -67,8 +67,6 @@ export const jaDict: Record<string, string> = {
   'help.thread_bound':
     '*スレッドは `{subdir}` にバインドされています。*\n' +
     '/claude /opencode — エージェントを起動\n' +
-    '/connect — OpenCode プロバイダー API key を接続（デフォルトは OpenAI）\n' +
-    '/disconnect — プロバイダーの保存済み認証情報を削除\n' +
     '/terminal — このフォルダでシェルを開く\n' +
     '/new — セッションを再起動（旧 → /sessions）\n' +
     '/model /sessions — 切り替え\n' +
@@ -78,7 +76,7 @@ export const jaDict: Record<string, string> = {
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
     '/limits — 使用量上限に達したときの動作（予備チェーン・切り替え・待機）\n' +
-    '/account — このトピックの Claude アカウント（選択; 追加 / 再ログイン / 削除）\n' +
+    '/accounts — Claude アカウントと OpenCode プロバイダー（選択・追加・再ログイン・削除・接続・切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
     '/bind — バインドを管理',
@@ -657,20 +655,20 @@ export const jaDict: Record<string, string> = {
   'account.removed': '✅ プロファイル {name} を削除しました。{count} トピックが既定に従うようになりました。',
   'account.removeDefaultRefused': 'default プロファイルは ~/.claude そのものなので削除できません。',
   'account.removeInstanceDefaultRefused': '{name} は全トピックの既定です。まず General トピックで別の既定を選んでください。',
-  'account.unknown': '❌ {name} というプロファイルはありません。/account で一覧を表示します。',
-  'account.notLoggedIn': '⚠️ プロファイル {name} はログインしていません。先に /account login {name} を実行してください。',
-  'account.askName': '➕ 新しいプロファイル名 — 小文字、数字、- と _、{max} 文字まで（例: work）。次のメッセージとして送るか、/account add <名前> を実行してください。',
+  'account.unknown': '❌ {name} というプロファイルはありません。/accounts で一覧を表示します。',
+  'account.notLoggedIn': '⚠️ プロファイル {name} はログインしていません。先に /accounts login {name} を実行してください。',
+  'account.askName': '➕ 新しいプロファイル名 — 小文字、数字、- と _、{max} 文字まで（例: work）。次のメッセージとして送るか、/accounts add <名前> を実行してください。',
   'account.invalidName': '❌ プロファイル名は小文字、数字、- と _ で {max} 文字まで、かつ "default" 以外です。',
   'account.exists': '{name} というプロファイルは既にあります。',
   'account.created': '✅ プロファイル {name} を作成しました。ログインを開始します…',
   'account.createFailed': '⚠️ プロファイル {name} のディレクトリを作成できませんでした。ボットのログを確認してください。',
   'account.login_url': '🔐 プロファイル {name} の Claude ログイン。そのアカウントでログイン済みのブラウザでこのリンクを開き（シークレットウィンドウか別のブラウザプロファイルなら現在のログインを引きずりません）、ログインを完了してコードをここに貼り付けてください:\n{url}',
   'account.login_success': '✅ プロファイル {name} がログインしました: {email} ({plan})。',
-  'account.login_failed': '⚠️ プロファイル {name} のログインに失敗しました。/account login {name} で再試行してください。',
+  'account.login_failed': '⚠️ プロファイル {name} のログインに失敗しました。/accounts login {name} で再試行してください。',
   'account.setThisTopic': '✅ このトピックの Claude アカウント: {name}。{apply}',
   'account.setGlobal': '✅ 全トピックの既定 Claude アカウント: {name}。独自に選択したトピックはそのまま、他は今すぐか次回の起動時に切り替わります。',
   'account.followSet': '✅ このトピックは既定の Claude アカウント ({name}) に従います。{apply}',
-  'account.usage': '使い方: /account — 選択画面; /account add <名前>; /account use <名前>; /account login <名前>; /account remove <名前>; /account autoswitch on|off。',
+  'account.usage': '使い方: /accounts — 選択画面; /accounts add <名前>; /accounts use <名前>; /accounts login <名前>; /accounts remove <名前>; /accounts autoswitch on|off。',
   'account.applied.inactive': ' セッションの次回の起動または再開時に適用されます。',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' 実行中のセッションをそのアカウントで再起動しました — 同じ会話です。',
@@ -715,7 +713,7 @@ export const jaDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 フォールバックチェーンに余裕のある項目があります — タップしてこのトピックを移し、今すぐ続行します。',
   'fallback.switched': '🔁 {from} が利用上限 — このトピックは {to} に切り替えて続行します。{reset}',
   'fallback.backgroundStopped': '実行中だったバックグラウンドタスクは切り替えにより停止されました。',
-  'fallback.switchedReset': ' {from} は {time} にリセットされます。戻すまで（/account, /model, /claude, /opencode）トピックは {to} のままです。',
+  'fallback.switchedReset': ' {from} は {time} にリセットされます。戻すまで（/accounts, /model, /claude, /opencode）トピックは {to} のままです。',
   'fallback.switchedDeferred': '🔁 {from} が利用上限 — エージェントはまだ作業中のため、ターン終了時にこのトピックを {to} に切り替えます。それまで待機は維持されます。',
   'fallback.switchFailed': '⚠️ {to} への切替に失敗しました: {error}。リセット待ちは維持されます。',
   'limits.topicRuns': 'このトピックは現在 {current} で動作しています。',
@@ -740,4 +738,13 @@ export const jaDict: Record<string, string> = {
   'limits.whatSwitch': '予備へ自動で切り替え',
   'limits.whatWait': 'リセットを待って続行',
   'limits.usage': '使い方: /limits — 画面; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same（トピックでは «same» = General に従う）。',
+  'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode プロバイダー: まだ接続されていません。「➕ OpenCode プロバイダー」で接続できます。',
+  'accounts.buttonsHint': '🔑 はアカウントの再ログイン、🗑 は削除、🔌 はプロバイダーの切断です。',
+  'accounts.addClaudeButton': '➕ Claude アカウント',
+  'accounts.addProviderButton': '➕ OpenCode プロバイダー',
+  'accounts.askProvider': '➕ どの OpenCode プロバイダーですか？次のメッセージでその id を送ってください（例: openai、openrouter）。',
+  'accounts.stale': 'この画面は古くなっています。再描画しました。',
+  'accounts.confirmDisconnect': '🔌 {provider} を切断しますか？保存済みの認証情報は削除されます。',
+  'accounts.confirmDisconnectButton': '🔌 はい、{provider} を切断',
 };

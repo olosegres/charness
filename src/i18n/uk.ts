@@ -73,8 +73,6 @@ export const ukDict: Record<string, string> = {
   'help.thread_bound':
     '*Тред прив\'язаний до `{subdir}`.*\n' +
     '/claude /opencode — запустити агента\n' +
-    '/connect — підключити OpenCode provider API key (за замовчуванням OpenAI)\n' +
-    '/disconnect — видалити збережені ключі провайдера\n' +
     '/terminal — відкрити shell у цій папці\n' +
     '/new — перезапустити сесію (стара → /sessions)\n' +
     '/model /sessions — переключення\n' +
@@ -84,7 +82,7 @@ export const ukDict: Record<string, string> = {
     '/compact — стиснути контекст агента\n' +
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
     '/limits — що робити при ліміті використання (запасний ланцюжок, перемикання, очікування)\n' +
-    '/account — обліковий запис Claude для цього топіка (вибір; додати / увійти знову / видалити)\n' +
+    '/accounts — облікові записи Claude і провайдери OpenCode (вибір, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/clear — видалити повідомлення треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
     '/bind — керування прив\'язкою',
@@ -669,20 +667,20 @@ export const ukDict: Record<string, string> = {
   'account.removed': '✅ Профіль {name} видалено. Топіків, що тепер використовують типовий: {count}.',
   'account.removeDefaultRefused': 'Профіль default — це сам ~/.claude, його не можна видалити.',
   'account.removeInstanceDefaultRefused': '{name} — типовий профіль для всіх топіків. Спершу оберіть інший у топіку General.',
-  'account.unknown': '❌ Профілю {name} немає. Список — /account.',
-  'account.notLoggedIn': '⚠️ У профіль {name} не виконано вхід. Спершу /account login {name}.',
-  'account.askName': '➕ Назва нового профілю — малі латинські літери, цифри, - та _, до {max} символів (наприклад, work). Надішліть її наступним повідомленням або виконайте /account add <назва>.',
+  'account.unknown': '❌ Профілю {name} немає. Список — /accounts.',
+  'account.notLoggedIn': '⚠️ У профіль {name} не виконано вхід. Спершу /accounts login {name}.',
+  'account.askName': '➕ Назва нового профілю — малі латинські літери, цифри, - та _, до {max} символів (наприклад, work). Надішліть її наступним повідомленням або виконайте /accounts add <назва>.',
   'account.invalidName': '❌ Назва профілю — малі латинські літери, цифри, - та _, до {max} символів, і не "default".',
   'account.exists': 'Профіль {name} уже існує.',
   'account.created': '✅ Профіль {name} створено. Запускаю вхід…',
   'account.createFailed': '⚠️ Не вдалося створити каталог профілю {name}. Дивіться лог бота.',
   'account.login_url': '🔐 Вхід у Claude для профілю {name}. Відкрийте посилання в браузері, де виконано вхід у ТОЙ обліковий запис — вікно інкогніто або інший профіль браузера не підхопить поточний вхід, — завершіть вхід і надішліть код сюди:\n{url}',
   'account.login_success': '✅ Профіль {name}: виконано вхід як {email} ({plan}).',
-  'account.login_failed': '⚠️ Вхід у профіль {name} не вдався. Повторити: /account login {name}.',
+  'account.login_failed': '⚠️ Вхід у профіль {name} не вдався. Повторити: /accounts login {name}.',
   'account.setThisTopic': '✅ Обліковий запис Claude для цього топіка: {name}.{apply}',
   'account.setGlobal': '✅ Типовий обліковий запис Claude для ВСІХ топіків: {name}. Топіки з власним вибором зберігають його; решта перемикаються зараз або під час наступного запуску.',
   'account.followSet': '✅ Цей топік використовує типовий обліковий запис Claude ({name}).{apply}',
-  'account.usage': 'Використання: /account — вибір; /account add <назва>; /account use <назва>; /account login <назва>; /account remove <назва>; /account autoswitch on|off.',
+  'account.usage': 'Використання: /accounts — вибір; /accounts add <назва>; /accounts use <назва>; /accounts login <назва>; /accounts remove <назва>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Застосується під час наступного запуску або відновлення сесії.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Запущену сесію перезапущено під ним — та сама розмова.',
@@ -727,7 +725,7 @@ export const ukDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 У ланцюжку є запис із запасом — натисніть, щоб перевести топік на нього й продовжити зараз.',
   'fallback.switched': '🔁 Ліміт на {from} — топік перемкнено на {to}, робота триває.{reset}',
   'fallback.backgroundStopped': 'Фонові завдання, що ще працювали, зупинено перемиканням.',
-  'fallback.switchedReset': ' {from} скинеться о {time}; топік залишається на {to}, доки ви не перемкнете його назад (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} скинеться о {time}; топік залишається на {to}, доки ви не перемкнете його назад (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Ліміт на {from} — агент ще працює, тому топік перемкнеться на {to} після завершення ходу; доти очікування лишається.',
   'fallback.switchFailed': '⚠️ Перемикання на {to} не вдалося: {error}. Очікування скидання лишається.',
   'limits.topicRuns': 'Цей топік зараз працює на: {current}.',
@@ -752,4 +750,13 @@ export const ukDict: Record<string, string> = {
   'limits.whatSwitch': 'Перемикатися на запасний варіант самому',
   'limits.whatWait': 'Дочекатися скидання й продовжити',
   'limits.usage': 'Використання: /limits — екран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — слідувати General, у топіку).',
+  'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',
+  'accounts.openCodeNone': '🔌 Провайдери OpenCode: поки жоден не підключено. Кнопка «➕ Провайдер OpenCode» підключає.',
+  'accounts.buttonsHint': '🔑 — увійти в обліковий запис знову, 🗑 — видалити його, 🔌 — відключити провайдера.',
+  'accounts.addClaudeButton': '➕ Обліковий запис Claude',
+  'accounts.addProviderButton': '➕ Провайдер OpenCode',
+  'accounts.askProvider': '➕ Який провайдер OpenCode? Надішли його id наступним повідомленням (наприклад, openai або openrouter).',
+  'accounts.stale': 'Цей екран застарів — його оновлено.',
+  'accounts.confirmDisconnect': '🔌 Відключити {provider}? Збережені облікові дані буде видалено.',
+  'accounts.confirmDisconnectButton': '🔌 Так, відключити {provider}',
 };

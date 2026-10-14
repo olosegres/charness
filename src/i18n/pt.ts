@@ -67,8 +67,6 @@ export const ptDict: Record<string, string> = {
   'help.thread_bound':
     '*Tópico vinculado a `{subdir}`.*\n' +
     '/claude /opencode — iniciar um agente\n' +
-    '/connect — ligar uma API key de provider OpenCode (OpenAI por defeito)\n' +
-    '/disconnect — remover as credenciais guardadas de um provider\n' +
     '/terminal — abrir um shell nesta pasta\n' +
     '/new — reiniciar a sessão (a antiga → /sessions)\n' +
     '/model /sessions — trocar\n' +
@@ -78,7 +76,7 @@ export const ptDict: Record<string, string> = {
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
     '/limits — o que acontece num limite de uso (cadeia de reserva, mudança, espera)\n' +
-    '/account — conta Claude deste tópico (seletor; adicionar / entrar de novo / remover)\n' +
+    '/accounts — contas Claude e providers OpenCode (escolher, adicionar, entrar de novo, remover, ligar, desligar)\n' +
     '/clear — apagar mensagens do tópico\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gerir vínculo',
@@ -664,20 +662,20 @@ export const ptDict: Record<string, string> = {
   'account.removed': '✅ Perfil {name} removido. {count} tópico(s) agora seguem o padrão.',
   'account.removeDefaultRefused': 'O perfil default é o próprio ~/.claude e não pode ser removido.',
   'account.removeInstanceDefaultRefused': '{name} é o padrão de todos os tópicos. Escolha outro padrão no tópico General primeiro.',
-  'account.unknown': '❌ Não há perfil chamado {name}. /account mostra a lista.',
-  'account.notLoggedIn': '⚠️ O perfil {name} não tem sessão iniciada. Execute antes /account login {name}.',
-  'account.askName': '➕ Nome do novo perfil — minúsculas, dígitos, - e _, até {max} caracteres (ex.: work). Envie-o como próxima mensagem ou execute /account add <nome>.',
+  'account.unknown': '❌ Não há perfil chamado {name}. /accounts mostra a lista.',
+  'account.notLoggedIn': '⚠️ O perfil {name} não tem sessão iniciada. Execute antes /accounts login {name}.',
+  'account.askName': '➕ Nome do novo perfil — minúsculas, dígitos, - e _, até {max} caracteres (ex.: work). Envie-o como próxima mensagem ou execute /accounts add <nome>.',
   'account.invalidName': '❌ Um nome de perfil: minúsculas, dígitos, - e _, até {max} caracteres, e não "default".',
   'account.exists': 'Já existe um perfil chamado {name}.',
   'account.created': '✅ Perfil {name} criado. Iniciando o login…',
   'account.createFailed': '⚠️ Não foi possível criar o diretório do perfil {name}. Veja o log do bot.',
   'account.login_url': '🔐 Login no Claude para o perfil {name}. Abra este link num navegador com sessão iniciada NESSA conta — uma janela anónima ou outro perfil do navegador evita arrastar o seu login atual —, conclua o login e cole o código aqui:\n{url}',
   'account.login_success': '✅ Perfil {name} com sessão iniciada: {email} ({plan}).',
-  'account.login_failed': '⚠️ O login do perfil {name} falhou. Tente de novo com /account login {name}.',
+  'account.login_failed': '⚠️ O login do perfil {name} falhou. Tente de novo com /accounts login {name}.',
   'account.setThisTopic': '✅ Conta Claude deste tópico: {name}.{apply}',
   'account.setGlobal': '✅ Conta Claude padrão para TODOS os tópicos: {name}. Tópicos com escolha própria mantêm-na; os outros mudam agora ou no próximo início.',
   'account.followSet': '✅ Este tópico segue a conta Claude padrão ({name}).{apply}',
-  'account.usage': 'Uso: /account — o seletor; /account add <nome>; /account use <nome>; /account login <nome>; /account remove <nome>; /account autoswitch on|off.',
+  'account.usage': 'Uso: /accounts — o seletor; /accounts add <nome>; /accounts use <nome>; /accounts login <nome>; /accounts remove <nome>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Aplica-se quando a sessão iniciar ou for retomada.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' A sessão em curso foi reiniciada com ela — mesma conversa.',
@@ -722,7 +720,7 @@ export const ptDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 A cadeia de reserva tem uma entrada com folga — toque para mover este tópico para ela e continuar agora.',
   'fallback.switched': '🔁 Limite de uso em {from} — este tópico trocou para {to} e continua.{reset}',
   'fallback.backgroundStopped': 'As tarefas em segundo plano que ainda estavam a correr foram paradas pela troca.',
-  'fallback.switchedReset': ' {from} reinicia às {time}; o tópico fica em {to} até você trocar de volta (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} reinicia às {time}; o tópico fica em {to} até você trocar de volta (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Limite de uso em {from} — o agente ainda está trabalhando, então este tópico troca para {to} quando o turno terminar; a espera continua armada até lá.',
   'fallback.switchFailed': '⚠️ A troca para {to} falhou: {error}. A espera pelo reinício continua armada.',
   'limits.topicRuns': 'Este tópico corre agora em: {current}.',
@@ -747,4 +745,13 @@ export const ptDict: Record<string, string> = {
   'limits.whatSwitch': 'Mudar sozinho para uma reserva',
   'limits.whatWait': 'Esperar o reinício e continuar',
   'limits.usage': 'Uso: /limits — o ecrã; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = seguir o General, num tópico).',
+  'accounts.openCodeSection': '🔌 Providers OpenCode (ligados):\n{list}',
+  'accounts.openCodeNone': '🔌 Providers OpenCode: ainda nenhum ligado. «➕ Provider OpenCode» liga um.',
+  'accounts.buttonsHint': '🔑 volta a iniciar sessão numa conta, 🗑 remove-a, 🔌 desliga um provider.',
+  'accounts.addClaudeButton': '➕ Conta Claude',
+  'accounts.addProviderButton': '➕ Provider OpenCode',
+  'accounts.askProvider': '➕ Que provider OpenCode? Envia o seu id na mensagem seguinte (por exemplo openai ou openrouter).',
+  'accounts.stale': 'Este ecrã está desatualizado — é redesenhado.',
+  'accounts.confirmDisconnect': '🔌 Desligar {provider}? As credenciais guardadas são removidas.',
+  'accounts.confirmDisconnectButton': '🔌 Sim, desligar {provider}',
 };

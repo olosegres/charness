@@ -67,8 +67,6 @@ export const frDict: Record<string, string> = {
   'help.thread_bound':
     '*Fil lié à `{subdir}`.*\n' +
     '/claude /opencode — démarrer un agent\n' +
-    '/connect — connecter une clé API de provider OpenCode (OpenAI par défaut)\n' +
-    '/disconnect — supprimer les identifiants enregistrés d\'un provider\n' +
     '/terminal — ouvrir un shell dans ce dossier\n' +
     '/new — redémarrer la session (l\'ancienne → /sessions)\n' +
     '/model /sessions — basculer\n' +
@@ -78,7 +76,7 @@ export const frDict: Record<string, string> = {
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
     '/limits — que faire à une limite d’usage (chaîne de secours, bascule, attente)\n' +
-    '/account — compte Claude de ce sujet (sélecteur ; ajouter / se reconnecter / supprimer)\n' +
+    '/accounts — comptes Claude et providers OpenCode (choisir, ajouter, se reconnecter, supprimer, connecter, déconnecter)\n' +
     '/clear — supprimer les messages du fil\n' +
     '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
     '/bind — gérer la liaison',
@@ -663,20 +661,20 @@ export const frDict: Record<string, string> = {
   'account.removed': '✅ Profil {name} supprimé. {count} sujet(s) suivent désormais la valeur par défaut.',
   'account.removeDefaultRefused': 'Le profil default est ~/.claude lui-même et ne peut pas être supprimé.',
   'account.removeInstanceDefaultRefused': '{name} est la valeur par défaut de tous les sujets. Choisissez d’abord une autre valeur par défaut dans le sujet General.',
-  'account.unknown': '❌ Aucun profil nommé {name}. /account affiche la liste.',
-  'account.notLoggedIn': '⚠️ Le profil {name} n’est pas connecté. Lancez d’abord /account login {name}.',
-  'account.askName': '➕ Nom du nouveau profil — minuscules, chiffres, - et _, {max} caractères au plus (p. ex. work). Envoyez-le comme prochain message, ou lancez /account add <nom>.',
+  'account.unknown': '❌ Aucun profil nommé {name}. /accounts affiche la liste.',
+  'account.notLoggedIn': '⚠️ Le profil {name} n’est pas connecté. Lancez d’abord /accounts login {name}.',
+  'account.askName': '➕ Nom du nouveau profil — minuscules, chiffres, - et _, {max} caractères au plus (p. ex. work). Envoyez-le comme prochain message, ou lancez /accounts add <nom>.',
   'account.invalidName': '❌ Un nom de profil : minuscules, chiffres, - et _, {max} caractères au plus, et pas "default".',
   'account.exists': 'Un profil nommé {name} existe déjà.',
   'account.created': '✅ Profil {name} créé. Lancement de la connexion…',
   'account.createFailed': '⚠️ Impossible de créer le dossier du profil {name}. Voir le journal du bot.',
   'account.login_url': '🔐 Connexion à Claude pour le profil {name}. Ouvrez ce lien dans un navigateur connecté avec CE compte — une fenêtre privée ou un autre profil de navigateur évite de reprendre votre connexion actuelle —, terminez la connexion et collez le code ici :\n{url}',
   'account.login_success': '✅ Profil {name} connecté : {email} ({plan}).',
-  'account.login_failed': '⚠️ La connexion du profil {name} a échoué. Réessayez avec /account login {name}.',
+  'account.login_failed': '⚠️ La connexion du profil {name} a échoué. Réessayez avec /accounts login {name}.',
   'account.setThisTopic': '✅ Compte Claude de ce sujet : {name}.{apply}',
   'account.setGlobal': '✅ Compte Claude par défaut pour TOUS les sujets : {name}. Les sujets ayant leur propre choix le gardent ; les autres basculent maintenant ou à leur prochain démarrage.',
   'account.followSet': '✅ Ce sujet suit le compte Claude par défaut ({name}).{apply}',
-  'account.usage': 'Usage : /account — le sélecteur ; /account add <nom> ; /account use <nom> ; /account login <nom> ; /account remove <nom> ; /account autoswitch on|off.',
+  'account.usage': 'Usage : /accounts — le sélecteur ; /accounts add <nom> ; /accounts use <nom> ; /accounts login <nom> ; /accounts remove <nom> ; /accounts autoswitch on|off.',
   'account.applied.inactive': ' S’applique au prochain démarrage ou à la prochaine reprise de la session.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' La session en cours a été relancée dessous — même conversation.',
@@ -721,7 +719,7 @@ export const frDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 La chaîne de repli a une entrée avec de la marge — touchez pour y déplacer ce sujet et continuer maintenant.',
   'fallback.switched': '🔁 Limite d\'usage sur {from} — ce sujet est passé à {to} et continue.{reset}',
   'fallback.backgroundStopped': 'Les tâches d\'arrière-plan encore en cours ont été arrêtées par le changement.',
-  'fallback.switchedReset': ' {from} se réinitialise à {time} ; le sujet reste sur {to} jusqu\'à ce que vous le rebasculiez (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} se réinitialise à {time} ; le sujet reste sur {to} jusqu\'à ce que vous le rebasculiez (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Limite d\'usage sur {from} — l\'agent travaille encore, ce sujet passera donc à {to} à la fin de son tour ; l\'attente reste armée d\'ici là.',
   'fallback.switchFailed': '⚠️ La bascule vers {to} a échoué : {error}. L\'attente de la réinitialisation reste armée.',
   'limits.topicRuns': 'Ce sujet tourne actuellement sur : {current}.',
@@ -746,4 +744,13 @@ export const frDict: Record<string, string> = {
   'limits.whatSwitch': 'Basculer seul vers un secours',
   'limits.whatWait': 'Attendre la réinitialisation et continuer',
   'limits.usage': 'Utilisation : /limits — l’écran ; /limits rebuild ; /limits clear ; /limits switch on|off|same ; /limits wait on|off|same («same» = suivre General, dans un sujet).',
+  'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',
+  'accounts.openCodeNone': '🔌 Providers OpenCode : aucun connecté pour l’instant. «➕ Provider OpenCode» en connecte un.',
+  'accounts.buttonsHint': '🔑 reconnecte un compte, 🗑 le supprime, 🔌 déconnecte un provider.',
+  'accounts.addClaudeButton': '➕ Compte Claude',
+  'accounts.addProviderButton': '➕ Provider OpenCode',
+  'accounts.askProvider': '➕ Quel provider OpenCode ? Envoyez son identifiant dans le message suivant (par exemple openai ou openrouter).',
+  'accounts.stale': 'Cet écran est périmé — il est réaffiché.',
+  'accounts.confirmDisconnect': '🔌 Déconnecter {provider} ? Ses identifiants enregistrés seront supprimés.',
+  'accounts.confirmDisconnectButton': '🔌 Oui, déconnecter {provider}',
 };

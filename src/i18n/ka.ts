@@ -67,8 +67,6 @@ export const kaDict: Record<string, string> = {
   'help.thread_bound':
     '*თემა დაკავშირებულია `{subdir}`-თან.*\n' +
     '/claude /opencode — აგენტის გაშვება\n' +
-    '/connect — OpenCode პროვაიდერის API გასაღების დაკავშირება (ნაგულისხმევად OpenAI)\n' +
-    '/disconnect — პროვაიდერის შენახული სერთიფიკატების წაშლა\n' +
     '/terminal — shell-ის გახსნა ამ საქაღალდეში\n' +
     '/new — სესიის გადატვირთვა (ძველი → /sessions)\n' +
     '/model /sessions — გადართვა\n' +
@@ -78,7 +76,7 @@ export const kaDict: Record<string, string> = {
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
     '/limits — რა ხდება გამოყენების ლიმიტზე (სარეზერვო ჯაჭვი, გადართვა, ლოდინი)\n' +
-    '/account — ამ თემის Claude ანგარიში (არჩევა; დამატება / ხელახლა შესვლა / წაშლა)\n' +
+    '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (არჩევა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
     '/bind — კავშირის მართვა',
@@ -663,20 +661,20 @@ export const kaDict: Record<string, string> = {
   'account.removed': '✅ პროფილი {name} წაიშალა. {count} თემა ახლა ნაგულისხმევს მიჰყვება.',
   'account.removeDefaultRefused': 'default პროფილი თავად ~/.claude-ია და მისი წაშლა შეუძლებელია.',
   'account.removeInstanceDefaultRefused': '{name} ყველა თემის ნაგულისხმევია. ჯერ General თემაში სხვა ნაგულისხმევი აირჩიეთ.',
-  'account.unknown': '❌ პროფილი სახელით {name} არ არსებობს. სიისთვის გაუშვით /account.',
-  'account.notLoggedIn': '⚠️ პროფილი {name} შესული არ არის. ჯერ გაუშვით /account login {name}.',
-  'account.askName': '➕ ახალი პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო (მაგ. work). გამოაგზავნეთ შემდეგი შეტყობინებით ან გაუშვით /account add <სახელი>.',
+  'account.unknown': '❌ პროფილი სახელით {name} არ არსებობს. სიისთვის გაუშვით /accounts.',
+  'account.notLoggedIn': '⚠️ პროფილი {name} შესული არ არის. ჯერ გაუშვით /accounts login {name}.',
+  'account.askName': '➕ ახალი პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო (მაგ. work). გამოაგზავნეთ შემდეგი შეტყობინებით ან გაუშვით /accounts add <სახელი>.',
   'account.invalidName': '❌ პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო, და არა "default".',
   'account.exists': 'პროფილი სახელით {name} უკვე არსებობს.',
   'account.created': '✅ პროფილი {name} შეიქმნა. იწყება შესვლა…',
   'account.createFailed': '⚠️ პროფილ {name}-ის საქაღალდის შექმნა ვერ მოხერხდა. იხილეთ ბოტის ლოგი.',
   'account.login_url': '🔐 Claude-ში შესვლა პროფილისთვის {name}. გახსენით ეს ბმული ბრაუზერში, რომელშიც იმ ანგარიშით ხართ შესული — ინკოგნიტო ფანჯარა ან სხვა ბრაუზერის პროფილი თქვენს მიმდინარე შესვლას გვერდზე ტოვებს — დაასრულეთ შესვლა და კოდი აქ ჩასვით:\n{url}',
   'account.login_success': '✅ პროფილი {name} შევიდა: {email} ({plan}).',
-  'account.login_failed': '⚠️ პროფილ {name}-ში შესვლა ვერ მოხერხდა. სცადეთ ხელახლა: /account login {name}.',
+  'account.login_failed': '⚠️ პროფილ {name}-ში შესვლა ვერ მოხერხდა. სცადეთ ხელახლა: /accounts login {name}.',
   'account.setThisTopic': '✅ ამ თემის Claude ანგარიში: {name}.{apply}',
   'account.setGlobal': '✅ ნაგულისხმევი Claude ანგარიში ყველა თემისთვის: {name}. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ; დანარჩენები ახლავე ან შემდეგ გაშვებისას გადადიან.',
   'account.followSet': '✅ ეს თემა ნაგულისხმევ Claude ანგარიშს ({name}) მიჰყვება.{apply}',
-  'account.usage': 'გამოყენება: /account — არჩევა; /account add <სახელი>; /account use <სახელი>; /account login <სახელი>; /account remove <სახელი>; /account autoswitch on|off.',
+  'account.usage': 'გამოყენება: /accounts — არჩევა; /accounts add <სახელი>; /accounts use <სახელი>; /accounts login <სახელი>; /accounts remove <სახელი>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' ამოქმედდება სესიის შემდეგ გაშვებისას ან განახლებისას.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' მიმდინარე სესია მის ქვეშ გადაიტვირთა — იგივე საუბარი.',
@@ -721,7 +719,7 @@ export const kaDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 სათადარიგო ჯაჭვში მარაგიანი ჩანაწერია — დააჭირეთ, რომ ეს თემა მასზე გადავიდეს და ახლავე გააგრძელოს.',
   'fallback.switched': '🔁 გამოყენების ლიმიტი {from}-ზე — ეს თემა {to}-ზე გადაერთო და აგრძელებს.{reset}',
   'fallback.backgroundStopped': 'ჯერ მიმდინარე ფონური ამოცანები გადართვამ შეაჩერა.',
-  'fallback.switchedReset': ' {from} განულდება {time}-ზე; თემა {to}-ზე რჩება, სანამ თავად არ დააბრუნებთ (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} განულდება {time}-ზე; თემა {to}-ზე რჩება, სანამ თავად არ დააბრუნებთ (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 გამოყენების ლიმიტი {from}-ზე — აგენტი ჯერ მუშაობს, ამიტომ ეს თემა სვლის დასრულებისას {to}-ზე გადაერთვება; მანამდე ლოდინი რჩება.',
   'fallback.switchFailed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}. განულების ლოდინი რჩება.',
   'limits.topicRuns': 'ეს თემა ახლა მუშაობს: {current}.',
@@ -746,4 +744,13 @@ export const kaDict: Record<string, string> = {
   'limits.whatSwitch': 'სარეზერვოზე თავისით გადართვა',
   'limits.whatWait': 'განულების დალოდება და გაგრძელება',
   'limits.usage': 'გამოყენება: /limits — ეკრანი; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
+  'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode პროვაიდერები: ჯერ არცერთია დაკავშირებული. «➕ OpenCode პროვაიდერი» აკავშირებს ერთს.',
+  'accounts.buttonsHint': '🔑 ანგარიშში ხელახლა შესვლა, 🗑 წაშლა, 🔌 პროვაიდერის გათიშვა.',
+  'accounts.addClaudeButton': '➕ Claude ანგარიში',
+  'accounts.addProviderButton': '➕ OpenCode პროვაიდერი',
+  'accounts.askProvider': '➕ რომელი OpenCode პროვაიდერი? შემდეგ შეტყობინებაში გამოაგზავნეთ მისი id (მაგალითად, openai ან openrouter).',
+  'accounts.stale': 'ეს ეკრანი მოძველებულია — თავიდან აიგო.',
+  'accounts.confirmDisconnect': '🔌 გაითიშოს {provider}? მისი შენახული სერთიფიკატები წაიშლება.',
+  'accounts.confirmDisconnectButton': '🔌 დიახ, {provider}-ის გათიშვა',
 };

@@ -71,8 +71,6 @@ export const ruDict: Record<string, string> = {
   'help.thread_bound':
     '*Тред привязан к `{subdir}`.*\n' +
     '/claude /opencode — старт агента\n' +
-    '/connect — подключить OpenCode provider API key (по умолчанию OpenAI)\n' +
-    '/disconnect — удалить сохранённые ключи провайдера\n' +
     '/terminal — открыть shell в этой папке\n' +
     '/new — перезапустить сессию (старая → /sessions)\n' +
     '/model /sessions — переключение\n' +
@@ -82,7 +80,7 @@ export const ruDict: Record<string, string> = {
     '/compact — сжать контекст агента\n' +
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
     '/limits — что делать при лимите использования (запасная цепочка, переключение, ожидание)\n' +
-    '/account — аккаунт Claude для этого топика (выбор; добавить / войти заново / удалить)\n' +
+    '/accounts — аккаунты Claude и провайдеры OpenCode (выбор, добавить, войти заново, удалить, подключить, отключить)\n' +
     '/clear — удалить сообщения треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
     '/bind — управление binding',
@@ -667,20 +665,20 @@ export const ruDict: Record<string, string> = {
   'account.removed': '✅ Профиль {name} удалён. Топиков, перешедших на значение по умолчанию: {count}.',
   'account.removeDefaultRefused': 'Профиль default — это сам ~/.claude, его удалить нельзя.',
   'account.removeInstanceDefaultRefused': '{name} — профиль по умолчанию для всех топиков. Сначала выберите другой в топике General.',
-  'account.unknown': '❌ Профиля {name} нет. Список — /account.',
-  'account.notLoggedIn': '⚠️ В профиль {name} не выполнен вход. Сначала /account login {name}.',
-  'account.askName': '➕ Имя нового профиля — строчные латинские буквы, цифры, - и _, до {max} символов (например, work). Отправьте его следующим сообщением или выполните /account add <имя>.',
+  'account.unknown': '❌ Профиля {name} нет. Список — /accounts.',
+  'account.notLoggedIn': '⚠️ В профиль {name} не выполнен вход. Сначала /accounts login {name}.',
+  'account.askName': '➕ Имя нового профиля — строчные латинские буквы, цифры, - и _, до {max} символов (например, work). Отправьте его следующим сообщением или выполните /accounts add <имя>.',
   'account.invalidName': '❌ Имя профиля — строчные латинские буквы, цифры, - и _, до {max} символов, и не "default".',
   'account.exists': 'Профиль {name} уже существует.',
   'account.created': '✅ Профиль {name} создан. Запускаю вход…',
   'account.createFailed': '⚠️ Не удалось создать каталог профиля {name}. Смотрите лог бота.',
   'account.login_url': '🔐 Вход в Claude для профиля {name}. Откройте ссылку в браузере, где выполнен вход в ТОТ аккаунт — окно инкогнито или другой профиль браузера не даст подхватить текущий вход, — завершите вход и пришлите код сюда:\n{url}',
   'account.login_success': '✅ Профиль {name}: выполнен вход как {email} ({plan}).',
-  'account.login_failed': '⚠️ Вход в профиль {name} не удался. Повторить: /account login {name}.',
+  'account.login_failed': '⚠️ Вход в профиль {name} не удался. Повторить: /accounts login {name}.',
   'account.setThisTopic': '✅ Аккаунт Claude для этого топика: {name}.{apply}',
   'account.setGlobal': '✅ Аккаунт Claude по умолчанию для ВСЕХ топиков: {name}. Топики со своим выбором сохраняют его; остальные переключаются сейчас или при следующем запуске.',
   'account.followSet': '✅ Этот топик использует аккаунт Claude по умолчанию ({name}).{apply}',
-  'account.usage': 'Использование: /account — выбор; /account add <имя>; /account use <имя>; /account login <имя>; /account remove <имя>; /account autoswitch on|off.',
+  'account.usage': 'Использование: /accounts — выбор; /accounts add <имя>; /accounts use <имя>; /accounts login <имя>; /accounts remove <имя>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Применится при следующем запуске или возобновлении сессии.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Запущенная сессия перезапущена под ним — тот же разговор.',
@@ -725,7 +723,7 @@ export const ruDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 В цепочке есть запись с запасом — нажмите, чтобы перевести топик на неё и продолжить сейчас.',
   'fallback.switched': '🔁 Лимит на {from} — топик переключён на {to} и продолжает работу.{reset}',
   'fallback.backgroundStopped': 'Фоновые задачи, которые ещё работали, остановлены переключением.',
-  'fallback.switchedReset': ' {from} сбросится в {time}; топик остаётся на {to}, пока вы не переключите его обратно (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} сбросится в {time}; топик остаётся на {to}, пока вы не переключите его обратно (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Лимит на {from} — агент ещё работает, поэтому топик переключится на {to} по окончании хода; до тех пор ожидание остаётся.',
   'fallback.switchFailed': '⚠️ Переключение на {to} не удалось: {error}. Ожидание сброса остаётся.',
   'limits.topicRuns': 'Этот топик сейчас работает на: {current}.',
@@ -750,4 +748,13 @@ export const ruDict: Record<string, string> = {
   'limits.whatSwitch': 'Переключаться на запасной вариант самому',
   'limits.whatWait': 'Дождаться сброса и продолжить',
   'limits.usage': 'Использование: /limits — экран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — следовать General, в топике).',
+  'accounts.openCodeSection': '🔌 Провайдеры OpenCode (подключены):\n{list}',
+  'accounts.openCodeNone': '🔌 Провайдеры OpenCode: пока ни один не подключён. Кнопка «➕ Провайдер OpenCode» подключает.',
+  'accounts.buttonsHint': '🔑 — войти в аккаунт заново, 🗑 — удалить его, 🔌 — отключить провайдера.',
+  'accounts.addClaudeButton': '➕ Аккаунт Claude',
+  'accounts.addProviderButton': '➕ Провайдер OpenCode',
+  'accounts.askProvider': '➕ Какой провайдер OpenCode? Отправь его id следующим сообщением (например, openai или openrouter).',
+  'accounts.stale': 'Этот экран устарел — он обновлён.',
+  'accounts.confirmDisconnect': '🔌 Отключить {provider}? Сохранённые учётные данные будут удалены.',
+  'accounts.confirmDisconnectButton': '🔌 Да, отключить {provider}',
 };

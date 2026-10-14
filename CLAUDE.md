@@ -117,7 +117,7 @@ per-backend controls are optional methods the bot checks before calling.
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
   scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
-- **Claude account profiles** (`/account`, `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
+- **Claude account profiles** (`/accounts` — also the OpenCode providers' connect / disconnect entry; hidden aliases `/account`, `/connect`, `/disconnect`; `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
   subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`
   handed to the CLI through `CLAUDE_CONFIG_DIR` at EVERY spawn (the `ClaudeConfigDirReader` seam in
   `createAdapter.ts`), with `projects/`, settings, skills, plugins and the user memory symlinked back into

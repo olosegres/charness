@@ -1131,6 +1131,8 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   }
 
   return {
+    showConnectMethodPicker,
+    applyProviderDisconnect,
     handleProviderConnectKey,
     applyNumberedModelPick,
     applyModelPagePickArming,

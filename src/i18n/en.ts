@@ -71,8 +71,6 @@ export const enDict: Record<string, string> = {
   'help.thread_bound':
     '*Thread bound to `{subdir}`.*\n' +
     '/claude /opencode — start an agent\n' +
-    '/connect — connect an OpenCode provider API key (OpenAI by default)\n' +
-    '/disconnect — remove a provider\'s stored credentials\n' +
     '/terminal — open a shell in this folder\n' +
     '/new — restart the session (old one → /sessions)\n' +
     '/model /sessions — switch\n' +
@@ -82,7 +80,7 @@ export const enDict: Record<string, string> = {
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
     '/limits — what happens when an agent hits a usage limit (backup chain, switch, wait)\n' +
-    '/account — Claude account for this topic (picker; add / re-login / remove)\n' +
+    '/accounts — Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
     '/bind — manage binding',
@@ -707,20 +705,20 @@ export const enDict: Record<string, string> = {
   'account.removed': '✅ Profile {name} removed. {count} topic(s) now follow the default.',
   'account.removeDefaultRefused': 'The default profile is ~/.claude itself and cannot be removed.',
   'account.removeInstanceDefaultRefused': '{name} is the default for all topics. Pick another default in the General topic first.',
-  'account.unknown': '❌ No profile named {name}. Run /account to see the list.',
-  'account.notLoggedIn': '⚠️ Profile {name} is not signed in. Run /account login {name} first.',
-  'account.askName': '➕ Name for the new profile — lowercase letters, digits, - and _, up to {max} characters (e.g. work). Send it as the next message, or run /account add <name>.',
+  'account.unknown': '❌ No profile named {name}. Run /accounts to see the list.',
+  'account.notLoggedIn': '⚠️ Profile {name} is not signed in. Run /accounts login {name} first.',
+  'account.askName': '➕ Name for the new profile — lowercase letters, digits, - and _, up to {max} characters (e.g. work). Send it as the next message, or run /accounts add <name>.',
   'account.invalidName': '❌ A profile name is lowercase letters, digits, - and _, up to {max} characters, and not "default".',
   'account.exists': 'A profile named {name} already exists.',
   'account.created': '✅ Profile {name} created. Starting its sign-in…',
   'account.createFailed': '⚠️ Could not create the directory for profile {name}. See the bot log.',
   'account.login_url': '🔐 Sign in to Claude for profile {name}. Open this link in a browser that is signed in as THAT account — an incognito window or another browser profile keeps your current login out of the way — complete the sign-in and paste the code back here:\n{url}',
   'account.login_success': '✅ Profile {name} signed in: {email} ({plan}).',
-  'account.login_failed': '⚠️ Sign-in for profile {name} failed. Run /account login {name} to try again.',
+  'account.login_failed': '⚠️ Sign-in for profile {name} failed. Run /accounts login {name} to try again.',
   'account.setThisTopic': '✅ Claude account for this topic: {name}.{apply}',
   'account.setGlobal': '✅ Default Claude account for ALL topics: {name}. Topics with their own pick keep it; the others switch now or at their next start.',
   'account.followSet': '✅ This topic follows the default Claude account ({name}).{apply}',
-  'account.usage': 'Usage: /account — the picker; /account add <name>; /account use <name>; /account login <name>; /account remove <name>; /account autoswitch on|off.',
+  'account.usage': 'Usage: /accounts — the picker; /accounts add <name>; /accounts use <name>; /accounts login <name>; /accounts remove <name>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' It applies when the session next starts or resumes.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' The running session was restarted under it — same conversation.',
@@ -765,7 +763,7 @@ export const enDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 The fallback chain has an entry with room — tap to move this topic to it and continue now.',
   'fallback.switched': '🔁 Usage limit on {from} — this topic switched to {to} and continues.{reset}',
   'fallback.backgroundStopped': 'Background tasks that were still running were stopped by the switch.',
-  'fallback.switchedReset': ' {from} resets at {time}; the topic stays on {to} until you switch it back (/account, /model, /claude, /opencode).',
+  'fallback.switchedReset': ' {from} resets at {time}; the topic stays on {to} until you switch it back (/accounts, /model, /claude, /opencode).',
   'fallback.switchedDeferred': '🔁 Usage limit on {from} — the agent is still working, so this topic switches to {to} when its turn ends; the wait stays armed until then.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',
   'limits.topicRuns': 'This topic runs on: {current}.',
@@ -790,4 +788,13 @@ export const enDict: Record<string, string> = {
   'limits.whatSwitch': 'Switch to a backup by itself',
   'limits.whatWait': 'Wait for the reset and continue',
   'limits.usage': 'Usage: /limits — the screen; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = follow General, in a topic).',
+  'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode providers: none connected yet. «➕ OpenCode provider» connects one.',
+  'accounts.buttonsHint': '🔑 signs an account in again, 🗑 removes it, 🔌 disconnects a provider.',
+  'accounts.addClaudeButton': '➕ Claude account',
+  'accounts.addProviderButton': '➕ OpenCode provider',
+  'accounts.askProvider': '➕ Which OpenCode provider? Send its id as the next message (for example openai or openrouter).',
+  'accounts.stale': 'This screen is out of date — it is re-rendered.',
+  'accounts.confirmDisconnect': '🔌 Disconnect {provider}? Its stored credentials are removed.',
+  'accounts.confirmDisconnectButton': '🔌 Yes, disconnect {provider}',
 };

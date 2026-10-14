@@ -67,8 +67,6 @@ export const hiDict: Record<string, string> = {
   'help.thread_bound':
     '*थ्रेड `{subdir}` से बाउंड है।*\n' +
     '/claude /opencode — एजेंट शुरू करें\n' +
-    '/connect — OpenCode प्रदाता API कुंजी कनेक्ट करें (डिफ़ॉल्ट OpenAI)\n' +
-    '/disconnect — किसी प्रदाता के सहेजे गए क्रेडेंशियल हटाएँ\n' +
     '/terminal — इस फ़ोल्डर में शेल खोलें\n' +
     '/new — सत्र पुनः प्रारंभ करें (पुराना → /sessions)\n' +
     '/model /sessions — स्विच\n' +
@@ -78,7 +76,7 @@ export const hiDict: Record<string, string> = {
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
     '/limits — उपयोग-सीमा पर क्या हो (बैकअप शृंखला, स्विच, प्रतीक्षा)\n' +
-    '/account — इस टॉपिक का Claude खाता (चयनकर्ता; जोड़ें / फिर से लॉगिन / हटाएँ)\n' +
+    '/accounts — Claude खाते और OpenCode प्रदाता (चुनें, जोड़ें, फिर से लॉगिन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
     '/bind — बाइंडिंग प्रबंधित करें',
@@ -662,20 +660,20 @@ export const hiDict: Record<string, string> = {
   'account.removed': '✅ प्रोफ़ाइल {name} हटाई गई। {count} टॉपिक अब डिफ़ॉल्ट का पालन करते हैं।',
   'account.removeDefaultRefused': 'default प्रोफ़ाइल स्वयं ~/.claude है और हटाई नहीं जा सकती।',
   'account.removeInstanceDefaultRefused': '{name} सभी टॉपिक के लिए डिफ़ॉल्ट है। पहले General टॉपिक में कोई और डिफ़ॉल्ट चुनें।',
-  'account.unknown': '❌ {name} नाम की कोई प्रोफ़ाइल नहीं। सूची के लिए /account चलाएँ।',
-  'account.notLoggedIn': '⚠️ प्रोफ़ाइल {name} साइन इन नहीं है। पहले /account login {name} चलाएँ।',
-  'account.askName': '➕ नई प्रोफ़ाइल का नाम — छोटे अक्षर, अंक, - और _, अधिकतम {max} वर्ण (जैसे work)। इसे अगला संदेश बनाकर भेजें, या /account add <नाम> चलाएँ।',
+  'account.unknown': '❌ {name} नाम की कोई प्रोफ़ाइल नहीं। सूची के लिए /accounts चलाएँ।',
+  'account.notLoggedIn': '⚠️ प्रोफ़ाइल {name} साइन इन नहीं है। पहले /accounts login {name} चलाएँ।',
+  'account.askName': '➕ नई प्रोफ़ाइल का नाम — छोटे अक्षर, अंक, - और _, अधिकतम {max} वर्ण (जैसे work)। इसे अगला संदेश बनाकर भेजें, या /accounts add <नाम> चलाएँ।',
   'account.invalidName': '❌ प्रोफ़ाइल नाम में छोटे अक्षर, अंक, - और _ हों, अधिकतम {max} वर्ण, और "default" न हो।',
   'account.exists': '{name} नाम की प्रोफ़ाइल पहले से है।',
   'account.created': '✅ प्रोफ़ाइल {name} बनाई गई। साइन इन शुरू हो रहा है…',
   'account.createFailed': '⚠️ प्रोफ़ाइल {name} की डायरेक्टरी नहीं बन सकी। बॉट लॉग देखें।',
   'account.login_url': '🔐 प्रोफ़ाइल {name} के लिए Claude में साइन इन। यह लिंक ऐसे ब्राउज़र में खोलें जो उसी खाते से साइन इन हो — इनकॉग्निटो विंडो या दूसरा ब्राउज़र प्रोफ़ाइल आपके मौजूदा लॉगिन को अलग रखता है — साइन इन पूरा करें और कोड यहाँ पेस्ट करें:\n{url}',
   'account.login_success': '✅ प्रोफ़ाइल {name} साइन इन हुई: {email} ({plan})।',
-  'account.login_failed': '⚠️ प्रोफ़ाइल {name} का साइन इन विफल रहा। फिर से कोशिश के लिए /account login {name} चलाएँ।',
+  'account.login_failed': '⚠️ प्रोफ़ाइल {name} का साइन इन विफल रहा। फिर से कोशिश के लिए /accounts login {name} चलाएँ।',
   'account.setThisTopic': '✅ इस टॉपिक का Claude खाता: {name}।{apply}',
   'account.setGlobal': '✅ सभी टॉपिक के लिए डिफ़ॉल्ट Claude खाता: {name}। अपना चुनाव रखने वाले टॉपिक उसे रखते हैं; बाकी अभी या अगली शुरुआत पर बदलते हैं।',
   'account.followSet': '✅ यह टॉपिक डिफ़ॉल्ट Claude खाते ({name}) का पालन करता है।{apply}',
-  'account.usage': 'उपयोग: /account — चयनकर्ता; /account add <नाम>; /account use <नाम>; /account login <नाम>; /account remove <नाम>; /account autoswitch on|off।',
+  'account.usage': 'उपयोग: /accounts — चयनकर्ता; /accounts add <नाम>; /accounts use <नाम>; /accounts login <नाम>; /accounts remove <नाम>; /accounts autoswitch on|off।',
   'account.applied.inactive': ' सत्र के अगली बार शुरू या फिर से चालू होने पर लागू होगा।',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' चल रहा सत्र उसके तहत फिर से शुरू किया गया — वही बातचीत।',
@@ -720,7 +718,7 @@ export const hiDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 फ़ॉलबैक चेन में गुंजाइश वाली प्रविष्टि है — इस टॉपिक को उस पर ले जाकर अभी जारी रखने के लिए टैप करें।',
   'fallback.switched': '🔁 {from} पर उपयोग सीमा — यह टॉपिक {to} पर स्विच हो गया और जारी है।{reset}',
   'fallback.backgroundStopped': 'जो बैकग्राउंड कार्य चल रहे थे, वे स्विच से रुक गए।',
-  'fallback.switchedReset': ' {from} {time} पर रीसेट होगा; जब तक आप वापस न बदलें (/account, /model, /claude, /opencode), टॉपिक {to} पर रहेगा।',
+  'fallback.switchedReset': ' {from} {time} पर रीसेट होगा; जब तक आप वापस न बदलें (/accounts, /model, /claude, /opencode), टॉपिक {to} पर रहेगा।',
   'fallback.switchedDeferred': '🔁 {from} पर उपयोग सीमा — एजेंट अभी काम कर रहा है, इसलिए यह टॉपिक अपनी बारी खत्म होने पर {to} पर स्विच होगा; तब तक प्रतीक्षा सक्रिय रहेगी।',
   'fallback.switchFailed': '⚠️ {to} पर स्विच विफल: {error}। रीसेट की प्रतीक्षा सक्रिय रहती है।',
   'limits.topicRuns': 'यह टॉपिक अभी इस पर चल रहा है: {current}।',
@@ -745,4 +743,13 @@ export const hiDict: Record<string, string> = {
   'limits.whatSwitch': 'बैकअप पर अपने-आप स्विच करें',
   'limits.whatWait': 'रीसेट का इंतज़ार करके जारी रखें',
   'limits.usage': 'उपयोग: /limits — स्क्रीन; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
+  'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode प्रदाता: अभी कोई कनेक्ट नहीं है। «➕ OpenCode प्रदाता» से एक कनेक्ट करें।',
+  'accounts.buttonsHint': '🔑 खाते में फिर से लॉग-इन, 🗑 उसे हटाना, 🔌 प्रदाता को डिस्कनेक्ट करना।',
+  'accounts.addClaudeButton': '➕ Claude खाता',
+  'accounts.addProviderButton': '➕ OpenCode प्रदाता',
+  'accounts.askProvider': '➕ कौन-सा OpenCode प्रदाता? अगले संदेश में उसकी id भेजें (जैसे openai या openrouter)।',
+  'accounts.stale': 'यह स्क्रीन पुरानी हो चुकी है — इसे फिर से बनाया गया है।',
+  'accounts.confirmDisconnect': '🔌 {provider} को डिस्कनेक्ट करें? उसके सहेजे गए क्रेडेंशियल हटा दिए जाएँगे।',
+  'accounts.confirmDisconnectButton': '🔌 हाँ, {provider} को डिस्कनेक्ट करें',
 };

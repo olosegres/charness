@@ -428,16 +428,22 @@ describe('/disconnect adapter resolution', () => {
 });
 
 describe('Telegram command menu', () => {
-  it('lists /disconnect right after /connect', () => {
+  it('lists /accounts and hides its three aliases (/account, /connect, /disconnect) — they still work', () => {
     const commands = COMMANDS_MENU.map((entry) => entry.command);
-    const connectIndex = commands.indexOf('connect');
-    assert.ok(connectIndex >= 0, '/connect must be in the menu');
-    assert.equal(commands[connectIndex + 1], 'disconnect');
+    assert.ok(commands.includes('accounts'), '/accounts must be in the menu');
+    for (const hidden of ['account', 'connect', 'disconnect']) {
+      assert.equal(commands.includes(hidden), false, `/${hidden} is a hidden alias`);
+    }
+  });
+
+  it('lists /limits and hides /fallback and /auto_continue_limits', () => {
+    const commands = COMMANDS_MENU.map((entry) => entry.command);
+    assert.ok(commands.includes('limits'));
+    assert.equal(commands.includes('fallback'), false);
+    assert.equal(commands.includes('auto_continue_limits'), false);
   });
 
   it('every menu entry carries a non-empty description', () => {
-    const disconnectEntry = COMMANDS_MENU.find((entry) => entry.command === 'disconnect');
-    assert.ok(disconnectEntry);
-    assert.ok(disconnectEntry.description.trim().length > 0);
+    for (const entry of COMMANDS_MENU) assert.ok(entry.description.trim().length > 0, entry.command);
   });
 });

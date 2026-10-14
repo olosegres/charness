@@ -1,6 +1,9 @@
 /**
- * `/account` — which Claude account (profile) a topic's Claude sessions run on, with its buttons: the picker,
- * add (name + sign-in), re-login, remove. See README.md in this folder and `utils/claudeProfiles.ts`.
+ * `/accounts` — every account the bot works with, on one screen: the Claude accounts (profiles) with their usage
+ * (which one a topic's Claude sessions run on, add / re-login / remove) and the OpenCode providers the server is
+ * authenticated for (connect / disconnect). `/account`, `/connect` and `/disconnect` stay as hidden aliases; the
+ * OpenCode flows themselves live in `modelProviders.ts` and are only entered from here through ports. See
+ * README.md in this folder and `utils/claudeProfiles.ts`.
  */
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
@@ -28,9 +31,12 @@ import {
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import {
   accountAddCallback,
+  accountAddProviderCallback,
   accountAutoSwitchOffCallback,
   accountAutoSwitchOnCallback,
   accountBackCallback,
+  accountDisconnectCallbackRe,
+  accountDisconnectConfirmCallbackRe,
   accountFollowDefaultCallback,
   accountLoginCallbackRe,
   accountLoginMenuCallback,
@@ -39,6 +45,8 @@ import {
   accountRemoveMenuCallback,
   accountUseCallbackRe,
   buildAccountLoginCallback,
+  buildAccountDisconnectCallback,
+  buildAccountDisconnectConfirmCallback,
   buildAccountPickerRows,
   buildAccountRemoveCallback,
   buildAccountRemoveConfirmCallback,
@@ -47,6 +55,7 @@ import {
   parseAccountCallbackName,
   type AccountPickerRow,
 } from '../../../utils/claudeAccountPickerPlan';
+import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
 import { getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 
@@ -78,7 +87,16 @@ export interface ClaudeAccountsPorts
   applyClaudeProfile: (key: SessionKey) => Promise<ClaudeProfileApplyOutcome>;
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
+  /** The OpenCode providers the server is authenticated for (its live catalog); `[]` when it cannot be read. */
+  detectOpenCodeProviders: () => Promise<string[]>;
+  /** Drop a provider's stored credentials and post the outcome — the `/disconnect <provider>` flow, unchanged. */
+  disconnectOpenCodeProvider: (key: SessionKey, providerId: string) => Promise<void>;
+  /** Start the `/connect <provider>` flow (the method picker: OAuth or API key), unchanged. */
+  startOpenCodeConnect: (key: SessionKey, providerId: string) => Promise<void>;
 }
+
+/** Screens whose provider snapshot is kept (the newest); an older keyboard is refused as expired. */
+const providerSnapshotLimit = 50;
 
 /**
  * @description Build the `/account` feature over its ports: the command, its buttons, the name capture the
@@ -89,11 +107,36 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere,
+    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect,
   } = ports;
 
-  /** Topics whose next plain message is the name of a new profile (armed by «Add»). */
-  const awaitingProfileName = new Set<string>();
+  /**
+   * Topics whose next plain message is an answer to «➕»: the name of a new Claude profile, or the id of the
+   * OpenCode provider to connect. One capture per topic; armed by the buttons / `add`, disarmed by a slash
+   * command or `/esc`.
+   */
+  const awaitingProfileName = new Map<string, 'claudeName' | 'providerId'>();
+  /** The OpenCode providers each screen MESSAGE listed — its disconnect buttons carry an index into this. */
+  const providerSnapshots = new Map<number, string[]>();
+
+  function rememberProviders(messageId: number, providers: string[]): void {
+    providerSnapshots.delete(messageId);
+    providerSnapshots.set(messageId, providers);
+    while (providerSnapshots.size > providerSnapshotLimit) {
+      const oldest = providerSnapshots.keys().next().value;
+      if (oldest === undefined) break;
+      providerSnapshots.delete(oldest);
+    }
+  }
+
+  async function readOpenCodeProviders(): Promise<string[]> {
+    try {
+      return await detectOpenCodeProviders();
+    } catch (e) {
+      console.warn('[accounts] the OpenCode providers are unavailable:', e instanceof Error ? e.message : e);
+      return [];
+    }
+  }
 
   function resolveActiveName(key: SessionKey, isGeneral: boolean): string {
     return isGeneral ? getState().getClaudeProfileGlobalDefault() : getState().resolveClaudeProfileName(key);
@@ -205,27 +248,47 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     });
   }
 
-  /** The main picker: text + keyboard, for the topic (or General). */
-  async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
-    const rows = await buildPickerRows(key, isGeneral);
+  /** The main screen: text + keyboard, for the topic (or General), and the provider list the keyboard indexes. */
+  async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard>; providers: string[] }> {
+    const [rows, providers] = await Promise.all([buildPickerRows(key, isGeneral), readOpenCodeProviders()]);
     const list = rows.map(formatRow).join('\n');
     const activeName = resolveActiveName(key, isGeneral);
     const title = isGeneral
       ? t('account.titleGeneral', { name: activeName, list })
       : t('account.title', { name: activeName, list });
-    const text = `${title}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}\n\n${t('account.autoSwitchHint')}`;
-    const keyboardRows = rows.map((row) => [Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name))]);
+    const openCodeSection = providers.length === 0
+      ? t('accounts.openCodeNone')
+      : t('accounts.openCodeSection', { list: providers.map((provider) => `• ${provider}`).join('\n') });
+    const text = `${title}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.usageHint', { timezone: getInstanceTimezone() })}\n\n${t('account.autoSwitchHint')}`;
+    // One row per Claude account: pick it (✓ = the current one), sign it in again, remove it (never `default`).
+    const keyboardRows = rows.map((row) => {
+      const buttons = [
+        Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),
+        Markup.button.callback('🔑', buildAccountLoginCallback(row.name)),
+      ];
+      if (row.name !== defaultClaudeProfileName) buttons.push(Markup.button.callback('🗑', buildAccountRemoveCallback(row.name)));
+      return buttons;
+    });
+    providers.forEach((provider, index) => {
+      keyboardRows.push([Markup.button.callback(t('disconnect.provider_button', { provider }), buildAccountDisconnectCallback(index))]);
+    });
     keyboardRows.push([
-      Markup.button.callback(t('account.addButton'), accountAddCallback),
-      Markup.button.callback(t('account.loginButton'), accountLoginMenuCallback),
-      Markup.button.callback(t('account.removeButton'), accountRemoveMenuCallback),
+      Markup.button.callback(t('accounts.addClaudeButton'), accountAddCallback),
+      Markup.button.callback(t('accounts.addProviderButton'), accountAddProviderCallback),
     ]);
     if (!isGeneral && getState().getClaudeProfileOverride(key) !== undefined) {
       keyboardRows.push([
         Markup.button.callback(t('account.followButton', { name: getState().getClaudeProfileGlobalDefault() }), accountFollowDefaultCallback),
       ]);
     }
-    return { text, keyboard: Markup.inlineKeyboard(keyboardRows) };
+    return { text, keyboard: Markup.inlineKeyboard(keyboardRows), providers };
+  }
+
+  /** Post the screen as a new message and remember the provider list its buttons index. */
+  async function postPicker(key: SessionKey, isGeneral: boolean): Promise<void> {
+    const picker = await buildPicker(key, isGeneral);
+    const messageId = await replyToThread(key, picker.text, picker.keyboard);
+    if (messageId !== null) rememberProviders(messageId, picker.providers);
   }
 
   /** A sub-picker: one button per profile (`default` included only when `includeDefault`), plus «Back». */
@@ -240,6 +303,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   async function rerenderPicker(key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
     if (messageId === null) return;
     const picker = await buildPicker(key, isGeneral);
+    rememberProviders(messageId, picker.providers);
     await editThreadMessage(key, messageId, picker.text, picker.keyboard);
   }
 
@@ -373,8 +437,23 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return awaitingProfileName.delete(keyToString(key));
   }
 
-  /** The captured name: create the profile and start its sign-in; a bad name keeps the capture armed. */
+  /** The captured provider id: start the `/connect` flow for it; a bad id keeps the capture armed. */
+  async function submitProviderId(key: SessionKey, text: string): Promise<void> {
+    const providerId = text.trim().toLowerCase();
+    if (!checkIsValidProviderId(providerId)) {
+      await replyToThread(key, `${t('connect.invalid_provider', { provider: providerId })}\n${t('login.esc_hint')}`);
+      return;
+    }
+    awaitingProfileName.delete(keyToString(key));
+    await startOpenCodeConnect(key, providerId);
+  }
+
+  /** The captured answer of «➕»: a Claude profile name, or an OpenCode provider id, by what was asked. */
   async function submitProfileName(key: SessionKey, text: string): Promise<void> {
+    if (awaitingProfileName.get(keyToString(key)) === 'providerId') {
+      await submitProviderId(key, text);
+      return;
+    }
     const name = normaliseClaudeProfileName(text);
     if (!checkIsValidClaudeProfileName(name)) {
       await replyToThread(key, `${t('account.invalidName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
@@ -388,7 +467,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   // ── the command ──
 
   function registerClaudeAccountCommands(): void {
-    // `/account` — bare: the picker. `add <name>` creates a profile and signs it in; `use <name>` switches
+    // `/accounts` (hidden alias `/account`) — bare: the screen. `add <name>` creates a profile and signs it in; `use <name>` switches
     // this topic (General: the instance default); `login <name>` signs a profile in again; `remove <name>`
     // deletes one. Not gated on a session: the pick is read at the next spawn, so it must be settable first.
     command(['account', 'accounts'], async (_ctx, key, parsed: InboundCommand) => {
@@ -397,13 +476,12 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const name = normaliseClaudeProfileName(rest.join(' '));
       switch (verb.toLowerCase()) {
         case '': {
-          const picker = await buildPicker(key, isGeneral);
-          await replyToThread(key, picker.text, picker.keyboard);
+          await postPicker(key, isGeneral);
           return;
         }
         case 'add': {
           if (!name) {
-            awaitingProfileName.add(keyToString(key));
+            awaitingProfileName.set(keyToString(key), 'claudeName');
             await replyToThread(key, `${t('account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
             return;
           }
@@ -468,9 +546,43 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountAddCallback, (ctx) => handleTap(ctx, async (key) => {
-      awaitingProfileName.add(keyToString(key));
+      awaitingProfileName.set(keyToString(key), 'claudeName');
       await ctx.answerCbQuery();
       await replyToThread(key, `${t('account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
+    }));
+
+    bot.action(accountAddProviderCallback, (ctx) => handleTap(ctx, async (key) => {
+      awaitingProfileName.set(keyToString(key), 'providerId');
+      await ctx.answerCbQuery();
+      await replyToThread(key, `${t('accounts.askProvider')}\n${t('login.esc_hint')}`);
+    }));
+
+    // A provider's «🔌» row → ask first (a disconnect drops stored credentials), against the snapshot of the
+    // message the button sits on: an older screen can never map its index onto a newer list.
+    bot.action(accountDisconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      if (messageId === null || provider === undefined) {
+        await ctx.answerCbQuery(t('accounts.stale'));
+        await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      await ctx.answerCbQuery();
+      await editThreadMessage(key, messageId, t('accounts.confirmDisconnect', { provider }), Markup.inlineKeyboard([
+        [Markup.button.callback(t('accounts.confirmDisconnectButton', { provider }), buildAccountDisconnectConfirmCallback(Number(ctx.match[1])))],
+        [Markup.button.callback(t('account.backButton'), accountBackCallback)],
+      ]));
+    }));
+
+    bot.action(accountDisconnectConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      if (messageId === null || provider === undefined) {
+        await ctx.answerCbQuery(t('accounts.stale'));
+        await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      await ctx.answerCbQuery();
+      await disconnectOpenCodeProvider(key, provider);
+      await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(accountLoginMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {

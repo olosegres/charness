@@ -81,9 +81,20 @@ a keyboard-less confirmation. The usage-limit notice appends the shared pointer 
 
 ## `claudeAccounts.ts`
 
-`/account` (`/accounts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_login_menu`,
-`acct_rm_menu`, `acct_back`, `acct_login_<name>`, `acct_rm_<name>`, `acct_rmok_<name>`: which Claude account
-profile (`utils/claudeProfiles.ts`) a topic's Claude sessions run on. A button BAKES the profile name into its
+`/accounts` (hidden alias `/account`; `/connect` and `/disconnect` are hidden aliases of its OpenCode half, still
+registered by `modelProviders.ts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_ocadd`,
+`acct_dc_<i>`, `acct_dcok_<i>`, `acct_login_menu`, `acct_rm_menu`, `acct_back`, `acct_login_<name>`,
+`acct_rm_<name>`, `acct_rmok_<name>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
+sessions run on, and the OpenCode providers the server is authenticated for. One screen: a row per Claude account
+(pick, 🔑 re-login, 🗑 remove — `default` has no remove), a 🔌 row per connected provider, «➕ Claude account» and
+«➕ OpenCode provider». The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
+(`providerSnapshots`, the newest 50): a tap asks for confirmation, the confirmation disconnects through the
+`disconnectOpenCodeProvider` port (`applyProviderDisconnect` of `modelProviders.ts`, flow unchanged), and an
+older screen resolves to «out of date» and a re-render. The providers come from the `detectOpenCodeProviders`
+port (the live OpenCode catalog; `[]` when unreadable). «➕ OpenCode provider» arms the same per-topic capture as
+«➕ Claude account», with the provider kind: the next plain message is the provider id, validated and handed to
+`startOpenCodeConnect` (`showConnectMethodPicker` — the `/connect <provider>` method picker, flow unchanged); a bad id
+keeps the capture armed. The old login / remove sub-pickers and their buttons keep answering. A button BAKES the profile name into its
 data (names are slugs of at most 32 characters, so the data stays under 64 bytes) — an old keyboard can never act
 on another profile. A regular topic sets its own pick, General the instance default; the picker is meant for
 repeated use and re-renders in place. The module owns no process: it asks the bot through ports to probe

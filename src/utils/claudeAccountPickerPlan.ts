@@ -30,6 +30,14 @@ export const accountRemoveConfirmCallbackRe = new RegExp(`^acct_rmok_${nameGroup
 export const accountAddCallback = 'acct_add';
 /** A topic drops its own pick and follows the instance default again. */
 export const accountFollowDefaultCallback = 'acct_follow';
+/** Arm the OpenCode provider-id capture (the next plain message names the provider to connect). */
+export const accountAddProviderCallback = 'acct_ocadd';
+/**
+ * Disconnect an OpenCode provider: the INDEX points into the provider list the screen listed, snapshotted per
+ * message (a provider id can be long and the list changes), then the confirmation of the same index.
+ */
+export const accountDisconnectCallbackRe = /^acct_dc_(\d{1,2})$/;
+export const accountDisconnectConfirmCallbackRe = /^acct_dcok_(\d{1,2})$/;
 /** Back to the main picker from a sub-picker. */
 export const accountBackCallback = 'acct_back';
 /** Flip the auto-switch-on-limit setting (`utils/claudeLimitSwitch.ts`): the topic's override, in General the instance default. */
@@ -42,6 +50,14 @@ export function buildAccountUseCallback(name: string): string {
 
 export function buildAccountLoginCallback(name: string): string {
   return `acct_login_${name}`;
+}
+
+export function buildAccountDisconnectCallback(index: number): string {
+  return `acct_dc_${index}`;
+}
+
+export function buildAccountDisconnectConfirmCallback(index: number): string {
+  return `acct_dcok_${index}`;
 }
 
 export function buildAccountRemoveCallback(name: string): string {

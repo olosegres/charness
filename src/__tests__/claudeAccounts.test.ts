@@ -37,6 +37,9 @@ let isGeneralTopic = false;
 let applyOutcome: ClaudeProfileApplyOutcome = 'inactive';
 const appliedKeys: SessionKey[] = [];
 let applyEverywhereCalls = 0;
+let openCodeProviders: string[] = [];
+const disconnected: Array<{ key: SessionKey; providerId: string }> = [];
+const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
@@ -45,7 +48,7 @@ function setStatus(configDir: string | null, status: ClaudeAuthStatus | null): v
   statusByDir.set(configDir, status);
 }
 
-describe('claudeAccounts: /account over its ports', () => {
+describe('claudeAccounts: /accounts over its ports', () => {
   before(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-accounts-'));
     homeClaudeDir = path.join(dataDir, 'fake-home', '.claude');
@@ -69,6 +72,13 @@ describe('claudeAccounts: /account over its ports', () => {
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
       },
+      detectOpenCodeProviders: async () => openCodeProviders,
+      disconnectOpenCodeProvider: async (key, providerId) => {
+        disconnected.push({ key, providerId });
+      },
+      startOpenCodeConnect: async (key, providerId) => {
+        startedConnects.push({ key, providerId });
+      },
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -81,12 +91,15 @@ describe('claudeAccounts: /account over its ports', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('registers /account (+ /accounts) and its buttons', () => {
+  it('registers /account and /accounts (the hidden alias and the menu name) and the buttons', () => {
     assert.deepEqual(harness.registeredCommandNames, ['account', 'accounts']);
     assert.deepEqual(harness.registeredActionPatterns, [
       String(/^acct_use_([a-z0-9][a-z0-9_-]{0,31})$/),
       'acct_follow',
       'acct_add',
+      'acct_ocadd',
+      String(/^acct_dc_(\d{1,2})$/),
+      String(/^acct_dcok_(\d{1,2})$/),
       'acct_login_menu',
       'acct_rm_menu',
       'acct_back',
@@ -103,9 +116,10 @@ describe('claudeAccounts: /account over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /✓ default — me@example\.com, personal max/);
     assert.deepEqual(harness.getKeyboardData(picker), [
-      ['acct_use_default'],
-      ['acct_add', 'acct_login_menu', 'acct_rm_menu'],
-    ]);
+      ['acct_use_default', 'acct_login_default'],
+      ['acct_add', 'acct_ocadd'],
+    ], 'one row per account (pick + re-login; `default` has no remove), then the two adders');
+    assert.match(picker?.text ?? '', /OpenCode providers: none connected yet/);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
     assert.equal(harness.state.getClaudeProfileRecord('default'), undefined);
@@ -161,9 +175,9 @@ describe('claudeAccounts: /account over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /• work — work@example\.com, corporate team/);
     assert.match(picker?.text ?? '', /• team — not signed in/);
-    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default']);
-    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work']);
-    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team']);
+    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default']);
+    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_login_work', 'acct_rm_work']);
+    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_login_team', 'acct_rm_team']);
   });
 
   it('`use` of a logged-out profile is refused; `use work` in a topic sets the pick and reports the apply outcome', async () => {
@@ -219,9 +233,9 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'team');
     await harness.runCommand('account');
     const picker = harness.replies.at(-1);
-    await harness.tapButton(picker!.messageId!, 'acct_rm_menu');
+    await harness.tapButton(picker!.messageId!, 'acct_rm_menu'); // the old sub-picker still answers
     assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['acct_rm_work'], ['acct_rm_team'], ['acct_back']]);
-    await harness.tapButton(picker!.messageId!, 'acct_rm_team');
+    await harness.tapButton(picker!.messageId!, 'acct_rm_team'); // the same data the row's 🗑 sends
     assert.match(harness.edits.at(-1)?.text ?? '', /Remove profile team \(team@example\.com\)\? .* 1 topic/);
     const callsBefore = applyEverywhereCalls;
     await harness.tapButton(picker!.messageId!, 'acct_rmok_team');
@@ -247,6 +261,64 @@ describe('claudeAccounts: /account over its ports', () => {
     assert.match(harness.replies.at(-1)?.text ?? '', /Auto-switch to another account on a usage limit: OFF for this topic/);
     await harness.runCommand('account', 'autoswitch maybe');
     assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: /);
+  });
+
+  it('the OpenCode part: connected providers are listed with a 🔌 row each; the tap asks first and only the confirmation disconnects', async () => {
+    openCodeProviders = ['openai', 'openrouter'];
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    assert.match(screen.text ?? '', /OpenCode providers \(connected\):\n• openai\n• openrouter/);
+    const rows = harness.getKeyboardData(screen);
+    assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0'], ['acct_dc_1']]);
+    assert.deepEqual(rows.at(-1)?.slice(-2), ['acct_add', 'acct_ocadd']);
+    await harness.tapButton(screen.messageId!, 'acct_dc_1');
+    assert.match(harness.edits.at(-1)?.text ?? '', /Disconnect openrouter\?/);
+    assert.deepEqual(disconnected, [], 'asking disconnects nothing');
+    assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['acct_dcok_1'], ['acct_back']]);
+    await harness.tapButton(screen.messageId!, 'acct_dcok_1');
+    assert.deepEqual(disconnected, [{ key: harness.key, providerId: 'openrouter' }]);
+    assert.equal(harness.getKeyboardData(harness.edits.at(-1)).some((row) => row[0] === 'acct_dc_0'), true, 'the screen is re-rendered in place');
+  });
+
+  it('a disconnect tap on a message with no provider snapshot (or an index past it) only re-renders', async () => {
+    const stray = (await harness.core.replyToThread(harness.key, 'an old screen'))!;
+    const editsBefore = harness.edits.length;
+    await harness.tapButton(stray, 'acct_dcok_0');
+    assert.equal(disconnected.length, 1, 'nothing more was disconnected');
+    assert.equal(harness.edits.length, editsBefore + 1);
+  });
+
+  it('«➕ OpenCode provider» arms a provider-id capture: the next plain message starts the /connect flow for it; a bad id keeps it armed; /esc-style cancel disarms', async () => {
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    await harness.tapButton(screen.messageId!, 'acct_ocadd');
+    assert.match(harness.replies.at(-1)?.text ?? '', /Which OpenCode provider\?/);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true);
+    await accounts.submitProfileName(harness.key, 'bad!id');
+    assert.match(harness.replies.at(-1)?.text ?? '', /Invalid provider id/);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true);
+    await accounts.submitProfileName(harness.key, ' OpenRouter ');
+    assert.deepEqual(startedConnects, [{ key: harness.key, providerId: 'openrouter' }]);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
+    await harness.tapButton(screen.messageId!, 'acct_ocadd');
+    assert.equal(accounts.cancelProfileNameCapture(harness.key), true);
+  });
+
+  it('«➕ Claude account» still arms the profile-name capture, not the provider one', async () => {
+    await harness.runCommand('accounts');
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');
+    assert.match(harness.replies.at(-1)?.text ?? '', /Name for the new profile/);
+    const before = startedConnects.length;
+    await accounts.submitProfileName(harness.key, 'bad name!');
+    assert.match(harness.replies.at(-1)?.text ?? '', /lowercase letters/);
+    assert.equal(startedConnects.length, before);
+    accounts.cancelProfileNameCapture(harness.key);
+  });
+
+  it('a provider list that cannot be read leaves the Claude half of the screen intact', async () => {
+    openCodeProviders = [];
+    await harness.runCommand('accounts');
+    assert.match(harness.replies.at(-1)?.text ?? '', /none connected yet/);
   });
 
   it('in General the toggle sets the instance default', async () => {

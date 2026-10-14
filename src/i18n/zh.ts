@@ -67,8 +67,6 @@ export const zhDict: Record<string, string> = {
   'help.thread_bound':
     '*话题已绑定到 `{subdir}`。*\n' +
     '/claude /opencode — 启动代理\n' +
-    '/connect — 连接 OpenCode provider API key（默认 OpenAI）\n' +
-    '/disconnect — 删除某个 provider 已保存的凭据\n' +
     '/terminal — 在此文件夹中打开 shell\n' +
     '/new — 重启会话（旧的 → /sessions）\n' +
     '/model /sessions — 切换\n' +
@@ -78,7 +76,7 @@ export const zhDict: Record<string, string> = {
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
     '/limits — 遇到用量上限时的处理（备用链、切换、等待）\n' +
-    '/account — 此话题的 Claude 账号（选择器；添加 / 重新登录 / 删除）\n' +
+    '/accounts — Claude 账号与 OpenCode provider（选择、添加、重新登录、删除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
     '/bind — 管理绑定',
@@ -657,20 +655,20 @@ export const zhDict: Record<string, string> = {
   'account.removed': '✅ 配置 {name} 已删除。{count} 个话题现在跟随默认值。',
   'account.removeDefaultRefused': 'default 配置就是 ~/.claude 本身，无法删除。',
   'account.removeInstanceDefaultRefused': '{name} 是所有话题的默认值。请先在 General 话题中选择另一个默认值。',
-  'account.unknown': '❌ 没有名为 {name} 的配置。运行 /account 查看列表。',
-  'account.notLoggedIn': '⚠️ 配置 {name} 未登录。请先运行 /account login {name}。',
-  'account.askName': '➕ 新配置的名称 — 小写字母、数字、- 和 _，最多 {max} 个字符（例如 work）。作为下一条消息发送，或运行 /account add <名称>。',
+  'account.unknown': '❌ 没有名为 {name} 的配置。运行 /accounts 查看列表。',
+  'account.notLoggedIn': '⚠️ 配置 {name} 未登录。请先运行 /accounts login {name}。',
+  'account.askName': '➕ 新配置的名称 — 小写字母、数字、- 和 _，最多 {max} 个字符（例如 work）。作为下一条消息发送，或运行 /accounts add <名称>。',
   'account.invalidName': '❌ 配置名称只能是小写字母、数字、- 和 _，最多 {max} 个字符，且不能是 "default"。',
   'account.exists': '已存在名为 {name} 的配置。',
   'account.created': '✅ 配置 {name} 已创建。正在开始登录…',
   'account.createFailed': '⚠️ 无法创建配置 {name} 的目录。请查看机器人日志。',
   'account.login_url': '🔐 为配置 {name} 登录 Claude。请在已登录“那个”账号的浏览器中打开此链接——使用无痕窗口或另一个浏览器配置可避免沿用当前登录——完成登录后把代码粘贴回这里：\n{url}',
   'account.login_success': '✅ 配置 {name} 已登录：{email}（{plan}）。',
-  'account.login_failed': '⚠️ 配置 {name} 登录失败。运行 /account login {name} 重试。',
+  'account.login_failed': '⚠️ 配置 {name} 登录失败。运行 /accounts login {name} 重试。',
   'account.setThisTopic': '✅ 此话题的 Claude 账号：{name}。{apply}',
   'account.setGlobal': '✅ 所有话题的默认 Claude 账号：{name}。自行选择过的话题保持不变；其余话题现在或在下次启动时切换。',
   'account.followSet': '✅ 此话题跟随默认 Claude 账号（{name}）。{apply}',
-  'account.usage': '用法：/account — 选择器；/account add <名称>；/account use <名称>；/account login <名称>；/account remove <名称>；/account autoswitch on|off。',
+  'account.usage': '用法：/accounts — 选择器；/accounts add <名称>；/accounts use <名称>；/accounts login <名称>；/accounts remove <名称>；/accounts autoswitch on|off。',
   'account.applied.inactive': ' 将在会话下次启动或恢复时生效。',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' 运行中的会话已在其下重启——同一段对话。',
@@ -715,7 +713,7 @@ export const zhDict: Record<string, string> = {
   'fallback.switchOffer': '🪜 备用链中有仍有余量的条目 — 点击把此话题移到它并立即继续。',
   'fallback.switched': '🔁 {from} 触及用量上限 — 此话题已切换到 {to} 并继续。{reset}',
   'fallback.backgroundStopped': '仍在运行的后台任务已因切换而停止。',
-  'fallback.switchedReset': ' {from} 将于 {time} 重置；在你手动切回之前（/account、/model、/claude、/opencode），话题保持在 {to}。',
+  'fallback.switchedReset': ' {from} 将于 {time} 重置；在你手动切回之前（/accounts、/model、/claude、/opencode），话题保持在 {to}。',
   'fallback.switchedDeferred': '🔁 {from} 触及用量上限 — 代理仍在工作，此话题将在本轮结束后切换到 {to}；在此之前等待保持生效。',
   'fallback.switchFailed': '⚠️ 切换到 {to} 失败：{error}。重置等待保持生效。',
   'limits.topicRuns': '此话题当前运行在：{current}。',
@@ -740,4 +738,13 @@ export const zhDict: Record<string, string> = {
   'limits.whatSwitch': '自动切换到备用',
   'limits.whatWait': '等待重置后继续',
   'limits.usage': '用法：/limits — 主界面；/limits rebuild；/limits clear；/limits switch on|off|same；/limits wait on|off|same（在话题中，«same» = 跟随 General）。',
+  'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',
+  'accounts.openCodeNone': '🔌 OpenCode provider：尚未连接任何一个。点「➕ OpenCode provider」来连接。',
+  'accounts.buttonsHint': '🔑 重新登录账号，🗑 删除账号，🔌 断开 provider。',
+  'accounts.addClaudeButton': '➕ Claude 账号',
+  'accounts.addProviderButton': '➕ OpenCode provider',
+  'accounts.askProvider': '➕ 连接哪个 OpenCode provider？请在下一条消息中发送它的 id（例如 openai 或 openrouter）。',
+  'accounts.stale': '此界面已过期——已重新生成。',
+  'accounts.confirmDisconnect': '🔌 断开 {provider}？已保存的凭据将被删除。',
+  'accounts.confirmDisconnectButton': '🔌 是，断开 {provider}',
 };

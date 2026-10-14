@@ -373,6 +373,7 @@ import {
   formatFallbackEntryLabel,
   getFallbackSwitchTapDecision,
   parseOpenCodeModelLabel,
+  listOpenCodeProviders,
   pickFallbackCandidates,
   resolveOpenCodeLimitedUntil,
   type FallbackChainEntry,
@@ -6465,6 +6466,8 @@ function handleStartCommand(
 }
 
 const {
+  showConnectMethodPicker,
+  applyProviderDisconnect,
   handleProviderConnectKey,
   applyNumberedModelPick,
   registerProviderCommands,
@@ -7052,6 +7055,9 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
+  detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
+  disconnectOpenCodeProvider: applyProviderDisconnect,
+  startOpenCodeConnect: showConnectMethodPicker,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
@@ -10723,8 +10729,6 @@ export const COMMANDS_MENU = [
   { command: 'mcp', description: '🔌 List active MCP servers' },
   { command: 'claude', description: '▶️ Start Claude Code' },
   { command: 'opencode', description: '▶️ Start OpenCode' },
-  { command: 'connect', description: '🔑 Connect an OpenCode provider API key' },
-  { command: 'disconnect', description: '🔌 Disconnect an OpenCode provider' },
   { command: 'terminal', description: '🖥 Open a raw shell in the bound folder' },
   { command: 'claude_mode', description: '🔀 Claude backend: json-stream ⇄ per-turn ⇄ tmux-scrape' },
   { command: 'new', description: '🆕 Restart session (alias /clear_session)' },
@@ -10743,7 +10747,7 @@ export const COMMANDS_MENU = [
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
-  { command: 'account', description: '👤 Claude account for this topic (picker; add / re-login / remove)' },
+  { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 What happens when an agent hits a usage limit' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
