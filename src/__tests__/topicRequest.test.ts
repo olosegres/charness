@@ -78,7 +78,7 @@ describe('buildTopicRequestHeader', () => {
     assert.ok(header.endsWith('\n\n'));
   });
 
-  it('carries the shared answer-style sentence in every view, the plain-text-hidden or not', () => {
+  it('carries the shared answer-style sentence in every view, whether the plain text is hidden or shown', () => {
     for (const view of ['answers', 'streamAnswers', 'stream'] as const) {
       assert.ok(buildTopicRequestHeader('req_abc', 'text', view).split('\n').includes(answerStyleInstruction), view);
     }
