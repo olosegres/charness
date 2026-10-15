@@ -551,6 +551,41 @@ describe('prepareJiraConnector', () => {
       assert.ok(later.ok, JSON.stringify(later));
     });
 
+    it('a setup check that is refused after an unreachable start: the tool names the refusal, never "try again shortly", and nothing is served', { timeout: 5_000 }, async () => {
+      issueAttachments = [{ id: '10', filename: 'design.png', mimeType: 'image/png', size: attachmentBytes.length, author: { accountId: 'a-member', accountType: 'atlassian' } }];
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'a-member', accountType: 'atlassian' }];
+      groupMemberStatus = 503;
+      const warnings = mock.method(console, 'warn', () => {});
+      const errors = mock.method(console, 'error', () => {});
+      try {
+        connector = await prepareJiraConnector({
+          dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, testTiming: { setupRetryBaseMs: 10, sleep: async () => {} },
+        });
+        const key = makeJiraKey('PROJ-1');
+        const before = await connector.fetchAttachment(key, '10');
+        assert.deepEqual(before, { ok: false, error: 'Attachment 10 could not be fetched: the trusted group has not been read yet; try again shortly' });
+        // Meanwhile the group is deleted: the next check reaches Jira and comes back refused.
+        siteGroups = [];
+        groupMemberStatus = 200;
+        connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), postRequest: async () => {} });
+        await waitUntil(() => errors.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] polling NOT started:')));
+        const refusedReason = 'jira.json trustedGroup: the site has no group named "ai-trusted"';
+        assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [`[jira] polling NOT started: ${refusedReason}`]);
+        const after = await connector.fetchAttachment(key, '10');
+        assert.deepEqual(after, {
+          ok: false,
+          error: `Attachment 10 could not be fetched: the setup was refused after the start (${refusedReason}), so the trusted group is not read and polling never began; an operator has to fix the setup`,
+        });
+        assert.ok(!requestPaths.includes('GET /rest/api/3/attachment/content/10'), 'nothing was downloaded');
+        assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'polling never began');
+      } finally {
+        warnings.mock.restore();
+        errors.mock.restore();
+      }
+    });
+
     describe('once the list read at boot is older than its age', () => {
       const realNow = Date.now.bind(Date);
       let clockOffsetMs = 0;

@@ -220,6 +220,8 @@ export async function prepareJiraConnector(context: {
     trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;
   };
   if (firstCheck.kind === 'ready') adoptTrustedGroup(firstCheck);
+  /** Why the setup check that retried after an unreachable start came out refused — polling never began; `null` while none did. */
+  let lateSetupRefusalReasons: readonly string[] | null = null;
   let setupRetryTimer: NodeJS.Timeout | null = null;
   let isStarted = false;
 
@@ -261,6 +263,7 @@ export async function prepareJiraConnector(context: {
       void checkJiraSetup(client, config, now).then((check) => {
         if (!isStarted) return;
         if (check.kind === 'refused') {
+          lateSetupRefusalReasons = check.reasons;
           for (const reason of check.reasons) console.error(`[jira] polling NOT started: ${reason}`);
         } else if (check.kind === 'unreachable') {
           retrySetupCheck(deps, failureCount + 1);
@@ -282,9 +285,13 @@ export async function prepareJiraConnector(context: {
       else contextLedger.drop(key.thread, requestId);
     },
     fetchAttachment: async (key, attachmentId) => {
-      // A group is configured but not read yet (Jira did not answer at boot): who uploaded what is unknown, so nothing is served.
+      // A group is configured but was never read: who uploaded what is unknown, so nothing is served. Either Jira did
+      // not answer yet (its check is retried), or the retried check was refused and polling never began.
       if (config.trustedGroupName !== null && trust === null) {
-        return { ok: false, error: `Attachment ${attachmentId} could not be fetched: the trusted group has not been read yet; try again shortly` };
+        const reason = lateSetupRefusalReasons === null
+          ? 'the trusted group has not been read yet; try again shortly'
+          : `the setup was refused after the start (${lateSetupRefusalReasons.join('; ')}), so the trusted group is not read and polling never began; an operator has to fix the setup`;
+        return { ok: false, error: `Attachment ${attachmentId} could not be fetched: ${reason}` };
       }
       return fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir, trust }, key, attachmentId);
     },
