@@ -31,5 +31,5 @@ test('public and hot-worker entries both apply the DNS fix', () => {
 
   assert.match(publicCliSource, /import \{ applyDnsFix \}[^;]+;[\s\S]+applyDnsFix\(\);/);
   assert.match(hotWorkerSource, /import \{ applyDnsFix \}[^;]+;[\s\S]+applyDnsFix\(\);/);
-  assert.ok(hotWorkerSource.indexOf('applyDnsFix();') < hotWorkerSource.indexOf('runBot()'));
+  assert.ok(hotWorkerSource.indexOf('applyDnsFix();') < hotWorkerSource.indexOf('runBot('));
 });

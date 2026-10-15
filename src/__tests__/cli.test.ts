@@ -140,29 +140,80 @@ test('claude-profiles with no state file: default is the only profile, with unkn
   assert.match(human.stdout, /✓ default .*usage not read yet/, 'unknown usage alone is still a usable account, hence recommended');
 });
 
-test('a pre-rename install boots on its old data dir and config dir, and says so once, in the bot log', () => {
+/** A pre-rename install under `tmpRoot`: the old config dir (with an old-named key) and the default data dir. */
+function writePreRenameInstall(): { legacyDataDir: string; legacyConfigDir: string; workRoot: string } {
   const legacyDataDir = path.join(tmpRoot, '.telegramCode');
+  const legacyConfigDir = path.join(tmpRoot, '.config', 'telegramcode');
   fs.mkdirSync(legacyDataDir);
-  fs.mkdirSync(path.join(tmpRoot, '.config', 'telegramcode'), { recursive: true });
-  fs.writeFileSync(path.join(tmpRoot, '.config', 'telegramcode', '.env'), 'CLI_TEST_LEGACY_CONFIG=1\n');
-  const missingWorkRoot = path.join(tmpRoot, 'missing-work-root');
+  fs.writeFileSync(path.join(legacyDataDir, 'state.json'), '{}');
+  fs.mkdirSync(legacyConfigDir, { recursive: true });
+  fs.writeFileSync(path.join(legacyConfigDir, '.env'), 'CLI_TEST_LEGACY_CONFIG=1\nTELEGRAMCODE_CLI_TEST=1\n');
+  const workRoot = path.join(tmpRoot, 'work');
+  fs.mkdirSync(workRoot);
+  return { legacyDataDir, legacyConfigDir, workRoot };
+}
 
-  // DATA_DIR empty: the default applies. The start stops at the WORK_ROOT check, after the boot announcement.
-  const { status, stderr } = runCli([], { DATA_DIR: '', WORK_ROOT: missingWorkRoot });
+/** What the start needs to get past the lock and into the bot, which then fails fast on the fake token. */
+function runPastTheLock(entryPath: string, workRoot: string): { status: number | null; stderr: string } {
+  const r = spawnSync(process.execPath, [entryPath], {
+    env: {
+      ...process.env,
+      CLAUDE_BIN: claudeShim,
+      HOME: tmpRoot,
+      DATA_DIR: '',
+      TELEGRAM_BOT_TOKEN: 'fake-token-' + Date.now(),
+      ALLOWED_GROUP_ID: '-100',
+      WORK_ROOT: workRoot,
+    },
+    cwd: tmpRoot,
+    encoding: 'utf8',
+    timeout: 20_000,
+  });
+  return { status: r.status, stderr: r.stderr };
+}
 
-  assert.equal(status, 1);
-  assert.match(stderr, /WORK_ROOT does not exist or is not a directory/);
-  const dataDirLines = stderr.split('\n').filter((line) => line.includes('~/.telegramCode is deprecated'));
-  assert.equal(dataDirLines.length, 1);
-  assert.match(dataDirLines[0], /rename it to ~\/\.charness \(see MIGRATION_RENAME_TO_CHARNESS\.md\)/);
-  const configLines = stderr.split('\n').filter((line) => line.includes('~/.config/telegramcode is deprecated'));
-  assert.equal(configLines.length, 1);
-  assert.match(configLines[0], /rename it to ~\/\.config\/charness/);
+test('a cold start moves a pre-rename install once, says what it did in the bot log, and stays silent after', () => {
+  const { legacyDataDir, legacyConfigDir, workRoot } = writePreRenameInstall();
 
-  const logFile = fs.readdirSync(legacyDataDir).find((name) => name.startsWith('bot-console-'));
-  assert.ok(logFile, 'the old data dir is the one in use: the console tee wrote into it');
-  assert.equal(fs.existsSync(path.join(tmpRoot, '.charness')), false, 'nothing was created or moved');
-  assert.match(fs.readFileSync(path.join(legacyDataDir, logFile), 'utf8'), /~\/\.telegramCode is deprecated/);
+  const first = runPastTheLock(cliPath, workRoot);
+
+  const migrateLines = first.stderr.split('\n').filter((line) => line.startsWith('[migrate]'));
+  assert.equal(migrateLines.length, 3, first.stderr);
+  assert.match(migrateLines[0], /moved ~\/\.config\/telegramcode to ~\/\.config\/charness/);
+  assert.match(migrateLines[1], /renamed 1 key\(s\) TELEGRAMCODE_\* to CHARNESS_\* in ~\/\.config\/charness\/\.env \(TELEGRAMCODE_CLI_TEST\)/);
+  assert.match(migrateLines[2], /moved ~\/\.telegramCode to ~\/\.charness/);
+  assert.doesNotMatch(first.stderr, /deprecated/, 'what the migration fixed is not announced as deprecated');
+
+  const canonicalDataDir = path.join(tmpRoot, '.charness');
+  assert.equal(fs.readlinkSync(legacyDataDir), '.charness');
+  assert.equal(fs.readlinkSync(legacyConfigDir), 'charness');
+  assert.equal(fs.readFileSync(path.join(canonicalDataDir, 'state.json'), 'utf8').startsWith('{'), true);
+  assert.equal(
+    fs.readFileSync(path.join(tmpRoot, '.config', 'charness', '.env'), 'utf8'),
+    'CLI_TEST_LEGACY_CONFIG=1\nCHARNESS_CLI_TEST=1\n',
+  );
+  const logFile = fs.readdirSync(canonicalDataDir).find((name) => name.startsWith('bot-console-'));
+  assert.ok(logFile, 'the console tee kept writing, now into the moved dir');
+  assert.match(fs.readFileSync(path.join(canonicalDataDir, logFile), 'utf8'), /\[migrate\] moved ~\/\.telegramCode to ~\/\.charness/);
+  assert.equal(fs.existsSync(path.join(canonicalDataDir, 'instance.lock')), false, 'the lock the migration ran under is released at exit');
+
+  const second = runPastTheLock(cliPath, workRoot);
+
+  assert.doesNotMatch(second.stderr, /\[migrate\]|deprecated/, 'a second start finds nothing to do');
+});
+
+test('a hot worker reload does not migrate; it announces what the old names still cost', () => {
+  const { legacyDataDir, legacyConfigDir, workRoot } = writePreRenameInstall();
+
+  const { stderr } = runPastTheLock(botEntryPath, workRoot);
+
+  assert.doesNotMatch(stderr, /\[migrate\]/);
+  assert.equal(fs.lstatSync(legacyDataDir).isDirectory(), true, 'the supervisor and the agents still hold this dir');
+  assert.equal(fs.lstatSync(legacyConfigDir).isDirectory(), true);
+  assert.equal(fs.existsSync(path.join(tmpRoot, '.charness')), false);
+  const deprecations = stderr.split('\n').filter((line) => line.startsWith('[deprecated]'));
+  assert.equal(deprecations.filter((line) => line.includes('~/.telegramCode is deprecated')).length, 1, stderr);
+  assert.equal(deprecations.filter((line) => line.includes('~/.config/telegramcode is deprecated')).length, 1, stderr);
 });
 
 test('a fresh install uses ~/.charness and ~/.config/charness without any deprecation notice', () => {

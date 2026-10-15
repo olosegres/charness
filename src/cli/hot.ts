@@ -13,6 +13,7 @@ import {
   stopOpenCodeServer,
 } from '../installManager';
 import { hotReloadEnvName, warnLegacyNamesAtBoot } from '../legacyNames';
+import { migrateLegacyNamesUnderLock } from '../legacyMigration';
 
 interface HotOpenCodeDeps {
   checkIsInstalled: (toolName: string) => boolean;
@@ -83,6 +84,9 @@ export async function runHot(): Promise<void> {
   // WORK_ROOT. This is load-bearing when the repo .env selects a custom port.
   // The connector guards wrap it, as in the plain start (Jira plan J3).
   loadEnvWithConnectorGuards(projectRoot);
+  // The supervisor's start is the cold start of a hot-mode instance (its workers never migrate): move the
+  // pre-rename config / data dirs now, under the instance lock, before anything below resolves a path in them.
+  migrateLegacyNamesUnderLock();
   // Only nodemon's replaceable worker externalizes later server generations.
   // The long-lived supervisor owns the initial server directly.
   clearOpenCodeExternalHostEnv();

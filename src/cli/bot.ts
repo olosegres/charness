@@ -4,6 +4,7 @@ import { acquireLock, installLockCleanupHandlers } from '../instanceLock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
 import { warnLegacyNamesAtBoot } from '../legacyNames';
+import { migrateLegacyNames } from '../legacyMigration';
 
 /**
  * @description Shared bot startup used by the public no-arg CLI and the
@@ -30,7 +31,7 @@ import { warnLegacyNamesAtBoot } from '../legacyNames';
  * the env load ran, and we'd see undefined tokens. `await import(...)`
  * defers binding until after env is populated.
  */
-export async function runBot(): Promise<void> {
+export async function runBot(options: { isHotWorker?: boolean } = {}): Promise<void> {
   // The connector guards wrap the env load: a breach exits here, before the
   // console tee, the lock or the bot module can do anything (Jira plan J3).
   const { loaded } = loadEnvWithConnectorGuards();
@@ -40,8 +41,6 @@ export async function runBot(): Promise<void> {
   // logs below this line are captured for post-incident reading, terminal view
   // preserved. Best-effort; never throws into a write.
   installConsoleFileTap(resolveDataDir());
-  // After the tee, so the deprecation lines reach the bot log, not only the terminal.
-  warnLegacyNamesAtBoot();
 
   if (loaded.length === 0) {
     process.stderr.write(
@@ -68,6 +67,12 @@ export async function runBot(): Promise<void> {
 
   await acquireLock();
   installLockCleanupHandlers();
+
+  // The pre-rename config / data dirs and keys move to the Charness names here: a COLD start, under the
+  // lock, before the bot module (and its state) loads. A hot worker's reload never migrates. What it
+  // could not move is announced next, once — after the tee, so the lines reach the bot log.
+  if (!options.isHotWorker) migrateLegacyNames();
+  warnLegacyNamesAtBoot();
 
   // Lazy import so env is fully populated before the bot module's top-level
   // `process.env.*` reads run. See file-level docstring for rationale.

@@ -12,7 +12,7 @@
  * announced ONCE per process, naming the migration doc.
  *
  * Nothing here moves a user's file: the fallback only decides which existing path
- * is read.
+ * is read. Moving them is `legacyMigration.ts`'s job, at a cold start.
  */
 
 import * as fs from 'fs';
@@ -84,6 +84,16 @@ export function resolveDefaultDataDir(homeDir: string = os.homedir()): string {
   const resolved = !fs.existsSync(currentDir) && fs.existsSync(legacyDir) ? legacyDir : currentDir;
   defaultDataDirByHome.set(homeDir, resolved);
   return resolved;
+}
+
+/**
+ * @description Decide the default `DATA_DIR` again, forgetting the earlier
+ * decision — for the one place that moves the dir (`legacyMigration.ts`), so the
+ * rest of the process sees the new path from then on.
+ */
+export function redecideDefaultDataDir(homeDir: string = os.homedir()): string {
+  defaultDataDirByHome.delete(homeDir);
+  return resolveDefaultDataDir(homeDir);
 }
 
 /** @description `~/.config/<dirName>/.env` under `homeDir`. */
