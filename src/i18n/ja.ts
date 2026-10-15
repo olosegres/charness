@@ -679,7 +679,7 @@ export const jaDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': '（古い）',
   'account.row.limited': '    ⛔ 上限中、{until} まで',
-  'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。Fable は専用の週間枠があるプランでのみ表示されます。',
+  'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。',
   'account.autoSwitchHint': '使用量制限時の動作（予備モデルへ切り替えるか、リセットを待つか）は /limits で設定します。',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

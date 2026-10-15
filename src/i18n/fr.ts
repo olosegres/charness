@@ -685,7 +685,7 @@ export const frDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (périmé)',
   'account.row.limited': '    ⛔ à la limite jusqu’à {until}',
-  'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures). Fable n’apparaît que sur les forfaits avec une fenêtre hebdomadaire propre.',
+  'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures).',
   'account.autoSwitchHint': 'Que faire à une limite d’usage — basculer vers un modèle de secours ou attendre la réinitialisation — se règle dans /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

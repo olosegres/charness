@@ -679,7 +679,7 @@ export const zhDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': '（已过时）',
   'account.row.limited': '    ⛔ 已达上限，直到 {until}',
-  'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。只有带独立每周窗口的套餐才会显示 Fable。',
+  'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。',
   'account.autoSwitchHint': '遇到用量上限时怎么办（切换到备用模型，或等待重置）在 /limits 中设置。',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

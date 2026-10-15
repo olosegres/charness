@@ -689,7 +689,7 @@ export const ruDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (устарело)',
   'account.row.limited': '    ⛔ на лимите до {until}',
-  'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа). Fable показан только на тарифах со своим недельным окном.',
+  'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа).',
   'account.autoSwitchHint': 'Что делать при лимите использования — переключиться на запасную модель или дождаться сброса — настраивается в /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

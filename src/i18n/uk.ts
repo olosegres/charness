@@ -691,7 +691,7 @@ export const ukDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (застаріло)',
   'account.row.limited': '    ⛔ на ліміті до {until}',
-  'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години). Fable показано лише на тарифах зі своїм тижневим вікном.',
+  'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години).',
   'account.autoSwitchHint': 'Що робити при ліміті використання — перемкнутися на запасну модель чи дочекатися скидання — налаштовується в /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

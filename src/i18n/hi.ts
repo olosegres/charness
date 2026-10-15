@@ -684,7 +684,7 @@ export const hiDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (पुराना)',
   'account.row.limited': '    ⛔ सीमा पर, {until} तक',
-  'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)। Fable तभी दिखता है जब प्लान में उसकी अपनी साप्ताहिक विंडो हो।',
+  'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)।',
   'account.autoSwitchHint': 'उपयोग-सीमा पर क्या हो — बैकअप मॉडल पर स्विच करना या रीसेट का इंतज़ार — यह /limits में तय होता है।',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

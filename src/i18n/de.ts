@@ -685,7 +685,7 @@ export const deDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (veraltet)',
   'account.row.limited': '    ⛔ am Limit bis {until}',
-  'account.usageHint': 'Nutzung: % jedes Fensters verbraucht, dann wann es zurückgesetzt wird (🔄 in 2h = in zwei Stunden). Fable erscheint nur bei Tarifen mit eigenem Wochenfenster.',
+  'account.usageHint': 'Nutzung: % jedes Fensters verbraucht, dann wann es zurückgesetzt wird (🔄 in 2h = in zwei Stunden).',
   'account.autoSwitchHint': 'Was bei einem Nutzungslimit geschieht — auf ein Ersatzmodell wechseln oder auf den Reset warten — wird in /limits eingestellt.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

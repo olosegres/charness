@@ -498,7 +498,7 @@ so one account's usage limit does not stop every topic.
   unknown 5h reset shows the weekly one, and with no reset at all only the
   percentage is shown. `telegramcode claude-profiles` prints
   the same relative form; its `--json` and the MCP tool keep ISO instants. The bot reads the figures with
-  each profile's own login every 10 minutes, when `/accounts` opens and when an
+  each profile's own login every 10 minutes, when `/accounts` or `/limits` opens and when an
   agent asks; a json-stream session's own rate-limit events keep them current
   between polls. A token the CLI has not renewed yet shows the last figures as
   `(stale)`; a profile whose session was refused on a window is marked

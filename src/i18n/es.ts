@@ -685,7 +685,7 @@ export const esDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (desactualizado)',
   'account.row.limited': '    ⛔ en el límite hasta {until}',
-  'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas). Fable solo aparece en planes con ventana semanal propia.',
+  'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas).',
   'account.autoSwitchHint': 'Qué ocurre ante un límite de uso — cambiar a un modelo de respaldo o esperar al reinicio — se configura en /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

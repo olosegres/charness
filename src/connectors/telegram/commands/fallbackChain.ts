@@ -78,6 +78,12 @@ import type { BotCore } from './botCore';
 /** Models per page in the «add an OpenCode model» step (the `/model` picker's density). */
 const addModelPageSize = 8;
 
+/**
+ * How long opening the screen waits for the usage refresh (one poll is ~0.5 s). A slower one — a hung endpoint
+ * runs into the fetch's own 15 s timeout — keeps going in the background and the next render shows its result.
+ */
+export const limitsUsageRefreshBudgetMs = 2_000;
+
 /** The two settings of the screen: the ids the setting rows, the sub-menu and its callbacks are keyed by. */
 type SettingId = 'switch' | 'wait';
 
@@ -120,7 +126,10 @@ export interface FallbackChainPorts
     'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
   getInstanceTimezone: () => string;
-  /** Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`) for the usage block; never throws. */
+  /**
+   * Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`) for the usage block; never
+   * throws. Called when the screen is OPENED (bounded by {@link limitsUsageRefreshBudgetMs}), never on a tap.
+   */
   refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
   /** What is connected now: Claude profiles with usage, the OpenCode catalog, the recent picks, the limit marks. */
   detectFallbackOptions: () => Promise<FallbackDetection>;
@@ -314,8 +323,6 @@ export function createFallbackChain(ports: FallbackChainPorts) {
    */
   async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
     const chain = getState().getFallbackChain();
-    // A snapshot younger than a minute is kept (the `/accounts` freshness); the detection reads the result.
-    await refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
     const detection = await detectFallbackOptions();
     const current = isGeneral ? null : getTopicPosition(key);
     const nowMs = Date.now();
@@ -352,7 +359,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return { text: parts.join('\n\n'), keyboard: Markup.inlineKeyboard(rows) };
   }
 
-  /** Re-render the picker IN PLACE (it is meant for repeated use, like `/account`); best-effort. */
+  /** Re-render the picker IN PLACE (it is meant for repeated use, like `/account`) off the cached usage; best-effort. */
   async function rerenderPicker(key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
     if (messageId === null) return;
     addSnapshots.delete(messageId);
@@ -473,8 +480,23 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     });
   }
 
-  /** Open the screen as a fresh message (the `/auto_continue_limits` alias lands here). */
+  /**
+   * Refresh the usage snapshots (a snapshot younger than a minute is kept — the `/accounts` freshness), waiting at
+   * most {@link limitsUsageRefreshBudgetMs}: the screen is never held by a slow usage endpoint.
+   */
+  async function refreshUsageWithinBudget(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<void>((resolve) => { timer = setTimeout(resolve, limitsUsageRefreshBudgetMs); });
+    try {
+      await Promise.race([refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs }), budget]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Open the screen as a fresh message (the `/auto_continue_limits` alias lands here); the usage is refreshed first. */
   async function openLimitsView(key: SessionKey): Promise<void> {
+    await refreshUsageWithinBudget();
     const picker = await buildPicker(key, checkIsGeneral(key));
     await replyToThread(key, picker.text, picker.keyboard);
   }

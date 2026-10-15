@@ -23,7 +23,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSkipArmedRetryCallbackData } from '../utils/autoContinueOnLimit';
-import { createFallbackChain } from '../connectors/telegram/commands/fallbackChain';
+import { createFallbackChain, limitsUsageRefreshBudgetMs } from '../connectors/telegram/commands/fallbackChain';
 import type { SessionKey } from '../sessionKey';
 import { getFallbackChainRevision, type FallbackChainEntry, type FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView } from '../utils/claudeUsage';
@@ -36,6 +36,8 @@ const switchTaps: Array<{ key: SessionKey; episodeId: number; index: number }> =
 let switchOutcome: string | null = null;
 let armedFireAt: number | null = null;
 const usageRefreshes: Array<{ maxAgeMs?: number }> = [];
+/** What the usage refresh port does after recording the call (a test swaps in a slow or never-ending one). */
+let runUsageRefresh: () => Promise<void> = async () => {};
 
 function buildProfile(name: string, loggedIn: boolean | undefined = true): ClaudeProfileUsageView {
   return { name, configDir: null, loggedIn, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null };
@@ -60,6 +62,7 @@ describe('fallbackChain: /limits over its ports', () => {
       getInstanceTimezone: () => 'UTC',
       refreshClaudeUsage: async (options) => {
         usageRefreshes.push(options);
+        await runUsageRefresh();
       },
       detectFallbackOptions: async () => detection,
       getTopicPosition: () => topicPosition,
@@ -123,7 +126,7 @@ describe('fallbackChain: /limits over its ports', () => {
       'the usage block (its heading, a signed-out account named, a never-polled one left out), the General note, the empty-list note — nothing else',
     );
     assert.doesNotMatch(picker?.text ?? '', /How it works|Auto switch|Wait for/, 'the settings are on the buttons, not repeated in the text');
-    assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand (a minute\'s cache) before the screen is built');
+    assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand (a minute\'s cache) when the screen opens');
     assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['➕ Add', '🔄 Fill from connected']);
     assert.deepEqual(harness.getKeyboardData(picker), [['fbk_add', 'fbk_prop'], ['fbk_asw_on'], ['fbk_wait_off']]);
   });
@@ -405,7 +408,7 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(rerender).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']]);
   });
 
-  it('the usage block: a «% used» heading, then the `/accounts` renderer one row per account — windows with relative resets and no arrow, Fable only when the account has it, the stale mark, the limit mark on the next row; signed-out named, never-polled left out; refreshed on every build', async () => {
+  it('the usage block: a «% used» heading, then the `/accounts` renderer one row per account — windows with relative resets and no arrow, Fable only when the account has it, the stale mark, the limit mark on the next row; signed-out named, never-polled left out; refreshed when the screen opens', async () => {
     const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
     const polled: ClaudeProfileUsageView = {
       ...buildProfile('personal'),
@@ -438,13 +441,34 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.match(rows[3], /^ {4}⛔ at its limit until \d{2}:\d{2}$/, 'the limit mark hangs under its account, as in /accounts');
     assert.equal(rows[4], '• out — not signed in');
     assert.equal(rows.length, 5, 'an account never polled has nothing to show and is left out');
-    assert.equal(usageRefreshes.length, refreshesBefore + 1, 'the usage is refreshed when the screen is built');
+    assert.equal(usageRefreshes.length, refreshesBefore + 1, 'the usage is refreshed when the screen opens');
     const sameLine = '⏱ 5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h · Fable 4% 🔄 in 5d 8h';
     assert.ok(text.includes(sameLine), 'the same windows line as /accounts prints under a row');
     detection = { ...savedDetection, claudeProfiles: [buildProfile('fresh'), buildProfile('other')] };
     await harness.runCommand('limits');
     assert.doesNotMatch(harness.replies.at(-1)?.text ?? '', /Usage \(% used\)/, 'no account to show → no heading over nothing');
     detection = savedDetection;
+  });
+
+  it('the usage refresh runs when the screen opens and is bounded: a tap re-renders off the cache, a refresh that hangs never holds the screen', async () => {
+    isGeneralTopic = true;
+    const refreshesBefore = usageRefreshes.length;
+    await harness.runCommand('limits');
+    const pickerId = harness.replies.at(-1)!.messageId!;
+    await harness.tapButton(pickerId, 'fbk_back');
+    await harness.tapButton(pickerId, 'fbk_wait_off');
+    await harness.tapButton(pickerId, 'fbk_wait_on');
+    assert.equal(usageRefreshes.length, refreshesBefore + 1, 'only the open refreshed: a tap never waits on the usage endpoint');
+
+    runUsageRefresh = () => new Promise<void>(() => {}); // a usage endpoint that never answers
+    const startedAt = Date.now();
+    const repliesBefore = harness.replies.length;
+    await harness.runCommand('limits');
+    const elapsedMs = Date.now() - startedAt;
+    runUsageRefresh = async () => {};
+    assert.equal(harness.replies.length, repliesBefore + 1, 'the screen is posted anyway');
+    assert.match(harness.replies.at(-1)?.text ?? '', /🪜 /);
+    assert.ok(elapsedMs >= limitsUsageRefreshBudgetMs - 50 && elapsedMs < limitsUsageRefreshBudgetMs + 1_000, `held for the budget only (${elapsedMs} ms)`);
   });
 
   it('the topic screen offers «skip once» only while a limit wait is armed', async () => {

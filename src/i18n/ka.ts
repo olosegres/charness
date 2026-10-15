@@ -685,7 +685,7 @@ export const kaDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (მოძველებული)',
   'account.row.limited': '    ⛔ ლიმიტზეა {until}-მდე',
-  'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში). Fable ჩანს მხოლოდ იმ ტარიფებზე, სადაც მას საკუთარი კვირეული ფანჯარა აქვს.',
+  'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში).',
   'account.autoSwitchHint': 'რა ხდება გამოყენების ლიმიტზე — სარეზერვო მოდელზე გადართვა თუ განულების დალოდება — /limits-ში მიეთითება.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

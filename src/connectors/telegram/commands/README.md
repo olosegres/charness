@@ -137,7 +137,8 @@ full-width buttons (the topic's own choice marked ✓) and Back. The three optio
 apply the choice and re-render the main screen; three buttons on one row would split the width evenly and cut every label.
 The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built); its message
 text is deliberately SHORT — the usage block (`formatUsageBlock`: a «Usage (% used)» heading, then each profile's windows through the renderer `/accounts` uses,
-`utils/claudeProfileUsageLines.ts`; refreshed on demand through the `refreshClaudeUsage` port, a minute's cache; OpenCode's
+`utils/claudeProfileUsageLines.ts`; refreshed through the `refreshClaudeUsage` port when the screen OPENS — a minute's cache, waited
+for at most `limitsUsageRefreshBudgetMs`, a slower poll lands at the next render — while a tap re-renders off the cache; OpenCode's
 limit marks are on the rung buttons already), what the topic runs on + where its settings come from (General: a one-line
 note that they are the defaults), and the list's heading — no numbered list, no legend, no how-it-works prose (the rung view
 and this README carry those). A tap opens `renderRungDetail` in the same message (⬆️ hidden on

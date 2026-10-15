@@ -686,7 +686,7 @@ export const ptDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (desatualizado)',
   'account.row.limited': '    ⛔ no limite até {until}',
-  'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas). O Fable só aparece em planos com janela semanal própria.',
+  'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas).',
   'account.autoSwitchHint': 'O que acontece num limite de uso — mudar para um modelo de reserva ou esperar o reinício — define-se em /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

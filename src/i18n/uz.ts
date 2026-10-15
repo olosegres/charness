@@ -685,7 +685,7 @@ export const uzDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (eskirgan)',
   'account.row.limited': '    ⛔ limitda, {until} gacha',
-  'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin). Fable faqat o‘z haftalik oynasi bor tariflarda ko‘rsatiladi.',
+  'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin).',
   'account.autoSwitchHint': 'Foydalanish limitida nima bo‘lishi — zaxira modelga o‘tish yoki tiklanishni kutish — /limits da belgilanadi.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',

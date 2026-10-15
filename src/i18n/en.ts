@@ -729,7 +729,7 @@ export const enDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (stale)',
   'account.row.limited': '    ⛔ at its limit until {until}',
-  'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours). Fable is listed only on plans with a weekly window of its own.',
+  'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours).',
   'account.autoSwitchHint': 'What happens on a usage limit — switch to a fallback model, or wait for the reset — is set in /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
