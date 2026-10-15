@@ -889,7 +889,10 @@ a person assigns an issue to the AI account (in a trigger status)
    that time. List only projects where only your team can write, and where no automation acts on text or
    actions from outside it — an e-mail handler, a portal form, a copy from another project, a rule that
    hands an issue to the AI when someone outside the team acts: an app's or automation's text and hand-over
-   are trusted, so such a rule brings that outside text, or that person's hand-over, to the agent.
+   are trusted, so such a rule brings that outside text, or that person's hand-over, to the agent. Nor list a
+   project where anyone outside the team holds the *Edit all comments* permission: Jira Cloud keeps no history
+   of a comment's edits, so a comment is judged by its author and its LAST editor only — an outsider's edit of a
+   member's comment, followed by a member's own edit, reads as trusted.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it

@@ -168,13 +168,13 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   links; a site with issue linking switched off answers the remote-link read with 403, read as no links), `attachments` (one line each: id, name, type, size, author, date, where it is used), then EVERY comment
   oldest first. The comments come from the comments endpoint (the issue's own `comment` field holds at most 100).
 - **With `trustedGroup`, only trusted text is in it** (`issueBlocks.ts`): a piece of the issue's own text reaches the
-  agent only when EVERYONE who wrote it is trusted — a member, the AI account or an app or automation; an author
-  Jira does not name counts as untrusted. Withheld text is replaced IN PLACE by a marker, before the blocks are
+  agent only when EVERYONE who wrote it is trusted — a member, the AI account or an app or automation (for a
+  comment: its author and its last editor, see below); an author Jira does not name counts as untrusted. Withheld text is replaced IN PLACE by a marker, before the blocks are
   hashed, fitted or spilled, so it never reaches a prompt, a delta or a spill file:
 
   | Part | Written by (from what the bot reads) | Withheld when | The agent sees |
   |---|---|---|---|
-  | a comment | its `author`, and its `updateAuthor` | either is untrusted | `Comment <id>, <date>: [withheld: written or edited by someone outside the trusted group]` — no name, no text |
+  | a comment | its `author`, and its `updateAuthor` — the LAST editor only (see below) | either is untrusted | `Comment <id>, <date>: [withheld: written or edited by someone outside the trusted group]` — no name, no text |
   | the description | the issue's `creator` and the author of every `description` changelog entry | any is untrusted | `Description: [withheld: …]` (no description stays `(empty)`) |
   | summary, labels, extra fields | `creator` and the authors of that field's changelog entries | any is untrusted | that field's line reads `[withheld: …]` (an empty value stays absent) |
   | type, priority, status, fix versions, components, people's names | lists the project's admins keep, and the people themselves | never | as without a group |
@@ -182,6 +182,15 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   | a media placeholder in kept text that points at a withheld file | — | — | `[image — attachment <id>, withheld]` (the kind word as before, no name; a mix of kept and withheld files of one name lists `<id> (withheld)`) |
   | another issue's summary (parent, sub-task, child, linked issue) | unknown to the bot | its project is not in `projects` | its key and status only; an issue of a listed project keeps its summary (the agent may read it through its own tools anyway) |
   | a remote link's title | not in the changelog | always | the URL only |
+
+  **A comment is judged by less than everyone who wrote it.** Jira Cloud keeps no history of a comment's edits — the
+  comment resource carries the author and the LAST editor (`updateAuthor`), nothing earlier, and Atlassian's own
+  feature request for tracking comment edits is still open (JRACLOUD-94821). So when someone outside the group edits
+  a member's comment and a member then edits it again, the comment reads as written and last edited by trusted
+  accounts and is shown in full, whatever of the outsider's text is still in it. No code can close that gap. What
+  bounds it is who may edit other people's comments: the *Edit all comments* project permission (Atlassian: it lets
+  a user "edit comments or internal notes added by anyone"). An operator lists only projects where no one outside the
+  team holds it, which is the same rule as for who may write there at all (root `README.md` § "Jira connector").
 
   A field's authors come from the issue's WHOLE changelog (an entry names its field by `fieldId`, else by `field`; a
   custom field is also matched by its display name for an old entry). The poller reads the changelog only as far as
