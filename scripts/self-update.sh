@@ -95,3 +95,10 @@ fi
 if checkChanged 'src/cli\.ts|src/cli/hot\.ts|nodemon\.json'; then
   log "WARNING: hot-supervisor files changed (src/cli.ts / src/cli/hot.ts / nodemon.json) — restart 'charness hot' manually"
 fi
+
+# A migration guide ADDED by the update means a rename or a breaking change an operator (or the agent running
+# this instance) must read: say so in the log this script is run for, where it is seen.
+migrationGuides="$(git diff --name-only --diff-filter=A "$localHead" HEAD | grep -E '^MIGRATION_.*\.md$' | tr '\n' ' ' || true)"
+if [ -n "$migrationGuides" ]; then
+  log "WARNING: breaking change — read ${migrationGuides}and the top entry of CHANGELOG.md before the next restart"
+fi

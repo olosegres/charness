@@ -1,8 +1,8 @@
 # Test image: the product image plus the Chromium the Jira live test's requester drives (its stored browser
 # login). Never used to run an instance.
 #
-#   docker build -t telegramcode-test -f docker/Dockerfile.test .      # from the checkout: its package.json names Playwright
-FROM telegramcode
+#   docker build -t charness-test -f docker/Dockerfile.test .          # from the checkout: its package.json names Playwright
+FROM charness
 
 # The same Playwright as the repo's playwright-core (read from package.json, which must pin it exactly), so its
 # Chromium revision matches; installed outside HOME, which is a mount.

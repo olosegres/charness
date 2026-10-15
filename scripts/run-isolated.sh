@@ -9,7 +9,7 @@
 #
 # The env file holds every setting of the instance, e.g. CONNECTORS, DATA_DIR,
 # WORK_ROOT and TMUX_SOCKET_NAME. IS_SANDBOX is passed on when set: inside the
-# telegramcode image the instance runs as root, where Claude Code needs it.
+# charness image the instance runs as root, where Claude Code needs it.
 set -eu
 
 if [ "$#" -lt 1 ]; then
