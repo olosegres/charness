@@ -11,8 +11,10 @@
  *  - `message`      — a person wrote in the conversation.
  *  - `scheduledRun` — a scheduled prompt fired.
  *  - `trackerEvent` — a tracker connector picked an issue up (e.g. an assignment).
+ *  - `trackerMention` — a tracker connector was mentioned in a comment of an issue that is NOT handed to it: the
+ *    request asks for an answer only, and nothing is handed over or back.
  */
-export type RequestOriginKind = 'message' | 'scheduledRun' | 'trackerEvent';
+export type RequestOriginKind = 'message' | 'scheduledRun' | 'trackerEvent' | 'trackerMention';
 
 /**
  * @name RequestOrigin

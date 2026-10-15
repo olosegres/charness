@@ -51,11 +51,20 @@ export function buildJiraAlertText(requestId: string, reason: RequestAlertReason
   return `⚠️ The AI could not finish request ${requestId}: ${alertTexts[reason]}. A person needs to look at this issue.`;
 }
 
-/** @description The park notice (D12): over the run budget, handed back without a new request. */
+/** @description The park notice (D12): over the run budget, handed back without a new request. Hand-overs and mentions share the budget. */
 export function buildJiraParkText(runBudgetPer24h: number): string {
-  return `⏸ This issue was handed to the AI ${runBudgetPer24h} times in the last 24 hours, its limit, so no new request was opened. ` +
-    'Assign it to the AI again later, or ask the operator to raise the limit.';
+  return `⏸ The AI was asked to work on this issue ${runBudgetPer24h} times in the last 24 hours (hand-overs and mentions together), ` +
+    'its limit, so no new request was opened. Assign it to the AI again later, or ask the operator to raise the limit.';
 }
+
+/** @description The mention park notice (D10): over the run budget, nothing is handed back — the issue was never handed over. */
+export function buildJiraMentionParkText(runBudgetPer24h: number): string {
+  return `⏸ The AI was asked about this issue ${runBudgetPer24h} times in the last 24 hours (hand-overs and mentions together), ` +
+    'its limit, so this mention was not answered. Mention it again later, or ask the operator to raise the limit.';
+}
+
+/** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
+export const jiraQuestionContinueText = 'To let me go on, answer in a comment and assign the issue back to me.';
 
 /**
  * @description The notice of a hand-over the trusted group does not back (T1): nothing was started, and who can
@@ -101,9 +110,17 @@ function getTextPreview(body: AdfDocument): string {
   return characters.length > missingPartPreviewChars ? `${characters.slice(0, missingPartPreviewChars).join('')}…` : characters.join('');
 }
 
+/** `body` with {@link jiraQuestionContinueText} as one more paragraph — plain text, never run through Markdown. */
+function getBodyWithContinueLine(body: AdfDocument): AdfDocument {
+  const [continueParagraph] = createPlainTextAdf(jiraQuestionContinueText).content;
+  return { ...body, content: [...body.content, continueParagraph] };
+}
+
 export interface JiraAnswerSink extends AnswerSink {
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
   parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
+  /** A mention over the run budget (D10): the park notice, no hand-back (nothing was handed over). Never rejects. */
+  parkMention(issueKey: string): Promise<void>;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
   refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
 }
@@ -188,13 +205,19 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * is a warning and no hand-back: the issue stays the AI's, and the trigger is recorded already, so it is not repeated.
    */
   async function postNoticeAndHandBack(issueKey: string, requester: JiraAccount | null, notice: AdfDocument, noticeKind: 'park' | 'untrusted'): Promise<void> {
+    if (!await postNotice(issueKey, notice, noticeKind)) return;
+    const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
+    if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
+  }
+
+  /** A notice the bot writes itself; `false` (and a warning) when it did not land. */
+  async function postNotice(issueKey: string, notice: AdfDocument, noticeKind: 'park' | 'untrusted' | 'mention park'): Promise<boolean> {
     const posted = await postComments(issueKey, [notice], null);
     if (posted.postedCount === 0 && posted.failure) {
       console.warn(`[jira] ${issueKey}: ${noticeKind} notice not posted: ${getNothingPostedError(posted.failure)}`);
-      return;
+      return false;
     }
-    const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
-    if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
+    return true;
   }
 
   /**
@@ -236,12 +259,16 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const bodies = createCommentBodies(delivery.body);
       if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      // Only a hand-over's question asks the requester to take the issue back, so only it carries the line saying how.
+      const isHandOver = delivery.origin.kind === 'trackerEvent';
+      if (isHandOver && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
-      if (delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
+      // A mention request never had the issue handed over: its answer is a comment, and the issue stays where it is.
+      if (isHandOver && delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
         const handBackWarning = await handBack(issueKey, getRequestRequester(delivery.origin));
         if (handBackWarning) warnings.push(handBackWarning);
       }
@@ -252,8 +279,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
-      if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
+      if (alert.origin.kind === 'trackerEvent') {
+        const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
+        if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
+      }
       // A comment needs no release: nothing is pinned.
       return { ok: true };
     },
@@ -262,6 +291,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     parkIssue: (issueKey, requester) =>
       postNoticeAndHandBack(issueKey, requester, convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h)), 'park'),
+
+    parkMention: async (issueKey) => {
+      await postNotice(issueKey, convertMarkdownToAdf(buildJiraMentionParkText(deps.runBudgetPer24h)), 'mention park');
+    },
 
     refuseUntrusted: (issueKey, requester, groupName) =>
       postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted'),

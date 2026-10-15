@@ -806,6 +806,7 @@ a dedicated AI account becomes a conversation with an agent, and the agent answe
 
 ```
 a person assigns an issue to the AI account (in a trigger status)
+  (or, with a trusted group: a member @-mentions the AI account in a comment — see "Mentions" below)
   → the instance polls Jira as the AI account and opens a request
   → the agent works in the project's folder; its streamed output never reaches Jira
   → it answers through the answer_request tool:
@@ -835,8 +836,16 @@ a person assigns an issue to the AI account (in a trigger status)
 - **How an answer reads.** The agent writes for a manager or QA, not an engineer: short, plain words, status
   and next steps as a short numbered list of who does what, one line per question, no back-story. The same
   instruction rides every request, on a Jira issue and in a Telegram topic alike.
-- **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
-  and opens no request.
+- **Mentions.** With a `trustedGroup`, a comment that @-mentions the AI account — on an issue that is not
+  handed to it, whoever holds it, in any status — wakes the agent to **answer only**: it may read the issue and
+  the code and run read-only checks, changes nothing, and asked to do work it answers that the issue has to be
+  assigned to it. Its answer is a comment; the issue stays with its assignee and in its status. Only a
+  comment whose author and last editor are trusted counts (an outsider's mention is ignored, with one log
+  line); one comment wakes it once; a person who has handed the issue over and whose request is still open
+  is not answered twice. A mention made while Jira was unreachable for longer than
+  `max(5 minutes, 2 × pollIntervalSeconds)` is not seen. `wakeOnMention: false` turns it off.
+- **Budget.** An issue handed over or mentioned more than `runBudgetPer24h` times in 24 hours opens no
+  request: a hand-over is handed back with a notice, a mention gets one notice a day.
 - **Who can steer it.** With `trustedGroup` (see Setup) only the members of ONE Jira group, the AI account and
   Jira's apps and automations count. A hand-over by anyone else — another person, a service-desk customer —
   opens no request: one notice on the issue names the group and the issue goes back to that person. Text
@@ -878,6 +887,7 @@ a person assigns an issue to the AI account (in a trigger status)
        "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "trustedGroup": "ai-trusted",
+     "wakeOnMention": true,
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
@@ -896,6 +906,10 @@ a person assigns an issue to the AI account (in a trigger status)
    project where anyone outside the team holds the *Edit all comments* permission: Jira Cloud keeps no history
    of a comment's edits, so a comment is judged by its author and its LAST editor only — an outsider's edit of a
    member's comment, followed by a member's own edit, reads as trusted.
+
+   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it (see
+   "Mentions"); absent, it is on exactly when `trustedGroup` is set, and `true` without a group is refused — without
+   one, anyone who can comment could start the AI.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it

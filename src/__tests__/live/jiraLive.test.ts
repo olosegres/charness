@@ -89,7 +89,9 @@
  *     read from Claude's own transcript
  *   → trusted group (needs `JIRA_LIVE_TRUSTED_GROUP`): the real site resolves the group by its name and lists
  *     the requester; an issue the requester created and hands over is answered, its prompt holds the
- *     requester's own text in full and says what a marker is
+ *     requester's own text in full and says what a marker is; an @-mention of the AI account by the requester,
+ *     in a comment of an issue the requester holds (not handed over), is answered by a comment within the
+ *     mention window — a request of origin `trackerMention`, the assignee and the status unchanged
  *   → every Jira session's MCP servers: only the bot's own (R8)
  *   → the self-assigned issue: no request, nothing posted
  *   end: charness stopped, its private tmux server removed, the issues moved to a
@@ -302,11 +304,11 @@ let jiraConfigOriginalText: string | null = null;
  */
 const seenInitsByProcess = new Map<string, { issueKey: string; inits: StreamLine[] }>();
 /** Every issue the run created, by its role; the end moves each to a finished status. */
-const issueKeys = new Map<Scenario | 'self' | 'probe' | 'trustedGroup', string>();
+const issueKeys = new Map<Scenario | 'self' | 'probe' | 'trustedGroup' | 'mention', string>();
 /** The SHA-256 each recall scenario's first answer posted: the commitment to its secret word. */
 const committedDigests = new Map<'final' | 'perTurn', string>();
 
-function getIssueKey(scenario: Scenario | 'self' | 'probe' | 'trustedGroup'): string {
+function getIssueKey(scenario: Scenario | 'self' | 'probe' | 'trustedGroup' | 'mention'): string {
   const issueKey = issueKeys.get(scenario);
   if (!issueKey) throw new Error(`no issue was created for ${scenario}`);
   return issueKey;
@@ -652,6 +654,7 @@ interface ClosedRequestLine {
   conversationKey: string;
   closeReason: string;
   supersededBy?: string;
+  origin?: { kind: string; attributes: Record<string, string> };
 }
 
 function getClosedRequests(issueKey: string): ClosedRequestLine[] {
@@ -665,6 +668,17 @@ function getClosedRequests(issueKey: string): ClosedRequestLine[] {
 
 function getAiComments(state: LiveIssueState): LiveComment[] {
   return state.comments.filter((comment) => comment.authorAccountId === config.accountId);
+}
+
+/** Wait until the issue holds an AI comment matching `predicate` — for a mention request, where nothing is handed back. */
+async function waitForAnswer(issueKey: string, timeoutMs: number, predicate: (comments: LiveComment[]) => boolean): Promise<LiveIssueState> {
+  let state: LiveIssueState | null = null;
+  await waitFor(`${issueKey} answered`, timeoutMs, async () => {
+    state = await getRequester().getIssueState(issueKey);
+    return predicate(getAiComments(state));
+  });
+  if (!state) throw new Error('unreachable');
+  return state;
 }
 
 /** Wait until the issue holds an AI comment matching `predicate` and is handed back to the requester. */
@@ -1272,6 +1286,29 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       assert.ok(prompt.includes('Parts marked [withheld: …] were written by people outside the trusted group'), 'the note explains the marker');
       assert.ok(!prompt.includes('[withheld: written or edited'), 'nothing of the member\'s own was withheld');
       report(`live T2 ${issueKey}: answered, prompt of ${prompt.length} characters`);
+    });
+
+    it('live M1 — an @-mention of the AI account by a member wakes it on an issue that is not handed to it: answered by a comment, the assignee and the status stay', async () => {
+      const probeText = 'Reply with ONE final answer whose text is exactly: MENTION-OK. Do not change anything.';
+      const issueKey = await getRequester().createIssue(projectKey, `[charness mention] ${getTrustedGroupName()}`, 'A question to the AI in a comment.');
+      issueKeys.set('mention', issueKey);
+      // The requester holds the issue itself; the AI is never assigned it.
+      await getRequester().assignIssue(issueKey, getRequester().accountId);
+      const postedAt = Date.now();
+      const commentId = await getRequester().addMentionComment(issueKey, config.accountId, probeText);
+      const state = await waitForAnswer(issueKey, answerTimeoutMs, (comments) => comments.length > 0);
+      assert.match(getAiComments(state).at(-1)?.text ?? '', /MENTION-OK/);
+      assert.equal(state.assigneeAccountId, getRequester().accountId, 'the issue is still the requester\'s — nothing was handed back');
+      assert.equal(state.isDone, false, 'and in the status it had');
+      const prompt = getLastPrompt(issueKey);
+      assert.ok(prompt.includes(`you were mentioned by `) && prompt.includes(` in comment ${commentId}]`), `the header names the mention:\n${prompt}`);
+      assert.ok(prompt.includes('The issue is not handed to you (assignee: '), 'the note says the issue is not handed over');
+      assert.ok(prompt.includes('Answer only:'), 'and that the agent answers only');
+      const closed = getClosedRequests(issueKey);
+      assert.deepEqual(closed.map((record) => [record.origin?.kind, record.closeReason]), [['trackerMention', 'final']]);
+      assert.equal(closed[0].origin?.attributes.triggerId, `mention:${commentId}`);
+      assert.equal(getPolledDecisions(charnessOutput).filter(({ decision, issueKey: decided }) => decided === `${issueKey}#mention:${commentId}` && decision === 'request').length, 1, 'one request for the comment');
+      report(`live M1 ${issueKey}: answered ${Math.round((Date.now() - postedAt) / 1000)} s after the mention`);
     });
   });
 

@@ -20,6 +20,7 @@ interface PageRestResponse {
 
 const myselfSchema = z.object({ accountId: z.string().min(1) });
 const createdIssueSchema = z.object({ key: z.string().min(1) });
+const createdCommentSchema = z.object({ id: z.string().min(1) });
 const issueTypesSchema = z.object({ issueTypes: z.array(z.object({ id: z.string(), subtask: z.boolean() })) });
 const transitionsSchema = z.object({
   transitions: z.array(z.object({ id: z.string(), to: z.object({ statusCategory: z.object({ key: z.string() }) }) })),
@@ -132,6 +133,21 @@ export class JiraLiveRequester {
 
   async addComment(issueKey: string, markdown: string): Promise<void> {
     await this.callJson('POST', `/rest/api/3/issue/${issueKey}/comment`, null, { body: convertMarkdownToAdf(markdown) });
+  }
+
+  /**
+   * @description A comment that @-mentions `accountId` the way Jira's editor writes it — a `mention` node holding the
+   * account id, first in the paragraph — followed by `text`. Resolves the new comment's id.
+   */
+  async addMentionComment(issueKey: string, accountId: string, text: string): Promise<string> {
+    const body = {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'mention', attrs: { id: accountId, text: '@AI' } }, { type: 'text', text: ` ${text}` }] }],
+    };
+    const created = await this.callJson('POST', `/rest/api/3/issue/${issueKey}/comment`, createdCommentSchema, { body });
+    if (!created) throw new Error('Jira returned no id for the created comment');
+    return created.id;
   }
 
   /** @description Move the issue to a finished status (the first transition into the `done` category). */

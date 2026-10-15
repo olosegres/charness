@@ -15,7 +15,10 @@ ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` tha
 site name — none by default, and an id the site does not list is logged once at boot and left out),
 `pollIntervalSeconds` (10–600, default 30), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
 group, see "The trusted group" under Isolation; absent → none, with one boot line `[jira] no trustedGroup: …`; the
-AI account needs the *Browse users and groups* global permission to read it), `model`, `effort` (the sessions',
+AI account needs the *Browse users and groups* global permission to read it), `wakeOnMention` (boolean: whether an
+@-mention of the AI account in a comment wakes it, see "An @-mention wakes the AI"; absent → on exactly when a
+`trustedGroup` is set; `true` without a group is refused at boot, because without one anyone who can comment could
+start the AI; `false` turns it off, with one boot line), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
 `agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
 executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
@@ -30,8 +33,9 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
 
 ## Request flow (`inbound.ts`)
 
-1. Poll: `buildJiraTriggerJql` = project allowlist AND `assignee = currentUser()` AND trigger status ids. Polls
-   never overlap (the next is scheduled when one ends). A rejected token (`JiraAuthError`), or a trusted group
+1. Poll: `buildJiraTriggerJql` = project allowlist AND `assignee = currentUser()` AND trigger status ids — and,
+   with mention wakes on, OR `comment ~ currentUser() AND updated >= -<n>m` (see "An @-mention wakes the AI").
+   Polls never overlap (the next is scheduled when one ends). A rejected token (`JiraAuthError`), or a trusted group
    deleted from the site, stops polling for good with one loud line; any other failure backs off
    (`getJiraRetryDelayMs`).
 2. Per issue: allowlist re-checked on what Jira returned → still assigned to the AI account and in a trigger
@@ -69,6 +73,45 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
 5. Setup problems refuse the start (bad config, refused token, unknown project or status, another account's
    token); an outage (no answer, 5xx, 429) does not — a mixed Telegram+Jira instance never loses Telegram to a
    Jira outage (`checkIsTransientJiraFailure`, `connector.ts`).
+
+### An @-mention wakes the AI — it answers only (`inbound.ts` `getMentionDecisions`)
+
+With a `trustedGroup` (and `wakeOnMention` not `false`) a comment that @-mentions the AI account starts a request
+on an issue that is NOT handed to it — any assignee, any status. The agent may read the issue and the code and
+run read-only checks; it changes nothing, and asked to do work it answers that the issue has to be assigned to
+it. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
+with the instance's rights.
+
+- **Finding it.** Jira's `comment ~ currentUser()`, run as the AI account, matches a comment that holds a
+  mention node of it — not a typed `@name`, not the account's display name written as text. Measured against a
+  live site: a fresh mention is returned by the search within about two seconds, and a comment edit moves the
+  issue's `updated`. The window is `max(5 min, 2 × pollIntervalSeconds)`; the JQL's `updated >= -<n>m` and the
+  comment scan share it. A mention made while Jira was unreachable for longer than the window is not seen, and
+  Jira promises no bound on its search index's lag (`getJiraMentionWindowMs`).
+- **The scan.** For each returned issue (allowlisted projects only) whose `updated` differs from what this process
+  last read — in memory, so a restart reads once more — the newest 100 comments are read. A comment counts when it
+  was created or edited inside the window, is not the AI account's own, holds a `mention` node with the AI
+  account's id (`getMentionedAccountIds`: the node's `id` attribute, never its text), and its trigger id
+  `mention:<commentId>` is not in the trigger log. Oldest first, one decision each.
+- **One wake per comment.** The decision is recorded under `mention:<commentId>` (`untrusted`, `covered`,
+  `parked` or `request`), so a later edit of the comment, the next poll and a restart wake nothing. An edit that
+  ADDS a mention to an older comment is the first decision on it.
+- **Who may wake it.** The comment's author AND its last editor must be trusted (`checkIsCommentTrusted`, the same
+  rule that decides whether the comment's text reaches the agent). Otherwise it is `untrusted`: recorded, one log
+  line (`[jira] PROJ-1: the mention in comment 10240 is ignored: …`), nothing posted — an outsider gets no
+  request and no notice. An app's or automation's mention is trusted.
+- **Covered.** The requester of an OPEN hand-over request of the issue who mentions the AI gets no request of
+  their own (`covered`): it would supersede the hand-over request — same requester — and strip its hand-back. The
+  comment reaches that run in its next prompt.
+- **Budget.** A mention request counts in `runBudgetPer24h` with the hand-overs. Over it the mention is `parked`;
+  its notice (nothing is handed back — nothing was handed over) is posted at most once per issue per rolling
+  24 hours, later ones are recorded silently.
+- **The request.** Origin `trackerMention`, requester = the comment's author; one request is posted at a time per
+  issue, so a second mention waits for the next poll. The prompt is the issue — whole, or what the conversation
+  has not seen yet — with the mention note after the requester line. A different person's mention opens a request
+  of its own; a second mention by the same person supersedes their earlier open one; a hand-over by that person
+  while their mention request is open supersedes the mention request. The answer is a comment and the issue stays
+  where it is (`answerSink.ts` keys on the origin kind).
 
 ## Isolation — fail-closed, checked at boot
 
@@ -122,14 +165,20 @@ another platform's state.
 ## Answer sink (`answerSink.ts`) and the client (`client.ts`)
 
 - An answer becomes one or more comments by the AI account (`createCommentBodies`, in order). A `question` or
-  `final` answer to an OPEN request then hands the issue back to the requester, only while it is still
-  assigned to the AI account; never for `progress`, never for a superseded request. Comment first, then the
-  hand-back: a failed hand-back is a delivered answer plus a warning (a retry would post it twice).
-- Two notices are the bot's own, with no agent behind them, each followed by the same hand-back (and no
-  hand-back when the notice did not land, only a warning — its trigger is recorded already, so it is not
-  repeated): the park notice, and the notice of an `untrusted` hand-over — "Only members of the AI's trusted
-  group (`<configured name>`) can hand it work, so nothing was started. Ask a member to hand it over." — posted
-  as plain text, so a group name is never read as Markdown.
+  `final` answer to an OPEN hand-over request (origin `trackerEvent`) then hands the issue back to the
+  requester, only while it is still assigned to the AI account; never for `progress`, never for a superseded
+  request. Comment first, then the hand-back: a failed hand-back is a delivered answer plus a warning (a retry
+  would post it twice). A mention request (origin `trackerMention`) hands nothing back — not its `final`, not its
+  `question`, not its alert: the issue was never handed over.
+- A hand-over's `question` ends with one more paragraph, plain text on the last comment: "To let me go on, answer
+  in a comment and assign the issue back to me." A reply that only mentions the AI wakes it for an answer, not
+  for the work; a hand-over is still how the work continues.
+- Three notices are the bot's own, with no agent behind them: the park notice of a hand-over (it names
+  hand-overs and mentions together, as both fill the budget) and the notice of an `untrusted` hand-over —
+  "Only members of the AI's trusted group (`<configured name>`) can hand it work, so nothing was started. Ask a
+  member to hand it over." — posted as plain text, so a group name is never read as Markdown — each followed by
+  the same hand-back (and no hand-back when the notice did not land, only a warning — its trigger is recorded
+  already, so it is not repeated); and the mention's park notice, which hands nothing back.
 - The first comment refused → an error (nothing posted, safe to send again). A later part that did not land →
   delivered with a warning saying where the unposted rest starts.
 - `addComment` is never retried by the client (a second POST would post twice). A post of UNKNOWN outcome

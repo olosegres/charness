@@ -45,7 +45,21 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
       return `${issueKey} moved to "${getSingleLineText(statusName ?? '') || 'a trigger status'}" by ${by}`;
     case 'created':
       return `${issueKey} created assigned to you by ${by}`;
+    case 'mentioned':
+      return `${issueKey}: you were mentioned by ${by} in comment ${getSingleLineText(trigger.commentId ?? '')}`;
   }
+}
+
+/** What a mention request adds after the requester line: the issue is not handed over, so the agent only answers. */
+function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
+  const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
+  const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
+  return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. ` +
+    `The issue is not handed to you (assignee: ${assigneeName}, status: ${statusName}). ` +
+    'Answer only: you may read the issue and the code and run read-only checks, but change nothing — ' +
+    'no code changes, no commits or pushes, no edits in Jira. ' +
+    'If the comment asks you to do work, answer that the issue has to be assigned to you for that. ' +
+    'Your answer becomes a comment on the issue; it does not reassign the issue.';
 }
 
 /** What every prompt of a request says before the issue itself: who, which issue, where answers go. */
@@ -58,6 +72,8 @@ export interface JiraRequestPromptBase {
   issueUrl: string;
   trigger: JiraIssueTrigger;
   requester: JiraAccount | null;
+  /** The issue's assignee when the request is a mention (the issue is not handed over; the note names who has it). */
+  assignee?: JiraAccount | null;
   /** The same requester's earlier requests of the issue this one replaced (R34); the header names them. */
   supersededRequestIds?: readonly string[];
   /** A trusted group filters the issue's text (`jira.json` `trustedGroup`): the note then says what a `[withheld: …]` marker is. */
@@ -85,6 +101,9 @@ function getPromptStart(input: JiraRequestPromptBase, title: string): string[] {
     title,
     `Link: ${input.issueUrl}`,
     `Requester (your answers go to them): ${getAccountName(input.requester)}`,
+    ...(input.trigger.kind === 'mentioned' && input.trigger.commentId !== undefined
+      ? ['', getMentionNote(input, input.trigger.commentId)]
+      : []),
   ];
 }
 

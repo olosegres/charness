@@ -184,6 +184,38 @@ describe('RequestLedger requests', () => {
     assert.deepEqual(readHistory().map((record) => [record.id, record.supersededBy]), [[operatorFirst.id, operatorSecond.id]]);
   });
 
+  it('a tracker mention request and a hand-over of the SAME requester share a group: the newer replaces the older; another person\'s stays', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const handOver: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-123', triggerId: '100', [requestRequesterAttribute]: 'person-b' } };
+    const mention: RequestOrigin = { kind: 'trackerMention', attributes: { issueKey: 'PROJ-123', triggerId: 'mention:10240', [requestRequesterAttribute]: 'person-b' } };
+    const otherMention: RequestOrigin = { kind: 'trackerMention', attributes: { issueKey: 'PROJ-123', triggerId: 'mention:10241', [requestRequesterAttribute]: 'person-c' } };
+    const bMention = await ledger.createRequest(topicKey, mention);
+    const cMention = await ledger.createRequest(topicKey, otherMention);
+
+    // A hand-over by B while B's mention request is open supersedes the mention request.
+    const bHandOver = await ledger.createRequest(topicKey, handOver);
+    assert.deepEqual(bHandOver.supersededRequestIds, [bMention.id]);
+    assert.equal(ledger.getRequest(cMention.id)?.isOpen, true, 'C\'s mention request is untouched');
+
+    // A second mention by the same person supersedes the older mention request.
+    const bMentionAgain = await ledger.createRequest(topicKey, { ...mention, attributes: { ...mention.attributes, triggerId: 'mention:10242' } });
+    assert.deepEqual(bMentionAgain.supersededRequestIds, [bMention.id, bHandOver.id], 'the chain of what this requester\'s newest request replaced');
+    assert.equal(ledger.getRequest(bHandOver.id)?.isOpen, false);
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.origin.kind), ['trackerMention', 'trackerMention']);
+  });
+
+  it('a closed mention request is read back from the history; an unknown origin kind is not', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerMention', attributes: { issueKey: 'PROJ-123', triggerId: 'mention:10240' } });
+    await ledger.closeRequest(request.id, 'final');
+    const [closedLine] = readHistory();
+    assert.equal(closedLine.origin.kind, 'trackerMention');
+    assert.equal(parseClosedRequestLine(JSON.stringify(closedLine))?.origin.kind, 'trackerMention');
+    assert.equal(parseClosedRequestLine(JSON.stringify({ ...closedLine, origin: { kind: 'trackerRumour', attributes: {} } })), null);
+  });
+
   it('a requester who keeps writing builds the chain of replaced ids, newest kept up to the bound', async () => {
     const store = await createStore();
     const ledger = await createLoadedLedger(store);

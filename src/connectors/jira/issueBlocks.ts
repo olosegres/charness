@@ -238,8 +238,11 @@ function getCommentVisibilityMarker(comment: JiraComment): string {
   return markers.join(' ');
 }
 
-/** Written AND last edited by trusted accounts; an author Jira does not name is not one. */
-function checkIsCommentTrusted(comment: JiraComment, trust: JiraBlockTrust): boolean {
+/**
+ * Written AND last edited by trusted accounts; an author Jira does not name is not one. The one rule for a
+ * comment: what reaches the agent as text and what may wake it by a mention are judged by it alike.
+ */
+export function checkIsCommentTrusted(comment: JiraComment, trust: Pick<JiraBlockTrust, 'checkIsTrusted'>): boolean {
   return trust.checkIsTrusted(comment.author) && (comment.updateAuthor === undefined || trust.checkIsTrusted(comment.updateAuthor));
 }
 

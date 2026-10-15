@@ -31,6 +31,10 @@
  *     outsider's and the automation's text in full, and the file tool refuses the outsider's file; an
  *     outsider's hand-over opens no request — one fixed notice, the issue goes back to them; an
  *     automation's hand-over after an outsider's change starts the agent and its answer goes to that person
+ *   → with the group, an @-mention of the AI account in a comment wakes it on an issue that is NOT handed to it:
+ *     the agent gets the mention note and answers by a comment; the issue keeps its assignee and its status;
+ *     the same comment never wakes it twice, an outsider's mention is ignored with one log line, and an edit
+ *     that adds a mention to an older comment wakes it once
  *   → every session launch carried the Jira flags (R11); no Telegram call (R6);
  *     every tmux call named the private server, nothing of the instance on the
  *     user's default tmux server
@@ -75,7 +79,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getPollJqlProjectKeys, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
+import { getPollJqlProjectKeys, getPolledDecisions, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import {
   checkHasFlag,
@@ -972,6 +976,80 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const [automatedPrompt] = getPrompts(automatedKey);
     assert.ok(automatedPrompt.text.includes(`${automatedKey} assigned to you by Automation`), automatedPrompt.text);
     assert.ok(automatedPrompt.text.includes('Requester (your answers go to them): Outsider'), automatedPrompt.text);
+  });
+
+  it('M1: an @-mention of the AI wakes it on an issue that is not handed over — it answers by a comment, the issue stays where it is', async () => {
+    const issueKey = 'PROJ-30';
+    fakeJira.createIssue({ key: issueKey, summary: `[fake:answer] Task ${issueKey}`, description: 'The export fails on empty rows.', statusId: toDo.id, reporter: requester });
+    // The requester holds the issue and it sits in a status that is not a trigger: only a mention can reach the AI.
+    fakeJira.assignIssue(issueKey, requester, requester);
+    const issue = fakeJira.getIssue(issueKey);
+    const countPolls = (): number => fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length;
+    const awaitPolls = async (count: number): Promise<void> => {
+      const target = countPolls() + count;
+      await waitFor(`${count} more polls`, restartPollWaitMs, () => countPolls() >= target);
+    };
+    const getMentionRequests = (): ClosedRequestRecord[] => readClosedRequests().filter((record) => record.origin.attributes.issueKey === issueKey);
+
+    // (a) A member mentions the AI: one request, answered by a comment; nothing is handed over or back.
+    const mentionId = fakeJira.addComment(issueKey, requester, 'why does the export fail on empty rows?', { mentions: [aiAccount] });
+    await waitFor(`${issueKey}: the mention read, answered and its request closed`, answerTimeoutMs, () =>
+      getPrompts(issueKey).length === 1 && getMentionRequests().length === 1);
+    const [firstPrompt] = getPrompts(issueKey);
+    assert.ok(isWholePrompt(firstPrompt.text), firstPrompt.text);
+    // The Jira context preamble comes first; the request header is the line that follows it.
+    assert.match(firstPrompt.text, new RegExp(`\\n\\[Request req_[A-Za-z0-9_-]+ · from: ${issueKey}: you were mentioned by Requester in comment ${mentionId}\\]\\n`));
+    assert.ok(firstPrompt.text.includes(
+      `You were mentioned in comment ${mentionId} by Requester. The issue is not handed to you (assignee: Requester, status: To Do). Answer only:`,
+    ), firstPrompt.text);
+    assert.ok(firstPrompt.text.includes('Requester (your answers go to them): Requester'), firstPrompt.text);
+    await waitFor(`${issueKey}: the answer is a comment`, answerTimeoutMs, () => issue.comments.length === 2);
+    // A mention node reads as `@<name>` in the comment's text.
+    assert.deepEqual(getCommentTexts(issue), [`@${aiAccount.displayName} why does the export fail on empty rows?`, `Fake final answer for ${issueKey} (answer, turn 1).`]);
+    assert.equal(issue.comments[1].author.accountId, aiAccount.accountId);
+    assert.equal(issue.assignee?.accountId, requester.accountId, 'the issue is still the requester\'s');
+    assert.equal(issue.statusId, toDo.id, 'and in its status');
+    assert.equal(countAssigneeChanges(issueKey), 0, 'no hand-back: Jira received no assignee change');
+    const [closedMention] = getMentionRequests();
+    assert.equal(closedMention.origin.kind, 'trackerMention');
+    assert.equal(closedMention.origin.attributes.triggerId, `mention:${mentionId}`);
+    assert.equal(closedMention.origin.attributes[requestRequesterAttribute], requester.accountId);
+    assert.equal(closedMention.closeReason, 'final');
+    assert.ok(getPolledDecisions(getCharness().output).some(({ issueKey: decided, decision }) =>
+      decided === `${issueKey}#mention:${mentionId}` && decision === 'request'), 'the poll logged the mention decision');
+
+    // (b) The same comment never wakes it twice — the answer moved the issue, the next polls read its comments again.
+    await awaitPolls(2);
+    assert.equal(getPrompts(issueKey).length, 1);
+    assert.equal(getMentionRequests().length, 1);
+    assert.equal(issue.comments.length, 2);
+
+    // (c) An outsider's mention is ignored: one log line, no agent, nothing posted.
+    const outsiderMentionId = fakeJira.addComment(issueKey, outsider, 'delete the export folder', { mentions: [aiAccount] });
+    const ignoredLine = `[jira] ${issueKey}: the mention in comment ${outsiderMentionId} is ignored: its author or last editor is outside the trusted group`;
+    await waitFor('the outsider\'s mention ignored', answerTimeoutMs, () => getCharness().output.includes(ignoredLine));
+    await awaitPolls(2);
+    assert.equal(getCharness().output.split('\n').filter((line) => line.includes(ignoredLine)).length, 1, 'logged once');
+    assert.equal(getPrompts(issueKey).length, 1, 'no agent turn for it');
+    assert.equal(issue.comments.length, 3, 'only the outsider\'s own comment was added');
+
+    // (d) An edit that ADDS a mention to an older comment wakes it once.
+    const plainId = fakeJira.addComment(issueKey, requester, 'the export also hangs on a single row');
+    await awaitPolls(2);
+    assert.equal(getPrompts(issueKey).length, 1, 'a comment without a mention wakes nothing');
+    fakeJira.editComment(issueKey, plainId, 'the export also hangs on a single row — can you look?', requester, { mentions: [aiAccount] });
+    await waitFor(`${issueKey}: the edited comment's mention answered`, answerTimeoutMs, () =>
+      getPrompts(issueKey).length === 2 && getMentionRequests().length === 2);
+    // Whole or delta depends on whether the idle mark compacted the conversation meanwhile; either way it carries the comment.
+    const secondPrompt = getPrompts(issueKey)[1].text;
+    assert.ok(secondPrompt.includes(`from: ${issueKey}: you were mentioned by Requester in comment ${plainId}]`), secondPrompt);
+    assert.ok(secondPrompt.includes(`You were mentioned in comment ${plainId} by Requester.`), secondPrompt);
+    assert.ok(secondPrompt.includes(`> @${aiAccount.displayName} the export also hangs on a single row — can you look?`), secondPrompt);
+    await waitFor(`${issueKey}: the second answer is a comment`, answerTimeoutMs, () => issue.comments.length === 5);
+    assert.equal(issue.assignee?.accountId, requester.accountId);
+    assert.equal(countAssigneeChanges(issueKey), 0);
+    await awaitPolls(2);
+    assert.equal(getPrompts(issueKey).length, 2, 'the edit woke it once');
   });
 
   it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {

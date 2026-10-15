@@ -173,6 +173,8 @@ const issueFieldsSchema = z.object({
   reporter: accountSchema.nullable().optional(),
   creator: accountSchema.nullable().optional(),
   created: z.string().optional(),
+  /** Moves on every change of the issue, a comment added or edited included (the mention scan reads it). */
+  updated: z.string().optional(),
   description: adfNodeSchema.nullable().optional(),
 });
 

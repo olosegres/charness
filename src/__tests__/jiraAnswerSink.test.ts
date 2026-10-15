@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildJiraAlertText, buildJiraParkText, buildJiraUntrustedText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
+import { buildJiraAlertText, buildJiraMentionParkText, buildJiraParkText, buildJiraUntrustedText, createJiraAnswerSink, jiraQuestionContinueText, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
 import { getAdfText, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import type { JiraClient, JiraComment, JiraCommentPostResult, JiraIssue } from '../connectors/jira/client';
@@ -28,10 +28,14 @@ const nowMs = Date.parse('2026-10-03T12:00:00Z');
 /** Two paragraphs never fit one comment; one fits by both counts (R19). */
 const paragraphLength = Math.floor(jiraCommentMarkdownMaxChars * 2 / 3);
 const origin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: 'requester-account' } };
+/** A request raised by an @-mention: nothing was handed over, so nothing is handed back. */
+const mentionOrigin: RequestOrigin = { kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10240', requester: 'requester-account' } };
 
 interface FakeJira {
   calls: string[];
   postedTexts: string[];
+  /** The bodies as posted, for what the plain text cannot tell (a paragraph of its own, no Markdown). */
+  postedBodies: AdfDocument[];
   assignee: string;
   /** Per comment post, in order: what Jira answers; `created` when the list runs out. */
   postOutcomes: Array<JiraCommentPostResult | Error>;
@@ -56,6 +60,7 @@ function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | '
     addComment: async (issue, body: AdfDocument) => {
       jira.calls.push(`comment ${issue}`);
       jira.postedTexts.push(getAdfText(body));
+      jira.postedBodies.push(body);
       const outcome = jira.postOutcomes.shift() ?? { outcome: 'created', id: `c${jira.postedTexts.length}` };
       if (outcome instanceof Error) throw outcome;
       return outcome;
@@ -91,7 +96,7 @@ const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
 beforeEach(async () => {
-  jira = { calls: [], postedTexts: [], assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
+  jira = { calls: [], postedTexts: [], postedBodies: [], assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
   dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
   unconfirmedPosts = await loadUnconfirmedPosts();
 });
@@ -330,7 +335,12 @@ describe('alert and park notice', () => {
   it('the park notice names the limit, then the issue goes back to the requester', async () => {
     await sink().parkIssue(issueKey, { accountId: 'requester-account' });
     assert.deepEqual(jira.postedTexts, [buildJiraParkText(5)]);
-    assert.match(jira.postedTexts[0], /handed to the AI 5 times in the last 24 hours/);
+    // T5: hand-overs and mentions fill the same budget, and the notice says so.
+    assert.equal(
+      jira.postedTexts[0],
+      '⏸ The AI was asked to work on this issue 5 times in the last 24 hours (hand-overs and mentions together), its limit, ' +
+        'so no new request was opened. Assign it to the AI again later, or ask the operator to raise the limit.',
+    );
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
   });
 
@@ -379,5 +389,80 @@ describe('alert and park notice', () => {
       await sink().refuseUntrusted(issueKey, { accountId: 'outsider-account' }, 'ai-trusted');
       assert.deepEqual(jira.calls, ['comment PROJ-12', 'assignee? PROJ-12']);
     });
+  });
+});
+
+describe('a mention request answers only — nothing is handed over, so nothing is handed back (T5–T7)', () => {
+  const deliverMention = (kind: RequestAnswerKind, body: string) =>
+    sink().deliverAnswer(key, { requestId: 'req_2', kind, body, origin: mentionOrigin, isRequestOpen: true });
+
+  it('a final answer is a comment and the issue stays where it is: no assignee read, no assignment', async () => {
+    assert.deepEqual(await deliverMention('final', 'The export fails on an empty row.'), { ok: true });
+    assert.deepEqual(jira.calls, ['comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, ['The export fails on an empty row.']);
+  });
+
+  it('a question stays a plain comment: no hand-back and no "to let me go on" line — it has nobody to hand back to', async () => {
+    assert.deepEqual(await deliverMention('question', 'Which export?'), { ok: true });
+    assert.deepEqual(jira.calls, ['comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, ['Which export?']);
+  });
+
+  it('the alert of a mention request is a comment and no hand-back', async () => {
+    assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_2', reason: 'silentTurns', origin: mentionOrigin }), { ok: true });
+    assert.deepEqual(jira.calls, ['comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_2', 'silentTurns')]);
+  });
+});
+
+describe('a hand-over question tells the requester how to let the agent go on (T7)', () => {
+  const continueLine = 'To let me go on, answer in a comment and assign the issue back to me.';
+
+  it('the question ends with that line as a paragraph of its own, then the issue goes back', async () => {
+    assert.equal(jiraQuestionContinueText, continueLine);
+    await deliver('question', 'Which branch should I use?');
+    assert.deepEqual(jira.postedTexts, [`Which branch should I use?\n${continueLine}`]);
+    const [body] = jira.postedBodies;
+    const lastParagraph = body.content[body.content.length - 1];
+    assert.deepEqual(lastParagraph, { type: 'paragraph', content: [{ type: 'text', text: continueLine }] });
+    assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
+  });
+
+  it('a final answer and a progress note do not carry it', async () => {
+    await deliver('final', 'Done.');
+    await deliver('progress', 'Halfway.');
+    assert.deepEqual(jira.postedTexts, ['Done.', 'Halfway.']);
+  });
+
+  it('a question split over several comments carries it once, on the last', async () => {
+    const paragraph = 'x'.repeat(paragraphLength);
+    await deliver('question', `${paragraph}\n\n${paragraph}`);
+    assert.equal(jira.postedTexts.length, 2);
+    assert.ok(!jira.postedTexts[0].includes(continueLine));
+    assert.ok(jira.postedTexts[1].endsWith(continueLine));
+  });
+});
+
+describe('the park notices (T5, T6)', () => {
+  it('T6: a mention over the budget names the limit and tells the person to mention again; nothing is handed back', async () => {
+    await sink().parkMention(issueKey);
+    assert.deepEqual(jira.postedTexts, [buildJiraMentionParkText(5)]);
+    assert.equal(
+      jira.postedTexts[0],
+      '⏸ The AI was asked about this issue 5 times in the last 24 hours (hand-overs and mentions together), its limit, ' +
+        'so this mention was not answered. Mention it again later, or ask the operator to raise the limit.',
+    );
+    assert.deepEqual(jira.calls, ['comment PROJ-12']);
+  });
+
+  it('a mention notice that Jira refused is a warning, never a throw (the trigger is recorded already)', async () => {
+    jira.postOutcomes = [new Error('Jira POST failed with 403')];
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      await sink().parkMention(issueKey);
+      assert.ok(warn.mock.calls.some((call) => String(call.arguments[0]).includes('mention park notice not posted')));
+    } finally {
+      warn.mock.restore();
+    }
   });
 });

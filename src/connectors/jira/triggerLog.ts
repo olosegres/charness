@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RotatingJsonlFile } from '../../utils/rotatingJsonlFile';
+import { mentionTriggerIdPrefix } from './trigger';
 
 /**
  * @description The Jira connector's trigger log (plan J5, D12):
@@ -18,17 +19,24 @@ const msPerDay = 24 * 60 * 60 * 1000;
  * @name JiraTriggerOutcome
  * @description `request` — a request was opened; `selfAuthored` — the AI account
  * made the change itself; `parked` — the issue was over its run budget;
- * `untrusted` — the hand-over was made by someone the trusted group does not back.
+ * `untrusted` — the hand-over (or the mention) was made by someone the trusted group
+ * does not back; `covered` — a mention by the requester of an open hand-over request
+ * of the issue, which that run already carries (it opens no request and counts for nothing).
  */
-export type JiraTriggerOutcome = 'request' | 'selfAuthored' | 'parked' | 'untrusted';
+export type JiraTriggerOutcome = 'request' | 'selfAuthored' | 'parked' | 'untrusted' | 'covered';
 
 const triggerRecordSchema = z.object({
   issueKey: z.string().min(1),
   triggerId: z.string().min(1),
-  outcome: z.enum(['request', 'selfAuthored', 'parked', 'untrusted']),
+  outcome: z.enum(['request', 'selfAuthored', 'parked', 'untrusted', 'covered']),
   /** Epoch ms. */
   at: z.number(),
   requestId: z.string().optional(),
+  /**
+   * A `parked` mention only: whether its park notice was posted (at most one per issue per rolling 24 h, the others
+   * are recorded silently). Absent → posted, as every older line was.
+   */
+  isNoticePosted: z.boolean().optional(),
 });
 
 export type JiraTriggerRecord = z.infer<typeof triggerRecordSchema>;
@@ -40,6 +48,7 @@ function getTriggerIdentity(issueKey: string, triggerId: string): string {
 export class JiraTriggerLog {
   private readonly seen = new Set<string>();
   private readonly requestTimesByIssue = new Map<string, number[]>();
+  private readonly mentionParkNoticeTimesByIssue = new Map<string, number[]>();
 
   constructor(private readonly file: RotatingJsonlFile<JiraTriggerRecord>) {}
 
@@ -56,6 +65,11 @@ export class JiraTriggerLog {
 
   private index(record: JiraTriggerRecord): void {
     this.seen.add(getTriggerIdentity(record.issueKey, record.triggerId));
+    if (record.outcome === 'parked' && record.triggerId.startsWith(mentionTriggerIdPrefix) && record.isNoticePosted !== false) {
+      const noticeTimes = this.mentionParkNoticeTimesByIssue.get(record.issueKey) ?? [];
+      noticeTimes.push(record.at);
+      this.mentionParkNoticeTimesByIssue.set(record.issueKey, noticeTimes);
+    }
     if (record.outcome !== 'request') return;
     const times = this.requestTimesByIssue.get(record.issueKey) ?? [];
     times.push(record.at);
@@ -66,9 +80,14 @@ export class JiraTriggerLog {
     return this.seen.has(getTriggerIdentity(issueKey, triggerId));
   }
 
-  /** @description Requests opened for the issue in the rolling 24 h before `nowMs`. */
+  /** @description Requests opened for the issue in the rolling 24 h before `nowMs`: hand-overs and mentions together. */
   getRequestCountLastDay(issueKey: string, nowMs: number): number {
     return (this.requestTimesByIssue.get(issueKey) ?? []).filter((at) => at > nowMs - msPerDay).length;
+  }
+
+  /** @description Was a mention park notice posted on the issue in the rolling 24 h before `nowMs`? */
+  checkIsMentionParkNoticePostedLastDay(issueKey: string, nowMs: number): boolean {
+    return (this.mentionParkNoticeTimesByIssue.get(issueKey) ?? []).some((at) => at > nowMs - msPerDay);
   }
 
   /** @description Persist a decision; `false` when the line could not be written (then nothing is indexed). */

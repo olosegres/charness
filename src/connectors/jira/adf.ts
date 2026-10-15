@@ -203,6 +203,16 @@ export function getStringAttribute(node: AdfNode | AdfMark, name: string): strin
   return typeof value === 'string' ? value : null;
 }
 
+/**
+ * @description The account ids of every `mention` node in `node`, in document order. Read from the node's own
+ * `id` attribute — never from its display text, which anyone can type.
+ */
+export function getMentionedAccountIds(node: AdfNode | AdfDocument | null | undefined): string[] {
+  if (!node) return [];
+  const own = node.type === 'mention' ? getStringAttribute(node, 'id') : null;
+  return [...(own === null ? [] : [own]), ...(node.content ?? []).flatMap((child) => getMentionedAccountIds(child))];
+}
+
 /** A text node; a linked one keeps its address, which the agent may need to follow. */
 function getTextNodeText(node: AdfNode): string {
   const text = node.text ?? '';

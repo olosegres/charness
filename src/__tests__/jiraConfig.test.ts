@@ -14,6 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   getOpenCodeIsolationError,
+  wakeOnMentionNeedsGroupError,
   jiraDefaultEffort,
   jiraDefaultModel,
   jiraPollIntervalDefaultSeconds,
@@ -34,7 +35,7 @@ const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
 let workRoot = '';
 let dataDir = '';
 
-function createConfig(overrides: Record<string, string | number | object | undefined> = {}): object {
+function createConfig(overrides: Record<string, string | number | boolean | object | undefined> = {}): object {
   return {
     site: 'example.atlassian.net',
     email: 'ai-account@example.com',
@@ -343,6 +344,37 @@ describe('validateJiraConfig', () => {
       'jira.json runBudgetPer24h',
     ]);
     assert.deepEqual(getErrors(createConfig({ pollIntervalSeconds: 9 })).map((error) => error.split(':')[0]), ['jira.json pollIntervalSeconds']);
+  });
+
+  describe('wakeOnMention (an @-mention of the AI account wakes it)', () => {
+    const getMentionSettings = (overrides: Record<string, string | boolean>): { isMentionWakeOn: boolean; wakeOnMentionSetting: boolean | null } => {
+      const result = validateJiraConfig(createConfig(overrides), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      return { isMentionWakeOn: result.config.isMentionWakeOn, wakeOnMentionSetting: result.config.wakeOnMentionSetting };
+    };
+
+    it('absent: on with a trusted group, off without one', () => {
+      assert.deepEqual(getMentionSettings({}), { isMentionWakeOn: false, wakeOnMentionSetting: null });
+      assert.deepEqual(getMentionSettings({ trustedGroup: 'ai-trusted' }), { isMentionWakeOn: true, wakeOnMentionSetting: null });
+    });
+
+    it('true needs a trusted group: without one the config is refused with the one named reason (T8d)', () => {
+      assert.deepEqual(getErrors(createConfig({ wakeOnMention: true })), [wakeOnMentionNeedsGroupError]);
+      assert.equal(
+        wakeOnMentionNeedsGroupError,
+        'jira.json wakeOnMention needs trustedGroup: without a group, anyone who can comment could start the AI',
+      );
+      assert.deepEqual(getMentionSettings({ wakeOnMention: true, trustedGroup: 'ai-trusted' }), { isMentionWakeOn: true, wakeOnMentionSetting: true });
+    });
+
+    it('false is kept, with or without a group — a deliberate off', () => {
+      assert.deepEqual(getMentionSettings({ wakeOnMention: false, trustedGroup: 'ai-trusted' }), { isMentionWakeOn: false, wakeOnMentionSetting: false });
+      assert.deepEqual(getMentionSettings({ wakeOnMention: false }), { isMentionWakeOn: false, wakeOnMentionSetting: false });
+    });
+
+    it('anything but a boolean is refused naming the field', () => {
+      assert.deepEqual(getErrors(createConfig({ wakeOnMention: 'yes' })).map((error) => error.split(':')[0]), ['jira.json wakeOnMention']);
+    });
   });
 });
 

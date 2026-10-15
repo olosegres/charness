@@ -14,8 +14,10 @@ import {
   jiraCommentAdfMaxChars,
   convertMarkdownToAdf,
   getAdfText,
+  getMentionedAccountIds,
   jiraCommentMarkdownMaxChars,
   splitMarkdownForComments,
+  type AdfDocument,
   type AdfNode,
 } from '../connectors/jira/adf';
 
@@ -99,6 +101,36 @@ describe('convertMarkdownToAdf keeps HTML as literal text (R17)', () => {
     const [, link] = convertMarkdownToAdf('see https://a.example/x\\<y').content.flatMap(getTextNodes);
     assert.deepEqual([link.text, link.marks], ['https://a.example/x\\<y', [{ type: 'link', attrs: { href: 'https://a.example/x\\<y' } }]]);
     assert.deepEqual(getTextNodes(convertMarkdownToAdf('```\nList\\<T>\n```').content[0]).map((node) => node.text), ['List\\<T>']);
+  });
+});
+
+describe('getMentionedAccountIds', () => {
+  const mention = (id: string, text: string): AdfNode => ({ type: 'mention', attrs: { id, text } });
+
+  it('reads the id of every mention node, in document order — also inside lists, quotes and tables', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [mention('ai-account', '@AI'), { type: 'text', text: ' and ' }, mention('someone', '@Someone')] },
+        { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [mention('ai-account', '@AI')] }] }] },
+      ],
+    };
+    assert.deepEqual(getMentionedAccountIds(doc), ['ai-account', 'someone', 'ai-account']);
+  });
+
+  it('the id attribute decides, never the text: a typed "@AI" is no mention, and a mention whose text says someone else is one', () => {
+    const typed: AdfDocument = { version: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '@AI please look' }] }] };
+    assert.deepEqual(getMentionedAccountIds(typed), []);
+    const renamed: AdfDocument = { version: 1, type: 'doc', content: [{ type: 'paragraph', content: [mention('ai-account', '@Somebody Else')] }] };
+    assert.deepEqual(getMentionedAccountIds(renamed), ['ai-account']);
+  });
+
+  it('a node without an id, no body, an empty document: nothing', () => {
+    assert.deepEqual(getMentionedAccountIds({ type: 'mention', attrs: { text: '@AI' } }), []);
+    assert.deepEqual(getMentionedAccountIds(null), []);
+    assert.deepEqual(getMentionedAccountIds(undefined), []);
+    assert.deepEqual(getMentionedAccountIds({ type: 'doc', content: [] }), []);
   });
 });
 
