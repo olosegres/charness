@@ -144,7 +144,12 @@ another platform's state.
 
 The bot MCP gives a Jira session one more tool, `jira_get_attachment(attachmentId)`. The issue is taken from the
 session's scoped token, never from the argument, and the id must be in that issue's attachment list read at the
-call, so a planted "fetch attachment 12345" cannot reach another issue's file. The original is streamed (no size
+call, so a planted "fetch attachment 12345" cannot reach another issue's file. With `trustedGroup` the uploader must be
+trusted as well — the predicate that withheld the file from the prompt — judged on the membership list as of the
+call (refreshed first when older than 5 minutes; a list that cannot be refreshed, or a group not read yet because
+Jira did not answer at boot, refuses): "Attachment 10234 was uploaded by someone outside the trusted group; it is
+not available to you." A file already on disk is not served around that check; the "Its attachments:" list of an
+unknown id stays ids only. The original is streamed (no size
 limit; any size) into `DATA_DIR/files/<conversation>/jira/<id>-<name>` and its path returned; the agent decides what
 to do with it (Read an image, `ffmpeg` on a video — the bot transcribes nothing). Technical rules only: a stall
 timeout (no data for 2 min aborts), a file name cut to 200 bytes on a character boundary with its extension kept

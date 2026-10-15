@@ -6,7 +6,7 @@ import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraC
 import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraContextLedger } from './contextLedger';
-import { createJiraTrust, readJiraTrustedGroup, type JiraTrustedGroupSnapshot } from './trustedGroup';
+import { createJiraTrust, readJiraTrustedGroup, type JiraTrust, type JiraTrustedGroupSnapshot } from './trustedGroup';
 import { fetchIssueAttachment, type JiraAttachmentToolResult } from './attachmentTool';
 import { linkAgentBinaries } from './agentBinaries';
 import { registerAgentBinDir } from '../../utils/agentEnvironment';
@@ -212,6 +212,13 @@ export async function prepareJiraConnector(context: {
     unconfirmedPosts,
   });
   let inbound: JiraInbound | null = null;
+  /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
+  let trust: JiraTrust | null = null;
+  const adoptTrustedGroup = (ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
+    const { trustedGroup } = ready;
+    trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;
+  };
+  if (firstCheck.kind === 'ready') adoptTrustedGroup(firstCheck);
   let setupRetryTimer: NodeJS.Timeout | null = null;
   let isStarted = false;
 
@@ -235,7 +242,7 @@ export async function prepareJiraConnector(context: {
       contextLedger,
       getSpillDir: (key) => path.join(getJiraFilesDir(key), jiraSpillDirName),
       triggerLog,
-      trust: trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null,
+      trust,
       now,
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
@@ -252,9 +259,14 @@ export async function prepareJiraConnector(context: {
     setupRetryTimer = setTimeout(() => {
       void checkJiraSetup(client, config, now).then((check) => {
         if (!isStarted) return;
-        if (check.kind === 'ready') startPolling(deps, check);
-        else if (check.kind === 'refused') for (const reason of check.reasons) console.error(`[jira] polling NOT started: ${reason}`);
-        else retrySetupCheck(deps, failureCount + 1);
+        if (check.kind === 'refused') {
+          for (const reason of check.reasons) console.error(`[jira] polling NOT started: ${reason}`);
+        } else if (check.kind === 'unreachable') {
+          retrySetupCheck(deps, failureCount + 1);
+        } else {
+          adoptTrustedGroup(check);
+          startPolling(deps, check);
+        }
       });
     }, getJiraRetryDelayMs(context.testTiming?.setupRetryBaseMs ?? config.pollIntervalMs, failureCount));
   };
@@ -268,7 +280,13 @@ export async function prepareJiraConnector(context: {
       if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);
       else contextLedger.drop(key.thread, requestId);
     },
-    fetchAttachment: (key, attachmentId) => fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir }, key, attachmentId),
+    fetchAttachment: async (key, attachmentId) => {
+      // A group is configured but not read yet (Jira did not answer at boot): who uploaded what is unknown, so nothing is served.
+      if (config.trustedGroupName !== null && trust === null) {
+        return { ok: false, error: `Attachment ${attachmentId} could not be fetched: the trusted group has not been read yet; try again shortly` };
+      }
+      return fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir, trust }, key, attachmentId);
+    },
     onContextReset: (key, reason) => {
       contextLedger.reset(key.thread);
       console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);

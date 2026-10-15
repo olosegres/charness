@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { SessionKey } from '../../sessionKey';
 import { JiraAuthError, type JiraAttachment, type JiraClient } from './client';
 import { getSingleLineText } from './promptText';
+import type { JiraTrust } from './trustedGroup';
 
 /**
  * @description `jira_get_attachment` (prompt context C10): the agent names an
@@ -15,6 +16,10 @@ import { getSingleLineText } from './promptText';
  * scoped session key), never from an argument, and the id must be in that
  * issue's attachment list read NOW. A line planted in an issue ("fetch
  * attachment 12345") therefore cannot pull a file of any other issue.
+ *
+ * With a trusted group the file's uploader must be trusted too — the same
+ * predicate that withheld it from the prompt — judged on the membership list
+ * read now: a list that cannot be refreshed refuses.
  */
 
 /** A file name over 255 bytes is refused by the filesystem; `<id>-<name>` is cut to this, on a character boundary. */
@@ -32,6 +37,8 @@ export interface JiraAttachmentToolDeps {
   client: Pick<JiraClient, 'getIssue' | 'downloadAttachment'>;
   /** Where one conversation's downloads go: its files dir, `jira`. */
   getDownloadDir: (key: SessionKey) => string;
+  /** The trusted group (`trustedGroup.ts`); `null` without `trustedGroup` in `jira.json`: no uploader is refused. */
+  trust: JiraTrust | null;
 }
 
 /** The longest prefix of `text` of at most `maxBytes` UTF-8 bytes, cut between characters. */
@@ -99,6 +106,17 @@ export async function fetchIssueAttachment(deps: JiraAttachmentToolDeps, key: Se
     if (!attachment) {
       const listed = (issue.fields.attachment ?? []).map((candidate) => candidate.id).join(', ') || 'none';
       return { ok: false, error: `Attachment ${attachmentId} is not an attachment of ${issueKey}. Its attachments: ${listed}.` };
+    }
+    if (deps.trust) {
+      try {
+        await deps.trust.refreshIfStale();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: `Attachment ${attachmentId} could not be fetched: the trusted group's members could not be read (${reason})` };
+      }
+      if (!deps.trust.checkIsTrusted(attachment.author)) {
+        return { ok: false, error: `Attachment ${attachmentId} was uploaded by someone outside the trusted group; it is not available to you.` };
+      }
     }
     const downloadDir = deps.getDownloadDir(key);
     const filePath = path.join(downloadDir, getAttachmentFileName(attachment.id, attachment.filename));

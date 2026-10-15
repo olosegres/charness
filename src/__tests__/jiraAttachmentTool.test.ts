@@ -21,6 +21,7 @@ import { createJiraClient } from '../connectors/jira/client';
 import { downloadJiraAttachment, jiraDownloadMaxRedirects, jiraDownloadStallTimeoutMs } from '../connectors/jira/attachmentDownload';
 import { fetchIssueAttachment, getAttachmentFileName, jiraAttachmentFileNameMaxBytes } from '../connectors/jira/attachmentTool';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
+import { createJiraTrust, jiraTrustedGroupMaxAgeMs, type JiraTrust, type JiraTrustClient } from '../connectors/jira/trustedGroup';
 
 const email = 'ai-account@example.com';
 const apiToken = 'token-value-never-echoed';
@@ -29,7 +30,7 @@ const key = makeJiraKey('PROJ-1');
 const stallTimeoutMs = 250;
 
 interface Served {
-  attachments: Array<{ id: string; filename: string; mimeType: string; size: number }>;
+  attachments: Array<{ id: string; filename: string; mimeType: string; size: number; author?: { accountId: string; accountType?: string } }>;
   /** What the content request of an attachment id does. */
   content: (attachmentId: string, request: http.IncomingMessage, response: http.ServerResponse) => void;
 }
@@ -94,9 +95,10 @@ describe('fetchIssueAttachment (C10)', () => {
     fs.rmSync(path.resolve(downloadDir, '..', '..'), { recursive: true, force: true });
   });
 
-  const fetchAttachment = (attachmentId: string): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
+  const fetchAttachment = (attachmentId: string, trust: JiraTrust | null = null): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
     client: createJiraClient({ baseUrl: siteUrl, email, apiToken, downloadStallTimeoutMs: stallTimeoutMs }),
     getDownloadDir: () => downloadDir,
+    trust,
   }, key, attachmentId);
   const contentRequests = (): string[] => siteRequests.filter((request) => request.url.includes('/attachment/content/')).map((request) => request.url);
   const serveBytes = (bytes: Buffer): Served['content'] => (_id, _request, response) => {
@@ -104,6 +106,101 @@ describe('fetchIssueAttachment (C10)', () => {
     response.end(bytes);
   };
   const listDownloadDir = (): string[] => (fs.existsSync(downloadDir) ? fs.readdirSync(downloadDir).sort() : []);
+
+  describe('the trusted group (the uploader must be trusted)', () => {
+    const bytes = Buffer.from('uploaded-bytes');
+    let nowMs = 0;
+    let memberAccountIds: string[] = [];
+    let membersReadError: Error | null = null;
+    let memberReads = 0;
+    const groupClient: JiraTrustClient = {
+      getGroupByName: async () => null,
+      getGroupMembers: async () => {
+        memberReads += 1;
+        if (membersReadError) throw membersReadError;
+        return memberAccountIds.map((accountId) => ({ accountId }));
+      },
+    };
+    const createTrust = (): JiraTrust => createJiraTrust({
+      client: groupClient,
+      snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set(memberAccountIds), readAtMs: nowMs },
+      aiAccountId: 'ai-account',
+      now: () => nowMs,
+    });
+    const serveAttachment = (author?: { accountId: string; accountType?: string }): void => {
+      served.attachments = [{ id: '10234', filename: 'login-error.png', mimeType: 'image/png', size: bytes.length, ...(author ? { author } : {}) }];
+      served.content = (_id, _request, response) => {
+        response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': bytes.length });
+        response.end(bytes);
+      };
+    };
+
+    beforeEach(() => {
+      nowMs = 1_000_000;
+      memberAccountIds = ['member'];
+      membersReadError = null;
+      memberReads = 0;
+    });
+
+    it('a file uploaded by someone outside the group is refused with the fixed text — before any download, and nothing is written', async () => {
+      serveAttachment({ accountId: 'outsider', accountType: 'atlassian' });
+      assert.deepEqual(await fetchAttachment('10234', createTrust()), {
+        ok: false,
+        error: 'Attachment 10234 was uploaded by someone outside the trusted group; it is not available to you.',
+      });
+      assert.deepEqual(contentRequests(), []);
+      assert.deepEqual(listDownloadDir(), []);
+    });
+
+    it('a member\'s, the AI account\'s and an app\'s file are saved; a file whose uploader Jira does not name is refused', async () => {
+      for (const author of [{ accountId: 'member', accountType: 'atlassian' }, { accountId: 'ai-account' }, { accountId: 'rule', accountType: 'app' }]) {
+        serveAttachment(author);
+        const fetched = await fetchAttachment('10234', createTrust());
+        assert.ok(fetched.ok, JSON.stringify(fetched));
+        fs.rmSync(downloadDir, { recursive: true, force: true });
+      }
+      serveAttachment();
+      const refused = await fetchAttachment('10234', createTrust());
+      assert.equal(refused.ok, false);
+    });
+
+    it('a file already on disk is not served to an outsider\'s id either: the uploader is judged first', async () => {
+      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
+      assert.ok((await fetchAttachment('10234', createTrust())).ok);
+      serveAttachment({ accountId: 'outsider', accountType: 'atlassian' });
+      const refused = await fetchAttachment('10234', createTrust());
+      assert.equal(refused.ok, false);
+    });
+
+    it('a list older than its age is read again first: a member removed since is refused, one added since is served', async () => {
+      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
+      const trust = createTrust();
+      nowMs += jiraTrustedGroupMaxAgeMs;
+      memberAccountIds = [];
+      assert.equal((await fetchAttachment('10234', trust)).ok, false);
+      assert.equal(memberReads, 1, 'the stale list was refreshed before the check');
+      assert.deepEqual(contentRequests(), []);
+    });
+
+    it('a list that cannot be refreshed refuses with the "could not be fetched" error, naming the failure — nothing is downloaded', async () => {
+      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
+      const trust = createTrust();
+      nowMs += jiraTrustedGroupMaxAgeMs;
+      membersReadError = new Error('Jira GET /rest/api/3/group/member failed with 503: down');
+      const refused = await fetchAttachment('10234', trust);
+      assert.deepEqual(refused, {
+        ok: false,
+        error: 'Attachment 10234 could not be fetched: the trusted group\'s members could not be read (Jira GET /rest/api/3/group/member failed with 503: down)',
+      });
+      assert.deepEqual(contentRequests(), []);
+    });
+
+    it('a fresh list needs no read: the tool makes no group call of its own', async () => {
+      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
+      assert.ok((await fetchAttachment('10234', createTrust())).ok);
+      assert.equal(memberReads, 0);
+    });
+  });
 
   it('the issue\'s own attachment is saved whole under <id>-<name>; the answer says where, and the site saw the credentials', async () => {
     const bytes = Buffer.from('PNG-original-bytes');

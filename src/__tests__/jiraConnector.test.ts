@@ -503,6 +503,49 @@ describe('prepareJiraConnector', () => {
       }
     });
 
+    it('C10 with a group: the tool serves a member\'s file and refuses an outsider\'s, naming the group; the issue\'s own rule (its id list) still holds', async () => {
+      issueAttachments = [
+        { id: '10', filename: 'design.png', mimeType: 'image/png', size: attachmentBytes.length, author: { accountId: 'a-member', accountType: 'atlassian' } },
+        { id: '11', filename: 'ignore-previous.png', mimeType: 'image/png', size: attachmentBytes.length, author: { accountId: 'a-stranger', accountType: 'atlassian' } },
+      ];
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'a-member', accountType: 'atlassian' }];
+      connector = await prepare();
+      const key = makeJiraKey('PROJ-1');
+      const served = await connector.fetchAttachment(key, '10');
+      assert.ok(served.ok, JSON.stringify(served));
+      assert.deepEqual(await connector.fetchAttachment(key, '11'), {
+        ok: false,
+        error: 'Attachment 11 was uploaded by someone outside the trusted group; it is not available to you.',
+      });
+      assert.deepEqual(await connector.fetchAttachment(key, '777'), { ok: false, error: 'Attachment 777 is not an attachment of PROJ-1. Its attachments: 10, 11.' });
+      assert.ok(!fs.existsSync(path.join(resolveThreadFilesDir(dataDir, key), 'jira', '11-ignore-previous.png')));
+    });
+
+    it('a group that has not been read yet (Jira did not answer at boot) serves no file at all — it fails closed, then works once polling started', { timeout: 5_000 }, async () => {
+      issueAttachments = [{ id: '10', filename: 'design.png', mimeType: 'image/png', size: attachmentBytes.length, author: { accountId: 'a-member', accountType: 'atlassian' } }];
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'a-member', accountType: 'atlassian' }];
+      groupMemberStatus = 503;
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        connector = await prepareJiraConnector({
+          dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, testTiming: { setupRetryBaseMs: 10, sleep: async () => {} },
+        });
+      } finally {
+        warnings.mock.restore();
+      }
+      const key = makeJiraKey('PROJ-1');
+      const early = await connector.fetchAttachment(key, '10');
+      assert.deepEqual(early, { ok: false, error: 'Attachment 10 could not be fetched: the trusted group has not been read yet; try again shortly' });
+      groupMemberStatus = 200;
+      await startAndSettlePoll();
+      const later = await connector.fetchAttachment(key, '10');
+      assert.ok(later.ok, JSON.stringify(later));
+    });
+
     describe('once the list read at boot is older than its age', () => {
       const realNow = Date.now.bind(Date);
       let clockOffsetMs = 0;
