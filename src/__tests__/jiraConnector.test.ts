@@ -13,7 +13,8 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import type { AddressInfo } from 'net';
-import { checkIsTransientJiraFailure, JiraConnectorStartError, prepareJiraConnector, type JiraConnector } from '../connectors/jira/connector';
+import { checkIsTransientJiraFailure, jiraNoTrustedGroupLogLine, JiraConnectorStartError, prepareJiraConnector, type JiraConnector } from '../connectors/jira/connector';
+import { jiraTrustedGroupMaxAgeMs } from '../connectors/jira/trustedGroup';
 import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
@@ -45,6 +46,12 @@ const attachmentBytes = 'the original bytes';
 let issueComments: object[] = [];
 /** Status of the field list; 200 serves `siteFields`. */
 let fieldsStatus = 200;
+/** The site's groups (`GET /group/bulk`, filtered by `groupName`) and the members of whichever group is read. */
+let siteGroups: Array<{ name: string; groupId: string }> = [];
+let groupMembers: Array<{ accountId: string; accountType?: string }> = [];
+/** Status of each group call; 200 serves `siteGroups` / `groupMembers`. */
+let groupBulkStatus = 200;
+let groupMemberStatus = 200;
 
 function sendJson(response: http.ServerResponse, body: object): void {
   response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -105,6 +112,17 @@ describe('prepareJiraConnector', () => {
           return;
         }
         if (url === '/rest/api/3/field') return sendJson(response, siteFields);
+        if (url.startsWith('/rest/api/3/group/bulk?') || url.startsWith('/rest/api/3/group/member?')) {
+          const isBulk = url.startsWith('/rest/api/3/group/bulk?');
+          const status = isBulk ? groupBulkStatus : groupMemberStatus;
+          if (status !== 200) {
+            response.writeHead(status, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ errorMessages: ['group call refused'] }));
+            return;
+          }
+          const groupName = new URL(url, 'http://127.0.0.1').searchParams.get('groupName');
+          return sendJson(response, { isLast: true, values: isBulk ? siteGroups.filter((group) => group.name === groupName) : groupMembers });
+        }
         if (request.method === 'POST' && url === '/rest/api/3/issue/PROJ-1/comment') {
           response.writeHead(201, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ id: '20001' }));
@@ -140,6 +158,10 @@ describe('prepareJiraConnector', () => {
     issueComments = [];
     issueAttachments = [];
     fieldsStatus = 200;
+    siteGroups = [];
+    groupMembers = [];
+    groupBulkStatus = 200;
+    groupMemberStatus = 200;
     requestPaths.length = 0;
   });
   afterEach(() => {
@@ -321,6 +343,177 @@ describe('prepareJiraConnector', () => {
       fieldsStatus = 400;
       await assert.rejects(prepare(), (error: Error) =>
         error instanceof JiraConnectorStartError && /GET \/rest\/api\/3\/field failed with 400/.test(error.reasons.join('\n')));
+    });
+  });
+
+  describe('trustedGroup', () => {
+    const trustedGroupName = 'ai-trusted';
+    const countPathCalls = (requestPath: string): number => requestPaths.filter((entry) => entry === requestPath).length;
+
+    it('the group is resolved by its name and its members read ONCE at boot; polling then starts', async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'requester-account', accountType: 'atlassian' }];
+      connector = await prepare();
+      const prompt = await startAndWaitForPrompt();
+      assert.ok(prompt.startsWith('[Request req_1'), prompt);
+      assert.equal(countPathCalls('GET /rest/api/3/group/bulk'), 1);
+      assert.equal(countPathCalls('GET /rest/api/3/group/member'), 1, 'the list read at boot is fresh for the first poll');
+    });
+
+    it('a site without a group of that name stops the start, naming the group', async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: 'another-group', groupId: 'group-2' }];
+      await assert.rejects(prepare(), (error: Error) =>
+        error instanceof JiraConnectorStartError
+        && error.reasons.length === 1
+        && error.reasons[0] === 'jira.json trustedGroup: the site has no group named "ai-trusted"');
+      assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was polled');
+    });
+
+    it('an AI account that may not read groups (403 on either call) stops the start, naming the permission; every reason comes at once', async () => {
+      const permissionReason = 'jira.json trustedGroup: the AI account needs the Browse users and groups global permission to read the trusted group';
+      writeConfig({ trustedGroup: trustedGroupName, projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'] } } });
+      groupBulkStatus = 403;
+      await assert.rejects(prepare(), (error: Error) =>
+        error instanceof JiraConnectorStartError
+        && error.reasons.length === 2
+        && error.reasons.includes(permissionReason)
+        && error.reasons.includes('project PROJ has no status named "AI To Do"'));
+      groupBulkStatus = 200;
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMemberStatus = 403;
+      writeConfig({ trustedGroup: trustedGroupName });
+      await assert.rejects(prepare(), (error: Error) => error instanceof JiraConnectorStartError && error.reasons.join('\n') === permissionReason);
+    });
+
+    it('a Jira that does not answer the group calls does not refuse the start — the check is repeated, then polling starts', { timeout: 5_000 }, async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'requester-account', accountType: 'atlassian' }];
+      groupMemberStatus = 503;
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        connector = await prepareJiraConnector({
+          dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, testTiming: { setupRetryBaseMs: 10, sleep: async () => {} },
+        });
+        assert.ok(warnings.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] Jira unreachable at start')));
+      } finally {
+        warnings.mock.restore();
+      }
+      const isPosted = new Promise<boolean>((resolve) => {
+        connector?.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), postRequest: async () => resolve(true) });
+        setTimeout(() => {
+          groupMemberStatus = 200;
+        }, 50);
+      });
+      assert.equal(await isPosted, true);
+    });
+
+    it('an empty group boots, with one warning that only apps and automations can hand the AI work', async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        connector = await prepare();
+        await startAndWaitForPrompt();
+        const groupWarnings = warnings.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('trusted group'));
+        assert.deepEqual(groupWarnings, ['[jira] the trusted group "ai-trusted" has no members: only apps and automations can hand the AI work']);
+      } finally {
+        warnings.mock.restore();
+      }
+    });
+
+    it('without trustedGroup: one boot line says nobody filters the text, the group endpoints are never called, polling is as before', async () => {
+      writeConfig();
+      const logs = mock.method(console, 'log', () => {});
+      try {
+        connector = await prepare();
+        await startAndWaitForPrompt();
+        assert.equal(logs.mock.calls.filter((call) => String(call.arguments[0]) === jiraNoTrustedGroupLogLine).length, 1);
+      } finally {
+        logs.mock.restore();
+      }
+      assert.equal(jiraNoTrustedGroupLogLine, '[jira] no trustedGroup: the text of everyone who can edit or comment reaches the agents');
+      assert.deepEqual(requestPaths.filter((entry) => entry.includes('/group/')), []);
+    });
+
+    it('with trustedGroup the "no trustedGroup" line is not logged', async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      const logs = mock.method(console, 'log', () => {});
+      try {
+        connector = await prepare();
+        assert.ok(!logs.mock.calls.some((call) => String(call.arguments[0]) === jiraNoTrustedGroupLogLine));
+      } finally {
+        logs.mock.restore();
+      }
+    });
+
+    describe('once the list read at boot is older than its age', () => {
+      const realNow = Date.now.bind(Date);
+      let clockOffsetMs = 0;
+      beforeEach(() => {
+        clockOffsetMs = 0;
+        mock.method(Date, 'now', () => realNow() + clockOffsetMs);
+      });
+      afterEach(() => {
+        mock.restoreAll();
+      });
+
+      it('the first poll reads the members again before it searches', async () => {
+        writeConfig({ trustedGroup: trustedGroupName });
+        siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+        groupMembers = [{ accountId: 'requester-account', accountType: 'atlassian' }];
+        connector = await prepare();
+        clockOffsetMs = jiraTrustedGroupMaxAgeMs + 1_000;
+        await startAndWaitForPrompt();
+        assert.equal(countPathCalls('GET /rest/api/3/group/member'), 2);
+        const memberRead = requestPaths.lastIndexOf('GET /rest/api/3/group/member');
+        assert.ok(memberRead < requestPaths.indexOf('POST /rest/api/3/search/jql'), 'refreshed before the search');
+      });
+
+      it('a group deleted meanwhile (404) stops polling with ONE loud line; the process goes on', async () => {
+        writeConfig({ trustedGroup: trustedGroupName });
+        siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+        groupMembers = [{ accountId: 'requester-account', accountType: 'atlassian' }];
+        connector = await prepare();
+        clockOffsetMs = jiraTrustedGroupMaxAgeMs + 1_000;
+        groupMemberStatus = 404;
+        const errors = mock.method(console, 'error', () => {});
+        try {
+          let isPosted = false;
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), postRequest: async () => { isPosted = true; } });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [
+            '[jira] polling STOPPED: the trusted group "ai-trusted" no longer exists on the site',
+          ]);
+          assert.equal(isPosted, false);
+          assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was searched');
+        } finally {
+          errors.mock.restore();
+        }
+      });
+
+      it('a membership read that fails (503) fails that poll — no search, nothing opened — and the next poll tries again', async () => {
+        writeConfig({ trustedGroup: trustedGroupName, pollIntervalSeconds: 600 });
+        siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+        groupMembers = [{ accountId: 'requester-account', accountType: 'atlassian' }];
+        connector = await prepareJiraConnector({
+          dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, testTiming: { setupRetryBaseMs: 10, sleep: async () => {} },
+        });
+        clockOffsetMs = jiraTrustedGroupMaxAgeMs + 1_000;
+        groupMemberStatus = 503;
+        const warnings = mock.method(console, 'warn', () => {});
+        try {
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), postRequest: async () => {} });
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          assert.ok(warnings.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] poll failed (1 in a row)')));
+          assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was searched on the stale list');
+        } finally {
+          warnings.mock.restore();
+        }
+      });
     });
   });
 

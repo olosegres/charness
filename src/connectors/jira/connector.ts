@@ -6,6 +6,7 @@ import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraC
 import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraContextLedger } from './contextLedger';
+import { createJiraTrust, readJiraTrustedGroup, type JiraTrustedGroupSnapshot } from './trustedGroup';
 import { fetchIssueAttachment, type JiraAttachmentToolResult } from './attachmentTool';
 import { linkAgentBinaries } from './agentBinaries';
 import { registerAgentBinDir } from '../../utils/agentEnvironment';
@@ -71,12 +72,18 @@ export function checkIsTransientJiraFailure(error: Error): boolean {
 /**
  * @name JiraSetupCheck
  * @description `ready` — every project resolved (`unknownExtraFieldIds`: per
- * project, the `extraFields` ids the site does not list); `refused` — the setup
- * itself is wrong (every reason); `unreachable` — Jira did not answer well
+ * project, the `extraFields` ids the site does not list; `trustedGroup`: the
+ * group as read, `null` without `trustedGroup` in the config); `refused` — the
+ * setup itself is wrong (every reason); `unreachable` — Jira did not answer well
  * enough to tell.
  */
 type JiraSetupCheck =
-  | { kind: 'ready'; projects: ReadonlyMap<string, JiraProjectTrigger>; unknownExtraFieldIds: ReadonlyMap<string, string[]> }
+  | {
+    kind: 'ready';
+    projects: ReadonlyMap<string, JiraProjectTrigger>;
+    unknownExtraFieldIds: ReadonlyMap<string, string[]>;
+    trustedGroup: JiraTrustedGroupSnapshot | null;
+  }
   | { kind: 'refused'; reasons: string[] }
   | { kind: 'unreachable'; detail: string };
 
@@ -91,15 +98,23 @@ async function settle<T>(lookup: Promise<T>): Promise<SettledLookup<T>> {
   }
 }
 
-/** What the setup check reads from Jira: the token's account, every project's statuses, the site's fields when any project names extra ones. */
-async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<JiraSetupCheck> {
+/** The status Jira answers with when the account lacks the permission a call needs. */
+const permissionRefusedStatus = 403;
+
+/**
+ * What the setup check reads from Jira: the token's account, every project's statuses, the site's fields when
+ * any project names extra ones, and the trusted group with its members when the config names one.
+ */
+async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () => number): Promise<JiraSetupCheck> {
   const projectEntries = [...config.projects];
   const hasExtraFields = projectEntries.some(([, project]) => project.extraFieldIds.length > 0);
+  const { trustedGroupName } = config;
   // Independent lookups, made together; one project's failure does not hide the others' problems.
-  const [myself, statusLookups, fieldsLookup] = await Promise.all([
+  const [myself, statusLookups, fieldsLookup, groupLookup] = await Promise.all([
     settle(client.getMyself()),
     Promise.all(projectEntries.map(([projectKey]) => settle(client.getProjectStatuses(projectKey)))),
     hasExtraFields ? settle(client.getFields()) : null,
+    trustedGroupName === null ? null : settle(readJiraTrustedGroup(client, trustedGroupName, now)),
   ]);
   const reasons: string[] = [];
   const transientDetails: string[] = [];
@@ -110,6 +125,17 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
   else if (myself.value.accountId !== config.accountId) reasons.push('jira.json accountId is not the account its apiToken belongs to');
   if (fieldsLookup && !fieldsLookup.ok) noteFailure(fieldsLookup.error);
   const fieldDefinitions: readonly JiraFieldDefinition[] = fieldsLookup?.ok ? fieldsLookup.value : [];
+  if (groupLookup && !groupLookup.ok) {
+    const { error } = groupLookup;
+    if (error instanceof JiraAuthError && error.status === permissionRefusedStatus) {
+      reasons.push('jira.json trustedGroup: the AI account needs the Browse users and groups global permission to read the trusted group');
+    } else {
+      noteFailure(error);
+    }
+  } else if (groupLookup && groupLookup.value === null) {
+    reasons.push(`jira.json trustedGroup: the site has no group named "${trustedGroupName}"`);
+  }
+  const trustedGroup = groupLookup?.ok ? groupLookup.value : null;
   const projects = new Map<string, JiraProjectTrigger>();
   const unknownExtraFieldIds = new Map<string, string[]>();
   projectEntries.forEach(([projectKey, project], index) => {
@@ -129,12 +155,15 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig): Promise<J
   });
   if (reasons.length > 0) return { kind: 'refused', reasons };
   if (transientDetails.length > 0) return { kind: 'unreachable', detail: transientDetails.join('; ') };
-  return { kind: 'ready', projects, unknownExtraFieldIds };
+  return { kind: 'ready', projects, unknownExtraFieldIds, trustedGroup };
 }
 
 /** The connector's own folders inside a conversation's files dir: its downloads, and under them the text too long for a prompt. */
 export const jiraFilesDirName = 'jira';
 export const jiraSpillDirName = 'text';
+
+/** Logged at boot when `jira.json` has no `trustedGroup`: nothing filters whose text reaches the agents. */
+export const jiraNoTrustedGroupLogLine = '[jira] no trustedGroup: the text of everyone who can edit or comment reaches the agents';
 
 /** The start-of-polling log line that carries the poll's JQL. */
 export const jiraPollJqlLogPrefix = '[jira] poll JQL: ';
@@ -156,15 +185,16 @@ export async function prepareJiraConnector(context: {
     ...(context.testTiming ? { sleepImpl: context.testTiming.sleep } : {}),
   });
 
+  const now = (): number => Date.now();
   // R22: a wrong setup refuses the start; a Jira that does not answer does not —
   // the connector starts and checks again before its first poll.
-  const firstCheck = await checkJiraSetup(client, config);
+  const firstCheck = await checkJiraSetup(client, config, now);
   if (firstCheck.kind === 'refused') throw new JiraConnectorStartError(firstCheck.reasons);
   if (firstCheck.kind === 'unreachable') console.warn(`[jira] Jira unreachable at start (${firstCheck.detail}); polling starts once it answers`);
+  if (config.trustedGroupName === null) console.log(jiraNoTrustedGroupLogLine);
 
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
   await triggerLog.load();
-  const now = (): number => Date.now();
   const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
   await unconfirmedPosts.load();
 
@@ -186,10 +216,13 @@ export async function prepareJiraConnector(context: {
   let isStarted = false;
 
   const startPolling = (deps: JiraConnectorSessionDeps, ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
-    const { projects, unknownExtraFieldIds } = ready;
+    const { projects, unknownExtraFieldIds, trustedGroup } = ready;
     // Once per start: this runs only for the check that came out ready.
     for (const [projectKey, fieldIds] of unknownExtraFieldIds) {
       console.warn(`[jira] ${projectKey}: extraFields the site does not list are left out of every prompt: ${fieldIds.join(', ')}`);
+    }
+    if (trustedGroup && trustedGroup.memberAccountIds.size === 0) {
+      console.warn(`[jira] the trusted group "${trustedGroup.groupName}" has no members: only apps and automations can hand the AI work`);
     }
     inbound = new JiraInbound({
       ...deps,
@@ -202,7 +235,8 @@ export async function prepareJiraConnector(context: {
       contextLedger,
       getSpillDir: (key) => path.join(getJiraFilesDir(key), jiraSpillDirName),
       triggerLog,
-      now: () => Date.now(),
+      trust: trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null,
+      now,
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
     });
     inbound.start();
@@ -215,7 +249,7 @@ export async function prepareJiraConnector(context: {
   const retrySetupCheck = (deps: JiraConnectorSessionDeps, failureCount: number): void => {
     // Not unref'd: in a Jira-only instance this timer keeps the process alive (D9).
     setupRetryTimer = setTimeout(() => {
-      void checkJiraSetup(client, config).then((check) => {
+      void checkJiraSetup(client, config, now).then((check) => {
         if (!isStarted) return;
         if (check.kind === 'ready') startPolling(deps, check);
         else if (check.kind === 'refused') for (const reason of check.reasons) console.error(`[jira] polling NOT started: ${reason}`);

@@ -17,6 +17,7 @@ import {
   jiraBackoffJitterRatio,
   jiraBackoffMs,
   jiraCommentPageSize,
+  jiraGroupMemberPageSize,
   jiraMaxAttempts,
   jiraRetryAfterCapMs,
   JiraAuthError,
@@ -211,6 +212,75 @@ describe('createJiraClient', () => {
       ]);
       assert.deepEqual(JSON.parse(requests[0].body), { body: adf });
       assert.deepEqual(JSON.parse(requests[1].body), { accountId: 'placeholder-requester' });
+    });
+
+    it('getGroupByName: GET /group/bulk with the name encoded; the group of EXACTLY that name, else null', async () => {
+      respondWith(
+        { status: 200, body: json({ isLast: true, values: [{ name: 'ai-trusted-old', groupId: 'g-0' }, { name: 'ai trusted/team', groupId: 'g-1' }] }) },
+        { status: 200, body: json({ isLast: true, values: [{ name: 'Ai Trusted', groupId: 'g-2' }] }) },
+        { status: 200, body: json({ isLast: true, values: [] }) },
+      );
+      const client = createClient();
+      assert.deepEqual(await client.getGroupByName('ai trusted/team'), { name: 'ai trusted/team', groupId: 'g-1' });
+      assert.equal(await client.getGroupByName('ai trusted'), null, 'a name that differs only in case is not the group');
+      assert.equal(await client.getGroupByName('nobody'), null);
+      assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), [
+        'GET /rest/api/3/group/bulk?groupName=ai%20trusted%2Fteam',
+        'GET /rest/api/3/group/bulk?groupName=ai%20trusted',
+        'GET /rest/api/3/group/bulk?groupName=nobody',
+      ]);
+    });
+
+    it('getGroupMembers: EVERY active member, page after page until isLast — the next page starts after what the last one held', async () => {
+      const createMembers = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({
+        accountId: `member-${from + index}`, accountType: 'atlassian', displayName: `Member ${from + index}`, emailAddress: 'ignored@example.com',
+      }));
+      respondWith(
+        { status: 200, body: json({ startAt: 0, maxResults: jiraGroupMemberPageSize, total: 80, isLast: false, values: createMembers(0, 30) }) },
+        { status: 200, body: json({ startAt: 30, maxResults: jiraGroupMemberPageSize, total: 80, isLast: false, values: createMembers(30, 30) }) },
+        { status: 200, body: json({ startAt: 60, maxResults: jiraGroupMemberPageSize, total: 80, isLast: true, values: createMembers(60, 20) }) },
+      );
+      const members = await createClient().getGroupMembers('group/id 1');
+      assert.deepEqual(members.map((member) => member.accountId), Array.from({ length: 80 }, (_, index) => `member-${index}`));
+      assert.equal(members[0].accountType, 'atlassian');
+      assert.deepEqual(requests.map((request) => request.url), [
+        `/rest/api/3/group/member?groupId=group%2Fid%201&includeInactiveUsers=false&startAt=0&maxResults=${jiraGroupMemberPageSize}`,
+        `/rest/api/3/group/member?groupId=group%2Fid%201&includeInactiveUsers=false&startAt=30&maxResults=${jiraGroupMemberPageSize}`,
+        `/rest/api/3/group/member?groupId=group%2Fid%201&includeInactiveUsers=false&startAt=60&maxResults=${jiraGroupMemberPageSize}`,
+      ]);
+    });
+
+    it('getGroupMembers: an empty group is one request; without isLast, total ends the read, else a page shorter than asked; an empty page always', async () => {
+      respondWith({ status: 200, body: json({ total: 0, isLast: true, values: [] }) });
+      assert.deepEqual(await createClient().getGroupMembers('g'), []);
+      assert.equal(requests.length, 1);
+      requests = [];
+      respondWith(
+        { status: 200, body: json({ total: 2, values: [{ accountId: 'a' }] }) },
+        { status: 200, body: json({ total: 2, values: [{ accountId: 'b' }] }) },
+      );
+      assert.deepEqual((await createClient().getGroupMembers('g')).map((member) => member.accountId), ['a', 'b']);
+      requests = [];
+      respondWith({ status: 200, body: json({ values: [{ accountId: 'a' }] }) });
+      assert.deepEqual((await createClient().getGroupMembers('g')).map((member) => member.accountId), ['a']);
+      requests = [];
+      // `isLast: false` with nothing on the page must not loop for ever.
+      respondWith({ status: 200, body: json({ isLast: false, values: [] }) });
+      assert.deepEqual(await createClient().getGroupMembers('g'), []);
+    });
+
+    it('the group calls: a missing group is a JiraHttpError with its 404, a missing permission a JiraAuthError, a 503 is retried', async () => {
+      respondWith({ status: 404, body: json({ errorMessages: ['The group does not exist'] }) });
+      await assert.rejects(createClient().getGroupMembers('gone'), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 404 && /The group does not exist/.test(error.message));
+      requests = [];
+      respondWith({ status: 403, body: json({ errorMessages: ['forbidden'] }) });
+      await assert.rejects(createClient().getGroupByName('ai-trusted'), (error: Error) => error instanceof JiraAuthError && error.status === 403);
+      assert.equal(requests.length, 1, 'a refused call is not repeated');
+      requests = [];
+      respondWith({ status: 503 }, { status: 200, body: json({ isLast: true, values: [{ accountId: 'a' }] }) });
+      assert.equal((await createClient().getGroupMembers('g')).length, 1);
+      assert.equal(requests.length, 2, 'a read is safe to repeat');
     });
 
     it('getRecentComments reads the issue\'s newest comments, newest first (R18\'s read-back)', async () => {

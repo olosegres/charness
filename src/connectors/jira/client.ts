@@ -33,6 +33,8 @@ export const jiraBackoffMs = [1_000, 4_000] as const;
 export const jiraBackoffJitterRatio = 0.5;
 /** Jira's own page size for comments; the page actually returned decides where the next one starts. */
 export const jiraCommentPageSize = 100;
+/** The most members of a group one `group/member` page holds; the page actually returned decides where the next one starts. */
+export const jiraGroupMemberPageSize = 50;
 /**
  * Network error codes that mean the request never left this host — no
  * connection, no address, no TLS session — so nothing reached Jira.
@@ -218,6 +220,17 @@ const remoteLinksDisabledStatus = 403;
 
 const fieldDefinitionsSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 
+/** `GET /group/bulk`: the groups of that name, each with the id that survives a rename. */
+const groupPageSchema = z.object({
+  values: z.array(z.object({ name: z.string(), groupId: z.string() })),
+});
+
+const groupMemberPageSchema = z.object({
+  total: z.number().optional(),
+  isLast: z.boolean().optional(),
+  values: z.array(accountSchema),
+});
+
 const createdCommentSchema = z.object({ id: z.string() });
 const myselfSchema = z.object({ accountId: z.string() });
 
@@ -236,6 +249,8 @@ export type JiraSearchResult = z.infer<typeof searchResultSchema>;
 export type JiraChangelogPage = z.infer<typeof changelogPageSchema>;
 /** A status as `GET /project/{key}/statuses` lists it. */
 export type JiraProjectStatus = z.infer<typeof projectStatusSchema>;
+/** A group as `GET /group/bulk` lists it: its name and the id that stays when the name changes. */
+export type JiraGroup = z.infer<typeof groupPageSchema>['values'][number];
 
 /** @name JiraSearchRequest @description `POST /rest/api/3/search/jql` (D13). */
 export interface JiraSearchRequest {
@@ -346,6 +361,13 @@ export interface JiraClient {
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
   getProjectStatuses(projectKey: string): Promise<JiraProjectStatus[]>;
+  /** The group named EXACTLY `groupName`, or `null` when the site has none. Needs the Browse users and groups permission. */
+  getGroupByName(groupName: string): Promise<JiraGroup | null>;
+  /**
+   * EVERY active member of the group `groupId`, read page by page. A group that does not exist is a
+   * {@link JiraHttpError} with `status` 404; a missing permission is a {@link JiraAuthError}.
+   */
+  getGroupMembers(groupId: string): Promise<JiraAccount[]>;
 }
 
 function getParsedResponse<T>(text: string, schema: z.ZodType<T>): { ok: true; value: T } | { ok: false; detail: string } {
@@ -556,6 +578,35 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       const byId = new Map<string, JiraProjectStatus>();
       for (const issueType of issueTypes) for (const status of issueType.statuses) byId.set(status.id, status);
       return [...byId.values()];
+    },
+
+    getGroupByName: async (groupName) => {
+      const page = await sendForJson(
+        { method: 'GET', path: `/rest/api/3/group/bulk?groupName=${encode(groupName)}`, isIdempotent: true },
+        groupPageSchema,
+      );
+      return page.values.find((group) => group.name === groupName) ?? null;
+    },
+
+    getGroupMembers: async (groupId) => {
+      const members: JiraAccount[] = [];
+      for (;;) {
+        const page = await sendForJson(
+          {
+            method: 'GET',
+            path: `/rest/api/3/group/member?groupId=${encode(groupId)}&includeInactiveUsers=false&startAt=${members.length}&maxResults=${jiraGroupMemberPageSize}`,
+            isIdempotent: true,
+          },
+          groupMemberPageSchema,
+        );
+        members.push(...page.values);
+        // `isLast` ends the read; without it `total` does, else a page shorter than asked. An empty page always does.
+        let isLastPage: boolean;
+        if (page.values.length === 0) isLastPage = true;
+        else if (page.isLast !== undefined) isLastPage = page.isLast;
+        else isLastPage = page.total === undefined ? page.values.length < jiraGroupMemberPageSize : members.length >= page.total;
+        if (isLastPage) return members;
+      }
     },
   };
 }

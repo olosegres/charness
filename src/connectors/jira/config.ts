@@ -74,6 +74,8 @@ const rawConfigSchema = z.strictObject({
   projects: z.record(z.string(), projectSchema),
   pollIntervalSeconds: z.number().int().min(jiraPollIntervalMinSeconds).max(jiraPollIntervalMaxSeconds).optional(),
   runBudgetPer24h: z.number().int().min(1).optional(),
+  // The NAME of one Jira group: only its members' text steers the agent (see `trustedGroup.ts`); absent → everyone's does.
+  trustedGroup: z.string().min(1).optional(),
   adapter: z.string().min(1).optional(),
   // R15: user settings no longer apply in a Jira session, so its model and effort come from here.
   model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
@@ -105,6 +107,8 @@ export interface JiraConfig {
   projects: ReadonlyMap<string, JiraProjectConfig>;
   pollIntervalMs: number;
   runBudgetPer24h: number;
+  /** The trusted group's name as `jira.json` gives it; `null` → no filter, the text of everyone who can edit or comment reaches the agents. */
+  trustedGroupName: string | null;
   adapter: JiraAdapterName;
   /** The sessions' model; absent from `jira.json` → {@link jiraDefaultModel}. */
   model: string;
@@ -247,6 +251,7 @@ export function validateJiraConfig(
       projects,
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
+      trustedGroupName: raw.trustedGroup ?? null,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
       model: raw.model ?? jiraDefaultModel,
       effort: raw.effort ?? jiraDefaultEffort,

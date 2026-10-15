@@ -12,8 +12,10 @@ import type { JiraAccount, JiraChangelogHistory } from './client';
 
 /** The trigger id of an issue that matched from its creation. */
 export const createdTriggerId = 'created';
-/** Jira's `accountType` of a person (an app or automation is `app`). */
+/** Jira's `accountType` of a person. */
 const personAccountType = 'atlassian';
+/** Jira's `accountType` of an app or automation. */
+const appAccountType = 'app';
 
 export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created';
 
@@ -76,6 +78,11 @@ export function getIssueTrigger(
 /** A person, as opposed to an app or automation; a missing type is read as a person. */
 export function checkIsPersonAccount(account: JiraAccount): boolean {
   return account.accountType === undefined || account.accountType === personAccountType;
+}
+
+/** An app or automation (a Jira rule, an integration), as opposed to a person or a service-desk customer. */
+export function checkIsAppAccount(account: JiraAccount): boolean {
+  return account.accountType === appAccountType;
 }
 
 /** A person who may be handed an issue back: not an app, not the AI account itself. */

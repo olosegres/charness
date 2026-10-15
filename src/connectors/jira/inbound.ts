@@ -12,6 +12,7 @@ import { getIssueDelta } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
 import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
+import { JiraTrustedGroupGoneError, type JiraTrust } from './trustedGroup';
 
 /**
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
@@ -83,6 +84,8 @@ export interface JiraInboundDeps {
   /** Where a conversation's text too long for its prompt is written whole (`promptSpill.ts`). */
   getSpillDir: (key: SessionKey) => string;
   triggerLog: JiraTriggerLog;
+  /** The trusted group (`trustedGroup.ts`); `null` without `trustedGroup` in `jira.json`: no filter. */
+  trust: JiraTrust | null;
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
   bindConversation: (key: SessionKey, folder: string) => Promise<void>;
@@ -160,8 +163,9 @@ export class JiraInbound {
       await this.pollOnce();
       this.failureCount = 0;
     } catch (error) {
-      if (error instanceof JiraAuthError) {
-        // D14: wrong or revoked credentials do not fix themselves; one loud line, then stop.
+      if (error instanceof JiraAuthError || error instanceof JiraTrustedGroupGoneError) {
+        // D14: wrong or revoked credentials, or a trusted group deleted from the site, do not fix themselves;
+        // one loud line, then stop.
         console.error(`[jira] polling STOPPED: ${error.message}`);
         this.stop();
         return;
@@ -173,12 +177,18 @@ export class JiraInbound {
     if (this.isRunning) this.scheduleNext(getJiraRetryDelayMs(this.deps.pollIntervalMs, this.failureCount));
   }
 
-  /** @description One poll: every matching issue, each decided once. A {@link JiraAuthError} propagates. */
+  /**
+   * @description One poll: every matching issue, each decided once. A {@link JiraAuthError} and a
+   * {@link JiraTrustedGroupGoneError} propagate, and so does a failed membership read: nothing is decided on a
+   * trusted-group list older than its age.
+   */
   async pollOnce(): Promise<Map<string, JiraIssueDecision>> {
     const decisions = new Map<string, JiraIssueDecision>();
     const jql = buildJiraTriggerJql(this.deps.projects);
     let nextPageToken: string | undefined;
     do {
+      // Before every page, not only the first: deciding a long page takes time, and the list must not age out under it.
+      await this.deps.trust?.refreshIfStale();
       const page = await this.deps.client.searchIssues({
         jql,
         fields: jiraSearchFields,

@@ -13,7 +13,9 @@ the instance's env file), `accountId` (the AI account — the token must belong 
 at boot), `projects` (key → `{ folder, triggerStatuses, extraFields? }`, the allowlist; status NAMES resolved to
 ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` that the prompt shows under their
 site name — none by default, and an id the site does not list is logged once at boot and left out),
-`pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `model`, `effort` (the sessions',
+`pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
+group, see "The trusted group" under Isolation; absent → none, with one boot line `[jira] no trustedGroup: …`; the
+AI account needs the *Browse users and groups* global permission to read it), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
 `agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
 executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
@@ -29,8 +31,9 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
 ## Request flow (`inbound.ts`)
 
 1. Poll: `buildJiraTriggerJql` = project allowlist AND `assignee = currentUser()` AND trigger status ids. Polls
-   never overlap (the next is scheduled when one ends). A rejected token (`JiraAuthError`) stops polling for
-   good with one loud line; any other failure backs off (`getJiraRetryDelayMs`).
+   never overlap (the next is scheduled when one ends). A rejected token (`JiraAuthError`), or a trusted group
+   deleted from the site, stops polling for good with one loud line; any other failure backs off
+   (`getJiraRetryDelayMs`).
 2. Per issue: allowlist re-checked on what Jira returned → still assigned to the AI account and in a trigger
    status → trigger detected (`trigger.ts`: the NEWEST changelog entry that assigned the issue or moved it into
    a trigger status, else the creation; changelog pages are read newest first, only as far as needed) →
@@ -81,6 +84,22 @@ another platform's state.
   above) — but for a folder under HOME that walk reads `~/.claude/CLAUDE.md` back in. The adapter must be the json-stream host, `claude-json-stream` or `claude-per-turn` (tmux Claude's
   trust dialog would hold the session; OpenCode cannot be isolated yet), and the OpenCode URL needs a port of
   its own.
+- **The trusted group** (`trustedGroup.ts`): `jira.json` `trustedGroup` names ONE group per instance — one AI
+  account serves one team; a team with several trust circles runs a second instance. The name is resolved at boot to
+  the group's id (`GET /rest/api/3/group/bulk?groupName=…`, the exact name) and the id is followed afterwards, so a
+  group renamed while the bot runs keeps working (the next boot needs the new name). Trusted accounts: an active
+  member of the group (`GET /rest/api/3/group/member?groupId=…&includeInactiveUsers=false`, pages of 50), the AI
+  account itself, and every app or automation (`accountType` `app`). Not trusted without membership: any other
+  person, a service-desk customer (`customer`) and an account whose `accountType` is missing (read as a person).
+  Membership is read at boot (part of the setup check) and before a poll's search — before every page of it —
+  whenever the last read is older than 5 minutes (`jiraTrustedGroupMaxAgeMs`): a removed member loses trust within
+  5 minutes plus one poll. The list is never served past its age: a refresh that fails (no answer, 5xx, 429) fails
+  that poll, with the usual backoff, so nothing is decided on a stale list (fail closed). Setup faults refuse the
+  start, with every reason at once: no group of that name (`jira.json trustedGroup: the site has no group named
+  "…"`), or the AI account may not read it (403: the *Browse users and groups* permission). A group deleted while
+  the bot runs (404 on a refresh) stops polling with one loud line, like a refused token — a setup fault does not
+  fix itself; the process stays up — and so does a withdrawn permission (403). An empty group boots, with one
+  warning (only apps and automations can hand the AI work).
 - `config.ts`: an unknown key is an error; `${VAR}` placeholders expand from the env file; every message names
   the field (and an unset placeholder's variable), never a value.
 - Lazy load: Jira code loads through a dynamic `import()` only when the connector is on, and nothing
@@ -176,7 +195,7 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 
 ## Tests
 
-`jiraConfig.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
+`jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
 real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` and `fakeClaude.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its

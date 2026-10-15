@@ -8,7 +8,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -25,6 +25,7 @@ import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
 import type { RequestOrigin } from '../requests/types';
 import { buildSupersededRequestsLine } from '../requests/requestHeader';
+import { JiraTrustedGroupGoneError, type JiraTrust } from '../connectors/jira/trustedGroup';
 
 const aiAccountId = 'ai-account';
 const requester: JiraAccount = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
@@ -163,6 +164,7 @@ describe('JiraInbound', () => {
         if (isPostFailing) throw new Error('session start failed');
       },
       contextLedger,
+      trust: null,
       parkIssue: async (issueKey, parkedRequester) => {
         recorded.calls.push(`park ${issueKey}`);
         recorded.parked.push({ issueKey, requester: parkedRequester });
@@ -668,6 +670,83 @@ describe('JiraInbound', () => {
       },
     });
     assert.deepEqual([...await inbound.pollOnce()], [['PROJ-25', 'failed'], ['PROJ-26', 'request']]);
+  });
+
+  describe('the trusted group\'s membership is read before anything is decided', () => {
+    function createTrust(refresh: () => Promise<void>): JiraTrust {
+      return { groupName: 'ai-trusted', refreshIfStale: refresh, checkIsTrusted: () => true };
+    }
+
+    it('before the search of every page, so a long poll never decides on a list past its age', async () => {
+      searchPages = [
+        { issues: [createIssue('PROJ-50')], nextPageToken: 'page-2', isLast: false },
+        { issues: [createIssue('PROJ-51')], isLast: true },
+      ];
+      const inbound = createInbound({
+        trust: createTrust(async () => {
+          recorded.calls.push('refresh');
+        }),
+      });
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual(recorded.calls.filter((call) => call === 'refresh' || call === 'search'), ['refresh', 'search', 'refresh', 'search']);
+    });
+
+    it('a refresh that fails fails the poll before any search — nothing is decided, nothing recorded', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-52')], isLast: true }];
+      const inbound = createInbound({
+        trust: createTrust(async () => {
+          throw new Error('Jira 503');
+        }),
+      });
+      await assert.rejects(inbound.pollOnce(), /Jira 503/);
+      assert.deepEqual(recorded.calls, []);
+      assert.equal(triggerLog.checkIsSeen('PROJ-52', '100'), false);
+    });
+
+    it('a group that is gone stops polling for good with ONE loud line naming it', async () => {
+      let polls = 0;
+      const errors = mock.method(console, 'error', () => {});
+      try {
+        const gone = createInbound({
+          pollIntervalMs: 5,
+          trust: createTrust(async () => {
+            polls += 1;
+            throw new JiraTrustedGroupGoneError('ai-trusted');
+          }),
+        });
+        gone.start();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        gone.stop();
+        assert.equal(polls, 1);
+        assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [
+          '[jira] polling STOPPED: the trusted group "ai-trusted" no longer exists on the site',
+        ]);
+      } finally {
+        errors.mock.restore();
+      }
+    });
+
+    it('a refused membership read (403) stops polling like any refused call', async () => {
+      let polls = 0;
+      const errors = mock.method(console, 'error', () => {});
+      try {
+        const refused = createInbound({
+          pollIntervalMs: 5,
+          trust: createTrust(async () => {
+            polls += 1;
+            throw new JiraAuthError(403, 'GET', '/rest/api/3/group/member');
+          }),
+        });
+        refused.start();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        refused.stop();
+        assert.equal(polls, 1);
+        assert.match(String(errors.mock.calls[0].arguments[0]), /^\[jira\] polling STOPPED: Jira refused GET \/rest\/api\/3\/group\/member with 403/);
+      } finally {
+        errors.mock.restore();
+      }
+    });
   });
 
   describe('the poll loop', () => {

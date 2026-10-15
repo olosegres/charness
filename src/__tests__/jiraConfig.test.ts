@@ -102,6 +102,25 @@ describe('validateJiraConfig', () => {
     assert.deepEqual([jiraDefaultModel, jiraDefaultEffort], ['opus', 'high']);
   });
 
+  describe('trustedGroup', () => {
+    it('absent → null: no filter, today\'s behaviour', () => {
+      const result = validateJiraConfig(createConfig(), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      assert.equal(result.config.trustedGroupName, null);
+    });
+
+    it('the group\'s name is taken as it is written', () => {
+      const result = validateJiraConfig(createConfig({ trustedGroup: 'ai-trusted' }), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      assert.equal(result.config.trustedGroupName, 'ai-trusted');
+    });
+
+    it('an empty name is refused, naming the key', () => {
+      const errors = getErrors(createConfig({ trustedGroup: '' }));
+      assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json trustedGroup']);
+    });
+  });
+
   describe('agentBinaries (C11)', () => {
     let toolPath = '';
 
