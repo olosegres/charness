@@ -1,18 +1,18 @@
 /**
- * @description `telegramcode claude-profiles [--best] [--model <name>] [--json]` — the command-line twin of the
+ * @description `charness claude-profiles [--best] [--model <name>] [--json]` — the command-line twin of the
  * `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by hand): which
  * Claude account profile a new process should run on. It reads the bot's cache off `DATA_DIR/state.json`
  * (`utils/claudeUsage.ts`; the bot polls every profile's usage on a timer, so the figures are at most a poll
  * old) and never opens the `StateStore` (that would migrate and lock a live bot's file) nor the network.
  *
  *   --best         print ONLY the recommended profile's config directory — an EMPTY line for the default
- *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(telegramcode claude-profiles --best)"`
+ *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`
  *                  works as is; exit 1 when no profile is eligible
  *   --model <name> the model the child will run (`fable` → the Fable weekly window counts)
  *   --json         the full report as JSON (the MCP tool's shape)
  *
  * Without a flag: one human line per profile. `DATA_DIR` comes from the environment the bot itself reads
- * (`~/.config/telegramcode/.env`, `$PWD/.env`, or `ENV_FILE`).
+ * (`~/.config/charness/.env`, `$PWD/.env`, or `ENV_FILE`).
  */
 
 import { loadEnvFiles } from './envLoader';
@@ -89,7 +89,7 @@ export async function runClaudeProfilesCli(
   const stderr = io.stderr ?? ((text: string) => process.stderr.write(text));
   const parsed = parseClaudeProfilesCliArgs(argv);
   if (!parsed.ok) {
-    stderr(`${parsed.error}\nUsage: telegramcode claude-profiles [--best] [--model <name>] [--json]\n`);
+    stderr(`${parsed.error}\nUsage: charness claude-profiles [--best] [--model <name>] [--json]\n`);
     return 2;
   }
   const { args } = parsed;

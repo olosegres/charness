@@ -3,9 +3,9 @@
 # the process gets a clean environment — only HOME, PATH, USER, SHELL, LANG,
 # TERM and ENV_FILE — so nothing exported in the calling shell (another bot's
 # token, Atlassian credentials) reaches it, and the env loader reads ONLY the
-# given file (no ~/.config/telegramcode/.env, no legacy config, no $PWD/.env).
+# given file (no ~/.config/charness/.env, no legacy config, no $PWD/.env).
 #
-#   scripts/run-isolated.sh /absolute/path/to/instance.env [telegramcode args…]
+#   scripts/run-isolated.sh /absolute/path/to/instance.env [charness args…]
 #
 # The env file holds every setting of the instance, e.g. CONNECTORS, DATA_DIR,
 # WORK_ROOT and TMUX_SOCKET_NAME. IS_SANDBOX is passed on when set: inside the
@@ -13,7 +13,7 @@
 set -eu
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: $0 <absolute env file> [telegramcode args...]" >&2
+  echo "usage: $0 <absolute env file> [charness args...]" >&2
   exit 2
 fi
 env_file=$1

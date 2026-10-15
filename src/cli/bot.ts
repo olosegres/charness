@@ -16,7 +16,7 @@ import { installConsoleFileTap } from '../utils/consoleFileTap';
  *      `process.env.*` values at top-level (TELEGRAM_BOT_TOKEN, WORK_ROOT,
  *      ALLOWED_GROUP_ID, etc.).
  *   2. Default `WORK_ROOT` to `process.cwd()` if still unset. This is the
- *      normal path: start `telegramcode` from the parent folder containing
+ *      normal path: start `charness` from the parent folder containing
  *      the projects/topics you want to bind.
  *   3. Validate `WORK_ROOT` resolves to an existing directory — fail fast
  *      with a clear message if not.
@@ -42,7 +42,7 @@ export async function runBot(): Promise<void> {
 
   if (loaded.length === 0) {
     process.stderr.write(
-      `Warning: no .env file found in $PWD or ~/.config/telegramcode/. ` +
+      `Warning: no .env file found in $PWD or ~/.config/charness/. ` +
         `Required env (TELEGRAM_BOT_TOKEN) ` +
         `must come from the shell instead. ALLOWED_GROUP_ID is optional ` +
         `(auto-pairs on first contact if unset; access = the group's admins).\n`,

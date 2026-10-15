@@ -27,7 +27,7 @@ const tscWatchReadyMarker = `Found 0 errors. ${tscWatchCompleteMarker}`;
 const tscWatchTailLength = tscWatchReadyMarker.length - 1;
 
 /**
- * @description Wrapper-entry for `telegramcode hot` — hot-reload mode for
+ * @description Wrapper-entry for `charness hot` — hot-reload mode for
  * the global terminal bin.
  *
  * **What it does:** starts `tsc -w` from the project root, then starts
@@ -41,7 +41,7 @@ const tscWatchTailLength = tscWatchReadyMarker.length - 1;
  * nodemon's worker subtree and in-flight turns survive reloads.
  *
  * **Why it lives in the bin** (not only as `yarn hot`): the user runs
- * `telegramcode` as a globally-installed `npm link` symlink, so they don't
+ * `charness` as a globally-installed `npm link` symlink, so they don't
  * have a yarn project in front of them. Exposing hot reload as a
  * subcommand makes the same workflow reachable from any CWD — we just
  * resolve the project root from the bin's own realpath. `yarn hot` in the
@@ -67,13 +67,13 @@ const tscWatchTailLength = tscWatchReadyMarker.length - 1;
  */
 export async function runHot(): Promise<void> {
   // The operator's real launch directory (e.g. `~/src`). Captured BEFORE any
-  // spawn so it reflects where `telegramcode hot` was invoked — the worker
+  // spawn so it reflects where `charness hot` was invoked — the worker
   // can't derive it later, because nodemon runs it with cwd = projectRoot.
   const launchCwd = process.cwd();
   const projectRoot = resolveProjectRoot();
   if (!checkIsHotModeSupported(process.platform)) {
     process.stderr.write(
-      'telegramcode hot: Windows is not supported because nodemon cannot gracefully drain its worker tree.\n',
+      'charness hot: Windows is not supported because nodemon cannot gracefully drain its worker tree.\n',
     );
     process.exit(1);
     return;
@@ -92,7 +92,7 @@ export async function runHot(): Promise<void> {
 
   if (!fs.existsSync(tscBin) || !fs.existsSync(nodemonBin)) {
     process.stderr.write(
-      `telegramcode hot: missing devDependencies in ${projectRoot}.\n` +
+      `charness hot: missing devDependencies in ${projectRoot}.\n` +
         `  expected: ${tscBin}\n` +
         `  expected: ${nodemonBin}\n` +
         `Run \`yarn install\` (or \`npm install\`) in the project root and retry.\n`,
@@ -110,9 +110,9 @@ export async function runHot(): Promise<void> {
   if (connectors.ok && connectors.connectors.includes('telegram')) await prepareHotOpenCodeServer();
 
   process.stderr.write(
-    `telegramcode hot: project=${projectRoot}\n` +
-      `telegramcode hot: starting \`tsc -w\`; nodemon starts after the first completed compile.\n` +
-      `telegramcode hot: Ctrl-C stops both watchers.\n`,
+    `charness hot: project=${projectRoot}\n` +
+      `charness hot: starting \`tsc -w\`; nodemon starts after the first completed compile.\n` +
+      `charness hot: Ctrl-C stops both watchers.\n`,
   );
 
   // Forward terminating signals. We deliberately do NOT re-raise on
@@ -154,12 +154,12 @@ export async function runHot(): Promise<void> {
       isSettled = true;
       children.delete(child);
       if (error) {
-        process.stderr.write(`telegramcode hot: child error (${childName}): ${error.message}\n`);
+        process.stderr.write(`charness hot: child error (${childName}): ${error.message}\n`);
         if (!shuttingDown && finalCode === 0) finalCode = 1;
       } else {
         const label = childName === 'tsc' ? 'tsc -w' : 'nodemon';
         process.stderr.write(
-          `telegramcode hot: ${label} exited ` +
+          `charness hot: ${label} exited ` +
             `(code=${code ?? 'null'}, signal=${signal ?? 'null'})\n`,
         );
         if (!shuttingDown && finalCode === 0) {
@@ -202,7 +202,7 @@ export async function runHot(): Promise<void> {
     tscOutputTail = '';
     if (!isWatchReady) {
       process.stderr.write(
-        'telegramcode hot: compile has TypeScript errors; nodemon is waiting for a clean build. ' +
+        'charness hot: compile has TypeScript errors; nodemon is waiting for a clean build. ' +
           'Fix the errors and save.\n',
       );
       return;
@@ -212,7 +212,7 @@ export async function runHot(): Promise<void> {
       return;
     }
     process.stderr.write(
-      'telegramcode hot: clean compile produced no dist worker entry. ' +
+      'charness hot: clean compile produced no dist worker entry. ' +
         'Check the TypeScript output path and save; nodemon will keep waiting.\n',
     );
   });
@@ -272,7 +272,7 @@ export async function prepareHotOpenCodeServer(
     deps.stopOpenCodeServer();
     const message =
       error instanceof Error ? error.message : error?.toString() ?? 'unknown error';
-    deps.writeWarning(`telegramcode hot: OpenCode pre-start failed: ${message}\n`);
+    deps.writeWarning(`charness hot: OpenCode pre-start failed: ${message}\n`);
     return false;
   }
 }

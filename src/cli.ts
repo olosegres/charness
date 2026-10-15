@@ -9,7 +9,7 @@ import { runHot } from './cli/hot';
 applyDnsFix();
 
 /**
- * @description Print the package version to stdout for `telegramcode --version`.
+ * @description Print the package version to stdout for `charness --version`.
  *
  * Reads it from the shipped package.json (`__dirname` is `dist/`, so the file
  * sits one level up) — the same idiom the `/version` bot command uses — so the
@@ -30,24 +30,24 @@ function printVersion(): void {
  * @description Print top-level usage to stderr.
  *
  * Keeps the message short and copy-pastable. Detailed docs live in README;
- * we surface just enough here for someone running `telegramcode --help`
+ * we surface just enough here for someone running `charness --help`
  * cold to know what to try next.
  */
 function printUsage(): void {
   process.stderr.write(
     `Usage:\n` +
-      `  telegramcode                  Start the bot (WORK_ROOT defaults to $PWD)\n` +
-      `  telegramcode hot              Hot-reload dev mode: tsc -w + nodemon on dist/\n` +
-      `                                  (rebuilds + restarts the bot on src/ edits;\n` +
-      `                                   in-flight agent sessions are reattached)\n` +
-      `  telegramcode claude-profiles  Claude account profiles + usage from the bot's cache;\n` +
-      `                                  --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
-      `                                  (empty = default), --model <name>, --json\n` +
-      `  telegramcode --help, -h       Show this help\n` +
-      `  telegramcode --version, -v    Print the version\n` +
+      `  charness                  Start the bot (WORK_ROOT defaults to $PWD)\n` +
+      `  charness hot              Hot-reload dev mode: tsc -w + nodemon on dist/\n` +
+      `                              (rebuilds + restarts the bot on src/ edits;\n` +
+      `                               in-flight agent sessions are reattached)\n` +
+      `  charness claude-profiles  Claude account profiles + usage from the bot's cache;\n` +
+      `                              --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
+      `                              (empty = default), --model <name>, --json\n` +
+      `  charness --help, -h       Show this help\n` +
+      `  charness --version, -v    Print the version\n` +
       `\n` +
       `Environment:\n` +
-      `  Loaded from ~/.config/telegramcode/.env (base) then $PWD/.env (override),\n` +
+      `  Loaded from ~/.config/charness/.env (base) then $PWD/.env (override),\n` +
       `  or with ENV_FILE=<absolute path> from that one file only.\n` +
       `  Required to start: TELEGRAM_BOT_TOKEN (unless CONNECTORS leaves out telegram).\n` +
       `  Access = creator + admins of the served forum group (read live; no user list).\n` +

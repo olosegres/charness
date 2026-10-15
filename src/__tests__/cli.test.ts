@@ -1,5 +1,5 @@
 /**
- * @description End-to-end coverage for the `telegramcode` CLI dispatcher.
+ * @description End-to-end coverage for the `charness` CLI dispatcher.
  *
  * Spawns the CLI as a subprocess (via `tsx`, the same way `yarn dev` runs
  * it) and asserts on stdio + exit code. This catches integration concerns
@@ -166,7 +166,11 @@ test('--help prints usage and exits 0', () => {
   assert.match(stderr, /Usage:/);
   // The removed passthrough must not be advertised any more.
   assert.doesNotMatch(stderr, /cli claude/);
-  assert.doesNotMatch(stderr, /telegramcode bot/);
+  assert.doesNotMatch(stderr, /(?:charness|telegramcode) bot/);
+  // The usage names the command and the config location users are meant to see.
+  assert.match(stderr, /^ {2}charness {2,}Start the bot/m);
+  assert.match(stderr, /~\/\.config\/charness\/\.env/);
+  assert.doesNotMatch(stderr, /telegramcode/);
 });
 
 test('--version prints the package version to stdout and exits 0', () => {
@@ -263,7 +267,7 @@ test('runBot refuses to start when a foreign lockfile holds the data dir', () =>
   });
 
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /telegramcode is already running/);
+  assert.match(r.stderr, /charness is already running/);
   assert.match(r.stderr, /pid:\s+1/);
   assert.match(r.stderr, /cwd:\s+\/somewhere-else/);
 

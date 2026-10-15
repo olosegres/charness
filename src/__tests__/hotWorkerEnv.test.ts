@@ -179,7 +179,7 @@ test('hot supervisor keeps the watchers bootable when OpenCode startup fails', a
   assert.equal(isReady, false);
   assert.deepEqual(events, [
     'stop',
-    'warning:telegramcode hot: OpenCode pre-start failed: port unavailable\n',
+    'warning:charness hot: OpenCode pre-start failed: port unavailable\n',
   ]);
 });
 

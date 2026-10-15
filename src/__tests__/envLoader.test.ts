@@ -6,20 +6,21 @@
  * at is also under the tmp dir (not the developer's real `~`).
  *
  * Key invariants under test:
- *   - $PWD/.env overrides ~/.config/telegramcode/.env on a per-key basis
+ *   - $PWD/.env overrides ~/.config/charness/.env on a per-key basis
  *   - Pre-existing process.env values win against the global config (because
  *     globals are loaded with `override: false`) but lose to a local .env
  *   - Neither file present → no throw, `loaded: []`
  *   - The `loaded` array reflects actual load order (global first, local last)
  *   - A caller can load the local file from an explicit project directory
  *     without changing the process cwd
- *   - Global config dir resolution: `~/.config/telegramcode` preferred, the
- *     legacy `~/.config/telegram-code` read as a fallback (first existing wins)
+ *   - Global config dir resolution: `~/.config/charness` preferred; the
+ *     earlier releases' `~/.config/telegramcode`, then `~/.config/telegram-code`,
+ *     are read as fallbacks (first existing wins)
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { test, beforeEach, afterEach } from 'node:test';
+import { test, beforeEach, afterEach, mock } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -29,6 +30,7 @@ import { loadEnvFiles } from '../cli/envLoader';
 let tmpRoot: string;
 let projectDir: string;
 let globalEnvDir: string;
+let previousGlobalEnvDir: string;
 let legacyGlobalEnvDir: string;
 let originalHome: string | undefined;
 let originalCwd: string;
@@ -51,10 +53,12 @@ function getExpectedLocalEnvPath(): string {
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-env-'));
   projectDir = path.join(tmpRoot, 'project');
-  globalEnvDir = path.join(tmpRoot, '.config', 'telegramcode');
+  globalEnvDir = path.join(tmpRoot, '.config', 'charness');
+  previousGlobalEnvDir = path.join(tmpRoot, '.config', 'telegramcode');
   legacyGlobalEnvDir = path.join(tmpRoot, '.config', 'telegram-code');
   fs.mkdirSync(projectDir, { recursive: true });
   fs.mkdirSync(globalEnvDir, { recursive: true });
+  fs.mkdirSync(previousGlobalEnvDir, { recursive: true });
   fs.mkdirSync(legacyGlobalEnvDir, { recursive: true });
 
   originalHome = process.env.HOME;
@@ -95,7 +99,7 @@ test('loads global config when only global exists', () => {
   const { loaded } = loadEnvFiles();
 
   assert.equal(loaded.length, 1);
-  assert.match(loaded[0], /\.config\/telegramcode\/\.env$/);
+  assert.match(loaded[0], /\.config\/charness\/\.env$/);
   assert.equal(process.env.ENV_LOADER_TEST_GLOBAL_ONLY, 'from-global');
 });
 
@@ -144,7 +148,7 @@ test('local .env overrides global on per-key basis, leaves global-only keys inta
 
   assert.equal(loaded.length, 2);
   // Order matters for documentation / banner output: global first, local last.
-  assert.match(loaded[0], /\.config\/telegramcode\/\.env$/);
+  assert.match(loaded[0], /\.config\/charness\/\.env$/);
   assert.equal(loaded[1], getExpectedLocalEnvPath());
 
   assert.equal(process.env.ENV_LOADER_TEST_GLOBAL_ONLY, 'g-only');
@@ -176,10 +180,52 @@ test('shell-set env wins against global (override:false), local .env still wins 
   assert.equal(process.env.ENV_LOADER_TEST_OVERRIDE, 'from-local');
 });
 
-test('prefers ~/.config/telegramcode over the legacy dir when both exist', () => {
+test('prefers ~/.config/charness over the earlier releases\' dirs when all exist', () => {
   fs.writeFileSync(
     path.join(globalEnvDir, '.env'),
     'ENV_LOADER_TEST_DIR_PICK=from-canonical\n',
+  );
+  fs.writeFileSync(
+    path.join(previousGlobalEnvDir, '.env'),
+    'ENV_LOADER_TEST_DIR_PICK=from-previous\n',
+  );
+  fs.writeFileSync(
+    path.join(legacyGlobalEnvDir, '.env'),
+    'ENV_LOADER_TEST_DIR_PICK=from-legacy\n',
+  );
+
+  const { loaded } = loadEnvFiles();
+
+  assert.equal(loaded.length, 1);
+  assert.match(loaded[0], /\.config\/charness\/\.env$/);
+  assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-canonical');
+});
+
+test('falls back to ~/.config/telegramcode when ~/.config/charness has no .env', () => {
+  fs.writeFileSync(
+    path.join(previousGlobalEnvDir, '.env'),
+    'ENV_LOADER_TEST_DIR_PICK=from-previous\n',
+  );
+  const stderrWrite = mock.method(process.stderr, 'write', () => true);
+
+  let loaded: string[];
+  try {
+    ({ loaded } = loadEnvFiles());
+  } finally {
+    stderrWrite.mock.restore();
+  }
+
+  assert.equal(loaded.length, 1);
+  assert.match(loaded[0], /\.config\/telegramcode\/\.env$/);
+  assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-previous');
+  const notice = String(stderrWrite.mock.calls[0]?.arguments[0]);
+  assert.match(notice, /preferred location: ~\/\.config\/charness\/\.env/);
+});
+
+test('prefers ~/.config/telegramcode over ~/.config/telegram-code when charness has no .env', () => {
+  fs.writeFileSync(
+    path.join(previousGlobalEnvDir, '.env'),
+    'ENV_LOADER_TEST_DIR_PICK=from-previous\n',
   );
   fs.writeFileSync(
     path.join(legacyGlobalEnvDir, '.env'),
@@ -190,7 +236,7 @@ test('prefers ~/.config/telegramcode over the legacy dir when both exist', () =>
 
   assert.equal(loaded.length, 1);
   assert.match(loaded[0], /\.config\/telegramcode\/\.env$/);
-  assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-canonical');
+  assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-previous');
 });
 
 test('falls back to the legacy ~/.config/telegram-code dir when only it exists', () => {
@@ -204,4 +250,20 @@ test('falls back to the legacy ~/.config/telegram-code dir when only it exists',
   assert.equal(loaded.length, 1);
   assert.match(loaded[0], /\.config\/telegram-code\/\.env$/);
   assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-legacy');
+});
+
+test('a canonical ~/.config/charness config writes no fallback notice', () => {
+  fs.writeFileSync(
+    path.join(globalEnvDir, '.env'),
+    'ENV_LOADER_TEST_DIR_PICK=from-canonical\n',
+  );
+  const stderrWrite = mock.method(process.stderr, 'write', () => true);
+
+  try {
+    loadEnvFiles();
+  } finally {
+    stderrWrite.mock.restore();
+  }
+
+  assert.equal(stderrWrite.mock.calls.length, 0);
 });

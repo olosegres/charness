@@ -306,7 +306,7 @@ export async function acquireLock(): Promise<void> {
 
   if (r.reason === 'live-holder') {
     process.stderr.write(
-      `telegramcode is already running:\n` +
+      `charness is already running:\n` +
         `  pid:        ${r.holder.pid}\n` +
         `  cwd:        ${r.holder.cwd}\n` +
         `  started:    ${r.holder.startedAt}\n` +
@@ -316,7 +316,7 @@ export async function acquireLock(): Promise<void> {
     );
   } else if (r.reason === 'foreign-host') {
     process.stderr.write(
-      `telegramcode is locked by an instance on another host, which cannot be checked from here:\n` +
+      `charness is locked by an instance on another host, which cannot be checked from here:\n` +
         `  host:       ${r.holder.hostname}\n` +
         `  pid:        ${r.holder.pid}\n` +
         `  started:    ${r.holder.startedAt}\n` +
@@ -325,7 +325,7 @@ export async function acquireLock(): Promise<void> {
     );
   } else {
     process.stderr.write(
-      `telegramcode could not acquire ${r.lockPath} after retry. ` +
+      `charness could not acquire ${r.lockPath} after retry. ` +
         `Another instance is likely starting concurrently.\n`,
     );
   }

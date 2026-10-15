@@ -4,13 +4,15 @@ import * as os from 'os';
 import * as dotenv from 'dotenv';
 import { addEnvFileVariableNames } from '../utils/agentEnvironment';
 
-/** Canonical per-user config dir name under `~/.config` (post-rename). */
-const configDirName = 'telegramcode';
+/** Canonical per-user config dir name under `~/.config`. */
+const configDirName = 'charness';
 /**
- * Pre-rename config dir name — still honoured as a fallback so installs
- * that predate the `telegramcode` rename keep working without moving files.
+ * Config dir names of earlier releases, newest first — still honoured as
+ * fallbacks so existing installs keep working without moving files: the
+ * `telegramcode` dir of the releases before the `charness` rename, then the
+ * `telegram-code` dir older still.
  */
-const legacyConfigDirName = 'telegram-code';
+const fallbackConfigDirNames = ['telegramcode', 'telegram-code'];
 
 function buildGlobalEnvPath(dirName: string): string {
   return path.join(os.homedir(), '.config', dirName, '.env');
@@ -19,18 +21,20 @@ function buildGlobalEnvPath(dirName: string): string {
 /**
  * @description Path to the per-user global config file.
  *
- * Prefers the canonical `~/.config/telegramcode/.env`; falls back to the
- * legacy `~/.config/telegram-code/.env` when only that one exists. When
- * neither exists the canonical path is returned, so callers report the
- * location a fresh install should use.
+ * Prefers the canonical `~/.config/charness/.env`; falls back to the first
+ * existing of the earlier releases' `~/.config/telegramcode/.env` and
+ * `~/.config/telegram-code/.env`. When none exists the canonical path is
+ * returned, so callers report the location a fresh install should use.
  *
  * Resolved lazily per call — tests may swap `HOME` between cases.
  */
 export function globalEnvPath(): string {
   const canonicalPath = buildGlobalEnvPath(configDirName);
   if (fs.existsSync(canonicalPath)) return canonicalPath;
-  const legacyPath = buildGlobalEnvPath(legacyConfigDirName);
-  if (fs.existsSync(legacyPath)) return legacyPath;
+  for (const fallbackDirName of fallbackConfigDirNames) {
+    const fallbackPath = buildGlobalEnvPath(fallbackDirName);
+    if (fs.existsSync(fallbackPath)) return fallbackPath;
+  }
   return canonicalPath;
 }
 
@@ -54,7 +58,7 @@ export function localEnvPath(localDirectory = process.cwd()): string {
  * then forces an override only for keys it explicitly sets.
  *
  * Returns the list of paths actually read, in load order. Useful for the
- * `telegramcode` startup banner and for test assertions.
+ * `charness` startup banner and for test assertions.
  */
 export function loadEnvFiles(localDirectory = process.cwd()): { loaded: string[] } {
   // An isolated instance (Jira connector plan J3, D7): ONLY its own file — no
@@ -80,7 +84,7 @@ export function loadEnvFiles(localDirectory = process.cwd()): { loaded: string[]
   if (fs.existsSync(globalPath)) {
     dotenv.config({ path: globalPath, override: false });
     loaded.push(globalPath);
-    if (globalPath === buildGlobalEnvPath(legacyConfigDirName)) {
+    if (globalPath !== buildGlobalEnvPath(configDirName)) {
       process.stderr.write(
         `Using legacy config ${globalPath} — preferred location: ` +
           `~/.config/${configDirName}/.env\n`,
