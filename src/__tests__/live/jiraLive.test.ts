@@ -1298,6 +1298,8 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       const commentId = await getRequester().addMentionComment(issueKey, config.accountId, probeText);
       const state = await waitForAnswer(issueKey, answerTimeoutMs, (comments) => comments.length > 0);
       assert.match(getAiComments(state).at(-1)?.text ?? '', /MENTION-OK/);
+      // The answer notifies its requester at the top: its first paragraph holds a real mention node of the requester.
+      assert.deepEqual(getAiComments(state).at(-1)?.leadingMentionAccountIds, [getRequester().accountId], 'the answer starts with a mention of the requester');
       assert.equal(state.assigneeAccountId, getRequester().accountId, 'the issue is still the requester\'s — nothing was handed back');
       assert.equal(state.isDone, false, 'and in the status it had');
       const prompt = getLastPrompt(issueKey);

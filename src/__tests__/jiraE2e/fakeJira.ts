@@ -326,7 +326,7 @@ export class FakeJira {
     }
     const requestBody = await this.readBody(request);
     const route = url.pathname.startsWith(restPrefix) ? url.pathname.slice(restPrefix.length) : url.pathname;
-    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink))?$/.exec(route);
+    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink)(?:\/([^/]+))?)?$/.exec(route);
     const statusesMatch = /^\/project\/([^/]+)\/statuses$/.exec(route);
     const attachmentContentMatch = /^\/attachment\/content\/([^/]+)$/.exec(route);
 
@@ -367,7 +367,7 @@ export class FakeJira {
         send(404, { errorMessages: ['Issue does not exist or you do not have permission to see it.'] });
         return;
       }
-      this.handleIssueRoute(method, issue, issueMatch[3], url, requestBody, send);
+      this.handleIssueRoute(method, issue, issueMatch[3], issueMatch[4], url, requestBody, send);
     } else {
       send(404, { errorMessages: [`fake Jira does not serve ${method} ${url.pathname}`] });
     }
@@ -377,6 +377,7 @@ export class FakeJira {
     method: string,
     issue: FakeJiraIssue,
     subresource: string | undefined,
+    subresourceId: string | undefined,
     url: URL,
     requestBody: FakeJiraRequestBody,
     send: (status: number, body?: object) => void,
@@ -404,6 +405,10 @@ export class FakeJira {
       issue.comments.push(comment);
       this.touch(issue);
       send(201, { id: comment.id });
+    } else if (method === 'GET' && subresource === 'comment' && subresourceId !== undefined) {
+      const comment = issue.comments.find((candidate) => candidate.id === decodeURIComponent(subresourceId));
+      if (comment) send(200, comment);
+      else send(404, { errorMessages: [`Can not find a comment with id ${subresourceId}`] });
     } else if (method === 'GET' && subresource === 'comment') {
       // `orderBy=-created` is newest first (the read-back); `created` (or none) is oldest first, paged like Jira's.
       const ordered = url.searchParams.get('orderBy') === '-created' ? [...issue.comments].reverse() : [...issue.comments];

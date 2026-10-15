@@ -1,11 +1,23 @@
 import type { SessionKey } from '../../sessionKey';
-import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink';
-import type { RequestAlertReason } from '../../requests/types';
+import type { AnswerSink, AnswerDeliveryResult, RequestAnswerDelivery } from '../../platform/answerSink';
+import type { RequestAlertReason, RequestOrigin } from '../../requests/types';
 import { emptyRequester, getRequestRequester } from '../../requests/requestGroup';
-import { convertMarkdownToAdf, createCommentBodies, createPlainTextAdf, getAdfText, type AdfDocument } from './adf';
+import {
+  convertMarkdownToAdf,
+  createCommentBodies,
+  createCommentBodiesWithLeadingNode,
+  createMentionParagraph,
+  createPlainTextAdf,
+  getAdfText,
+  type AdfDocument,
+} from './adf';
 import { getSingleLineText } from './promptText';
-import type { JiraAccount, JiraClient } from './client';
+import { JiraHttpError, type JiraAccount, type JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
+import { mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
+import { checkIsCommentTrusted } from './issueBlocks';
+import type { JiraContextLedger } from './contextLedger';
+import type { JiraTrust } from './trustedGroup';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -63,6 +75,15 @@ export function buildJiraMentionParkText(runBudgetPer24h: number): string {
     'its limit, so this mention was not answered. Mention it again later, or ask the operator to raise the limit.';
 }
 
+/**
+ * @description The warning that rides an answer's result when some of `replyToCommentIds` were left out: the
+ * answer itself was delivered, so the agent is told what to know, never to resend it.
+ */
+export function buildJiraReplyLeftOutWarning(commentIds: readonly string[]): string {
+  return `Delivered, but these comments' authors were not mentioned: ${commentIds.join(', ')}. ` +
+    'Only comments you were shown in this conversation, written by a trusted person, can be replied to this way.';
+}
+
 /** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
 export const jiraQuestionContinueText = 'To let me go on, answer in a comment and assign the issue back to me.';
 
@@ -75,8 +96,12 @@ export function buildJiraUntrustedText(groupName: string): string {
 }
 
 export interface JiraAnswerSinkDeps {
-  client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue'>;
+  client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'>;
   aiAccountId: string;
+  /** What each issue's conversation was shown: only a comment it was shown can be replied to. */
+  contextLedger: Pick<JiraContextLedger, 'getShownBlock'>;
+  /** The trusted group's trust, or `null` without a group (or before it is first read): nobody is judged then. */
+  getTrust: () => JiraTrust | null;
   runBudgetPer24h: number;
   now: () => number;
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
@@ -186,6 +211,66 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     return { postedCount, failure: null };
   }
 
+  /**
+   * The person a mention request is about: its comment's author, when it is the request's requester and a person
+   * (an app cannot be notified). `null` — nobody to mention; the answer goes without.
+   */
+  async function getMentionRequester(issueKey: string, origin: RequestOrigin): Promise<JiraAccount | null> {
+    const requesterAccountId = getRequestRequester(origin);
+    const triggerId = origin.attributes.triggerId ?? '';
+    if (requesterAccountId === emptyRequester || !triggerId.startsWith(mentionTriggerIdPrefix)) return null;
+    try {
+      const comment = await client.getComment(issueKey, triggerId.slice(mentionTriggerIdPrefix.length));
+      const { author } = comment;
+      return author && author.accountId === requesterAccountId && checkIsPersonAccount(author) ? author : null;
+    } catch (error) {
+      // The comment was deleted, or Jira did not answer: the answer is worth more than its mention.
+      console.warn(`[jira] ${issueKey}: the requester of ${triggerId} could not be read, so it is not mentioned: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * The author of comment `commentId` when the agent may reply to it that way: the conversation was shown it and
+   * its text was readable then, its author is a person other than the AI account, and — with a trusted group —
+   * the comment is trusted now (author and last editor). `null` otherwise.
+   */
+  async function getReplyTarget(issueKey: string, commentId: string): Promise<JiraAccount | null> {
+    const shown = deps.contextLedger.getShownBlock(issueKey, `comment:${commentId}`);
+    if (!shown || shown.isWithheld) return null;
+    try {
+      const comment = await client.getComment(issueKey, commentId);
+      const { author } = comment;
+      if (!author || author.accountId === deps.aiAccountId || !checkIsPersonAccount(author)) return null;
+      const trust = deps.getTrust();
+      return trust && !checkIsCommentTrusted(comment, trust) ? null : author;
+    } catch (error) {
+      // An id Jira does not know is the agent's slip, told to it in the result; anything else is the operator's to see.
+      const isUnknownComment = error instanceof JiraHttpError && error.status === 404;
+      if (!isUnknownComment) console.warn(`[jira] ${issueKey}: comment ${commentId} could not be read, so its author is not mentioned: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Whom an answer notifies, requester first, each once: the requester of a mention request, and the authors of the
+   * comments the answer replies to. `leftOutCommentIds` are the replies that did not qualify.
+   */
+  async function resolveMentionTargets(issueKey: string, delivery: RequestAnswerDelivery): Promise<{ targets: JiraAccount[]; leftOutCommentIds: string[] }> {
+    const targets = new Map<string, JiraAccount>();
+    if (delivery.origin.kind === 'trackerMention') {
+      const requester = await getMentionRequester(issueKey, delivery.origin);
+      if (requester) targets.set(requester.accountId, requester);
+    }
+    const leftOutCommentIds: string[] = [];
+    for (const commentId of new Set(delivery.replyToCommentIds ?? [])) {
+      const author = await getReplyTarget(issueKey, commentId);
+      if (author) targets.set(author.accountId, author);
+      else leftOutCommentIds.push(commentId);
+    }
+    return { targets: [...targets.values()], leftOutCommentIds };
+  }
+
   /** Hand the issue back to the requester while it is still the AI's; a warning when that could not happen. */
   async function handBack(issueKey: string, requesterAccountId: string): Promise<string | null> {
     if (requesterAccountId === emptyRequester) return 'no requester is known, so the issue stays assigned to the AI account';
@@ -257,7 +342,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   return {
     async deliverAnswer(key: SessionKey, delivery): Promise<AnswerDeliveryResult> {
       const issueKey = key.thread;
-      const bodies = createCommentBodies(delivery.body);
+      const { targets, leftOutCommentIds } = await resolveMentionTargets(issueKey, delivery);
+      const bodies = targets.length > 0
+        ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
+        : createCommentBodies(delivery.body);
       if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
       // Only a hand-over's question asks the requester to take the issue back, so only it carries the line saying how.
       const isHandOver = delivery.origin.kind === 'trackerEvent';
@@ -265,6 +353,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const posted = await postComments(issueKey, bodies, delivery.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];
+      if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
       // A mention request never had the issue handed over: its answer is a comment, and the issue stays where it is.

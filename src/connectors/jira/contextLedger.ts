@@ -83,6 +83,22 @@ export class JiraContextLedger {
     return { generation: state.generation, sent: state.sent };
   }
 
+  /**
+   * @description The block `blockKey` as the conversation was last SHOWN it: in a prompt it has taken in, or in one
+   * built for it that is not taken in yet — an agent may answer its prompt before the bot saw it consumed, and what
+   * that prompt carried was shown all the same. `undefined`: never shown (or shown before its context was lost).
+   */
+  getShownBlock(issueKey: string, blockKey: string): JiraSentBlock | undefined {
+    const state = this.getState(issueKey);
+    const untakenBuildsNewestFirst = Object.values(state.pending)
+      .filter((build) => build.generation === state.generation && build.buildSeq > state.committedBuildSeq)
+      .sort((left, right) => right.buildSeq - left.buildSeq);
+    for (const build of untakenBuildsNewestFirst) {
+      if (build.sent[blockKey] !== undefined) return build.sent[blockKey];
+    }
+    return state.sent[blockKey];
+  }
+
   /** @description A request's prompt was built from the snapshot of `generation`; `sent` is what it makes the sent-set once taken in. */
   recordBuild(issueKey: string, requestId: string, generation: number, sent: JiraSentBlocks): void {
     const state = this.getState(issueKey);

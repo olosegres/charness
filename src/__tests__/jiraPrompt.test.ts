@@ -211,11 +211,13 @@ describe('the Jira context preamble (R5)', () => {
     const preamble = buildJiraContextPreamble({ key: makeJiraKey('PROJ-12'), subdir: 'proj-work', timezone: 'Europe/Berlin' });
     assert.equal(preamble.split('\n')[0], jiraContextPreambleHeader);
     assert.match(preamble, /^issue: PROJ-12 \| project: PROJ \| folder: proj-work \| timezone: Europe\/Berlin$/m);
-    // T4: the requesters are the person who handed the issue over and anyone who mentioned the AI in a comment.
+    // T4: the requesters are the person who handed the issue over and anyone who mentioned the AI in a comment;
+    // a reply names the comment's id, and the bot mentions its author.
     assert.ok(preamble.split('\n').includes(
       'You work on this issue for its requesters: the person who handed it to you, or someone who mentioned you in a comment. ' +
       'They see none of your plain output: each answer_request answer becomes a comment on the issue. ' +
-      'On a hand-over, a question or a final answer hands the issue back to its requester; on a mention, the issue stays where it is.',
+      'On a hand-over, a question or a final answer hands the issue back to its requester; on a mention, the issue stays where it is. ' +
+      'To reply to someone\'s comment, put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified.',
     ), preamble);
     assert.ok(!preamble.includes('Telegram'));
   });

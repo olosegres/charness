@@ -54,6 +54,8 @@ export interface AnswerRequestArgs {
   requestId: string;
   kind: RequestAnswerKind;
   body: string;
+  /** Platform-owned (a tracker's comment ids); handed to the sink untouched. */
+  replyToCommentIds?: readonly string[];
   checkIsConversationInScope: (conversationKey: string) => boolean;
 }
 
@@ -105,6 +107,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     body: args.body,
     origin: lookup.request.origin,
     isRequestOpen: lookup.isOpen,
+    ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
   });
   if (!delivery.ok) {
     return { ok: false, error: `The answer was NOT delivered: ${delivery.error}. Request ${args.requestId} is unchanged; you may retry.` };

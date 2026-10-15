@@ -217,17 +217,19 @@ export async function prepareJiraConnector(context: {
   const contextLedger = JiraContextLedger.createForDataDir(context.dataDir);
   // C11: the tools the agents should find on their PATH, linked once per boot; a name dropped from the config is unlinked.
   registerAgentBinDir(linkAgentBinaries(context.dataDir, config.agentBinaries));
+  /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
+  let trust: JiraTrust | null = null;
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
+    contextLedger,
+    getTrust: () => trust,
     runBudgetPer24h: config.runBudgetPer24h,
     now,
     wait: sleep,
     unconfirmedPosts,
   });
   let inbound: JiraInbound | null = null;
-  /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
-  let trust: JiraTrust | null = null;
   const adoptTrustedGroup = (ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
     const { trustedGroup } = ready;
     trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;

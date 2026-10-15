@@ -58,6 +58,23 @@ describe('JiraContextLedger', () => {
     assert.deepEqual(ledger.getSnapshot(issueKey).sent, sentA);
   });
 
+  it('a block is SHOWN from the moment its prompt is built — before it is taken in; a dropped, stale or reset build shows nothing', () => {
+    assert.equal(ledger.getShownBlock(issueKey, 'comment:2'), undefined, 'never prompted');
+    ledger.recordBuild(issueKey, 'req_1', 0, sentB);
+    assert.deepEqual(ledger.getShownBlock(issueKey, 'comment:2'), sentB['comment:2'], 'built, not taken in: still shown');
+    assert.equal(ledger.getSnapshot(issueKey).sent['comment:2'], undefined, 'while the sent-set does not count it yet');
+    ledger.drop(issueKey, 'req_1');
+    assert.equal(ledger.getShownBlock(issueKey, 'comment:2'), undefined, 'a dropped build was never taken in');
+
+    ledger.recordBuild(issueKey, 'req_2', 0, sentA);
+    ledger.commit(issueKey, 'req_2');
+    assert.deepEqual(ledger.getShownBlock(issueKey, 'comment:1'), sentA['comment:1'], 'taken in: shown');
+    ledger.recordBuild(issueKey, 'req_3', 0, { 'comment:1': { hash: 'c1', isWithheld: true } });
+    assert.equal(ledger.getShownBlock(issueKey, 'comment:1')?.isWithheld, true, 'the newest prompt says it was withheld');
+    ledger.reset(issueKey);
+    assert.equal(ledger.getShownBlock(issueKey, 'comment:1'), undefined, 'the agent lost that context');
+  });
+
   it('a dropped build (superseded, cancelled) never counts; a later commit of it finds nothing', () => {
     ledger.recordBuild(issueKey, 'req_1', 0, sentA);
     ledger.drop(issueKey, 'req_1');

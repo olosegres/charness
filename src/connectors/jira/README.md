@@ -170,6 +170,19 @@ another platform's state.
   request. Comment first, then the hand-back: a failed hand-back is a delivered answer plus a warning (a retry
   would post it twice). A mention request (origin `trackerMention`) hands nothing back — not its `final`, not its
   `question`, not its alert: the issue was never handed over.
+- **Who an answer notifies** (`resolveMentionTargets`). The first comment of an answer may open with ONE paragraph
+  of real mention nodes (`createMentionParagraph`: one per person, one space between, nothing else — Jira shows
+  `@Name` and notifies them): the requester of a mention request on every answer, unless it is an app (read from
+  the request's own comment, `GET …/comment/{id}`; a comment that is gone means no mention, never a failed answer),
+  then the authors of the comments the answer names in `replyToCommentIds`. A hand-over's requester is not
+  mentioned: the hand-back already tells them. Only the bot writes mention nodes — an agent's own ADF never reaches a
+  comment — so an agent can notify only whom this rule lets through. A replied-to comment qualifies when the
+  conversation was SHOWN it (`getShownBlock`: in a prompt taken in, or built and not taken in yet — an agent may
+  answer a prompt before the bot saw it consumed) and not as a `[withheld: …]` marker, its author is a person other
+  than the AI account, and — with a trusted group — its author and last editor are trusted. Ids that do not
+  qualify are left out and named in the tool result's warning (the answer itself is delivered, never resent). The
+  paragraph counts toward the comment size split (`createCommentBodiesWithLeadingNode`: its size comes off the
+  limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
 - A hand-over's `question` ends with one more paragraph, plain text on the last comment: "To let me go on, answer
   in a comment and assign the issue back to me." A reply that only mentions the AI wakes it for an answer, not
   for the work; a hand-over is still how the work continues.

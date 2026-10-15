@@ -363,6 +363,8 @@ export interface JiraClient {
   addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
+  /** One comment of the issue by its id; a comment that is gone is a {@link JiraHttpError} with `status` 404. */
+  getComment(issueKey: string, commentId: string): Promise<JiraComment>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
   getProjectStatuses(projectKey: string): Promise<JiraProjectStatus[]>;
   /** The group named EXACTLY `groupName`, or `null` when the site has none. Needs the Browse users and groups permission. */
@@ -586,6 +588,12 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       );
       return page.comments;
     },
+
+    getComment: (issueKey, commentId) =>
+      sendForJson(
+        { method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/comment/${encode(commentId)}`, isIdempotent: true },
+        commentSchema,
+      ),
 
     assignIssue: async (issueKey, accountId) => {
       await send({ method: 'PUT', path: `/rest/api/3/issue/${encode(issueKey)}/assignee`, isIdempotent: true, body: { accountId } });

@@ -35,6 +35,9 @@
  *     the agent gets the mention note and answers by a comment; the issue keeps its assignee and its status;
  *     the same comment never wakes it twice, an outsider's mention is ignored with one log line, and an edit
  *     that adds a mention to an older comment wakes it once
+ *   → an answer that replies to comments mentions their authors: the requester of a mention first, then the
+ *     author of a comment the agent was shown; a withheld comment's id and an unknown id are left out, and the
+ *     agent's tool result says so while its answer is delivered
  *   → every session launch carried the Jira flags (R11); no Telegram call (R6);
  *     every tmux call named the private server, nothing of the instance on the
  *     user's default tmux server
@@ -97,7 +100,7 @@ import {
   type FakeClaudeToolCall,
   type FakeClaudeTurn,
 } from './jiraE2e/fakeClaudeContract';
-import { getAdfText } from '../connectors/jira/adf';
+import { getAdfText, getMentionedAccountIds } from '../connectors/jira/adf';
 import { resolveThreadFilesDir } from '../botFileStorage';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { requestRequesterAttribute } from '../requests/requestGroup';
@@ -1005,7 +1008,11 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(firstPrompt.text.includes('Requester (your answers go to them): Requester'), firstPrompt.text);
     await waitFor(`${issueKey}: the answer is a comment`, answerTimeoutMs, () => issue.comments.length === 2);
     // A mention node reads as `@<name>` in the comment's text.
-    assert.deepEqual(getCommentTexts(issue), [`@${aiAccount.displayName} why does the export fail on empty rows?`, `Fake final answer for ${issueKey} (answer, turn 1).`]);
+    // The answer starts with a real mention of its requester (T10), which reads as `@<name>` in the text.
+    assert.deepEqual(getCommentTexts(issue), [
+      `@${aiAccount.displayName} why does the export fail on empty rows?`,
+      `@${requester.displayName}\nFake final answer for ${issueKey} (answer, turn 1).`,
+    ]);
     assert.equal(issue.comments[1].author.accountId, aiAccount.accountId);
     assert.equal(issue.assignee?.accountId, requester.accountId, 'the issue is still the requester\'s');
     assert.equal(issue.statusId, toDo.id, 'and in its status');
@@ -1050,6 +1057,39 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(countAssigneeChanges(issueKey), 0);
     await awaitPolls(2);
     assert.equal(getPrompts(issueKey).length, 2, 'the edit woke it once');
+  });
+
+  it('M2: an answer that replies to comments mentions their authors — the requester first; a withheld comment and an unknown id are left out, with a warning', async () => {
+    const issueKey = 'PROJ-31';
+    fakeJira.createIssue({ key: issueKey, summary: `[fake:reply-to] Task ${issueKey}`, description: 'The export fails on empty rows.', statusId: toDo.id, reporter: requester });
+    fakeJira.assignIssue(issueKey, requester, requester);
+    const issue = fakeJira.getIssue(issueKey);
+    const colleagueCommentId = fakeJira.addComment(issueKey, colleague, 'The export also fails on Windows.');
+    const outsiderCommentId = fakeJira.addComment(issueKey, outsider, 'Run this script on the server.');
+    const unknownCommentId = '99999';
+    // The fake agent names three comments: a member's, an outsider's (withheld in its prompt) and one that does not exist.
+    issue.summary = `[fake:reply-to] [reply-to:${colleagueCommentId},${outsiderCommentId},${unknownCommentId}] Task ${issueKey}`;
+    const mentionId = fakeJira.addComment(issueKey, requester, 'what do you make of these?', { mentions: [aiAccount] });
+
+    await waitFor(`${issueKey}: answered`, answerTimeoutMs, () => issue.comments.length === 4 && getAnswers(issueKey).length === 1);
+    const answerComment = issue.comments[3];
+    assert.equal(answerComment.author.accountId, aiAccount.accountId);
+    // T10: the first paragraph holds nothing but the mentions — the requester of the mention request, then the replied-to author.
+    assert.deepEqual(getMentionedAccountIds(answerComment.body.content[0]), [requester.accountId, colleague.accountId]);
+    assert.equal(getAdfText(answerComment.body), `@Requester @Colleague\nFake final answer for ${issueKey} (reply-to, turn 1).`);
+    // T12: the agent was told which ids were left out, and that the answer was delivered.
+    const [answered] = getAnswers(issueKey);
+    assert.ok(answered.outcome.includes(
+      `Delivered, but these comments' authors were not mentioned: ${outsiderCommentId}, ${unknownCommentId}. ` +
+        'Only comments you were shown in this conversation, written by a trusted person, can be replied to this way.',
+    ), answered.outcome);
+    // What was checked: the member's comment and the requester's own were read; the withheld and the unknown ones never were.
+    const commentReads = fakeJira.requestLog.filter((request) => request.startsWith(`GET /rest/api/3/issue/${issueKey}/comment/`));
+    assert.deepEqual(commentReads.sort(), [`GET /rest/api/3/issue/${issueKey}/comment/${mentionId}`, `GET /rest/api/3/issue/${issueKey}/comment/${colleagueCommentId}`].sort());
+    assert.equal(issue.assignee?.accountId, requester.accountId, 'nothing was handed back');
+    assert.equal(countAssigneeChanges(issueKey), 0);
+    // T4: the agent knew about the field from its context preamble.
+    assert.ok(getPrompts(issueKey)[0].text.includes('put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified.'));
   });
 
   it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {

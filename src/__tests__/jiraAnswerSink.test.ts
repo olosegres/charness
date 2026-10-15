@@ -14,10 +14,22 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildJiraAlertText, buildJiraMentionParkText, buildJiraParkText, buildJiraUntrustedText, createJiraAnswerSink, jiraQuestionContinueText, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
-import { getAdfText, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
+import {
+  buildJiraAlertText,
+  buildJiraMentionParkText,
+  buildJiraParkText,
+  buildJiraReplyLeftOutWarning,
+  buildJiraUntrustedText,
+  createJiraAnswerSink,
+  jiraQuestionContinueText,
+  jiraReadBackClockSkewMs,
+  jiraReadBackDelayMs,
+} from '../connectors/jira/answerSink';
+import { getAdfText, getMentionedAccountIds, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
+import { createJiraTrust, type JiraTrust } from '../connectors/jira/trustedGroup';
+import type { JiraSentBlocks } from '../connectors/jira/contextLedger';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
-import type { JiraClient, JiraComment, JiraCommentPostResult, JiraIssue } from '../connectors/jira/client';
+import { JiraHttpError, type JiraClient, type JiraComment, type JiraCommentPostResult, type JiraIssue } from '../connectors/jira/client';
 import { getCommentBodyHash, JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from '../connectors/jira/unconfirmedPosts';
 import type { RequestAnswerKind, RequestOrigin } from '../requests/types';
 
@@ -36,6 +48,12 @@ interface FakeJira {
   postedTexts: string[];
   /** The bodies as posted, for what the plain text cannot tell (a paragraph of its own, no Markdown). */
   postedBodies: AdfDocument[];
+  /** `getComment` answers by comment id: a comment, or the failure Jira would give. */
+  commentsById: Map<string, JiraComment | Error>;
+  /** What the conversation was shown (`comment:<id>` → the block), as the context ledger holds it. */
+  sentBlocks: JiraSentBlocks;
+  /** The trusted group's trust, `null` without a group. */
+  trust: JiraTrust | null;
   assignee: string;
   /** Per comment post, in order: what Jira answers; `created` when the list runs out. */
   postOutcomes: Array<JiraCommentPostResult | Error>;
@@ -55,8 +73,15 @@ async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
   return store;
 }
 
-function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue'> {
+function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'> {
   return {
+    getComment: async (issue, commentId) => {
+      jira.calls.push(`getComment ${issue} ${commentId}`);
+      const comment = jira.commentsById.get(commentId);
+      if (comment === undefined) throw new Error(`Jira GET comment ${commentId} failed with 404`);
+      if (comment instanceof Error) throw comment;
+      return comment;
+    },
     addComment: async (issue, body: AdfDocument) => {
       jira.calls.push(`comment ${issue}`);
       jira.postedTexts.push(getAdfText(body));
@@ -85,6 +110,8 @@ function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | '
 const sink = () => createJiraAnswerSink({
   client: createClient(),
   aiAccountId,
+  contextLedger: { getShownBlock: (_issueKey, blockKey) => jira.sentBlocks[blockKey] },
+  getTrust: () => jira.trust,
   runBudgetPer24h: 5,
   now: () => nowMs,
   wait: async (ms) => {
@@ -96,7 +123,7 @@ const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
 beforeEach(async () => {
-  jira = { calls: [], postedTexts: [], postedBodies: [], assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
+  jira = { calls: [], postedTexts: [], postedBodies: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
   dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
   unconfirmedPosts = await loadUnconfirmedPosts();
 });
@@ -395,17 +422,27 @@ describe('alert and park notice', () => {
 describe('a mention request answers only — nothing is handed over, so nothing is handed back (T5–T7)', () => {
   const deliverMention = (kind: RequestAnswerKind, body: string) =>
     sink().deliverAnswer(key, { requestId: 'req_2', kind, body, origin: mentionOrigin, isRequestOpen: true });
+  /** The requester's own comment, which the answer's mention is read from. */
+  const requesterCommentId = mentionOrigin.attributes.triggerId.slice('mention:'.length);
+
+  beforeEach(() => {
+    jira.commentsById.set(requesterCommentId, {
+      id: requesterCommentId,
+      author: { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' },
+      created: '2026-10-03T10:00:00.000+0000',
+    });
+  });
 
   it('a final answer is a comment and the issue stays where it is: no assignee read, no assignment', async () => {
     assert.deepEqual(await deliverMention('final', 'The export fails on an empty row.'), { ok: true });
-    assert.deepEqual(jira.calls, ['comment PROJ-12']);
-    assert.deepEqual(jira.postedTexts, ['The export fails on an empty row.']);
+    assert.deepEqual(jira.calls, [`getComment PROJ-12 ${requesterCommentId}`, 'comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, ['@Requester\nThe export fails on an empty row.']);
   });
 
   it('a question stays a plain comment: no hand-back and no "to let me go on" line — it has nobody to hand back to', async () => {
     assert.deepEqual(await deliverMention('question', 'Which export?'), { ok: true });
-    assert.deepEqual(jira.calls, ['comment PROJ-12']);
-    assert.deepEqual(jira.postedTexts, ['Which export?']);
+    assert.deepEqual(jira.calls, [`getComment PROJ-12 ${requesterCommentId}`, 'comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, ['@Requester\nWhich export?']);
   });
 
   it('the alert of a mention request is a comment and no hand-back', async () => {
@@ -464,5 +501,167 @@ describe('the park notices (T5, T6)', () => {
     } finally {
       warn.mock.restore();
     }
+  });
+});
+
+describe('whom an answer notifies: the requester of a mention request, and the authors it replies to (T10–T12)', () => {
+  const requester = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
+  const colleague = { accountId: 'colleague-account', accountType: 'atlassian', displayName: 'Colleague' };
+  const outsider = { accountId: 'outsider-account', accountType: 'atlassian', displayName: 'Outsider' };
+  const automation = { accountId: 'rule-account', accountType: 'app', displayName: 'Automation' };
+  const created = '2026-10-03T10:00:00.000+0000';
+
+  /** A comment of the issue; `isShown` puts it in what the conversation was shown. */
+  function addComment(id: string, author: JiraComment['author'], options: { isShown?: boolean; isWithheld?: boolean; updateAuthor?: JiraComment['author'] } = {}): string {
+    jira.commentsById.set(id, { id, author, created, ...(options.updateAuthor ? { updated: created, updateAuthor: options.updateAuthor } : {}) });
+    if (options.isShown ?? true) jira.sentBlocks[`comment:${id}`] = { hash: `hash-${id}`, ...(options.isWithheld ? { isWithheld: true } : {}) };
+    return id;
+  }
+  const createGroupTrust = (memberAccountIds: string[]): JiraTrust => createJiraTrust({
+    client: { getGroupByName: async () => null, getGroupMembers: async () => [] },
+    snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set(memberAccountIds), readAtMs: nowMs },
+    aiAccountId,
+    now: () => nowMs,
+  });
+  const deliverMention = (kind: RequestAnswerKind, body: string, replyToCommentIds?: string[], isRequestOpen = true) =>
+    sink().deliverAnswer(key, { requestId: 'req_2', kind, body, origin: mentionOrigin, isRequestOpen, ...(replyToCommentIds ? { replyToCommentIds } : {}) });
+  const deliverHandOver = (kind: RequestAnswerKind, body: string, replyToCommentIds: string[]) =>
+    sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen: true, replyToCommentIds });
+  /** The mention nodes of the first posted comment's FIRST paragraph, by account id. */
+  const getLeadingMentions = (): string[] => getMentionedAccountIds(jira.postedBodies[0].content[0]);
+  const getTrigger = (): string => mentionOrigin.attributes.triggerId;
+
+  beforeEach(() => {
+    // The mention request's own comment, by its requester.
+    addComment(getTrigger().slice('mention:'.length), requester);
+  });
+
+  it('T10: every answer to a mention request starts with a real mention of its requester — progress, question and final alike', async () => {
+    for (const kind of ['progress', 'question', 'final'] as const) {
+      jira.postedBodies = [];
+      await deliverMention(kind, 'Looking into it.');
+      assert.deepEqual(getLeadingMentions(), [requester.accountId], kind);
+      assert.deepEqual(jira.postedBodies[0].content[0], {
+        type: 'paragraph',
+        content: [{ type: 'mention', attrs: { id: requester.accountId, text: '@Requester' } }],
+      });
+      assert.equal(getAdfText(jira.postedBodies[0]), '@Requester\nLooking into it.');
+    }
+  });
+
+  it('an app that mentioned the AI is not mentioned back — it cannot be notified; the answer goes without', async () => {
+    jira.commentsById.set(getTrigger().slice('mention:'.length), { id: '10240', author: automation, created });
+    mentionOrigin.attributes.requester = automation.accountId;
+    try {
+      assert.deepEqual(await deliverMention('final', 'Done.'), { ok: true });
+    } finally {
+      mentionOrigin.attributes.requester = requester.accountId;
+    }
+    assert.deepEqual(jira.postedTexts, ['Done.']);
+  });
+
+  it('a requester\'s comment that is gone: the answer goes without a mention, never fails for it', async () => {
+    jira.commentsById.delete(getTrigger().slice('mention:'.length));
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      assert.deepEqual(await deliverMention('final', 'Done.'), { ok: true });
+    } finally {
+      warn.mock.restore();
+    }
+    assert.deepEqual(jira.postedTexts, ['Done.']);
+  });
+
+  it('a hand-over request mentions nobody on its own — the hand-back already tells the requester', async () => {
+    await deliver('final', 'Done.');
+    assert.deepEqual(jira.postedTexts, ['Done.']);
+    assert.ok(!jira.calls.some((call) => call.startsWith('getComment')), 'no comment was read for it');
+  });
+
+  it('T11/T12: a reply to a delivered comment of a trusted person mentions its author, after the requester, once each', async () => {
+    jira.trust = createGroupTrust([requester.accountId, colleague.accountId]);
+    addComment('10250', colleague);
+    addComment('10251', colleague);
+    addComment('10252', requester);
+    assert.deepEqual(await deliverMention('final', 'Both of you:', ['10250', '10251', '10250', '10252']), { ok: true });
+    assert.deepEqual(getLeadingMentions(), [requester.accountId, colleague.accountId], 'requester first; duplicates and the requester again are one mention each');
+  });
+
+  it('a hand-over answer may reply too: the mention leads, the "to let me go on" line ends a question', async () => {
+    addComment('10250', colleague);
+    await deliverHandOver('question', 'Which branch?', ['10250']);
+    assert.deepEqual(getLeadingMentions(), [colleague.accountId]);
+    assert.equal(jira.postedTexts[0], `@Colleague\nWhich branch?\n${jiraQuestionContinueText}`);
+    assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
+  });
+
+  it('left out, with the warning: a comment the conversation was never shown, a withheld one, the AI account\'s own, an app\'s, an unknown id', async () => {
+    addComment('20001', colleague, { isShown: false });
+    addComment('20002', colleague, { isWithheld: true });
+    addComment('20003', { accountId: aiAccountId, accountType: 'atlassian', displayName: 'AI' });
+    addComment('20004', automation);
+    // 20005 is shown but Jira has no such comment any more.
+    jira.sentBlocks['comment:20005'] = { hash: 'hash-20005' };
+    const result = await deliverMention('final', 'Done.', ['20001', '20002', '20003', '20004', '20005']);
+    assert.deepEqual(result, { ok: true, warning: buildJiraReplyLeftOutWarning(['20001', '20002', '20003', '20004', '20005']) });
+    assert.deepEqual(getLeadingMentions(), [requester.accountId], 'only the requester was mentioned');
+    assert.equal(
+      buildJiraReplyLeftOutWarning(['10240', '10241']),
+      'Delivered, but these comments\' authors were not mentioned: 10240, 10241. ' +
+        'Only comments you were shown in this conversation, written by a trusted person, can be replied to this way.',
+    );
+  });
+
+  it('with a trusted group a non-member\'s comment, or one a non-member last edited, is left out; a reply with no valid id still delivers the answer', async () => {
+    jira.trust = createGroupTrust([requester.accountId, colleague.accountId]);
+    addComment('20010', outsider);
+    addComment('20011', colleague, { updateAuthor: outsider });
+    const result = await deliverHandOver('final', 'Done.', ['20010', '20011']);
+    assert.deepEqual(result, { ok: true, warning: buildJiraReplyLeftOutWarning(['20010', '20011']) });
+    assert.deepEqual(jira.postedTexts, ['Done.'], 'the answer was delivered, with no mention at all');
+  });
+
+  it('without a trusted group a person\'s comment qualifies: nobody is judged', async () => {
+    addComment('20020', outsider);
+    assert.deepEqual(await deliverHandOver('final', 'Done.', ['20020']), { ok: true });
+    assert.deepEqual(getLeadingMentions(), [outsider.accountId]);
+  });
+
+  it('a comment that could not be read for another reason than not existing is left out with a log line for the operator', async () => {
+    addComment('20030', colleague);
+    jira.commentsById.set('20030', new JiraHttpError(503, 'GET', '/rest/api/3/issue/PROJ-12/comment/20030', 'Service Unavailable'));
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const result = await deliverMention('final', 'Done.', ['20030', '99999']);
+      assert.deepEqual(result, { ok: true, warning: buildJiraReplyLeftOutWarning(['20030', '99999']) });
+      const lines = warn.mock.calls.map((call) => String(call.arguments[0]));
+      assert.ok(lines.some((line) => line.includes('comment 20030 could not be read')), 'the 503 is logged');
+      assert.ok(!lines.some((line) => line.includes('comment 99999')), 'an unknown id is not worth a line');
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('a long answer carries the mentions on its first comment only', async () => {
+    const paragraph = 'x'.repeat(paragraphLength);
+    await deliverMention('final', `${paragraph}\n\n${paragraph}`);
+    assert.equal(jira.postedBodies.length, 2);
+    assert.deepEqual(getMentionedAccountIds(jira.postedBodies[0]), [requester.accountId]);
+    assert.deepEqual(getMentionedAccountIds(jira.postedBodies[1]), []);
+  });
+
+  it('the read-back of a post of unknown outcome compares the body WITH its mention — a landed comment is not posted twice', async () => {
+    jira.postOutcomes = [{ outcome: 'deliveryUnknown', reason: 'timeout' }];
+    // The comment did land: the same text, with the mention, by the AI account.
+    jira.recentComments = [{
+      id: 'c9',
+      author: { accountId: aiAccountId },
+      created: new Date(nowMs).toISOString(),
+      body: { type: 'doc', content: [
+        { type: 'paragraph', content: [{ type: 'mention', attrs: { id: requester.accountId, text: '@Requester' } }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Done.' }] },
+      ] },
+    }];
+    assert.deepEqual(await deliverMention('final', 'Done.'), { ok: true });
+    assert.equal(jira.postedTexts.length, 1, 'posted once');
   });
 });

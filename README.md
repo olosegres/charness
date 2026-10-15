@@ -833,6 +833,10 @@ a person assigns an issue to the AI account (in a trigger status)
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
   again replaces their earlier open request; the agent answers only what the new hand-over adds (if it
   already finished the first, a short pointer to that answer).
+- **Who is notified.** An answer to a mention starts with a real @-mention of the person who mentioned the AI
+  (unless it is an automation), so they are told. The agent can also name comments it is replying to; their
+  authors are mentioned the same way — only comments it was shown, written by a person the trusted group backs.
+  The agent never chooses whom to mention, only which comment it answers.
 - **How an answer reads.** The agent writes for a manager or QA, not an engineer: short, plain words, status
   and next steps as a short numbered list of who does what, one line per question, no back-story. The same
   instruction rides every request, on a Jira issue and in a Telegram topic alike.

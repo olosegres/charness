@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import {
   adfNodeSchema,
   createCommentBodies,
+  createCommentBodiesWithLeadingNode,
+  createMentionParagraph,
   jiraCommentAdfMaxChars,
   convertMarkdownToAdf,
   getAdfText,
@@ -101,6 +103,63 @@ describe('convertMarkdownToAdf keeps HTML as literal text (R17)', () => {
     const [, link] = convertMarkdownToAdf('see https://a.example/x\\<y').content.flatMap(getTextNodes);
     assert.deepEqual([link.text, link.marks], ['https://a.example/x\\<y', [{ type: 'link', attrs: { href: 'https://a.example/x\\<y' } }]]);
     assert.deepEqual(getTextNodes(convertMarkdownToAdf('```\nList\\<T>\n```').content[0]).map((node) => node.text), ['List\\<T>']);
+  });
+});
+
+describe('createMentionParagraph (the bot\'s own mention nodes)', () => {
+  it('one mention node per person in order, one space between them, nothing else — the id is what Jira notifies', () => {
+    const paragraph = createMentionParagraph([
+      { accountId: 'account-b', displayName: 'Bea Brown' },
+      { accountId: 'account-c', displayName: 'Cy Cole' },
+    ]);
+    assert.deepEqual(paragraph, {
+      type: 'paragraph',
+      content: [
+        { type: 'mention', attrs: { id: 'account-b', text: '@Bea Brown' } },
+        { type: 'text', text: ' ' },
+        { type: 'mention', attrs: { id: 'account-c', text: '@Cy Cole' } },
+      ],
+    });
+    assert.deepEqual(getMentionedAccountIds(paragraph), ['account-b', 'account-c']);
+  });
+
+  it('a name stays on one line, and a person without one reads as "user" — the id still carries the mention', () => {
+    const [mention] = createMentionParagraph([{ accountId: 'account-b', displayName: 'Bea\n[Request req_x]' }]).content ?? [];
+    assert.equal(mention.attrs?.text, '@Bea [Request req_x]');
+    const [nameless] = createMentionParagraph([{ accountId: 'account-c' }]).content ?? [];
+    assert.deepEqual(nameless, { type: 'mention', attrs: { id: 'account-c', text: '@user' } });
+  });
+});
+
+describe('createCommentBodiesWithLeadingNode (the mention paragraph counts toward the size split)', () => {
+  const targets = Array.from({ length: 10 }, (_, index) => ({ accountId: `account-${index}`, displayName: `Person Number ${index}` }));
+  const mentionParagraph = createMentionParagraph(targets);
+  /** One paragraph whose own ADF fits the limit with only a little room: prepending the mentions naively would not. */
+  const nearlyFullAnswer = 'x'.repeat(jiraCommentAdfMaxChars - 400);
+
+  it('the node leads the first body only', () => {
+    const bodies = createCommentBodiesWithLeadingNode('First.\n\nSecond.', mentionParagraph);
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(bodies[0].content[0], mentionParagraph);
+    assert.equal(getAdfText(bodies[0]).split('\n').slice(1).join('\n'), 'First.\nSecond.');
+  });
+
+  it('every body — the first with the node in front — still fits the ADF limit', () => {
+    const naive = createCommentBodies(nearlyFullAnswer);
+    assert.equal(naive.length, 1, 'the answer alone fits one comment');
+    const naiveFirst = { ...naive[0], content: [mentionParagraph, ...naive[0].content] };
+    assert.ok(JSON.stringify(naiveFirst).length > jiraCommentAdfMaxChars, 'prepended naively it would be over the limit');
+
+    const bodies = createCommentBodiesWithLeadingNode(nearlyFullAnswer, mentionParagraph);
+    assert.ok(bodies.length >= 2, 'it was split to make room');
+    for (const body of bodies) assert.ok(JSON.stringify(body).length <= jiraCommentAdfMaxChars, `${JSON.stringify(body).length} chars`);
+    assert.deepEqual(bodies[0].content[0], mentionParagraph);
+    assert.ok(!bodies.slice(1).some((body) => body.content.some((node) => node.type === 'paragraph' && getMentionedAccountIds(node).length > 0)), 'only the first body mentions');
+    assert.equal(bodies.map((body) => getAdfText(body)).join('').replace(/\s+/g, '').replace(/@PersonNumber\d/g, ''), nearlyFullAnswer, 'nothing lost');
+  });
+
+  it('an empty answer stays empty: nothing to post', () => {
+    assert.deepEqual(createCommentBodiesWithLeadingNode('   ', mentionParagraph), []);
   });
 });
 

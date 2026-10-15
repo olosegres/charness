@@ -10,7 +10,7 @@
 
 import type { Browser, Page } from 'playwright-core';
 import { z } from 'zod';
-import { adfNodeSchema, convertMarkdownToAdf, getAdfText } from '../../connectors/jira/adf';
+import { adfNodeSchema, convertMarkdownToAdf, getAdfText, getMentionedAccountIds } from '../../connectors/jira/adf';
 
 /** What a REST call from the page returned. */
 interface PageRestResponse {
@@ -46,6 +46,8 @@ export interface LiveComment {
   text: string;
   /** The length of the comment body's serialized ADF, as Jira returns it. */
   adfLength: number;
+  /** The account ids of the mention nodes of the body's FIRST paragraph, in order — who the comment notifies at its top. */
+  leadingMentionAccountIds: string[];
 }
 
 /** @name LiveIssueState @description An issue's assignee, whether it is finished, and its comments, oldest first. */
@@ -178,6 +180,7 @@ export class JiraLiveRequester {
         authorAccountId: comment.author.accountId,
         text: getAdfText(comment.body),
         adfLength: JSON.stringify(comment.body).length,
+        leadingMentionAccountIds: getMentionedAccountIds(comment.body.content?.[0]),
       })),
     };
   }

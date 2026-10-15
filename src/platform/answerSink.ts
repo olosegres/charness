@@ -23,6 +23,11 @@ export interface RequestAnswerDelivery {
   body: string;
   origin: RequestOrigin;
   isRequestOpen: boolean;
+  /**
+   * Platform-owned: the ids of the conversation's comments this answer replies to, as the agent named them. The
+   * core passes it through untouched; a sink that has no such notion ignores it.
+   */
+  replyToCommentIds?: readonly string[];
 }
 
 /**
