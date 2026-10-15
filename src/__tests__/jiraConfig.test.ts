@@ -70,7 +70,8 @@ describe('validateJiraConfig', () => {
     const { config } = result;
     assert.equal(config.apiToken, tokenValue);
     assert.equal(config.baseUrl, 'https://example.atlassian.net');
-    assert.equal(config.pollIntervalMs, jiraPollIntervalDefaultSeconds * 1000);
+    assert.equal(jiraPollIntervalDefaultSeconds, 30);
+    assert.equal(config.pollIntervalMs, 30_000);
     assert.equal(config.runBudgetPer24h, jiraRunBudgetDefault);
     assert.equal(config.adapter, 'claude-json-stream');
     assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'], extraFieldIds: [] }]]);
@@ -78,11 +79,11 @@ describe('validateJiraConfig', () => {
 
   it('explicit poll interval, budget, json-stream adapter, model and effort are taken', () => {
     const result = validateJiraConfig(
-      createConfig({ pollIntervalSeconds: 30, runBudgetPer24h: 2, adapter: 'claude-json-stream', model: 'opus[1m]', effort: 'low' }),
+      createConfig({ pollIntervalSeconds: 45, runBudgetPer24h: 2, adapter: 'claude-json-stream', model: 'opus[1m]', effort: 'low' }),
       { workRoot, openCodeUrl: isolatedOpenCodeUrl },
     );
     assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
-    assert.equal(result.config.pollIntervalMs, 30_000);
+    assert.equal(result.config.pollIntervalMs, 45_000);
     assert.equal(result.config.runBudgetPer24h, 2);
     assert.equal(result.config.adapter, 'claude-json-stream');
     assert.equal(result.config.model, 'opus[1m]');

@@ -21,7 +21,7 @@ import type { JiraExtraField } from './issueBlocks';
 /** Poll interval bounds and default, seconds (D13). */
 export const jiraPollIntervalMinSeconds = 10;
 export const jiraPollIntervalMaxSeconds = 600;
-export const jiraPollIntervalDefaultSeconds = 90;
+export const jiraPollIntervalDefaultSeconds = 30;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
 /** What a Jira session runs on when `jira.json` names neither (C14); either key still overrides its own default. */

@@ -13,7 +13,7 @@ the instance's env file), `accountId` (the AI account — the token must belong 
 at boot), `projects` (key → `{ folder, triggerStatuses, extraFields? }`, the allowlist; status NAMES resolved to
 ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` that the prompt shows under their
 site name — none by default, and an id the site does not list is logged once at boot and left out),
-`pollIntervalSeconds` (10–600, default 90), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
+`pollIntervalSeconds` (10–600, default 30), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
 group, see "The trusted group" under Isolation; absent → none, with one boot line `[jira] no trustedGroup: …`; the
 AI account needs the *Browse users and groups* global permission to read it), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),

@@ -878,7 +878,7 @@ a person assigns an issue to the AI account (in a trigger status)
        "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "trustedGroup": "ai-trusted",
-     "pollIntervalSeconds": 90,
+     "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
      "effort": "high"
@@ -901,7 +901,7 @@ a person assigns an issue to the AI account (in a trigger status)
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
    and in every parent) like any Claude Code session, while your user-level Claude setup stays out of its
    sessions — except that for a folder under HOME that walk reads `~/.claude/CLAUDE.md` back in.
-   `pollIntervalSeconds` is 10–600 (default 90);
+   `pollIntervalSeconds` is 10–600 (default 30);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
