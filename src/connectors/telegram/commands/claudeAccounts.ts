@@ -23,13 +23,7 @@ import {
   resolveClaudeProfileDir,
   type ClaudeAuthStatus,
 } from '../../../utils/claudeProfiles';
-import {
-  formatClaudeUsageBucket,
-  formatClaudeUsageResetAt,
-  type ClaudeRelativeResetWords,
-  getClaudeUsageBucket,
-  type ClaudeUsageBucketKind,
-} from '../../../utils/claudeUsage';
+import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import {
   accountAddCallback,
@@ -215,35 +209,12 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return `${marker}${row.name} — ${account}${users}${formatUsageLines(row.name)}`;
   }
 
-  /** The localised words of a relative reset («🔄 in 2h»). */
-  function getRelativeWords(): ClaudeRelativeResetWords {
-    return { pattern: t('usage.resetIn'), day: t('usage.unitDay'), hour: t('usage.unitHour'), minute: t('usage.unitMinute') };
-  }
-
   /**
-   * The profile's usage under its row: the three windows as `used% → reset` in the instance zone (`—` for a
-   * window the account has no figure for — a corporate seat has no Fable window), `(stale)` when the last poll
-   * could not refresh, and the limit mark while it holds. Nothing for a profile never polled.
+   * The profile's usage under its row (`utils/claudeProfileUsageLines.ts`, the renderer `/limits` shares), each
+   * line on its own row. Nothing for a profile never polled.
    */
   function formatUsageLines(name: string): string {
-    const info = getState().getClaudeProfileInfo(name);
-    const nowMs = Date.now();
-    const timezone = getInstanceTimezone();
-    const lines: string[] = [];
-    if (info?.usage && info.usage.buckets.length > 0) {
-      const words = getRelativeWords();
-      // An unknown 5h reset shows the weekly window's instead of «?».
-      const weeklyReset = getClaudeUsageBucket(info.usage, 'weekly_all')?.resetsAt ?? null;
-      const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(info.usage, kind), nowMs, {
-        words,
-        fallbackResetsAt: kind === 'session' ? weeklyReset : null,
-      });
-      const stale = info.usage.isStale ? t('account.row.usageStale') : '';
-      lines.push(t('account.row.usage', { session: read('session'), weekly: read('weekly_all'), fable: read('weekly_scoped') }) + stale);
-    }
-    if (info?.limitedUntil && Date.parse(info.limitedUntil) > nowMs) {
-      lines.push(t('account.row.limited', { until: formatClaudeUsageResetAt(info.limitedUntil, timezone, nowMs) }));
-    }
+    const lines = formatClaudeProfileUsageLines(getState().getClaudeProfileInfo(name), getInstanceTimezone(), Date.now());
     return lines.map((line) => `\n${line}`).join('');
   }
 

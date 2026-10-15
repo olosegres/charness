@@ -7116,6 +7116,7 @@ const { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimit
   applyAutoContinue: applyAutoContinueLimits,
   getArmedLimitRetryFireAt,
   getInstanceTimezone: getCurrentTimezone,
+  refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
   detectFallbackOptions,
   getTopicPosition: getTopicFallbackPosition,
   takeSwitchOffer: takeFallbackSwitchOffer,

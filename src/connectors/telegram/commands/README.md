@@ -106,7 +106,7 @@ per-topic name capture the text handler consults (`checkIsAwaitingProfileName` /
 command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
 picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
-Under each row the picker prints the profile's usage windows (`utils/claudeUsage.ts`: session, weekly, Fable
+Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable
 weekly — percent used → a relative reset `🔄 in 2d 1h` (`formatClaudeUsageBucket`; an unknown 5h reset shows the weekly one)), read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
 goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
@@ -125,14 +125,19 @@ model) and `fbk_wait_on|off|same` (wait for the reset; written through the `appl
 usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
 on when its agent hits a usage limit (`utils/fallbackChain.ts`). The list is edited from EVERY topic (one instance-wide list; a topic also gets ✓ on its own position, a
 sub-menu per setting — on / off / as General — for the two settings' overrides, and «skip once» while a limit wait is
-armed). Each setting is ONE full-width button on the main screen (`buildSettingRow`; the setting's name and its effective
-value, `limits.switchButton` / `limits.waitButton` — the source, «as in General» / «set for this topic», is in the message
-text and the sub-menu line, never on the button, which a phone would cut again): in General a tap flips the value, in a
-topic it opens `renderSettingMenu` in the same message — the line, then ON / OFF / «As in General (<General value>)» as full-width buttons
-(the topic's own choice marked ✓) and Back. The three options are the setting's own `fbk_asw_*` / `fbk_wait_*` callbacks, which
+armed). Each setting is ONE short full-width button on the main screen (`buildSettingRow`; the setting's name and its
+effective value, `limits.switchButton` / `limits.waitButton` — the source, «as in General» / «set for this topic», is one
+line of the message text (`limits.sourceLine`, emoji-keyed to the buttons) and the ✓ of the sub-menu, never on the button,
+which a phone would cut again): in General a tap flips the value, in a topic it opens `renderSettingMenu` in the same
+message — the setting's name (`limits.switchMenuTitle` / `limits.waitMenuTitle`), then ON / OFF / «As in General (<General value>)» as
+full-width buttons (the topic's own choice marked ✓) and Back. The three options are the setting's own `fbk_asw_*` / `fbk_wait_*` callbacks, which
 apply the choice and re-render the main screen; three buttons on one row would split the width evenly and cut every label.
-The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built) and the
-closing priority paragraph; the message text carries no numbered list. A tap opens `renderRungDetail` in the same message (⬆️ hidden on
+The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built); its message
+text is deliberately SHORT — the usage block (`formatUsageBlock`: each profile's windows through the renderer `/accounts` uses,
+`utils/claudeProfileUsageLines.ts`; refreshed on demand through the `refreshClaudeUsage` port, a minute's cache; OpenCode's
+limit marks are on the rung buttons already), what the topic runs on + where its settings come from (General: a one-line
+note that they are the defaults), and the list's heading — no numbered list, no legend, no how-it-works prose (the rung view
+and this README carry those). A tap opens `renderRungDetail` in the same message (⬆️ hidden on
 the first rung, ⬇️ on the last; up / down / toggle re-render the view at the rung's new place, remove returns to the list); a rung with `disabled: true` is skipped by
 `pickFallbackCandidates` and kept disabled by a rebuild (`proposeFallbackChain(detection, previous)`); the screen is meant
 for repeated use and re-renders in place. Every edit button BAKES the chain's content revision (8 hex digits of

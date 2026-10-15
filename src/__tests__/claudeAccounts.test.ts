@@ -138,6 +138,25 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(picker?.text ?? '', /Tap an account to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
   });
 
+  it('a polled profile\'s windows hang under its row (the renderer `/limits` shares): 5h / week / Fable with relative resets, the stale mark and the limit mark', async () => {
+    const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
+    harness.state.setClaudeProfileUsage('default', {
+      fetchedAt: new Date().toISOString(),
+      source: 'api',
+      isStale: true,
+      buckets: [
+        { kind: 'session', percent: 5, resetsAt: inHours(4), scopeModel: null },
+        { kind: 'weekly_all', percent: 20, resetsAt: inHours(5 * 24 + 8), scopeModel: null },
+      ],
+    });
+    harness.state.setClaudeProfileLimitedUntil('default', inHours(2));
+    await harness.runCommand('account');
+    const text = harness.replies.at(-1)?.text ?? '';
+    assert.match(text, /✓ default — me@example\.com, personal max\n {4}⏱ 5h 5% → 🔄 in 4h · week 20% → 🔄 in 5d 8h · Fable — \(stale\)\n {4}⛔ at its limit until /);
+    harness.state.setClaudeProfileLimitedUntil('default', null);
+    await harness.state.upsertClaudeProfileRecord('default', { usage: undefined });
+  });
+
   it('`add <name>` lays the directory out, records the profile and starts its sign-in under that directory', async () => {
     await harness.runCommand('account', 'add Work');
     const dir = path.join(dataDir, 'claude-profiles', 'work');

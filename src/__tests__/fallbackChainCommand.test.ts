@@ -10,6 +10,8 @@
  *   • the two-step «add»: a Claude account + model, an OpenCode provider + model off the message's snapshot;
  *   • the auto-switch toggle writes the shared setting; in a topic each setting is ONE full-width button
  *     opening a sub-menu (ON / OFF / As in General + Back) whose choice applies and returns to the screen;
+ *   • the SHORT text: the Claude accounts' usage block on top (the `/accounts` renderer; signed-out named,
+ *     never-polled left out), then what the topic runs on + where its settings come from, then the list's heading;
  *   • the limit-notice switch button reaches the port with its episode and index and consumes the notice,
  *     a stale tap only answers.
  */
@@ -31,12 +33,13 @@ let topicPosition: FallbackChainEntry | null = null;
 const switchTaps: Array<{ key: SessionKey; episodeId: number; index: number }> = [];
 let switchOutcome: string | null = null;
 let armedFireAt: number | null = null;
+const usageRefreshes: Array<{ maxAgeMs?: number }> = [];
 
 function buildProfile(name: string, loggedIn: boolean | undefined = true): ClaudeProfileUsageView {
   return { name, configDir: null, loggedIn, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null };
 }
 
-const detection: FallbackDetection = {
+let detection: FallbackDetection = {
   claudeProfiles: [buildProfile('default'), buildProfile('work'), buildProfile('out', false)],
   openCodeModels: ['openai/gpt-5', 'openai/gpt-5-mini', 'google/gemini-2.5-pro'],
   recentOpenCodeModels: ['openai/gpt-5-mini'],
@@ -53,6 +56,9 @@ describe('fallbackChain: /limits over its ports', () => {
       ...harness.core,
       checkIsGeneral: () => isGeneralTopic,
       getInstanceTimezone: () => 'UTC',
+      refreshClaudeUsage: async (options) => {
+        usageRefreshes.push(options);
+      },
       detectFallbackOptions: async () => detection,
       getTopicPosition: () => topicPosition,
       applyAutoContinue: async (key, isGeneral, enabled) => {
@@ -109,11 +115,13 @@ describe('fallbackChain: /limits over its ports', () => {
   it('the bare command in General renders the empty screen with add / rebuild and the two instance-default toggles', async () => {
     await harness.runCommand('limits');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /Fallback models — when an agent hits a usage limit/);
-    assert.match(picker?.text ?? '', /Auto switch to a fallback model: OFF\n.*Wait for the reset and continue: ON/);
-    assert.match(picker?.text ?? '', /How it works: .*earliest reset/);
-    assert.match(picker?.text ?? '', /list of fallback models is empty \(the default\): .*only switches between signed-in Claude accounts.*➕.*Fill from connected/);
-    assert.doesNotMatch(picker?.text ?? '', /^\d\. /m, 'no numbered list in the text');
+    assert.equal(
+      picker?.text,
+      '• out — not signed in\n\nDefaults for all topics.\n\n🪜 No fallback models yet — only signed-in Claude accounts are tried. ➕ Add or 🔄 Fill from connected.',
+      'the usage block (a signed-out account named, a never-polled one left out), the General note, the empty-list note — nothing else',
+    );
+    assert.doesNotMatch(picker?.text ?? '', /How it works|Auto switch|Wait for/, 'the settings are on the buttons, not repeated in the text');
+    assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand (a minute\'s cache) before the screen is built');
     assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['➕ Add', '🔄 Fill from connected']);
     assert.deepEqual(harness.getKeyboardData(picker), [['fbk_add', 'fbk_prop'], ['fbk_asw_on'], ['fbk_wait_off']]);
   });
@@ -127,7 +135,7 @@ describe('fallbackChain: /limits over its ports', () => {
     const rerender = harness.edits.at(-1);
     assert.equal(rerender?.messageId, pickerId);
     assert.doesNotMatch(rerender?.text ?? '', /^\d\. /m, 'the list is on the buttons, not in the text');
-    assert.match(rerender?.text ?? '', /buttons below are the fallback models in priority order, top first/);
+    assert.match(rerender?.text ?? '', /🪜 Fallback models, top first:$/);
     const revision = getFallbackChainRevision(harness.state.getFallbackChain());
     const rows = harness.getKeyboardData(rerender);
     const labels = harness.getKeyboardLabels(rerender);
@@ -146,7 +154,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, `fbk_op_0_${revision}`);
     let detail = harness.edits.at(-1)!;
     assert.equal(detail.messageId, pickerId);
-    assert.match(detail.text ?? '', /^🪜 1 of 5: Claude · default · topic's model\n✅ Ready/);
+    assert.equal(detail.text, "🪜 1 of 5: Claude · default · topic's model\n✅ Ready.");
     assert.deepEqual(harness.getKeyboardData(detail), [
       [`fbk_dn_0_${revision}`], [`fbk_tg_0_${revision}`, `fbk_rm_0_${revision}`], ['fbk_back'],
     ], 'the first rung has no «up»');
@@ -163,13 +171,13 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, `fbk_rm_0_${revision}`); // the old revision: the chain moved on
     assert.equal(harness.state.getFallbackChain().length, 5, 'a stale keyboard removes nothing');
     assert.equal(harness.edits.length, editsBefore + 1, 'but the picker is re-rendered');
-    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /, 'as the list');
+    assert.match(harness.edits.at(-1)?.text ?? '', /🪜 Fallback models, top first:$/, 'as the list');
     await harness.tapButton(pickerId, `fbk_op_0_${revision}`); // a stale open
-    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /);
+    assert.match(harness.edits.at(-1)?.text ?? '', /🪜 Fallback models, top first:$/);
 
     await harness.tapButton(pickerId, `fbk_rm_4_${fresh}`);
     assert.deepEqual(harness.state.getFallbackChain().at(-1), openCode('openai', 'gpt-5'));
-    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — /, 'after a removal: back to the list');
+    assert.match(harness.edits.at(-1)?.text ?? '', /🪜 Fallback models, top first:$/, 'after a removal: back to the list');
     // The last rung has no «down».
     const last = harness.state.getFallbackChain().length - 1;
     const now = getFallbackChainRevision(harness.state.getFallbackChain());
@@ -181,7 +189,7 @@ describe('fallbackChain: /limits over its ports', () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     await harness.tapButton(pickerId, 'fbk_add');
     const step1 = harness.edits.at(-1);
-    assert.match(step1?.text ?? '', /pick the account or provider/);
+    assert.equal(step1?.text, '➕ Pick an account or provider:');
     assert.deepEqual(harness.getKeyboardData(step1), [
       ['fbk_addc_default'], ['fbk_addc_work'], // `out` is not signed in
       ['fbk_addp_0'], ['fbk_addp_1'],
@@ -208,7 +216,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, 'fbk_add');
     await harness.tapButton(pickerId, 'fbk_addp_0'); // openai
     const models = harness.edits.at(-1);
-    assert.match(models?.text ?? '', /OpenCode · openai — pick the model/);
+    assert.equal(models?.text, '➕ OpenCode · openai — pick a model:');
     assert.deepEqual(harness.getKeyboardData(models), [['fbk_addm_0'], ['fbk_addm_1'], ['fbk_back']]);
     await harness.state.setFallbackChain(harness.state.getFallbackChain().filter((entry) => entry.backend !== 'opencode' || entry.modelId !== 'gpt-5-mini'));
     await harness.tapButton(pickerId, 'fbk_addm_1');
@@ -269,7 +277,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.runCommand('fallback');
     const picker = harness.replies.at(-1);
     assert.equal(harness.getKeyboardLabels(picker)[0][0], '1. Claude · work · opus ✓');
-    assert.match(picker?.text ?? '', /This topic runs on: Claude · work · claude-opus-4-1/);
+    assert.match(picker?.text ?? '', /Runs on: Claude · work · claude-opus-4-1\n🔁 as in General · ⏳ as in General\n\n🪜 Fallback models, top first:$/);
     const revision = getFallbackChainRevision(harness.state.getFallbackChain());
     assert.deepEqual(harness.getKeyboardData(picker), [
       [`fbk_op_0_${revision}`],
@@ -289,7 +297,7 @@ describe('fallbackChain: /limits over its ports', () => {
     isGeneralTopic = true;
   });
 
-  it('a topic\'s setting buttons: one full-width button each with the effective value (its source stays in the text, a phone would cut it); General keeps its single flip button', async () => {
+  it('a topic\'s setting buttons: one SHORT full-width button each with the effective value (its source is one line of text, a phone would cut it on the button); General keeps its single flip button', async () => {
     isGeneralTopic = false;
     await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
     await harness.state.setAutoContinueOnLimitGlobalDefault(true);
@@ -298,21 +306,22 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.runCommand('limits');
     const screen = harness.replies.at(-1);
     assert.deepEqual(harness.getKeyboardLabels(screen).slice(-2), [
-      ['🔁 Auto switch to a fallback model: OFF'],
-      ['⏳ Wait for the reset and continue: ON'],
+      ['🔁 Auto switch: OFF'],
+      ['⏳ Wait for reset: ON'],
     ]);
-    assert.match(screen?.text ?? '', /Auto switch to a fallback model: OFF \(as in General\)/, 'the source is in the text');
+    for (const [label] of harness.getKeyboardLabels(screen).slice(-2)) assert.ok(label.length <= 30, `${label} fits a phone button`);
+    assert.match(screen?.text ?? '', /\n🔁 as in General · ⏳ as in General\n/, 'only the source is in the text: the buttons already say name and value');
     assert.deepEqual(harness.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, true);
     await harness.runCommand('limits');
-    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).at(-2), ['🔁 Auto switch to a fallback model: ON']);
-    assert.match(harness.replies.at(-1)?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
+    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).at(-2), ['🔁 Auto switch: ON']);
+    assert.match(harness.replies.at(-1)?.text ?? '', /\n🔁 set for this topic · ⏳ as in General\n/);
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
     isGeneralTopic = true;
     await harness.runCommand('limits');
     assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).slice(-2), [
-      ['🔁 Auto switch to a fallback model: OFF'],
-      ['⏳ Wait for the reset and continue: ON'],
+      ['🔁 Auto switch: OFF'],
+      ['⏳ Wait for reset: ON'],
     ], 'General: the same shape');
     assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']], 'General: a tap flips');
   });
@@ -329,7 +338,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, 'fbk_set_asw');
     const menu = harness.edits.at(-1);
     assert.equal(menu?.messageId, pickerId, 'the sub-menu replaces the screen in the same message');
-    assert.equal(menu?.text, '🔁 Auto switch to a fallback model: OFF (as in General)');
+    assert.equal(menu?.text, '🔁 Auto switch to a fallback model', 'the setting\'s name only: the ✓ below is the value\'s source');
     assert.deepEqual(harness.getKeyboardLabels(menu), [['ON'], ['OFF'], ['As in General (OFF) ✓'], ['⬅️ Back']]);
     assert.deepEqual(harness.getKeyboardData(menu), [['fbk_asw_on'], ['fbk_asw_off'], ['fbk_asw_same'], ['fbk_back']]);
     for (const data of harness.getKeyboardData(menu).flat()) assert.ok(Buffer.byteLength(data) <= 64, `${data} fits callback_data`);
@@ -339,9 +348,9 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic choice never touches the instance default');
     const backOnScreen = harness.edits.at(-1);
-    assert.match(backOnScreen?.text ?? '', /Fallback models — when an agent hits a usage limit/, 'the choice returns to the main screen');
-    assert.match(backOnScreen?.text ?? '', /Auto switch to a fallback model: ON \(set for this topic\)/);
-    assert.deepEqual(harness.getKeyboardLabels(backOnScreen).at(-2), ['🔁 Auto switch to a fallback model: ON']);
+    assert.match(backOnScreen?.text ?? '', /🪜 /, 'the choice returns to the main screen');
+    assert.match(backOnScreen?.text ?? '', /\n🔁 set for this topic · ⏳ as in General\n/);
+    assert.deepEqual(harness.getKeyboardLabels(backOnScreen).at(-2), ['🔁 Auto switch: ON']);
 
     await harness.tapButton(pickerId, 'fbk_set_asw');
     assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON ✓'], ['OFF'], ['As in General (OFF)'], ['⬅️ Back']], 'the topic\'s own choice is marked');
@@ -353,13 +362,13 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), undefined, '«as in General» drops the override');
 
     await harness.tapButton(pickerId, 'fbk_set_wait');
-    assert.equal(harness.edits.at(-1)?.text, '⏳ Wait for the reset and continue: ON (as in General)');
+    assert.equal(harness.edits.at(-1)?.text, '⏳ Wait for the reset and continue');
     assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON'], ['OFF'], ['As in General (ON) ✓'], ['⬅️ Back']]);
     assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['fbk_wait_on'], ['fbk_wait_off'], ['fbk_wait_same'], ['fbk_back']]);
     await harness.tapButton(pickerId, 'fbk_wait_off');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), false);
     assert.equal(harness.state.checkIsAutoContinueOnLimitEnabled(harness.key), false);
-    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).at(-1), ['⏳ Wait for the reset and continue: OFF']);
+    assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).at(-1), ['⏳ Wait for reset: OFF']);
     await harness.tapButton(pickerId, 'fbk_set_wait');
     await harness.tapButton(pickerId, 'fbk_wait_same');
     assert.equal(harness.state.getAutoContinueOnLimitOverride(harness.key), undefined);
@@ -376,7 +385,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, 'fbk_set_asw');
     assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)), [['ON'], ['OFF ✓'], ['As in General (ON)'], ['⬅️ Back']]);
     await harness.tapButton(pickerId, 'fbk_back');
-    assert.match(harness.edits.at(-1)?.text ?? '', /Fallback models — when an agent hits a usage limit/);
+    assert.match(harness.edits.at(-1)?.text ?? '', /🪜 /);
     assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false, 'Back applies nothing');
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
@@ -390,8 +399,45 @@ describe('fallbackChain: /limits over its ports', () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     await harness.tapButton(pickerId, 'fbk_set_wait');
     const rerender = harness.edits.at(-1);
-    assert.match(rerender?.text ?? '', /Fallback models — when an agent hits a usage limit/);
+    assert.match(rerender?.text ?? '', /^Defaults for all topics\./m);
     assert.deepEqual(harness.getKeyboardData(rerender).slice(-2), [['fbk_asw_on'], ['fbk_wait_off']]);
+  });
+
+  it('the usage block is the `/accounts` renderer, one row per account: windows with relative resets, the stale mark, the limit mark on the next row; signed-out named, never-polled left out; refreshed on every build', async () => {
+    const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
+    const polled: ClaudeProfileUsageView = {
+      ...buildProfile('personal'),
+      usage: {
+        fetchedAt: new Date().toISOString(),
+        source: 'api',
+        buckets: [
+          { kind: 'session', percent: 5, resetsAt: inHours(4), scopeModel: null },
+          { kind: 'weekly_all', percent: 20, resetsAt: inHours(5 * 24 + 8), scopeModel: null },
+          { kind: 'weekly_scoped', percent: 4, resetsAt: inHours(5 * 24 + 8), scopeModel: 'Fable' },
+        ],
+      },
+    };
+    const limited: ClaudeProfileUsageView = {
+      ...buildProfile('work'),
+      usage: { fetchedAt: new Date().toISOString(), source: 'stream', isStale: true, buckets: [{ kind: 'session', percent: 100, resetsAt: inHours(1), scopeModel: null }] },
+      limitedUntil: inHours(1),
+    };
+    const savedDetection = detection;
+    detection = { ...savedDetection, claudeProfiles: [polled, limited, buildProfile('fresh'), buildProfile('out', false)] };
+    const refreshesBefore = usageRefreshes.length;
+    isGeneralTopic = true;
+    await harness.runCommand('limits');
+    const text = harness.replies.at(-1)?.text ?? '';
+    const [usage] = text.split('\n\n');
+    assert.equal(usage.split('\n')[0], '• personal — ⏱ 5h 5% → 🔄 in 4h · week 20% → 🔄 in 5d 8h · Fable 4% → 🔄 in 5d 8h');
+    assert.match(usage.split('\n')[1], /^• work — ⏱ 5h 100% → 🔄 in 1h · week — · Fable — \(stale\)$/);
+    assert.match(usage.split('\n')[2], /^ {4}⛔ at its limit until \d{2}:\d{2}$/, 'the limit mark hangs under its account, as in /accounts');
+    assert.equal(usage.split('\n')[3], '• out — not signed in');
+    assert.equal(usage.split('\n').length, 4, 'an account never polled has nothing to show and is left out');
+    assert.equal(usageRefreshes.length, refreshesBefore + 1, 'the usage is refreshed when the screen is built');
+    const sameLine = '⏱ 5h 5% → 🔄 in 4h · week 20% → 🔄 in 5d 8h · Fable 4% → 🔄 in 5d 8h';
+    assert.ok(text.includes(sameLine), 'the same windows line as /accounts prints under a row');
+    detection = savedDetection;
   });
 
   it('the topic screen offers «skip once» only while a limit wait is armed', async () => {

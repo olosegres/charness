@@ -4,7 +4,9 @@
  * sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide what a
  * limit does (auto switch to a fallback model, wait for the reset and continue — instance defaults in General,
  * on / off / same-as-General overrides in a topic, chosen in a per-setting sub-menu) — and the «🔁 Switch to …»
- * buttons a usage-limit notice carries. `/fallback` and `/auto_continue_limits` are hidden aliases of this
+ * buttons a usage-limit notice carries. The message text is deliberately short: the Claude accounts' usage block
+ * on top (the `/accounts` renderer), then the topic's position and where its settings come from — the list and
+ * the settings' values are on the buttons. `/fallback` and `/auto_continue_limits` are hidden aliases of this
  * screen. See README.md in this folder and `utils/fallbackChain.ts`.
  */
 import { Markup, type Context } from 'telegraf';
@@ -13,6 +15,8 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { paginateList } from '../../../utils/paginateList';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
+import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
+import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import {
   addFallbackEntry,
@@ -99,10 +103,10 @@ const settingCallbacks: Record<SettingId, SettingCallbacks> = {
   wait: { open: fallbackWaitOpenCallback, on: fallbackWaitOnCallback, off: fallbackWaitOffCallback, same: fallbackWaitSameCallback },
 };
 
-/** The line naming a setting with its value (`{state}`): the main screen's button (the value alone) and the sub-menu's text (with its source). */
-const settingLabelKeys: Record<SettingId, 'limits.switchButton' | 'limits.waitButton'> = {
-  switch: 'limits.switchButton',
-  wait: 'limits.waitButton',
+/** A setting's texts: its main-screen button (the name with the value, `{state}`) and the title of its sub-menu. */
+const settingTextKeys: Record<SettingId, { button: 'limits.switchButton' | 'limits.waitButton'; menuTitle: 'limits.switchMenuTitle' | 'limits.waitMenuTitle' }> = {
+  switch: { button: 'limits.switchButton', menuTitle: 'limits.switchMenuTitle' },
+  wait: { button: 'limits.waitButton', menuTitle: 'limits.waitMenuTitle' },
 };
 
 /**
@@ -116,6 +120,8 @@ export interface FallbackChainPorts
     'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
   getInstanceTimezone: () => string;
+  /** Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`) for the usage block; never throws. */
+  refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
   /** What is connected now: Claude profiles with usage, the OpenCode catalog, the recent picks, the limit marks. */
   detectFallbackOptions: () => Promise<FallbackDetection>;
   /** The rung the topic runs on now (its Claude profile + model, or its OpenCode provider/model); `null` for no agent. */
@@ -146,7 +152,7 @@ interface AddSnapshot {
 export function createFallbackChain(ports: FallbackChainPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
-    getInstanceTimezone, detectFallbackOptions, getTopicPosition, takeSwitchOffer, applyAutoContinue, getArmedLimitRetryFireAt,
+    getInstanceTimezone, refreshClaudeUsage, detectFallbackOptions, getTopicPosition, takeSwitchOffer, applyAutoContinue, getArmedLimitRetryFireAt,
   } = ports;
 
   const addSnapshots = new Map<number, AddSnapshot>();
@@ -236,29 +242,29 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     return enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
   }
 
-  /** `ON` for General; `ON (as in General)` / `OFF (set for this topic)` in a topic. */
-  function formatSettingValue(enabled: boolean, override: boolean | undefined, isGeneral: boolean): string {
-    if (isGeneral) return formatState(enabled);
-    return `${formatState(enabled)}${override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic')}`;
+  /** Where a topic's setting value comes from: General, or the topic's own override. */
+  function formatSettingSource(setting: SettingValue): string {
+    return setting.override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic');
   }
 
   /**
    * One setting's button on the main screen: one full-width button with the setting's name and its effective value
-   * (`🔁 Auto switch to a fallback model: ON`). Where a topic's value comes from is in the message text above and in
-   * the sub-menu, not on the button — the worded source made it too long for a phone and cut it again. General: a tap
+   * (`🔁 Auto switch: ON`). Where a topic's value comes from is in the message text above and in the sub-menu
+   * (the ✓), not on the button — the worded source made it too long for a phone and cut it again. General: a tap
    * flips the value. A topic: a tap opens the setting's sub-menu ({@link renderSettingMenu}) in the same message —
    * three choices on one row would split the width evenly and cut every label.
    */
   function buildSettingRow(id: SettingId, setting: SettingValue, isGeneral: boolean) {
     const callbacks = settingCallbacks[id];
     const tapData = isGeneral ? (setting.effective ? callbacks.off : callbacks.on) : callbacks.open;
-    return [Markup.button.callback(t(settingLabelKeys[id], { state: formatState(setting.effective) }), tapData)];
+    return [Markup.button.callback(t(settingTextKeys[id].button, { state: formatState(setting.effective) }), tapData)];
   }
 
   /**
-   * A topic's setting sub-menu, in the message the screen sits in: the setting's line, then ON / OFF / As in
-   * General (with the General value it would give) as full-width buttons — the current choice marked `✓` — and
-   * Back. The options are the setting's own callbacks, which apply the choice and return to the main screen.
+   * A topic's setting sub-menu, in the message the screen sits in: the setting's name, then ON / OFF / As in
+   * General (with the General value it would give) as full-width buttons — the current choice marked `✓`, which
+   * is also where the value comes from — and Back. The options are the setting's own callbacks, which apply the
+   * choice and return to the main screen.
    */
   async function renderSettingMenu(key: SessionKey, messageId: number | null, id: SettingId): Promise<void> {
     if (messageId === null) return;
@@ -274,30 +280,57 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       )],
       buildBackRow(),
     ];
-    const line = t(settingLabelKeys[id], { state: formatSettingValue(setting.effective, setting.override, false) });
-    await editThreadMessage(key, messageId, line, Markup.inlineKeyboard(rows));
+    await editThreadMessage(key, messageId, t(settingTextKeys[id].menuTitle), Markup.inlineKeyboard(rows));
   }
 
   /**
-   * The `/limits` screen: the chain with its availability (editable from every topic), the two settings with
-   * their effective values, and how they combine. A topic also sees what it runs on now, and «skip once»
-   * while a limit wait is armed for it.
+   * The usage block at the top of the screen: each Claude profile's windows as `/accounts` shows them under its
+   * row (`formatClaudeProfileUsageLines`), one row per profile — the name, then its windows (a limit mark on the
+   * next row). A signed-out profile is named as such; one never polled has nothing to show and is left out.
+   * OpenCode's limit marks are not repeated here: they are on the rung buttons (`⛔ until`).
+   */
+  function formatUsageBlock(detection: FallbackDetection, nowMs: number): string {
+    const timezone = getInstanceTimezone();
+    const rows: string[] = [];
+    for (const profile of detection.claudeProfiles) {
+      if (profile.loggedIn === false) {
+        rows.push(`• ${profile.name} — ${t('account.row.loggedOut')}`);
+        continue;
+      }
+      // The first line hangs under a row in `/accounts` (the locale indents it); here it sits after the name.
+      const [first, ...rest] = formatClaudeProfileUsageLines(profile, timezone, nowMs);
+      if (first === undefined) continue;
+      rows.push([`• ${profile.name} — ${first.trimStart()}`, ...rest].join('\n'));
+    }
+    return rows.join('\n');
+  }
+
+  /**
+   * The `/limits` screen. Text: the Claude accounts' usage, then what the topic runs on and where its two
+   * settings come from (General: just that these are defaults) and the list's heading — the list itself, its
+   * marks and the two settings' values are on the buttons. A topic also gets «skip once» while a limit wait is
+   * armed for it.
    */
   async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
     const chain = getState().getFallbackChain();
+    // A snapshot younger than a minute is kept (the `/accounts` freshness); the detection reads the result.
+    await refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
     const detection = await detectFallbackOptions();
     const current = isGeneral ? null : getTopicPosition(key);
     const nowMs = Date.now();
     const switchSetting = readSetting('switch', key, isGeneral);
     const waitSetting = readSetting('wait', key, isGeneral);
     const parts: string[] = [];
-    if (!isGeneral) parts.push(t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }));
-    parts.push(t('limits.chainHint'));
-    parts.push(`${isGeneral ? `${t('limits.settingsGeneral')}\n` : ''}${t('limits.settings', {
-      switch: formatSettingValue(switchSetting.effective, switchSetting.override, isGeneral),
-      wait: formatSettingValue(waitSetting.effective, waitSetting.override, isGeneral),
-    })}`);
-    parts.push(t('limits.howItWorks'));
+    const usageBlock = formatUsageBlock(detection, nowMs);
+    if (usageBlock !== '') parts.push(usageBlock);
+    if (isGeneral) {
+      parts.push(t('limits.settingsGeneral'));
+    } else {
+      parts.push([
+        t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }),
+        t('limits.sourceLine', { switch: formatSettingSource(switchSetting), wait: formatSettingSource(waitSetting) }),
+      ].join('\n'));
+    }
     parts.push(chain.length === 0 ? t('limits.listNoteEmpty') : t('limits.listNote'));
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
     const revision = getFallbackChainRevision(chain);
