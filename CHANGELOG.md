@@ -10,10 +10,11 @@ checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATIO
 - **`charness` is the command in every message, help text and document.** `telegramcode` and `telegramCode`
   stay as aliases.
 - **Global config: `~/.config/charness/.env`** (was `~/.config/telegramcode/.env`; the older
-  `~/.config/telegram-code` too). Move: `mv ~/.config/telegramcode ~/.config/charness`.
+  `~/.config/telegram-code` too). Moved by the automatic migration below; by hand:
+  `mv ~/.config/telegramcode ~/.config/charness`.
 - **Default data dir: `~/.charness`** (was `~/.telegramCode`). An existing `~/.telegramCode` is kept while
-  `~/.charness` does not exist; an explicit `DATA_DIR` is untouched. Move it with the bot stopped and no agent
-  running, or set `DATA_DIR` to the old path to keep it.
+  `~/.charness` does not exist; an explicit `DATA_DIR` is untouched. Moved by the automatic migration below; by
+  hand, with the bot stopped and no agent running — or set `DATA_DIR` to the old path to keep it.
 - **Hot-mode variables: `CHARNESS_HOT_RELOAD`, `CHARNESS_OPENCODE_PROCESS_FILE`** (were `TELEGRAMCODE_HOT_RELOAD`,
   `TELEGRAMCODE_OPENCODE_PROCESS_FILE`). The supervisor sets both; restart `charness hot` once after the update.
 - **MCP client-id header: `x-charness-mcp-client-id`** (was `x-telegramcode-mcp-client-id`); the server accepts
@@ -26,6 +27,13 @@ checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATIO
   mount points and `telegramcode-restart-bot` still works.
 
 ### Added
+- **Automatic migration at a cold start.** The bot moves `~/.config/telegramcode` (or the older
+  `~/.config/telegram-code`) to `~/.config/charness` and the default `~/.telegramCode` to `~/.charness`, leaves a
+  relative symlink at each old path (running agents and scripts keep working), renames `TELEGRAMCODE_*` keys to
+  `CHARNESS_*` in the config file it moved (the original kept as `.env.bak`) and logs one `[migrate]` line per
+  action. It runs under the instance lock before the state is loaded, only on the plain start and the hot
+  supervisor's start (never on a worker reload), never for an explicit `DATA_DIR` or an `ENV_FILE` instance,
+  and is idempotent. Details: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md#automatic-migration).
 - `scripts/self-update.sh` names a newly added `MIGRATION_*.md` in its log.
 
 ## 3.0.0 — 2026-10-07

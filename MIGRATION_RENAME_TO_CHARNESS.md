@@ -9,8 +9,8 @@ in use prints one line at start (the terminal and the bot log):
 [deprecated] ~/.telegramCode is deprecated, rename it to ~/.charness (see MIGRATION_RENAME_TO_CHARNESS.md)
 ```
 
-The new name always wins when both exist. Nothing is moved for you. The fallbacks are a bridge, not a
-permanent feature: rename now.
+The new name always wins when both exist. The fallbacks are a bridge, not a permanent feature — and at a cold
+start the bot renames the config and data dirs itself, see [Automatic migration](#automatic-migration).
 
 ## What was renamed
 
@@ -30,37 +30,76 @@ permanent feature: rename now.
 Unchanged on purpose: the `telegramcode` and `telegramCode` commands (aliases of `charness` in `package.json`),
 the `TELEGRAM_*` variables (they name Telegram, not the project) and every `DATA_DIR` you set explicitly.
 
-## Steps
+## Automatic migration
 
-Do the update first; do the renames whenever the deprecation lines tell you to. Order does not matter.
+At a **cold start** the bot moves what it can, once, by itself:
+
+| What | Becomes | Then |
+|------|---------|------|
+| `~/.config/telegramcode` (else the older `~/.config/telegram-code`) | `~/.config/charness` | a symlink `~/.config/telegramcode` → `charness` is left at the old path |
+| `~/.telegramCode`, the **default** data dir | `~/.charness` | a symlink `~/.telegramCode` → `.charness` is left at the old path |
+| `TELEGRAMCODE_*` keys in the config `.env` it just moved | `CHARNESS_*` | the original is kept next to it as `.env.bak` (a second backup becomes `.env.bak.<time>`) |
+
+It logs one line per action, for example
+`[migrate] moved ~/.telegramCode to ~/.charness; ~/.telegramCode is now a symlink to it`, into the terminal and
+the bot log. The symlinks are relative, so running tmux / json-stream agents and your scripts that still use the
+old paths keep working; delete a symlink when nothing uses it any more.
+
+The rules it keeps:
+
+- **Cold start only.** The plain `charness` start, and the start of the `charness hot` supervisor. A hot
+  worker's reload never migrates: its supervisor, and the agents it started, still hold files in the data dir.
+  A hot-mode instance therefore migrates when its supervisor is restarted.
+- **Under the instance lock, before the state is loaded.** A live instance holding the lock blocks it (a line
+  says so; the next start tries again).
+- **Never an explicit `DATA_DIR`**, whatever path it names, and **nothing at all for an isolated instance**
+  (`ENV_FILE` set: it reads only its own file, and the shared config and default data dir belong to another bot).
+- **Only the global config file it moved** gets its keys renamed. `ENV_FILE` and a `$PWD/.env` are never
+  rewritten: the first is yours (often read-only, mounted into a container), the second belongs to the project
+  the bot was launched from. Rename keys there by hand if you use them.
+- **Idempotent, and it never deletes anything.** A target that already exists, or an old path that is already
+  a symlink (yours, or one of its own), skips the step silently — a second start prints nothing. A step that
+  fails (another filesystem, no permission) is logged, leaves both sides usable (a failed symlink undoes its
+  move) and the old name keeps working with its deprecation line.
+
+What it cannot fix stays announced: a `TELEGRAMCODE_*` variable set by systemd, your shell or Docker, a
+`DATA_DIR` you set to an old-looking path, the Docker names and mounts, and a hot-mode instance until its
+supervisor is restarted.
+
+## Steps by hand
+
+Only needed where the automatic migration does not apply or failed — a hot-mode instance before its supervisor
+restarts, an `ENV_FILE` instance, an explicit `DATA_DIR`, Docker. Order does not matter.
 
 ### A plain npm install
 
 1. `npm install -g charness@latest`, then restart `charness` (or `charness hot`).
-2. Config: stop the bot, then `mv ~/.config/telegramcode ~/.config/charness`.
-3. Data dir, only if you rely on the default (no `DATA_DIR` in your env file). Either leave it where it is and
-   say so, which also silences the line and moves nothing — add to `~/.config/charness/.env`:
+2. The start does the renames itself (see above). If it logged that it could not, or you want it by hand:
+   stop the bot, `mv ~/.config/telegramcode ~/.config/charness`.
+3. Data dir, only if you rely on the default (no `DATA_DIR` in your env file). To keep it exactly where it is and
+   silence the line, add to `~/.config/charness/.env` (an explicit `DATA_DIR` is never migrated):
 
    ```dotenv
    DATA_DIR=/home/<you>/.telegramCode
    ```
 
-   or move it while **no agent is running** (a session started under the old path keeps writing its exit code
-   there): stop the bot, `mv ~/.telegramCode ~/.charness`, start the bot. Update anything of yours that holds the
-   old path (a cron entry, a script).
+   To move it by hand, stop the bot first and move it while **no agent is running**; the automatic migration
+   leaves a symlink for the ones that are, a hand `mv` does not: `mv ~/.telegramCode ~/.charness`, start the bot.
+   Update anything of yours that holds the old path (a cron entry, a script).
 4. If you start the bot with `TELEGRAMCODE_*` variables of your own, nothing reads them besides the two hot-mode
    ones below; they are set by the supervisor, not by you.
 
 ### A source checkout with self-update (hot mode)
 
 1. `scripts/self-update.sh` pulls the change; hot mode rebuilds and restarts the **worker**, which falls back to
-   the old names the **supervisor** still sets (`TELEGRAMCODE_HOT_RELOAD`, `TELEGRAMCODE_OPENCODE_PROCESS_FILE`).
+   the old names the **supervisor** still sets (`TELEGRAMCODE_HOT_RELOAD`, `TELEGRAMCODE_OPENCODE_PROCESS_FILE`)
+   and does not migrate.
 2. The update touches the supervisor's own files, so restart it once (`systemctl --user restart <unit>` or stop
-   and start `charness hot`): it then sets the new variable names, and the deprecation lines about them stop.
-   Agents survive the restart as after any bot restart.
-3. Rename the config and the data dir as in the npm steps above.
-4. Every host that mirrors this checkout (`git pull` on a timer) gets the same change and the same lines;
-   rename there too.
+   and start `charness hot`): the new supervisor migrates the config and data dirs under the instance lock,
+   then sets the new variable names, and the deprecation lines about them stop. Agents survive the restart as
+   after any bot restart, and keep their old paths through the symlinks.
+3. Every host that mirrors this checkout (`git pull` on a timer) gets the same change and does the same when
+   its supervisor restarts.
 
 ### Docker
 
@@ -81,9 +120,13 @@ you next rebuild the image:
 
 ## What you may see after the update
 
+- `[migrate] moved …` lines at a cold start: the automatic migration above, once.
+- `[migrate] could not move …` / `skipped: another instance holds the lock`: the step is left for the next cold
+  start or for you; the old name keeps working.
 - `[deprecated] … is deprecated, rename it to … (see MIGRATION_RENAME_TO_CHARNESS.md)` once per start for each
-  old name in use: the data dir, the global config dir, a plugin file or the MCP header (an agent session that was
-  launched before the update still sends the old one; a restarted session sends the new one).
+  old name still in use: a hot worker's data dir or config dir (until its supervisor restarts), a failed move,
+  a plugin file or the MCP header (an agent session that was launched before the update still sends the old
+  one; a restarted session sends the new one).
 - `[deprecated] TELEGRAMCODE_HOT_RELOAD … the running charness hot supervisor still sets it`: restart the
   supervisor (above).
 - The OpenCode compaction plugin is reinstalled under its new name and the old file is deleted; a folder whose

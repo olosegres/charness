@@ -18,8 +18,9 @@
 > `telegramcode-compaction` plugin, the `telegramcode` image) survive ONLY as read-fallbacks in
 > `src/legacyNames.ts` (+ the plugin / MCP header code and `docker/entrypoint.sh`) because instances hot-reload
 > `main`: new wins, old is the fallback, set BOTH where a child may run old code, announce a fallback once with
-> `[deprecated] <old> is deprecated, rename it to <new> (see MIGRATION_RENAME_TO_CHARNESS.md)`. A further rename
-> follows the same pattern and ships its own migration guide.
+> `[deprecated] <old> is deprecated, rename it to <new> (see MIGRATION_RENAME_TO_CHARNESS.md)`. The config and
+> default data dirs are moved at a COLD start by `src/legacyMigration.ts` (symlink left behind, under the lock,
+> never on a hot worker reload). A further rename follows the same pattern and ships its own migration guide.
 
 ## What this project is
 

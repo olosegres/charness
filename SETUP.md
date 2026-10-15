@@ -39,8 +39,10 @@ package (2.x)? Run `npm uninstall -g telegramcode` first: both install the same
 commands. The config, `DATA_DIR` and sessions carry over as they are: a
 `~/.config/telegramcode/.env` is still read while `~/.config/charness/.env` does
 not exist, and a `~/.telegramCode` data dir is still used while `~/.charness` does
-not exist. Every old name that is still read prints one deprecation line at start;
-what to rename, and how, is in [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md).
+not exist. At a cold start the bot renames those two dirs itself (leaving a symlink
+at the old path) and says so; every old name still in use prints one deprecation
+line. What it does, its limits and the steps by hand:
+[MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md).
 
 ### Environment variables
 
