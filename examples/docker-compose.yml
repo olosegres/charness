@@ -1,4 +1,4 @@
-# The whole bot in one container (README "Run with Docker"): the bot, tmux, every agent it starts, OpenCode and
+# The whole bot in one container (SETUP.md "Run with Docker"): the bot, tmux, every agent it starts, OpenCode and
 # the bot's MCP server. Build the image once from the checkout this file mounts:
 #
 #   cd <checkout> && docker build -t telegramcode -f docker/Dockerfile .

@@ -26,6 +26,7 @@
     "dist/",
     "README.md",
     "DEVELOPMENT.md",
+    "SETUP.md",
     "MIGRATION_1_TO_2.md",
     "LICENSE",
     ".env.example",

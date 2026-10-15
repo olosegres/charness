@@ -244,7 +244,7 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 - **Run:** `yarn start` (`node dist/cli.js`), or installed: `cd <projects-parent> && telegramcode` (the launch
   directory becomes the work root).
 - **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
-  test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. README § Run with Docker.
+  test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. SETUP.md § Run with Docker.
 - `yarn typecheck` (strict `tsc` over ALL of `src/`, test code included, via `tsconfig.typecheck.json` — tests run
   through `tsx`, which checks no types) · `yarn build` (`tsc` → `dist/` from `tsconfig.json`, which leaves
   `src/__tests__` out) · `yarn test` (= `test:unit` then `test:flows`, node test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a

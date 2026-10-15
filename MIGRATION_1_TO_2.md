@@ -4,7 +4,7 @@ The 1.x "one bot = one private chat = one folder" mode is **removed**.
 There is no in-place upgrade; the steps are:
 
 1. Stop the old bot.
-2. Create a forum supergroup, add the bot, follow [Telegram setup, step 2](README.md#2-set-up-a-group-optional-or-dm).
+2. Create a forum supergroup, add the bot, follow [Telegram setup, step 2](SETUP.md#2-set-up-a-group-optional-or-dm).
 3. Remove the old `WORK_DIR` env and launch from the projects parent:
    `cd /home/user/src && telegramcode`.
 4. Leave `ALLOWED_GROUP_ID` empty to auto-pair on first contact (or set

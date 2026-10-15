@@ -7,8 +7,8 @@ code (`src/<module>/README.md`).
 
 ## Architecture
 
-The per-topic folder layout is in the README under
-[Required files structure](README.md#required-files-structure).
+The per-topic folder layout is in [SETUP.md](SETUP.md) under
+[Required files structure](SETUP.md#required-files-structure).
 
 Routing key is `(chatId, threadId)` everywhere. Per-thread state lives in
 `${DATA_DIR}/state.json` (atomic writes with `fsync`, archived on

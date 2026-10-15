@@ -1,6 +1,6 @@
-# README screenshots
+# README and SETUP screenshots
 
-The Telegram setup in the top-level `README.md` references the images below. They
+The Telegram setup in the top-level `SETUP.md` references the images below. They
 are sanitized, generated Telegram-style walkthroughs, so the public repository
 does not expose a real bot token, chat, group, user id, or project. Keep these
 exact filenames and the portrait `720x1280` size (rendered at `width="360"`).
