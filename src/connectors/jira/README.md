@@ -39,8 +39,8 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
    a trigger status, else the creation; changelog pages are read newest first, only as far as needed) →
    already seen? (`triggerLog.ts`) → self-authored? → with `trustedGroup`: is the HAND-OVER backed by the group?
    (see below; if not, `untrusted`: a fixed notice, the issue handed back, no request) → run budget (over it the
-   issue is `parked` with a notice and handed back) → fetch the issue's context (`issueContext.ts`: the issue with its fields and the project's
-   `extraFields`, ALL its comments page by page, its remote links, an epic's children by `parent = KEY`) → bind the conversation to the project's folder → open a request
+   issue is `parked` with a notice and handed back) → fetch the issue's context (`issueContext.ts`: the issue with
+   its fields and the project's `extraFields`, ALL its comments page by page, its remote links, an epic's children by `parent = KEY`) → bind the conversation to the project's folder → open a request
    (origin `trackerEvent`) → post, NOT awaited (a busy session may take minutes) → RECORD the trigger once the
    post has settled, also when it failed (the open request then belongs to the wake-up engine). The origin names
    the requester under the core's `requester` attribute (`requests/requestGroup.ts`), so a request supersedes an

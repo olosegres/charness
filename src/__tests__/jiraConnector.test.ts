@@ -202,8 +202,11 @@ describe('prepareJiraConnector', () => {
     for (let attempt = 0; attempt < 200 && !isDone(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(isDone(), 'the awaited call never came');
   };
-  /** Start polling and wait for the first poll's search; the prompts it posted (none when the issue was not handed over by a trusted account). */
-  const startAndSettlePoll = async (): Promise<string[]> => {
+  /**
+   * Start polling and wait until its first search reached Jira (the trusted group is read by then); the prompts it
+   * posts collect in the returned list.
+   */
+  const startAndWaitForSearch = async (): Promise<string[]> => {
     const prompts: string[] = [];
     connector?.start({
       bindConversation: async () => {},
@@ -213,10 +216,10 @@ describe('prepareJiraConnector', () => {
       },
     });
     await waitUntil(() => requestPaths.includes('POST /rest/api/3/search/jql'));
-    // The poll's decisions are made right after its search answered.
-    await new Promise((resolve) => setTimeout(resolve, 100));
     return prompts;
   };
+  /** The untrusted refusal's last call: the hand-back. Waiting for it, not for a while, makes "no prompt" load-bearing. */
+  const waitForHandBack = (): Promise<void> => waitUntil(() => requestPaths.includes('PUT /rest/api/3/issue/PROJ-1/assignee'));
   const startAndWaitForPrompt = (): Promise<string> => new Promise<string>((resolve) => {
     connector?.start({
       bindConversation: async () => {},
@@ -446,7 +449,8 @@ describe('prepareJiraConnector', () => {
       const warnings = mock.method(console, 'warn', () => {});
       try {
         connector = await prepare();
-        const posted = await startAndSettlePoll();
+        const posted = await startAndWaitForSearch();
+        await waitForHandBack();
         assert.deepEqual(posted, []);
         const groupWarnings = warnings.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('trusted group'));
         assert.deepEqual(groupWarnings, ['[jira] the trusted group "ai-trusted" has no members: only apps and automations can hand the AI work']);
@@ -460,8 +464,9 @@ describe('prepareJiraConnector', () => {
       siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
       groupMembers = [{ accountId: 'a-member', accountType: 'atlassian' }];
       connector = await prepare();
-      assert.deepEqual(await startAndSettlePoll(), []);
-      await waitUntil(() => requestPaths.includes('PUT /rest/api/3/issue/PROJ-1/assignee'));
+      const posted = await startAndWaitForSearch();
+      await waitForHandBack();
+      assert.deepEqual(posted, []);
       const afterSearch = requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql'));
       assert.deepEqual(afterSearch.filter((entry) => !entry.includes('/changelog')), [
         'POST /rest/api/3/search/jql',
@@ -541,7 +546,7 @@ describe('prepareJiraConnector', () => {
       const early = await connector.fetchAttachment(key, '10');
       assert.deepEqual(early, { ok: false, error: 'Attachment 10 could not be fetched: the trusted group has not been read yet; try again shortly' });
       groupMemberStatus = 200;
-      await startAndSettlePoll();
+      await startAndWaitForSearch();
       const later = await connector.fetchAttachment(key, '10');
       assert.ok(later.ok, JSON.stringify(later));
     });
