@@ -21,6 +21,11 @@
  *                                       then a whole prompt) run on it. A run hands it over four times, so
  *                                       the instance's run budget (`runBudgetPer24h`, default 5) allows one run a
  *                                       day: raise it for a rerun, or the hand-overs are parked
+ *   JIRA_LIVE_TRUSTED_GROUP             optional: the NAME of the Jira group the instance's `jira.json` names as
+ *                                       `trustedGroup`, of which the requester is a member (so every step above
+ *                                       runs under the filter and passes unchanged); the trusted-group steps
+ *                                       check the real site's group and author fields against it. The AI account
+ *                                       needs the Browse users and groups permission
  *   JIRA_LIVE_LONG_IDLE_MINUTES         optional: how long the run sleeps before the cross-process
  *                                       cache measurement (lifecycle plan L6 step 5, ~50); unset →
  *                                       that step is skipped
@@ -82,6 +87,9 @@
  *     compaction the agent runs on request makes the next prompt the whole issue again; the run named
  *     neither model nor effort, so every session ran on the defaults. What the agent was sent and called is
  *     read from Claude's own transcript
+ *   → trusted group (needs `JIRA_LIVE_TRUSTED_GROUP`): the real site resolves the group by its name and lists
+ *     the requester; an issue the requester created and hands over is answered, its prompt holds the
+ *     requester's own text in full and says what a marker is
  *   → every Jira session's MCP servers: only the bot's own (R8)
  *   → the self-assigned issue: no request, nothing posted
  *   end: charness stopped, its private tmux server removed, the issues moved to a
@@ -108,7 +116,7 @@ import { createJiraClient, type JiraClient } from '../../connectors/jira/client'
 import { jiraCommentAdfMaxChars, jiraCommentMarkdownMaxChars, type AdfDocument } from '../../connectors/jira/adf';
 import { makeJiraKey } from '../../connectors/jira/sessionKeyCodec';
 import { getJiraConfigPath } from '../../connectors/jira/configFile';
-import { jiraFilesDirName } from '../../connectors/jira/connector';
+import { jiraFilesDirName, jiraNoTrustedGroupLogLine } from '../../connectors/jira/connector';
 import { resolveThreadFilesDir } from '../../botFileStorage';
 import { StateStore } from '../../state';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../../utils/jsonStreamHost';
@@ -126,6 +134,8 @@ const requesterStorageState = process.env.JIRA_LIVE_REQUESTER_STORAGE_STATE;
 const longIdleMinutesEnvName = 'JIRA_LIVE_LONG_IDLE_MINUTES';
 /** The key of a sandbox issue prepared with pasted media (a screenshot in the description, a video in a comment); its steps are skipped without it. */
 const mediaIssueKey = process.env.JIRA_LIVE_MEDIA_ISSUE;
+/** The name of the trusted group the instance's `jira.json` names; its steps are skipped without it. */
+const trustedGroupName = process.env.JIRA_LIVE_TRUSTED_GROUP;
 
 /** The long idle wait (minutes), or `null` when the step is to be skipped; a value that is not a positive number is refused up front. */
 function parseLongIdleMinutes(raw: string | undefined): number | null {
@@ -531,6 +541,13 @@ function readTranscriptLines(issueKey: string): StreamLine[] {
 /** A request prompt as the transcript holds it: the request header, behind the preamble when the session just started. */
 function checkIsRequestPrompt(text: string): boolean {
   return text.startsWith('[Request ') || (text.startsWith('[Jira issue context]') && text.includes('\n\n[Request '));
+}
+
+/** The newest request prompt in the conversation's transcript — the text the agent really read. */
+function getLastPrompt(issueKey: string): string {
+  const prompt = readTranscriptLines(issueKey).filter((line) => line.type === 'user').map(getUserLineText).filter(checkIsRequestPrompt).at(-1);
+  assert.ok(prompt, `${issueKey}: its transcript holds a request prompt`);
+  return prompt;
 }
 
 /** Collect the `system/init` frames of every live issue session (see `seenInitsByProcess`); called by each wait's poll. */
@@ -1164,13 +1181,6 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       return getAiComments(await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > aiCommentsBefore));
     }
 
-    /** The newest request prompt in the conversation's transcript — the text the agent really read. */
-    function getLastPrompt(issueKey: string): string {
-      const prompt = readTranscriptLines(issueKey).filter((line) => line.type === 'user').map(getUserLineText).filter(checkIsRequestPrompt).at(-1);
-      assert.ok(prompt, `${issueKey}: its transcript holds a request prompt`);
-      return prompt;
-    }
-
     it('live 1 — pasted media: the agent fetches the screenshot and the video through the attachment tool and measures them (ffmpeg is on its PATH)', async () => {
       const issueKey = getMediaIssueKey();
       const comments = await askAndWait(issueKey, mediaAskText);
@@ -1228,6 +1238,39 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
       for (const line of spawns) assert.match(line, / effort=high model=opus /, line);
       const inits = [mediaIssueKey ?? '', ...sessionScenarios.map(getIssueKey)].flatMap((issueKey) => getSeenInits(issueKey).concat(readStreamLines(issueKey).filter((line) => line.type === 'system' && line.subtype === 'init')));
       assert.ok(inits.length > 0 && inits.every((init) => /opus/i.test(init.model ?? '')), `the agents report the model they ran: ${[...new Set(inits.map((init) => init.model))].join(', ')}`);
+    });
+  });
+
+  describe('trusted group (needs JIRA_LIVE_TRUSTED_GROUP)', { skip: trustedGroupName ? false : 'set JIRA_LIVE_TRUSTED_GROUP to run' }, () => {
+    function getTrustedGroupName(): string {
+      if (!trustedGroupName) throw new Error('JIRA_LIVE_TRUSTED_GROUP is not set');
+      return trustedGroupName;
+    }
+
+    it('live T1 — the site resolves the group by its exact name and lists the requester among its members; the instance named it and logged no "nothing filters" line', async () => {
+      const raw: { trustedGroup?: string } = JSON.parse(fs.readFileSync(getJiraConfigPath(dataDir), 'utf8'));
+      assert.equal(raw.trustedGroup, getTrustedGroupName(), 'the precondition: jira.json names the group');
+      const client = createJiraClient({ baseUrl: config.baseUrl, email: config.email, apiToken: config.apiToken });
+      const group = await client.getGroupByName(getTrustedGroupName());
+      assert.ok(group, `the site has a group named exactly "${getTrustedGroupName()}"`);
+      const members = await client.getGroupMembers(group.groupId);
+      assert.ok(members.some((member) => member.accountId === getRequester().accountId), 'the requester is a member');
+      assert.ok(!charnessOutput.includes(jiraNoTrustedGroupLogLine), 'the instance booted with a group');
+      assert.ok(!/the trusted group ".*" has no members/.test(charnessOutput), 'and the group was not empty');
+      report(`live T1: group "${getTrustedGroupName()}" has ${members.length} member(s), the requester among them`);
+    });
+
+    it('live T2 — an issue a member created and hands over is answered; its prompt holds the member\'s own text in full, carries no marker for it and explains what a marker is', async () => {
+      const probeText = 'Reply with ONE final answer whose text is exactly: TRUST-OK';
+      const issueKey = await getRequester().createIssue(projectKey, `[charness trusted-group] ${getTrustedGroupName()}`, probeText);
+      await getRequester().assignIssue(issueKey, config.accountId);
+      const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > 0);
+      assert.match(getAiComments(state).at(-1)?.text ?? '', /TRUST-OK/);
+      const prompt = getLastPrompt(issueKey);
+      assert.ok(prompt.includes(`> ${probeText}`), `the member's own description is in the prompt:\n${prompt}`);
+      assert.ok(prompt.includes('Parts marked [withheld: …] were written by people outside the trusted group'), 'the note explains the marker');
+      assert.ok(!prompt.includes('[withheld: written or edited'), 'nothing of the member\'s own was withheld');
+      report(`live T2 ${issueKey}: answered, prompt of ${prompt.length} characters`);
     });
   });
 

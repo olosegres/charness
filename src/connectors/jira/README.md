@@ -248,8 +248,12 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
-real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` and `fakeClaude.ts`;
+real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
+groups and their members) and `fakeClaude.ts`, and, restarted with a `trustedGroup`, proves the filter, the notice
+and an automation's hand-over end to end;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and
 effort) also need `JIRA_LIVE_MEDIA_ISSUE` and an instance `jira.json` that maps `ffmpeg` in `agentBinaries` and names
-neither `model` nor `effort` (the file header lists the inputs).
+neither `model` nor `effort` (the file header lists the inputs); its trusted-group steps need
+`JIRA_LIVE_TRUSTED_GROUP`, the name of the group the instance's `jira.json` names and of which the requester is a
+member.

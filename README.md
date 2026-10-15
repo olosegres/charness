@@ -833,11 +833,21 @@ a person assigns an issue to the AI account (in a trigger status)
   already finished the first, a short pointer to that answer).
 - **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
   and opens no request.
+- **Who can steer it.** With `trustedGroup` (see Setup) only the members of ONE Jira group, the AI account and
+  Jira's apps and automations count. A hand-over by anyone else — another person, a service-desk customer —
+  opens no request: one notice on the issue names the group and the issue goes back to that person. Text
+  written or edited by anyone else (a comment, the description, the summary, labels and extra fields, a
+  file's name and content) is replaced in the prompt by a `[withheld: …]` marker, so the agent knows there
+  is something and can ask its requester. Without `trustedGroup` everyone who can edit or comment steers the
+  agent, and the instance logs one line saying so.
 
 ### Setup
 
 1. Create a Jira account for the AI (its API token is the instance's only secret) and note its account id.
-2. An instance of its own: a `DATA_DIR`, a `WORK_ROOT` with one folder per project, a private tmux server, and
+2. Create or choose a Jira group of the people whose words may steer the AI (for example `ai-trusted`), and give
+   the AI account the *Browse users and groups* global permission so that it can read the group. Its members'
+   comments, descriptions and files, and the issues they hand over, are the only people's the agent acts on.
+3. An instance of its own: a `DATA_DIR`, a `WORK_ROOT` with one folder per project, a private tmux server, and
    an env file that is the ONLY configuration it reads:
 
    ```bash
@@ -850,7 +860,7 @@ a person assigns an issue to the AI account (in a trigger status)
    JIRA_AI_API_TOKEN=...                # referenced by jira.json below, never written there
    ```
 
-3. `DATA_DIR/jira.json` — the allowlist and the credentials (`${VAR}` expands from the env file; an unknown
+4. `DATA_DIR/jira.json` — the allowlist, the trusted group and the credentials (`${VAR}` expands from the env file; an unknown
    key is an error):
 
    ```json
@@ -862,12 +872,22 @@ a person assigns an issue to the AI account (in a trigger status)
      "projects": {
        "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
+     "trustedGroup": "ai-trusted",
      "pollIntervalSeconds": 90,
      "runBudgetPer24h": 5,
      "model": "opus",
      "effort": "high"
    }
    ```
+
+   `trustedGroup` (optional, but without it everyone who can edit or comment steers the agent) is the group's
+   NAME — one group per instance; a team with several trust circles runs a second instance. The instance
+   resolves it to the group's id at start, so renaming the group while it runs keeps working, and reads its
+   members again whenever its last read is older than 5 minutes: a removed member loses the AI's trust within
+   that time. List only projects where only your team can write, and where no automation acts on text or
+   actions from outside it — an e-mail handler, a portal form, a copy from another project, a rule that
+   hands an issue to the AI when someone outside the team acts: an app's or automation's text and hand-over
+   are trusted, so such a rule brings that outside text, or that person's hand-over, to the agent.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
@@ -882,7 +902,7 @@ a person assigns an issue to the AI account (in a trigger status)
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 
-4. Start it with a clean environment, so nothing of the calling shell reaches it:
+5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
    ```bash
    scripts/run-isolated.sh /path/to/jira-instance.env
@@ -890,7 +910,8 @@ a person assigns an issue to the AI account (in a trigger status)
 
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
-   another account, an unknown project or status, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
+   may not read, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the
@@ -914,7 +935,8 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
 - `jira_get_attachment` — Jira conversations only: saves the original of one attachment of the conversation's
-  own issue (any size) and returns its path, so the agent can read an image or run `ffmpeg` on a video;
+  own issue (any size) and returns its path, so the agent can read an image or run `ffmpeg` on a video (with a
+  trusted group, only a file uploaded by a trusted account);
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current

@@ -13,7 +13,8 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * returns EVERY issue, so the connector's own re-check (D13) is what keeps an
  * issue of another project out. Like real Jira it answers 401 to any other
  * credentials than the AI account's, and 400 to a comment body that is not a
- * valid ADF document (an empty text node included).
+ * valid ADF document (an empty text node included). Groups ({@link FakeJira.addGroup})
+ * are served by `group/bulk` (by exact name) and `group/member` (paged).
  */
 
 export interface FakeJiraStatus {
@@ -37,6 +38,14 @@ export interface FakeJiraAttachment {
   filename: string;
   mimeType: string;
   content: Buffer;
+  /** Who uploaded it; the issue's reporter when absent. */
+  author?: JiraAccount;
+}
+
+interface FakeJiraGroup {
+  groupId: string;
+  name: string;
+  members: JiraAccount[];
 }
 
 interface FakeJiraChangelogItem {
@@ -105,6 +114,7 @@ function checkHasEmptyTextNode(nodes: readonly AdfNode[]): boolean {
 export class FakeJira {
   private readonly server: http.Server;
   private readonly issues = new Map<string, FakeJiraIssue>();
+  private readonly groups = new Map<string, FakeJiraGroup>();
   private nextHistoryId = 1000;
   private nextCommentId = 5000;
   private nextAttachmentId = 9000;
@@ -131,6 +141,11 @@ export class FakeJira {
   async stop(): Promise<void> {
     this.server.closeAllConnections();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+
+  /** @description A group of the site with its active members; its id is not its name, as in Jira. */
+  addGroup(name: string, members: JiraAccount[]): void {
+    this.groups.set(name, { groupId: `group-id-${this.groups.size + 1}`, name, members });
   }
 
   /** @description A new issue, unassigned, as its reporter created it. */
@@ -222,7 +237,7 @@ export class FakeJira {
           mimeType: attachment.mimeType,
           size: attachment.content.length,
           created: issue.created,
-          author: issue.reporter,
+          author: attachment.author ?? issue.reporter,
         })),
       },
       ...(isChangelogExpanded
@@ -253,6 +268,21 @@ export class FakeJira {
       send(200, { accountId: this.options.aiAccount.accountId });
     } else if (method === 'GET' && statusesMatch) {
       send(200, [{ statuses: this.options.statuses }]);
+    } else if (method === 'GET' && route === '/group/bulk') {
+      // Only the groups of exactly the names asked for, as `groupName=` filters.
+      const names = url.searchParams.getAll('groupName');
+      const values = [...this.groups.values()].filter((group) => names.includes(group.name)).map(({ name, groupId }) => ({ name, groupId }));
+      send(200, { startAt: 0, maxResults: 50, total: values.length, isLast: true, values });
+    } else if (method === 'GET' && route === '/group/member') {
+      const group = [...this.groups.values()].find((candidate) => candidate.groupId === url.searchParams.get('groupId'));
+      if (!group) {
+        send(404, { errorMessages: ['The group does not exist.'] });
+        return;
+      }
+      const startAt = Number(url.searchParams.get('startAt') ?? 0);
+      const maxResults = Number(url.searchParams.get('maxResults') ?? 50);
+      const values = group.members.slice(startAt, startAt + maxResults);
+      send(200, { startAt, maxResults, total: group.members.length, isLast: startAt + values.length >= group.members.length, values });
     } else if (method === 'GET' && attachmentContentMatch) {
       // With `redirect=false`, as the connector asks, Jira answers with the file itself.
       const attachment = [...this.issues.values()].flatMap((issue) => issue.attachments).find((candidate) => candidate.id === attachmentContentMatch[1]);
