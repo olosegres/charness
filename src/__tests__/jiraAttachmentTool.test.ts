@@ -109,6 +109,10 @@ describe('fetchIssueAttachment (C10)', () => {
 
   describe('the trusted group (the uploader must be trusted)', () => {
     const bytes = Buffer.from('uploaded-bytes');
+    const outsiderRefusal = {
+      ok: false,
+      error: 'Attachment 10234 was uploaded by someone outside the trusted group; it is not available to you.',
+    };
     let nowMs = 0;
     let memberAccountIds: string[] = [];
     let membersReadError: Error | null = null;
@@ -144,10 +148,7 @@ describe('fetchIssueAttachment (C10)', () => {
 
     it('a file uploaded by someone outside the group is refused with the fixed text — before any download, and nothing is written', async () => {
       serveAttachment({ accountId: 'outsider', accountType: 'atlassian' });
-      assert.deepEqual(await fetchAttachment('10234', createTrust()), {
-        ok: false,
-        error: 'Attachment 10234 was uploaded by someone outside the trusted group; it is not available to you.',
-      });
+      assert.deepEqual(await fetchAttachment('10234', createTrust()), outsiderRefusal);
       assert.deepEqual(contentRequests(), []);
       assert.deepEqual(listDownloadDir(), []);
     });
@@ -160,26 +161,31 @@ describe('fetchIssueAttachment (C10)', () => {
         fs.rmSync(downloadDir, { recursive: true, force: true });
       }
       serveAttachment();
-      const refused = await fetchAttachment('10234', createTrust());
-      assert.equal(refused.ok, false);
+      const contentRequestsBefore = contentRequests().length;
+      assert.deepEqual(await fetchAttachment('10234', createTrust()), outsiderRefusal);
+      assert.equal(contentRequests().length, contentRequestsBefore, 'nothing downloaded for an unnamed uploader');
     });
 
     it('a file already on disk is not served to an outsider\'s id either: the uploader is judged first', async () => {
       serveAttachment({ accountId: 'member', accountType: 'atlassian' });
       assert.ok((await fetchAttachment('10234', createTrust())).ok);
       serveAttachment({ accountId: 'outsider', accountType: 'atlassian' });
-      const refused = await fetchAttachment('10234', createTrust());
-      assert.equal(refused.ok, false);
+      assert.deepEqual(await fetchAttachment('10234', createTrust()), outsiderRefusal);
     });
 
     it('a list older than its age is read again first: a member removed since is refused, one added since is served', async () => {
-      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
       const trust = createTrust();
+      serveAttachment({ accountId: 'newcomer', accountType: 'atlassian' });
+      assert.deepEqual(await fetchAttachment('10234', trust), outsiderRefusal, 'not a member as of the list read at the start');
       nowMs += jiraTrustedGroupMaxAgeMs;
-      memberAccountIds = [];
-      assert.equal((await fetchAttachment('10234', trust)).ok, false);
+      memberAccountIds = ['newcomer'];
+      const served = await fetchAttachment('10234', trust);
+      assert.ok(served.ok, JSON.stringify(served));
       assert.equal(memberReads, 1, 'the stale list was refreshed before the check');
-      assert.deepEqual(contentRequests(), []);
+      serveAttachment({ accountId: 'member', accountType: 'atlassian' });
+      assert.deepEqual(await fetchAttachment('10234', trust), outsiderRefusal, 'removed by that refresh');
+      assert.equal(contentRequests().length, 1, 'only the newcomer\'s file was downloaded');
+      assert.equal(memberReads, 1, 'the refreshed list is fresh again: no second read');
     });
 
     it('a list that cannot be refreshed refuses with the "could not be fetched" error, naming the failure — nothing is downloaded', async () => {

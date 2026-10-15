@@ -51,6 +51,7 @@ export interface JiraConnector {
   /**
    * `jira_get_attachment` (C10): download attachment `attachmentId` of the issue `key` names — and no other
    * issue's — into the conversation's files dir. The key comes from the session's scoped token, never from the agent.
+   * With `trustedGroup`, a file whose uploader is not trusted is refused, and so is every file until the group is read.
    */
   fetchAttachment(key: SessionKey, attachmentId: string): Promise<JiraAttachmentToolResult>;
   /** Start polling (the session side is ready: the boot restored the sessions). */
