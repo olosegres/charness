@@ -53,7 +53,7 @@ const foreignPidDirPreload = [
   "const fs = require('node:fs');",
   "const os = require('node:os');",
   "const path = require('node:path');",
-  'const foreignDir = path.join(os.tmpdir(), `telegramcode-test-${process.pid}`);',
+  'const foreignDir = path.join(os.tmpdir(), `charness-test-${process.pid}`);',
   'fs.mkdirSync(foreignDir);',
   `fs.writeFileSync(path.join(foreignDir, '${foreignDirMarker}'), 'left by another account');`,
   `fs.chmodSync(foreignDir, ${foreignDirMode});`,
@@ -136,7 +136,7 @@ test('globalTestSetup: a stale unwritable dir named after the pid is neither ado
   assert.notEqual(result.dataDir, foreignDir, 'the setup must not hand out the stale foreign dir as DATA_DIR');
   assert.equal(result.isDataDirLeft, false, `${result.dataDir} must not outlive the process that created it`);
   assert.deepEqual(
-    result.leftTmpEntries.filter((entryName) => entryName.startsWith('telegramcode-test-')),
+    result.leftTmpEntries.filter((entryName) => entryName.startsWith('charness-test-')),
     [path.basename(foreignDir)],
     'the foreign dir is not ours to delete and must be the only one left',
   );

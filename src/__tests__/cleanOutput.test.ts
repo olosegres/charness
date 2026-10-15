@@ -4,7 +4,7 @@
  * (`cleanOutput`, `convertAnsiToMarkdown`, `stripTuiElements`).
  *
  * Each case mirrors a live reproduction captured from the
- * ExampleGroup → TelegramCode debug session on 2026-05-28:
+ * ExampleGroup → Charness debug session on 2026-05-28:
  *
  *  - C1 — whitespace-only line dropped, paragraphs glued together
  *  - C2 — OSC 8 hyperlink escape leaked as `Update(8;id=...;file://...8;;)`
@@ -63,7 +63,7 @@ test('cleanOutput: three+ consecutive blanks collapse to one', () => {
 
 test('convertAnsiToMarkdown: strips OSC 8 hyperlink (BEL terminator)', () => {
   const input =
-    '\x1b]8;id=1a2p0b6;file:///home/user/src/telegramCode/IDEAS.md\x07Edit(IDEAS.md)\x1b]8;;\x07';
+    '\x1b]8;id=1a2p0b6;file:///home/user/src/charness/IDEAS.md\x07Edit(IDEAS.md)\x1b]8;;\x07';
   assert.equal(convertAnsiToMarkdown(input), 'Edit(IDEAS.md)');
 });
 
@@ -71,7 +71,7 @@ test('convertAnsiToMarkdown: strips OSC 8 hyperlink (ST terminator ESC\\)', () =
   // Claude's TUI actually uses ESC\ as terminator, not BEL — verified
   // by od -c of the live tmux pane during 2026-05-28 V3 verification.
   const input =
-    '\x1b]8;id=133ki5c;file:///home/user/src/telegramCode/IDEAS.md\x1b\\Write(IDEAS.md)\x1b]8;;\x1b\\';
+    '\x1b]8;id=133ki5c;file:///home/user/src/charness/IDEAS.md\x1b\\Write(IDEAS.md)\x1b]8;;\x1b\\';
   assert.equal(convertAnsiToMarkdown(input), 'Write(IDEAS.md)');
 });
 
@@ -114,7 +114,7 @@ test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (BEL)', () => {
   // The exact byte sequence Claude emitted in a live capture:
   // `Create(<OSC8 START>file:///.../IDEAS.md<BEL>IDEAS.md<OSC8 END>)`.
   const input =
-    '● Create(\x1b]8;id=1a2p0b6;file:///home/user/src/telegramCode/IDEAS.md\x07IDEAS.md\x1b]8;;\x07)';
+    '● Create(\x1b]8;id=1a2p0b6;file:///home/user/src/charness/IDEAS.md\x07IDEAS.md\x1b]8;;\x07)';
   const out = cleanOutput(input);
   assert.ok(
     !out.includes('8;id='),
@@ -134,7 +134,7 @@ test('cleanOutput: full pipeline removes a real OSC 8 hyperlink (ST)', () => {
   // The actual byte sequence captured from a live claude
   // tmux pane during V3 re-verification — uses ESC\ as terminator.
   const input =
-    '● Write(\x1b]8;id=133ki5c;file:///home/user/src/telegramCode/agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b\\agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b]8;;\x1b\\)';
+    '● Write(\x1b]8;id=133ki5c;file:///home/user/src/charness/agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b\\agent/tasks/actual/2026-05-28-tg-output-readability.md\x1b]8;;\x1b\\)';
   const out = cleanOutput(input);
   assert.ok(!out.includes('8;id='), `OSC 8 params leaked: ${JSON.stringify(out)}`);
   assert.ok(!out.includes('file:///'), `OSC 8 URL leaked: ${JSON.stringify(out)}`);
@@ -552,7 +552,7 @@ test('checkIsInputEchoFrame: frame with a ❯ first line but a ● tool line lat
 const forwardedWithPreamble = [
   '[Telegram thread context]',
   'topic: "Telegram code testing" | group: "ExampleGroup"',
-  'thread: -1001111111111:4242 | folder: telegramCode',
+  'thread: -1001111111111:4242 | folder: charness',
   '',
   'please summarise the relay module and list its exports',
 ].join('\n');
@@ -570,7 +570,7 @@ test('checkIsForwardedEcho: just the preamble header line is an echo (split acro
 
 test('checkIsForwardedEcho: the thread/folder preamble line alone is a contained slice', () => {
   assert.equal(
-    checkIsForwardedEcho('thread: -1001111111111:4242 | folder: telegramCode', forwardedWithPreamble),
+    checkIsForwardedEcho('thread: -1001111111111:4242 | folder: charness', forwardedWithPreamble),
     true,
   );
 });

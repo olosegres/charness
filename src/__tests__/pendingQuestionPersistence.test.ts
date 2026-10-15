@@ -67,7 +67,7 @@ describe('StateStore pending-question collection', () => {
 
   beforeEach(() => {
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-pq-'));
-    dataDir = path.join(fakeHome, '.telegramCode');
+    dataDir = path.join(fakeHome, '.charness');
     fs.mkdirSync(dataDir, { recursive: true });
     originalHome = process.env.HOME;
     process.env.HOME = fakeHome;

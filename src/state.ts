@@ -13,6 +13,7 @@ import {
   type ThreadDisplayPrefs,
 } from './types';
 import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
+import { resolveDefaultDataDir } from './legacyNames';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
@@ -2704,14 +2705,16 @@ let singletonInFlight: Promise<StateStore> | null = null;
  * Priority:
  *   1. `process.env.DATA_DIR` (set by the operator — required for the
  *      two-instance setup, plan §10.7).
- *   2. `~/.telegramCode` — single-instance default.
+ *   2. `~/.charness` — single-instance default; an install made before the
+ *      rename keeps its `~/.telegramCode` while `~/.charness` does not exist
+ *      (`resolveDefaultDataDir`).
  *
  * Two bots on the same host MUST set distinct `DATA_DIR` values, otherwise
  * they'd silently share `state.json` and corrupt each other. Plan §16.2
  * adds a startup `.lock` check; that lives in `bot.ts` (Этап 3), not here.
  */
 export function resolveDataDir(): string {
-  return process.env.DATA_DIR || path.join(os.homedir(), '.telegramCode');
+  return process.env.DATA_DIR || resolveDefaultDataDir();
 }
 
 /**

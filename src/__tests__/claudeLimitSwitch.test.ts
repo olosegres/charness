@@ -37,7 +37,7 @@ function buildUsage(input: { session: number; weekly: number; fable?: number; is
 function buildProfile(name: string, patch: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView {
   return {
     name,
-    configDir: name === 'default' ? null : `/home/user/.telegramCode/claude-profiles/${name}`,
+    configDir: name === 'default' ? null : `/home/user/.charness/claude-profiles/${name}`,
     loggedIn: true,
     email: `${name}@example.com`,
     subscriptionType: 'max',

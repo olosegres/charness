@@ -20,7 +20,7 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { test, beforeEach, afterEach, mock } from 'node:test';
+import { test, beforeEach, afterEach } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -206,20 +206,12 @@ test('falls back to ~/.config/telegramcode when ~/.config/charness has no .env',
     path.join(previousGlobalEnvDir, '.env'),
     'ENV_LOADER_TEST_DIR_PICK=from-previous\n',
   );
-  const stderrWrite = mock.method(process.stderr, 'write', () => true);
 
-  let loaded: string[];
-  try {
-    ({ loaded } = loadEnvFiles());
-  } finally {
-    stderrWrite.mock.restore();
-  }
+  const { loaded } = loadEnvFiles();
 
   assert.equal(loaded.length, 1);
   assert.match(loaded[0], /\.config\/telegramcode\/\.env$/);
   assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-previous');
-  const notice = String(stderrWrite.mock.calls[0]?.arguments[0]);
-  assert.match(notice, /preferred location: ~\/\.config\/charness\/\.env/);
 });
 
 test('prefers ~/.config/telegramcode over ~/.config/telegram-code when charness has no .env', () => {
@@ -250,20 +242,4 @@ test('falls back to the legacy ~/.config/telegram-code dir when only it exists',
   assert.equal(loaded.length, 1);
   assert.match(loaded[0], /\.config\/telegram-code\/\.env$/);
   assert.equal(process.env.ENV_LOADER_TEST_DIR_PICK, 'from-legacy');
-});
-
-test('a canonical ~/.config/charness config writes no fallback notice', () => {
-  fs.writeFileSync(
-    path.join(globalEnvDir, '.env'),
-    'ENV_LOADER_TEST_DIR_PICK=from-canonical\n',
-  );
-  const stderrWrite = mock.method(process.stderr, 'write', () => true);
-
-  try {
-    loadEnvFiles();
-  } finally {
-    stderrWrite.mock.restore();
-  }
-
-  assert.equal(stderrWrite.mock.calls.length, 0);
 });

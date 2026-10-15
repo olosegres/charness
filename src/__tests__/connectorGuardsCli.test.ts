@@ -81,8 +81,8 @@ const jiraInstance = { CONNECTORS: 'jira', TMUX_SOCKET_NAME: 'isolated' };
 describe('the CLI refuses a start that breaks a connector guard', () => {
   it('a shell that marks the instance as Jira without ENV_FILE stops before any config file is read', () => {
     // The shared config holds a token; had it been read, its own guard would speak too.
-    fs.mkdirSync(path.join(tmpRoot, '.config', 'telegramcode'), { recursive: true });
-    fs.writeFileSync(path.join(tmpRoot, '.config', 'telegramcode', '.env'), `TELEGRAM_BOT_TOKEN=${placeholderSecret}\n`);
+    fs.mkdirSync(path.join(tmpRoot, '.config', 'charness'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, '.config', 'charness', '.env'), `TELEGRAM_BOT_TOKEN=${placeholderSecret}\n`);
 
     const { status, stderr } = runCli({ CONNECTORS: 'jira' });
 
@@ -211,7 +211,7 @@ describe('scripts/run-isolated.sh', () => {
     assert.ok(!stdout.includes(placeholderSecret), 'no inherited secret reaches the instance');
   });
 
-  it('passes IS_SANDBOX on when it is set (the telegramcode image runs the instance as root), and only then', () => {
+  it('passes IS_SANDBOX on when it is set (the charness image runs the instance as root), and only then', () => {
     const envFile = writeEnvFile(jiraInstance);
     const { status, stdout } = runIsolated([envFile], { IS_SANDBOX: '1' });
     assert.equal(status, 0);

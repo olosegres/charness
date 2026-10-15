@@ -154,7 +154,7 @@ describe('claude auth status', () => {
 describe('parseClaudeConfigDirFromCommand', () => {
   it('recovers the single-quoted wrapper / pane value, a bare one, and none for the default profile', () => {
     assert.equal(parseClaudeConfigDirFromCommand("env -u ANTHROPIC_API_KEY 'CLAUDE_CONFIG_DIR=/data/claude-profiles/work' '/opt/bin/claude' '-p'"), '/data/claude-profiles/work');
-    assert.equal(parseClaudeConfigDirFromCommand("'env' 'CLAUDE_CONFIG_DIR=/home/user/.telegramCode/claude-profiles/it'\\''s' '/opt/claude' '--session-id' 'u'"), "/home/user/.telegramCode/claude-profiles/it's");
+    assert.equal(parseClaudeConfigDirFromCommand("'env' 'CLAUDE_CONFIG_DIR=/home/user/.charness/claude-profiles/it'\\''s' '/opt/claude' '--session-id' 'u'"), "/home/user/.charness/claude-profiles/it's");
     assert.equal(parseClaudeConfigDirFromCommand('env CLAUDE_CONFIG_DIR=/p/work claude --resume x'), '/p/work');
     assert.equal(parseClaudeConfigDirFromCommand("env -u ANTHROPIC_API_KEY '/opt/bin/claude' '-p'"), null);
     assert.equal(parseClaudeConfigDirFromCommand("'/opt/claude' '--session-id' 'MY_CLAUDE_CONFIG_DIR=x'"), null, 'only a standalone assignment counts');

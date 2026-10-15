@@ -5,7 +5,7 @@
  * after Nms" to report it (`e2e/isolatedCharness.ts`).
  */
 
-/** Test case: N/A — TelegramCode has no Jira tracker. */
+/** Test case: N/A — Charness has no Jira tracker. */
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';

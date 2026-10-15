@@ -418,7 +418,7 @@ function parseEnv() {
   // CHAT_MODE selects which surface(s) the instance serves: `group` (forum
   // supergroup only), `dm` (the owner's private chat only), or `both` (one
   // instance serves the owner DM AND the group at once, decided per chat).
-  // Unset → `both`, so a bare `telegramcode` lights up both surfaces. An unknown
+  // Unset → `both`, so a bare `charness` lights up both surfaces. An unknown
   // value fails fast (same intent as the ALLOWED_GROUP_ID numeric gate).
   const chatModeRaw = (process.env.CHAT_MODE ?? '').trim();
   let chatMode: ChatMode = 'both';
@@ -12553,7 +12553,7 @@ export async function startBot(): Promise<void> {
   }, 60_000);
   // Keep the interval handle so shutdown can clear it (so test-time
   // shutdowns don't leak timers).
-  (globalThis as { __telegramCodeGcInterval?: NodeJS.Timeout }).__telegramCodeGcInterval = inMemoryGcInterval;
+  (globalThis as { __charnessGcInterval?: NodeJS.Timeout }).__charnessGcInterval = inMemoryGcInterval;
 
   // 5c. Heartbeat. Stamps `state.lastHeartbeatAt = Date.now()` every
   //     `HEARTBEAT_INTERVAL_MS`; the next boot reads the stamp to

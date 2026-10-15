@@ -104,7 +104,7 @@ describe('OpenCode fallback session naming', () => {
     const key: SessionKey = makeTelegramKey(-100, 2);
     injectSession(adapter, key, true);
 
-    const preamble = buildThreadContextPreamble({ key, subdir: 'telegramCode' });
+    const preamble = buildThreadContextPreamble({ key, subdir: 'charness' });
     const userText = 'Add pagination to the users list endpoint';
     adapter.sendInput(key, prependThreadContextPreamble(preamble, userText));
     await drain();

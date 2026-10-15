@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { DEFAULT_WATCHDOG_MS } from './shutdown';
+import { resolveDefaultDataDir } from './legacyNames';
 
 /**
  * @description Number of acquisition attempts before giving up.
@@ -65,12 +66,13 @@ function getLockHolderState(holder: LockData, own: { hostname: string; pidNamesp
 /**
  * @description Resolve the data directory the lockfile lives in.
  *
- * Mirrors `src/state.ts:694` — kept independent (not imported) because lock
- * acquisition runs BEFORE the bot module is loaded, and `state.ts` reads
- * `process.env.DATA_DIR` at module scope which we want to avoid coupling to.
+ * Mirrors `state.ts`'s `resolveDataDir` — kept independent (not imported)
+ * because lock acquisition runs BEFORE the bot module is loaded, and `state.ts`
+ * reads `process.env.DATA_DIR` at module scope which we want to avoid coupling
+ * to. Both take the home-dir default from `resolveDefaultDataDir`.
  */
 function dataDir(): string {
-  return process.env.DATA_DIR || path.join(os.homedir(), '.telegramCode');
+  return process.env.DATA_DIR || resolveDefaultDataDir();
 }
 
 /** @description Lockfile path: `${DATA_DIR}/instance.lock`. */
@@ -123,7 +125,7 @@ function readLock(lp: string): LockData | null {
  *
  * 12 hex chars from SHA-256 is enough collision resistance for "is this the
  * same token the running instance is using" but reveals nothing useful to an
- * attacker who reads `~/.telegramCode/instance.lock`.
+ * attacker who reads `<DATA_DIR>/instance.lock`.
  */
 function hashToken(token: string | undefined): string {
   if (!token) return 'no-token';

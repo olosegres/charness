@@ -24,7 +24,7 @@ let originalHome: string | undefined;
 
 beforeEach(() => {
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-perm-'));
-  dataDir = path.join(fakeHome, '.telegramCode');
+  dataDir = path.join(fakeHome, '.charness');
   originalHome = process.env.HOME;
   // Keep the legacy-migration probe (os.homedir()) inside the tmp sandbox.
   process.env.HOME = fakeHome;

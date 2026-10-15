@@ -24,10 +24,14 @@ import {
   prepareHotOpenCodeServer,
 } from '../cli/hot';
 import {
+  checkIsOpenCodeExternalHost,
+  clearOpenCodeExternalHostEnv,
   getDefaultOpenCodeOwnershipFilePath,
   getOpenCodeChildEnv,
   openCodeExternalHostEnvName,
   openCodeOwnershipFileEnvName,
+  readOpenCodeOwnershipFilePath,
+  setOpenCodeOwnershipFileEnv,
 } from '../installManager';
 
 const launchCwd = '/home/op/src';
@@ -39,11 +43,13 @@ test('injects launchCwd as WORK_ROOT when unset', () => {
 
 test('marks the nodemon worker so every OpenCode generation is externally hosted', () => {
   const env = buildHotWorkerEnv({ PATH: '/usr/bin' }, launchCwd);
+  assert.equal(env.CHARNESS_HOT_RELOAD, '1');
+  // A supervisor that outlives a hot reload may still hand its worker to code that reads the old name.
   assert.equal(env.TELEGRAMCODE_HOT_RELOAD, '1');
 });
 
 test('passes the persisted OpenCode ownership file to every worker generation', () => {
-  const ownershipFilePath = '/tmp/telegramcode-opencode-process';
+  const ownershipFilePath = '/tmp/charness-opencode-process';
   const env = buildHotWorkerEnv(
     { [openCodeOwnershipFileEnvName]: ownershipFilePath },
     launchCwd,
@@ -56,8 +62,8 @@ test('resolves a relative DATA_DIR against the hot worker project root', () => {
   process.env.DATA_DIR = 'relative-data';
   try {
     assert.equal(
-      getDefaultOpenCodeOwnershipFilePath('/opt/telegramcode'),
-      '/opt/telegramcode/relative-data/.opencode-server-process',
+      getDefaultOpenCodeOwnershipFilePath('/opt/charness'),
+      '/opt/charness/relative-data/.opencode-server-process',
     );
   } finally {
     if (savedDataDirectory === undefined) delete process.env.DATA_DIR;
@@ -70,8 +76,41 @@ test('strips hot ownership controls from every OpenCode child environment', () =
     PATH: '/usr/bin',
     [openCodeExternalHostEnvName]: '1',
     [openCodeOwnershipFileEnvName]: '/tmp/owned-process',
+    TELEGRAMCODE_HOT_RELOAD: '1',
+    TELEGRAMCODE_OPENCODE_PROCESS_FILE: '/tmp/owned-process',
   });
   assert.deepEqual(env, { PATH: '/usr/bin' });
+});
+
+test('the hot handshake reads the CHARNESS_* name first and falls back to the TELEGRAMCODE_* one', () => {
+  assert.equal(checkIsOpenCodeExternalHost({}), false);
+  assert.equal(checkIsOpenCodeExternalHost({ CHARNESS_HOT_RELOAD: '1' }), true);
+  assert.equal(
+    checkIsOpenCodeExternalHost({ TELEGRAMCODE_HOT_RELOAD: '1' }),
+    true,
+    'a worker under a supervisor that still runs the pre-rename code',
+  );
+  assert.equal(checkIsOpenCodeExternalHost({ CHARNESS_HOT_RELOAD: '0', TELEGRAMCODE_HOT_RELOAD: '1' }), false, 'the new name wins');
+
+  assert.equal(readOpenCodeOwnershipFilePath({}), undefined);
+  assert.equal(readOpenCodeOwnershipFilePath({ TELEGRAMCODE_OPENCODE_PROCESS_FILE: '/old' }), '/old');
+  assert.equal(
+    readOpenCodeOwnershipFilePath({ CHARNESS_OPENCODE_PROCESS_FILE: '/new', TELEGRAMCODE_OPENCODE_PROCESS_FILE: '/old' }),
+    '/new',
+    'the new name wins',
+  );
+});
+
+test('the supervisor names the ownership file under both names and unmarks itself under both', () => {
+  const env: NodeJS.ProcessEnv = { CHARNESS_HOT_RELOAD: '1', TELEGRAMCODE_HOT_RELOAD: '1' };
+
+  clearOpenCodeExternalHostEnv(env);
+  setOpenCodeOwnershipFileEnv('/data/owned-process', env);
+
+  assert.equal(env.CHARNESS_HOT_RELOAD, undefined);
+  assert.equal(env.TELEGRAMCODE_HOT_RELOAD, undefined);
+  assert.equal(env.CHARNESS_OPENCODE_PROCESS_FILE, '/data/owned-process');
+  assert.equal(env.TELEGRAMCODE_OPENCODE_PROCESS_FILE, '/data/owned-process');
 });
 
 test('OpenCode OAuth uses the stripped child environment at its spawn boundary', () => {

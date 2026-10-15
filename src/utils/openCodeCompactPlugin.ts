@@ -37,12 +37,21 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { compactionSkillsGuidance } from './compactOnIdle';
+import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 
 /** File name of the plugin in OpenCode's plugin folder; also how the bot recognises it in `GET /config`. */
-export const openCodeCompactPluginFileName = 'telegramcode-compaction.js';
+export const openCodeCompactPluginFileName = 'charness-compaction.js';
 
 /** OpenCode requires a path plugin to export an id. */
-export const openCodeCompactPluginId = 'telegramcode-compaction';
+export const openCodeCompactPluginId = 'charness-compaction';
+
+/**
+ * The file and id the same plugin had before the rename. A folder instance that
+ * loaded it keeps it in memory, so it still counts as "has the plugin"; the FILE
+ * is removed on install so a new instance does not load both.
+ */
+export const legacyOpenCodeCompactPluginFileName = 'telegramcode-compaction.js';
+export const legacyOpenCodeCompactPluginId = 'telegramcode-compaction';
 
 /**
  * @description The text the plugin adds to every compaction prompt. OpenCode
@@ -86,7 +95,11 @@ export function checkHasOpenCodeCompactPlugin(pluginSpecs: unknown): boolean {
   if (!Array.isArray(pluginSpecs)) return false;
   return pluginSpecs.some((entry) => {
     const spec = Array.isArray(entry) ? entry[0] : entry;
-    return typeof spec === 'string' && spec.endsWith(`/${openCodeCompactPluginFileName}`);
+    return (
+      typeof spec === 'string' &&
+      (spec.endsWith(`/${openCodeCompactPluginFileName}`) ||
+        spec.endsWith(`/${legacyOpenCodeCompactPluginFileName}`))
+    );
   });
 }
 
@@ -119,15 +132,39 @@ export function getCompactPluginActivation(input: {
 export type CompactPluginInstallResult = 'written' | 'unchanged' | 'failed';
 
 /**
+ * @description Remove the plugin file a pre-rename release installed, so a folder
+ * instance never loads two copies of the guidance. Only a file that is the bot's
+ * own (it exports the legacy id) is removed; anything else under that name is
+ * the user's and stays. Best-effort: a failure leaves a duplicate guidance, which
+ * is harmless.
+ */
+function removeLegacyOpenCodeCompactPlugin(pluginDir: string): void {
+  const legacyPath = path.join(pluginDir, legacyOpenCodeCompactPluginFileName);
+  try {
+    const source = fs.readFileSync(legacyPath, 'utf-8');
+    if (!source.includes(JSON.stringify(legacyOpenCodeCompactPluginId))) return;
+    fs.unlinkSync(legacyPath);
+  } catch {
+    return;
+  }
+  warnLegacyNameOnce(
+    'opencode-compact-plugin',
+    `${formatDeprecation(legacyPath, path.join(pluginDir, openCodeCompactPluginFileName))}; the old file was removed`,
+  );
+}
+
+/**
  * @description Put the plugin into OpenCode's global plugin folder. Idempotent:
  * an identical file is left alone, a stale one is replaced atomically (a folder
  * instance being created concurrently never reads half a file). Any failure is
  * logged and returned — the plugin improves a summary, it must never block an
- * OpenCode start or the bot's boot.
+ * OpenCode start or the bot's boot. The file a pre-rename release installed is
+ * removed first.
  */
 export function installOpenCodeCompactPlugin(
   pluginDir: string = resolveOpenCodeGlobalPluginDir(process.env),
 ): CompactPluginInstallResult {
+  removeLegacyOpenCodeCompactPlugin(pluginDir);
   const pluginPath = path.join(pluginDir, openCodeCompactPluginFileName);
   const source = buildOpenCodeCompactPluginSource(getOpenCodeCompactPluginContext());
   try {

@@ -24,7 +24,7 @@ import {
 describe('getSessionTitleLine — strip service wrappers, collapse to one line', () => {
   it('strips the [Telegram thread context] preamble, keeps the real prompt', () => {
     const raw =
-      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100:123 | folder: telegramCode\n\nрефактори session picker';
+      '[Telegram thread context]\ngroup: "ExampleGroup"\nthread: -100:123 | folder: charness\n\nрефактори session picker';
     assert.equal(getSessionTitleLine(raw), 'рефактори session picker');
   });
 
@@ -68,7 +68,7 @@ describe('getSessionTitleCandidate — reject tooling noise, return the topic', 
     '[Request interrupted by user for tool use]',
     '[Telegram file] photo saved to: /x/y.png (12 KB)',
     '[Telegram album] 3 files saved',
-    'Base directory for this skill: /home/user/src/telegramCode/.claude',
+    'Base directory for this skill: /home/user/src/charness/.claude',
     'Set effort level to xhigh', // wrapper-less command echo
     'Set model to Fable 5',
   ]) {

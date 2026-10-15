@@ -13,7 +13,7 @@
  * 300-col-wrapped 5-space continuation lines) is NEVER fenced — the
  * continuation is byte-identical in shape to a diff/output body, so the
  * discriminator MUST be the tool header, not body indent. Fixtures are the
- * real shapes captured from the ExampleGroup → TelegramCode log.
+ * real shapes captured from the ExampleGroup → Charness log.
  */
 
 import { test } from 'node:test';

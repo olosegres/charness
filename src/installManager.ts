@@ -1,10 +1,15 @@
 import { execSync, execFileSync, exec, spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
+import {
+  hotReloadEnvName,
+  openCodeProcessFileEnvName,
+  readRenamedEnv,
+  resolveDefaultDataDir,
+} from './legacyNames';
 
 /**
  * The OpenCode server URL when `OPENCODE_URL` is unset — also every OTHER
@@ -138,16 +143,46 @@ interface OpenCodeProcessOwnership extends ExternalProcessIdentity {
 let ownedOpenCodeProcess: OpenCodeProcessOwnership | null = null;
 let openCodeServerLifecycleTail = Promise.resolve();
 
-export const openCodeExternalHostEnvName = 'TELEGRAMCODE_HOT_RELOAD';
+/**
+ * The hot-mode handshake between the supervisor and its worker. The supervisor
+ * may be a process started before the rename, which sets only the legacy names
+ * (`TELEGRAMCODE_*`), so every read goes through {@link checkIsOpenCodeExternalHost}
+ * / {@link readOpenCodeOwnershipFilePath}, and every write sets both names.
+ */
+export const openCodeExternalHostEnvName = hotReloadEnvName.current;
 export const openCodeExternalHostEnvValue = '1';
-export const openCodeOwnershipFileEnvName = 'TELEGRAMCODE_OPENCODE_PROCESS_FILE';
+export const openCodeOwnershipFileEnvName = openCodeProcessFileEnvName.current;
+
+/** @description Is this process a hot worker, whose OpenCode generations are hosted outside its tree? */
+export function checkIsOpenCodeExternalHost(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readRenamedEnv(env, hotReloadEnvName) === openCodeExternalHostEnvValue;
+}
+
+/** @description The persisted OpenCode ownership file the supervisor named, if any. */
+export function readOpenCodeOwnershipFilePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return readRenamedEnv(env, openCodeProcessFileEnvName);
+}
+
+/** @description Unmark the process as a hot worker (the supervisor owns its OpenCode server directly). */
+export function clearOpenCodeExternalHostEnv(env: NodeJS.ProcessEnv = process.env): void {
+  delete env[hotReloadEnvName.current];
+  delete env[hotReloadEnvName.legacy];
+}
+
+/** @description Name the ownership file for this process and the workers it starts, under both names. */
+export function setOpenCodeOwnershipFileEnv(filePath: string, env: NodeJS.ProcessEnv = process.env): void {
+  env[openCodeProcessFileEnvName.current] = filePath;
+  env[openCodeProcessFileEnvName.legacy] = filePath;
+}
 
 export function getOpenCodeChildEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...baseEnv };
-  delete childEnv[openCodeExternalHostEnvName];
-  delete childEnv[openCodeOwnershipFileEnvName];
+  for (const name of [hotReloadEnvName, openCodeProcessFileEnvName]) {
+    delete childEnv[name.current];
+    delete childEnv[name.legacy];
+  }
   return childEnv;
 }
 
@@ -327,12 +362,12 @@ function getProcessIdentity(pid: number): ExternalProcessIdentity | null {
 }
 
 export function getDefaultOpenCodeOwnershipFilePath(baseDirectory = process.cwd()): string {
-  const dataDirectory = process.env.DATA_DIR || path.join(os.homedir(), '.telegramCode');
+  const dataDirectory = process.env.DATA_DIR || resolveDefaultDataDir();
   return path.join(path.resolve(baseDirectory, dataDirectory), '.opencode-server-process');
 }
 
 function saveOpenCodeServerProcessOwnership(processOwnership: OpenCodeProcessOwnership): void {
-  const ownershipFilePath = process.env[openCodeOwnershipFileEnvName];
+  const ownershipFilePath = readOpenCodeOwnershipFilePath();
   if (!ownershipFilePath) return;
   const ownershipDirectory = path.dirname(ownershipFilePath);
   const temporaryPath = `${ownershipFilePath}.tmp-${process.pid}`;
@@ -350,7 +385,7 @@ function saveOpenCodeServerProcessOwnership(processOwnership: OpenCodeProcessOwn
 const loopbackHostnames = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 function saveHealthyOpenCodeServerOwnership(endpoint: string, hostname: string, port: string): void {
-  if (!process.env[openCodeOwnershipFileEnvName] || !loopbackHostnames.has(hostname)) return;
+  if (!readOpenCodeOwnershipFilePath() || !loopbackHostnames.has(hostname)) return;
   const processOwnership = getOwnedOpenCodeProcessOwnership(endpoint);
   if (processOwnership) {
     const readyProcessOwnership: OpenCodeProcessOwnership = {
@@ -376,7 +411,7 @@ function saveHealthyOpenCodeServerOwnership(endpoint: string, hostname: string, 
 function getPersistedOpenCodeProcessOwnership(
   expectedEndpoint?: string,
 ): OpenCodeProcessOwnership | null {
-  const ownershipFilePath = process.env[openCodeOwnershipFileEnvName];
+  const ownershipFilePath = readOpenCodeOwnershipFilePath();
   if (!ownershipFilePath || !fs.existsSync(ownershipFilePath)) return null;
   try {
     const [pidText, startToken, endpoint, signalScope, persistedState = 'ready'] = fs
@@ -421,7 +456,7 @@ function getPersistedOpenCodeProcessOwnership(
 }
 
 function clearPersistedOpenCodeProcessOwnership(processOwnership: OpenCodeProcessOwnership): void {
-  const ownershipFilePath = process.env[openCodeOwnershipFileEnvName];
+  const ownershipFilePath = readOpenCodeOwnershipFilePath();
   if (!ownershipFilePath || !fs.existsSync(ownershipFilePath)) return;
   try {
     const persistedOwnership = getPersistedOpenCodeProcessOwnership();
@@ -832,7 +867,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     return !startupProcessOwnership || checkIsProcessIdentityCurrent(startupProcessOwnership);
   };
 
-  if (process.env[openCodeExternalHostEnvName] === openCodeExternalHostEnvValue) {
+  if (checkIsOpenCodeExternalHost()) {
     const hostedProcessIdentity = await startExternallyParentedProcess(
       opencodeCmd,
       serverArgs,
@@ -899,7 +934,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
         clearOwnedOpenCodeProcessOwnership(startupDirectProcessOwnership);
       }
     });
-    if (process.env[openCodeOwnershipFileEnvName]) {
+    if (readOpenCodeOwnershipFilePath()) {
       if (!startupDirectProcessOwnership) {
         intentionallyStoppedProcesses.add(child);
         child.kill('SIGKILL');

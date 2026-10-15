@@ -140,6 +140,44 @@ test('claude-profiles with no state file: default is the only profile, with unkn
   assert.match(human.stdout, /✓ default .*usage not read yet/, 'unknown usage alone is still a usable account, hence recommended');
 });
 
+test('a pre-rename install boots on its old data dir and config dir, and says so once, in the bot log', () => {
+  const legacyDataDir = path.join(tmpRoot, '.telegramCode');
+  fs.mkdirSync(legacyDataDir);
+  fs.mkdirSync(path.join(tmpRoot, '.config', 'telegramcode'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, '.config', 'telegramcode', '.env'), 'CLI_TEST_LEGACY_CONFIG=1\n');
+  const missingWorkRoot = path.join(tmpRoot, 'missing-work-root');
+
+  // DATA_DIR empty: the default applies. The start stops at the WORK_ROOT check, after the boot announcement.
+  const { status, stderr } = runCli([], { DATA_DIR: '', WORK_ROOT: missingWorkRoot });
+
+  assert.equal(status, 1);
+  assert.match(stderr, /WORK_ROOT does not exist or is not a directory/);
+  const dataDirLines = stderr.split('\n').filter((line) => line.includes('~/.telegramCode is deprecated'));
+  assert.equal(dataDirLines.length, 1);
+  assert.match(dataDirLines[0], /rename it to ~\/\.charness \(see MIGRATION_RENAME_TO_CHARNESS\.md\)/);
+  const configLines = stderr.split('\n').filter((line) => line.includes('~/.config/telegramcode is deprecated'));
+  assert.equal(configLines.length, 1);
+  assert.match(configLines[0], /rename it to ~\/\.config\/charness/);
+
+  const logFile = fs.readdirSync(legacyDataDir).find((name) => name.startsWith('bot-console-'));
+  assert.ok(logFile, 'the old data dir is the one in use: the console tee wrote into it');
+  assert.equal(fs.existsSync(path.join(tmpRoot, '.charness')), false, 'nothing was created or moved');
+  assert.match(fs.readFileSync(path.join(legacyDataDir, logFile), 'utf8'), /~\/\.telegramCode is deprecated/);
+});
+
+test('a fresh install uses ~/.charness and ~/.config/charness without any deprecation notice', () => {
+  fs.mkdirSync(path.join(tmpRoot, '.config', 'charness'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, '.config', 'charness', '.env'), 'CLI_TEST_FRESH_CONFIG=1\n');
+  const missingWorkRoot = path.join(tmpRoot, 'missing-work-root');
+
+  const { status, stderr } = runCli([], { DATA_DIR: '', WORK_ROOT: missingWorkRoot });
+
+  assert.equal(status, 1);
+  assert.match(stderr, /WORK_ROOT does not exist or is not a directory/);
+  assert.doesNotMatch(stderr, /deprecated/);
+  assert.ok(fs.existsSync(path.join(tmpRoot, '.charness')), 'the console tee created the default data dir');
+});
+
 test('internal hot worker entry invokes the shared runBot preflight', () => {
   const missingWorkRoot = path.join(tmpRoot, 'missing-work-root');
   const result = spawnSync(process.execPath, [botEntryPath], {

@@ -28,7 +28,7 @@ import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSess
 const openCodeServer = useStubbedOpenCodeServer();
 
 const sessionId = 'ses_rename_test';
-const workDir = '/tmp/work/telegramCode';
+const workDir = '/tmp/work/charness';
 
 /**
  * @description Build an adapter whose API requests are recorded. `shouldPatchFail`

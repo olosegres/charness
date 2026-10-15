@@ -49,6 +49,7 @@ import {
   resolveSchedulerMcpPort,
   defaultSchedulerMcpPort,
   createSchedulerMcpCancellationLifecycle,
+  legacySchedulerMcpClientIdHeader,
   schedulerMcpClientIdHeader,
   schedulerMcpPendingCancellationMax,
   schedulerMcpPendingCancellationTtlMs,
@@ -56,6 +57,7 @@ import {
   type SchedulerMcpHandle,
   type SchedulerMcpDeps,
 } from '../scheduler/mcpSurface';
+import { resetLegacyNameState } from '../legacyNames';
 import { request, type ClientRequest } from 'node:http';
 import { connect, Server } from 'node:net';
 import type { ScheduleRecord } from '../scheduler/types';
@@ -725,10 +727,11 @@ async function buildClient(
   port: number,
   token: string | null,
   clientId?: string,
+  clientIdHeader: string = schedulerMcpClientIdHeader,
 ): Promise<Client> {
   const client = new Client({ name: 'test-agent', version: '1.0.0' });
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-  if (clientId !== undefined) headers[schedulerMcpClientIdHeader] = clientId;
+  if (clientId !== undefined) headers[clientIdHeader] = clientId;
   const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
     requestInit: { headers },
   });
@@ -875,7 +878,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
   let fixture: ServerFixture;
 
   async function startFixture(): Promise<ServerFixture> {
-    const dataDir = path.join(fakeHome, '.telegramCode');
+    const dataDir = path.join(fakeHome, '.charness');
     fs.mkdirSync(dataDir, { recursive: true });
     const store = new StateStore(dataDir, { saveDebounceMs: 20 });
     await store.init();
@@ -1590,6 +1593,61 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     } finally {
       await reusedClient.close();
     }
+  });
+
+  it('identifies a client that still sends the pre-rename client-id header, and says so once', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const clientId = 'pre-rename-client';
+    let markStarted = () => {};
+    let markAborted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const aborted = new Promise<void>((resolve) => {
+      markAborted = resolve;
+    });
+    fixture.fileSendHandler.current = async (_threadKey, options) => {
+      const signal = options.signal;
+      assert.ok(signal);
+      markStarted();
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          markAborted();
+          reject(signal.reason);
+        }, { once: true });
+      });
+    };
+    resetLegacyNameState();
+    const stderrChunks: string[] = [];
+    const originalStderrWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    const client = await buildClient(fixture.handle.port, token, clientId, legacySchedulerMcpClientIdHeader);
+    try {
+      const settled = client.callTool({
+        name: 'send_file_to_user',
+        arguments: { paths: ['legacy.bin'] },
+      }).then(() => undefined, () => undefined);
+      await started;
+
+      // The cancellation names the SAME client id under the NEW header: it can only reach the request
+      // if the server read the old header as that client's identity.
+      await sendCancellationNotification(fixture.handle.port, token, clientId, 1, 'cancel via the new header');
+
+      assert.equal(await checkPromiseResolvesWithin(aborted, schedulerMcpStopTimeoutMs), true);
+      await settled;
+    } finally {
+      process.stderr.write = originalStderrWrite;
+      await client.close();
+    }
+
+    const deprecations = stderrChunks.filter((chunk) => chunk.includes(legacySchedulerMcpClientIdHeader));
+    assert.equal(deprecations.length, 1, 'announced once, not per request');
+    assert.match(deprecations[0], /x-charness-mcp-client-id/);
+    assert.match(deprecations[0], /MIGRATION_RENAME_TO_CHARNESS\.md/);
   });
 
   it('records abnormal response closure before abort so late cancellation cannot poison ID reuse', async () => {

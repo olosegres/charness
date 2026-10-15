@@ -36,7 +36,7 @@ import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 const openCodeServer = useStubbedOpenCodeServer();
 
 const sessionId = 'ses_compact_test';
-const workDir = '/tmp/work/telegramCode';
+const workDir = '/tmp/work/charness';
 
 /** The model the stubbed `GET /config` reports as the server default. */
 const serverDefaultModel = { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' };

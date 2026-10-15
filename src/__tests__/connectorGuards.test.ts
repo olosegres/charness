@@ -153,7 +153,7 @@ describe('loadEnvFiles with ENV_FILE', () => {
     originalHome = process.env.HOME;
     originalEnv = Object.fromEntries(touchedKeys.map((key) => [key, process.env[key]]));
     process.env.HOME = tmpRoot;
-    for (const dirName of ['telegramcode', 'telegram-code']) {
+    for (const dirName of ['charness', 'telegramcode', 'telegram-code']) {
       fs.mkdirSync(path.join(tmpRoot, '.config', dirName), { recursive: true });
       fs.writeFileSync(path.join(tmpRoot, '.config', dirName, '.env'), 'J3_GLOBAL_VALUE=from-global\n');
     }
@@ -389,7 +389,7 @@ describe('the guards are wired where they must run', () => {
     const { projectModules } = getModulesLoadedBy('cli/connectorGuards.ts');
     // A module joins this list only once it is known to read no settings at load time.
     const allowed = [
-      'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'platform/connectorSet.ts',
+      'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'legacyNames.ts', 'platform/connectorSet.ts',
       'requests/requestGroup.ts', 'sessionKey.ts', 'state.ts', 'utils/agentEnvironment.ts', 'utils/autoContinueOnLimit.ts',
       'utils/claudeProfiles.ts', 'utils/claudeUsage.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts', 'utils/fallbackChain.ts',
       'utils/minutesOverride.ts', 'utils/modelRecentPlan.ts', 'utils/threadToggle.ts', 'utils/topicView.ts',

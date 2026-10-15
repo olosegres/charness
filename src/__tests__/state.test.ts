@@ -32,7 +32,7 @@ let originalHome: string | undefined;
 
 beforeEach(() => {
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-home-'));
-  dataDir = path.join(fakeHome, '.telegramCode');
+  dataDir = path.join(fakeHome, '.charness');
   fs.mkdirSync(dataDir, { recursive: true });
   originalHome = process.env.HOME;
   // Node's `os.homedir()` on POSIX falls back to `process.env.HOME` when

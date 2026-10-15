@@ -27,6 +27,7 @@ import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
+import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 import {
   answerBodyMaxLength,
   type AnswerRequestArgs,
@@ -81,7 +82,14 @@ export const defaultSchedulerMcpPort = 0;
 export const schedulerMcpPath = '/mcp';
 
 /** Per-registration identity used to isolate equal JSON-RPC request IDs. */
-export const schedulerMcpClientIdHeader = 'x-telegramcode-mcp-client-id';
+export const schedulerMcpClientIdHeader = 'x-charness-mcp-client-id';
+
+/**
+ * The header a pre-rename release put into the MCP config it injected. A running
+ * agent keeps the config of its launch, so the server still accepts it; new
+ * configs carry {@link schedulerMcpClientIdHeader}.
+ */
+export const legacySchedulerMcpClientIdHeader = 'x-telegramcode-mcp-client-id';
 
 /**
  * A port that is in use at the start is retried this many times, this far apart,
@@ -1491,7 +1499,15 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   const cancellationLifecycle = createSchedulerMcpCancellationLifecycle();
 
   function getClientIdentity(req: IncomingMessage, verifiedToken: string): string {
-    const clientId = req.headers[schedulerMcpClientIdHeader];
+    let clientId = req.headers[schedulerMcpClientIdHeader];
+    if (clientId === undefined && req.headers[legacySchedulerMcpClientIdHeader] !== undefined) {
+      clientId = req.headers[legacySchedulerMcpClientIdHeader];
+      warnLegacyNameOnce(
+        'mcp-client-id-header',
+        `${formatDeprecation(legacySchedulerMcpClientIdHeader, schedulerMcpClientIdHeader)} — ` +
+          `an agent session launched before the rename still sends it; a restarted session sends the new one`,
+      );
+    }
     if (
       typeof clientId === 'string' &&
       clientId.length > 0 &&

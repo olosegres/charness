@@ -82,7 +82,7 @@ test('buildSessionTitleSnippet: strips the thread-context preamble — title is 
     topicName: 'Login bug',
     groupTitle: 'ExampleGroup',
     key: threadKey,
-    subdir: 'telegramCode',
+    subdir: 'charness',
   });
   const userText = 'Investigate the broken OAuth redirect on staging';
   const glued = prependThreadContextPreamble(preamble, userText);
@@ -98,7 +98,7 @@ test('checkIsMeaningfulPrompt + strip: a glued preamble over a trivial reply is 
   // This mirrors the adapter call site, which strips the preamble BEFORE
   // judging meaningfulness — otherwise the preamble length would make every
   // "да" look meaningful and name the session after the boilerplate.
-  const preamble = buildThreadContextPreamble({ key: threadKey, subdir: 'telegramCode' });
+  const preamble = buildThreadContextPreamble({ key: threadKey, subdir: 'charness' });
   const glued = prependThreadContextPreamble(preamble, 'да');
   // Stripping first is the adapter's responsibility; the snippet helper proves
   // the raw text is recovered, so meaningfulness judged on it is correct.

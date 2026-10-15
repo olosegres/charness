@@ -5,13 +5,14 @@ import { loadEnvWithConnectorGuards } from './connectorGuards';
 import { parseConnectors } from '../platform/connectorSet';
 import {
   checkIsInstalled,
+  clearOpenCodeExternalHostEnv,
   ensureOpenCodeServer,
   getDefaultOpenCodeOwnershipFilePath,
-  openCodeExternalHostEnvName,
   openCodeExternalHostEnvValue,
-  openCodeOwnershipFileEnvName,
+  setOpenCodeOwnershipFileEnv,
   stopOpenCodeServer,
 } from '../installManager';
+import { hotReloadEnvName, warnLegacyNamesAtBoot } from '../legacyNames';
 
 interface HotOpenCodeDeps {
   checkIsInstalled: (toolName: string) => boolean;
@@ -84,8 +85,11 @@ export async function runHot(): Promise<void> {
   loadEnvWithConnectorGuards(projectRoot);
   // Only nodemon's replaceable worker externalizes later server generations.
   // The long-lived supervisor owns the initial server directly.
-  delete process.env[openCodeExternalHostEnvName];
-  process.env[openCodeOwnershipFileEnvName] = getDefaultOpenCodeOwnershipFilePath(projectRoot);
+  clearOpenCodeExternalHostEnv();
+  setOpenCodeOwnershipFileEnv(getDefaultOpenCodeOwnershipFilePath(projectRoot));
+  // After the handshake variables above are set: what is left to announce is the
+  // default data dir, not a legacy variable inherited from an older supervisor.
+  warnLegacyNamesAtBoot();
   const distEntry = path.join(projectRoot, 'dist', 'cli', 'botEntry.js');
   const tscBin = localBin(projectRoot, 'tsc');
   const nodemonBin = localBin(projectRoot, 'nodemon');
@@ -298,7 +302,9 @@ export function buildHotWorkerEnv(
   return {
     ...baseEnv,
     WORK_ROOT: baseEnv.WORK_ROOT || launchCwd,
-    [openCodeExternalHostEnvName]: openCodeExternalHostEnvValue,
+    // Both names: this supervisor may outlive a rename of the worker's code.
+    [hotReloadEnvName.current]: openCodeExternalHostEnvValue,
+    [hotReloadEnvName.legacy]: openCodeExternalHostEnvValue,
   };
 }
 

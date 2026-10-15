@@ -18,10 +18,13 @@ import {
   getCompactPluginActivation,
   getOpenCodeCompactPluginContext,
   installOpenCodeCompactPlugin,
+  legacyOpenCodeCompactPluginFileName,
+  legacyOpenCodeCompactPluginId,
   openCodeCompactPluginFileName,
   openCodeCompactPluginId,
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
+import { resetLegacyNameState } from '../legacyNames';
 import { compactionSkillsGuidance } from '../utils/compactOnIdle';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
@@ -119,4 +122,77 @@ test('getCompactPluginActivation: loaded wins, an idle folder is recreated, anyt
     'busy',
   );
   assert.equal(getCompactPluginActivation({ pluginSpecs: [], sessionStatus: null }), 'busy', 'unreadable status');
+});
+
+/** The file a pre-rename release wrote: same module shape, the old id and file name. */
+function writeLegacyPluginFile(dir: string): string {
+  const legacyPath = path.join(dir, legacyOpenCodeCompactPluginFileName);
+  fs.writeFileSync(
+    legacyPath,
+    `export default { id: ${JSON.stringify(legacyOpenCodeCompactPluginId)}, server: async () => ({}) };\n`,
+  );
+  return legacyPath;
+}
+
+function captureStderr(run: () => void): string[] {
+  const chunks: string[] = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    run();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return chunks;
+}
+
+test('the plugin is named charness-compaction, not the pre-rename id', () => {
+  assert.equal(openCodeCompactPluginFileName, 'charness-compaction.js');
+  assert.equal(openCodeCompactPluginId, 'charness-compaction');
+});
+
+test('installOpenCodeCompactPlugin: removes the pre-rename file once, so a folder never loads both', async () => {
+  await withTempDir((dir) => {
+    resetLegacyNameState();
+    const legacyPath = writeLegacyPluginFile(dir);
+
+    const written: string[] = [];
+    const firstWarnings = captureStderr(() => written.push(installOpenCodeCompactPlugin(dir)));
+    const secondWarnings = captureStderr(() => {
+      writeLegacyPluginFile(dir);
+      written.push(installOpenCodeCompactPlugin(dir));
+    });
+
+    assert.deepEqual(written, ['written', 'unchanged']);
+    assert.equal(fs.existsSync(legacyPath), false);
+    assert.deepEqual(fs.readdirSync(dir), [openCodeCompactPluginFileName]);
+    assert.equal(firstWarnings.length, 1, 'announced once');
+    assert.match(firstWarnings[0], /telegramcode-compaction\.js is deprecated, rename it to .*charness-compaction\.js/);
+    assert.match(firstWarnings[0], /MIGRATION_RENAME_TO_CHARNESS\.md/);
+    assert.deepEqual(secondWarnings, [], 'a second removal in the same process is not announced again');
+  });
+});
+
+test('installOpenCodeCompactPlugin: a file under the old name that is not the bot\'s is left alone', async () => {
+  await withTempDir((dir) => {
+    const legacyPath = path.join(dir, legacyOpenCodeCompactPluginFileName);
+    fs.writeFileSync(legacyPath, '// the user\'s own plugin\n');
+
+    assert.equal(installOpenCodeCompactPlugin(dir), 'written');
+
+    assert.equal(fs.readFileSync(legacyPath, 'utf-8'), '// the user\'s own plugin\n');
+  });
+});
+
+test('checkHasOpenCodeCompactPlugin: an instance that loaded the pre-rename file still counts as having the plugin', () => {
+  const legacyUrl = `file:///home/user/.config/opencode/plugins/${legacyOpenCodeCompactPluginFileName}`;
+  assert.equal(checkHasOpenCodeCompactPlugin([legacyUrl]), true);
+  assert.equal(
+    getCompactPluginActivation({ pluginSpecs: [legacyUrl], sessionStatus: { s: { type: 'idle' } } }),
+    'loaded',
+    'not recreated just to swap an identical plugin',
+  );
 });

@@ -32,7 +32,7 @@ interface ApiCall {
 const openCodeServer = useStubbedOpenCodeServer();
 
 const newSessionId = 'ses_folder_scoped';
-const workDir = '/home/user/src/telegramCode';
+const workDir = '/home/user/src/charness';
 const expectedQuery = `directory=${encodeURIComponent(workDir)}`;
 
 /** Adapter whose API requests are recorded; POST /session resolves the id, GET

@@ -172,7 +172,7 @@ function startIsolatedInstanceReaper(layout: IsolatedInstanceLayout): void {
 }
 
 /**
- * `IS_SANDBOX` for a launch through `run-isolated.sh`, which passes it on: the telegramcode image runs everything as
+ * `IS_SANDBOX` for a launch through `run-isolated.sh`, which passes it on: the charness image runs everything as
  * root, where Claude Code needs it. Empty where the test process has none (a host run).
  */
 export const isolatedSandboxEnv: Record<string, string> = process.env.IS_SANDBOX ? { IS_SANDBOX: process.env.IS_SANDBOX } : {};

@@ -105,6 +105,8 @@ const args = process.argv.slice(2);
 if (args.includes('--version')) {
   if (process.env.FAKE_OPENCODE_ENV_FILE) {
     fs.appendFileSync(process.env.FAKE_OPENCODE_ENV_FILE, 'version:' + [
+      process.env.CHARNESS_HOT_RELOAD || '',
+      process.env.CHARNESS_OPENCODE_PROCESS_FILE || '',
       process.env.TELEGRAMCODE_HOT_RELOAD || '',
       process.env.TELEGRAMCODE_OPENCODE_PROCESS_FILE || '',
     ].join('|') + '\\n');
@@ -137,6 +139,8 @@ if (process.env.FAKE_OPENCODE_DESCENDANT_LOG) {
 }
 if (process.env.FAKE_OPENCODE_ENV_FILE) {
   fs.appendFileSync(process.env.FAKE_OPENCODE_ENV_FILE, 'serve:' + [
+    process.env.CHARNESS_HOT_RELOAD || '',
+    process.env.CHARNESS_OPENCODE_PROCESS_FILE || '',
     process.env.TELEGRAMCODE_HOT_RELOAD || '',
     process.env.TELEGRAMCODE_OPENCODE_PROCESS_FILE || '',
   ].join('|') + '\\n');
@@ -368,7 +372,7 @@ test(
   'external process host timeout removes a child that was already started',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-host-timeout-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-host-timeout-'));
     const pidFilePath = path.join(testDirectory, 'hosted.pid');
 
     try {
@@ -452,7 +456,7 @@ test(
   'external process host abort request covers a child whose PID arrives after timeout',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-host-delayed-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-host-delayed-'));
     const pidFilePath = path.join(testDirectory, 'hosted.pid');
 
     try {
@@ -482,7 +486,7 @@ test(
   'a fixture server exits by itself once the test process that owns it is killed',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-orphan-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-orphan-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const port = await getUnusedPort();
     const descendantLogPath = path.join(testDirectory, 'descendants.log');
@@ -540,7 +544,7 @@ test(
   'a fresh worker recovers a persisted bot-started generation before it binds its socket',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-prebind-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-prebind-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -601,7 +605,7 @@ test(
   'hot ensure serializes concurrent callers and externally hosts every replacement generation',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-host-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-host-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -667,7 +671,7 @@ test(
       assert.equal(checkIsTestProcessAlive(allDescendantPids[1]), true);
       assert.deepEqual(
         fs.readFileSync(serverEnvFilePath, 'utf8').trim().split('\n').sort(),
-        ['serve:|', 'serve:|', 'version:|'],
+        ['serve:|||', 'serve:|||', 'version:|||'],
         'process-host controls must not leak into OpenCode probes, servers, or descendants',
       );
       assert.equal(
@@ -689,7 +693,7 @@ test(
   'a fresh hot worker replaces a persisted unresponsive server before starting its generation',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-adopted-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-adopted-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -759,7 +763,7 @@ test(
   'ownership follows the configured endpoint and signals an adopted non-group listener by PID',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-endpoint-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-endpoint-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -828,7 +832,7 @@ test(
   'stale adopted ownership cannot signal a former listener or a same-port different-address listener',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-listener-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-listener-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -913,7 +917,7 @@ test(
   'a newly spawned never-ready server is killed and its ownership file is removed',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-not-ready-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-not-ready-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -962,7 +966,7 @@ test(
   'a direct process exit before readiness does not report a post-start crash',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-start-exit-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-start-exit-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -1009,7 +1013,7 @@ test(
   'a direct process exit at the health boundary is rejected or reported after readiness',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-health-exit-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-health-exit-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');
@@ -1074,7 +1078,7 @@ test(
   'non-hot ensure keeps direct process ownership and reports an unexpected exit',
   { skip: process.platform === 'win32' },
   async () => {
-    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegramcode-opencode-owned-'));
+    const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-opencode-owned-'));
     const fakeBinaryPath = path.join(testDirectory, 'fake-opencode');
     const spawnLogPath = path.join(testDirectory, 'spawn.log');
     const pidFilePath = path.join(testDirectory, 'server.pid');

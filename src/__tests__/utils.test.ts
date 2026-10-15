@@ -11,7 +11,7 @@ import * as assert from 'node:assert/strict';
 import { stripCommandBotMention } from '../utils';
 
 test('strips @botusername from a bare command', () => {
-  assert.equal(stripCommandBotMention('/compact@mybot_telegramcode_bot'), '/compact');
+  assert.equal(stripCommandBotMention('/compact@mybot_charness_bot'), '/compact');
   assert.equal(stripCommandBotMention('/help@some_bot'), '/help');
 });
 

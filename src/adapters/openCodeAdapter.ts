@@ -62,7 +62,7 @@ const execAsync = promisify(exec);
  * `SessionKey`: `{ "<chatId>:<threadId>": "provider/model" }` (plan §10.3, D22).
  *
  * Audit S3 / #9: previous fallback chain `DATA_DIR || HOME || /tmp` drifted
- * from `state.ts:resolveDataDir`, which uses `~/.telegramCode` when
+ * from `state.ts:resolveDataDir`, which uses `~/.charness` when
  * `DATA_DIR` is unset. Two bots on one host sharing a Linux user would have
  * stored prefs in `$HOME/.opencode-model-prefs.json` and silently collided.
  *

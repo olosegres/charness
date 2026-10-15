@@ -2021,7 +2021,7 @@ export function stripTuiElements(
  * Claude stores per-project transcripts under
  * `~/.claude/projects/<slug>/<sessionUuid>.jsonl`, where the slug is the
  * absolute path with every non-alphanumeric character replaced by `-`
- * (e.g. `/home/user/src/telegramCode` → `-home-user-src-telegramCode`).
+ * (e.g. `/home/user/src/myProject` → `-home-user-src-myProject`).
  *
  * The slug encoding is undocumented and could drift across Claude versions,
  * so it is used only to *locate* the candidate folder — the authoritative

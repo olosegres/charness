@@ -8,7 +8,7 @@
  * integration tests for `runBot`.
  *
  * Each test runs against an isolated `DATA_DIR` under a tmp dir to avoid
- * touching the developer's real `~/.telegramCode/instance.lock`.
+ * touching the developer's real `~/.charness/instance.lock`.
  */
 
 import { test, beforeEach, afterEach } from 'node:test';
@@ -21,6 +21,7 @@ import {
   releaseLock,
   lockPath,
 } from '../instanceLock';
+import { resetLegacyNameState } from '../legacyNames';
 
 let tmpRoot: string;
 let savedDataDir: string | undefined;
@@ -239,4 +240,33 @@ test('a lock without the new fields keeps today\'s logic', () => {
   if (!live.ok) assert.equal(live.reason, 'live-holder');
   writeLock({ pid: deadPid });
   assert.equal(tryAcquireLock().ok, true);
+});
+
+test('lockPath: without DATA_DIR the lock lives in ~/.charness, or in a pre-rename ~/.telegramCode that exists', () => {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-lock-home-'));
+  const savedHome = process.env.HOME;
+  delete process.env.DATA_DIR;
+  process.env.HOME = fakeHome;
+  try {
+    assert.equal(lockPath(), path.join(fakeHome, '.charness', 'instance.lock'));
+
+    // The default is decided once per process and home dir, so each case forgets the earlier decision.
+    resetLegacyNameState();
+    fs.mkdirSync(path.join(fakeHome, '.telegramCode'));
+    assert.equal(lockPath(), path.join(fakeHome, '.telegramCode', 'instance.lock'));
+
+    fs.mkdirSync(path.join(fakeHome, '.charness'));
+    assert.equal(
+      lockPath(),
+      path.join(fakeHome, '.telegramCode', 'instance.lock'),
+      'a ~/.charness that appears later does not move a running process',
+    );
+    resetLegacyNameState();
+    assert.equal(lockPath(), path.join(fakeHome, '.charness', 'instance.lock'), 'the new dir wins at the next start');
+  } finally {
+    resetLegacyNameState();
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
 });

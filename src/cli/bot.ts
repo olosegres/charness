@@ -3,6 +3,7 @@ import { loadEnvWithConnectorGuards } from './connectorGuards';
 import { acquireLock, installLockCleanupHandlers } from '../instanceLock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
+import { warnLegacyNamesAtBoot } from '../legacyNames';
 
 /**
  * @description Shared bot startup used by the public no-arg CLI and the
@@ -39,6 +40,8 @@ export async function runBot(): Promise<void> {
   // logs below this line are captured for post-incident reading, terminal view
   // preserved. Best-effort; never throws into a write.
   installConsoleFileTap(resolveDataDir());
+  // After the tee, so the deprecation lines reach the bot log, not only the terminal.
+  warnLegacyNamesAtBoot();
 
   if (loaded.length === 0) {
     process.stderr.write(
