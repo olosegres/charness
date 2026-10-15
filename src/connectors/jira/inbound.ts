@@ -1,11 +1,11 @@
 import type { SessionKey } from '../../sessionKey';
 import type { OpenRequestState, RequestOrigin } from '../../requests/types';
 import { emptyRequester, requestRequesterAttribute } from '../../requests/requestGroup';
-import { JiraAuthError, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraIssue } from './client';
-import { makeJiraKey } from './sessionKeyCodec';
+import { JiraAuthError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraIssue } from './client';
+import { getJiraIssueProjectKey, makeJiraKey } from './sessionKeyCodec';
 import { findNewestTrigger, getIssueTrigger, getRequester, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
-import { buildIssueBlocks, type JiraExtraField } from './issueBlocks';
+import { buildIssueBlocks, type JiraBlockTrust, type JiraExtraField } from './issueBlocks';
 import { fetchJiraIssueContext } from './issueContext';
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from './prompt';
 import { getIssueDelta } from './issueDelta';
@@ -46,8 +46,6 @@ export const jiraRetryBackoffCapMs = 15 * 60 * 1000;
 export function getJiraRetryDelayMs(baseMs: number, failureCount: number): number {
   return Math.min(baseMs * 2 ** failureCount, Math.max(baseMs, jiraRetryBackoffCapMs));
 }
-/** Jira's largest changelog page. */
-export const jiraChangelogPageSize = 100;
 /** Enough of each issue to decide; the prompt's fields are fetched only for a new request. */
 export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator'];
 
@@ -122,15 +120,6 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
     .map((statusId) => `"${statusId}"`)
     .join(', ');
   return `project in (${projectKeys}) AND assignee = currentUser() AND status in (${statusIds}) ORDER BY created ASC`;
-}
-
-/** The issue's project from its key, or `null` for a key that is not a Jira issue key. */
-function getIssueProjectKey(issueKey: string): string | null {
-  try {
-    return makeJiraKey(issueKey).space;
-  } catch {
-    return null;
-  }
 }
 
 export class JiraInbound {
@@ -221,7 +210,7 @@ export class JiraInbound {
 
   private async getDecision(issue: JiraIssue): Promise<JiraIssueDecision> {
     const { deps } = this;
-    const projectKey = getIssueProjectKey(issue.key);
+    const projectKey = getJiraIssueProjectKey(issue.key);
     const project = projectKey === null ? undefined : deps.projects.get(projectKey);
     // D13: the JQL names only the allowlist, but every returned issue is checked again.
     if (!project) return 'notAllowed';
@@ -264,9 +253,15 @@ export class JiraInbound {
     at: number,
   ): Promise<JiraIssueDecision> {
     const { deps } = this;
-    // Fetched before the request opens: a request is never left without its prompt.
-    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id));
-    const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId);
+    const { trust } = deps;
+    // Fetched before the request opens: a request is never left without its prompt. The whole changelog is read
+    // only with a trusted group — it says who wrote each field — and once per request, never per poll.
+    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id), trust !== null);
+    const blockTrust: JiraBlockTrust | null = trust && {
+      checkIsTrusted: (account) => trust.checkIsTrusted(account),
+      allowlistedProjectKeys: new Set(deps.projects.keys()),
+    };
+    const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId, blockTrust);
     const key = makeJiraKey(issue.key);
     const promptInput = {
       issueKey: issue.key,
@@ -274,6 +269,7 @@ export class JiraInbound {
       issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
       trigger,
       requester,
+      isTextFiltered: trust !== null,
     };
     // Rendered and written BEFORE the request opens: the ledger builds the prompt inside its own synchronous update.
     const fitted = await fitBlocksToPrompt({

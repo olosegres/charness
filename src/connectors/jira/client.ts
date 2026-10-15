@@ -33,6 +33,8 @@ export const jiraBackoffMs = [1_000, 4_000] as const;
 export const jiraBackoffJitterRatio = 0.5;
 /** Jira's own page size for comments; the page actually returned decides where the next one starts. */
 export const jiraCommentPageSize = 100;
+/** Jira's largest changelog page. */
+export const jiraChangelogPageSize = 100;
 /** The most members of a group one `group/member` page holds; the page actually returned decides where the next one starts. */
 export const jiraGroupMemberPageSize = 50;
 /**

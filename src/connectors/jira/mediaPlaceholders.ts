@@ -18,6 +18,9 @@ import { getSingleLineText } from './promptText';
  *     (`<a href=".../attachment/content/<id>" data-media-services-id="<media id>">`):
  *     {@link getAttachmentIdsByMediaId} reads that — exact, so nothing is guessed;
  *  4. nothing found → `attachment unknown`.
+ *
+ * An attachment the trusted group does not back is WITHHELD (`issueBlocks.ts`): its placeholder names no
+ * file — `[image — attachment 10234, withheld]` — since the file name is the uploader's text.
  */
 
 const attachmentContentPathRe = /\/attachment\/content\/(\d+)/;
@@ -27,6 +30,7 @@ const mediaServicesIdAttribute = 'data-media-services-id';
 const unknownAttachmentText = 'attachment unknown';
 const inlineFileLabel = 'inline file';
 const externalMediaType = 'external';
+const noAttachmentIds: ReadonlySet<string> = new Set();
 
 /**
  * @description The media id → attachment id pairs a rendered body (a comment's
@@ -53,6 +57,8 @@ export interface MediaResolverContext {
   attachmentIdByMediaId: ReadonlyMap<string, string>;
   /** Told, for each media node resolved, which attachments it stands for — the attachments block's "referenced in". */
   onResolved?: (attachmentIds: readonly string[]) => void;
+  /** Ids of the attachments the agent must not see by name or content; a node standing for one carries no file name. */
+  withheldAttachmentIds?: ReadonlySet<string>;
 }
 
 /** What kind of file the placeholder names, from its type: only an image or a video is worth saying. */
@@ -62,9 +68,12 @@ function getMediaKind(mimeType: string | undefined): string {
   return 'file';
 }
 
-function getAttachmentTarget(attachmentIds: readonly string[]): string {
+function getAttachmentTarget(attachmentIds: readonly string[], withheldAttachmentIds: ReadonlySet<string>): string {
   if (attachmentIds.length === 0) return unknownAttachmentText;
-  return attachmentIds.length === 1 ? `attachment ${attachmentIds[0]}` : `attachments ${attachmentIds.join(', ')}`;
+  const noun = attachmentIds.length === 1 ? 'attachment' : 'attachments';
+  // All of them withheld: one word for the whole placeholder; a mix names which ones.
+  if (attachmentIds.every((attachmentId) => withheldAttachmentIds.has(attachmentId))) return `${noun} ${attachmentIds.join(', ')}, withheld`;
+  return `${noun} ${attachmentIds.map((attachmentId) => (withheldAttachmentIds.has(attachmentId) ? `${attachmentId} (withheld)` : attachmentId)).join(', ')}`;
 }
 
 /** The ids of the attachments a `file` media node stands for (rules 1–3 above); empty when none is found. */
@@ -87,9 +96,14 @@ export function createMediaResolver(context: MediaResolverContext): AdfMediaReso
     }
     const attachmentIds = getAttachmentIds(node, context);
     context.onResolved?.(attachmentIds);
+    const withheldAttachmentIds = context.withheldAttachmentIds ?? noAttachmentIds;
     const firstAttachment = context.attachments.find((attachment) => attachment.id === attachmentIds[0]);
+    const target = getAttachmentTarget(attachmentIds, withheldAttachmentIds);
+    // The node's `alt` and the stored file name both come from whoever uploaded the file.
+    if (attachmentIds.some((attachmentId) => withheldAttachmentIds.has(attachmentId))) {
+      return `[${getMediaKind(firstAttachment?.mimeType)} — ${target}]`;
+    }
     const name = getSingleLineText(getStringAttribute(node, 'alt') ?? firstAttachment?.filename ?? '');
-    const target = getAttachmentTarget(attachmentIds);
     if (!name) return `[${inlineFileLabel} — ${target}]`;
     return `[${getMediaKind(firstAttachment?.mimeType)}: ${name} — ${target}]`;
   };

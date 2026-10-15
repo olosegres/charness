@@ -1,5 +1,5 @@
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
-import type { JiraComment, JiraIssue } from '../connectors/jira/client';
+import type { JiraChangelogHistory, JiraComment, JiraIssue } from '../connectors/jira/client';
 import type { JiraIssueContext } from '../connectors/jira/issueContext';
 
 /**
@@ -17,6 +17,7 @@ export function createIssueContext(options: {
   comments?: JiraComment[];
   remoteLinks?: JiraIssueContext['remoteLinks'];
   children?: JiraIssue[];
+  changelog?: JiraChangelogHistory[];
 } = {}): JiraIssueContext {
   return {
     issue: {
@@ -28,6 +29,7 @@ export function createIssueContext(options: {
     comments: options.comments ?? [],
     remoteLinks: options.remoteLinks ?? [],
     children: options.children ?? [],
+    changelog: options.changelog ?? [],
   };
 }
 

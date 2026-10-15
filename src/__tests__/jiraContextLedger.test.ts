@@ -36,6 +36,21 @@ describe('JiraContextLedger', () => {
     assert.deepEqual(ledger.getSnapshot(issueKey), { generation: 0, sent: {} });
   });
 
+  it('a withheld block\'s flag is kept on disk; an entry from before the group has none and loads as it was', () => {
+    const sentWithFlag = { fields: { hash: 'a1' }, 'comment:2': { hash: 'w1', label: 'comment 2 from 2026-10-05', isWithheld: true } };
+    ledger.recordBuild(issueKey, 'req_1', 0, sentWithFlag);
+    ledger.commit(issueKey, 'req_1');
+    assert.deepEqual(JiraContextLedger.createForDataDir(dataDir).getSnapshot(issueKey).sent, sentWithFlag);
+    const filePath = path.join(dataDir, jiraContextDirName, `${issueKey}.json`);
+    const legacy = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    delete legacy.sent['comment:2'].isWithheld;
+    fs.writeFileSync(filePath, JSON.stringify(legacy));
+    assert.deepEqual(
+      JiraContextLedger.createForDataDir(dataDir).getSnapshot(issueKey).sent['comment:2'],
+      { hash: 'w1', label: 'comment 2 from 2026-10-05' },
+    );
+  });
+
   it('a build counts as sent only once committed — never when it is built', () => {
     ledger.recordBuild(issueKey, 'req_1', 0, sentA);
     assert.deepEqual(ledger.getSnapshot(issueKey).sent, {}, 'built and even forwarded is not taken in');

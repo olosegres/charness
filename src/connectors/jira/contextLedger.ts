@@ -31,6 +31,8 @@ const sentBlockSchema = z.object({
   hash: z.string(),
   /** A comment's `comment <id> by <name> from <date>`, for the line that says it was deleted. */
   label: z.string().optional(),
+  /** What was sent was a marker for text outside the trusted group; absent = the block was readable (a ledger from before the group). */
+  isWithheld: z.boolean().optional(),
 });
 const sentBlocksSchema = z.record(z.string(), sentBlockSchema);
 const pendingBuildSchema = z.object({

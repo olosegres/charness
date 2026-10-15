@@ -29,6 +29,11 @@ const issueNumberPattern = '[1-9]\\d*';
 const issueKeyRe = new RegExp(`^(${projectKeyPattern})-${issueNumberPattern}$`);
 const projectKeyRe = new RegExp(`^${projectKeyPattern}$`);
 
+/** @description The project key of an issue key (`PROJ-12` → `PROJ`), or `null` for a string that is not an issue key. */
+export function getJiraIssueProjectKey(issueKey: string): string | null {
+  return issueKeyRe.exec(issueKey)?.[1] ?? null;
+}
+
 /** @description Whether `projectKey` is spelled like a Jira project key (`PROJ`, `MY_PROJ`). */
 export function checkIsJiraProjectKey(projectKey: string): boolean {
   return projectKeyRe.test(projectKey);

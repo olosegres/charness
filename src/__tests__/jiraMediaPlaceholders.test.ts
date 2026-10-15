@@ -145,3 +145,58 @@ describe('getAttachmentIdsByMediaId (the rendered HTML)', () => {
     assert.equal(getAttachmentIdsByMediaId(html).size, 0);
   });
 });
+
+describe('withheld attachments (the trusted group)', () => {
+  const attachments = [
+    { id: '1', filename: 'shot.png', mimeType: 'image/png' },
+    { id: '2', filename: 'clip.mp4', mimeType: 'video/mp4' },
+    { id: '3', filename: 'notes.txt', mimeType: 'text/plain' },
+  ];
+  const getText = (node: AdfNode, withheldAttachmentIds: string[], attachmentIdByMediaId: [string, string][] = []): string =>
+    getAdfText(node, createMediaResolver({
+      attachments,
+      attachmentIdByMediaId: new Map(attachmentIdByMediaId),
+      withheldAttachmentIds: new Set(withheldAttachmentIds),
+    }));
+  const createFileNode = (alt: string, mediaId: string): AdfNode => createMediaNode('media', { type: 'file', id: mediaId, collection: 'c', alt });
+
+  it('a withheld file: its kind and id, the word withheld — never its name', () => {
+    assert.equal(getText(createFileNode('shot.png', 'm1'), ['1'], [['m1', '1']]), '[image — attachment 1, withheld]');
+    assert.equal(getText(createFileNode('clip.mp4', 'm2'), ['2'], [['m2', '2']]), '[video — attachment 2, withheld]');
+    assert.equal(getText(createFileNode('notes.txt', 'm3'), ['3'], [['m3', '3']]), '[file — attachment 3, withheld]');
+  });
+
+  it('a file that is not withheld is named as before, whatever else is withheld', () => {
+    assert.equal(getText(createFileNode('clip.mp4', 'm2'), ['1'], [['m2', '2']]), '[video: clip.mp4 — attachment 2]');
+  });
+
+  it('an inline file with no alt: its kind and id, withheld', () => {
+    assert.equal(getText(createMediaNode('mediaInline', { id: 'm1' }), ['1'], [['m1', '1']]), '[image — attachment 1, withheld]');
+  });
+
+  it('several attachments of one name, some withheld: the ids say which, and no name is given', () => {
+    const duplicates = [
+      { id: '4', filename: 'log.txt', mimeType: 'text/plain' },
+      { id: '5', filename: 'log.txt', mimeType: 'text/plain' },
+    ];
+    const resolve = (withheld: string[]): string => getAdfText(createFileNode('log.txt', 'unknown'), createMediaResolver({
+      attachments: duplicates,
+      attachmentIdByMediaId: new Map(),
+      withheldAttachmentIds: new Set(withheld),
+    }));
+    assert.equal(resolve(['5']), '[file — attachments 4, 5 (withheld)]');
+    assert.equal(resolve(['4', '5']), '[file — attachments 4, 5, withheld]');
+    assert.equal(resolve([]), '[file: log.txt — attachments 4, 5]');
+  });
+
+  it('the resolver still tells onResolved which attachments a node stood for', () => {
+    const resolved: string[][] = [];
+    getAdfText(createFileNode('shot.png', 'm1'), createMediaResolver({
+      attachments,
+      attachmentIdByMediaId: new Map([['m1', '1']]),
+      withheldAttachmentIds: new Set(['1']),
+      onResolved: (attachmentIds) => resolved.push([...attachmentIds]),
+    }));
+    assert.deepEqual(resolved, [['1']]);
+  });
+});

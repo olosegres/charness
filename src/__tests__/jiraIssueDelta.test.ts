@@ -11,8 +11,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
-import { buildIssueBlocks, type IssueBlock } from '../connectors/jira/issueBlocks';
-import { changedBlockNote, getIssueDelta, newBlockNote } from '../connectors/jira/issueDelta';
+import { buildIssueBlocks, type IssueBlock, type JiraBlockTrust } from '../connectors/jira/issueBlocks';
+import { changedBlockNote, getIssueDelta, newBlockNote, trustChangedBlockNote } from '../connectors/jira/issueDelta';
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from '../connectors/jira/prompt';
 import type { JiraComment } from '../connectors/jira/client';
 import type { JiraIssueTrigger } from '../connectors/jira/trigger';
@@ -87,6 +87,57 @@ describe('getIssueDelta', () => {
     const answer = createTestComment('3', 2, 'Fixed in the export module.', { author: aiAccount });
     const whole = buildJiraRequestPrompt({ ...promptBase, blocks: getBlocks([first, answer]) });
     assert.ok(whole.includes('Comment 3 by AI Agent, 2026-10-05T10:02:00.000+0000:\n> Fixed in the export module.'));
+  });
+});
+
+describe('a trust change is a note of its own, never "edited" (the trusted group)', () => {
+  const ann = { accountId: 'ann', displayName: 'Ann Author' };
+  const bob = { accountId: 'bob', displayName: 'Bob Person' };
+  const comments = [createTestComment('1', 0, 'Please check the export.', { author: ann }), createTestComment('2', 1, 'It fails on Mondays.', { author: bob })];
+  /** A group whose members are `memberAccountIds`; the AI account is always trusted, as in the real trust. */
+  const createTrust = (memberAccountIds: string[]): JiraBlockTrust => ({
+    checkIsTrusted: (account) => account !== null && account !== undefined && (account.accountId === testAiAccountId || memberAccountIds.includes(account.accountId)),
+    allowlistedProjectKeys: new Set(['PROJ']),
+  });
+  const getTrustedBlocks = (memberAccountIds: string[]): IssueBlock[] =>
+    buildIssueBlocks(createIssueContext({ fields: { creator: ann }, comments }), [], testAiAccountId, createTrust(memberAccountIds));
+
+  it('an author who left the group: the comment is sent once as a marker with the trust note; the same state again is silent', () => {
+    const sent = getIssueDelta(getTrustedBlocks(['ann', 'bob']), {}).sent;
+    const delta = getIssueDelta(getTrustedBlocks(['ann']), sent);
+    assert.deepEqual(delta.entries.map((entry) => [entry.block.key, entry.stateNote]), [['comment:2', trustChangedBlockNote]]);
+    assert.equal(delta.entries[0].block.isWithheld, true);
+    assert.equal(delta.sent['comment:2'].isWithheld, true);
+    assert.deepEqual(getIssueDelta(getTrustedBlocks(['ann']), delta.sent).entries, [], 'withheld again: nothing new');
+  });
+
+  it('an author who joined the group: the comment is sent once, readable, with the trust note', () => {
+    const sent = getIssueDelta(getTrustedBlocks(['ann']), {}).sent;
+    const delta = getIssueDelta(getTrustedBlocks(['ann', 'bob']), sent);
+    assert.deepEqual(delta.entries.map((entry) => [entry.block.key, entry.stateNote]), [['comment:2', trustChangedBlockNote]]);
+    assert.equal(delta.entries[0].block.isWithheld, undefined);
+    assert.equal(delta.sent['comment:2'].isWithheld, undefined, 'readable again: the flag is not carried');
+  });
+
+  it('a sent-set from before the group (no flag) reads as readable: a comment that is withheld now is a trust change', () => {
+    const sentBeforeTheGroup = getIssueDelta(buildIssueBlocks(createIssueContext({ comments }), [], testAiAccountId), {}).sent;
+    assert.ok(Object.values(sentBeforeTheGroup).every((block) => !('isWithheld' in block)));
+    const delta = getIssueDelta(getTrustedBlocks(['ann']), sentBeforeTheGroup);
+    assert.deepEqual(delta.entries.filter((entry) => entry.stateNote === trustChangedBlockNote).map((entry) => entry.block.key), ['comment:2']);
+  });
+
+  it('a withheld comment that is deleted is named without its author', () => {
+    const sent = getIssueDelta(getTrustedBlocks(['ann']), {}).sent;
+    const withoutBob = buildIssueBlocks(createIssueContext({ fields: { creator: ann }, comments: [comments[0]] }), [], testAiAccountId, createTrust(['ann']));
+    assert.deepEqual(getIssueDelta(withoutBob, sent).deletedCommentLabels, ['comment 2 from 2026-10-05T10:01:00.000+0000']);
+  });
+
+  it('a delta prompt prints a withheld block on one line, with the note after the heading', () => {
+    const sent = getIssueDelta(getTrustedBlocks(['ann', 'bob']), {}).sent;
+    const delta = getIssueDelta(getTrustedBlocks(['ann']), sent);
+    const prompt = buildJiraDeltaPrompt({ ...promptBase, delta, isTextFiltered: true });
+    assert.ok(prompt.includes('Comment 2, 2026-10-05T10:01:00.000+0000 (trust changed since your last prompt): [withheld: written or edited by someone outside the trusted group]'), prompt);
+    assert.ok(!prompt.includes('Mondays'));
   });
 });
 

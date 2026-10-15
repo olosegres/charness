@@ -33,7 +33,7 @@ export interface JiraTriggerMatch {
 }
 
 /** A changelog item names its field by `fieldId` (stable) or, on older entries, only by `field`. */
-function getItemField(item: JiraChangelogHistory['items'][number]): string {
+export function getItemField(item: JiraChangelogHistory['items'][number]): string {
   return item.fieldId ?? item.field;
 }
 

@@ -112,6 +112,7 @@ describe('prepareJiraConnector', () => {
         }
         if (url.startsWith('/rest/api/3/issue/PROJ-1/comment?')) return sendJson(response, { total: issueComments.length, comments: issueComments });
         if (url === '/rest/api/3/issue/PROJ-1/remotelink') return sendJson(response, []);
+        if (url.startsWith('/rest/api/3/issue/PROJ-1/changelog?')) return sendJson(response, { ...issue.changelog, isLast: true, values: issue.changelog.histories });
         if (url === '/rest/api/3/field' && fieldsStatus !== 200) {
           response.writeHead(fieldsStatus, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ errorMessages: ['bad field request'] }));

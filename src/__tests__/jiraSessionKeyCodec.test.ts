@@ -20,7 +20,7 @@ import {
   unregisterSessionKeyCodec,
   type SessionKey,
 } from '../sessionKey';
-import { jiraSessionKeyCodec, makeJiraKey } from '../connectors/jira/sessionKeyCodec';
+import { getJiraIssueProjectKey, jiraSessionKeyCodec, makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { makeTelegramKey, telegramSessionKeyCodec } from '../connectors/telegram/sessionKeyCodec';
 import { makeTestKey, registerTestSessionKeyCodec } from '../connectors/test/sessionKeyCodec';
 import { buildTmuxSessionName, parseTmuxSessionName } from '../utils/tmuxSessionName';
@@ -34,6 +34,16 @@ import {
 const issueKey: SessionKey = makeJiraKey('PROJ-12');
 /** A project key with `_`: the slug separator of directory names. */
 const underscoreKey: SessionKey = makeJiraKey('MY_PROJ-345');
+
+describe('getJiraIssueProjectKey', () => {
+  it('is the project part of an issue key — and null for anything that is not one', () => {
+    assert.equal(getJiraIssueProjectKey('PROJ-12'), 'PROJ');
+    assert.equal(getJiraIssueProjectKey('MY_PROJ-345'), 'MY_PROJ');
+    for (const notAnIssueKey of ['', 'PROJ', 'PROJ-0', 'PROJ-012', 'proj-12', 'PROJ-12 ', 'jira:PROJ:PROJ-12', 'PROJ-12-3']) {
+      assert.equal(getJiraIssueProjectKey(notAnIssueKey), null, JSON.stringify(notAnIssueKey));
+    }
+  });
+});
 
 describe('the Jira key', () => {
   it('is spelled jira:<PROJECT>:<ISSUE-KEY> and round-trips through the registry', () => {
