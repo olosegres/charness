@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  checkIsSameClaudeConfigDir,
   checkClaudeProfileDirExists,
   checkIsValidClaudeProfileName,
   claudeProfileNameMaxLength,
@@ -188,5 +189,27 @@ describe('account picker plan', () => {
       ['work', false, 'unknown', 0, false],
       ['team', true, 'corporate', 2, true],
     ]);
+  });
+});
+
+describe('checkIsSameClaudeConfigDir', () => {
+  it('knows a profile dir reached through the old path of a moved data dir', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-cfgdir-'));
+    try {
+      const realDir = path.join(root, '.charness', 'claude-profiles', 'work');
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.symlinkSync('.charness', path.join(root, '.telegramCode'));
+      const viaOldPath = path.join(root, '.telegramCode', 'claude-profiles', 'work');
+
+      assert.equal(checkIsSameClaudeConfigDir(viaOldPath, realDir), true);
+      assert.equal(checkIsSameClaudeConfigDir(realDir, realDir), true);
+      assert.equal(checkIsSameClaudeConfigDir(null, null), true);
+      assert.equal(checkIsSameClaudeConfigDir(viaOldPath, path.join(root, '.charness', 'claude-profiles', 'other')), false);
+      assert.equal(checkIsSameClaudeConfigDir(viaOldPath, null), false);
+      assert.equal(checkIsSameClaudeConfigDir(null, realDir), false);
+      assert.equal(checkIsSameClaudeConfigDir('/does/not/exist/a', '/does/not/exist/b'), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

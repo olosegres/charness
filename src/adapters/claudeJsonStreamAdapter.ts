@@ -99,6 +99,7 @@ import {
   type JsonStreamSessionPaths,
   type StdoutTailState,
 } from '../utils/jsonStreamHost';
+import { checkIsSameClaudeConfigDir } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapterNames';
 import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
@@ -1971,7 +1972,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return 'inactive';
     const wanted = this.resolveConfigDir(key);
-    if (wanted === session.configDir) {
+    if (checkIsSameClaudeConfigDir(wanted, session.configDir)) {
       session.isConfigDirSwitchPending = false;
       return 'unchanged';
     }

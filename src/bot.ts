@@ -362,7 +362,7 @@ import { createModelProviders, type PendingProviderConnect } from './connectors/
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
@@ -6737,7 +6737,7 @@ async function applyClaudeProfileToThread(key: SessionKey, options: { isAfterLim
   if (!(adapter instanceof ClaudeCliAdapter)) return 'inactive';
   const current = adapter.getSessionClaudeConfigDir(key);
   if (current === undefined) return 'inactive';
-  if (current === resolveThreadClaudeConfigDir(key)) return 'unchanged';
+  if (checkIsSameClaudeConfigDir(current, resolveThreadClaudeConfigDir(key))) return 'unchanged';
   // After a usage limit the turn is dead: the pane is reopened even though it looks busy.
   if (!options.isAfterLimit && adapter.checkIsBusy(key)) return 'restartRequired';
   const sessionId = state.getAgent(key)?.claudeSessionId;
@@ -6782,7 +6782,7 @@ const claudeUsageRefresher = createClaudeUsageRefresher({
 function resolveClaudeProfileNameForDir(configDir: string | null): string | null {
   if (configDir === null) return defaultClaudeProfileName;
   const root = resolveClaudeProfilesRoot(resolveDataDir());
-  if (path.dirname(configDir) !== root) return null;
+  if (!checkIsSameClaudeConfigDir(path.dirname(configDir), root)) return null;
   const name = path.basename(configDir);
   return state.getClaudeProfileRecord(name) ? name : null;
 }

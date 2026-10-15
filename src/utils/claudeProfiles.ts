@@ -236,6 +236,22 @@ export function getClaudeAccountKind(subscriptionType: string | null): ClaudeAcc
 export const claudeConfigDirVariableName = 'CLAUDE_CONFIG_DIR';
 
 /**
+ * @description Whether two `CLAUDE_CONFIG_DIR` values name the same directory: equal strings, or paths that
+ * resolve to the same real directory. A process adopted after the data dir was moved to its new name keeps
+ * the old path in its command line (the old path is now a symlink), and must not look like a different
+ * account — that would re-spawn it for nothing.
+ */
+export function checkIsSameClaudeConfigDir(left: string | null, right: string | null): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @description Recover the `CLAUDE_CONFIG_DIR` a running process was started with from its command line —
  * the json-stream wrapper script or a tmux pane's `#{pane_start_command}` — so an adopted process after a bot
  * restart is compared against the profile its topic has NOW (a mismatch is corrected at the next idle point).
