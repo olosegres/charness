@@ -11,9 +11,11 @@
 
 > **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is
 > `olosegres/charness`; the npm package is **`charness`** since 3.0.0, up to 2.0.3 it was `telegramcode`). The CLI
-> command keeps the old name, lowercase **`telegramcode`** (`charness` and the legacy `telegramCode` are bin
-> aliases), and so do the `~/.config/telegramcode` config dir, the `DATA_DIR`
-> default `~/.telegramCode` and the `TELEGRAMCODE_*` env vars.
+> command is **`charness`** and the user-facing text says so (`telegramcode` and the legacy `telegramCode` stay as bin
+> aliases); the config is `~/.config/charness/.env`, with `~/.config/telegramcode/.env` (then the older
+> `~/.config/telegram-code`) still read when the new dir has none. What keeps the old name, so existing installs do
+> not break: the `DATA_DIR` default `~/.telegramCode`, the `TELEGRAMCODE_*` env vars, the Docker image / container /
+> `telegramcode-restart-bot` names and their `/opt/telegramcode` paths.
 
 ## What this project is
 
@@ -127,7 +129,7 @@ per-backend controls are optional methods the bot checks before calling.
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
   endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot) plus the
   json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
-  `/accounts` row, served to agents by the `claude_profiles` MCP tool and `telegramcode claude-profiles`. A usage
+  `/accounts` row, served to agents by the `claude_profiles` MCP tool and `charness claude-profiles`. A usage
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
   `announceUsageLimitOrSwitch`): the limited profile gets `limitedUntil`, the ranking names the other
   signed-in profiles with fresh usage and room — the implicit chain when the `/limits` chain is empty.
@@ -241,7 +243,7 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 
 ## Tests & build
 
-- **Run:** `yarn start` (`node dist/cli.js`), or installed: `cd <projects-parent> && telegramcode` (the launch
+- **Run:** `yarn start` (`node dist/cli.js`), or installed: `cd <projects-parent> && charness` (the launch
   directory becomes the work root).
 - **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
   test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. SETUP.md § Run with Docker.
@@ -250,7 +252,7 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   `src/__tests__` out) · `yarn test` (= `test:unit` then `test:flows`, node test runner + tsx; needs `dist/` — process-level tests spawn the built CLI; Node applies `--test-timeout` to a
   whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow, whose own budget is that limit less its
   teardown (`getFlowDeadlineMs`) — so a hung or process-leaking file fails by name instead of hanging the run) ·
-  `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` / `telegramcode hot` (`tsc -w` + nodemon on
+  `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` / `charness hot` (`tsc -w` + nodemon on
   `dist/`: a broken edit cannot take the bot down, agents survive reloads; Linux/macOS only).
 - **tmux safety in tests and by hand.** Run anything that touches tmux as `env -u TMUX -u TMUX_PANE …`. Never
   touch the DEFAULT tmux server: a bare `kill-server` run from inside tmux goes to the server `$TMUX` names,

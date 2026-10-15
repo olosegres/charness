@@ -71,9 +71,9 @@ The bot serves two Telegram surfaces:
 ## Quick start
 
 1. `npm install -g charness` (needs Node ≥ 22.12).
-2. Put your bot token (from [@BotFather](https://t.me/BotFather)) into `~/.config/telegramcode/.env` as
+2. Put your bot token (from [@BotFather](https://t.me/BotFather)) into `~/.config/charness/.env` as
    `TELEGRAM_BOT_TOKEN=…`.
-3. Run `telegramcode` from the folder that holds your projects: `cd ~/projects && telegramcode`.
+3. Run `charness` from the folder that holds your projects: `cd ~/projects && charness`.
 4. In your Telegram group (or the bot's DM): `/bind <subfolder>` in a topic, then `/claude` or `/opencode` and
    talk to the agent — text or voice.
 
@@ -247,7 +247,7 @@ so one account's usage limit does not stop every topic.
   percentage is USED. A reset is shown as a time from
   now (`🔄 in 2d 1h`; the two largest units, minutes only under an hour); an
   unknown 5h reset shows the weekly one, and with no reset at all only the
-  percentage is shown. `telegramcode claude-profiles` prints
+  percentage is shown. `charness claude-profiles` prints
   the same relative form; its `--json` and the MCP tool keep ISO instants. The bot reads the figures with
   each profile's own login every 10 minutes, when `/accounts` or `/limits` opens and when an
   agent asks; a json-stream session's own rate-limit events keep them current
@@ -279,9 +279,9 @@ so one account's usage limit does not stop every topic.
   any other model → the shared weekly window and the session window). It then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
   profile: set nothing). The same answer from a shell, for a worker without
-  MCP: `telegramcode claude-profiles [--best] [--model <name>] [--json]` —
+  MCP: `charness claude-profiles [--best] [--model <name>] [--json]` —
   `--best` prints just the directory (an empty line for the default), so
-  `CLAUDE_CONFIG_DIR="$(telegramcode claude-profiles --best --model fable)"`
+  `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best --model fable)"`
   works as is; it reads the bot's cache off `DATA_DIR/state.json`.
 
 ### Usage limits and the fallback models (`/limits`)
@@ -659,7 +659,7 @@ Install Charness on your own machine or VPS, create a Telegram bot, and bind a f
 Yes. The bot only makes outbound connections to Telegram, so nothing listens for inbound traffic and you never expose a port. OpenCode runs as a local HTTP server that the bot talks to on loopback, and you reach it from anywhere through Telegram.
 
 **How do I run a coding agent on a VPS and drive it from Telegram?**
-Set up your VPS once with git, your repos, the agent CLIs, and `telegramcode`, then launch the bot from your projects folder. You get an always-on dev box you drive from any device: phone, tablet, or voice. Because the agent lives on the server, it keeps working even when your laptop sleeps, and the same sessions are still reachable over plain SSH.
+Set up your VPS once with git, your repos, the agent CLIs, and `charness`, then launch the bot from your projects folder. You get an always-on dev box you drive from any device: phone, tablet, or voice. Because the agent lives on the server, it keeps working even when your laptop sleeps, and the same sessions are still reachable over plain SSH.
 
 **Does my session survive a restart?**
 Yes, both a bot restart and an agent-server restart. State is persisted to disk; on restart the bot re-attaches to the running Claude session in tmux or re-connects to OpenCode, and an in-flight turn is delivered once it is back. A prompt sent during startup is buffered and replayed, never dropped.

@@ -88,13 +88,13 @@ yarn test         # test:unit, then test:flows (node test runner + tsx); build
 yarn test:unit    # every file but the flows; each file must finish in 2 min
 yarn test:flows   # the `*E2e.test.ts` flows; each file must finish in 20 min
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
-                   # `telegramcode hot` from anywhere) — a broken edit can't
+                   # `charness hot` from anywhere) — a broken edit can't
                    # take the bot down; OpenCode generations stay outside the
                    # worker tree, so agent turns survive worker reloads
                    # (Linux/macOS; Windows hot mode is intentionally refused)
 ```
 
-To run your checkout as the global `telegramcode` / `charness` command instead of the npm package, `yarn install-link`
+To run your checkout as the global `charness` command instead of the npm package, `yarn install-link`
 (= `yarn install && yarn build && npm link`) symlinks the command to this folder, so a later `yarn build` is picked up
 without re-installing; `npm install -g .` installs a copy instead. Configuration and launch are as in
 [SETUP.md](SETUP.md).

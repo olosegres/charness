@@ -11,13 +11,13 @@ npm — see [Alternatives](#alternatives) at the end. What Charness does is in t
 
 The bot runs anywhere the agent CLIs run:
 
-- **Your own working machine** — the simplest start: launch `telegramcode`
+- **Your own working machine** — the simplest start: launch `charness`
   from your projects parent folder and your laptop/desktop becomes the
   backend. The catch: agents are only reachable while the machine is on and
   awake.
 - **A remote server (cloud VPS/VDS or bare metal)** — the more convenient
   setup: organize your working environment there once (git + your repos,
-  Claude Code / OpenCode, `telegramcode`) and you get an always-on dev box you
+  Claude Code / OpenCode, `charness`) and you get an always-on dev box you
   drive from any device through Telegram — phone, tablet, voice. When picking
   one, a bare-metal server without virtualization beats a virtualized VPS/VDS:
   its NVMe drives are usually much faster, which matters once you also build
@@ -33,10 +33,12 @@ The bot runs anywhere the agent CLIs run:
 npm install -g charness      # needs Node ≥ 22.12
 ```
 
-This registers the `telegramcode` command (it keeps the project's former name;
-`charness` works too). Coming from the old `telegramcode` npm package (2.x)?
-Run `npm uninstall -g telegramcode` first: both install the same commands. The
-config, `DATA_DIR` and sessions carry over as they are.
+This registers the `charness` command; the former `telegramcode` command (and
+`telegramCode`) still works as an alias. Coming from the old `telegramcode` npm
+package (2.x)? Run `npm uninstall -g telegramcode` first: both install the same
+commands. The config, `DATA_DIR` and sessions carry over as they are: a
+`~/.config/telegramcode/.env` is still read while `~/.config/charness/.env` does
+not exist.
 
 ### Environment variables
 
@@ -60,7 +62,7 @@ your chosen providers need them.
 
 | Variable | Default | Set only when |
 |---|---|---|
-| `WORK_ROOT` | `$PWD` | You cannot control the process cwd; normal launch uses `cd <projects-parent> && telegramcode` |
+| `WORK_ROOT` | `$PWD` | You cannot control the process cwd; normal launch uses `cd <projects-parent> && charness` |
 | `OPENCODE_URL` | `http://localhost:4096` | You use a custom OpenCode port or external server; the port must differ per instance |
 | `OPENCODE_USERNAME` | `opencode` | `OPENCODE_PASSWORD` is set for a protected OpenCode server |
 | `OPENCODE_PASSWORD` | — | Connecting to a protected OpenCode server |
@@ -73,7 +75,7 @@ your chosen providers need them.
 | `AGENT_IDLE_MINUTES` | `55` | A json-stream Claude topic idle for this long is compacted (when `/compact_on_idle` allows) and its process stopped; the session sleeps and the next message resumes it — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
-| `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` (in a checkout) starts an instance with a clean environment plus this variable |
+| `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/charness/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` (in a checkout) starts an instance with a clean environment plus this variable |
 | `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira setup](#jira-setup). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
 
 > `WORK_DIR` (1.x) is retired. Use the wrapper from the desired parent folder
@@ -97,7 +99,7 @@ hostnames: their ports and tmux servers are their own.
 
 ### Updating
 
-An npm install updates with `npm install -g charness@latest`; then restart `telegramcode` (what survives a restart:
+An npm install updates with `npm install -g charness@latest`; then restart `charness` (what survives a restart:
 [Restart behaviour](README.md#restart-behaviour)).
 
 #### Updating a checkout (self-update, no root)
@@ -112,23 +114,23 @@ safe to run blindly (e.g. from cron):
   a dev clone that is ahead of origin is never touched;
 - `yarn install --immutable` runs only when `yarn.lock` / `package.json`
   changed;
-- a hot-mode instance (`telegramcode hot`) rebuilds and restarts the worker
+- a hot-mode instance (`charness hot`) rebuilds and restarts the worker
   by itself (after a dependency install the script touches `tsconfig.json`
   so `tsc -w` recompiles with the new modules); a non-hot instance gets
   `yarn build` plus a restart notice — the script never kills processes;
 - changes to the hot supervisor itself (`src/cli.ts`, `src/cli/hot.ts`,
   `nodemon.json`) are flagged with a warning: those need a manual
-  `telegramcode hot` restart (nodemon reloads only the worker).
+  `charness hot` restart (nodemon reloads only the worker).
 
 For unattended updates give the deploying user read access to the repo (e.g.
 a read-only GitLab deploy key on a passphrase-less SSH key) and add a cron
 entry:
 
 ```cron
-*/10 * * * * /path/to/telegramcode/scripts/self-update.sh >> "$HOME/.local/state/telegramcode/self-update.log" 2>&1
+*/10 * * * * /path/to/charness/scripts/self-update.sh >> "$HOME/.local/state/charness/self-update.log" 2>&1
 ```
 
-(create the log directory once: `mkdir -p ~/.local/state/telegramcode`).
+(create the log directory once: `mkdir -p ~/.local/state/charness`).
 
 ## Telegram setup
 
@@ -155,12 +157,12 @@ The CLI is installed first — see [Install the CLI](#install-the-cli). After th
 Put the token where the bot reads it — the global config `.env`:
 
 ```bash
-mkdir -p ~/.config/telegramcode
-$EDITOR ~/.config/telegramcode/.env
+mkdir -p ~/.config/charness
+$EDITOR ~/.config/charness/.env
 ```
 
 ```dotenv
-# ~/.config/telegramcode/.env — the one place your keys live
+# ~/.config/charness/.env — the one place your keys live
 TELEGRAM_BOT_TOKEN=123456789:ABCdef...
 # GROQ_API_KEY=...     # optional: free voice transcription
 # OWNER_USER_ID=...    # set to drive the bot from its DM (step 2)
@@ -174,7 +176,7 @@ see [Environment Variables](#environment-variables).) The wrapper loads env
 from two locations, in order — a global base and an optional per-project
 override:
 
-1. `~/.config/telegramcode/.env` — base, set once, used everywhere.
+1. `~/.config/charness/.env` — base, set once, used everywhere.
 2. `$PWD/.env` — per-project tweaks (last write wins).
 
 The full annotated template is `.env.example` (shipped with the package and in
@@ -229,7 +231,7 @@ surface inert (group-only); set it and the DM lights up alongside the group. Use
 ### 3. Launch from your projects folder
 
 ```bash
-cd ~/projects && telegramcode
+cd ~/projects && charness
 ```
 
 That `$PWD` — the parent folder holding your repositories — is the folder the
@@ -267,7 +269,7 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 
 ### Required files structure
 
-Launch `telegramcode` from the parent folder that holds your project repos —
+Launch `charness` from the parent folder that holds your project repos —
 that `$PWD` is the work root, and every topic binds to a subfolder under it:
 
 ```
@@ -301,7 +303,7 @@ The settings of the Telegram surface; the ones every surface shares are under
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Token from @BotFather. Telegram only: a Jira-only instance refuses to start with it set — see [Jira setup](#jira-setup) |
 
-Start from the parent folder containing your projects: `cd ~/projects && telegramcode`.
+Start from the parent folder containing your projects: `cd ~/projects && charness`.
 That `$PWD` is the folder the bot works in — nothing else to set for it.
 
 **Access control.** There is no user allow-list. Whoever is a **creator or
@@ -422,7 +424,7 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
    ```bash
-   env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 ENV_FILE=/path/to/jira-instance.env telegramcode
+   env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 ENV_FILE=/path/to/jira-instance.env charness
    ```
 
    (In a checkout, `scripts/run-isolated.sh /path/to/jira-instance.env` does the same.)
