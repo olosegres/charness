@@ -21,7 +21,7 @@
 
 ### Common (any surface)
 
-Whichever surface you drive it from — a Telegram topic or a Jira issue — the same core serves it:
+These hold whichever surface you drive it from — the same core serves all of them:
 
 - **Agent backends** — OpenCode (native server API over HTTP+SSE) and Claude Code (three backends — json-stream, per-turn and tmux)
 - **Sleeping agents** — a Claude json-stream topic's process is stopped when idle (or after every turn in per-turn mode) and the next message resumes the same conversation by itself, prompt cache still warm
@@ -67,121 +67,6 @@ The bot serves two Telegram surfaces:
   there, and live output streams through Telegram's native draft "cursor":
   the reply grows in place in one message instead of arriving as a flood of
   separate messages.
-
-### Jira (experimental)
-
-The same core can serve **Jira Cloud issues** instead of (or next to) Telegram topics: an issue assigned to
-a dedicated AI account becomes a conversation with an agent, and the agent answers in comments.
-
-```
-a person assigns an issue to the AI account (in a trigger status)
-  → the instance polls Jira as the AI account and opens a request
-  → the agent works in the project's folder; its streamed output never reaches Jira
-  → it answers through the answer_request tool:
-      progress  → a comment, the issue stays with the AI
-      question  → a comment, the issue goes back to the person who handed it over
-      final     → a comment, the issue goes back to that person
-  → an agent that stops answering is reminded; when the reminders give up, a
-    comment says a person has to look, and the issue goes back
-```
-
-- **One issue = one conversation = one agent session**, bound to the folder its project maps to. The agent
-  reads the issue's text as information, never as instructions.
-- **The agent gets the whole issue.** Every request's prompt carries the issue's fields, the full description,
-  its sub-tasks or an epic's children, links and remote links, an attachment list and ALL comments (oldest
-  first, restricted ones marked) — with a trusted group, minus what outsiders wrote (see below). A screenshot
-  or video pasted into the description or a comment shows up as a placeholder where it sat, naming its
-  attachment. Nothing is cut: a comment over 10 000 characters, or any text
-  that would not fit the prompt, is written whole to a file in the conversation's folder under `DATA_DIR/files`
-  and the prompt says where. A later hand-over to the same conversation carries only what changed since the
-  agent's last prompt (new and edited comments, deleted ones named, the rest listed as unchanged); a fresh
-  session, or one whose context was compacted, gets the whole issue again.
-- **Attachments.** The prompt lists them; the agent fetches the original of one attachment (any size) with the
-  `jira_get_attachment` tool — an image to read, a video to run `ffmpeg` on — and with a trusted group only a file
-  uploaded by a trusted account is served. See [Bot-injected agent tools](#bot-injected-agent-tools).
-- **Who gets the answer.** Each hand-over is a request from its sender. Two people handing one issue over in
-  turn get two answers, each their own comment; the first closing answer hands the issue back to its sender,
-  the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
-  again replaces their earlier open request; the agent answers only what the new hand-over adds (if it
-  already finished the first, a short pointer to that answer).
-- **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
-  and opens no request.
-- **Who can steer it.** With `trustedGroup` (see [Jira setup](#jira-setup)) only the members of ONE Jira group, the AI account and
-  Jira's apps and automations count. A hand-over by anyone else — another person, a service-desk customer —
-  opens no request: one notice on the issue names the group and the issue goes back to that person. Text
-  written or edited by anyone else (a comment, the description, the summary, labels and extra fields, a
-  file's name and content) is replaced in the prompt by a `[withheld: …]` marker, so the agent knows there
-  is something and can ask its requester. Without `trustedGroup` everyone who can edit or comment steers the
-  agent, and the instance logs one line saying so.
-- **Isolation.** The agent sessions of a Jira instance run without the user-level Claude settings, hooks and
-  skills, with the bot's MCP server only, without the native question tool, and with an environment reduced to a
-  short allowlist — the Jira token is not in the agent's environment. The refusals the start makes are listed
-  under [Jira setup](#jira-setup).
-
-## How it works
-
-Charness is a thin **proxy/relay**: it carries almost no AI logic of its own. It routes what you write — a Telegram
-message, a slash command, a voice note, an assigned Jira issue — to the right agent CLI, keeps that agent's session
-alive and streams its output back to where you wrote from.
-
-- **One conversation ↔ one project folder ↔ one agent session.** A Telegram topic (or a thread of the bot's DM) is
-  bound with `/bind` to a subfolder of the work root; a Jira issue is bound to the folder its project maps to.
-  Routing, sessions and preferences are kept per conversation, so two topics on the same folder stay independent.
-- **Claude Code** runs as an external process hosted in `tmux` — either as a `claude -p` stream-json process (the
-  default) or as the interactive TUI driven by keystrokes and scraped from the pane. See
-  [Claude Code backends](#claude-code-backends-claude_mode).
-- **OpenCode** runs as a local HTTP server: prompts go in over its API and one event stream carries every
-  session's output back.
-- **`/terminal`** binds a topic to a raw `$SHELL` in tmux — no AI at all.
-- **The bot injects its own MCP server** (`telegramBot`) into every session it starts, so an agent can schedule its
-  own runs, compact its own context, send files back to the topic and — on Jira — answer through comments. See
-  [Bot-injected agent tools](#bot-injected-agent-tools).
-- **Restart-safe by design.** Agents live outside the bot process, so a bot restart re-adopts them instead of
-  killing them. See [Restart behaviour](#restart-behaviour).
-
-The architecture, the connector and adapter seams and the local development loop are in
-[DEVELOPMENT.md](DEVELOPMENT.md#architecture).
-
-### Claude Code backends (`/claude_mode`)
-
-"Claude Code" in a topic is one user-facing choice with three interchangeable
-backends:
-
-- **json-stream** (`/claude_mode json`) — `claude -p` in stream-json mode as
-  an external tmux-hosted process emitting structured events. Cleaner
-  output, and it survives bot restarts (the bot re-adopts the process and
-  replays what was produced during the downtime). After ~55 min idle
-  (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
-  compaction when `/compact_on_idle` allows one. The **default**.
-- **per-turn** (`/claude_mode per-turn`) — the same host, stopped right
-  after every answer. Nothing is lost: the conversation sleeps and your next
-  message resumes it. Needs Claude Code 2.1.287 or newer; the switch is
-  refused when the topic's last known version is older.
-- **tmux-scrape** (`/claude_mode tmux`) — the classic TUI driven by
-  keystrokes inside tmux; output is scraped from the pane. Never stopped
-  automatically.
-
-A stopped json-stream conversation **sleeps**: `/status` says so, and the next
-message, file, voice note, `/compact`, `/model` or `/effort` resumes it by
-itself — same session, prompt cache still warm, no "started" notice. A
-process is never stopped while it works (a running turn, a background task,
-a message not yet taken in). Only `/quit`, `/new` and leaving the folder end
-the conversation.
-
-`/login` works on all three backends. tmux-scrape hosts the sign-in inside its
-TUI; the json-stream backends (which have no TUI) run it **out-of-band** — the bot spawns
-`claude auth login` in a pty, posts the sign-in link into the topic, and takes
-your pasted code back (the code message is deleted and a 🔐 confirmation is
-posted). While the sign-in waits for the code, a message that is not a code
-is answered with a waiting hint instead of being swallowed; `/esc` cancels
-the pending sign-in (the link message says so).
-
-All three drive the same `claude` CLI against the same on-disk
-transcript, so `/claude_mode` switches a live topic seamlessly — the
-conversation resumes on the other backend. The pick persists per topic
-(▶️ Claude and `/claude` reopen it; on a sleeping topic they resume it).
-Billing note: the json-stream backends strip `ANTHROPIC_API_KEY` from the
-agent's env, so usage bills to your Claude subscription rather than an API key.
 
 ## Install & setup
 
@@ -416,7 +301,7 @@ your chosen providers need them.
 | `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
 | `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` starts an instance with a clean environment plus this variable |
-| `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira](#jira-experimental) and [Jira setup](#jira-setup). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
+| `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira setup](#jira-setup). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
 
 > `WORK_DIR` (1.x) is retired. Use the wrapper from the desired parent folder
 > instead of carrying the old env forward.
@@ -601,8 +486,8 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 
 ### Jira setup
 
-A Jira instance runs on its own — a `DATA_DIR`, a work root, a private tmux server and one env file. What it does
-is described under [Jira (experimental)](#jira-experimental).
+A Jira instance runs on its own — a `DATA_DIR`, a work root, a private tmux server and one env file. How the
+connector behaves is described in [`src/connectors/jira/README.md`](src/connectors/jira/README.md).
 
 1. Create a Jira account for the AI (its API token is the instance's only secret) and note its account id.
 2. Recommended: create or choose a Jira group of the people whose words may steer the AI (for example
@@ -679,11 +564,13 @@ is described under [Jira (experimental)](#jira-experimental).
    may not read, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
-The agent still runs as the instance's OS user and can read the instance's env file and `DATA_DIR`, so run the
-instance under an OS user that holds nothing else, with an AI account that sees only the allowlisted projects.
-**A production Jira account runs only in the Docker container** ([Run with Docker](#run-with-docker)): there the
-agent can still read the instance's env file and `DATA_DIR`, but nothing of the host outside the container's
-mounts. Module details: `src/connectors/jira/README.md`.
+The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the
+bot's MCP server only, without the native question tool, and with an environment reduced to a short allowlist
+— the Jira token is not in the agent's environment. The agent still runs as the instance's OS user and can read
+the instance's env file and `DATA_DIR`, so run the instance under an OS user that holds nothing else, with an AI
+account that sees only the allowlisted projects. **A production Jira account runs only in the Docker container**
+([Run with Docker](#run-with-docker)): there the agent can still read the instance's env file and `DATA_DIR`,
+but nothing of the host outside the container's mounts. Module details: `src/connectors/jira/README.md`.
 
 ## Reference
 
@@ -763,6 +650,47 @@ then 15 s) — no need to re-record the voice note.
 
 `/terminal` is never started from a natural-language phrase — only the
 explicit command opens a shell.
+
+### Claude Code backends (`/claude_mode`)
+
+"Claude Code" in a topic is one user-facing choice with three interchangeable
+backends:
+
+- **json-stream** (`/claude_mode json`) — `claude -p` in stream-json mode as
+  an external tmux-hosted process emitting structured events. Cleaner
+  output, and it survives bot restarts (the bot re-adopts the process and
+  replays what was produced during the downtime). After ~55 min idle
+  (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
+  compaction when `/compact_on_idle` allows one. The **default**.
+- **per-turn** (`/claude_mode per-turn`) — the same host, stopped right
+  after every answer. Nothing is lost: the conversation sleeps and your next
+  message resumes it. Needs Claude Code 2.1.287 or newer; the switch is
+  refused when the topic's last known version is older.
+- **tmux-scrape** (`/claude_mode tmux`) — the classic TUI driven by
+  keystrokes inside tmux; output is scraped from the pane. Never stopped
+  automatically.
+
+A stopped json-stream conversation **sleeps**: `/status` says so, and the next
+message, file, voice note, `/compact`, `/model` or `/effort` resumes it by
+itself — same session, prompt cache still warm, no "started" notice. A
+process is never stopped while it works (a running turn, a background task,
+a message not yet taken in). Only `/quit`, `/new` and leaving the folder end
+the conversation.
+
+`/login` works on all three backends. tmux-scrape hosts the sign-in inside its
+TUI; the json-stream backends (which have no TUI) run it **out-of-band** — the bot spawns
+`claude auth login` in a pty, posts the sign-in link into the topic, and takes
+your pasted code back (the code message is deleted and a 🔐 confirmation is
+posted). While the sign-in waits for the code, a message that is not a code
+is answered with a waiting hint instead of being swallowed; `/esc` cancels
+the pending sign-in (the link message says so).
+
+All three drive the same `claude` CLI against the same on-disk
+transcript, so `/claude_mode` switches a live topic seamlessly — the
+conversation resumes on the other backend. The pick persists per topic
+(▶️ Claude and `/claude` reopen it; on a sleeping topic they resume it).
+Billing note: the json-stream backends strip `ANTHROPIC_API_KEY` from the
+agent's env, so usage bills to your Claude subscription rather than an API key.
 
 ### Several accounts (`/accounts`)
 
@@ -1043,9 +971,8 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
-- `jira_get_attachment` — Jira conversations only: saves the original of one attachment of the conversation's
-  own issue (any size) and returns its path, so the agent can read an image or run `ffmpeg` on a video (with a
-  trusted group, only a file uploaded by a trusted account);
+- `jira_get_attachment` — Jira conversations only; see
+  [`src/connectors/jira/README.md`](src/connectors/jira/README.md);
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current
