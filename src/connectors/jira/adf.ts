@@ -184,6 +184,11 @@ export function convertMarkdownToAdf(markdown: string): AdfDocument {
   return { ...document, content: getSafeNodes(getRestoredNodes(getNodesWithoutEmptyText(document.content))) };
 }
 
+/** A text that is data, never Markdown (an operator's group name inside it): one paragraph, converted by nothing. */
+export function createPlainTextAdf(text: string): AdfDocument {
+  return { version: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+}
+
 /** Nodes that start a line of their own in the text form. */
 const blockNodeTypes = new Set([
   'paragraph', 'heading', 'blockquote', 'codeBlock', 'rule', 'panel', 'listItem', 'taskItem', 'decisionItem',

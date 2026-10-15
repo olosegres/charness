@@ -37,8 +37,9 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
 2. Per issue: allowlist re-checked on what Jira returned → still assigned to the AI account and in a trigger
    status → trigger detected (`trigger.ts`: the NEWEST changelog entry that assigned the issue or moved it into
    a trigger status, else the creation; changelog pages are read newest first, only as far as needed) →
-   already seen? (`triggerLog.ts`) → self-authored? → run budget (over it the issue is `parked` with a notice
-   and handed back) → fetch the issue's context (`issueContext.ts`: the issue with its fields and the project's
+   already seen? (`triggerLog.ts`) → self-authored? → with `trustedGroup`: is the HAND-OVER backed by the group?
+   (see below; if not, `untrusted`: a fixed notice, the issue handed back, no request) → run budget (over it the
+   issue is `parked` with a notice and handed back) → fetch the issue's context (`issueContext.ts`: the issue with its fields and the project's
    `extraFields`, ALL its comments page by page, its remote links, an epic's children by `parent = KEY`) → bind the conversation to the project's folder → open a request
    (origin `trackerEvent`) → post, NOT awaited (a busy session may take minutes) → RECORD the trigger once the
    post has settled, also when it failed (the open request then belongs to the wake-up engine). The origin names
@@ -47,6 +48,18 @@ Operator-facing setup steps: the public `README.md` § "Jira connector".
    two open requests and each gets their own comment; the first closing answer hands the issue back to its own
    sender, the second finds it no longer the AI's and leaves the assignee alone. The newer request's prompt
    header names the request it replaced.
+   **The hand-over gate** (only with `trustedGroup`, `inbound.ts` `getDecision`): the gate looks at the account
+   that made the triggering change — the trigger's author (it assigned the issue to the AI account or moved it into
+   a trigger status), or, for an issue created already matching, its creator (else its reporter). A member, an
+   app or an automation → go on; any other person, a service-desk customer or an account without `accountType` →
+   `untrusted`. When Jira names no one for the change, the requester stands in (fail closed: no account at all is
+   untrusted). The requester — who gets the answer and the hand-back — keeps its own rule (step 4), so an
+   automation's hand-over answers to the person whose action came before it, who may be outside the group: the gate
+   trusted the automation, and the requester is not a second gate (the operator's project rule — no automation
+   that acts on outside text or actions in a listed project — keeps such a person inside the team). `untrusted`
+   is a recorded decision like `parked` (written BEFORE the notice, so a failed or repeated poll never posts it
+   twice; not counted against the run budget; the log line `[jira] poll: PROJ-1 untrusted`), and nothing of the
+   issue is fetched for it.
 3. A restart before the post settled leaves the trigger unrecorded, so the next poll opens a fresh request
    (superseding the old one) rather than leaving a request the agent never saw. Only a crash in the instant
    between a finished post and its record posts a trigger twice. An issue with a post in flight is skipped.
@@ -112,6 +125,11 @@ another platform's state.
   `final` answer to an OPEN request then hands the issue back to the requester, only while it is still
   assigned to the AI account; never for `progress`, never for a superseded request. Comment first, then the
   hand-back: a failed hand-back is a delivered answer plus a warning (a retry would post it twice).
+- Two notices are the bot's own, with no agent behind them, each followed by the same hand-back (and no
+  hand-back when the notice did not land, only a warning — its trigger is recorded already, so it is not
+  repeated): the park notice, and the notice of an `untrusted` hand-over — "Only members of the AI's trusted
+  group (`<configured name>`) can hand it work, so nothing was started. Ask a member to hand it over." — posted
+  as plain text, so a group name is never read as Markdown.
 - The first comment refused → an error (nothing posted, safe to send again). A later part that did not land →
   delivered with a warning saying where the unposted rest starts.
 - `addComment` is never retried by the client (a second POST would post twice). A post of UNKNOWN outcome

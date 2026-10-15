@@ -238,6 +238,7 @@ export async function prepareJiraConnector(context: {
       trust: trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null,
       now,
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
+      refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
     });
     inbound.start();
     console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${config.pollIntervalMs / 1000} s`);

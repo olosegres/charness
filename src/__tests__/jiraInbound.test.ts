@@ -25,7 +25,7 @@ import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
 import type { RequestOrigin } from '../requests/types';
 import { buildSupersededRequestsLine } from '../requests/requestHeader';
-import { JiraTrustedGroupGoneError, type JiraTrust } from '../connectors/jira/trustedGroup';
+import { createJiraTrust, JiraTrustedGroupGoneError, type JiraTrust } from '../connectors/jira/trustedGroup';
 
 const aiAccountId = 'ai-account';
 const requester: JiraAccount = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
@@ -73,6 +73,8 @@ interface Recorded {
   /** What each request was opened with, to keep for a re-post (R21). */
   storedPrompts: string[];
   parked: Array<{ issueKey: string; requester: JiraAccount | null }>;
+  /** Each hand-over the trusted group did not back: who got the notice, and the group's name it carried. */
+  untrusted: Array<{ issueKey: string; requester: JiraAccount | null; groupName: string }>;
 }
 
 describe('JiraInbound', () => {
@@ -89,7 +91,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -168,6 +170,10 @@ describe('JiraInbound', () => {
       parkIssue: async (issueKey, parkedRequester) => {
         recorded.calls.push(`park ${issueKey}`);
         recorded.parked.push({ issueKey, requester: parkedRequester });
+      },
+      refuseUntrusted: async (issueKey, refusedRequester, groupName) => {
+        recorded.calls.push(`untrusted ${issueKey}`);
+        recorded.untrusted.push({ issueKey, requester: refusedRequester, groupName });
       },
       ...overrides,
     });
@@ -670,6 +676,170 @@ describe('JiraInbound', () => {
       },
     });
     assert.deepEqual([...await inbound.pollOnce()], [['PROJ-25', 'failed'], ['PROJ-26', 'request']]);
+  });
+
+  describe('the hand-over decides (T1, T2 extended)', () => {
+    const member: JiraAccount = { accountId: 'member-account', accountType: 'atlassian', displayName: 'Member' };
+    const outsider: JiraAccount = { accountId: 'outsider-account', accountType: 'atlassian', displayName: 'Outsider' };
+    const automation: JiraAccount = { accountId: 'rule', accountType: 'app' };
+    const customer: JiraAccount = { accountId: 'customer-account', accountType: 'customer' };
+    const memberReporter: JiraAccount = { accountId: 'member-reporter', accountType: 'atlassian' };
+
+    /** The real trust over a group of `memberAccountIds` that was just read (nothing to refresh). */
+    function createGroupTrust(memberAccountIds: string[]): JiraTrust {
+      return createJiraTrust({
+        client: { getGroupByName: async () => null, getGroupMembers: async () => [] },
+        snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set(memberAccountIds), readAtMs: nowMs },
+        aiAccountId,
+        now: () => nowMs,
+      });
+    }
+    const createGatedInbound = (memberAccountIds: string[] = [member.accountId, memberReporter.accountId]): JiraInbound =>
+      createInbound({ trust: createGroupTrust(memberAccountIds) });
+    const createAssignedBy = (issueKey: string, author: JiraAccount, extra: JiraChangelogHistory[] = []): JiraIssue =>
+      createIssue(issueKey, { histories: [...extra, createHistory('300', 30, [{ field: 'assignee', to: aiAccountId }], author)] });
+
+    it('a member\'s hand-over opens a request, answered to that member', async () => {
+      searchPages = [{ issues: [createAssignedBy('PROJ-60', member)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-60', 'request']]);
+      assert.equal(recorded.origins[0].attributes.requester, member.accountId);
+      assert.deepEqual(recorded.untrusted, []);
+    });
+
+    it('a non-member\'s hand-over: untrusted and recorded, the notice and the hand-back go to that person, no request — and no second notice at the next poll', async () => {
+      searchPages = [{ issues: [createAssignedBy('PROJ-61', outsider)] }, { issues: [createAssignedBy('PROJ-61', outsider)] }];
+      const inbound = createGatedInbound();
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-61', 'untrusted']]);
+      assert.deepEqual(recorded.untrusted, [{ issueKey: 'PROJ-61', requester: outsider, groupName: 'ai-trusted' }]);
+      assert.equal(requestCount, 0);
+      assert.equal(triggerLog.checkIsSeen('PROJ-61', '300'), true);
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-61', 'seen']]);
+      assert.equal(recorded.untrusted.length, 1, 'at most one notice per trigger');
+      // Not even a request's worth of reads: nothing of the issue was fetched.
+      assert.ok(!recorded.calls.some((call) => call.startsWith('getIssue') || call.startsWith('getComments') || call.startsWith('bind') || call.startsWith('create')));
+    });
+
+    it('an untrusted decision survives a restart: the notice is not posted again', async () => {
+      searchPages = [{ issues: [createAssignedBy('PROJ-62', outsider)] }];
+      await createGatedInbound().pollOnce();
+      triggerLog = await createLoadedTriggerLog();
+      searchPages = [{ issues: [createAssignedBy('PROJ-62', outsider)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-62', 'seen']]);
+      assert.equal(recorded.untrusted.length, 1);
+    });
+
+    it('an app\'s hand-over starts the agent although the person before it is outside the group — the answer goes to that person (T2 extended)', async () => {
+      const outsiderThenRule = createIssue('PROJ-63', {
+        histories: [
+          createHistory('200', 0, [{ field: 'summary', from: 'a', to: 'b' }], outsider),
+          createHistory('300', 30, [{ field: 'assignee', to: aiAccountId }], automation),
+        ],
+      });
+      searchPages = [{ issues: [outsiderThenRule] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-63', 'request']]);
+      assert.equal(recorded.origins[0].attributes.requester, outsider.accountId);
+      assert.deepEqual(recorded.untrusted, []);
+    });
+
+    it('an app that created an issue already assigned to the AI starts the agent — the answer goes to the reporter', async () => {
+      const createdByRule: JiraIssue = { ...createIssue('PROJ-64', { histories: [] }), fields: { ...createIssue('PROJ-64').fields, creator: automation, reporter } };
+      searchPages = [{ issues: [createdByRule] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-64', 'request']]);
+      assert.equal(recorded.origins[0].attributes.triggerId, createdTriggerId);
+      assert.equal(recorded.origins[0].attributes.requester, reporter.accountId);
+    });
+
+    it('a person outside the group who created the issue assigned to the AI is untrusted — the notice goes to them', async () => {
+      const createdByOutsider: JiraIssue = { ...createIssue('PROJ-65', { histories: [] }), fields: { ...createIssue('PROJ-65').fields, creator: outsider, reporter: outsider } };
+      searchPages = [{ issues: [createdByOutsider] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-65', 'untrusted']]);
+      assert.deepEqual(recorded.untrusted, [{ issueKey: 'PROJ-65', requester: outsider, groupName: 'ai-trusted' }]);
+    });
+
+    it('a service-desk customer\'s hand-over is untrusted; the notice goes to the nearest earlier person, else the reporter', async () => {
+      searchPages = [{ issues: [createAssignedBy('PROJ-66', customer)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-66', 'untrusted']]);
+      assert.deepEqual(recorded.untrusted, [{ issueKey: 'PROJ-66', requester: reporter, groupName: 'ai-trusted' }]);
+    });
+
+    it('an account without an accountType is read as a person — a member is trusted, anyone else is not', async () => {
+      const untyped: JiraAccount = { accountId: 'untyped-account' };
+      searchPages = [{ issues: [createAssignedBy('PROJ-67', untyped)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-67', 'untrusted']]);
+      searchPages = [{ issues: [createAssignedBy('PROJ-68', untyped)] }];
+      assert.deepEqual([...await createGatedInbound([untyped.accountId]).pollOnce()], [['PROJ-68', 'request']]);
+    });
+
+    it('a change Jira names no author for: the requester decides — a member requester is trusted, an outside one is not', async () => {
+      const unnamed = (issueKey: string, issueReporter: JiraAccount): JiraIssue => ({
+        ...createIssue(issueKey, { histories: [{ id: '300', created: '2026-10-03T09:30:00.000+0000', items: [{ field: 'assignee', to: aiAccountId }] }] }),
+        fields: { ...createIssue(issueKey).fields, reporter: issueReporter },
+      });
+      searchPages = [{ issues: [unnamed('PROJ-69', memberReporter), unnamed('PROJ-70', outsider)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-69', 'request'], ['PROJ-70', 'untrusted']]);
+      assert.deepEqual(recorded.untrusted, [{ issueKey: 'PROJ-70', requester: outsider, groupName: 'ai-trusted' }]);
+    });
+
+    it('an unnamed change with an app as the reporter is trusted — the reporter stands in for the hand-over', async () => {
+      const unnamed: JiraIssue = {
+        ...createIssue('PROJ-71', { histories: [{ id: '300', created: '2026-10-03T09:30:00.000+0000', items: [{ field: 'assignee', to: aiAccountId }] }] }),
+        fields: { ...createIssue('PROJ-71').fields, reporter: automation },
+      };
+      searchPages = [{ issues: [unnamed] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-71', 'request']]);
+    });
+
+    it('an unnamed change with no reporter either fails closed: untrusted, and nobody to hand the issue back to', async () => {
+      const nobody: JiraIssue = {
+        ...createIssue('PROJ-72', { histories: [{ id: '300', created: '2026-10-03T09:30:00.000+0000', items: [{ field: 'assignee', to: aiAccountId }] }] }),
+        fields: { ...createIssue('PROJ-72').fields, reporter: null, creator: null },
+      };
+      searchPages = [{ issues: [nobody] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-72', 'untrusted']]);
+      assert.deepEqual(recorded.untrusted, [{ issueKey: 'PROJ-72', requester: null, groupName: 'ai-trusted' }]);
+    });
+
+    it('the self-authored check is still first: the AI account\'s own change is selfAuthored, never untrusted', async () => {
+      const refusingEveryone: JiraTrust = { groupName: 'ai-trusted', refreshIfStale: async () => {}, checkIsTrusted: () => false };
+      searchPages = [{ issues: [createAssignedBy('PROJ-73', { accountId: aiAccountId, accountType: 'atlassian' })] }];
+      assert.deepEqual([...await createInbound({ trust: refusingEveryone }).pollOnce()], [['PROJ-73', 'selfAuthored']]);
+      assert.deepEqual(recorded.untrusted, []);
+    });
+
+    it('an untrusted trigger does not count against the run budget: the member\'s next hand-over still opens a request', async () => {
+      // The budget is 2 requests; three refused hand-overs come first.
+      for (const [index, minute] of [10, 20, 30].entries()) {
+        const refused = createIssue('PROJ-74', { histories: [createHistory(`${index + 1}`, minute, [{ field: 'assignee', to: aiAccountId }], outsider)] });
+        searchPages = [{ issues: [refused] }];
+        assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-74', 'untrusted']]);
+      }
+      assert.equal(triggerLog.getRequestCountLastDay('PROJ-74', nowMs), 0);
+      searchPages = [{ issues: [createAssignedBy('PROJ-74', member, [createHistory('9', 5, [{ field: 'assignee', to: aiAccountId }], outsider)])] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-74', 'request']]);
+    });
+
+    it('the gate stands before the budget: an over-budget issue handed over by an outsider is untrusted, not parked', async () => {
+      triggerLog.record({ issueKey: 'PROJ-75', triggerId: 'a', outcome: 'request', at: nowMs - 2 * 60 * 60 * 1000 });
+      triggerLog.record({ issueKey: 'PROJ-75', triggerId: 'b', outcome: 'request', at: nowMs - 60 * 60 * 1000 });
+      searchPages = [{ issues: [createAssignedBy('PROJ-75', outsider)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-75', 'untrusted']]);
+      assert.deepEqual(recorded.parked, []);
+    });
+
+    it('a decision that cannot be recorded is failed, and no notice goes out (it would repeat at every poll)', async () => {
+      const logPath = path.join(dataDir, jiraTriggerLogFileName);
+      fs.mkdirSync(logPath);
+      searchPages = [{ issues: [createAssignedBy('PROJ-76', outsider)] }];
+      assert.deepEqual([...await createGatedInbound().pollOnce()], [['PROJ-76', 'failed']]);
+      assert.deepEqual(recorded.untrusted, []);
+      fs.rmdirSync(logPath);
+    });
+
+    it('without a trusted group nothing is gated: an outsider\'s hand-over opens a request, as before', async () => {
+      searchPages = [{ issues: [createAssignedBy('PROJ-77', outsider)] }];
+      assert.deepEqual([...await createInbound().pollOnce()], [['PROJ-77', 'request']]);
+      assert.deepEqual(recorded.untrusted, []);
+    });
   });
 
   describe('the trusted group\'s membership is read before anything is decided', () => {

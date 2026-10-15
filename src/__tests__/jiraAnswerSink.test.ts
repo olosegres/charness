@@ -4,17 +4,17 @@
  * final answer to an open request and only while the issue is still the AI's,
  * a failed hand-back as a warning, the read-back of a post of unknown outcome,
  * the at-most-once resend of an unconfirmed post (R29, over a real file), the
- * alert and the park notice.
+ * alert, the park notice and the notice of an untrusted hand-over.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildJiraAlertText, buildJiraParkText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
+import { buildJiraAlertText, buildJiraParkText, buildJiraUntrustedText, createJiraAnswerSink, jiraReadBackClockSkewMs, jiraReadBackDelayMs } from '../connectors/jira/answerSink';
 import { getAdfText, jiraCommentMarkdownMaxChars, type AdfDocument } from '../connectors/jira/adf';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import type { JiraClient, JiraComment, JiraCommentPostResult, JiraIssue } from '../connectors/jira/client';
@@ -332,5 +332,52 @@ describe('alert and park notice', () => {
     assert.deepEqual(jira.postedTexts, [buildJiraParkText(5)]);
     assert.match(jira.postedTexts[0], /handed to the AI 5 times in the last 24 hours/);
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
+  });
+
+  describe('the notice of a hand-over the trusted group does not back (T1)', () => {
+    it('the fixed text names the configured group, then the issue goes back to the requester', async () => {
+      await sink().refuseUntrusted(issueKey, { accountId: 'outsider-account' }, 'ai-trusted');
+      assert.deepEqual(jira.postedTexts, [
+        'Only members of the AI\'s trusted group (ai-trusted) can hand it work, so nothing was started. Ask a member to hand it over.',
+      ]);
+      assert.deepEqual(jira.calls, ['comment PROJ-12', 'assignee? PROJ-12', 'assign PROJ-12 outsider-account']);
+    });
+
+    it('a group name is data: Markdown in it reaches the comment as written, not converted', async () => {
+      const groupName = 'team_*dev*_ [ops] `x`';
+      await sink().refuseUntrusted(issueKey, { accountId: 'outsider-account' }, groupName);
+      assert.deepEqual(jira.postedTexts, [buildJiraUntrustedText(groupName)]);
+      assert.ok(jira.postedTexts[0].includes(`(${groupName})`));
+    });
+
+    it('a notice Jira refused is a warning and NO hand-back — the issue stays the AI\'s', async () => {
+      jira.postOutcomes = [new Error('Jira POST failed with 403')];
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        await sink().refuseUntrusted(issueKey, { accountId: 'outsider-account' }, 'ai-trusted');
+        assert.deepEqual(jira.calls, ['comment PROJ-12']);
+        assert.equal(warnings.mock.calls.length, 1);
+        assert.match(String(warnings.mock.calls[0].arguments[0]), /^\[jira\] PROJ-12: untrusted notice not posted: Jira did not take the comment/);
+      } finally {
+        warnings.mock.restore();
+      }
+    });
+
+    it('no requester known: the notice stands and the issue stays assigned, with a warning', async () => {
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        await sink().refuseUntrusted(issueKey, null, 'ai-trusted');
+        assert.deepEqual(jira.calls, ['comment PROJ-12']);
+        assert.match(String(warnings.mock.calls[0].arguments[0]), /^\[jira\] PROJ-12: untrusted: no requester is known/);
+      } finally {
+        warnings.mock.restore();
+      }
+    });
+
+    it('an issue someone took meanwhile keeps its new assignee', async () => {
+      jira.assignee = 'someone-else';
+      await sink().refuseUntrusted(issueKey, { accountId: 'outsider-account' }, 'ai-trusted');
+      assert.deepEqual(jira.calls, ['comment PROJ-12', 'assignee? PROJ-12']);
+    });
   });
 });

@@ -2,7 +2,7 @@ import type { SessionKey } from '../../sessionKey';
 import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink';
 import type { RequestAlertReason } from '../../requests/types';
 import { emptyRequester, getRequestRequester } from '../../requests/requestGroup';
-import { convertMarkdownToAdf, createCommentBodies, getAdfText, type AdfDocument } from './adf';
+import { convertMarkdownToAdf, createCommentBodies, createPlainTextAdf, getAdfText, type AdfDocument } from './adf';
 import { getSingleLineText } from './promptText';
 import type { JiraAccount, JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
@@ -57,6 +57,14 @@ export function buildJiraParkText(runBudgetPer24h: number): string {
     'Assign it to the AI again later, or ask the operator to raise the limit.';
 }
 
+/**
+ * @description The notice of a hand-over the trusted group does not back (T1): nothing was started, and who can
+ * hand the AI work. Fixed text — no agent ran. `groupName` is the group as `jira.json` names it.
+ */
+export function buildJiraUntrustedText(groupName: string): string {
+  return `Only members of the AI's trusted group (${groupName}) can hand it work, so nothing was started. Ask a member to hand it over.`;
+}
+
 export interface JiraAnswerSinkDeps {
   client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue'>;
   aiAccountId: string;
@@ -96,6 +104,8 @@ function getTextPreview(body: AdfDocument): string {
 export interface JiraAnswerSink extends AnswerSink {
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
   parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
+  /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
+  refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
 }
 
 export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
@@ -174,6 +184,20 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   }
 
   /**
+   * A notice the bot writes itself (no agent ran), then the hand-back to the requester. A notice that did not land
+   * is a warning and no hand-back: the issue stays the AI's, and the trigger is recorded already, so it is not repeated.
+   */
+  async function postNoticeAndHandBack(issueKey: string, requester: JiraAccount | null, notice: AdfDocument, noticeKind: 'park' | 'untrusted'): Promise<void> {
+    const posted = await postComments(issueKey, [notice], null);
+    if (posted.postedCount === 0 && posted.failure) {
+      console.warn(`[jira] ${issueKey}: ${noticeKind} notice not posted: ${getNothingPostedError(posted.failure)}`);
+      return;
+    }
+    const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
+    if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
+  }
+
+  /**
    * A failure before the first comment landed. The agent has no way to look at the
    * issue itself, so the text says what to do: send again — and, when the issue
    * could not be read, to send the same text unchanged, since only an identical
@@ -236,14 +260,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     async releaseAlert() {},
 
-    async parkIssue(issueKey, requester) {
-      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h))], null);
-      if (posted.postedCount === 0 && posted.failure) {
-        console.warn(`[jira] ${issueKey}: park notice not posted: ${getNothingPostedError(posted.failure)}`);
-        return;
-      }
-      const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
-      if (handBackWarning) console.warn(`[jira] ${issueKey}: park: ${handBackWarning}`);
-    },
+    parkIssue: (issueKey, requester) =>
+      postNoticeAndHandBack(issueKey, requester, convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h)), 'park'),
+
+    refuseUntrusted: (issueKey, requester, groupName) =>
+      postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted'),
   };
 }

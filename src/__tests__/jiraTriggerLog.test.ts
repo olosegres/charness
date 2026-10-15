@@ -56,6 +56,16 @@ describe('JiraTriggerLog', () => {
     assert.equal((await createLoadedLog()).getRequestCountLastDay('PROJ-12', nowMs), 1, 'the same after a reload');
   });
 
+  it('an untrusted trigger is seen — after a restart too — and never counts against the budget', async () => {
+    const log = await createLoadedLog();
+    assert.equal(log.record({ issueKey: 'PROJ-12', triggerId: '100', outcome: 'untrusted', at: nowMs - hourMs }), true);
+    assert.equal(log.checkIsSeen('PROJ-12', '100'), true);
+    assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 0);
+    const reloaded = await createLoadedLog();
+    assert.equal(reloaded.checkIsSeen('PROJ-12', '100'), true, 'its line is readable, not skipped as unknown');
+    assert.equal(reloaded.getRequestCountLastDay('PROJ-12', nowMs), 0);
+  });
+
   it('unreadable lines are skipped; the rest still load', async () => {
     fs.writeFileSync(logPath, [
       '{not json',

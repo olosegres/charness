@@ -19,7 +19,7 @@ import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
 import { resolveThreadFilesDir } from '../botFileStorage';
-import { convertMarkdownToAdf } from '../connectors/jira/adf';
+import { convertMarkdownToAdf, getAdfText } from '../connectors/jira/adf';
 import { jiraCommentSpillMinChars } from '../connectors/jira/promptSpill';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
@@ -36,6 +36,9 @@ let myselfFailures = { count: 0, status: 503 };
 /** Status of the project-statuses lookup; 200 serves the statuses. */
 let projectStatusesStatus = 200;
 const requestPaths: string[] = [];
+/** The text of every comment posted and the account of every assignee change the fake Jira took. */
+const postedCommentTexts: string[] = [];
+const assigneeRequests: string[] = [];
 /** The site's fields (`GET /field`) and the custom values the issue returns. */
 let siteFields: Array<{ id: string; name: string }> = [];
 let issueCustomFields: Record<string, string> = {};
@@ -82,7 +85,10 @@ describe('prepareJiraConnector', () => {
     server = http.createServer((request, response) => {
       const url = request.url ?? '';
       requestPaths.push(`${request.method} ${url.split('?')[0]}`);
-      request.resume();
+      let requestBody = '';
+      request.on('data', (chunk: Buffer) => {
+        requestBody += chunk.toString('utf8');
+      });
       request.on('end', () => {
         if (url === '/rest/api/3/myself' && myselfFailures.count > 0) {
           myselfFailures.count -= 1;
@@ -124,11 +130,13 @@ describe('prepareJiraConnector', () => {
           return sendJson(response, { isLast: true, values: isBulk ? siteGroups.filter((group) => group.name === groupName) : groupMembers });
         }
         if (request.method === 'POST' && url === '/rest/api/3/issue/PROJ-1/comment') {
+          postedCommentTexts.push(getAdfText(JSON.parse(requestBody).body));
           response.writeHead(201, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ id: '20001' }));
           return;
         }
         if (request.method === 'PUT' && url === '/rest/api/3/issue/PROJ-1/assignee') {
+          assigneeRequests.push(JSON.parse(requestBody).accountId);
           response.writeHead(204);
           response.end();
           return;
@@ -163,6 +171,8 @@ describe('prepareJiraConnector', () => {
     groupBulkStatus = 200;
     groupMemberStatus = 200;
     requestPaths.length = 0;
+    postedCommentTexts.length = 0;
+    assigneeRequests.length = 0;
   });
   afterEach(() => {
     connector?.stop();
@@ -187,6 +197,25 @@ describe('prepareJiraConnector', () => {
   }
 
   const prepare = (): Promise<JiraConnector> => prepareJiraConnector({ dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl });
+  const waitUntil = async (isDone: () => boolean): Promise<void> => {
+    for (let attempt = 0; attempt < 200 && !isDone(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(isDone(), 'the awaited call never came');
+  };
+  /** Start polling and wait for the first poll's search; the prompts it posted (none when the issue was not handed over by a trusted account). */
+  const startAndSettlePoll = async (): Promise<string[]> => {
+    const prompts: string[] = [];
+    connector?.start({
+      bindConversation: async () => {},
+      createRequest: async () => ({ id: 'req_1' }),
+      postRequest: async (_key, _requestId, prompt) => {
+        prompts.push(prompt.buildText({ isFresh: true }));
+      },
+    });
+    await waitUntil(() => requestPaths.includes('POST /rest/api/3/search/jql'));
+    // The poll's decisions are made right after its search answered.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return prompts;
+  };
   const startAndWaitForPrompt = (): Promise<string> => new Promise<string>((resolve) => {
     connector?.start({
       bindConversation: async () => {},
@@ -410,18 +439,41 @@ describe('prepareJiraConnector', () => {
       assert.equal(await isPosted, true);
     });
 
-    it('an empty group boots, with one warning that only apps and automations can hand the AI work', async () => {
+    it('an empty group boots, with one warning that only apps and automations can hand the AI work — a person\'s hand-over then opens nothing', async () => {
       writeConfig({ trustedGroup: trustedGroupName });
       siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
       const warnings = mock.method(console, 'warn', () => {});
       try {
         connector = await prepare();
-        await startAndWaitForPrompt();
+        const posted = await startAndSettlePoll();
+        assert.deepEqual(posted, []);
         const groupWarnings = warnings.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('trusted group'));
         assert.deepEqual(groupWarnings, ['[jira] the trusted group "ai-trusted" has no members: only apps and automations can hand the AI work']);
       } finally {
         warnings.mock.restore();
       }
+    });
+
+    it('T1: a hand-over by someone outside the group opens no request — the fixed notice is posted on the issue and the issue goes back to that person', async () => {
+      writeConfig({ trustedGroup: trustedGroupName });
+      siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+      groupMembers = [{ accountId: 'a-member', accountType: 'atlassian' }];
+      connector = await prepare();
+      assert.deepEqual(await startAndSettlePoll(), []);
+      await waitUntil(() => requestPaths.includes('PUT /rest/api/3/issue/PROJ-1/assignee'));
+      const afterSearch = requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql'));
+      assert.deepEqual(afterSearch.filter((entry) => !entry.includes('/changelog')), [
+        'POST /rest/api/3/search/jql',
+        'POST /rest/api/3/issue/PROJ-1/comment',
+        'GET /rest/api/3/issue/PROJ-1',
+        'PUT /rest/api/3/issue/PROJ-1/assignee',
+      ]);
+      assert.equal(postedCommentTexts.length, 1);
+      assert.equal(
+        postedCommentTexts[0],
+        'Only members of the AI\'s trusted group (ai-trusted) can hand it work, so nothing was started. Ask a member to hand it over.',
+      );
+      assert.equal(assigneeRequests.at(-1), 'requester-account');
     });
 
     it('without trustedGroup: one boot line says nobody filters the text, the group endpoints are never called, polling is as before', async () => {

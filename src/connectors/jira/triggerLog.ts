@@ -17,14 +17,15 @@ const msPerDay = 24 * 60 * 60 * 1000;
 /**
  * @name JiraTriggerOutcome
  * @description `request` — a request was opened; `selfAuthored` — the AI account
- * made the change itself; `parked` — the issue was over its run budget.
+ * made the change itself; `parked` — the issue was over its run budget;
+ * `untrusted` — the hand-over was made by someone the trusted group does not back.
  */
-export type JiraTriggerOutcome = 'request' | 'selfAuthored' | 'parked';
+export type JiraTriggerOutcome = 'request' | 'selfAuthored' | 'parked' | 'untrusted';
 
 const triggerRecordSchema = z.object({
   issueKey: z.string().min(1),
   triggerId: z.string().min(1),
-  outcome: z.enum(['request', 'selfAuthored', 'parked']),
+  outcome: z.enum(['request', 'selfAuthored', 'parked', 'untrusted']),
   /** Epoch ms. */
   at: z.number(),
   requestId: z.string().optional(),

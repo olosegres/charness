@@ -19,7 +19,8 @@ import { JiraTrustedGroupGoneError, type JiraTrust } from './trustedGroup';
  * poll loop, one search per cycle, and per issue the decision chain
  *
  *   allowlist → still matching → no post in flight → trigger (newest changelog pages first) → seen before → self-authored
- *     → run budget → fetch the issue → bind → open a request → post (not awaited)
+ *     → hand-over backed by the trusted group (only with `trustedGroup`) → run budget → fetch the issue → bind
+ *     → open a request → post (not awaited)
  *     → RECORD the trigger once the post settled
  *
  * The trigger is recorded only once its post SETTLED: a restart while the prompt
@@ -65,10 +66,12 @@ export interface JiraProjectTrigger {
  *  - `notMatching` — no longer assigned to the AI account, or not in a trigger status.
  *  - `posting`     — the post of its last request has not settled yet (skipped).
  *  - `seen`        — its trigger was decided before.
- *  - `selfAuthored`, `parked`, `request` — the recorded outcomes.
+ *  - `selfAuthored`, `parked`, `untrusted`, `request` — the recorded outcomes; `untrusted` — the hand-over was
+ *    made by someone the trusted group does not back (a notice and the hand-back, no request).
  *  - `failed`      — an error stopped it; the next poll tries again.
  */
-export type JiraIssueDecision = 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'request' | 'failed';
+export type JiraIssueDecision =
+  | 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'untrusted' | 'request' | 'failed';
 
 /** Decisions that change nothing, left out of the poll's log line. */
 const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen']);
@@ -108,6 +111,8 @@ export interface JiraInboundDeps {
   contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild'>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
   parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
+  /** A hand-over the trusted group `groupName` does not back: the fixed notice and the hand-back (the answer side). */
+  refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
 }
 
 /** @description The poll's JQL (D13): the allowlist, assigned to the AI account, in a trigger status. */
@@ -232,6 +237,15 @@ export class JiraInbound {
     if (trigger.author?.accountId === deps.aiAccountId) {
       this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'selfAuthored', at });
       return 'selfAuthored';
+    }
+    // The HAND-OVER decides: the account that made the change — an app or automation is trusted, so what it hands
+    // over starts the agent whoever the requester turns out to be. A change Jira names no one for falls back to the
+    // requester, and no account at all is untrusted (fail closed).
+    if (deps.trust && !deps.trust.checkIsTrusted(trigger.author ?? requester)) {
+      // Recorded first, as a park: the notice is posted at most once per trigger, never again by a failed or repeated poll.
+      if (!this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'untrusted', at })) return 'failed';
+      await deps.refuseUntrusted(issue.key, requester, deps.trust.groupName);
+      return 'untrusted';
     }
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // Recorded first: a failed notice is not repeated on every poll (at most one per trigger).
