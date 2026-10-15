@@ -1,4 +1,4 @@
-import { jiraChangelogPageSize, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue, type JiraRemoteLink } from './client';
+import { checkIsLastOffsetPage, jiraChangelogPageSize, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue, type JiraRemoteLink } from './client';
 
 /**
  * @description Everything one request's prompt says about an issue (plan C1,
@@ -62,8 +62,9 @@ async function getWholeChangelog(client: JiraIssueContextClient, issueKey: strin
   for (;;) {
     const page = await client.getChangelogPage(issueKey, histories.length, jiraChangelogPageSize);
     histories.push(...page.values);
-    const isLastPage = page.values.length === 0 || page.isLast === true || histories.length >= page.total;
-    if (isLastPage) return histories;
+    if (checkIsLastOffsetPage({ isLast: page.isLast, total: page.total, pageItemCount: page.values.length, readItemCount: histories.length, pageSize: jiraChangelogPageSize })) {
+      return histories;
+    }
   }
 }
 

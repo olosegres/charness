@@ -321,7 +321,10 @@ export function buildIssueBlocks(
   });
 
   // A withheld description or comment never meets the media resolver: its media are not locations of anything.
-  const isDescriptionWithheld = trust !== null && !checkIsFieldTrusted(context, trust, { id: descriptionFieldId });
+  // No description has nothing to withhold: a marker would send the agent asking for text that is not there.
+  const isDescriptionWithheld = trust !== null
+    && Boolean(context.issue.fields.description)
+    && !checkIsFieldTrusted(context, trust, { id: descriptionFieldId });
   let descriptionBlock: IssueBlock;
   if (isDescriptionWithheld) {
     descriptionBlock = createWithheldBlock('description', 'description', 'Description', withheldWrittenMarker);

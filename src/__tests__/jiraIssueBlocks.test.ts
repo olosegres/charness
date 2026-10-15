@@ -463,6 +463,12 @@ describe('a trusted group filters whose text reaches the agent', () => {
       const body = getBlock(build(createIssueContext({ fields: { creator: outsider } })), 'fields').body;
       assert.ok(!body.includes('Labels'));
     });
+
+    it('no description has nothing to withhold either: it reads (empty), not a marker to ask about', () => {
+      const description = getBlock(build(createIssueContext({ fields: { creator: outsider, description: null } })), 'description');
+      assert.equal(description.isWithheld, undefined);
+      assert.equal(getIssueBlockText(description), 'Description:\n> (empty)');
+    });
   });
 
   describe('attachments and their placeholders', () => {

@@ -373,7 +373,7 @@ export interface JiraClient {
 }
 
 /** One page of a read paged by `startAt`, as {@link checkIsLastOffsetPage} judges it. */
-interface JiraOffsetPage {
+export interface JiraOffsetPage {
   isLast?: boolean;
   total?: number;
   pageItemCount: number;
@@ -384,7 +384,7 @@ interface JiraOffsetPage {
 }
 
 /** An empty page always ends a `startAt` read; else `isLast` does when Jira sends it, else `total`, else a page shorter than asked. */
-function checkIsLastOffsetPage(page: JiraOffsetPage): boolean {
+export function checkIsLastOffsetPage(page: JiraOffsetPage): boolean {
   if (page.pageItemCount === 0) return true;
   if (page.isLast !== undefined) return page.isLast;
   return page.total === undefined ? page.pageItemCount < page.pageSize : page.readItemCount >= page.total;
