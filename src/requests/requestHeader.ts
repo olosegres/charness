@@ -1,3 +1,4 @@
+import { answerStyleInstruction } from './answerStyle';
 import type { OpenRequestState, RequestWakeUpReason } from './types';
 
 /**
@@ -44,6 +45,7 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
     `[Request ${options.requestId} · from: ${options.originDescription}]`,
     `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
       '"question" if you need the requester before you can go on, "progress" for an interim note.',
+    answerStyleInstruction,
   ];
   const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
   if (supersededLine !== '') lines.push(supersededLine);
@@ -116,5 +118,6 @@ export function buildWakeUpReminder(options: { requestId: string; reason: Reques
     wakeUpReasonLines[options.reason],
     `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
       '"question" if you need the requester, or a short "progress" note if you are still working — then continue.',
+    answerStyleInstruction,
   ].join('\n');
 }

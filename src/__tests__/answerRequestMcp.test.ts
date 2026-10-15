@@ -20,6 +20,7 @@ import { StateStore } from '../state';
 import { keyToString } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { answerRequest } from '../requests/answerRequest';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import type { AnswerSinks, RequestAnswerDelivery } from '../platform/answerSink';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import {
@@ -156,6 +157,31 @@ describe('answer_request over the bot MCP server', () => {
     assert.equal((await callAnswer(client, sharedFolderRequest.id)).isError, false);
     assert.equal((await callAnswer(client, outside.id)).isError, true);
     assert.deepEqual(deliveries.map((delivery) => delivery.requestId), [sharedFolderRequest.id]);
+  });
+});
+
+describe('how the agent is told to write an answer', () => {
+  const scopes = [
+    { label: 'a Telegram topic', scope: { kind: 'thread' as const, threadKey: keyToString(topicKey) } },
+    { label: 'an OpenCode folder session', scope: { kind: 'dir' as const, directory: sharedFolder } },
+    { label: 'a Jira issue', scope: { kind: 'thread' as const, threadKey: keyToString(makeJiraKey('PROJ-12')) } },
+    { label: 'a conversation on no known platform', scope: { kind: 'thread' as const, threadKey: 'a-key-no-codec-reads' } },
+  ];
+
+  for (const { label, scope } of scopes) {
+    it(`${label}: the connect-time instructions, the tool description and the body field carry the shared style sentence`, async () => {
+      const client = await connectAgent(scope);
+      assert.ok((client.getInstructions() ?? '').includes(answerStyleInstruction), 'instructions');
+      const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'answer_request');
+      assert.ok(tool?.description?.includes(answerStyleInstruction), 'tool description');
+      assert.ok(JSON.stringify(tool?.inputSchema.properties?.body).includes(answerStyleInstruction), 'body field description');
+    });
+  }
+
+  it('a Jira session without the attachment tool gets the neutral instructions, the style sentence still in them', async () => {
+    isJiraAttachmentOffered = false;
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
+    assert.ok((client.getInstructions() ?? '').includes(answerStyleInstruction));
   });
 });
 

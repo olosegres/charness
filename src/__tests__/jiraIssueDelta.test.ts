@@ -14,6 +14,7 @@ import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { buildIssueBlocks, type IssueBlock, type JiraBlockTrust } from '../connectors/jira/issueBlocks';
 import { changedBlockNote, getIssueDelta, newBlockNote, trustChangedBlockNote } from '../connectors/jira/issueDelta';
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from '../connectors/jira/prompt';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import type { JiraComment } from '../connectors/jira/client';
 import type { JiraIssueTrigger } from '../connectors/jira/trigger';
 import { createIssueContext, createTestComment, testAiAccountId } from './jiraIssueTestData';
@@ -165,6 +166,12 @@ describe('buildJiraDeltaPrompt', () => {
       '',
       'Unchanged since your last prompt: fields, hierarchy, links, attachments, 1 comment.',
     ].join('\n'));
+  });
+
+  it('opens with the same header as a full prompt, the answer-style sentence included', () => {
+    const blocks = getBlocks([first]);
+    const prompt = buildJiraDeltaPrompt({ ...promptBase, delta: getIssueDelta(blocks, getSentAfter(blocks)) });
+    assert.ok(prompt.split('\n').includes(answerStyleInstruction));
   });
 
   it('nothing changed: it says so, and names everything it left out', () => {

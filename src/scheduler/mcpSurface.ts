@@ -32,6 +32,7 @@ import {
   type AnswerRequestArgs,
   type AnswerRequestOutcome,
 } from '../requests/answerRequest';
+import { answerStyleInstruction } from '../requests/answerStyle';
 
 /**
  * @description The bot-owned MCP server exposes the agent-facing tools —
@@ -112,7 +113,8 @@ const mcpServerVersion = '1.0.0';
 const compactConversationInstruction =
   '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
 const answerRequestInstruction =
-  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request.';
+  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. ' +
+  answerStyleInstruction;
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
@@ -1196,7 +1198,7 @@ const answerRequestShape = {
     .trim()
     .min(1)
     .max(answerBodyMaxLength)
-    .describe('The answer itself, in Markdown. Write it for the requester: they do not see your other output.'),
+    .describe(`The answer itself, in Markdown. The requester does not see your other output. ${answerStyleInstruction}`),
 };
 
 /**
@@ -1216,7 +1218,8 @@ function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps
         'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
         'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +
         'note. You may call it several times for one request; only "question" and "final" close it. Do not ' +
-        'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice.',
+        'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice. ' +
+        answerStyleInstruction,
       inputSchema: answerRequestShape,
     },
     async (args) => {

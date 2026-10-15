@@ -15,6 +15,7 @@ import * as path from 'path';
 import { buildJiraRequestPrompt, getJiraOriginDescription, type JiraRequestPromptInput } from '../connectors/jira/prompt';
 import { buildSupersededRequestsLine } from '../requests/requestHeader';
 import { buildJiraContextPreamble, jiraContextPreambleHeader } from '../connectors/jira/contextPreamble';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import { convertMarkdownToAdf } from '../connectors/jira/adf';
 import { buildIssueBlocks } from '../connectors/jira/issueBlocks';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
@@ -51,6 +52,10 @@ describe('buildJiraRequestPrompt (D15)', () => {
     assert.match(prompt, /^\[Request req_abc · from: PROJ-12 assigned to you by Requester Person\]\n/);
     assert.match(prompt, /answer_request tool \(requestId "req_abc"\)/);
     assert.match(prompt, /The requester does not see your plain text output or your thinking/);
+  });
+
+  it('the header asks for an answer a manager or QA can read — the shared style sentence', () => {
+    assert.ok(prompt.split('\n').includes(answerStyleInstruction));
   });
 
   it('the withheld-text sentence is in the note only when a trusted group filters the text', () => {
@@ -148,6 +153,11 @@ describe('the Jira context preamble (R5)', () => {
     assert.match(preamble, /^issue: PROJ-12 \| project: PROJ \| folder: proj-work \| timezone: Europe\/Berlin$/m);
     assert.match(preamble, /for its requester — the person who assigned it to you/);
     assert.ok(!preamble.includes('Telegram'));
+  });
+
+  it('says how an answer is written — the shared style sentence, on its own line', () => {
+    const preamble = buildJiraContextPreamble({ key: makeJiraKey('PROJ-12'), subdir: 'proj-work' });
+    assert.ok(preamble.split('\n').includes(answerStyleInstruction));
   });
 
   it('C12: the standing rule — never quote or paraphrase a restricted or internal comment; and C10: the tool that reaches the original files', () => {

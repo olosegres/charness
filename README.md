@@ -832,6 +832,9 @@ a person assigns an issue to the AI account (in a trigger status)
   the second finds the issue no longer the AI's and leaves the assignee alone. The same person handing over
   again replaces their earlier open request; the agent answers only what the new hand-over adds (if it
   already finished the first, a short pointer to that answer).
+- **How an answer reads.** The agent writes for a manager or QA, not an engineer: short, plain words, status
+  and next steps as a short numbered list of who does what, one line per question, no back-story. The same
+  instruction rides every request, on a Jira issue and in a Telegram topic alike.
 - **Budget.** An issue handed over more than `runBudgetPer24h` times in 24 hours is handed back with a notice
   and opens no request.
 - **Who can steer it.** With `trustedGroup` (see Setup) only the members of ONE Jira group, the AI account and

@@ -16,6 +16,7 @@ import { StateStore } from '../state';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { answerRequest, type AnswerRequestArgs } from '../requests/answerRequest';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import type { RequestOrigin } from '../requests/types';
 import type { AnswerDeliveryResult, AnswerSink, AnswerSinks, RequestAnswerDelivery } from '../platform/answerSink';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
@@ -121,6 +122,18 @@ describe('answerRequest close rules', () => {
     assert.equal(sink.deliveries.length, 3);
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, request.id);
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.progressAnswerCount, 3);
+  });
+
+  it('the result of a progress answer tells the agent how to finish, the shared style sentence included; a closing answer\'s result does not', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin);
+
+    const progress = await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(progress.ok && progress.message.startsWith(`Delivered. Request ${request.id} stays open — send the full result with kind "final"`), true);
+    assert.equal(progress.ok && progress.message.endsWith(answerStyleInstruction), true);
+
+    const final = await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'final' }));
+    assert.equal(final.ok && final.message, `Delivered. Request ${request.id} is now closed (final).`);
   });
 
   it('a progress answer proves the agent read the request: a kept prompt counts as taken in (R21)', async () => {

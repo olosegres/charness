@@ -54,6 +54,14 @@ Numeric bounds are named constants in the files below; this README says only wha
   written mid-turn only AFTER that turn ends, so the agent has by then answered the replaced request (the
   answer is delivered — content is never dropped) and must not redo the work. `joinPromptsNotTakenIn` is
   the re-post text of a conversation's untaken prompts (one per requester at most).
+- **How an answer is written is ONE sentence, `answerStyle.ts`**: for a manager or QA, short plain words,
+  status and next steps as a short numbered who-does-what list, one line per question, no back-story. Every
+  surface that asks for an `answer_request` answer joins that constant — the header, the wake-up and
+  answer-tail reminders, the bot MCP's instructions, `answer_request`'s description, its `body` field and its
+  result to a progress note, the Jira context preamble — so the guidance never drifts between them. Change
+  the wording there only; each surface's test asserts it includes the constant and `answerStyle.test.ts`
+  pins what it says. A re-described tool changes the MCP tool digest, so an adopted session reconnects at its
+  next idle point (L4).
 
 ## `answer_request` (`answerRequest.ts`)
 
