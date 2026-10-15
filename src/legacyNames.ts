@@ -65,11 +65,17 @@ export function readRenamedEnv(env: NodeJS.ProcessEnv, name: RenamedEnvName): st
 
 const defaultDataDirByHome = new Map<string, string>();
 
+/** The file whose presence marks a data dir as an instance's state, not just a parent of other dirs. */
+const stateFileName = 'state.json';
+
 /**
  * @description The default `DATA_DIR` (no explicit `DATA_DIR`): `~/.charness`,
  * except that an existing `~/.telegramCode` is kept while `~/.charness` does not
- * exist — an install made before the rename keeps its state where it is. Never
- * creates or moves anything.
+ * exist — an install made before the rename keeps its state where it is. A
+ * `~/.charness` that holds no `state.json` while `~/.telegramCode` does (made by
+ * hand, or as the parent of another instance's explicit `DATA_DIR`) does not
+ * take over either: the bot would start with none of its bindings. Never creates
+ * or moves anything.
  *
  * Decided ONCE per process and home dir: several modules resolve their paths at
  * load and others at every call, and a `~/.charness` that appears while the
@@ -81,7 +87,11 @@ export function resolveDefaultDataDir(homeDir: string = os.homedir()): string {
   if (decided !== undefined) return decided;
   const currentDir = path.join(homeDir, defaultDataDirName);
   const legacyDir = path.join(homeDir, legacyDefaultDataDirName);
-  const resolved = !fs.existsSync(currentDir) && fs.existsSync(legacyDir) ? legacyDir : currentDir;
+  const isLegacyKept =
+    fs.existsSync(legacyDir) &&
+    (!fs.existsSync(currentDir) ||
+      (!fs.existsSync(path.join(currentDir, stateFileName)) && fs.existsSync(path.join(legacyDir, stateFileName))));
+  const resolved = isLegacyKept ? legacyDir : currentDir;
   defaultDataDirByHome.set(homeDir, resolved);
   return resolved;
 }

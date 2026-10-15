@@ -17,7 +17,7 @@ start the bot renames the config and data dirs itself, see [Automatic migration]
 | Old | New | While the old one is still read |
 |-----|-----|---------------------------------|
 | `~/.config/telegramcode/.env` (and the older `~/.config/telegram-code/.env`) | `~/.config/charness/.env` | read when the new file does not exist |
-| `~/.telegramCode` — the default `DATA_DIR` | `~/.charness` | used while `~/.charness` does not exist; an explicit `DATA_DIR` is never touched |
+| `~/.telegramCode` — the default `DATA_DIR` | `~/.charness` | used while `~/.charness` does not exist (or holds no `state.json` while the old dir does); an explicit `DATA_DIR` is never touched |
 | `TELEGRAMCODE_HOT_RELOAD`, `TELEGRAMCODE_OPENCODE_PROCESS_FILE` | `CHARNESS_HOT_RELOAD`, `CHARNESS_OPENCODE_PROCESS_FILE` | read when the new one is unset; `charness hot` sets both |
 | MCP header `x-telegramcode-mcp-client-id` | `x-charness-mcp-client-id` | the bot's MCP server accepts both |
 | OpenCode plugin `telegramcode-compaction.js` (id `telegramcode-compaction`) | `charness-compaction.js` (id `charness-compaction`) | the old file is removed when the new one is installed |

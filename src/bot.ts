@@ -11058,7 +11058,7 @@ async function reattachExistingSessions(
             adopted += 1;
             // The pane keeps the account it was started with; a changed pick reopens it (idle) or waits for the next start.
             const spawnedConfigDir = claudeAdapter.getSessionClaudeConfigDir(key);
-            if (spawnedConfigDir !== undefined && spawnedConfigDir !== resolveThreadClaudeConfigDir(key)) {
+            if (spawnedConfigDir !== undefined && !checkIsSameClaudeConfigDir(spawnedConfigDir, resolveThreadClaudeConfigDir(key))) {
               void applyClaudeProfileToThread(key)
                 .then((outcome) => console.log(`[reattach] ${keyToString(key)}: the pane's account profile differs from the topic's pick: ${outcome}`))
                 .catch((e) => console.warn(`[reattach] ${keyToString(key)}: moving the pane onto its profile failed:`, e instanceof Error ? e.message : e));
@@ -11194,7 +11194,7 @@ async function reattachExistingSessions(
             // The surviving process keeps the account it was spawned with; a topic whose pick changed while the
             // bot was down gets it at the next idle point (the resume reads the current profile).
             const spawnedConfigDir = ownerAdapter.getSessionClaudeConfigDir(key);
-            if (spawnedConfigDir !== undefined && spawnedConfigDir !== resolveThreadClaudeConfigDir(key)) {
+            if (spawnedConfigDir !== undefined && !checkIsSameClaudeConfigDir(spawnedConfigDir, resolveThreadClaudeConfigDir(key))) {
               console.log(`[reattach] ${keyToString(key)}: adopted under profile dir ${spawnedConfigDir ?? 'default'}, the topic now resolves to ${resolveThreadClaudeConfigDir(key) ?? 'default'}`);
               if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the account profile');
             }

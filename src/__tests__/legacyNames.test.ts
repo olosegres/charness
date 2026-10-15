@@ -86,6 +86,19 @@ test('default DATA_DIR: ~/.charness wins when both exist', () => {
   assert.equal(resolveDefaultDataDir(homeDir), path.join(homeDir, '.charness'));
 });
 
+test('default DATA_DIR: a ~/.charness without state does not hide the state in ~/.telegramCode', () => {
+  fs.mkdirSync(path.join(homeDir, '.telegramCode'));
+  fs.writeFileSync(path.join(homeDir, '.telegramCode', 'state.json'), '{}');
+  // Another instance's explicit DATA_DIR nested under it created the dir.
+  fs.mkdirSync(path.join(homeDir, '.charness', 'mybot'), { recursive: true });
+
+  assert.equal(resolveDefaultDataDir(homeDir), path.join(homeDir, '.telegramCode'));
+
+  resetLegacyNameState();
+  fs.writeFileSync(path.join(homeDir, '.charness', 'state.json'), '{}');
+  assert.equal(resolveDefaultDataDir(homeDir), path.join(homeDir, '.charness'), 'a ~/.charness with state wins');
+});
+
 test('default DATA_DIR: an explicit DATA_DIR always wins', () => {
   fs.mkdirSync(path.join(homeDir, '.telegramCode'));
   fs.mkdirSync(path.join(homeDir, '.charness'));
