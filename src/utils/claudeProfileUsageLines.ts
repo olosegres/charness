@@ -24,24 +24,27 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
 }
 
 /**
- * @description The profile's usage as display lines: the three windows as `used% → reset` (`—` for a window the
- * account has no figure for — a corporate seat has no Fable window), `(stale)` when the last poll could not
- * refresh, and the limit mark while it holds, the reset instant in `timezone`. The lines carry the locale's own
- * indentation (they hang under a row); empty for a profile never polled and not limited.
+ * @description The profile's usage as display lines: the windows as `used% 🔄 reset` — 5h and weekly always (`—`
+ * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
+ * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
+ * reset instant in `timezone`. The lines carry the locale's own indentation (they hang under a row); empty for a
+ * profile never polled and not limited.
  */
 export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource | undefined, timezone: string, nowMs: number): string[] {
   const lines: string[] = [];
   const usage = source?.usage;
   if (usage && usage.buckets.length > 0) {
     const words = getRelativeResetWords();
-    // An unknown 5h reset shows the weekly window's instead of «?».
+    // An unknown 5h reset shows the weekly window's instead (with neither, the bare percent).
     const weeklyReset = getClaudeUsageBucket(usage, 'weekly_all')?.resetsAt ?? null;
     const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(usage, kind), nowMs, {
       words,
       fallbackResetsAt: kind === 'session' ? weeklyReset : null,
     });
     const stale = usage.isStale ? t('account.row.usageStale') : '';
-    lines.push(t('account.row.usage', { session: read('session'), weekly: read('weekly_all'), fable: read('weekly_scoped') }) + stale);
+    const hasFable = getClaudeUsageBucket(usage, 'weekly_scoped') !== null;
+    const fable = hasFable ? t('account.row.usageFable', { fable: read('weekly_scoped') }) : '';
+    lines.push(t('account.row.usage', { session: read('session'), weekly: read('weekly_all'), fable }) + stale);
   }
   if (source?.limitedUntil && Date.parse(source.limitedUntil) > nowMs) {
     lines.push(t('account.row.limited', { until: formatClaudeUsageResetAt(source.limitedUntil, timezone, nowMs) }));

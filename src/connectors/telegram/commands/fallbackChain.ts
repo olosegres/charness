@@ -284,10 +284,11 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * The usage block at the top of the screen: each Claude profile's windows as `/accounts` shows them under its
-   * row (`formatClaudeProfileUsageLines`), one row per profile — the name, then its windows (a limit mark on the
-   * next row). A signed-out profile is named as such; one never polled has nothing to show and is left out.
-   * OpenCode's limit marks are not repeated here: they are on the rung buttons (`⛔ until`).
+   * The usage block at the top of the screen: a heading that says the percentages are USED, then each Claude
+   * profile's windows as `/accounts` shows them under its row (`formatClaudeProfileUsageLines`), one row per
+   * profile — the name, then its windows (a limit mark on the next row). A signed-out profile is named as such;
+   * one never polled has nothing to show and is left out (no rows → no heading either). OpenCode's limit marks
+   * are not repeated here: they are on the rung buttons (`⛔ until`).
    */
   function formatUsageBlock(detection: FallbackDetection, nowMs: number): string {
     const timezone = getInstanceTimezone();
@@ -302,7 +303,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       if (first === undefined) continue;
       rows.push([`• ${profile.name} — ${first.trimStart()}`, ...rest].join('\n'));
     }
-    return rows.join('\n');
+    return rows.length === 0 ? '' : [t('limits.usageHeading'), ...rows].join('\n');
   }
 
   /**

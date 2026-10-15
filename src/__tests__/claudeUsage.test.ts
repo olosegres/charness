@@ -257,8 +257,8 @@ describe('the human formats', () => {
     assert.equal(formatClaudeUsageResetAt('2026-10-12T23:30:00Z', zone, nowMs), 'Tue 02:30', 'already tomorrow in Kyiv');
   });
 
-  it('a bucket renders as percent → relative reset, a missing one as a dash', () => {
-    assert.equal(formatClaudeUsageBucket({ kind: 'session', percent: 81, resetsAt: '2026-10-12T13:00:00Z', scopeModel: null }, nowMs), `81% → ${formatClaudeUsageRelativeReset('2026-10-12T13:00:00Z', nowMs)}`);
+  it('a bucket renders as percent, a space and the relative reset (no arrow), a missing one as a dash', () => {
+    assert.equal(formatClaudeUsageBucket({ kind: 'session', percent: 81, resetsAt: '2026-10-12T13:00:00Z', scopeModel: null }, nowMs), `81% ${formatClaudeUsageRelativeReset('2026-10-12T13:00:00Z', nowMs)}`);
     assert.equal(formatClaudeUsageBucket(null, nowMs), '—');
   });
 
@@ -283,10 +283,10 @@ describe('the human formats', () => {
   it('an unknown reset takes the fallback (the weekly window for the 5h one)', () => {
     const weekly = new Date(nowMs + 2 * 86_400_000).toISOString();
     const session = { kind: 'session' as const, percent: 10, resetsAt: null, scopeModel: null };
-    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackResetsAt: weekly }), '10% → 🔄 in 2d');
-    assert.equal(formatClaudeUsageBucket(session, nowMs), '10% → ?');
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackResetsAt: weekly }), '10% 🔄 in 2d');
+    assert.equal(formatClaudeUsageBucket(session, nowMs), '10%', 'with no reset at all it is the bare percent, never a «?» after the number');
     const known = { ...session, resetsAt: new Date(nowMs + 3_600_000).toISOString() };
-    assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackResetsAt: weekly }), '10% → 🔄 in 1h', 'a known reset wins');
+    assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackResetsAt: weekly }), '10% 🔄 in 1h', 'a known reset wins');
   });
 });
 
@@ -301,6 +301,11 @@ describe('the claude-profiles CLI line', () => {
       usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 60, isRecommended: true,
     } as const;
     const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
-    assert.match(line, /5h 12% → 🔄 in 2d 1h · week 40% → 🔄 in 2d 1h · Fable —/);
+    assert.match(line, /5h 12% 🔄 in 2d 1h · week 40% 🔄 in 2d 1h$/, 'an account with no Fable window says nothing about Fable');
+    const withFable = formatClaudeProfileCliLine({
+      ...entry,
+      buckets: [...entry.buckets, { kind: 'weekly_scoped', percent: 3, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: 'Fable' }],
+    }, nowMs);
+    assert.match(withFable, /week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h$/);
   });
 });

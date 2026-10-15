@@ -107,7 +107,10 @@ command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that
 picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
 Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable
-weekly — percent used → a relative reset `🔄 in 2d 1h` (`formatClaudeUsageBucket`; an unknown 5h reset shows the weekly one)), read off the record's snapshot
+weekly — percent USED, a space, a relative reset `5h 5% 🔄 in 4h` (`formatClaudeUsageBucket`; no arrow; an unknown 5h reset shows the weekly one, no
+reset at all the bare percent; the Fable part is written only when the snapshot has that window — `account.row.usageFable`)). The usage hint
+(`account.usageHint`, which says the percentages are used) is the paragraph right after the list; `/limits` puts the same
+fact in a heading (`limits.usageHeading`) over its block. The lines are read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
 goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
 on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting through the
@@ -133,7 +136,7 @@ message — the setting's name (`limits.switchMenuTitle` / `limits.waitMenuTitle
 full-width buttons (the topic's own choice marked ✓) and Back. The three options are the setting's own `fbk_asw_*` / `fbk_wait_*` callbacks, which
 apply the choice and re-render the main screen; three buttons on one row would split the width evenly and cut every label.
 The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built); its message
-text is deliberately SHORT — the usage block (`formatUsageBlock`: each profile's windows through the renderer `/accounts` uses,
+text is deliberately SHORT — the usage block (`formatUsageBlock`: a «Usage (% used)» heading, then each profile's windows through the renderer `/accounts` uses,
 `utils/claudeProfileUsageLines.ts`; refreshed on demand through the `refreshClaudeUsage` port, a minute's cache; OpenCode's
 limit marks are on the rung buttons already), what the topic runs on + where its settings come from (General: a one-line
 note that they are the defaults), and the list's heading — no numbered list, no legend, no how-it-works prose (the rung view

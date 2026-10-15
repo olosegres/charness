@@ -138,7 +138,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(picker?.text ?? '', /Tap an account to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
   });
 
-  it('a polled profile\'s windows hang under its row (the renderer `/limits` shares): 5h / week / Fable with relative resets, the stale mark and the limit mark', async () => {
+  it('a polled profile\'s windows hang under its row (the renderer `/limits` shares): 5h / week with relative resets and no arrow, Fable left out when the account has no such window, the stale mark and the limit mark', async () => {
     const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
     harness.state.setClaudeProfileUsage('default', {
       fetchedAt: new Date().toISOString(),
@@ -152,7 +152,9 @@ describe('claudeAccounts: /accounts over its ports', () => {
     harness.state.setClaudeProfileLimitedUntil('default', inHours(2));
     await harness.runCommand('account');
     const text = harness.replies.at(-1)?.text ?? '';
-    assert.match(text, /✓ default — me@example\.com, personal max\n {4}⏱ 5h 5% → 🔄 in 4h · week 20% → 🔄 in 5d 8h · Fable — \(stale\)\n {4}⛔ at its limit until /);
+    assert.match(text, /✓ default — me@example\.com, personal max\n {4}⏱ 5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h \(stale\)\n {4}⛔ at its limit until /);
+    assert.doesNotMatch(text, /Fable \d|Fable —/, 'no Fable window → nothing about Fable on the line');
+    assert.ok(text.indexOf('Usage: % of each window used') < text.indexOf('OpenCode providers'), 'the usage hint (the percentages are USED) sits right after the account list');
     harness.state.setClaudeProfileLimitedUntil('default', null);
     await harness.state.upsertClaudeProfileRecord('default', { usage: undefined });
   });

@@ -449,8 +449,9 @@ export function formatClaudeUsageRelativeReset(resetsAt: string | null, nowMs: n
 }
 
 /**
- * @description `81% → 🔄 in 2h` for a bucket, `—` for a missing one. A bucket whose reset is unknown shows
- * `fallbackResetsAt` instead (the session window's reset is often missing while the weekly one is known).
+ * @description `81% 🔄 in 2h` for a bucket, `—` for a missing one. A bucket whose reset is unknown shows
+ * `fallbackResetsAt` instead (the session window's reset is often missing while the weekly one is known);
+ * with neither it is the bare percent — a «?» after a number would read as a doubt about the number.
  */
 export function formatClaudeUsageBucket(
   bucket: ClaudeUsageBucket | null,
@@ -460,7 +461,8 @@ export function formatClaudeUsageBucket(
   if (bucket === null) return '—';
   const known = bucket.resetsAt !== null && !Number.isNaN(Date.parse(bucket.resetsAt));
   const resetsAt = known ? bucket.resetsAt : options.fallbackResetsAt ?? null;
-  return `${bucket.percent}% → ${formatClaudeUsageRelativeReset(resetsAt, nowMs, options.words)}`;
+  if (resetsAt === null || Number.isNaN(Date.parse(resetsAt))) return `${bucket.percent}%`;
+  return `${bucket.percent}% ${formatClaudeUsageRelativeReset(resetsAt, nowMs, options.words)}`;
 }
 
 // ── small readers ──

@@ -257,7 +257,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       : t('accounts.openCodeSection', { list: providers.map((provider) => `• ${provider}`).join('\n') });
     const isDefaultRemoved = getState().getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true;
     const removedNote = isDefaultRemoved ? `\n\n${t('accounts.defaultRemovedNote')}` : '';
-    const text = `${title}${removedNote}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.usageHint')}\n\n${t('account.autoSwitchHint')}`;
+    // The usage hint (which says the percentages are USED) follows the account list it explains.
+    const text = `${title}${removedNote}\n\n${t('account.usageHint')}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.autoSwitchHint')}`;
     // One row per Claude account: pick it (✓ = the current one), sign it in again, remove it (`default` too: signs it out).
     const keyboardRows = rows.map((row) => [
       Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),

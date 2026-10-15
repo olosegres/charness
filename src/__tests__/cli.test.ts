@@ -124,8 +124,8 @@ test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints
   assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 19], ['work', false, 90]]);
   const human = runCli(['claude-profiles']);
   assert.equal(human.status, 0, human.stderr);
-  assert.match(human.stdout, /✓ default .*5h 81% → /);
-  assert.match(human.stdout, /• work .*Fable 5% → /);
+  assert.match(human.stdout, /✓ default .*5h 81% 🔄 /);
+  assert.match(human.stdout, /• work .*Fable 5% 🔄 /);
   assert.match(human.stdout, /recommended for any model: default/);
   const bad = runCli(['claude-profiles', '--frob']);
   assert.equal(bad.status, 2);

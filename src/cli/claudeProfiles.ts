@@ -51,7 +51,7 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
   return { ok: true, args };
 }
 
-/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% → 🔄 in 2h · week 40% → 🔄 in 2d 1h · Fable 3% → 🔄 in 2d 1h`. */
+/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window). */
 export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
   const weeklyReset = find('weekly_all')?.resetsAt ?? null;
@@ -64,7 +64,11 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
       : `${entry.email ?? '?'} ${entry.kind} ${entry.subscriptionType ?? '?'}`;
   const usage = entry.buckets.length === 0
     ? 'usage not read yet'
-    : `5h ${read('session')} · week ${read('weekly_all')} · Fable ${read('weekly_scoped')}${entry.isUsageStale ? ' (stale)' : ''}`;
+    : `${[
+      `5h ${read('session')}`,
+      `week ${read('weekly_all')}`,
+      ...(find('weekly_scoped') === null ? [] : [`Fable ${read('weekly_scoped')}`]),
+    ].join(' · ')}${entry.isUsageStale ? ' (stale)' : ''}`;
   const limited = entry.limitedUntil && Date.parse(entry.limitedUntil) > nowMs ? `  LIMITED until ${entry.limitedUntil}` : '';
   return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}`;
 }
