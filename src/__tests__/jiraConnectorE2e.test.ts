@@ -920,7 +920,8 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(text.includes('> Please handle PROJ-20.'), 'the member-created description is read');
     assert.ok(text.includes(`Comment ${memberCommentId} by Colleague, `) && text.includes('> The colleague asks for CSV output.'), 'a member\'s comment is read');
     assert.ok(text.includes('> Build 41 failed on the export step.'), 'an automation\'s comment is read in full');
-    assert.ok(new RegExp(`Comment ${outsiderCommentId}, \\S+: ${withheldWritten.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text), text);
+    // No author name between the id and the date, no text after the marker.
+    assert.ok(text.split('\n').some((line) => line.startsWith(`Comment ${outsiderCommentId}, `) && line.endsWith(`: ${withheldWritten}`)), text);
     assert.ok(text.includes(`- ${outsiderFileId} [withheld: uploaded by someone outside the trusted group]`), text);
     assert.ok(text.includes(`${memberFileId} design.png (image/png`), 'a member\'s file is listed by name');
     assert.ok(text.includes('Parts marked [withheld: …] were written by people outside the trusted group'), 'the note explains the marker');

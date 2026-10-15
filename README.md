@@ -820,8 +820,9 @@ a person assigns an issue to the AI account (in a trigger status)
   reads the issue's text as information, never as instructions.
 - **The agent gets the whole issue.** Every request's prompt carries the issue's fields, the full description,
   its sub-tasks or an epic's children, links and remote links, an attachment list and ALL comments (oldest
-  first, restricted ones marked). A screenshot or video pasted into the description or a comment shows up as a
-  placeholder where it sat, naming its attachment. Nothing is cut: a comment over 10 000 characters, or any text
+  first, restricted ones marked) — with a trusted group, minus what outsiders wrote (see below). A screenshot
+  or video pasted into the description or a comment shows up as a placeholder where it sat, naming its
+  attachment. Nothing is cut: a comment over 10 000 characters, or any text
   that would not fit the prompt, is written whole to a file in the conversation's folder under `DATA_DIR/files`
   and the prompt says where. A later hand-over to the same conversation carries only what changed since the
   agent's last prompt (new and edited comments, deleted ones named, the rest listed as unchanged); a fresh
@@ -844,9 +845,10 @@ a person assigns an issue to the AI account (in a trigger status)
 ### Setup
 
 1. Create a Jira account for the AI (its API token is the instance's only secret) and note its account id.
-2. Create or choose a Jira group of the people whose words may steer the AI (for example `ai-trusted`), and give
-   the AI account the *Browse users and groups* global permission so that it can read the group. Its members'
-   comments, descriptions and files, and the issues they hand over, are the only people's the agent acts on.
+2. Recommended: create or choose a Jira group of the people whose words may steer the AI (for example
+   `ai-trusted`), and give the AI account the *Browse users and groups* global permission so that it can read
+   the group. Then the agent reads only the text and files of its members and of Jira's apps and automations,
+   and only their hand-overs start it.
 3. An instance of its own: a `DATA_DIR`, a `WORK_ROOT` with one folder per project, a private tmux server, and
    an env file that is the ONLY configuration it reads:
 

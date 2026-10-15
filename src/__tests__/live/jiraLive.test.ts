@@ -301,11 +301,12 @@ let jiraConfigOriginalText: string | null = null;
  * what the polls collected while the processes were alive, not the files at the end.
  */
 const seenInitsByProcess = new Map<string, { issueKey: string; inits: StreamLine[] }>();
-const issueKeys = new Map<Scenario | 'self' | 'probe', string>();
+/** Every issue the run created, by its role; the end moves each to a finished status. */
+const issueKeys = new Map<Scenario | 'self' | 'probe' | 'trustedGroup', string>();
 /** The SHA-256 each recall scenario's first answer posted: the commitment to its secret word. */
 const committedDigests = new Map<'final' | 'perTurn', string>();
 
-function getIssueKey(scenario: Scenario | 'self' | 'probe'): string {
+function getIssueKey(scenario: Scenario | 'self' | 'probe' | 'trustedGroup'): string {
   const issueKey = issueKeys.get(scenario);
   if (!issueKey) throw new Error(`no issue was created for ${scenario}`);
   return issueKey;
@@ -1250,10 +1251,9 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     it('live T1 — the site resolves the group by its exact name and lists the requester among its members; the instance named it and logged no "nothing filters" line', async () => {
       const raw: { trustedGroup?: string } = JSON.parse(fs.readFileSync(getJiraConfigPath(dataDir), 'utf8'));
       assert.equal(raw.trustedGroup, getTrustedGroupName(), 'the precondition: jira.json names the group');
-      const client = createJiraClient({ baseUrl: config.baseUrl, email: config.email, apiToken: config.apiToken });
-      const group = await client.getGroupByName(getTrustedGroupName());
+      const group = await aiClient.getGroupByName(getTrustedGroupName());
       assert.ok(group, `the site has a group named exactly "${getTrustedGroupName()}"`);
-      const members = await client.getGroupMembers(group.groupId);
+      const members = await aiClient.getGroupMembers(group.groupId);
       assert.ok(members.some((member) => member.accountId === getRequester().accountId), 'the requester is a member');
       assert.ok(!charnessOutput.includes(jiraNoTrustedGroupLogLine), 'the instance booted with a group');
       assert.ok(!/the trusted group ".*" has no members/.test(charnessOutput), 'and the group was not empty');
@@ -1263,6 +1263,7 @@ describe('Jira connector live run (J8)', { skip: liveEnvFile ? false : 'set JIRA
     it('live T2 — an issue a member created and hands over is answered; its prompt holds the member\'s own text in full, carries no marker for it and explains what a marker is', async () => {
       const probeText = 'Reply with ONE final answer whose text is exactly: TRUST-OK';
       const issueKey = await getRequester().createIssue(projectKey, `[charness trusted-group] ${getTrustedGroupName()}`, probeText);
+      issueKeys.set('trustedGroup', issueKey);
       await getRequester().assignIssue(issueKey, config.accountId);
       const state = await waitForHandBack(issueKey, answerTimeoutMs, (comments) => comments.length > 0);
       assert.match(getAiComments(state).at(-1)?.text ?? '', /TRUST-OK/);
