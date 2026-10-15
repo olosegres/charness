@@ -343,7 +343,7 @@ is written safely, so a crash can't corrupt it.
 
 | Variable | Description |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Token from @BotFather |
+| `TELEGRAM_BOT_TOKEN` | Token from @BotFather. Telegram only: a Jira-only instance refuses to start with it set — see [Jira setup](#jira-setup) |
 
 Start from the parent folder containing your projects: `cd ~/projects && telegramcode`.
 That `$PWD` is the folder the bot works in — nothing else to set for it.
