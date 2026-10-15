@@ -11,11 +11,15 @@
 
 > **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is
 > `olosegres/charness`; the npm package is **`charness`** since 3.0.0, up to 2.0.3 it was `telegramcode`). The CLI
-> command is **`charness`** and the user-facing text says so (`telegramcode` and the legacy `telegramCode` stay as bin
-> aliases); the config is `~/.config/charness/.env`, with `~/.config/telegramcode/.env` (then the older
-> `~/.config/telegram-code`) still read when the new dir has none. What keeps the old name, so existing installs do
-> not break: the `DATA_DIR` default `~/.telegramCode`, the `TELEGRAMCODE_*` env vars, the Docker image / container /
-> `telegramcode-restart-bot` names and their `/opt/telegramcode` paths.
+> command is **`charness`** (`telegramcode` and the legacy `telegramCode` stay as bin aliases), the config
+> `~/.config/charness/.env`, the default `DATA_DIR` `~/.charness`, the env vars `CHARNESS_*`, the Docker names
+> `charness` / `/opt/charness` / `charness-restart-bot`. Use the new names in code, docs and messages. The old names
+> (`~/.config/telegramcode`, `~/.telegramCode`, `TELEGRAMCODE_*`, `x-telegramcode-mcp-client-id`, the
+> `telegramcode-compaction` plugin, the `telegramcode` image) survive ONLY as read-fallbacks in
+> `src/legacyNames.ts` (+ the plugin / MCP header code and `docker/entrypoint.sh`) because instances hot-reload
+> `main`: new wins, old is the fallback, set BOTH where a child may run old code, announce a fallback once with
+> `[deprecated] <old> is deprecated, rename it to <new> (see MIGRATION_RENAME_TO_CHARNESS.md)`. A further rename
+> follows the same pattern and ships its own migration guide.
 
 ## What this project is
 
@@ -245,7 +249,7 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
 
 - **Run:** `yarn start` (`node dist/cli.js`), or installed: `cd <projects-parent> && charness` (the launch
   directory becomes the work root).
-- **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `telegramcode-restart-bot`,
+- **The whole bot in Docker:** `docker/` (image, entrypoint with the hot-mode restart loop, `charness-restart-bot`,
   test image); the container runs as root, which is why the agent allowlist carries `IS_SANDBOX`. SETUP.md § Run with Docker.
 - `yarn typecheck` (strict `tsc` over ALL of `src/`, test code included, via `tsconfig.typecheck.json` — tests run
   through `tsx`, which checks no types) · `yarn build` (`tsc` → `dist/` from `tsconfig.json`, which leaves

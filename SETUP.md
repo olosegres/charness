@@ -38,7 +38,9 @@ This registers the `charness` command; the former `telegramcode` command (and
 package (2.x)? Run `npm uninstall -g telegramcode` first: both install the same
 commands. The config, `DATA_DIR` and sessions carry over as they are: a
 `~/.config/telegramcode/.env` is still read while `~/.config/charness/.env` does
-not exist.
+not exist, and a `~/.telegramCode` data dir is still used while `~/.charness` does
+not exist. Every old name that is still read prints one deprecation line at start;
+what to rename, and how, is in [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md).
 
 ### Environment variables
 
@@ -49,7 +51,7 @@ under [Telegram environment variables](#telegram-environment-variables).
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `~/.telegramCode` | Per-instance state. **Mandatory** if you run two bots on the same host — otherwise both share `state.json` and `mcp.json` and corrupt each other |
+| `DATA_DIR` | `~/.charness` (an existing `~/.telegramCode` is kept while `~/.charness` does not exist) | Per-instance state. **Mandatory** if you run two bots on the same host — otherwise both share `state.json` and `mcp.json` and corrupt each other |
 
 Agent provider/auth setup is normally done inside the agents themselves:
 `claude login` for Claude CLI and `/connect <provider-id>` (for example,
@@ -101,6 +103,12 @@ hostnames: their ports and tmux servers are their own.
 
 An npm install updates with `npm install -g charness@latest`; then restart `charness` (what survives a restart:
 [Restart behaviour](README.md#restart-behaviour)).
+
+**An update that renames something ships a migration guide** — read it before the restart. The names that were
+renamed from TelegramCode to Charness (environment variables, the data dir, the Docker names, …) still work for
+now and print a deprecation line at start; the steps are in
+[MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md), the summary in the top entry of
+[CHANGELOG.md](CHANGELOG.md). `scripts/self-update.sh` names a newly added migration guide in its log.
 
 #### Updating a checkout (self-update, no root)
 
@@ -289,7 +297,7 @@ Telegram forum supergroup
 saves which topic is bound to which folder, each topic's live agent session (to
 re-attach it after a reboot), your per-topic preferences (agent, model,
 reasoning effort, language, display verbosity), scheduled prompts, and the
-paired group id. This file lives in `DATA_DIR` (default `~/.telegramCode`) and
+paired group id. This file lives in `DATA_DIR` (default `~/.charness`) and
 is written safely, so a crash can't corrupt it.
 
 ### Telegram environment variables
@@ -458,11 +466,11 @@ The whole bot runs in one container: the bot itself, tmux, every agent it starts
 lends the container the folders it mounts, so the bot and its agents see nothing else of the machine.
 
 ```
-host                                        container telegramcode-<instance>
+host                                        container charness-<instance>
 your instance env file (tokens)   ── ro ──▶  the bot (hot mode) + a restart loop
 DATA_DIR, WORK_ROOT               ──────▶    tmux, the agents, OpenCode, the bot MCP
-a clone of this repository        ──────▶    /opt/telegramcode
-the agents' home folder           ──────▶    /home/telegramcode: their Claude / OpenCode
+a clone of this repository        ──────▶    /opt/charness
+the agents' home folder           ──────▶    /home/charness: their Claude / OpenCode
                                               login, sessions and CLI installs
 ```
 
@@ -470,8 +478,8 @@ the agents' home folder           ──────▶    /home/telegramcode: t
    not the checkout a host instance runs from) and build the image from it:
 
    ```bash
-   git clone https://github.com/olosegres/charness /srv/telegramcode/checkout
-   cd /srv/telegramcode/checkout && docker build -t telegramcode -f docker/Dockerfile .
+   git clone https://github.com/olosegres/charness /srv/charness/checkout
+   cd /srv/charness/checkout && docker build -t charness -f docker/Dockerfile .
    ```
 
    The image holds only system tools (tmux, git, ffmpeg, ripgrep, …) and the yarn the checkout's `package.json`
@@ -485,34 +493,34 @@ the agents' home folder           ──────▶    /home/telegramcode: t
 3. **Run** (or use `examples/docker-compose.yml`):
 
    ```bash
-   docker run -d --name telegramcode-main --hostname telegramcode-main \
+   docker run -d --name charness-main --hostname charness-main \
      --restart unless-stopped --stop-timeout 60 \
-     -v /srv/telegramcode/checkout:/opt/telegramcode \
-     -v /srv/telegramcode/home:/home/telegramcode \
-     -v /srv/telegramcode/data:/srv/telegramcode/data \
+     -v /srv/charness/checkout:/opt/charness \
+     -v /srv/charness/home:/home/charness \
+     -v /srv/charness/data:/srv/charness/data \
      -v /srv/projects:/srv/projects \
-     -v /srv/telegramcode/instance.env:/srv/telegramcode/instance.env:ro \
-     -e ENV_FILE=/srv/telegramcode/instance.env \
-     telegramcode
+     -v /srv/charness/instance.env:/srv/charness/instance.env:ro \
+     -e ENV_FILE=/srv/charness/instance.env \
+     charness
    ```
 
    No port is published: Telegram is long polling, and the bot's MCP server and the OpenCode server listen on the
    container's own loopback. Keep the `--hostname` fixed and unique per instance: the instance lock tells its own
    restarted container from another machine by it.
 4. **Log the agents in once**, with the account the agents should use (a separate one is best):
-   `docker exec -it telegramcode-main claude`, then `/login` (or `/login` in a topic). OpenCode: `/connect` in a
-   topic, or `docker exec -it telegramcode-main opencode auth login`. Never copy your own `~/.claude` login in:
+   `docker exec -it charness-main claude`, then `/login` (or `/login` in a topic). OpenCode: `/connect` in a
+   topic, or `docker exec -it charness-main opencode auth login`. Never copy your own `~/.claude` login in:
    a second holder of its refresh token can log the first one out. For git, put a `.gitconfig` and an SSH key of
    their own into the agents' home.
 
 Running it:
 
-- **Restart the bot only** (agents keep running and are adopted): `docker exec telegramcode-main
-  telegramcode-restart-bot`. A crashed bot is restarted by the container after 20 s.
-- **Update the bot**: `docker exec telegramcode-main /opt/telegramcode/scripts/self-update.sh` (by hand or from
+- **Restart the bot only** (agents keep running and are adopted): `docker exec charness-main
+  charness-restart-bot`. A crashed bot is restarted by the container after 20 s.
+- **Update the bot**: `docker exec charness-main /opt/charness/scripts/self-update.sh` (by hand or from
   a timer on the host); hot mode picks the change up. A change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
   needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
-  `docker exec telegramcode-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
+  `docker exec charness-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
 - **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
 - **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
   yours. **Rootful Docker**: add `--user "$(id -u):$(id -g)"` and give that user the agents' home.

@@ -28,6 +28,7 @@
     "DEVELOPMENT.md",
     "SETUP.md",
     "MIGRATION_1_TO_2.md",
+    "MIGRATION_RENAME_TO_CHARNESS.md",
     "LICENSE",
     ".env.example",
     "examples/"

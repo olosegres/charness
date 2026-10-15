@@ -110,7 +110,7 @@ The Docker dev loop (never `docker compose restart` — it ignores
 `depends_on`):
 
 ```bash
-docker compose down telegramcode && docker compose up -d telegramcode   # examples/docker-compose.yml
-docker compose logs -f telegramcode         # tail logs
-docker exec telegramcode-main telegramcode-restart-bot   # restart only the bot; agents keep running
+docker compose down charness && docker compose up -d charness   # examples/docker-compose.yml
+docker compose logs -f charness             # tail logs
+docker exec charness-main charness-restart-bot   # restart only the bot; agents keep running
 ```

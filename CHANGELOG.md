@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+**Renamed: what was left under the TelegramCode name is now Charness.** The old names still work and each one
+in use prints a `[deprecated]` line at start — rename them when you see it. Steps for an npm install, a source
+checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md).
+
+### Breaking / renamed
+- **`charness` is the command in every message, help text and document.** `telegramcode` and `telegramCode`
+  stay as aliases.
+- **Global config: `~/.config/charness/.env`** (was `~/.config/telegramcode/.env`; the older
+  `~/.config/telegram-code` too). Move: `mv ~/.config/telegramcode ~/.config/charness`.
+- **Default data dir: `~/.charness`** (was `~/.telegramCode`). An existing `~/.telegramCode` is kept while
+  `~/.charness` does not exist; an explicit `DATA_DIR` is untouched. Move it with the bot stopped and no agent
+  running, or set `DATA_DIR` to the old path to keep it.
+- **Hot-mode variables: `CHARNESS_HOT_RELOAD`, `CHARNESS_OPENCODE_PROCESS_FILE`** (were `TELEGRAMCODE_HOT_RELOAD`,
+  `TELEGRAMCODE_OPENCODE_PROCESS_FILE`). The supervisor sets both; restart `charness hot` once after the update.
+- **MCP client-id header: `x-charness-mcp-client-id`** (was `x-telegramcode-mcp-client-id`); the server accepts
+  both.
+- **OpenCode compaction plugin: `charness-compaction.js`** (was `telegramcode-compaction.js`); the old file is
+  removed when the new one is installed.
+- **Docker: image, service and container `charness`, `charness-main`**; mounts `/opt/charness`,
+  `/home/charness`; restart command `charness-restart-bot`; compose variables `CHARNESS_DATA_DIR`,
+  `CHARNESS_WORK_ROOT`. A running container of the old image is not affected; the new entrypoint accepts the old
+  mount points and `telegramcode-restart-bot` still works.
+
+### Added
+- `scripts/self-update.sh` names a newly added `MIGRATION_*.md` in its log.
+
 ## 3.0.0 — 2026-10-07
 
 **Published as `charness`.** The npm package is renamed from `telegramcode` to
