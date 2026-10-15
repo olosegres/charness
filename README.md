@@ -478,8 +478,6 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
-- `jira_get_attachment` — Jira conversations only; see
-  [`src/connectors/jira/README.md`](src/connectors/jira/README.md);
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current
@@ -635,7 +633,7 @@ the bot → tick the missing boxes. `/doctor` shows the exact gap.
 
 You forgot to set distinct `DATA_DIR` and `OPENCODE_URL`. The bot logs
 `[startup] DATA_DIR=<path>` on boot — if both instances log the same
-path, fix `.env` and `docker compose down && up -d`.
+path, give each its own `DATA_DIR` and `OPENCODE_URL` port and restart both.
 
 #### Claude opens a session picker instead of resuming
 

@@ -73,7 +73,7 @@ your chosen providers need them.
 | `AGENT_IDLE_MINUTES` | `55` | A json-stream Claude topic idle for this long is compacted (when `/compact_on_idle` allows) and its process stopped; the session sleeps and the next message resumes it — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
-| `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` starts an instance with a clean environment plus this variable |
+| `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/telegramcode/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` (in a checkout) starts an instance with a clean environment plus this variable |
 | `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira setup](#jira-setup). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
 
 > `WORK_DIR` (1.x) is retired. Use the wrapper from the desired parent folder
@@ -82,24 +82,30 @@ your chosen providers need them.
 ### Two instances on one host
 
 Two host instances, or a host instance next to a container: each pair of variables below must differ to avoid
-silent corruption. Two containers need only different tokens, groups, `DATA_DIR`s, container names and hostnames: their
-ports and tmux servers are their own.
+silent corruption. Two containers need only different tokens and groups (Telegram), `DATA_DIR`s, container names and
+hostnames: their ports and tmux servers are their own.
 
 | What | Why it must differ |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Telegram routes updates to a single long-poller per token; sharing → message loss |
-| `ALLOWED_GROUP_ID` | The bot gates by group id; sharing → cross-instance leakage |
+| `TELEGRAM_BOT_TOKEN` (Telegram) | Telegram routes updates to a single long-poller per token; sharing → message loss |
+| `ALLOWED_GROUP_ID` (Telegram) | The bot gates by group id; sharing → cross-instance leakage |
 | `WORK_ROOT` | Each instance manages its subtree; sharing → tmux name collisions |
 | `DATA_DIR` | `state.json` / `mcp.json` / `threads/` per instance; sharing → corrupted JSON |
 | `OPENCODE_URL` port | OpenCode server binds the port; second start fails with `EADDRINUSE` and you'd silently share sessions |
 | `SCHEDULER_MCP_PORT` | Optional stable scheduler-MCP port; if set, it must differ from that instance's `OPENCODE_URL` port |
 | `TMUX_SOCKET_NAME` | Optional, recommended: each instance's boot kills the agent sessions on its tmux server that its own state does not know — on one shared server, the other instance's |
 
-### Updating a deployment (self-update, no root)
+### Updating
 
-`scripts/self-update.sh` refreshes a checkout in place, running as the
-checkout's owning user — no root, no cross-user copying. It is safe to run
-blindly (e.g. from cron):
+An npm install updates with `npm install -g charness@latest`; then restart `telegramcode` (what survives a restart:
+[Restart behaviour](README.md#restart-behaviour)).
+
+#### Updating a checkout (self-update, no root)
+
+A checkout — the one the [Docker container](#run-with-docker) runs, or a clone from
+[DEVELOPMENT.md](DEVELOPMENT.md#local-development) — updates with `scripts/self-update.sh` (not in the npm package).
+It refreshes the checkout in place, running as the checkout's owning user — no root, no cross-user copying. It is
+safe to run blindly (e.g. from cron):
 
 - fast-forward only: it skips silently when the tree has tracked changes, a
   merge/rebase is in progress, or local history diverged from the upstream —
@@ -416,8 +422,10 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
    ```bash
-   scripts/run-isolated.sh /path/to/jira-instance.env
+   env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 ENV_FILE=/path/to/jira-instance.env telegramcode
    ```
+
+   (In a checkout, `scripts/run-isolated.sh /path/to/jira-instance.env` does the same.)
 
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
@@ -439,10 +447,9 @@ The npm install above is the way to run Charness; this is the alternative to it.
 
 ### Run with Docker
 
-Choose this instead of the npm install when you want one of two things. **Isolation:** the agents run any command
-in the project folder; in a container they reach only what you mount, so the worst they break is the container and
-those folders. **A ready environment:** Node 22, tmux, git and ffmpeg come in the image, and the bot installs Claude
-Code and OpenCode itself on its first start, so the host needs nothing but Docker.
+Choose this over the npm install for **isolation** — the agents reach only the folders you mount — or for **a ready
+environment**: the image brings Node 22, tmux, git and ffmpeg, and the bot installs Claude Code and OpenCode the first
+time it starts each, so the host needs only Docker and a clone of this repository.
 
 The whole bot runs in one container: the bot itself, tmux, every agent it starts (Claude Code in any backend,
 `/terminal`, OpenCode and its server) and the bot's MCP server. Everything works as on a host; the host only
