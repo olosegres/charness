@@ -347,9 +347,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
         : createCommentBodies(delivery.body);
       if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
-      // Only a hand-over's question asks the requester to take the issue back, so only it carries the line saying how.
+      // Only a hand-over's question hands the issue back, so only it carries the line saying how to give it back —
+      // and only while its request is open: a superseded request's question hands nothing back.
       const isHandOver = delivery.origin.kind === 'trackerEvent';
-      if (isHandOver && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
+      if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];

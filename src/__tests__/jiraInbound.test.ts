@@ -1372,6 +1372,13 @@ describe('JiraInbound', () => {
       assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 0);
     });
 
+    it('D9: an open hand-over request with NO requester covers anyone\'s mention — a mention request would supersede it', async () => {
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: '' } }]);
+      comments = [createMentionComment('10240', colleague)];
+      assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'covered']]);
+      assert.equal(requestCount, 0);
+    });
+
     it('a DIFFERENT person\'s mention during an open hand-over request opens a request of its own — its requester is the mentioner', async () => {
       openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: member.accountId } }]);
       comments = [createMentionComment('10240', colleague)];

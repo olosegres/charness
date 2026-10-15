@@ -387,10 +387,14 @@ export class JiraInbound {
       return 'untrusted';
     }
     // D9: the requester of an open hand-over request already has the agent on this issue; their comment reaches that
-    // run (a delta, or the news). A request of their own would supersede it and strip its hand-back.
+    // run (a delta, or the news). A request of their own would supersede it and strip its hand-back. A hand-over
+    // request with NO requester is superseded by ANY next request of the conversation (`requestLedger.ts`), so while
+    // one is open every mention is covered by it.
     const requesterAccountId = comment.author?.accountId;
-    const isCovered = deps.listOpenRequests(makeJiraKey(issue.key)).some((request) =>
-      request.origin.kind === 'trackerEvent' && getRequestRequester(request.origin) === requesterAccountId);
+    const isCovered = deps.listOpenRequests(makeJiraKey(issue.key)).some((request) => {
+      const openRequester = getRequestRequester(request.origin);
+      return request.origin.kind === 'trackerEvent' && (openRequester === requesterAccountId || openRequester === emptyRequester);
+    });
     if (isCovered) return record('covered') ? 'covered' : 'failed';
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // D10: the notice is posted at most once per issue per rolling 24 h; later over-budget mentions are recorded silently.

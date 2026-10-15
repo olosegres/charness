@@ -102,7 +102,8 @@ with the instance's rights.
   request and no notice. An app's or automation's mention is trusted.
 - **Covered.** The requester of an OPEN hand-over request of the issue who mentions the AI gets no request of
   their own (`covered`): it would supersede the hand-over request — same requester — and strip its hand-back. The
-  comment reaches that run in its next prompt.
+  comment reaches that run in its next prompt. An open hand-over request with NO requester covers every mention
+  the same way: the ledger lets any next request of the conversation supersede such a request.
 - **Budget.** A mention request counts in `runBudgetPer24h` with the hand-overs. Over it the mention is `parked`;
   its notice (nothing is handed back — nothing was handed over) is posted at most once per issue per rolling
   24 hours, later ones are recorded silently.
@@ -183,9 +184,9 @@ another platform's state.
   qualify are left out and named in the tool result's warning (the answer itself is delivered, never resent). The
   paragraph counts toward the comment size split (`createCommentBodiesWithLeadingNode`: its size comes off the
   limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
-- A hand-over's `question` ends with one more paragraph, plain text on the last comment: "To let me go on, answer
-  in a comment and assign the issue back to me." A reply that only mentions the AI wakes it for an answer, not
-  for the work; a hand-over is still how the work continues.
+- A hand-over's `question` to an OPEN request (the one that hands the issue back) ends with one more paragraph,
+  plain text on the last comment: "To let me go on, answer in a comment and assign the issue back to me." A reply
+  that only mentions the AI wakes it for an answer, not for the work; a hand-over is still how the work continues.
 - Three notices are the bot's own, with no agent behind them: the park notice of a hand-over (it names
   hand-overs and mentions together, as both fill the budget) and the notice of an `untrusted` hand-over —
   "Only members of the AI's trusted group (`<configured name>`) can hand it work, so nothing was started. Ask a

@@ -465,6 +465,12 @@ describe('a hand-over question tells the requester how to let the agent go on (T
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
   });
 
+  it('a question to a superseded request does not carry it — nothing is handed back', async () => {
+    await deliver('question', 'Which branch should I use?', false);
+    assert.deepEqual(jira.postedTexts, ['Which branch should I use?']);
+    assert.ok(!jira.calls.some((call) => call.startsWith('assign ')));
+  });
+
   it('a final answer and a progress note do not carry it', async () => {
     await deliver('final', 'Done.');
     await deliver('progress', 'Halfway.');
