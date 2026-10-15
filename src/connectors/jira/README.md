@@ -26,7 +26,7 @@ an old process is never auto-stopped — until a newer CLI reports in, L-D10); n
 resumes it. The instance's env file carries `CONNECTORS=jira`, `DATA_DIR`, `WORK_ROOT`, `TMUX_SOCKET_NAME`, an
 `OPENCODE_URL` off the default port (R9) and the token variable; `REQUEST_BACKSTOP_MINUTES` shortens the wake-up
 backstop and `AGENT_IDLE_MINUTES` the idle mark (tests).
-Operator-facing setup steps: the public `README.md` § "Jira connector".
+Operator-facing setup steps: the public `README.md` § "Jira setup".
 
 ## Request flow (`inbound.ts`)
 
@@ -191,7 +191,7 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   accounts and is shown in full, whatever of the outsider's text is still in it. No code can close that gap. What
   bounds it is who may edit other people's comments: the *Edit all comments* project permission (Atlassian: it lets
   a user "edit comments or internal notes added by anyone"). An operator lists only projects where no one outside the
-  team holds it, which is the same rule as for who may write there at all (root `README.md` § "Jira connector").
+  team holds it, which is the same rule as for who may write there at all (root `README.md` § "Jira setup").
 
   A field's authors come from the issue's WHOLE changelog (an entry names its field by `fieldId`, else by `field`; a
   custom field is also matched by its display name for an old entry). The poller reads the changelog only as far as
