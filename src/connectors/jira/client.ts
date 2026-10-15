@@ -372,6 +372,24 @@ export interface JiraClient {
   getGroupMembers(groupId: string): Promise<JiraAccount[]>;
 }
 
+/** One page of a read paged by `startAt`, as {@link checkIsLastOffsetPage} judges it. */
+interface JiraOffsetPage {
+  isLast?: boolean;
+  total?: number;
+  pageItemCount: number;
+  /** Everything read so far, this page included. */
+  readItemCount: number;
+  /** The `maxResults` asked for. */
+  pageSize: number;
+}
+
+/** An empty page always ends a `startAt` read; else `isLast` does when Jira sends it, else `total`, else a page shorter than asked. */
+function checkIsLastOffsetPage(page: JiraOffsetPage): boolean {
+  if (page.pageItemCount === 0) return true;
+  if (page.isLast !== undefined) return page.isLast;
+  return page.total === undefined ? page.pageItemCount < page.pageSize : page.readItemCount >= page.total;
+}
+
 function getParsedResponse<T>(text: string, schema: z.ZodType<T>): { ok: true; value: T } | { ok: false; detail: string } {
   let json: object;
   try {
@@ -512,10 +530,9 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
           commentPageSchema,
         );
         comments.push(...page.comments);
-        // `total` ends the read; without it a page shorter than asked does. An empty page always does.
-        const isLastPage = page.comments.length === 0
-          || (page.total === undefined ? page.comments.length < jiraCommentPageSize : comments.length >= page.total);
-        if (isLastPage) return comments;
+        if (checkIsLastOffsetPage({ total: page.total, pageItemCount: page.comments.length, readItemCount: comments.length, pageSize: jiraCommentPageSize })) {
+          return comments;
+        }
       }
     },
 
@@ -602,12 +619,9 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
           groupMemberPageSchema,
         );
         members.push(...page.values);
-        // `isLast` ends the read; without it `total` does, else a page shorter than asked. An empty page always does.
-        let isLastPage: boolean;
-        if (page.values.length === 0) isLastPage = true;
-        else if (page.isLast !== undefined) isLastPage = page.isLast;
-        else isLastPage = page.total === undefined ? page.values.length < jiraGroupMemberPageSize : members.length >= page.total;
-        if (isLastPage) return members;
+        if (checkIsLastOffsetPage({ isLast: page.isLast, total: page.total, pageItemCount: page.values.length, readItemCount: members.length, pageSize: jiraGroupMemberPageSize })) {
+          return members;
+        }
       }
     },
   };
