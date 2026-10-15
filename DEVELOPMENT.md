@@ -77,6 +77,7 @@ Each adapter implements `AgentAdapter` from `src/types.ts`:
 ## Local development
 
 ```bash
+git clone https://github.com/olosegres/charness && cd charness
 yarn install
 yarn dev          # tsx watch (fast dev — TS errors crash the process)
 yarn typecheck    # strict tsc over all of src/, test code included
@@ -92,6 +93,11 @@ yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
                    # worker tree, so agent turns survive worker reloads
                    # (Linux/macOS; Windows hot mode is intentionally refused)
 ```
+
+To run your checkout as the global `telegramcode` / `charness` command instead of the npm package, `yarn install-link`
+(= `yarn install && yarn build && npm link`) symlinks the command to this folder, so a later `yarn build` is picked up
+without re-installing; `npm install -g .` installs a copy instead. Configuration and launch are as in
+[SETUP.md](SETUP.md).
 
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running

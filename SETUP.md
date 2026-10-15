@@ -1,8 +1,9 @@
 # Setup
 
-How to install, configure and run Charness. The common part comes first — where to run it, install, Docker,
-the environment, several instances on one host, updating; then follow the surface you use:
-[Telegram](#telegram-setup) or [Jira](#jira-setup). What Charness does is in the [README](README.md).
+How to install, configure and run Charness. The common part comes first — where to run it, install, the
+environment, several instances on one host, updating; then follow the surface you use:
+[Telegram](#telegram-setup) or [Jira](#jira-setup). The whole bot can also run in a container instead of through
+npm — see [Alternatives](#alternatives) at the end. What Charness does is in the [README](README.md).
 
 ## Common setup
 
@@ -36,97 +37,6 @@ This registers the `telegramcode` command (it keeps the project's former name;
 `charness` works too). Coming from the old `telegramcode` npm package (2.x)?
 Run `npm uninstall -g telegramcode` first: both install the same commands. The
 config, `DATA_DIR` and sessions carry over as they are.
-
-Prefer the whole bot in a container, isolated from the host? Use
-[Run with Docker](#run-with-docker) instead — the Telegram and Jira setup steps are
-the same. To hack on the bot itself, see [Run from source](#run-from-source).
-
-### Run with Docker
-
-The whole bot runs in one container: the bot itself, tmux, every agent it starts (Claude Code in any backend,
-`/terminal`, OpenCode and its server) and the bot's MCP server. Everything works as on a host; the host only
-lends the container the folders it mounts, so the bot and its agents see nothing else of the machine.
-
-```
-host                                        container telegramcode-<instance>
-your instance env file (tokens)   ── ro ──▶  the bot (hot mode) + a restart loop
-DATA_DIR, WORK_ROOT               ──────▶    tmux, the agents, OpenCode, the bot MCP
-a clone of this repository        ──────▶    /opt/telegramcode
-the agents' home folder           ──────▶    /home/telegramcode: their Claude / OpenCode
-                                              login, sessions and CLI installs
-```
-
-1. **Image and checkout.** Clone the repository for the container (a full clone of its own, not a worktree and
-   not the checkout a host instance runs from) and build the image from it:
-
-   ```bash
-   git clone https://github.com/olosegres/charness /srv/telegramcode/checkout
-   cd /srv/telegramcode/checkout && docker build -t telegramcode -f docker/Dockerfile .
-   ```
-
-   The image holds only system tools (tmux, git, ffmpeg, ripgrep, …) and the yarn the checkout's `package.json`
-   names (build from the checkout's root, which is how the build reads it; rebuild after a yarn bump so no
-   container has to download it). On first start the container installs the checkout's dependencies for the
-   image and builds it; the bot installs Claude Code and OpenCode into the agents' home.
-2. **Instance env file**, as for a host install (`TELEGRAM_BOT_TOKEN`, `DATA_DIR`, `WORK_ROOT`, …). It stays on
-   the host and is mounted read-only. Every host path it names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is
-   mounted at the SAME path, so `state.json`, sessions and file paths stay valid inside and an instance can move
-   between host and container unchanged.
-3. **Run** (or use `examples/docker-compose.yml`):
-
-   ```bash
-   docker run -d --name telegramcode-main --hostname telegramcode-main \
-     --restart unless-stopped --stop-timeout 60 \
-     -v /srv/telegramcode/checkout:/opt/telegramcode \
-     -v /srv/telegramcode/home:/home/telegramcode \
-     -v /srv/telegramcode/data:/srv/telegramcode/data \
-     -v /srv/projects:/srv/projects \
-     -v /srv/telegramcode/instance.env:/srv/telegramcode/instance.env:ro \
-     -e ENV_FILE=/srv/telegramcode/instance.env \
-     telegramcode
-   ```
-
-   No port is published: Telegram is long polling, and the bot's MCP server and the OpenCode server listen on the
-   container's own loopback. Keep the `--hostname` fixed and unique per instance: the instance lock tells its own
-   restarted container from another machine by it.
-4. **Log the agents in once**, with the account the agents should use (a separate one is best):
-   `docker exec -it telegramcode-main claude`, then `/login` (or `/login` in a topic). OpenCode: `/connect` in a
-   topic, or `docker exec -it telegramcode-main opencode auth login`. Never copy your own `~/.claude` login in:
-   a second holder of its refresh token can log the first one out. For git, put a `.gitconfig` and an SSH key of
-   their own into the agents' home.
-
-Running it:
-
-- **Restart the bot only** (agents keep running and are adopted): `docker exec telegramcode-main
-  telegramcode-restart-bot`. A crashed bot is restarted by the container after 20 s.
-- **Update the bot**: `docker exec telegramcode-main /opt/telegramcode/scripts/self-update.sh` (by hand or from
-  a timer on the host); hot mode picks the change up. A change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
-  needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
-  `docker exec telegramcode-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
-- **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
-- **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
-  yours. **Rootful Docker**: add `--user "$(id -u):$(id -g)"` and give that user the agents' home.
-- **Moving a host instance in**: stop it first (the lock refuses a lock written on another host), mount its
-  folders at their paths, and copy its conversations' folders from `~/.claude/projects/` into the agents' home
-  `.claude/projects/` — without them each conversation starts a fresh session on its next message.
-- **What the agents can read**: everything mounted, the instance env file with its tokens, `DATA_DIR` and the
-  checkout included. The container keeps the rest of the host out of reach; running the agents as a second user
-  inside the container would close that gap later.
-
-### Run from source
-
-To hack on the bot itself:
-
-```bash
-git clone https://github.com/olosegres/charness && cd charness
-yarn install && yarn build
-npm install -g .            # registers the `telegramcode` (and `charness`) command
-```
-
-Shortcut: `yarn install-link` runs `yarn install && yarn build && npm link` in
-one shot — `npm link` symlinks the global `telegramcode` to this folder, so
-later rebuilds (`yarn build`) are picked up without re-installing. Config and
-launch are identical to the [Telegram setup](#telegram-setup) steps.
 
 ### Environment variables
 
@@ -522,3 +432,84 @@ the instance's env file and `DATA_DIR`, so run the instance under an OS user tha
 account that sees only the allowlisted projects. **A production Jira account runs only in the Docker container**
 ([Run with Docker](#run-with-docker)): there the agent can still read the instance's env file and `DATA_DIR`,
 but nothing of the host outside the container's mounts. Module details: `src/connectors/jira/README.md`.
+
+## Alternatives
+
+The npm install above is the way to run Charness; this is the alternative to it.
+
+### Run with Docker
+
+Choose this instead of the npm install when you want one of two things. **Isolation:** the agents run any command
+in the project folder; in a container they reach only what you mount, so the worst they break is the container and
+those folders. **A ready environment:** Node 22, tmux, git and ffmpeg come in the image, and the bot installs Claude
+Code and OpenCode itself on its first start, so the host needs nothing but Docker.
+
+The whole bot runs in one container: the bot itself, tmux, every agent it starts (Claude Code in any backend,
+`/terminal`, OpenCode and its server) and the bot's MCP server. Everything works as on a host; the host only
+lends the container the folders it mounts, so the bot and its agents see nothing else of the machine.
+
+```
+host                                        container telegramcode-<instance>
+your instance env file (tokens)   ── ro ──▶  the bot (hot mode) + a restart loop
+DATA_DIR, WORK_ROOT               ──────▶    tmux, the agents, OpenCode, the bot MCP
+a clone of this repository        ──────▶    /opt/telegramcode
+the agents' home folder           ──────▶    /home/telegramcode: their Claude / OpenCode
+                                              login, sessions and CLI installs
+```
+
+1. **Image and checkout.** Clone the repository for the container (a full clone of its own, not a worktree and
+   not the checkout a host instance runs from) and build the image from it:
+
+   ```bash
+   git clone https://github.com/olosegres/charness /srv/telegramcode/checkout
+   cd /srv/telegramcode/checkout && docker build -t telegramcode -f docker/Dockerfile .
+   ```
+
+   The image holds only system tools (tmux, git, ffmpeg, ripgrep, …) and the yarn the checkout's `package.json`
+   names (build from the checkout's root, which is how the build reads it; rebuild after a yarn bump so no
+   container has to download it). On first start the container installs the checkout's dependencies for the
+   image and builds it; the bot installs Claude Code and OpenCode into the agents' home.
+2. **Instance env file**, as for a host install (`TELEGRAM_BOT_TOKEN`, `DATA_DIR`, `WORK_ROOT`, …). It stays on
+   the host and is mounted read-only. Every host path it names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is
+   mounted at the SAME path, so `state.json`, sessions and file paths stay valid inside and an instance can move
+   between host and container unchanged.
+3. **Run** (or use `examples/docker-compose.yml`):
+
+   ```bash
+   docker run -d --name telegramcode-main --hostname telegramcode-main \
+     --restart unless-stopped --stop-timeout 60 \
+     -v /srv/telegramcode/checkout:/opt/telegramcode \
+     -v /srv/telegramcode/home:/home/telegramcode \
+     -v /srv/telegramcode/data:/srv/telegramcode/data \
+     -v /srv/projects:/srv/projects \
+     -v /srv/telegramcode/instance.env:/srv/telegramcode/instance.env:ro \
+     -e ENV_FILE=/srv/telegramcode/instance.env \
+     telegramcode
+   ```
+
+   No port is published: Telegram is long polling, and the bot's MCP server and the OpenCode server listen on the
+   container's own loopback. Keep the `--hostname` fixed and unique per instance: the instance lock tells its own
+   restarted container from another machine by it.
+4. **Log the agents in once**, with the account the agents should use (a separate one is best):
+   `docker exec -it telegramcode-main claude`, then `/login` (or `/login` in a topic). OpenCode: `/connect` in a
+   topic, or `docker exec -it telegramcode-main opencode auth login`. Never copy your own `~/.claude` login in:
+   a second holder of its refresh token can log the first one out. For git, put a `.gitconfig` and an SSH key of
+   their own into the agents' home.
+
+Running it:
+
+- **Restart the bot only** (agents keep running and are adopted): `docker exec telegramcode-main
+  telegramcode-restart-bot`. A crashed bot is restarted by the container after 20 s.
+- **Update the bot**: `docker exec telegramcode-main /opt/telegramcode/scripts/self-update.sh` (by hand or from
+  a timer on the host); hot mode picks the change up. A change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
+  needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
+  `docker exec telegramcode-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
+- **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
+- **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
+  yours. **Rootful Docker**: add `--user "$(id -u):$(id -g)"` and give that user the agents' home.
+- **Moving a host instance in**: stop it first (the lock refuses a lock written on another host), mount its
+  folders at their paths, and copy its conversations' folders from `~/.claude/projects/` into the agents' home
+  `.claude/projects/` — without them each conversation starts a fresh session on its next message.
+- **What the agents can read**: everything mounted, the instance env file with its tokens, `DATA_DIR` and the
+  checkout included. The container keeps the rest of the host out of reach; running the agents as a second user
+  inside the container would close that gap later.

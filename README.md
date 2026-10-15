@@ -6,7 +6,7 @@
   <a href="https://github.com/olosegres/charness/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/charness" alt="license"></a>
 </p>
 
-<h2 align="center">Run multiple Claude Code / OpenCode agents and connect them to your Telegram or Atlassian Jira.</h2>
+<h2 align="center">Run multiple Claude Code / OpenCode agents and connect them to your Telegram or Jira.</h2>
 
 - **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
 - **In Jira** it starts an agent when you assign a ticket to a special user: the agent reads the description, comments and attachments and does the work according to the ticket's status — like a real employee.
@@ -77,7 +77,7 @@ The bot serves two Telegram surfaces:
 4. In your Telegram group (or the bot's DM): `/bind <subfolder>` in a topic, then `/claude` or `/opencode` and
    talk to the agent — text or voice.
 
-Full setup — Telegram, Jira, Docker, from source: [SETUP.md](SETUP.md)
+Full setup — Telegram, Jira, environment, updating: [SETUP.md](SETUP.md)
 
 ## Reference
 
@@ -674,7 +674,7 @@ Yes. Send a voice message to a topic and it is transcribed with Whisper (via Gro
 
 ### Documentation
 
-- **[SETUP.md](SETUP.md)** — installing and configuring: Telegram, Jira, Docker, from source, environment, updating.
+- **[SETUP.md](SETUP.md)** — installing and configuring: Telegram, Jira, environment, updating; Docker as an alternative to npm.
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** — architecture and local development (build, test, hot-reload, Docker dev loop).
 - **[MIGRATION_1_TO_2.md](MIGRATION_1_TO_2.md)** — upgrading a 1.x install to 2.0.
 
