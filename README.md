@@ -8,10 +8,10 @@
 
 <h2 align="center">Run multiple Claude Code / OpenCode agents and connect them to your Telegram or Atlassian Jira.</h2>
 
-<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a server and your agents keep working while the laptop sleeps.</p>
-
 - **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
 - **In Jira** it starts an agent when you assign a ticket to a special user: the agent reads the description, comments and attachments and does the work according to the ticket's status — like a real employee.
+
+<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a server and your agents keep working while the laptop sleeps.</p>
 
 <p align="center">
   <img src="docs/images/hero-v2.png" alt="Charness — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
