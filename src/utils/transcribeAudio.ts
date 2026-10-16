@@ -86,6 +86,12 @@ export interface TranscribeAudioOptions {
   retryDelaysMs?: readonly number[];
   /** Fired before each retry, e.g. to tell the user a retry is coming. */
   onRetry?: (info: TranscribeRetryInfo) => void;
+  /**
+   * The endpoint to use for the next attempt, asked for before every RETRY. An engine backed by a process may have
+   * restarted on another port since the first attempt: a retry on the old endpoint would hit a refused port. A
+   * rejection ends the attempts with its message.
+   */
+  refreshEndpoint?: () => Promise<TranscriptionEndpoint>;
 }
 
 /** @description The Groq Whisper endpoint for `apiKey`. */
@@ -255,8 +261,9 @@ export async function transcribeAudio(
   endpoint: TranscriptionEndpoint,
   options: TranscribeAudioOptions,
 ): Promise<TranscribeResult> {
+  let currentEndpoint = endpoint;
   for (let retryIndex = 0; ; retryIndex++) {
-    const attempt = await transcribeAudioOnce(filePath, endpoint, options.timeoutMs);
+    const attempt = await transcribeAudioOnce(filePath, currentEndpoint, options.timeoutMs);
     if (attempt.ok) return attempt;
 
     const delayMs = getTranscribeRetryDelayMs({
@@ -275,5 +282,12 @@ export async function transcribeAudio(
     }
     options.onRetry?.({ attemptNumber: attemptCount, error: attempt.error, delayMs });
     await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (options.refreshEndpoint) {
+      try {
+        currentEndpoint = await options.refreshEndpoint();
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : 'the endpoint could not be refreshed' };
+      }
+    }
   }
 }

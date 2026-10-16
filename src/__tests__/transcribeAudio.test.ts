@@ -299,3 +299,30 @@ test('an empty download fails at once without calling the provider', async () =>
   assert.equal(receivedRequests.length, 0);
   assert.deepEqual(retries, []);
 });
+
+test('refreshEndpoint is asked before every retry, never before the first attempt, and its endpoint is used', async () => {
+  resetServer([respondWith(503, 'busy'), respondWith(503, 'busy'), transcribed('third time')]);
+  const asked: number[] = [];
+  const result = await transcribeAudio(audioPath, endpoint, {
+    timeoutMs: testTimeoutMs,
+    retryDelaysMs: testRetryDelaysMs,
+    refreshEndpoint: async () => {
+      asked.push(receivedRequests.length);
+      return { ...endpoint, apiKey: `refreshed-${asked.length}` };
+    },
+  });
+  assert.deepEqual(result, { ok: true, text: 'third time' });
+  assert.deepEqual(asked, [1, 2], 'asked after the 1st and the 2nd failure');
+  assert.deepEqual(receivedRequests.map((request) => request.authorization), ['Bearer test-key', 'Bearer refreshed-1', 'Bearer refreshed-2']);
+});
+
+test('a refreshEndpoint that rejects ends the attempts with its message', async () => {
+  resetServer([respondWith(503, 'busy'), transcribed('never reached')]);
+  const result = await transcribeAudio(audioPath, endpoint, {
+    timeoutMs: testTimeoutMs,
+    retryDelaysMs: testRetryDelaysMs,
+    refreshEndpoint: async () => { throw new Error('the engine is gone'); },
+  });
+  assert.deepEqual(result, { ok: false, error: 'the engine is gone' });
+  assert.equal(receivedRequests.length, 1);
+});

@@ -423,6 +423,7 @@ export const uzDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Lokal dvigatel: mavjud emas — dvigatelga egalik qila olishi uchun bot supervizorini bir marta qayta ishga tushirish kerak.',
   'stt.screen.local.unhealthy': 'Lokal dvigatel: bir necha muvaffaqiyatsiz ishga tushirishdan keyin {until} gacha to‘xtatilgan.',
   'stt.screen.local.running': 'Lokal dvigatel: ishlamoqda.',
+  'stt.screen.local.runningSlow': 'Lokal dvigatel: ishlamoqda, uzun ovozli xabar bilan band.',
   'stt.screen.local.runningBusy': 'Lokal dvigatel: ishlamoqda, {count} ta jarayonda.',
   'stt.screen.local.ready': 'Lokal dvigatel: tayyor, hozir ishlamayapti — keyingi ovozli xabar bilan ishga tushadi.',
   'stt.screen.languageNote': '⚠️ Lokal dvigatel faqat rus tilini tushunadi, shuning uchun bu tilda u o‘tkazib yuboriladi.',

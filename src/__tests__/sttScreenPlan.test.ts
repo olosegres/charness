@@ -188,6 +188,7 @@ test('main screen, process states: ready not running, running idle, running busy
   assert.match(textFor({ state: 'notRunning' }).text, /stt\.screen\.local\.ready/);
   assert.match(textFor({ state: 'running', busyRequests: 0 }).text, /stt\.screen\.local\.running(?!Busy)/);
   assert.match(textFor({ state: 'running', busyRequests: 3 }).text, /stt\.screen\.local\.runningBusy\(count=3\)/);
+  assert.match(textFor({ state: 'running' }).text, /stt\.screen\.local\.runningSlow/, 'alive but too busy to answer /health');
 
   const untilMs = new Date(2026, 9, 16, 14, 5, 0).getTime();
   const unhealthy = textFor({ state: 'unhealthy', unhealthyUntil: untilMs }, { isGigaamUnhealthy: true });

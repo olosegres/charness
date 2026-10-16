@@ -423,6 +423,7 @@ export const frDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Moteur local : indisponible — le superviseur du bot doit être redémarré une fois pour pouvoir posséder le moteur.',
   'stt.screen.local.unhealthy': 'Moteur local : en pause jusqu’à {until} après plusieurs démarrages échoués.',
   'stt.screen.local.running': 'Moteur local : en marche.',
+  'stt.screen.local.runningSlow': 'Moteur local : en marche, occupé par un long message vocal.',
   'stt.screen.local.runningBusy': 'Moteur local : en marche, {count} en cours.',
   'stt.screen.local.ready': 'Moteur local : prêt, pas en marche — il démarre avec le prochain message vocal.',
   'stt.screen.languageNote': '⚠️ Le moteur local ne comprend que le russe ; il est donc ignoré avec cette langue.',

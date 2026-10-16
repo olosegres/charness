@@ -8,7 +8,7 @@ and it takes itself down when it has been idle (`--idle-minutes`) or when its ow
 Long audio is cut at the quietest 50 ms inside the last 8 s before every 25 s boundary; the chunks are
 recognised in parallel on a pool of threads that share ONE onnxruntime session, shortest request first.
 
-Exit codes: 0 clean (SIGTERM, idle, owner gone), 1 the model or the socket could not be set up, 2 bad usage
+Exit codes: 0 clean (SIGTERM, idle, owner gone), 1 the model, the socket, the record or the ready file could not be set up, 2 bad usage
 (including a missing token). Everything it has to say goes to `--log-file`: it is externally parented, so its
 stdio may point at a dead pipe.
 
@@ -18,6 +18,7 @@ Protocol and layout: `src/stt/README.md`.
 from __future__ import annotations
 
 import argparse
+import datetime
 import email.parser
 import email.policy
 import hmac
@@ -30,6 +31,7 @@ import logging.handlers
 import os
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -62,6 +64,7 @@ SOCKET_TIMEOUT_SECONDS = 120.0
 REQUEST_QUEUE_SIZE = 16
 IDLE_CHECK_SECONDS = 5.0
 OWNER_CHECK_SECONDS = 2.0
+PS_TIMEOUT_SECONDS = 3.0
 SERVE_POLL_SECONDS = 0.5
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 1
@@ -480,7 +483,17 @@ def remove_record_if_owned(record_path: str, own_pid: int) -> bool:
 
 
 def read_process_start_token(pid: int) -> str | None:
-    """Field 22 of `/proc/<pid>/stat` — the same token the bot records; None when gone or a zombie."""
+    """The token the bot records to tell a process from a reused pid: field 22 of `/proc/<pid>/stat` on Linux
+    (None when gone or a zombie), elsewhere the `ps` text the bot reads (`lstart` + `command`)."""
+    if not sys.platform.startswith("linux"):
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=PS_TIMEOUT_SECONDS, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout.strip() or None
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as stream:
             stat = stream.read()
@@ -490,6 +503,22 @@ def read_process_start_token(pid: int) -> str | None:
     if not fields or fields[0] == "Z" or len(fields) < 20:
         return None
     return fields[19]
+
+
+def build_record(args: argparse.Namespace, port: int, token: str, start_token: str) -> dict:
+    """What the bot adopts this process from: the sidecar writes it ITSELF, right after it binds and before the
+    ready file, so a bot worker that is replaced while it waits for the ready file leaves a process the next
+    worker can find (the token is only in this process and in this file)."""
+    return {
+        "pid": os.getpid(),
+        "startToken": start_token,
+        "port": port,
+        "token": token,
+        "configHash": args.config_hash,
+        "ownerPid": args.owner_pid,
+        "ownerStartToken": args.owner_start_token or "",
+        "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
 
 
 def is_owner_alive(owner_pid: int, owner_start_token: str | None) -> bool:
@@ -629,7 +658,16 @@ def run_serve(args: argparse.Namespace, token: str) -> int:
     for handled in (signal.SIGTERM, signal.SIGINT):
         signal.signal(handled, lambda *_: request_exit(EXIT_OK))
 
-    write_json_atomic(args.ready_file, {"pid": os.getpid(), "port": port, "version": SCRIPT_VERSION})
+    start_token = read_process_start_token(os.getpid())
+    if start_token is None:
+        logger.error("could not read the own start token")
+        return EXIT_SETUP_FAILED
+    try:
+        write_json_atomic(args.record_file, build_record(args, port, token, start_token))
+        write_json_atomic(args.ready_file, {"pid": os.getpid(), "port": port, "version": SCRIPT_VERSION})
+    except OSError:
+        logger.error("could not write the record or the ready file: %s", traceback.format_exc())
+        return EXIT_SETUP_FAILED
     logger.info("ready on 127.0.0.1:%d", port)
     start_serving()
     threading.Thread(target=monitor_owner, name="stt-owner", daemon=True).start()
@@ -651,7 +689,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Charness GigaAM speech-recognition sidecar")
     parser.add_argument("--check", action="store_true", help="load the model, recognise 1 s of silence, print versions")
     parser.add_argument("--ready-file", help="written atomically with {pid, port, version} once the server listens")
-    parser.add_argument("--record-file", help="the bot's record of this process; deleted on an idle exit if it names this pid")
+    parser.add_argument("--record-file", help="written by this process right after it binds (the bot adopts it from this file); deleted on an idle exit if it names this pid")
+    parser.add_argument("--config-hash", help="the bot's hash of the knobs this process was started with, recorded as is")
     parser.add_argument("--log-file", help="where every log line goes")
     parser.add_argument("--owner-pid", type=int, help="exit within ~2 s of this process dying")
     parser.add_argument("--owner-start-token", help="the owner's /proc start time (field 22), to tell a reused pid")
@@ -662,7 +701,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS, help="give up on one request after this long")
     args = parser.parse_args(argv)
     if not args.check:
-        for name in ("ready_file", "record_file", "log_file", "owner_pid"):
+        for name in ("ready_file", "record_file", "log_file", "owner_pid", "config_hash"):
             if getattr(args, name) is None:
                 parser.error(f"--{name.replace('_', '-')} is required")
     if args.idle_seconds is None:

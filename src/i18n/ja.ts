@@ -423,6 +423,7 @@ export const jaDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'ローカルエンジン: 利用不可 — エンジンを所有できるよう、ボットのスーパーバイザーを一度再起動してください。',
   'stt.screen.local.unhealthy': 'ローカルエンジン: 起動の失敗が続いたため {until} まで一時停止中。',
   'stt.screen.local.running': 'ローカルエンジン: 実行中。',
+  'stt.screen.local.runningSlow': 'ローカルエンジン: 実行中、長い音声メッセージの処理中。',
   'stt.screen.local.runningBusy': 'ローカルエンジン: 実行中、処理中 {count} 件。',
   'stt.screen.local.ready': 'ローカルエンジン: 準備完了、停止中 — 次の音声メッセージで起動します。',
   'stt.screen.languageNote': '⚠️ ローカルエンジンはロシア語のみ対応のため、この言語ではスキップされます。',

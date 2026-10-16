@@ -150,18 +150,18 @@ test('hot supervisor hands its worker the speech-engine owner env, and stops the
       ].join('\n'),
     );
 
-    // A live sidecar the way an earlier worker would have left it, with its record. The test process is its
-    // owner, so only the supervisor's shutdown can end it.
+    // A live sidecar the way an earlier worker would have left it: it records itself (the contract). The test
+    // process is its owner, so only the supervisor's shutdown can end it.
     const ownerIdentity = getProcessIdentity(process.pid);
     assert.ok(ownerIdentity);
     sidecarIdentity = await startExternallyParentedProcess(
       process.execPath,
-      [fakeSidecarPath, '--ready-file', path.join(sttRoot, 'ready.json'), '--record-file', recordPath, '--owner-pid', process.pid.toString(), '--owner-start-token', ownerIdentity.startToken],
+      [fakeSidecarPath, '--ready-file', path.join(sttRoot, 'ready.json'), '--record-file', recordPath, '--owner-pid', process.pid.toString(), '--owner-start-token', ownerIdentity.startToken, '--config-hash', 'hot-test-hash'],
       { ...process.env, CHARNESS_STT_SIDECAR_TOKEN: 'hot-test-token' },
     );
-    fs.writeFileSync(recordPath, JSON.stringify({
-      ...sidecarIdentity, port: 1, token: 'hot-test-token', configHash: 'h', ownerPid: process.pid, ownerStartToken: ownerIdentity.startToken, startedAt: 'now',
-    }));
+    const recordDeadlineMs = Date.now() + subprocessTimeoutMs;
+    while (!fs.existsSync(recordPath) && Date.now() < recordDeadlineMs) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(fs.existsSync(recordPath), 'the sidecar recorded itself');
 
     const supervisor = spawn(process.execPath, [path.join(copiedDist, 'cli.js'), 'hot'], {
       cwd: launchRoot,

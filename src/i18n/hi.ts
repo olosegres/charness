@@ -423,6 +423,7 @@ export const hiDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'लोकल इंजन: उपलब्ध नहीं — बॉट सुपरवाइज़र को एक बार रीस्टार्ट करना होगा ताकि वह इंजन का मालिक बन सके।',
   'stt.screen.local.unhealthy': 'लोकल इंजन: बार-बार स्टार्ट विफल होने के बाद {until} तक रुका हुआ।',
   'stt.screen.local.running': 'लोकल इंजन: चल रहा है।',
+  'stt.screen.local.runningSlow': 'लोकल इंजन: चल रहा है, एक लंबे वॉइस नोट में व्यस्त।',
   'stt.screen.local.runningBusy': 'लोकल इंजन: चल रहा है, {count} प्रोसेस में।',
   'stt.screen.local.ready': 'लोकल इंजन: तैयार, अभी चल नहीं रहा — अगले वॉइस नोट के साथ शुरू होगा।',
   'stt.screen.languageNote': '⚠️ लोकल इंजन सिर्फ़ रूसी समझता है, इसलिए इस भाषा में उसे छोड़ दिया जाता है।',

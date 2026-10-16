@@ -423,6 +423,7 @@ export const deDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Lokale Engine: nicht verfügbar — der Bot-Supervisor muss einmal neu gestartet werden, damit er die Engine besitzen kann.',
   'stt.screen.local.unhealthy': 'Lokale Engine: bis {until} pausiert nach mehreren fehlgeschlagenen Starts.',
   'stt.screen.local.running': 'Lokale Engine: läuft.',
+  'stt.screen.local.runningSlow': 'Lokale Engine: läuft, beschäftigt mit einer langen Sprachnachricht.',
   'stt.screen.local.runningBusy': 'Lokale Engine: läuft, {count} in Bearbeitung.',
   'stt.screen.local.ready': 'Lokale Engine: bereit, läuft gerade nicht — sie startet mit der nächsten Sprachnachricht.',
   'stt.screen.languageNote': '⚠️ Die lokale Engine versteht nur Russisch und wird mit dieser Sprache übersprungen.',

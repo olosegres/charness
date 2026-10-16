@@ -284,14 +284,84 @@ test('a start that exits before it is ready, and one that is never ready, both r
   assert.deepEqual(fs.readdirSync(getSttPaths(dataDir).root).filter((name) => name.startsWith('ready-')), []);
 });
 
-test('a start whose record cannot be written is stopped and reported — no unfindable process is left running', async () => {
-  const paths = getSttPaths(dataDir);
-  fs.mkdirSync(path.join(paths.root, `sidecar.json.${process.pid}.tmp`), { recursive: true }); // the record's temp file cannot be created
+test('a sidecar that cannot record itself exits before any ready file, which is a failed start; one that says "ready" without a record is stopped', async () => {
+  fakeArgs = ['--fail-to-record'];
   const owner = createSttSidecarOwner(createDeps());
-  await assert.rejects(() => owner.ensure(defaultSettings), /record could not be written/);
-  assert.equal(startCalls.length, 1);
-  assert.ok(await waitUntilGone(startedIdentities[0], 2_000), 'the process that started is stopped');
+  await assert.rejects(() => owner.ensure(defaultSettings), /exited before it was ready/);
   assert.equal(fs.existsSync(getRecordPath()), false);
+
+  fakeArgs = ['--skip-record'];
+  await assert.rejects(() => owner.ensure(defaultSettings), /did not record itself/);
+  assert.ok(await waitUntilGone(startedIdentities[1], 2_000), 'a process nobody can find again is stopped, not left idling');
+});
+
+test('the sidecar records itself: its own pid and start token, the token it was given, the config hash and the owner it was started for', async () => {
+  const owner = createSttSidecarOwner(createDeps());
+  const endpoint = await owner.ensure(defaultSettings);
+  const record = readRecord();
+  assert.equal(record.pid, startedIdentities[0].pid);
+  assert.equal(record.startToken, startedIdentities[0].startToken);
+  assert.equal(record.token, endpoint.token);
+  assert.equal(record.configHash, getSttSidecarConfigHash(defaultSettings));
+  assert.equal(record.ownerPid, testOwner.pid);
+  assert.equal(record.ownerStartToken, testOwner.startToken);
+  const flag = (name: string): string => startCalls[0].args[startCalls[0].args.indexOf(name) + 1];
+  assert.equal(flag('--config-hash'), record.configHash, 'the bot hands the hash over; the sidecar records it as it is');
+  await owner.stop();
+});
+
+test('a busy sidecar that answers /health late is adopted, not killed and replaced', async () => {
+  fakeArgs = ['--health-delay-ms', '700'];
+  const owner = createSttSidecarOwner(createDeps({ adoptHealthTimeoutsMs: [150, 3_000] }));
+  const first = await owner.ensure(defaultSettings);
+  const identity = getRecordedIdentity();
+
+  const second = await owner.ensure(defaultSettings);
+  assert.deepEqual(second, first);
+  assert.equal(startCalls.length, 1, 'no second process: the late answer was waited for');
+  assert.ok(checkIsProcessIdentityCurrent(identity));
+  await owner.stop();
+});
+
+test('a live matching sidecar that answers nothing is used anyway twice, and replaced only when it stays silent a third time', async () => {
+  fakeArgs = ['--health-hang'];
+  const owner = createSttSidecarOwner(createDeps({ adoptHealthTimeoutsMs: [100, 200] }));
+  const first = await owner.ensure(defaultSettings);
+  const wedged = getRecordedIdentity();
+
+  assert.deepEqual(await owner.ensure(defaultSettings), first, 'silent once: still used');
+  assert.deepEqual(await owner.ensure(defaultSettings), first, 'silent twice: still used');
+  assert.equal(startCalls.length, 1);
+  assert.ok(logLines.some((line) => line.includes('did not answer /health (1/3); using it anyway')));
+  assert.ok(checkIsProcessIdentityCurrent(wedged), 'nothing was killed');
+
+  fakeArgs = [];
+  const replacement = await owner.ensure(defaultSettings);
+  assert.equal(startCalls.length, 2, 'the third silence replaces it');
+  assert.notEqual(replacement.port, first.port);
+  assert.ok(await waitUntilGone(wedged, 4_000), 'the wedged one is stopped, not leaked');
+  assert.ok(logLines.some((line) => line.includes('stayed silent 3 times in a row; replacing it')));
+  await owner.stop();
+});
+
+test('a dead process, another owner and another config are still replaced at once — only silence is forgiven', async () => {
+  fakeArgs = ['--health-hang'];
+  const owner = createSttSidecarOwner(createDeps({ adoptHealthTimeoutsMs: [100, 200] }));
+  await owner.ensure(defaultSettings);
+  const silent = getRecordedIdentity();
+  fakeArgs = [];
+  await owner.ensure({ idleMinutes: 15, workers: 2 });
+  assert.equal(startCalls.length, 2, 'a changed config does not wait for the silent one');
+  assert.ok(await waitUntilGone(silent, 4_000));
+  await owner.stop();
+});
+
+test('status: a live sidecar too busy to answer /health is "running" with no count, not "not running"', async () => {
+  fakeArgs = ['--health-hang'];
+  const owner = createSttSidecarOwner(createDeps());
+  await owner.ensure(defaultSettings);
+  assert.deepEqual(await owner.getStatus(), { state: 'running' });
+  await owner.stop();
 });
 
 test('a settings change that the process was started with stops it; the next ensure starts with the new hash', async () => {
@@ -493,15 +563,16 @@ test('no owner context → ensure refuses without starting anything; status read
   assert.deepEqual(await owner.getStatus(), { state: 'notRunning' });
 });
 
-test('status: running reports the sidecar\'s busy count; a record whose process answers nothing is "not running"', async () => {
+test('status: running reports the sidecar\'s busy count; a record the process does not answer for is "running" without a count', async () => {
   const owner = createSttSidecarOwner(createDeps());
   await owner.ensure(defaultSettings);
   assert.deepEqual(await owner.getStatus(), { state: 'running', busyRequests: 0 });
   const record = readRecord();
   fs.writeFileSync(getRecordPath(), JSON.stringify({ ...record, token: 'a-token-the-process-does-not-know' }));
-  assert.deepEqual(await owner.getStatus(), { state: 'notRunning' });
+  assert.deepEqual(await owner.getStatus(), { state: 'running' }, 'alive but not answering: busy, not gone');
   fs.writeFileSync(getRecordPath(), JSON.stringify(record));
   await owner.stop();
+  assert.deepEqual(await owner.getStatus(), { state: 'notRunning' });
 });
 
 test('owner context: a hot worker takes its supervisor\'s from the env, a plain bot is its own owner, anything else is none', () => {
@@ -515,22 +586,31 @@ test('owner context: a hot worker takes its supervisor\'s from the env, a plain 
   assert.deepEqual(resolveSttOwnerContext({ [sttOwnerPidEnvName]: '4242', [sttOwnerStartTokenEnvName]: '9000' }, 111, () => 'own'), { pid: 111, startToken: 'own' }, 'a plain bot ignores a stray handshake');
 });
 
-/** Run the owner-worker fixture in its own process and read its one JSON line. */
-function runOwnerWorker(owner: string, mode: 'ensure' | 'ensure-and-stay'): { child: ChildProcess; endpoint: Promise<SttSidecarEndpoint> } {
-  const child = spawn(process.execPath, ['--import', 'tsx', ownerWorkerPath, dataDir, owner, mode], { stdio: ['ignore', 'pipe', 'pipe'] });
+/** Run the owner-worker fixture in its own process: `spawned` is the sidecar pid it announces, `endpoint` its answer. */
+function runOwnerWorker(
+  owner: string,
+  mode: 'ensure' | 'ensure-and-stay',
+  fakeArgs: string[] = [],
+): { child: ChildProcess; endpoint: Promise<SttSidecarEndpoint>; spawned: Promise<number> } {
+  const child = spawn(process.execPath, ['--import', 'tsx', ownerWorkerPath, dataDir, owner, mode, JSON.stringify(fakeArgs)], { stdio: ['ignore', 'pipe', 'pipe'] });
   decoys.push(child);
+  let announceSpawn: (pid: number) => void = () => {};
+  const spawned = new Promise<number>((resolve) => { announceSpawn = resolve; });
   const endpoint = new Promise<SttSidecarEndpoint>((resolve, reject) => {
     let output = '';
     let errors = '';
     child.stdout?.on('data', (chunk: Buffer) => {
       output += chunk.toString();
-      const line = output.split('\n').find((candidate) => candidate.startsWith('{'));
-      if (line) resolve(JSON.parse(line));
+      const spawnedLine = output.split('\n').find((candidate) => candidate.startsWith('SPAWNED '));
+      if (spawnedLine) announceSpawn(Number(spawnedLine.slice('SPAWNED '.length)));
+      const endpointLine = output.split('\n').find((candidate) => candidate.startsWith('ENDPOINT '));
+      if (endpointLine) resolve(JSON.parse(endpointLine.slice('ENDPOINT '.length)));
     });
     child.stderr?.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
     child.once('exit', (code) => reject(new Error(`the owner worker exited (${code}) before it printed an endpoint: ${errors}`)));
   });
-  return { child, endpoint };
+  endpoint.catch(() => {}); // a worker killed on purpose rejects; the test that kills it does not read it
+  return { child, endpoint, spawned };
 }
 
 test('owner death: SIGKILL of the owner (a decoy this test starts) takes the sidecar down within four seconds', { timeout: 60_000 }, async () => {
@@ -564,3 +644,30 @@ test('reload: a second worker process over the same record and owner adopts the 
   assert.equal(readRecord().pid, identity.pid);
   assert.ok(checkIsProcessIdentityCurrent(identity));
 });
+
+test('a worker replaced while its sidecar is still starting leaves a process the next worker ADOPTS — no orphan, no second sidecar', { timeout: 60_000 }, async () => {
+  const ownerArg = `${testOwner.pid}:${testOwner.startToken}`;
+  const first = runOwnerWorker(ownerArg, 'ensure', ['--ready-delay-ms', '1500']);
+  const sidecarPid = await first.spawned;
+  assert.equal(fs.existsSync(getRecordPath()), false, 'the sidecar is not up yet');
+  first.child.kill('SIGKILL'); // the hot reload: the worker is gone before the ready file was ever read
+
+  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the sidecar to record itself');
+  const record = readRecord();
+  assert.equal(record.pid, sidecarPid);
+  startedIdentities.push({ pid: record.pid, startToken: record.startToken });
+
+  const second = runOwnerWorker(ownerArg, 'ensure');
+  const endpoint = await second.endpoint;
+  assert.deepEqual(endpoint, { port: record.port, token: record.token }, 'adopted from the record the sidecar wrote');
+  assert.equal(readRecord().pid, sidecarPid);
+  assert.ok(checkIsProcessIdentityCurrent({ pid: sidecarPid, startToken: record.startToken }));
+});
+
+async function getCharnessWait(check: () => boolean, timeoutMs: number, description: string): Promise<void> {
+  const deadlineMs = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadlineMs) throw new Error(`timed out waiting for ${description}`);
+    await sleep(50);
+  }
+}

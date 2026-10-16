@@ -251,3 +251,58 @@ test('the language hint rides to every engine only when it is set', async () => 
   await runChain([createEngine('first', first)], { language: null });
   assert.doesNotMatch(first.bodies[0], /name="language"/);
 });
+
+test('a retry of the last engine asks it for its endpoint again — a process that came back elsewhere is found', async () => {
+  reset([respondWith(503, '{"error":{"message":"restarting"}}')], [transcribed('on the new port')]);
+  let asked = 0;
+  const comesBackElsewhere: ResolvedSttEngine = {
+    id: 'g',
+    kind: 'gigaam',
+    name: 'gigaam',
+    timeout: defaultSttTimeout,
+    getEndpoint: () => {
+      asked++;
+      return Promise.resolve({ url: (asked === 1 ? first : second).url, apiKey: 'token', model: 'gigaam' });
+    },
+  };
+  const { result, retries } = await runChain([comesBackElsewhere], { language: 'ru' });
+  assert.deepEqual(result, { ok: true, text: 'on the new port', engine: 'gigaam' });
+  assert.equal(asked, 2);
+  assert.equal(retries.length, 1);
+  assert.equal(first.bodies.length, 1);
+  assert.equal(second.bodies.length, 1);
+  assert.match(second.bodies[0], /name="language"\r\n\r\nru\r\n/, 'the language hint rides on the refreshed endpoint too');
+});
+
+test('a retry whose endpoint cannot be had ends the voice with that reason', async () => {
+  reset([respondWith(503, 'down')]);
+  let asked = 0;
+  const cannotRestart: ResolvedSttEngine = {
+    id: 'g',
+    kind: 'gigaam',
+    name: 'gigaam',
+    timeout: defaultSttTimeout,
+    getEndpoint: () => {
+      asked++;
+      return asked === 1 ? Promise.resolve({ url: first.url, model: 'gigaam' }) : Promise.reject(new Error('gigaam is unhealthy until 14:05'));
+    },
+  };
+  const { result, retries } = await runChain([cannotRestart]);
+  assert.deepEqual(result, { ok: false, error: 'gigaam is unhealthy until 14:05', engine: 'gigaam' });
+  assert.equal(retries.length, 1, 'the retry was announced before the endpoint was asked for');
+});
+
+test('a non-last engine is asked for its endpoint once — it is not retried', async () => {
+  reset([respondWith(503, 'down')], [transcribed('rescued')]);
+  let asked = 0;
+  const firstEngine: ResolvedSttEngine = {
+    ...createEngine('first', first),
+    getEndpoint: () => {
+      asked++;
+      return Promise.resolve({ url: first.url, model: 'm' });
+    },
+  };
+  const { result } = await runChain([firstEngine, createEngine('last', second)]);
+  assert.equal(result.engine, 'last');
+  assert.equal(asked, 1);
+});

@@ -1,6 +1,7 @@
 """Unit tests of the sidecar's logic — no model, no network beyond loopback. Run with the sidecar's own
 interpreter (it needs numpy):  <venv>/bin/python -I stt/test_gigaam_sidecar.py"""
 
+import argparse
 import contextlib
 import http.client
 import io
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -260,6 +262,51 @@ class RecordTest(unittest.TestCase):
                 self.assertEqual(json.load(stream), {"pid": 1, "port": 2, "version": "1"})
             self.assertEqual(os.stat(ready).st_mode & 0o777, 0o600)
             self.assertEqual(os.listdir(directory), ["ready.json"])
+
+
+class OwnRecordTest(unittest.TestCase):
+    """The sidecar writes the record the bot adopts it from — so a bot worker replaced while it waits for the ready
+    file leaves a process the next worker can find."""
+
+    def make_args(self, **overrides):
+        values = dict(config_hash="abc123", owner_pid=4242, owner_start_token="777")
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_the_record_names_everything_the_bot_checks_before_it_adopts(self):
+        record = sidecar.build_record(self.make_args(), 40123, "secret-token", "start-token-1")
+        self.assertEqual(
+            {key: record[key] for key in ("pid", "startToken", "port", "token", "configHash", "ownerPid", "ownerStartToken")},
+            {
+                "pid": os.getpid(), "startToken": "start-token-1", "port": 40123, "token": "secret-token",
+                "configHash": "abc123", "ownerPid": 4242, "ownerStartToken": "777",
+            },
+        )
+        self.assertTrue(record["startedAt"].endswith("+00:00"), record["startedAt"])
+
+    def test_an_owner_without_a_start_token_is_an_empty_string_not_a_missing_field(self):
+        record = sidecar.build_record(self.make_args(owner_start_token=None), 1, "t", "s")
+        self.assertEqual(record["ownerStartToken"], "")
+
+    def test_the_record_is_written_owner_only_and_removable_by_the_idle_exit_rule(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "sidecar.json")
+            sidecar.write_json_atomic(path, sidecar.build_record(self.make_args(), 1, "t", "s"))
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            self.assertTrue(sidecar.remove_record_if_owned(path, os.getpid()))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux reads /proc")
+    def test_the_own_start_token_is_the_one_the_bot_reads(self):
+        self.assertEqual(sidecar.read_process_start_token(os.getpid()), sidecar.read_process_start_token(os.getpid()))
+        self.assertIsNotNone(sidecar.read_process_start_token(os.getpid()))
+
+    def test_elsewhere_the_token_is_the_ps_text_the_bot_reads(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="  Fri Oct 16 12:00:00 2026 python gigaam_sidecar.py\n")
+        with unittest.mock.patch.object(sys, "platform", "darwin"), unittest.mock.patch("subprocess.run", return_value=completed) as run:
+            self.assertEqual(sidecar.read_process_start_token(123), "Fri Oct 16 12:00:00 2026 python gigaam_sidecar.py")
+        self.assertEqual(run.call_args.args[0], ["ps", "-o", "lstart=", "-o", "command=", "-p", "123"])
+        with unittest.mock.patch.object(sys, "platform", "darwin"), unittest.mock.patch("subprocess.run", side_effect=OSError("no ps")):
+            self.assertIsNone(sidecar.read_process_start_token(123))
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the start token is read from /proc")
@@ -512,7 +559,7 @@ class MainTest(unittest.TestCase):
                 [
                     sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "gigaam_sidecar.py"),
                     "--ready-file", os.path.join(directory, "r"), "--record-file", os.path.join(directory, "s"),
-                    "--log-file", os.path.join(directory, "l"), "--owner-pid", str(os.getpid()),
+                    "--log-file", os.path.join(directory, "l"), "--owner-pid", str(os.getpid()), "--config-hash", "h",
                 ],
                 env=environment, capture_output=True, text=True, timeout=30,
             )
@@ -526,7 +573,7 @@ class MainTest(unittest.TestCase):
         self.assertIn("--ready-file is required", usage.getvalue())
 
     def test_the_hidden_idle_seconds_wins_over_idle_minutes(self):
-        required = ["--ready-file", "r", "--record-file", "s", "--log-file", "l", "--owner-pid", "1"]
+        required = ["--ready-file", "r", "--record-file", "s", "--log-file", "l", "--owner-pid", "1", "--config-hash", "h"]
         self.assertEqual(sidecar.parse_args(required + ["--idle-minutes", "5"]).idle_seconds, 300.0)
         self.assertEqual(sidecar.parse_args(required + ["--idle-minutes", "5", "--idle-seconds", "3"]).idle_seconds, 3.0)
         self.assertEqual(sidecar.parse_args(required + ["--idle-minutes", "0"]).idle_seconds, 0.0)

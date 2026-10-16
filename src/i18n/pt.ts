@@ -423,6 +423,7 @@ export const ptDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Motor local: indisponível — o supervisor do bot precisa ser reiniciado uma vez para poder ser dono do motor.',
   'stt.screen.local.unhealthy': 'Motor local: em pausa até {until} após várias inicializações falhas.',
   'stt.screen.local.running': 'Motor local: em execução.',
+  'stt.screen.local.runningSlow': 'Motor local: em execução, ocupado com uma mensagem de voz longa.',
   'stt.screen.local.runningBusy': 'Motor local: em execução, {count} em andamento.',
   'stt.screen.local.ready': 'Motor local: pronto, sem executar — inicia com a próxima mensagem de voz.',
   'stt.screen.languageNote': '⚠️ O motor local entende apenas russo, então é ignorado com este idioma.',

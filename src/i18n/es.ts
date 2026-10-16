@@ -423,6 +423,7 @@ export const esDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Motor local: no disponible — hay que reiniciar una vez el supervisor del bot para que pueda ser dueño del motor.',
   'stt.screen.local.unhealthy': 'Motor local: en pausa hasta las {until} tras varios arranques fallidos.',
   'stt.screen.local.running': 'Motor local: en marcha.',
+  'stt.screen.local.runningSlow': 'Motor local: en marcha, ocupado con una nota de voz larga.',
   'stt.screen.local.runningBusy': 'Motor local: en marcha, {count} en curso.',
   'stt.screen.local.ready': 'Motor local: listo, sin ejecutarse — arranca con la próxima nota de voz.',
   'stt.screen.languageNote': '⚠️ El motor local solo entiende ruso, así que se omite con este idioma.',

@@ -11,6 +11,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { getProcessIdentity } from '../installManager';
 import {
   formatDownloadDetail,
   gigaamModelApproxBytes,
@@ -127,7 +128,7 @@ test('installed: needs the marker of THIS script version and pins, and the venv 
   assert.equal(isGigaamInstalled(dataDir), false);
 });
 
-test('installing: a lock owned by a live process counts, a stale or dead-owner one does not', () => {
+test('installing: a lock counts while its owner lives — however old — and not once the owner is dead', () => {
   const paths = getSttPaths(dataDir);
   assert.equal(isGigaamInstalling(dataDir), false);
 
@@ -140,9 +141,51 @@ test('installing: a lock owned by a live process counts, a stale or dead-owner o
   fs.writeFileSync(path.join(paths.lockDir, 'owner'), `${2 ** 22 - 1}\n`);
   assert.equal(isGigaamInstalling(dataDir), false, 'the owner is dead');
 
+  // A slow model download keeps its lock for as long as the job lives: hours old is still held.
   fs.writeFileSync(path.join(paths.lockDir, 'owner'), `${process.pid}\n`);
-  const thirtyOneMinutesMs = 31 * 60 * 1000;
-  assert.equal(isGigaamInstalling(dataDir, Date.now() + thirtyOneMinutesMs), false, 'an old lock is stale even if its owner lives');
+  const threeHoursMs = 3 * 60 * 60 * 1000;
+  assert.equal(isGigaamInstalling(dataDir, Date.now() + threeHoursMs), true, 'age alone never makes a live owner\'s lock stale');
+});
+
+test('installing: a lock nobody ever wrote an owner into goes stale after a minute; a pid reused by another process is not the owner', () => {
+  const paths = getSttPaths(dataDir);
+  fs.mkdirSync(paths.lockDir, { recursive: true });
+  assert.equal(isGigaamInstalling(dataDir, Date.now() + 30 * 1000), true, 'its taker may still be writing');
+  assert.equal(isGigaamInstalling(dataDir, Date.now() + 2 * 60 * 1000), false, 'its taker died between mkdir and the write');
+
+  const ownIdentity = getProcessIdentity(process.pid);
+  assert.ok(ownIdentity);
+  fs.writeFileSync(path.join(paths.lockDir, 'owner'), `${process.pid}\n${ownIdentity.startToken}\n`);
+  assert.equal(isGigaamInstalling(dataDir), true, 'the live owner, recognised by pid AND start token');
+  fs.writeFileSync(path.join(paths.lockDir, 'owner'), `${process.pid}\n${ownIdentity.startToken}-another-process\n`);
+  assert.equal(isGigaamInstalling(dataDir), false, 'the pid now belongs to a different process: the job is gone');
+});
+
+test('a job takes the lock with its pid and start token', async () => {
+  const paths = getSttPaths(dataDir);
+  let ownerText = '';
+  const runner: SttCommandRunner = async (_command, args) => {
+    if (args[0] === 'venv') ownerText = fs.readFileSync(path.join(paths.lockDir, 'owner'), 'utf8');
+    return { exitCode: 1, stdout: '' };
+  };
+  await runSttInstall(dataDir, { runCommand: runner, detectFacts: createUvFacts, env: {} });
+  const [pid, startToken] = ownerText.split('\n');
+  assert.equal(pid, process.pid.toString());
+  assert.equal(startToken, getProcessIdentity(process.pid)?.startToken);
+});
+
+test('run: the install commands get a short allowlist of the environment, never the bot\'s secrets', async () => {
+  const calls: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
+  await runSttInstall(dataDir, {
+    runCommand: createFakeRunner(calls),
+    detectFacts: createUvFacts,
+    env: { PATH: '/bin', HOME: '/home/user', HTTPS_PROXY: 'http://proxy.local:3128', TELEGRAM_BOT_TOKEN: '1000000001:secret', GROQ_API_KEY: 'gsk_secret', DATA_DIR: '/srv/data', HF_HUB_OFFLINE: '1' },
+    downloadPollIntervalMs: 10_000,
+  });
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.deepEqual(Object.keys(call.env).sort(), ['HF_HOME', 'HOME', 'HTTPS_PROXY', 'PATH', 'PIP_DISABLE_PIP_VERSION_CHECK', 'UV_CACHE_DIR']);
+  }
 });
 
 test('progress lines: the last complete JSON line wins, a torn last line is skipped', () => {

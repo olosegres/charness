@@ -5,8 +5,14 @@
  * CHARNESS_STT_SIDECAR_TOKEN, port 0, GET /health, POST /v1/audio/transcriptions, an owner-PID watchdog, an
  * idle exit that deletes ITS OWN record, SIGTERM -> exit 0.
  *
+ * Like the Python sidecar it records ITSELF (`--record-file`, atomically, before the ready file): the bot adopts a
+ * process from that record, so one a replaced worker never saw ready is still found.
+ *
  * Test knobs (not part of the contract): --ready-delay-ms N, --never-ready, --crash-after-ms N (hard exit 1
- * after it is ready, record left behind), --idle-seconds N (overrides --idle-minutes), --ignore-sigterm.
+ * after it is ready, record left behind), --idle-seconds N (overrides --idle-minutes), --ignore-sigterm,
+ * --health-delay-ms N (answer /health late, like a sidecar busy with a long voice), --health-hang (never answer
+ * /health), --fail-to-record (exit 1 where the record cannot be written, before any ready file), --skip-record
+ * (write the ready file WITHOUT recording).
  */
 const fs = require('node:fs');
 const http = require('node:http');
@@ -23,6 +29,8 @@ const recordFile = readArg('--record-file');
 const workers = Number(readArg('--workers', '4'));
 const ownerPid = Number(readArg('--owner-pid', '0'));
 const ownerStartToken = readArg('--owner-start-token');
+const configHash = readArg('--config-hash');
+const healthDelayMs = Number(readArg('--health-delay-ms', '0'));
 const readyDelayMs = Number(readArg('--ready-delay-ms', '0'));
 const crashAfterMs = Number(readArg('--crash-after-ms', '0'));
 const idleSeconds = readArg('--idle-seconds') !== undefined
@@ -66,7 +74,9 @@ const server = http.createServer((req, res) => {
   };
   if (!authorised) return reply(401, { error: { message: 'missing or wrong token' } });
   if (req.method === 'GET' && req.url === '/health') {
-    return reply(200, { status: 'ok', busyRequests: 0, workers, pid: process.pid });
+    if (hasFlag('--health-hang')) return undefined;
+    setTimeout(() => reply(200, { status: 'ok', busyRequests: 0, workers, pid: process.pid }), healthDelayMs);
+    return undefined;
   }
   if (req.method === 'POST' && req.url === '/v1/audio/transcriptions') {
     lastActivityMs = Date.now();
@@ -80,8 +90,27 @@ const server = http.createServer((req, res) => {
   return reply(404, { error: { message: 'not found' } });
 });
 
+function writeJsonAtomic(filePath, payload) {
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(payload), { mode: 0o600 });
+  fs.renameSync(temporaryPath, filePath);
+}
+
 setTimeout(() => {
   server.listen(0, '127.0.0.1', () => {
+    if (hasFlag('--fail-to-record')) process.exit(1);
+    if (!hasFlag('--skip-record')) {
+      writeJsonAtomic(recordFile, {
+        pid: process.pid,
+        startToken: readStartToken(process.pid),
+        port: server.address().port,
+        token,
+        configHash,
+        ownerPid,
+        ownerStartToken: ownerStartToken ?? '',
+        startedAt: new Date().toISOString(),
+      });
+    }
     const temporaryPath = `${readyFile}.tmp`;
     fs.writeFileSync(temporaryPath, JSON.stringify({ pid: process.pid, port: server.address().port, version: 'fake' }));
     fs.renameSync(temporaryPath, readyFile);

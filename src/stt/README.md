@@ -79,7 +79,7 @@ private Hugging Face cache live under `<DATA_DIR>/stt`.
 | `hf/` | `HF_HOME` — the model files (216 MiB for int8); the running sidecar is offline (`HF_HUB_OFFLINE=1`) |
 | `uv-cache/` | uv's cache, kept here so it stays off the root fs and is removed with the install (wheels are hard-linked, not doubled) |
 | `installed.json` | the marker `{ scriptVersion, pins, installedAt }`; "installed" means the marker matches this build AND `venv/bin/python` exists |
-| `install.lock/` | a `mkdir` lock with an `owner` file; stale after 30 min or when the owner pid is dead |
+| `install.lock/` | a `mkdir` lock with an `owner` file (`pid` and start token). Held for as long as that process lives — a slow model download can take far longer than any timeout — so age never frees it; a lock with no owner file (its taker died between `mkdir` and the write) goes stale after a minute |
 | `install.log` | child output of the install; a failure returns its last 20 lines |
 | `install-progress.json` | JSON lines `{phase, detail, bytesDownloaded[, error, logTail]}` — `creatingEnvironment` → `installingPackages` → `downloadingModel` → `checking` → `done` / `failed`; truncated when a run takes the lock |
 
@@ -90,15 +90,19 @@ of `hf/` every 2 s for the download progress. Heavy writes follow `TMPDIR`.
 
 ### Sidecar protocol (`stt/gigaam_sidecar.py`)
 
-`python -I gigaam_sidecar.py --ready-file F --record-file R --log-file L --owner-pid P [--owner-start-token S]
-[--idle-minutes 15] [--workers 4] [--threads 2] [--max-seconds 600]`. The token comes from the env variable
+`python -I gigaam_sidecar.py --ready-file F --record-file R --log-file L --owner-pid P --config-hash H
+[--owner-start-token S] [--idle-minutes 15] [--workers 4] [--threads 2] [--max-seconds 600]`. The token comes from the env variable
 `CHARNESS_STT_SIDECAR_TOKEN` (never an argument: `ps` shows arguments). `HF_HOME` and `HF_HUB_OFFLINE=1` come from the
 env too.
 
-- **Startup order:** load the model → start W pool threads → bind `127.0.0.1:0` → write the ready file `F` atomically
-  (`{pid, port, version}`, mode 0600). A model or bind failure is logged and exits 1 without writing `F`.
-- **Exit codes:** `0` clean (SIGTERM, idle, owner gone) · `1` model or socket setup failed · `2` bad usage (a missing
-  token included).
+- **Startup order:** load the model → start W pool threads → bind `127.0.0.1:0` → write ITS OWN record `R` atomically
+  (`{pid, startToken, port, token, configHash, ownerPid, ownerStartToken, startedAt}`, mode 0600; the hash is the bot's,
+  recorded as given) → write the ready file `F` (`{pid, port, version}`). The sidecar records itself so that a bot worker
+  replaced while it waits for `F` (a hot reload during the ~2 s start) leaves a process the next worker finds and adopts,
+  instead of an orphan nobody knows the token of. A model, bind, record or ready-file failure is logged and exits 1
+  without writing `F`.
+- **Exit codes:** `0` clean (SIGTERM, idle, owner gone) · `1` model, socket, record or ready file could not be set up ·
+  `2` bad usage (a missing token included).
 - **Logs** go to `L` only (5 MB, one rotation); stdio is pointed at `/dev/null` because the process is externally
   parented. Transcripts are never logged — only audio length, chunk count and timing.
 - `GET /health` (Bearer token, else 401) → `{status, busyRequests, queuedChunks, workers, idleMinutes, version, pid}`. A
@@ -133,14 +137,21 @@ peak RSS ≈ 780 MB; a short voice sent while a long one is queued is answered i
 
 **On demand.** A voice whose chain reaches the local engine calls `ensure` (through the engine's `getEndpoint()`):
 
-1. **Adopt** the recorded process when ALL hold: its pid + start token are current, the record's owner fields match
-   the current owner, the config hash matches, and `GET /health` with the recorded token answers within 1 s.
-2. A recorded process that is alive but not adoptable gets a guarded SIGTERM, 3 s, then SIGKILL; a dead one's record
-   is dropped.
+1. **Adopt** the recorded process when its pid + start token are current, the record's owner fields match the current
+   owner, and the config hash matches. `GET /health` is asked with the recorded token (1 s, then once more patiently,
+   5 s): a sidecar recognising a long voice with every core busy answers late, and killing it would drop another topic's
+   in-flight recognition — so a SILENT live matching process is used anyway, and replaced only when it stays silent three
+   `ensure`s in a row (it is wedged). `/stt` shows such a process as «running, busy», not «not running».
+2. A recorded process that is dead, or alive but of another owner / config (or wedged), gets a guarded SIGTERM, 3 s, then
+   SIGKILL, and its record is dropped.
 3. **Spawn.** A fresh token (`crypto.randomBytes`) goes to the process through the env; the process is hosted by
    `startExternallyParentedProcess` (outside nodemon's tree, so a reload never kills it); the bot polls the ready file
-   every 100 ms for up to 15 s; on success it writes `sidecar.json` (pid, start token, port, token, config hash, owner,
-   start time) and logs `[STT] sidecar started pid N port P in Xms (workers W)`.
+   every 100 ms for up to 15 s, checks the record the sidecar wrote for itself (pid and token) and logs
+   `[STT] sidecar started pid N port P in Xms (workers W)`.
+
+**Environment.** The sidecar and the install job run third-party code, so they get a short allowlist
+(`sttChildEnv.ts`: `PATH`, `HOME`, `TMPDIR`, the locale, proxy / CA settings, `HF_*` / `UV_*` / `PIP_*`) — never the bot's
+Telegram token or the operator's other secrets. The sidecar's own token and the offline model cache are added explicitly.
 
 Concurrent voices share ONE attempt (a module-level promise). Nothing starts at boot.
 

@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { formatLocalClock } from '../utils/localClock';
 import { checkIsPlausibleProviderApiKey } from '../utils/openCodeAuthLogin';
 import type { SttInstallProgress } from './sttInstall';
 import {
@@ -27,6 +28,7 @@ import {
   type SttTimeout,
   type SttUnavailableReason,
 } from './sttSettings';
+import type { SttSidecarStatus } from './sttSidecarOwner';
 
 /**
  * @description What the voice-settings messages say, as pure functions over data — the Telegram side
@@ -85,18 +87,6 @@ export function formatSttInstallLogLine(progress: SttInstallProgress): string {
 
 // ───────────────────────────── the `/stt` screens ─────────────────────────────
 
-/** @description `HH:MM` in the process zone (the instance zone is applied through `process.env.TZ`). */
-export function formatSttClockTime(timestampMs: number): string {
-  const time = new Date(timestampMs);
-  return `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
-}
-
-/** What the local engine's PROCESS is doing, for the status line. */
-export type SttSidecarState =
-  | { state: 'notRunning' }
-  | { state: 'running'; busyRequests: number }
-  | { state: 'unhealthy'; unhealthyUntil: number };
-
 /** @name SttScreenInput @description Everything a `/stt` screen shows, gathered by the command module. */
 export interface SttScreenInput {
   resolved: ResolvedSttSettings;
@@ -104,7 +94,7 @@ export interface SttScreenInput {
   isLocalInstalled: boolean;
   /** The install job's last report while one runs (or null when not installing). */
   installing: SttInstallProgress | null;
-  sidecar: SttSidecarState;
+  sidecar: SttSidecarStatus;
   hasOwnerContext: boolean;
 }
 
@@ -113,7 +103,8 @@ export type SttLocalStatus =
   | { state: 'installing'; progress: SttInstallProgress }
   | { state: 'noOwner' }
   | { state: 'unhealthy'; until: number }
-  | { state: 'running'; busyRequests: number }
+  /** `busyRequests` unknown: the process is alive but was too busy to answer /health. */
+  | { state: 'running'; busyRequests?: number }
   | { state: 'ready' };
 
 /** @description The one line the local engine's state boils down to; installing and not installed outrank the process state. */
@@ -253,9 +244,10 @@ function buildMainScreen(input: SttScreenInput, translate: SttTranslate, notice?
     case 'notInstalled': lines.push(translate('stt.screen.local.notInstalled')); break;
     case 'installing': lines.push(translate('stt.screen.local.installing', { phase: getSttInstallPhaseLine(local.progress, translate) })); break;
     case 'noOwner': lines.push(translate('stt.screen.local.noOwner')); break;
-    case 'unhealthy': lines.push(translate('stt.screen.local.unhealthy', { until: formatSttClockTime(local.until) })); break;
+    case 'unhealthy': lines.push(translate('stt.screen.local.unhealthy', { until: formatLocalClock(local.until) })); break;
     case 'running':
-      lines.push(local.busyRequests > 0 ? translate('stt.screen.local.runningBusy', { count: local.busyRequests }) : translate('stt.screen.local.running'));
+      if (local.busyRequests === undefined) lines.push(translate('stt.screen.local.runningSlow'));
+      else lines.push(local.busyRequests > 0 ? translate('stt.screen.local.runningBusy', { count: local.busyRequests }) : translate('stt.screen.local.running'));
       break;
     case 'ready': lines.push(translate('stt.screen.local.ready')); break;
   }

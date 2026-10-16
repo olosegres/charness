@@ -62,6 +62,16 @@ const idleSeconds = 3;
 const idleExitBudgetMs = 10_000;
 const fallbackDurationSeconds = 20;
 
+interface SidecarRecord {
+  pid: number;
+  startToken: string;
+  port: number;
+  token: string;
+  configHash: string;
+  ownerPid: number;
+  ownerStartToken: string;
+}
+
 interface RunningSidecar {
   child: ChildProcess;
   pid: number;
@@ -104,6 +114,7 @@ async function startSidecar(options: { ownerPid: number; idleSecondsForTest?: nu
     '--threads', String(threads),
     '--owner-pid', String(options.ownerPid),
     '--owner-start-token', getStartToken(options.ownerPid),
+    '--config-hash', 'live-test-hash',
     ...(options.idleSecondsForTest !== undefined ? ['--idle-seconds', String(options.idleSecondsForTest)] : []),
   ];
   const startedAt = Date.now();
@@ -122,7 +133,13 @@ async function startSidecar(options: { ownerPid: number; idleSecondsForTest?: nu
   }
   const ready: { pid: number; port: number } = JSON.parse(fs.readFileSync(readyFile, 'utf8'));
   assert.equal(ready.pid, child.pid);
-  fs.writeFileSync(recordFile, JSON.stringify({ pid: ready.pid, port: ready.port }));
+  // The sidecar recorded ITSELF before the ready file: that record is what a bot worker adopts it from.
+  const record: SidecarRecord = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+  assert.deepEqual(
+    { pid: record.pid, startToken: record.startToken, port: record.port, token: record.token, configHash: record.configHash, ownerPid: record.ownerPid, ownerStartToken: record.ownerStartToken },
+    { pid: ready.pid, startToken: getStartToken(ready.pid), port: ready.port, token, configHash: 'live-test-hash', ownerPid: options.ownerPid, ownerStartToken: getStartToken(options.ownerPid) },
+  );
+  assert.equal(fs.statSync(recordFile).mode & 0o777, 0o600, 'the record holds the token: owner only');
   return { child, pid: ready.pid, port: ready.port, token, coldStartMs: Date.now() - startedAt, recordFile, exited };
 }
 

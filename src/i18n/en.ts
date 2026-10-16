@@ -436,6 +436,7 @@ export const enDict: Record<string, string> = {
   'stt.screen.local.noOwner': 'Local engine: unavailable — the bot supervisor must be restarted once so it can own the engine.',
   'stt.screen.local.unhealthy': 'Local engine: paused until {until} after repeated failed starts.',
   'stt.screen.local.running': 'Local engine: running.',
+  'stt.screen.local.runningSlow': 'Local engine: running, busy with a long voice note.',
   'stt.screen.local.runningBusy': 'Local engine: running, {count} in progress.',
   'stt.screen.local.ready': 'Local engine: ready, not running — it starts with the next voice note.',
   'stt.screen.languageNote': '⚠️ The local engine understands Russian only, so it is skipped with this language.',

@@ -2,6 +2,9 @@ import { spawn, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { checkIsProcessIdentityCurrent, getProcessIdentity } from '../installManager';
+import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { getSttChildEnv } from './sttChildEnv';
 import { getErrnoCode } from './sttSettings';
 
 /**
@@ -28,12 +31,15 @@ const mebibyte = 1024 * 1024;
 /** The int8 e2e-rnnt files as fetched (216 MiB: the 215 MB encoder, decoder, joint, vocab), the progress denominator. */
 export const gigaamModelApproxBytes = 216 * mebibyte;
 
-const installLockStaleMs = 30 * 60 * 1000;
+/** A lock with no owner file (its taker died between `mkdir` and the write) is left after this long. */
+const ownerlessLockStaleMs = 60 * 1000;
 const downloadPollIntervalMs = 2_000;
 const pythonProbeTimeoutMs = 10_000;
 const logTailLineCount = 20;
 const logTailLineMaxLength = 300;
 const installStepTimeoutMs = 20 * 60 * 1000;
+/** The model check downloads ~220 MB: a slow link needs far longer than the pip steps. */
+const modelCheckTimeoutMs = 60 * 60 * 1000;
 const rootDirName = 'stt';
 const venvDirName = 'venv';
 const hfDirName = 'hf';
@@ -216,26 +222,31 @@ export function isGigaamInstalled(dataDir: string): boolean {
   return checkIsExecutableFile(paths.venvPython);
 }
 
-function checkIsProcessAlive(pid: number): boolean {
+/** The owner file: the job's pid, and its start token so a reused pid is not mistaken for the job. */
+function readLockOwner(paths: SttPaths): { pid: number; startToken: string | null } | null {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && getErrnoCode(error) === 'EPERM';
+    const [pidText, startToken] = fs.readFileSync(path.join(paths.lockDir, lockOwnerFileName), 'utf8').split('\n');
+    const pid = Number(pidText);
+    return Number.isInteger(pid) && pid > 0 ? { pid, startToken: startToken?.trim() || null } : null;
+  } catch {
+    return null;
   }
 }
 
-/** The install lock is held by a live process that started less than {@link installLockStaleMs} ago. */
+/**
+ * The install lock is held while its owner lives — however long a slow download takes. Age matters only for a
+ * lock nobody ever wrote an owner into (its taker died in between), which goes stale quickly.
+ */
 function checkIsLockHeld(paths: SttPaths, nowMs: number): boolean {
+  let lockModifiedMs: number;
   try {
-    const lockAgeMs = nowMs - fs.statSync(paths.lockDir).mtimeMs;
-    if (lockAgeMs > installLockStaleMs) return false;
-    const ownerPid = Number(fs.readFileSync(path.join(paths.lockDir, lockOwnerFileName), 'utf8').trim());
-    return Number.isInteger(ownerPid) && ownerPid > 0 ? checkIsProcessAlive(ownerPid) : true;
-  } catch (error) {
-    // No owner file yet (between the mkdir and the write) still counts as a fresh, held lock.
-    return error instanceof Error && getErrnoCode(error) === 'ENOENT' && fs.existsSync(paths.lockDir);
+    lockModifiedMs = fs.statSync(paths.lockDir).mtimeMs;
+  } catch {
+    return false;
   }
+  const owner = readLockOwner(paths);
+  if (!owner) return nowMs - lockModifiedMs <= ownerlessLockStaleMs;
+  return owner.startToken ? checkIsProcessIdentityCurrent({ pid: owner.pid, startToken: owner.startToken }) : checkIsPidAlive(owner.pid);
 }
 
 /** @description An install job is running right now (its lock is held by a live process, not stale). */
@@ -249,7 +260,7 @@ function acquireInstallLock(paths: SttPaths, nowMs: number): boolean {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       fs.mkdirSync(paths.lockDir);
-      fs.writeFileSync(path.join(paths.lockDir, lockOwnerFileName), `${process.pid}\n`);
+      fs.writeFileSync(path.join(paths.lockDir, lockOwnerFileName), `${process.pid}\n${getProcessIdentity(process.pid)?.startToken ?? ''}\n`);
       return true;
     } catch (error) {
       if (!(error instanceof Error && getErrnoCode(error) === 'EEXIST')) throw error;
@@ -458,7 +469,8 @@ export async function runSttInstall(dataDir: string, options: SttInstallOptions 
     if (!plan.ok) return fail(plan.error);
 
     // The model has to come from the network here (the running sidecar is offline), whatever the parent env says.
-    const { HF_HUB_OFFLINE: _hubOffline, ...inheritedEnv } = env;
+    // ... and from a short allowlist, not the bot's whole environment: pip / uv run third-party package code.
+    const { HF_HUB_OFFLINE: _hubOffline, ...inheritedEnv } = getSttChildEnv(env);
     const installEnv: NodeJS.ProcessEnv = {
       ...inheritedEnv,
       HF_HOME: paths.hfHome,
@@ -488,7 +500,7 @@ export async function runSttInstall(dataDir: string, options: SttInstallOptions 
       check = await runCommand(paths.venvPython, ['-I', getSidecarScriptPath(), '--check'], {
         env: installEnv,
         logFile: paths.installLog,
-        timeoutMs: installStepTimeoutMs,
+        timeoutMs: modelCheckTimeoutMs,
       });
     } finally {
       clearInterval(poller);

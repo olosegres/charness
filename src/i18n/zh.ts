@@ -423,6 +423,7 @@ export const zhDict: Record<string, string> = {
   'stt.screen.local.noOwner': '本地引擎：不可用——需要重启一次机器人守护进程，它才能拥有该引擎。',
   'stt.screen.local.unhealthy': '本地引擎：多次启动失败，暂停至 {until}。',
   'stt.screen.local.running': '本地引擎：运行中。',
+  'stt.screen.local.runningSlow': '本地引擎：运行中，正忙于处理长语音。',
   'stt.screen.local.runningBusy': '本地引擎：运行中，{count} 个正在处理。',
   'stt.screen.local.ready': '本地引擎：就绪，当前未运行——下一条语音消息时启动。',
   'stt.screen.languageNote': '⚠️ 本地引擎只懂俄语，因此在该语言下会被跳过。',

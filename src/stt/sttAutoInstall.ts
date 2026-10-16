@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   checkIsProcessIdentityCurrent,
-  getOpenCodeChildEnv,
   startExternallyParentedProcess,
   type ExternalProcessIdentity,
 } from '../installManager';
+import { getSttChildEnv } from './sttChildEnv';
 import {
   getSttPaths,
   isGigaamInstalling,
@@ -82,7 +82,7 @@ export function getSttInstallEntryPath(): string {
 export function createDefaultSttInstallJobDeps(getDataDir: () => string): SttInstallJobDeps {
   return {
     launchEntry: (extraArgs) =>
-      startExternallyParentedProcess(process.execPath, [getSttInstallEntryPath(), getDataDir(), ...extraArgs], getOpenCodeChildEnv()),
+      startExternallyParentedProcess(process.execPath, [getSttInstallEntryPath(), getDataDir(), ...extraArgs], getSttChildEnv()),
     checkIsLaunchedAlive: checkIsProcessIdentityCurrent,
     checkIsInstalling: () => isGigaamInstalling(getDataDir()),
     readProgress: () => readSttInstallProgress(getDataDir()),

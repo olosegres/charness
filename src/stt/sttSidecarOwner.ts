@@ -5,14 +5,14 @@ import * as path from 'path';
 import {
   checkIsOpenCodeExternalHost,
   checkIsProcessIdentityCurrent,
-  getOpenCodeChildEnv,
   getProcessIdentity,
   signalExternallyHostedProcess,
   startExternallyParentedProcess,
   type ExternalProcessIdentity,
 } from '../installManager';
+import { formatLocalClock } from '../utils/localClock';
 import { getSidecarScriptPath, getSttPaths, gigaamScriptVersion, type SttPaths } from './sttInstall';
-import { formatSttClockTime } from './sttScreenPlan';
+import { getSttChildEnv } from './sttChildEnv';
 import {
   defaultGigaamThreads,
   type SttConfigFile,
@@ -50,6 +50,10 @@ const readyFileSuffix = '.json';
 const readyTimeoutMs = 15_000;
 const readyPollMs = 100;
 const adoptHealthTimeoutMs = 1_000;
+/** A sidecar recognising a long voice with every core busy answers /health late: ask once more, patiently. */
+const adoptHealthRetryTimeoutMs = 5_000;
+/** A live, matching sidecar that answered no /health this many ensures in a row is wedged and replaced. */
+const unansweredAdoptionLimit = 3;
 const statusHealthTimeoutMs = 1_000;
 const stopBudgetMs = 3_000;
 const killGraceMs = 500;
@@ -59,7 +63,6 @@ const spawnFailureWindowMs = 10 * 60 * 1000;
 const unhealthyDurationMs = 5 * 60 * 1000;
 const tokenBytes = 32;
 const readyFileRandomBytes = 6;
-const recordFileMode = 0o600;
 const gigaamModelName = 'gigaam';
 const transcriptionsPath = '/v1/audio/transcriptions';
 const loopbackHost = '127.0.0.1';
@@ -105,10 +108,15 @@ export interface SttSidecarHealth {
 /** @name SttSidecarStatus @description What `/stt` shows about the local engine's process. */
 export type SttSidecarStatus =
   | { state: 'notRunning' }
-  | { state: 'running'; busyRequests: number }
+  /** `busyRequests` absent: the process lives but did not answer /health in time — it is busy with a long voice. */
+  | { state: 'running'; busyRequests?: number }
   | { state: 'unhealthy'; unhealthyUntil: number };
 
-/** @name SttSidecarRecord @description `<DATA_DIR>/stt/sidecar.json`: the live process the bot may adopt. */
+/**
+ * @name SttSidecarRecord
+ * @description `<DATA_DIR>/stt/sidecar.json`: the live process the bot may adopt. The SIDECAR writes it (right after
+ * it binds, before its ready file), so a worker replaced while it waits leaves a process the next worker finds.
+ */
 interface SttSidecarRecord extends ExternalProcessIdentity {
   port: number;
   token: string;
@@ -138,6 +146,8 @@ export interface SttSidecarOwnerDeps {
   sleep: (ms: number) => Promise<void>;
   /** How long a spawn may take to become ready; tests shorten it. */
   readyTimeoutMs: number;
+  /** The two /health waits when adopting a live process (first, then the patient retry); tests shorten them. */
+  adoptHealthTimeoutsMs: readonly [number, number];
   log: (line: string) => void;
 }
 
@@ -147,7 +157,7 @@ export function createDefaultSttSidecarOwnerDeps(getDataDir: () => string): SttS
     getDataDir,
     getOwnerContext: () => resolveSttOwnerContext(),
     getLaunch: (paths) => ({ command: paths.venvPython, args: ['-I', getSidecarScriptPath()] }),
-    getBaseEnv: () => getOpenCodeChildEnv(),
+    getBaseEnv: () => getSttChildEnv(),
     startProcess: (command, args, env) => startExternallyParentedProcess(command, args, env),
     checkIsIdentityCurrent: checkIsProcessIdentityCurrent,
     signalProcess: signalExternallyHostedProcess,
@@ -155,6 +165,7 @@ export function createDefaultSttSidecarOwnerDeps(getDataDir: () => string): SttS
     nowMs: Date.now,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     readyTimeoutMs,
+    adoptHealthTimeoutsMs: [adoptHealthTimeoutMs, adoptHealthRetryTimeoutMs],
     log: (line) => console.log(line),
   };
 }
@@ -252,6 +263,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
   let inFlightEnsure: Promise<SttSidecarEndpoint> | null = null;
   let spawnFailureTimes: number[] = [];
   let unhealthyUntilMs = 0;
+  let unansweredAdoptions = 0;
 
   const getPaths = (): SttPaths => getSttPaths(deps.getDataDir());
   const getRecordPath = (): string => path.join(getPaths().root, recordFileName);
@@ -263,13 +275,6 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     } catch {
       return null;
     }
-  }
-
-  function writeRecord(record: SttSidecarRecord): void {
-    const recordPath = getRecordPath();
-    const temporaryPath = `${recordPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(record), { mode: recordFileMode });
-    fs.renameSync(temporaryPath, recordPath);
   }
 
   function removeRecord(): void {
@@ -300,7 +305,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     if (spawnFailureTimes.length < spawnFailureLimit) return;
     unhealthyUntilMs = nowMs + unhealthyDurationMs;
     spawnFailureTimes = [];
-    deps.log(`[STT] gigaam marked unhealthy until ${formatSttClockTime(unhealthyUntilMs)} after ${spawnFailureLimit} failed starts`);
+    deps.log(`[STT] gigaam marked unhealthy until ${formatLocalClock(unhealthyUntilMs)} after ${spawnFailureLimit} failed starts`);
   }
 
   function readReadyFile(readyFile: string): SttReadyFile | null {
@@ -321,11 +326,23 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     const isAlive = deps.checkIsIdentityCurrent(record);
     const isSameOwner = record.ownerPid === owner.pid && record.ownerStartToken === owner.startToken;
     if (isAlive && isSameOwner && record.configHash === getSttSidecarConfigHash(settings)) {
-      if (await deps.fetchHealth(record.port, record.token, adoptHealthTimeoutMs)) {
-        return { port: record.port, token: record.token };
+      const endpoint = { port: record.port, token: record.token };
+      const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
+      if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
+        unansweredAdoptions = 0;
+        return endpoint;
       }
+      // Alive, ours, the right config, but silent: a sidecar busy with a long voice answers /health late and
+      // killing it would drop another topic's recognition. Use it; replace it only when it stays silent.
+      unansweredAdoptions++;
+      if (unansweredAdoptions < unansweredAdoptionLimit) {
+        deps.log(`[STT] sidecar pid ${record.pid} did not answer /health (${unansweredAdoptions}/${unansweredAdoptionLimit}); using it anyway`);
+        return endpoint;
+      }
+      deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
+      unansweredAdoptions = 0;
     }
-    // Live but not adoptable (another owner, another config, not answering) or dead: it must go before a new one starts.
+    // Dead, another owner's or another config's — or wedged: it must go before a new one starts.
     if (isAlive) await terminate(record, stopBudgetMs);
     removeRecord();
     return null;
@@ -333,7 +350,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
 
   async function spawnSidecar(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint> {
     if (deps.nowMs() < unhealthyUntilMs) {
-      throw new Error(`gigaam is unhealthy until ${formatSttClockTime(unhealthyUntilMs)}`);
+      throw new Error(`gigaam is unhealthy until ${formatLocalClock(unhealthyUntilMs)}`);
     }
     const paths = getPaths();
     fs.mkdirSync(paths.root, { recursive: true });
@@ -350,6 +367,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       '--threads', (settings.threads ?? defaultGigaamThreads).toString(),
       '--owner-pid', owner.pid.toString(),
       '--owner-start-token', owner.startToken,
+      '--config-hash', getSttSidecarConfigHash(settings),
     ];
     // The token and the offline cache reach the process through its env, never its arguments.
     const env: NodeJS.ProcessEnv = {
@@ -377,19 +395,10 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     for (;;) {
       const ready = readReadyFile(readyFile);
       if (ready && ready.pid === identity.pid) {
-        try {
-          writeRecord({
-            ...identity,
-            port: ready.port,
-            token,
-            configHash: getSttSidecarConfigHash(settings),
-            ownerPid: owner.pid,
-            ownerStartToken: owner.startToken,
-            startedAt: new Date(deps.nowMs()).toISOString(),
-          });
-        } catch (error) {
-          // A process nobody can find again would idle until its owner dies: stop it now.
-          return fail(`the local engine started but its record could not be written (${error instanceof Error ? error.message : 'unknown error'})`);
+        // The sidecar recorded itself before it wrote the ready file; the token in that record is the one it was given.
+        const record = readRecord();
+        if (!record || record.pid !== identity.pid || record.token !== token) {
+          return fail('the local engine did not record itself (see sidecar.log)');
         }
         fs.rmSync(readyFile, { force: true });
         deps.log(`[STT] sidecar started pid ${identity.pid} port ${ready.port} in ${deps.nowMs() - startedAtMs}ms (workers ${settings.workers})`);
@@ -431,7 +440,8 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       const record = readRecord();
       if (!record || !deps.checkIsIdentityCurrent(record)) return { state: 'notRunning' };
       const health = await deps.fetchHealth(record.port, record.token, statusHealthTimeoutMs);
-      return health ? { state: 'running', busyRequests: health.busyRequests } : { state: 'notRunning' };
+      // Alive but silent is busy, not gone: it is recognising something long.
+      return health ? { state: 'running', busyRequests: health.busyRequests } : { state: 'running' };
     },
     checkIsUnhealthy: () => deps.nowMs() < unhealthyUntilMs,
     resetSpawnGuard: () => {

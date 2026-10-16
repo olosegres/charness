@@ -66,19 +66,21 @@ async function transcribeWithEngine(
   isLast: boolean,
   options: TranscribeWithEnginesOptions,
 ): Promise<TranscribeResult> {
+  const getEndpoint = async (): Promise<TranscriptionEndpoint> => {
+    const endpoint = await engine.getEndpoint();
+    return options.language ? { ...endpoint, language: options.language } : endpoint;
+  };
   let endpoint: TranscriptionEndpoint;
   try {
-    endpoint = await engine.getEndpoint();
+    endpoint = await getEndpoint();
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'speech engine could not be started' };
   }
-  return transcribeAudio(
-    filePath,
-    options.language ? { ...endpoint, language: options.language } : endpoint,
-    {
-      timeoutMs: getEngineTimeoutMs(engine.timeout, options.durationSeconds),
-      retryDelaysMs: isLast ? options.retryDelaysMs : noRetryDelaysMs,
-      onRetry: options.onRetry,
-    },
-  );
+  return transcribeAudio(filePath, endpoint, {
+    timeoutMs: getEngineTimeoutMs(engine.timeout, options.durationSeconds),
+    retryDelaysMs: isLast ? options.retryDelaysMs : noRetryDelaysMs,
+    onRetry: options.onRetry,
+    // A retry asks the engine again: the local one may have crashed or idled out and come back on another port.
+    refreshEndpoint: getEndpoint,
+  });
 }
