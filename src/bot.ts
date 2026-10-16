@@ -188,7 +188,7 @@ import {
 } from './stt/sttSidecarOwner';
 import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
 import { isGigaamInstalling } from './stt/sttInstall';
-import { createSttInstallLogReporter, createSttInstallMessageReporter } from './stt/sttInstallReporter';
+import { createSttInstallLogReporter, createSttInstallMessagePorts, createSttInstallMessageReporter } from './stt/sttInstallReporter';
 import { transcribeWithEngines } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
@@ -396,6 +396,7 @@ import {
 } from './utils/fallbackChain';
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
+import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 
@@ -777,8 +778,9 @@ async function checkIsForumAdmin(chatId: number, userId: number): Promise<boolea
 // recorded before any gating (access control, group routing) can drop it.
 // Security: while the thread awaits a `/connect` key paste (same
 // `pendingProviderConnects` state the text handler consumes later in this
-// update), the message text is a provider API key — the preview is redacted
-// at record time so the secret never lands in the on-disk trace.
+// update, or while `/stt` waits for a speech-engine key), the message text is
+// an API key — the preview is redacted at record time so the secret never
+// lands in the on-disk trace.
 bot.use(async (ctx, next) => {
   const message = ctx.message;
   const messageText = message && 'text' in message ? message.text : undefined;
@@ -787,6 +789,7 @@ bot.use(async (ctx, next) => {
   const threadKey = messageText === undefined ? null : getThreadKey(ctx);
   const isThreadPendingProviderConnect =
     threadKey !== null && pendingProviderConnects.has(keyToString(threadKey));
+  const isThreadPendingSttKey = threadKey !== null && checkIsAwaitingSttKey(threadKey);
   traceRecvUpdate({
     updateType: ctx.updateType,
     updateId: ctx.update.update_id,
@@ -796,7 +799,7 @@ bot.use(async (ctx, next) => {
     preview:
       messageText === undefined
         ? callbackData
-        : getRecvTracePreview(messageText, isThreadPendingProviderConnect),
+        : getRecvTracePreview(messageText, isThreadPendingProviderConnect, isThreadPendingSttKey),
     tgDateSec: message?.date,
   });
   return next();
@@ -2749,6 +2752,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
   threadSessionLists.delete(k);
   awaitingSessionSelection.delete(k);
   pendingProviderConnects.delete(k);
+  void cancelSttInput(key, { isSilent: true }); // teardown → drop an armed /stt step and its timer
   connectMethodLists.delete(k);
   // Compound (thread + message) keys — drop every picker this thread rendered.
   for (const pickerKey of getDisconnectPickerKeysForThread(disconnectProviderLists.keys(), k)) {
@@ -4031,6 +4035,8 @@ const ALBUM_DEBOUNCE_MS = 2_000;
  */
 const sttOwner = createSttSidecarOwner(createDefaultSttSidecarOwnerDeps(resolveDataDir));
 const sttInstallJobs = createSttInstallJobManager(createDefaultSttInstallJobDeps(resolveDataDir));
+/** How an install job's progress reaches people: one edited message in a topic. */
+const sttInstallMessagePorts = createSttInstallMessagePorts({ getState: () => state, replyToThread, editThreadMessage, withThreadLocale }, t);
 const sttRuntime = createSttRuntime({
   getDataDir: resolveDataDir,
   getConfigPath: () => getSttConfigPath(),
@@ -4051,17 +4057,6 @@ function getResolvedSttSettings(): ResolvedSttSettings {
   return sttRuntime.getResolved();
 }
 
-/** How an install job's progress reaches people: one edited message in `key`'s topic. */
-function createSttInstallMessagePorts() {
-  return {
-    getState: () => state,
-    replyToThread: (key: SessionKey, text: string) => replyToThread(key, text),
-    editThreadMessage: (key: SessionKey, messageId: number, text: string) => editThreadMessage(key, messageId, text),
-    translateFor: (key: SessionKey) => (code: string, vars?: Record<string, string | number>) => withThreadLocale(key, () => t(code, vars)),
-    nowMs: () => Date.now(),
-  };
-}
-
 /**
  * @description Fetch the local engine because `stt.json` names it (at boot, or on an edit): the progress is one
  * edited message in General of the paired group — the message a reload left behind when one is remembered — or
@@ -4075,7 +4070,7 @@ async function startSttAutoInstall(): Promise<void> {
   const generalKey = groupId !== null ? makeTelegramKey(groupId, GENERAL_THREAD_ID) : null;
   const targetKey = rememberedKey ?? generalKey;
   const reportTo = targetKey
-    ? createSttInstallMessageReporter(createSttInstallMessagePorts(), targetKey)
+    ? createSttInstallMessageReporter(sttInstallMessagePorts, targetKey)
     : createSttInstallLogReporter((line) => console.log(line));
   try {
     const outcome = await sttInstallJobs.start({ reportTo });
@@ -5328,6 +5323,7 @@ async function exitPendingInputModes(key: SessionKey, messageText: string): Prom
   if (hadPendingProviderConnect && !checkIsConnectCommandText(messageText)) {
     await replyToThread(key, t('connect.cancelled'));
   }
+  await cancelSttInput(key);
   await cancelReminderWizard(key);
 }
 
@@ -7246,9 +7242,28 @@ const {
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 
+const {
+  registerSttCommands,
+  registerSttCallbacks,
+  checkIsAwaitingSttInput,
+  checkIsAwaitingSttKey,
+  submitSttInput,
+  cancelSttInput,
+} = createStt({
+  ...botCore,
+  getConfigPath: () => getSttConfigPath(),
+  getDataDir: resolveDataDir,
+  getResolvedSettings: getResolvedSttSettings,
+  getOwnerContext: () => resolveSttOwnerContext(),
+  owner: sttOwner,
+  installJobs: sttInstallJobs,
+});
+
 registerClaudeAccountCommands();
 
 registerFallbackChainCommands();
+
+registerSttCommands();
 
 registerCompactionCommands();
 
@@ -7886,7 +7901,7 @@ const botCommands = new Set([
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',
 ]);
 
 /**
@@ -7924,6 +7939,8 @@ bot.on(message('text'), async (ctx) => {
     const cmd = text.slice(1).split(' ')[0].split('@')[0].toLowerCase();
     // A slash command ends a pending «Add account» name prompt (the command itself runs normally).
     cancelProfileNameCapture(key);
+    // ... and an armed `/stt` address or key step.
+    await cancelSttInput(key);
     if (botCommands.has(cmd)) return;
     // `/login` on a json-stream Claude thread (idle or per-turn lifecycle) has no
     // TUI to host the OAuth flow → run it out-of-band (spawn `claude auth login`,
@@ -7974,6 +7991,13 @@ bot.on(message('text'), async (ctx) => {
   // armed and says so; a slash command above already disarmed it).
   if (checkIsAwaitingProfileName(key) && !text.startsWith('/')) {
     await submitProfileName(key, text);
+    return;
+  }
+
+  // `/stt` asked for a server address or an API key → this message is the answer. A plausible key is deleted at
+  // once and never echoed; anything else re-arms the step. A slash command above already disarmed it.
+  if (checkIsAwaitingSttInput(key) && !text.startsWith('/')) {
+    await submitSttInput(key, text, ctx.message.message_id);
     return;
   }
 
@@ -9166,6 +9190,7 @@ registerCompactionCallbacks();
 registerAutoContinueLimitsCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
+registerSttCallbacks();
 
 // «⏭ Skip once» in the `/auto_continue_limits` picker: drop THIS armed resume and
 // leave the on/off setting alone. The episode is identified by the `fireAt` baked
@@ -10927,6 +10952,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 What happens when an agent hits a usage limit' },
+  { command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
   { command: 'status', description: '📊 Show status' },

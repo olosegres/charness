@@ -64,3 +64,22 @@ export function createSttInstallLogReporter(log: (line: string) => void): SttIns
     log(formatSttInstallLogLine(progress));
   };
 }
+
+/** What the Telegram side lends the install message: the topic send helpers and the locale. */
+export interface SttInstallMessageCore {
+  getState: SttInstallMessagePorts['getState'];
+  replyToThread: (key: SessionKey, text: string, extra?: object) => Promise<number | null>;
+  editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
+  withThreadLocale: <TResult>(key: SessionKey, fn: () => TResult) => TResult;
+}
+
+/** @description The ports of {@link createSttInstallMessageReporter} over the bot's topic helpers; `translate` is `t(…)`. */
+export function createSttInstallMessagePorts(core: SttInstallMessageCore, translate: SttTranslate): SttInstallMessagePorts {
+  return {
+    getState: core.getState,
+    replyToThread: (key, text) => core.replyToThread(key, text),
+    editThreadMessage: (key, messageId, text) => core.editThreadMessage(key, messageId, text),
+    translateFor: (key) => (code, vars) => core.withThreadLocale(key, () => translate(code, vars)),
+    nowMs: () => Date.now(),
+  };
+}

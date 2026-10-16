@@ -12,6 +12,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | `sttSidecarOwner.ts` | The sidecar's lifecycle: `ensure` (adopt or spawn on demand, one shared attempt), the record, the spawn-storm guard, `stop`, the boot cleanup, the owner context |
 | `sttAutoInstall.ts` | The install job manager: launch the detached job or attach to the running one, poll its progress file, report |
 | `sttInstallReporter.ts`, `sttScreenPlan.ts` | The install progress as ONE edited message (or `[STT]` log lines), and the pure text of it |
+| `sttConfigEdit.ts`, `sttScreenPlan.ts` | The `/stt` brain, without Telegram: the edits to `stt.json` (validated like a hand edit), the screens as data, the callback codec (`stt_<action>_<arg>_<revision>`, ≤ 64 bytes), the key/address input decision and `reduceSttAction` (tap → show / save / arm input / effect). The buttons and the typed-input hooks are `connectors/telegram/commands/stt.ts` |
 | `sttRuntime.ts` | `stt.json` + the lifecycle facts resolved per call; the boot migration; the once-per-edit auto-install trigger |
 | `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests |
 | `../utils/transcribeAudio.ts` | The ONE HTTP primitive: a multipart `POST` to an OpenAI-compatible `/audio/transcriptions`, with classified failures and the retry schedule |
@@ -170,3 +171,16 @@ whenever the file changes (once per change, never per voice). The job runs detac
 its progress file every 3 s and edits ONE message — in General of the paired group, or the message a reload left in
 `state.json` (`sttInstallProgress`) — or writes `[STT] install:` lines when no group is paired. A reloaded worker
 re-attaches to a running job (its lock is held); a failure is reported once with the log tail and not retried.
+
+## `/stt` — the settings screen
+
+Every tap is one of: show another screen, save a new `stt.json` (then `applySettingsChange`), arm a typed step, or run an
+effect (install, remove files, reset the spawn guard, close). The callbacks bake in `computeSttRevision(settings)` — the
+content hash of the effective settings — so a hand edit makes old keyboards answer «changed — refreshed» instead of
+acting on a list that moved. An edit made from `/stt` while the file is invalid rewrites it from the last good settings.
+
+Typed steps (a custom server's address, an API key) belong to the Telegram module: a plausible key is deleted from the
+topic the moment it is accepted and never echoed or logged; the output trace records `[redacted: speech engine key]` for
+the message while a key is awaited. Install: «Enable local recognition» confirms the cost, then the install job edits ONE
+message with its progress (remembered in `state.json`); on success the engine joins the list first. Details and the
+registration contract: `connectors/telegram/commands/README.md` § `stt.ts`.

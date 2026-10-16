@@ -278,6 +278,11 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 
 ### Voice input
 
+Open **`/stt`** in any topic (General included) to set voice recognition up with buttons: add Groq, OpenAI or your own
+OpenAI-compatible server (the key is pasted into the chat and deleted at once), reorder or switch off engines, set each
+engine's timeout and the language, and enable the [local engine](#local-speech-recognition-gigaam). Every tap is saved to
+the file below and applies to the next voice note. The rest of this section is for hand editing.
+
 Voice notes are transcribed by an **ordered chain of speech engines**: the first available one is tried,
 and when it fails (refused connection, timeout, an error answer) the next one answers the same voice note
 at once. Only the last engine retries a temporary failure (after 5 s, then 15 s). An empty transcript is
@@ -321,7 +326,7 @@ on the env keys are ignored — edit `stt.json` instead.
 #### Local speech recognition (GigaAM)
 
 Besides the hosted engines, the bot can recognise Russian voice notes **on your own machine** with GigaAM v3 (an
-`onnx-asr` model, int8). It is a `gigaam` engine in `stt.json`, installed from `/stt` ("Enable local recognition") or
+`onnx-asr` model, int8). It is a `gigaam` engine in `stt.json`, installed from `/stt` («🖥 Enable local recognition», with a live progress message) or
 by adding `{ "id": "g", "kind": "gigaam" }` to `stt.json` by hand — in that case the bot installs it by itself at the
 next start and shows the progress in General (or in its log).
 

@@ -1,0 +1,399 @@
+/**
+ * `/stt` — the voice-recognition settings on one screen, from any topic (General included), instance-wide like
+ * `/limits`: the ordered engine chain (reorder, use / don't use, timeout, key, remove), adding Groq / OpenAI / a
+ * custom OpenAI-compatible server, the language, the local engine (enable = install with live progress, idle
+ * exit, workers, remove its files, "try again" after the spawn-storm guard). Everything is written to
+ * `stt.json` and applies to the next voice note. The screens, the callback codec and the decision of what a tap
+ * does are pure (`stt/sttScreenPlan.ts`); this file renders them, reads the host's facts and runs the effects.
+ * See README.md in this folder.
+ */
+import { Markup, type Context } from 'telegraf';
+import { t } from '../../../i18n';
+import { keyToString, type SessionKey } from '../../../sessionKey';
+import {
+  isGigaamInstalled,
+  isGigaamInstalling,
+  readSttInstallProgress,
+  removeSttInstall,
+  type SttInstallProgress,
+} from '../../../stt/sttInstall';
+import { addSttEngine, dropLocalSttEngine, enableLocalSttEngine, setSttEngineApiKey, type SttEditResult } from '../../../stt/sttConfigEdit';
+import type { SttInstallJobManager } from '../../../stt/sttAutoInstall';
+import { createSttInstallMessagePorts, createSttInstallMessageReporter } from '../../../stt/sttInstallReporter';
+import {
+  buildSttCancelRow,
+  buildSttCallback,
+  buildSttScreen,
+  buildSttInstallProgressText,
+  computeSttRevision,
+  decideSttInput,
+  parseSttCallback,
+  reduceSttAction,
+  sttCallbackRe,
+  type SttKeyTarget,
+  type SttButton,
+  type SttNotice,
+  type SttScreenId,
+  type SttScreenInput,
+} from '../../../stt/sttScreenPlan';
+import { getErrnoCode, saveSttConfig, type ResolvedSttSettings, type SttConfigFile } from '../../../stt/sttSettings';
+import type { SttOwnerContext, SttSidecarOwner } from '../../../stt/sttSidecarOwner';
+import type { BotCore } from './botCore';
+import { getCallbackMessageId } from './callbackMessage';
+
+/** How long a typed-input step (the address, the key) waits before it is given up and its prompt retired. */
+export const sttInputTimeoutMs = 10 * 60 * 1000;
+
+/** The first line of the install progress before the job reports anything. */
+const initialInstallProgress: SttInstallProgress = { phase: 'creatingEnvironment', detail: '', bytesDownloaded: 0 };
+
+export interface SttPorts
+  extends Pick<
+    BotCore,
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale'
+  > {
+  getConfigPath: () => string;
+  getDataDir: () => string;
+  /** The chain in effect now (re-reads `stt.json` if it changed). */
+  getResolvedSettings: () => ResolvedSttSettings;
+  getOwnerContext: () => SttOwnerContext | null;
+  owner: Pick<SttSidecarOwner, 'getStatus' | 'stop' | 'applySettingsChange' | 'resetSpawnGuard'>;
+  installJobs: SttInstallJobManager;
+}
+
+/** A typed-input step the next plain message of a topic answers. Only `url` and `key` consume text. */
+interface PendingSttInput {
+  step: 'url' | 'key' | 'keyChoice';
+  /** `key` step: whose key this is. */
+  target?: SttKeyTarget;
+  /** `keyChoice` step: the address waiting for "does it need a key?". */
+  url?: string;
+  /** The screen message the prompt sits in (edited into the result, or retired on timeout). */
+  promptMessageId: number;
+  timer: NodeJS.Timeout;
+}
+
+/** @description Build the `/stt` feature over its ports: the command (+ hidden aliases), its buttons and the typed-input hooks the text handler calls. */
+export function createStt(ports: SttPorts) {
+  const {
+    bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale,
+    getConfigPath, getDataDir, getResolvedSettings, getOwnerContext, owner, installJobs,
+  } = ports;
+
+  const pendingInputs = new Map<string, PendingSttInput>();
+  const installMessagePorts = createSttInstallMessagePorts({ getState, replyToThread, editThreadMessage, withThreadLocale }, t);
+
+  // ── rendering ──
+
+  async function gatherScreenInput(): Promise<SttScreenInput> {
+    const dataDir = getDataDir();
+    const isInstalling = isGigaamInstalling(dataDir);
+    return {
+      resolved: getResolvedSettings(),
+      configPath: getConfigPath(),
+      isLocalInstalled: isGigaamInstalled(dataDir),
+      installing: isInstalling ? (readSttInstallProgress(dataDir) ?? initialInstallProgress) : null,
+      sidecar: await owner.getStatus(),
+      hasOwnerContext: getOwnerContext() !== null,
+    };
+  }
+
+  function toMarkup(rows: SttButton[][]) {
+    return Markup.inlineKeyboard(rows.map((row) => row.map((button) => Markup.button.callback(button.text, button.data))));
+  }
+
+  function formatNotice(notice: SttNotice | undefined): string | undefined {
+    return notice ? t(notice.code, notice.vars) : undefined;
+  }
+
+  /** Show a screen: a new message when `messageId` is null, else an edit of it (a new message when the edit fails). */
+  async function render(key: SessionKey, messageId: number | null, screenId: SttScreenId, notice?: SttNotice | string): Promise<number | null> {
+    const input = await gatherScreenInput();
+    const noticeText = typeof notice === 'string' ? notice : formatNotice(notice);
+    const screen = buildSttScreen(screenId, input, t, noticeText) ?? buildSttScreen({ id: 'main' }, input, t, noticeText);
+    if (!screen) return messageId;
+    const markup = toMarkup(screen.rows);
+    if (messageId !== null && (await editThreadMessage(key, messageId, screen.text, markup))) return messageId;
+    return replyToThread(key, screen.text, markup);
+  }
+
+  // ── saving ──
+
+  /** Write the next settings and stop a process the change invalidates; `false` (and a log line) when the file cannot be written. */
+  async function save(previous: SttConfigFile, next: SttConfigFile): Promise<boolean> {
+    try {
+      saveSttConfig(getConfigPath(), next);
+    } catch (e) {
+      console.warn(`[STT] could not write stt.json (${e instanceof Error ? getErrnoCode(e) : 'unknown'})`);
+      return false;
+    }
+    try {
+      await owner.applySettingsChange(previous, next);
+    } catch (e) {
+      console.warn('[STT] applying the settings change failed:', e instanceof Error ? e.message : e);
+    }
+    return true;
+  }
+
+  // ── typed input (the address, the key) ──
+
+  function clearPending(threadKey: string): PendingSttInput | undefined {
+    const pending = pendingInputs.get(threadKey);
+    if (pending) clearTimeout(pending.timer);
+    pendingInputs.delete(threadKey);
+    return pending;
+  }
+
+  function armInput(key: SessionKey, spec: Omit<PendingSttInput, 'timer'>): void {
+    const threadKey = keyToString(key);
+    clearPending(threadKey);
+    const timer = setTimeout(() => {
+      const pending = pendingInputs.get(threadKey);
+      if (!pending || pending.promptMessageId !== spec.promptMessageId) return;
+      pendingInputs.delete(threadKey);
+      void withThreadLocale(key, () => editThreadMessage(key, pending.promptMessageId, t('stt.input.expired'))).catch(() => {});
+    }, sttInputTimeoutMs);
+    timer.unref();
+    pendingInputs.set(threadKey, { ...spec, timer });
+  }
+
+  /** Edit the screen message into a prompt with a cancel button and arm the step. */
+  async function armPrompt(key: SessionKey, messageId: number | null, spec: Omit<PendingSttInput, 'timer' | 'promptMessageId'>, promptText: string): Promise<void> {
+    const revision = computeSttRevision(getResolvedSettings().settings);
+    const markup = toMarkup(buildSttCancelRow(t, revision));
+    let promptMessageId = messageId;
+    if (promptMessageId === null || !(await editThreadMessage(key, promptMessageId, promptText, markup))) {
+      promptMessageId = await replyToThread(key, promptText, markup);
+    }
+    if (promptMessageId !== null) armInput(key, { ...spec, promptMessageId });
+  }
+
+  function checkIsAwaitingInput(key: SessionKey): boolean {
+    const step = pendingInputs.get(keyToString(key))?.step;
+    return step === 'url' || step === 'key';
+  }
+
+  /** The next plain message is a speech-engine key — the output trace must not record it. */
+  function checkIsAwaitingKey(key: SessionKey): boolean {
+    return pendingInputs.get(keyToString(key))?.step === 'key';
+  }
+
+  /** A slash command or a topic teardown ends an armed step; the prompt is retired out loud only when asked to. */
+  async function cancelInput(key: SessionKey, options: { isSilent?: boolean } = {}): Promise<void> {
+    const pending = clearPending(keyToString(key));
+    if (!pending || options.isSilent) return;
+    await withThreadLocale(key, () => editThreadMessage(key, pending.promptMessageId, t('stt.input.cancelled')));
+  }
+
+  async function saveNewKey(previous: SttConfigFile, target: SttKeyTarget, apiKey: string): Promise<{ ok: true; next: SttConfigFile; engineId: string } | { ok: false }> {
+    let result: SttEditResult & { engineId?: string };
+    let engineId: string | undefined;
+    if (target.kind === 'engine') {
+      result = setSttEngineApiKey(previous, target.engineId, apiKey);
+      engineId = target.engineId;
+    } else if (target.kind === 'newKeyed') {
+      result = addSttEngine(previous, { kind: target.engineKind, apiKey });
+      engineId = result.engineId;
+    } else {
+      result = addSttEngine(previous, { kind: 'url', url: target.url, apiKey });
+      engineId = result.engineId;
+    }
+    if (!result.ok || engineId === undefined || !(await save(previous, result.config))) return { ok: false };
+    return { ok: true, next: result.config, engineId };
+  }
+
+  /**
+   * @description The text handler's hook: the message is the answer to an armed step. A plausible key is deleted
+   * from the topic the moment it is accepted and never echoed, logged or put into an error; an implausible one
+   * stays visible (it is not a secret) and the step re-arms.
+   */
+  async function submitInput(key: SessionKey, text: string, userMessageId: number): Promise<void> {
+    const threadKey = keyToString(key);
+    const pending = pendingInputs.get(threadKey);
+    if (!pending || (pending.step !== 'url' && pending.step !== 'key')) return;
+    await withThreadLocale(key, async () => {
+      const decision = decideSttInput(pending.step === 'url' ? 'url' : 'key', text);
+      if (decision.outcome !== 'accept') {
+        if (decision.outcome === 'retryAndDelete') await deleteThreadMessage(key, userMessageId);
+        armInput(key, { step: pending.step, target: pending.target, promptMessageId: pending.promptMessageId });
+        await replyToThread(key, t(`stt.input.${decision.hint}`));
+        return;
+      }
+      if (pending.step === 'url') {
+        armInput(key, { step: 'keyChoice', url: decision.value, promptMessageId: pending.promptMessageId });
+        await render(key, pending.promptMessageId, { id: 'keyChoice' });
+        return;
+      }
+      // A key: out of the topic's history FIRST, then used.
+      await deleteThreadMessage(key, userMessageId);
+      clearPending(threadKey);
+      const previous = getResolvedSettings().settings;
+      const target = pending.target;
+      const saved = target ? await saveNewKey(previous, target, decision.value) : { ok: false as const };
+      if (!saved.ok) {
+        await render(key, pending.promptMessageId, { id: 'main' }, { code: 'stt.saveFailed' });
+        return;
+      }
+      await render(key, pending.promptMessageId, { id: 'card', engineId: saved.engineId }, { code: 'stt.input.keySaved' });
+    });
+  }
+
+  // ── the install ──
+
+  /** Install (or attach to the running install) with the progress edited into `messageId`; on success the local engine joins the chain. */
+  async function runInstall(key: SessionKey, messageId: number, isAttach: boolean): Promise<void> {
+    const threadKey = keyToString(key);
+    if (!isAttach) {
+      await editThreadMessage(key, messageId, buildSttInstallProgressText(initialInstallProgress, 0, t));
+    }
+    await getState().setSttInstallProgressMessage({ threadKey, messageId });
+    const reporter = createSttInstallMessageReporter(installMessagePorts, key, { threadKey, messageId });
+    const outcome = await installJobs.start({ reportTo: reporter });
+    await withThreadLocale(key, async () => {
+      const revisionAfter = (): string => computeSttRevision(getResolvedSettings().settings);
+      if (outcome.phase === 'done') {
+        const previous = getResolvedSettings().settings;
+        const enabled = enableLocalSttEngine(previous);
+        if (enabled.ok && enabled.config !== previous) await save(previous, enabled.config);
+        await editThreadMessage(key, messageId, t('stt.install.done'), toMarkup([
+          [{ text: t('stt.btn.openSettings'), data: buildSttCallback('bk', [], revisionAfter()) }],
+        ]));
+        return;
+      }
+      const failureText = buildSttInstallProgressText(outcome, 0, t);
+      await editThreadMessage(key, messageId, failureText, toMarkup([[
+        { text: t('stt.btn.retry'), data: buildSttCallback('er', [], revisionAfter()) },
+        { text: t('stt.btn.openSettings'), data: buildSttCallback('bk', [], revisionAfter()) },
+      ]]));
+    });
+  }
+
+  async function removeLocalEngineFiles(): Promise<boolean> {
+    await owner.stop();
+    return removeSttInstall(getDataDir());
+  }
+
+  // ── command and buttons ──
+
+  function registerSttCommands(): void {
+    // Bare `/stt` opens the screen; `/voice` and `/speech` are hidden aliases. Not gated on a bound folder or a
+    // session: the voice settings are instance-wide and must be reachable before anything else is set up.
+    command(['stt', 'voice', 'speech'], async (_ctx, key) => {
+      await render(key, null, { id: 'main' });
+    });
+  }
+
+  /** The shared tap prologue: authorise, resolve the topic, run under its locale. */
+  async function handleTap(ctx: Context, run: (key: SessionKey, messageId: number | null) => Promise<void>): Promise<void> {
+    const key = await authoriseContext(ctx);
+    if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    await withThreadLocale(key, () => run(key, getCallbackMessageId(ctx)));
+  }
+
+  /** `answerCbQuery` is capped at 200 characters; a notice is short, but never trust it. */
+  async function answerWith(ctx: Context, notice: SttNotice | undefined): Promise<void> {
+    const text = formatNotice(notice);
+    await ctx.answerCbQuery(text !== undefined && text.length <= 180 ? text : undefined);
+  }
+
+  function registerSttCallbacks(): void {
+    bot.action(sttCallbackRe, (ctx) => handleTap(ctx, async (key, messageId) => {
+      const parsed = parseSttCallback(ctx.match[0]);
+      if (!parsed) { await ctx.answerCbQuery(); return; }
+      const dataDir = getDataDir();
+      const settings = getResolvedSettings().settings;
+      const pending = pendingInputs.get(keyToString(key));
+      const outcome = reduceSttAction(parsed, {
+        config: settings,
+        isLocalInstalled: isGigaamInstalled(dataDir),
+        isLocalInstalling: isGigaamInstalling(dataDir),
+        pendingUrl: pending?.step === 'keyChoice' ? (pending.url ?? null) : null,
+      });
+      switch (outcome.kind) {
+        case 'stale':
+          await ctx.answerCbQuery(t('stt.stale'));
+          await render(key, messageId, { id: 'main' });
+          return;
+        case 'show':
+          await ctx.answerCbQuery();
+          await render(key, messageId, outcome.screen);
+          return;
+        case 'save':
+          if (!(await save(settings, outcome.config))) {
+            await ctx.answerCbQuery(t('stt.saveFailed'));
+            return;
+          }
+          await answerWith(ctx, outcome.notice);
+          await render(key, messageId, outcome.screen);
+          return;
+        case 'armKey':
+          await ctx.answerCbQuery();
+          await armPrompt(key, messageId, { step: 'key', target: outcome.target }, t('stt.prompt.key'));
+          return;
+        case 'armUrl':
+          await ctx.answerCbQuery();
+          await armPrompt(key, messageId, { step: 'url' }, t('stt.prompt.url'));
+          return;
+        case 'cancelInput':
+          await ctx.answerCbQuery();
+          clearPending(keyToString(key));
+          await render(key, messageId, { id: 'main' });
+          return;
+        case 'effect':
+          await runEffect(ctx, key, messageId, outcome.effect, settings);
+          return;
+      }
+    }));
+  }
+
+  async function runEffect(
+    ctx: Context,
+    key: SessionKey,
+    messageId: number | null,
+    effect: 'install' | 'attachInstall' | 'removeFiles' | 'resetGuard' | 'close',
+    settings: SttConfigFile,
+  ): Promise<void> {
+    switch (effect) {
+      case 'close':
+        await ctx.answerCbQuery();
+        if (messageId !== null) await deleteThreadMessage(key, messageId);
+        return;
+      case 'resetGuard':
+        owner.resetSpawnGuard();
+        await ctx.answerCbQuery(t('stt.notice.guardReset'));
+        await render(key, messageId, { id: 'main' });
+        return;
+      case 'install':
+      case 'attachInstall':
+        await ctx.answerCbQuery();
+        if (messageId === null) return;
+        // Minutes long: never hold the update handler (the topic's other taps and messages) for it.
+        void runInstall(key, messageId, effect === 'attachInstall').catch((e) => {
+          console.warn('[STT] install flow error:', e instanceof Error ? e.message : e);
+        });
+        return;
+      case 'removeFiles': {
+        const isRemoved = await removeLocalEngineFiles();
+        if (!isRemoved) {
+          await ctx.answerCbQuery(t('stt.notice.busyInstalling'));
+          await render(key, messageId, { id: 'main' });
+          return;
+        }
+        const dropped = dropLocalSttEngine(settings);
+        if (dropped.ok && dropped.config.engines.length !== settings.engines.length) await save(settings, dropped.config);
+        await ctx.answerCbQuery(t('stt.notice.localRemoved'));
+        await render(key, messageId, { id: 'main' });
+        return;
+      }
+    }
+  }
+
+  return {
+    registerSttCommands,
+    registerSttCallbacks,
+    checkIsAwaitingSttInput: checkIsAwaitingInput,
+    checkIsAwaitingSttKey: checkIsAwaitingKey,
+    submitSttInput: submitInput,
+    cancelSttInput: cancelInput,
+  };
+}

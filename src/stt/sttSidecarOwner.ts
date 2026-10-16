@@ -12,6 +12,7 @@ import {
   type ExternalProcessIdentity,
 } from '../installManager';
 import { getSidecarScriptPath, getSttPaths, gigaamScriptVersion, type SttPaths } from './sttInstall';
+import { formatSttClockTime } from './sttScreenPlan';
 import {
   defaultGigaamThreads,
   type SttConfigFile,
@@ -218,11 +219,6 @@ export function checkIsSidecarRestartNeeded(previous: SttConfigFile, next: SttCo
   return getSttSidecarConfigHash(previous.gigaam) !== getSttSidecarConfigHash(next.gigaam);
 }
 
-function formatClockTime(timestampMs: number): string {
-  const time = new Date(timestampMs);
-  return `${time.getHours().toString().padStart(2, '0')}:${time.getMinutes().toString().padStart(2, '0')}`;
-}
-
 function isSttSidecarRecord(value: Partial<SttSidecarRecord>): value is SttSidecarRecord {
   return (
     Number.isInteger(value.pid) &&
@@ -304,7 +300,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     if (spawnFailureTimes.length < spawnFailureLimit) return;
     unhealthyUntilMs = nowMs + unhealthyDurationMs;
     spawnFailureTimes = [];
-    deps.log(`[STT] gigaam marked unhealthy until ${formatClockTime(unhealthyUntilMs)} after ${spawnFailureLimit} failed starts`);
+    deps.log(`[STT] gigaam marked unhealthy until ${formatSttClockTime(unhealthyUntilMs)} after ${spawnFailureLimit} failed starts`);
   }
 
   function readReadyFile(readyFile: string): SttReadyFile | null {
@@ -337,7 +333,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
 
   async function spawnSidecar(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint> {
     if (deps.nowMs() < unhealthyUntilMs) {
-      throw new Error(`gigaam is unhealthy until ${formatClockTime(unhealthyUntilMs)}`);
+      throw new Error(`gigaam is unhealthy until ${formatSttClockTime(unhealthyUntilMs)}`);
     }
     const paths = getPaths();
     fs.mkdirSync(paths.root, { recursive: true });

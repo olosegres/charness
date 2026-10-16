@@ -154,3 +154,30 @@ catalog, the recent `/model` picks, the limit marks), the topic's current rung (
 switch a notice button triggers (`takeSwitchOffer`: the bot checks the episode is still the topic's open one and
 the index is inside that episode's remembered candidates, moves the topic and resumes the work; the notice is
 edited into the confirmation, a stale tap only answers the callback).
+
+## `stt.ts`
+
+`/stt` (hidden aliases `/voice`, `/speech`) and its buttons `stt_<action>[_<arg>…]_<revision>` (every button matches
+`sttCallbackRe`, at most 64 bytes): the voice-recognition settings on one screen, instance-wide, from any topic. The
+module renders and runs effects; WHAT a tap does is decided by pure code in `src/stt/` — `sttScreenPlan.ts` (the
+screens as data, the callback codec, `reduceSttAction`: a tap → show a screen / save a config / arm an input /
+run an effect) and `sttConfigEdit.ts` (the edits, validated by the same schema as a hand edit). Every callback bakes in
+the content hash of the settings (`computeSttRevision`), so a keyboard from before a hand edit answers «settings
+changed — refreshed» and re-renders; back / close / cancel are exempt. A save writes `stt.json`, then
+`applySettingsChange` stops a sidecar the change invalidates (never starts one). The settings read through
+`getResolvedSettings` (the file re-read when it changed). The text of the install progress is `stt/sttInstallReporter.ts`'s.
+
+**Typed input** (a custom server's address, an API key) is the `/connect` pattern with its own state, private to the
+factory: the next plain message of the topic answers the armed step (`checkIsAwaitingSttInput` /
+`submitSttInput`, hooked into the text handler after the profile-name capture). A plausible key
+(`checkIsPlausibleProviderApiKey`) is deleted from the topic the instant it is accepted and is never echoed, logged or
+put into an error; an implausible one stays visible (not a secret) and the step re-arms; an address with a login in it
+is deleted and re-asked. A slash command, the cancel button, a topic teardown or a 10-minute timeout (which retires the
+prompt message) ends the step. While a KEY is awaited (`checkIsAwaitingSttKey`) the output-trace `recv` preview is
+`[redacted: speech engine key]`.
+
+**Install**: «Enable local recognition» → a confirm screen with the cost → `Install` hands the SAME message to the install
+job (`installJobs.start`, the progress is edited into it and remembered in `state.json` so a reload re-attaches); on
+success the local engine joins the list first, on failure the message shows the error, the log tail and `Retry`. The
+tap handler never waits for the job. «Remove local engine files» stops the sidecar, deletes the install and drops the
+engine from the list; it is refused while an install runs.

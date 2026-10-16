@@ -7,6 +7,8 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import {
   t,
@@ -893,6 +895,38 @@ test('the local engine install progress strings exist in every locale and keep t
         assert.ok(raw.includes(placeholder), `${locale} ${code} lost ${placeholder}: "${raw}"`);
       }
     }
+  }
+});
+
+test('every stt.* string exists in every locale with the same placeholders and line count as English', () => {
+  const placeholdersOf = (text: string): string[] => (text.match(/\{\w+\}/g) ?? []).sort();
+  const sttCodes = Object.keys(enDict).filter((code) => code.startsWith('stt.'));
+  assert.ok(sttCodes.length > 80, `expected the /stt catalogue, found ${sttCodes.length} keys`);
+  for (const code of sttCodes) {
+    for (const locale of localeCodes) {
+      const text = getKeyInLang(locale, code);
+      assert.ok(text !== undefined, `${locale} is missing ${code}`);
+      assert.deepEqual(placeholdersOf(text), placeholdersOf(enDict[code]), `${locale} ${code}: placeholders differ`);
+      assert.equal(text.split('\n').length, enDict[code].split('\n').length, `${locale} ${code}: line count differs`);
+    }
+  }
+});
+
+test('every stt.* key the /stt code asks for exists in English — literals and the dynamic families', () => {
+  const sources = ['stt/sttScreenPlan.ts', 'connectors/telegram/commands/stt.ts', 'stt/sttInstallReporter.ts', 'stt/sttSidecarOwner.ts']
+    .map((file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+    .join('\n');
+  const literals = new Set([...sources.matchAll(/'(stt\.[A-Za-z.]+[A-Za-z])'/g)].map((match) => match[1]));
+  literals.delete('stt.json');
+  assert.ok(literals.size > 60);
+  for (const code of literals) assert.ok(code in enDict, `${code} is used but not defined`);
+  const families: Record<string, readonly string[]> = {
+    'stt.card.problem.': ['disabled', 'notInstalled', 'installing', 'unhealthy', 'languageNotSupported', 'noOwnerContext', 'missingKey', 'missingUrl'],
+    'stt.input.': ['invalidUrl', 'invalidKey', 'urlHasCredentials'],
+    'stt.install.': ['creatingEnvironment', 'installingPackages', 'downloadingModel', 'checking'],
+  };
+  for (const [prefix, names] of Object.entries(families)) {
+    for (const name of names) assert.ok(`${prefix}${name}` in enDict, `${prefix}${name} is missing`);
   }
 });
 

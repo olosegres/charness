@@ -70,7 +70,7 @@ test('boot starts NO sidecar: it cleans up, re-attaches to or starts the INSTALL
 test('the auto-install reports into General (or the remembered message), else into the log, and edits are never retried by a loop', () => {
   const body = getFunctionBody('startSttAutoInstall');
   assert.match(body, /makeTelegramKey\(groupId, GENERAL_THREAD_ID\)/);
-  assert.match(body, /createSttInstallMessageReporter\(createSttInstallMessagePorts\(\), targetKey\)/);
+  assert.match(body, /createSttInstallMessageReporter\(sttInstallMessagePorts, targetKey\)/);
   assert.match(body, /createSttInstallLogReporter/);
   assert.match(body, /sttInstallJobs\.start\(\{ reportTo \}\)/);
   assert.doesNotMatch(body, /for \(|while \(/, 'no retry loop');
@@ -94,4 +94,30 @@ test('no module reads the old voice env keys from the environment any more (the 
   };
   visit(srcDir);
   assert.deepEqual(offenders, []);
+});
+
+test('/stt is a bot-owned command in the menu, registered with its buttons, and its aliases are not forwarded to the agent', () => {
+  assert.match(botSource, /'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',\n\]\);/);
+  assert.match(botSource, /\{ command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' \}/);
+  assert.match(botSource, /\n {2}registerSttCommands,\n {2}registerSttCallbacks,\n/);
+  assert.match(botSource, /\nregisterSttCommands\(\);\n/);
+  assert.match(botSource, /\nregisterSttCallbacks\(\);\n/);
+});
+
+test('the typed-input step of /stt is taken before the message could reach a prompt path, and every way out ends it', () => {
+  const handlerStart = botSource.indexOf("bot.on(message('text'), async (ctx) => {");
+  const handler = botSource.slice(handlerStart, botSource.indexOf('// Session is mid-startup', handlerStart));
+  const profileNameIdx = handler.indexOf('checkIsAwaitingProfileName(key)');
+  const sttIdx = handler.indexOf('checkIsAwaitingSttInput(key) && !text.startsWith(\'/\')');
+  const connectIdx = handler.indexOf('pendingProviderConnects.get(kStr)');
+  assert.ok(profileNameIdx >= 0 && sttIdx > profileNameIdx && connectIdx > sttIdx, 'order: profile name, then /stt input, then the rest');
+  assert.match(handler, /await submitSttInput\(key, text, ctx\.message\.message_id\);\n\s+return;/);
+  assert.match(handler, /cancelProfileNameCapture\(key\);\n\s+\/\/ \.\.\. and an armed `\/stt` address or key step\.\n\s+await cancelSttInput\(key\);/);
+  assert.match(getFunctionBody('exitPendingInputModes'), /await cancelSttInput\(key\);/);
+  assert.match(botSource, /void cancelSttInput\(key, \{ isSilent: true \}\); \/\/ teardown/);
+});
+
+test('the output trace records no pasted speech-engine key: the recv middleware passes the armed-key flag', () => {
+  assert.match(botSource, /const isThreadPendingSttKey = threadKey !== null && checkIsAwaitingSttKey\(threadKey\);/);
+  assert.match(botSource, /getRecvTracePreview\(messageText, isThreadPendingProviderConnect, isThreadPendingSttKey\)/);
 });
