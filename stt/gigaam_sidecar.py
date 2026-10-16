@@ -8,8 +8,11 @@ and it takes itself down when it has been idle (`--idle-minutes`) or when its ow
 Long audio is cut at the quietest 50 ms inside the last 8 s before every 25 s boundary; the chunks are
 recognised in parallel on a pool of threads that share ONE onnxruntime session, shortest request first.
 
+It claims the bot's record before it loads the model (an exclusive create, so a second start of the same engine
+exits instead of becoming an unrecorded orphan) and completes it with its port once it listens.
+
 Exit codes: 0 clean (SIGTERM, idle, owner gone), 1 the model, the socket, the record or the ready file could not be set up, 2 bad usage
-(including a missing token). Everything it has to say goes to `--log-file`: it is externally parented, so its
+(including a missing token), 4 another live sidecar already holds the record. Everything it has to say goes to `--log-file`: it is externally parented, so its
 stdio may point at a dead pipe.
 
 Protocol and layout: `src/stt/README.md`.
@@ -18,6 +21,7 @@ Protocol and layout: `src/stt/README.md`.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import email.parser
 import email.policy
@@ -48,6 +52,8 @@ TOKEN_ENV_NAME = "CHARNESS_STT_SIDECAR_TOKEN"
 EXIT_OK = 0
 EXIT_SETUP_FAILED = 1
 EXIT_USAGE = 2
+# Another live sidecar already holds the bot's record: this process was a second start of the same engine.
+EXIT_DUPLICATE = 4
 
 MAX_CHUNK_SECONDS = 25.0
 SILENCE_SEARCH_SECONDS = 8.0
@@ -69,6 +75,9 @@ SERVE_POLL_SECONDS = 0.5
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 1
 FILE_MODE = 0o600
+# The record's port while the model is still loading: the process is there, but nothing listens yet.
+STARTING_PORT = 0
+CLAIM_ATTEMPTS = 3
 SECONDS_PER_MINUTE = 60.0
 BEARER_PREFIX = "Bearer "
 TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
@@ -506,9 +515,9 @@ def read_process_start_token(pid: int) -> str | None:
 
 
 def build_record(args: argparse.Namespace, port: int, token: str, start_token: str) -> dict:
-    """What the bot adopts this process from: the sidecar writes it ITSELF, right after it binds and before the
-    ready file, so a bot worker that is replaced while it waits for the ready file leaves a process the next
-    worker can find (the token is only in this process and in this file)."""
+    """What the bot adopts this process from: the sidecar writes it ITSELF, so a bot worker that is replaced while it
+    waits for the ready file leaves a process the next worker can find (the token is only in this process and in this
+    file). `port` is STARTING_PORT until the server listens."""
     return {
         "pid": os.getpid(),
         "startToken": start_token,
@@ -519,6 +528,60 @@ def build_record(args: argparse.Namespace, port: int, token: str, start_token: s
         "ownerStartToken": args.owner_start_token or "",
         "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+
+
+def read_record(record_path: str) -> dict | None:
+    try:
+        with open(record_path, encoding="utf-8") as stream:
+            record = json.load(stream)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def is_other_sidecar_alive(record: dict | None) -> bool:
+    """The record names a process that is not this one and is still the process it was (the start token tells a
+    reused pid)."""
+    if record is None:
+        return False
+    pid = record.get("pid")
+    if not isinstance(pid, int) or pid == os.getpid():
+        return False
+    return read_process_start_token(pid) == record.get("startToken")
+
+
+def claim_record(args: argparse.Namespace, token: str, start_token: str) -> bool:
+    """Take the bot's record BEFORE the slow model load, with an exclusive create (a hard link of a finished file, so
+    a reader never sees half a record): of two sidecars started at once — a bot worker replaced mid-start asks again
+    — only the first is ever recorded, and the second learns it here instead of becoming an unrecorded orphan.
+    False: another live sidecar holds the record. A record of a dead process is replaced."""
+    temporary = f"{args.record_file}.{os.getpid()}.claim"
+    with open(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE), "w", encoding="utf-8") as stream:
+        json.dump(build_record(args, STARTING_PORT, token, start_token), stream)
+    try:
+        for _ in range(CLAIM_ATTEMPTS):
+            try:
+                os.link(temporary, args.record_file)
+                return True
+            except FileExistsError:
+                if is_other_sidecar_alive(read_record(args.record_file)):
+                    return False
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(args.record_file)
+        raise OSError(f"could not claim {args.record_file}")
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+
+
+def publish_port(args: argparse.Namespace, port: int, token: str, start_token: str) -> bool:
+    """Put the listening port into the record, while the record is still this process's (the bot may have stopped
+    this start and taken it away)."""
+    current = read_record(args.record_file)
+    if current is None or current.get("pid") != os.getpid():
+        return False
+    write_json_atomic(args.record_file, build_record(args, port, token, start_token))
+    return True
 
 
 def is_owner_alive(owner_pid: int, owner_start_token: str | None) -> bool:
@@ -601,6 +664,18 @@ def run_serve(args: argparse.Namespace, token: str) -> int:
     logger.info(
         "starting pid=%d workers=%d threads=%d idle=%ss owner=%d", os.getpid(), args.workers, args.threads, args.idle_seconds, args.owner_pid
     )
+    start_token = read_process_start_token(os.getpid())
+    if start_token is None:
+        logger.error("could not read the own start token")
+        return EXIT_SETUP_FAILED
+    try:
+        is_claimed = claim_record(args, token, start_token)
+    except OSError:
+        logger.error("could not write the record: %s", traceback.format_exc())
+        return EXIT_SETUP_FAILED
+    if not is_claimed:
+        logger.info("another sidecar already holds the record; exiting")
+        return EXIT_DUPLICATE
     loading_started = time.monotonic()
     try:
         model = load_model(args.threads)
@@ -658,12 +733,10 @@ def run_serve(args: argparse.Namespace, token: str) -> int:
     for handled in (signal.SIGTERM, signal.SIGINT):
         signal.signal(handled, lambda *_: request_exit(EXIT_OK))
 
-    start_token = read_process_start_token(os.getpid())
-    if start_token is None:
-        logger.error("could not read the own start token")
-        return EXIT_SETUP_FAILED
     try:
-        write_json_atomic(args.record_file, build_record(args, port, token, start_token))
+        if not publish_port(args, port, token, start_token):
+            logger.error("the record was taken away while the model loaded; exiting")
+            return EXIT_SETUP_FAILED
         write_json_atomic(args.ready_file, {"pid": os.getpid(), "port": port, "version": SCRIPT_VERSION})
     except OSError:
         logger.error("could not write the record or the ready file: %s", traceback.format_exc())
@@ -689,7 +762,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Charness GigaAM speech-recognition sidecar")
     parser.add_argument("--check", action="store_true", help="load the model, recognise 1 s of silence, print versions")
     parser.add_argument("--ready-file", help="written atomically with {pid, port, version} once the server listens")
-    parser.add_argument("--record-file", help="written by this process right after it binds (the bot adopts it from this file); deleted on an idle exit if it names this pid")
+    parser.add_argument("--record-file", help="claimed by this process before it loads the model, completed with the port once it listens (the bot adopts it from this file); deleted on an idle exit if it names this pid")
     parser.add_argument("--config-hash", help="the bot's hash of the knobs this process was started with, recorded as is")
     parser.add_argument("--log-file", help="where every log line goes")
     parser.add_argument("--owner-pid", type=int, help="exit within ~2 s of this process dying")

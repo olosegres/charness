@@ -310,6 +310,77 @@ class OwnRecordTest(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the start token is read from /proc")
+class RecordClaimTest(unittest.TestCase):
+    """Two sidecars started at once — a bot worker replaced mid-start asks again — must not both be recorded: the
+    record is claimed with an exclusive create BEFORE the model loads, and completed with the port after."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.record_path = os.path.join(self.directory.name, "sidecar.json")
+        self.args = argparse.Namespace(config_hash="abc123", owner_pid=4242, owner_start_token="777", record_file=self.record_path)
+        self.own_start_token = sidecar.read_process_start_token(os.getpid())
+
+    def start_other_sidecar_record(self, **overrides):
+        """A record naming a live process that is not this one (a sleeping child stands in for the other sidecar)."""
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        record = {"pid": child.pid, "startToken": sidecar.read_process_start_token(child.pid), "port": 0, "token": "other-token"}
+        record.update(overrides)
+        with open(self.record_path, "w", encoding="utf-8") as stream:
+            json.dump(record, stream)
+        return child
+
+    def read_record_file(self):
+        with open(self.record_path, encoding="utf-8") as stream:
+            return json.load(stream)
+
+    def test_the_claim_writes_a_starting_record_owner_only_and_leaves_no_temporary_file(self):
+        self.assertTrue(sidecar.claim_record(self.args, "secret-token", self.own_start_token))
+        record = self.read_record_file()
+        self.assertEqual((record["pid"], record["port"], record["token"], record["configHash"]), (os.getpid(), sidecar.STARTING_PORT, "secret-token", "abc123"))
+        self.assertEqual(os.stat(self.record_path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.listdir(self.directory.name), ["sidecar.json"])
+
+    def test_another_live_sidecar_keeps_the_record_and_this_start_learns_it(self):
+        child = self.start_other_sidecar_record()
+        self.assertFalse(sidecar.claim_record(self.args, "secret-token", self.own_start_token))
+        self.assertEqual(self.read_record_file()["pid"], child.pid, "the first sidecar's record is untouched")
+        self.assertEqual(os.listdir(self.directory.name), ["sidecar.json"], "the losing start leaves nothing behind")
+
+    def test_the_record_of_a_dead_process_a_reused_pid_or_garbage_is_replaced(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        with open(self.record_path, "w", encoding="utf-8") as stream:
+            json.dump({"pid": dead.pid, "startToken": "1"}, stream)
+        self.assertTrue(sidecar.claim_record(self.args, "t1", self.own_start_token))
+        self.assertEqual(self.read_record_file()["pid"], os.getpid())
+
+        child = self.start_other_sidecar_record(startToken="not-the-start-token-of-that-pid")
+        self.assertTrue(sidecar.claim_record(self.args, "t2", self.own_start_token), "a live pid with another start time is a reused pid")
+        self.assertEqual(self.read_record_file()["token"], "t2")
+        self.assertIsNone(child.poll(), "the unrelated process is left alone")
+
+        with open(self.record_path, "w", encoding="utf-8") as stream:
+            stream.write("{ not json")
+        self.assertTrue(sidecar.claim_record(self.args, "t3", self.own_start_token))
+        self.assertEqual(self.read_record_file()["token"], "t3")
+
+    def test_the_port_completes_the_own_record_and_only_the_own_record(self):
+        self.assertTrue(sidecar.claim_record(self.args, "secret-token", self.own_start_token))
+        self.assertTrue(sidecar.publish_port(self.args, 40123, "secret-token", self.own_start_token))
+        self.assertEqual(self.read_record_file()["port"], 40123)
+
+        child = self.start_other_sidecar_record()
+        self.assertFalse(sidecar.publish_port(self.args, 40124, "secret-token", self.own_start_token), "a record the bot gave to another start is not overwritten")
+        self.assertEqual(self.read_record_file()["pid"], child.pid)
+
+        os.unlink(self.record_path)
+        self.assertFalse(sidecar.publish_port(self.args, 40125, "secret-token", self.own_start_token), "a record taken away is not recreated")
+        self.assertFalse(os.path.exists(self.record_path))
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the start token is read from /proc")
 class OwnerTest(unittest.TestCase):
     def test_start_token_matches_the_bots_field_22(self):
         token = sidecar.read_process_start_token(os.getpid())

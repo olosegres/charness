@@ -591,11 +591,12 @@ function runOwnerWorker(
   owner: string,
   mode: 'ensure' | 'ensure-and-stay',
   fakeArgs: string[] = [],
-): { child: ChildProcess; endpoint: Promise<SttSidecarEndpoint>; spawned: Promise<number> } {
+): { child: ChildProcess; endpoint: Promise<SttSidecarEndpoint>; spawned: Promise<number>; hasSpawned: () => boolean } {
   const child = spawn(process.execPath, ['--import', 'tsx', ownerWorkerPath, dataDir, owner, mode, JSON.stringify(fakeArgs)], { stdio: ['ignore', 'pipe', 'pipe'] });
   decoys.push(child);
   let announceSpawn: (pid: number) => void = () => {};
-  const spawned = new Promise<number>((resolve) => { announceSpawn = resolve; });
+  let hasSpawnedProcess = false;
+  const spawned = new Promise<number>((resolve) => { announceSpawn = (pid) => { hasSpawnedProcess = true; resolve(pid); }; });
   const endpoint = new Promise<SttSidecarEndpoint>((resolve, reject) => {
     let output = '';
     let errors = '';
@@ -610,7 +611,7 @@ function runOwnerWorker(
     child.once('exit', (code) => reject(new Error(`the owner worker exited (${code}) before it printed an endpoint: ${errors}`)));
   });
   endpoint.catch(() => {}); // a worker killed on purpose rejects; the test that kills it does not read it
-  return { child, endpoint, spawned };
+  return { child, endpoint, spawned, hasSpawned: () => hasSpawnedProcess };
 }
 
 test('owner death: SIGKILL of the owner (a decoy this test starts) takes the sidecar down within four seconds', { timeout: 60_000 }, async () => {
@@ -645,23 +646,106 @@ test('reload: a second worker process over the same record and owner adopts the 
   assert.ok(checkIsProcessIdentityCurrent(identity));
 });
 
-test('a worker replaced while its sidecar is still starting leaves a process the next worker ADOPTS — no orphan, no second sidecar', { timeout: 60_000 }, async () => {
+test('a worker replaced while its sidecar is still LOADING its model leaves a process the next worker waits for and ADOPTS — no orphan, no second sidecar', { timeout: 60_000 }, async () => {
   const ownerArg = `${testOwner.pid}:${testOwner.startToken}`;
   const first = runOwnerWorker(ownerArg, 'ensure', ['--ready-delay-ms', '1500']);
   const sidecarPid = await first.spawned;
-  assert.equal(fs.existsSync(getRecordPath()), false, 'the sidecar is not up yet');
-  first.child.kill('SIGKILL'); // the hot reload: the worker is gone before the ready file was ever read
-
-  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the sidecar to record itself');
-  const record = readRecord();
-  assert.equal(record.pid, sidecarPid);
-  startedIdentities.push({ pid: record.pid, startToken: record.startToken });
-
-  const second = runOwnerWorker(ownerArg, 'ensure');
-  const endpoint = await second.endpoint;
-  assert.deepEqual(endpoint, { port: record.port, token: record.token }, 'adopted from the record the sidecar wrote');
+  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the sidecar to claim its record');
   assert.equal(readRecord().pid, sidecarPid);
+  assert.equal(readRecord().port, 0, 'claimed, but nothing listens yet: the model is still loading');
+  startedIdentities.push({ pid: sidecarPid, startToken: readRecord().startToken });
+  first.child.kill('SIGKILL'); // the hot reload: the worker is gone before the sidecar listens
+
+  const second = runOwnerWorker(ownerArg, 'ensure'); // a voice reaches the new worker inside the loading window
+  const endpoint = await second.endpoint;
+  const record = readRecord();
+  assert.notEqual(record.port, 0, 'the record was completed with the port');
+  assert.deepEqual(endpoint, { port: record.port, token: record.token }, 'adopted from the record the sidecar wrote');
+  assert.equal(record.pid, sidecarPid);
+  assert.equal(second.hasSpawned(), false, 'the new worker started nothing');
   assert.ok(checkIsProcessIdentityCurrent({ pid: sidecarPid, startToken: record.startToken }));
+});
+
+/** A sidecar the test starts the way an EARLIER worker would have: same owner and config, a token of its own. */
+async function startEarlierSidecar(extraArgs: string[], token = 'earlier-token'): Promise<ExternalProcessIdentity> {
+  const paths = getSttPaths(dataDir);
+  fs.mkdirSync(paths.root, { recursive: true });
+  const identity = await createDefaultSttSidecarOwnerDeps(() => dataDir).startProcess(
+    process.execPath,
+    [
+      fakeSidecarPath,
+      '--ready-file', path.join(paths.root, `ready-earlier-${Date.now()}.json`),
+      '--record-file', getRecordPath(),
+      '--owner-pid', testOwner.pid.toString(),
+      '--owner-start-token', testOwner.startToken,
+      '--config-hash', getSttSidecarConfigHash(defaultSettings),
+      '--workers', defaultSettings.workers.toString(),
+      ...extraArgs,
+    ],
+    { PATH: process.env.PATH ?? '', [sttSidecarTokenEnvName]: token },
+  );
+  startedIdentities.push(identity);
+  return identity;
+}
+
+test('a voice that asks while the sidecar loads its model waits for the port instead of starting a second sidecar; /stt does not call it running yet', async () => {
+  const earlier = await startEarlierSidecar(['--ready-delay-ms', '1200']);
+  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the earlier sidecar to claim its record');
+  assert.equal(readRecord().port, 0);
+
+  const owner = createSttSidecarOwner(createDeps());
+  assert.deepEqual(await owner.getStatus(), { state: 'notRunning' }, 'nothing listens yet');
+  const endpoint = await owner.ensure(defaultSettings);
+  assert.equal(startCalls.length, 0, 'no second process');
+  assert.deepEqual(endpoint, { port: readRecord().port, token: 'earlier-token' });
+  assert.equal(readRecord().pid, earlier.pid);
+  assert.ok(logLines.some((line) => line.includes('is still loading the model')), logLines.join('\n'));
+  assert.equal((await owner.getStatus()).state, 'running');
+  await owner.stop();
+});
+
+test('two starts at once: the later one finds the record claimed, leaves, and its ensure uses the earlier sidecar — not a failure, however often it happens', { timeout: 60_000 }, async () => {
+  const owner = createSttSidecarOwner(createDeps());
+  for (let round = 1; round <= 3; round++) {
+    fakeArgs = ['--claim-delay-ms', '500']; // OUR spawn claims late: the earlier start gets in first
+    const ensuring = owner.ensure(defaultSettings);
+    await getCharnessWait(() => startCalls.length === round, 10_000, 'our spawn');
+    const ours = startedIdentities[startedIdentities.length - 1];
+    const earlier = await startEarlierSidecar(['--ready-delay-ms', '900'], `earlier-token-${round}`);
+
+    const endpoint = await ensuring;
+    assert.equal(endpoint.token, `earlier-token-${round}`, 'the earlier start won');
+    assert.equal(readRecord().pid, earlier.pid);
+    assert.ok(await waitUntilGone(ours, 3_000), 'our own start left');
+    assert.ok(checkIsProcessIdentityCurrent(earlier), 'and the earlier one keeps running');
+    assert.equal(owner.checkIsUnhealthy(), false, `round ${round}: a lost claim is not a failed start`);
+    await owner.stop();
+  }
+  assert.ok(logLines.some((line) => line.includes('found another start already running')), logLines.join('\n'));
+  assert.equal(fs.existsSync(getRecordPath()), false);
+});
+
+test('a start that claimed the record and never listens is replaced after the wait; one that dies during the wait is replaced at once', { timeout: 60_000 }, async () => {
+  const wedged = await startEarlierSidecar(['--never-ready']);
+  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the wedged sidecar to claim its record');
+  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 600 }));
+  const endpoint = await owner.ensure(defaultSettings);
+  assert.equal(startCalls.length, 1, 'a replacement was started');
+  assert.ok(await waitUntilGone(wedged, 3_000), 'the wedged one was stopped');
+  assert.equal(readRecord().port, endpoint.port);
+  assert.ok(logLines.some((line) => line.includes('did not start listening')), logLines.join('\n'));
+  await owner.stop();
+
+  const dying = await startEarlierSidecar(['--never-ready']);
+  await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the dying sidecar to claim its record');
+  const patientOwner = createSttSidecarOwner(createDeps());
+  const ensuring = patientOwner.ensure(defaultSettings);
+  await sleep(300);
+  signalExternallyHostedProcess(dying, 'SIGKILL');
+  const replacement = await ensuring;
+  assert.equal(startCalls.length, 2, 'a start that died while we waited is replaced, not waited for');
+  assert.equal(readRecord().port, replacement.port);
+  await patientOwner.stop();
 });
 
 async function getCharnessWait(check: () => boolean, timeoutMs: number, description: string): Promise<void> {

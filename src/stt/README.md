@@ -98,14 +98,17 @@ of `hf/` every 2 s for the download progress. Heavy writes follow `TMPDIR`.
 `CHARNESS_STT_SIDECAR_TOKEN` (never an argument: `ps` shows arguments). `HF_HOME` and `HF_HUB_OFFLINE=1` come from the
 env too.
 
-- **Startup order:** load the model → start W pool threads → bind `127.0.0.1:0` → write ITS OWN record `R` atomically
-  (`{pid, startToken, port, token, configHash, ownerPid, ownerStartToken, startedAt}`, mode 0600; the hash is the bot's,
-  recorded as given) → write the ready file `F` (`{pid, port, version}`). The sidecar records itself so that a bot worker
-  replaced while it waits for `F` (a hot reload during the ~2 s start) leaves a process the next worker finds and adopts,
-  instead of an orphan nobody knows the token of. A model, bind, record or ready-file failure is logged and exits 1
+- **Startup order:** claim ITS OWN record `R` (an exclusive create — a hard link of a finished file — with
+  `{pid, startToken, port: 0, token, configHash, ownerPid, ownerStartToken, startedAt}`, mode 0600; the hash is the
+  bot's, recorded as given) → load the model → start W pool threads → bind `127.0.0.1:0` → complete `R` with the port
+  (only while it is still this process's) → write the ready file `F` (`{pid, port, version}`). The record exists from the
+  first moment so that a bot worker replaced while it waits for `F` (a hot reload during the 2–6 s start, most of which
+  is the model load) leaves a process the next worker finds and waits for, instead of an orphan nobody knows the token
+  of; and because the claim is exclusive, of two sidecars started at once only the first is recorded — the second sees
+  a live record of another process and exits `4`. A model, bind, record or ready-file failure is logged and exits 1
   without writing `F`.
 - **Exit codes:** `0` clean (SIGTERM, idle, owner gone) · `1` model, socket, record or ready file could not be set up ·
-  `2` bad usage (a missing token included).
+  `2` bad usage (a missing token included) · `4` another live sidecar already holds the record (a duplicate start).
 - **Logs** go to `L` only (5 MB, one rotation); stdio is pointed at `/dev/null` because the process is externally
   parented. Transcripts are never logged — only audio length, chunk count and timing.
 - `GET /health` (Bearer token, else 401) → `{status, busyRequests, queuedChunks, workers, idleMinutes, version, pid}`. A
@@ -141,7 +144,9 @@ peak RSS ≈ 780 MB; a short voice sent while a long one is queued is answered i
 **On demand.** A voice whose chain reaches the local engine calls `ensure` (through the engine's `getEndpoint()`):
 
 1. **Adopt** the recorded process when its pid + start token are current, the record's owner fields match the current
-   owner, and the config hash matches. `GET /health` is asked with the recorded token (1 s, then once more patiently,
+   owner, and the config hash matches. A record with `port: 0` is a start still loading its model: wait (up to the ready
+   timeout) for the port instead of starting a second sidecar; a start that dies meanwhile is replaced at once, one that
+   never listens is stopped and replaced. `GET /health` is asked with the recorded token (1 s, then once more patiently,
    5 s): a sidecar recognising a long voice with every core busy answers late, and killing it would drop another topic's
    in-flight recognition — so a SILENT live matching process is used anyway, and replaced only when it stays silent three
    `ensure`s in a row (it is wedged). `/stt` shows such a process as «running, busy», not «not running».
@@ -150,7 +155,10 @@ peak RSS ≈ 780 MB; a short voice sent while a long one is queued is answered i
 3. **Spawn.** A fresh token (`crypto.randomBytes`) goes to the process through the env; the process is hosted by
    `startExternallyParentedProcess` (outside nodemon's tree, so a reload never kills it); the bot polls the ready file
    every 100 ms for up to 15 s, checks the record the sidecar wrote for itself (pid and token) and logs
-   `[STT] sidecar started pid N port P in Xms (workers W)`.
+   `[STT] sidecar started pid N port P in Xms (workers W)`. A spawn that leaves before it is ready because its claim
+   lost to an earlier start (exit `4`, another live record) is NOT a failed start: the earlier sidecar is adopted
+   (`[STT] … found another start already running and left; using that one`). A failed start removes the record it
+   claimed.
 
 **Environment.** The sidecar and the install job run third-party code, so they get a short allowlist
 (`sttChildEnv.ts`: `PATH`, `HOME`, `TMPDIR`, the locale, proxy / CA settings, `HF_*` / `UV_*` / `PIP_*`) — never the bot's

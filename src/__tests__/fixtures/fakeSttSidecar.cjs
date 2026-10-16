@@ -5,14 +5,17 @@
  * CHARNESS_STT_SIDECAR_TOKEN, port 0, GET /health, POST /v1/audio/transcriptions, an owner-PID watchdog, an
  * idle exit that deletes ITS OWN record, SIGTERM -> exit 0.
  *
- * Like the Python sidecar it records ITSELF (`--record-file`, atomically, before the ready file): the bot adopts a
- * process from that record, so one a replaced worker never saw ready is still found.
+ * Like the Python sidecar it records ITSELF (`--record-file`): it CLAIMS the record at once (an exclusive create,
+ * port 0, before the "model" loads) and completes it with its port once it listens, before the ready file. The bot
+ * adopts a process from that record, so one a replaced worker never saw ready is still found, and a second start
+ * that finds the record held by another live sidecar exits with code 4 instead of becoming an orphan.
  *
- * Test knobs (not part of the contract): --ready-delay-ms N, --never-ready, --crash-after-ms N (hard exit 1
- * after it is ready, record left behind), --idle-seconds N (overrides --idle-minutes), --ignore-sigterm,
- * --health-delay-ms N (answer /health late, like a sidecar busy with a long voice), --health-hang (never answer
- * /health), --fail-to-record (exit 1 where the record cannot be written, before any ready file), --skip-record
- * (write the ready file WITHOUT recording).
+ * Test knobs (not part of the contract): --claim-delay-ms N (start slowly: the window before the claim),
+ * --ready-delay-ms N (the "model load": between the claim and the listening port), --never-ready (claims, then
+ * hangs without ever listening), --crash-after-ms N (hard exit 1 after it is ready, record left behind),
+ * --idle-seconds N (overrides --idle-minutes), --ignore-sigterm, --health-delay-ms N (answer /health late, like a
+ * sidecar busy with a long voice), --health-hang (never answer /health), --fail-to-record (exit 1 where the record
+ * cannot be written, before any ready file), --skip-record (write the ready file WITHOUT recording).
  */
 const fs = require('node:fs');
 const http = require('node:http');
@@ -32,6 +35,8 @@ const ownerStartToken = readArg('--owner-start-token');
 const configHash = readArg('--config-hash');
 const healthDelayMs = Number(readArg('--health-delay-ms', '0'));
 const readyDelayMs = Number(readArg('--ready-delay-ms', '0'));
+const claimDelayMs = Number(readArg('--claim-delay-ms', '0'));
+const duplicateExitCode = 4;
 const crashAfterMs = Number(readArg('--crash-after-ms', '0'));
 const idleSeconds = readArg('--idle-seconds') !== undefined
   ? Number(readArg('--idle-seconds'))
@@ -41,10 +46,6 @@ const ownerCheckMs = 100;
 const idleCheckMs = 100;
 
 if (!token) process.exit(2);
-if (hasFlag('--never-ready')) {
-  setInterval(() => {}, 1000);
-  return;
-}
 
 let lastActivityMs = Date.now();
 
@@ -55,6 +56,49 @@ function readStartToken(pid) {
     return fields[0] === 'Z' ? null : fields[19];
   } catch {
     return null;
+  }
+}
+
+function readRecordFile() {
+  try {
+    return JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function buildRecord(port) {
+  return {
+    pid: process.pid,
+    startToken: readStartToken(process.pid),
+    port,
+    token,
+    configHash,
+    ownerPid,
+    ownerStartToken: ownerStartToken ?? '',
+    startedAt: new Date().toISOString(),
+  };
+}
+
+/** The exclusive create: a hard link of a finished file, so a reader never sees half a record. False: another live sidecar holds it. */
+function claimRecord() {
+  const temporaryPath = `${recordFile}.${process.pid}.claim`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(buildRecord(0)), { mode: 0o600 });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.linkSync(temporaryPath, recordFile);
+        return true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const existing = readRecordFile();
+        if (existing && existing.pid !== process.pid && readStartToken(existing.pid) === existing.startToken) return false;
+        fs.rmSync(recordFile, { force: true });
+      }
+    }
+    throw new Error('could not claim the record');
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
   }
 }
 
@@ -96,27 +140,31 @@ function writeJsonAtomic(filePath, payload) {
   fs.renameSync(temporaryPath, filePath);
 }
 
-setTimeout(() => {
+function listenAndReport(isRecorded) {
   server.listen(0, '127.0.0.1', () => {
-    if (hasFlag('--fail-to-record')) process.exit(1);
-    if (!hasFlag('--skip-record')) {
-      writeJsonAtomic(recordFile, {
-        pid: process.pid,
-        startToken: readStartToken(process.pid),
-        port: server.address().port,
-        token,
-        configHash,
-        ownerPid,
-        ownerStartToken: ownerStartToken ?? '',
-        startedAt: new Date().toISOString(),
-      });
+    const port = server.address().port;
+    if (isRecorded) {
+      const current = readRecordFile();
+      if (!current || current.pid !== process.pid) process.exit(1); // the record was taken away while "loading"
+      writeJsonAtomic(recordFile, buildRecord(port));
     }
     const temporaryPath = `${readyFile}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify({ pid: process.pid, port: server.address().port, version: 'fake' }));
+    fs.writeFileSync(temporaryPath, JSON.stringify({ pid: process.pid, port, version: 'fake' }));
     fs.renameSync(temporaryPath, readyFile);
     if (crashAfterMs > 0) setTimeout(() => process.exit(1), crashAfterMs);
   });
-}, readyDelayMs);
+}
+
+setTimeout(() => {
+  if (hasFlag('--fail-to-record')) process.exit(1);
+  const isRecorded = !hasFlag('--skip-record');
+  if (isRecorded && !claimRecord()) process.exit(duplicateExitCode);
+  if (hasFlag('--never-ready')) {
+    setInterval(() => {}, 1000);
+    return;
+  }
+  setTimeout(() => listenAndReport(isRecorded), readyDelayMs);
+}, claimDelayMs);
 
 setInterval(() => {
   let isOwnerAlive = true;

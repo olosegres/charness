@@ -49,6 +49,8 @@ const readyFilePrefix = 'ready-';
 const readyFileSuffix = '.json';
 const readyTimeoutMs = 15_000;
 const readyPollMs = 100;
+/** The record's port while the sidecar still loads its model: the process is there, nothing listens yet. */
+const startingRecordPort = 0;
 const adoptHealthTimeoutMs = 1_000;
 /** A sidecar recognising a long voice with every core busy answers /health late: ask once more, patiently. */
 const adoptHealthRetryTimeoutMs = 5_000;
@@ -114,8 +116,10 @@ export type SttSidecarStatus =
 
 /**
  * @name SttSidecarRecord
- * @description `<DATA_DIR>/stt/sidecar.json`: the live process the bot may adopt. The SIDECAR writes it (right after
- * it binds, before its ready file), so a worker replaced while it waits leaves a process the next worker finds.
+ * @description `<DATA_DIR>/stt/sidecar.json`: the live process the bot may adopt. The SIDECAR writes it: it claims it
+ * (exclusively, `port` {@link startingRecordPort}) before it loads the model, and completes it with its port once it
+ * listens, before its ready file. So a worker replaced while it waits leaves a process the next worker finds — even
+ * one still loading — and a second start of the same engine learns that one is already there.
  */
 interface SttSidecarRecord extends ExternalProcessIdentity {
   port: number;
@@ -317,8 +321,23 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     }
   }
 
+  /**
+   * Wait for a sidecar that is still loading its model (its record has no port yet) to publish the port. `gone`: the
+   * process ended or the record now belongs to another start; `timeout`: alive but not listening in time (wedged).
+   */
+  async function waitForRecordedPort(starting: SttSidecarRecord): Promise<{ kind: 'listening'; record: SttSidecarRecord } | { kind: 'gone' } | { kind: 'timeout' }> {
+    const deadlineMs = deps.nowMs() + deps.readyTimeoutMs;
+    for (;;) {
+      const current = readRecord();
+      if (!current || current.pid !== starting.pid || !deps.checkIsIdentityCurrent(current)) return { kind: 'gone' };
+      if (current.port !== startingRecordPort) return { kind: 'listening', record: current };
+      if (deps.nowMs() >= deadlineMs) return { kind: 'timeout' };
+      await deps.sleep(readyPollMs);
+    }
+  }
+
   async function adoptRecorded(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint | null> {
-    const record = readRecord();
+    let record = readRecord();
     if (!record) {
       removeRecord();
       return null;
@@ -326,21 +345,35 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     const isAlive = deps.checkIsIdentityCurrent(record);
     const isSameOwner = record.ownerPid === owner.pid && record.ownerStartToken === owner.startToken;
     if (isAlive && isSameOwner && record.configHash === getSttSidecarConfigHash(settings)) {
-      const endpoint = { port: record.port, token: record.token };
-      const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
-      if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
+      if (record.port === startingRecordPort) {
+        // A start nobody finished waiting for (a reloaded worker's) or another voice's: wait for it, never start a second one.
+        deps.log(`[STT] sidecar pid ${record.pid} is still loading the model; waiting for it`);
+        const waited = await waitForRecordedPort(record);
+        if (waited.kind === 'gone') {
+          if (readRecord()?.pid === record.pid) removeRecord();
+          return null;
+        }
+        if (waited.kind === 'listening') record = waited.record;
+      }
+      if (record.port !== startingRecordPort) {
+        const endpoint = { port: record.port, token: record.token };
+        const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
+        if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
+          unansweredAdoptions = 0;
+          return endpoint;
+        }
+        // Alive, ours, the right config, but silent: a sidecar busy with a long voice answers /health late and
+        // killing it would drop another topic's recognition. Use it; replace it only when it stays silent.
+        unansweredAdoptions++;
+        if (unansweredAdoptions < unansweredAdoptionLimit) {
+          deps.log(`[STT] sidecar pid ${record.pid} did not answer /health (${unansweredAdoptions}/${unansweredAdoptionLimit}); using it anyway`);
+          return endpoint;
+        }
+        deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
         unansweredAdoptions = 0;
-        return endpoint;
+      } else {
+        deps.log(`[STT] sidecar pid ${record.pid} did not start listening in ${Math.round(deps.readyTimeoutMs / 1000)} s; replacing it`);
       }
-      // Alive, ours, the right config, but silent: a sidecar busy with a long voice answers /health late and
-      // killing it would drop another topic's recognition. Use it; replace it only when it stays silent.
-      unansweredAdoptions++;
-      if (unansweredAdoptions < unansweredAdoptionLimit) {
-        deps.log(`[STT] sidecar pid ${record.pid} did not answer /health (${unansweredAdoptions}/${unansweredAdoptionLimit}); using it anyway`);
-        return endpoint;
-      }
-      deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
-      unansweredAdoptions = 0;
     }
     // Dead, another owner's or another config's — or wedged: it must go before a new one starts.
     if (isAlive) await terminate(record, stopBudgetMs);
@@ -389,6 +422,8 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     const fail = async (reason: string): Promise<never> => {
       await terminate(identity, 0);
       fs.rmSync(readyFile, { force: true });
+      // The sidecar claimed the record before it loaded the model: a start that failed must not leave it behind.
+      if (readRecord()?.pid === identity.pid) removeRecord();
       noteSpawnFailure();
       throw new Error(reason);
     };
@@ -406,6 +441,14 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
         return { port: ready.port, token };
       }
       if (!deps.checkIsIdentityCurrent(identity)) {
+        // Two starts at once (a reloaded worker asked while the first was still loading): ours found the record
+        // claimed and left. That is no failure — use the sidecar that holds the record.
+        const earlierStart = await adoptRecorded(settings, owner);
+        if (earlierStart) {
+          fs.rmSync(readyFile, { force: true });
+          deps.log(`[STT] sidecar pid ${identity.pid} found another start already running and left; using that one`);
+          return earlierStart;
+        }
         return fail('the local engine exited before it was ready (see sidecar.log)');
       }
       if (deps.nowMs() - startedAtMs >= deps.readyTimeoutMs) {
@@ -438,7 +481,8 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     async getStatus() {
       if (deps.nowMs() < unhealthyUntilMs) return { state: 'unhealthy', unhealthyUntil: unhealthyUntilMs };
       const record = readRecord();
-      if (!record || !deps.checkIsIdentityCurrent(record)) return { state: 'notRunning' };
+      // A record without a port is a start still loading the model: nothing to ask yet.
+      if (!record || record.port === startingRecordPort || !deps.checkIsIdentityCurrent(record)) return { state: 'notRunning' };
       const health = await deps.fetchHealth(record.port, record.token, statusHealthTimeoutMs);
       // Alive but silent is busy, not gone: it is recognising something long.
       return health ? { state: 'running', busyRequests: health.busyRequests } : { state: 'running' };
