@@ -1,7 +1,6 @@
+import { checkIsConfigFileOnContainerDisk, getConfigFileWriteBlock } from '../configDirFile';
 import {
-  checkIsSttConfigOnContainerDisk,
   createEmptySttConfig,
-  getSttConfigWriteBlock,
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
@@ -54,7 +53,7 @@ export interface SttRuntime {
 export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
   const checkIsInstalled = deps.checkIsInstalled ?? isGigaamInstalled;
   const checkIsInstalling = deps.checkIsInstalling ?? isGigaamInstalling;
-  const checkIsConfigOnContainerDisk = deps.checkIsConfigOnContainerDisk ?? checkIsSttConfigOnContainerDisk;
+  const checkIsConfigOnContainerDisk = deps.checkIsConfigOnContainerDisk ?? checkIsConfigFileOnContainerDisk;
   /** The `[STT]` lines last logged, so an unchanged state is reported once, not per voice note. */
   let lastReport = '';
   /** The load the last resolve saw: the cache hands back the SAME object until the file changes. */
@@ -91,7 +90,7 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
    * empty and would migrate the old env keys again).
    */
   function reportStorageProblem(configPath: string): void {
-    const writeBlock = getSttConfigWriteBlock(configPath);
+    const writeBlock = getConfigFileWriteBlock(configPath);
     if (writeBlock !== null) {
       deps.logProblem(`[STT] ${configPath} cannot be written (${writeBlock}): changes made in /stt will not be kept — make its directory writable`);
     } else if (checkIsConfigOnContainerDisk(configPath)) {

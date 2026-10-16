@@ -45,7 +45,8 @@ import {
   type SttScreenId,
   type SttScreenInput,
 } from '../../../stt/sttScreenPlan';
-import { getErrnoCode, saveSttConfig, sttEngineLimit, type ResolvedSttSettings, type SttConfigFile } from '../../../stt/sttSettings';
+import { getCaughtErrnoCode } from '../../../configDirFile';
+import { saveSttConfig, sttEngineLimit, type ResolvedSttSettings, type SttConfigFile } from '../../../stt/sttSettings';
 import type { SttOwnerContext, SttSidecarOwner } from '../../../stt/sttSidecarOwner';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
@@ -144,7 +145,7 @@ export function createStt(ports: SttPorts) {
     try {
       saveSttConfig(getConfigPath(), next);
     } catch (e) {
-      console.warn(`[STT] could not write ${getConfigPath()} (${e instanceof Error ? getErrnoCode(e) : 'unknown'})`);
+      console.warn(`[STT] could not write ${getConfigPath()} (${getCaughtErrnoCode(e)})`);
       return false;
     }
     try {

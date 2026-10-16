@@ -5,7 +5,7 @@ import * as path from 'path';
 import { checkIsProcessIdentityCurrent, getProcessIdentity } from '../installManager';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { getSttChildEnv } from './sttChildEnv';
-import { getErrnoCode } from './sttSettings';
+import { getErrnoCode } from '../configDirFile';
 
 /**
  * @description The install of the local speech engine: a private Python venv

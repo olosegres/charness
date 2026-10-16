@@ -1,8 +1,15 @@
 import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
 import { z } from 'zod';
-import { resolveGlobalConfigEnvPath, warnLegacyNameOnce } from '../legacyNames';
+import {
+  createConfigFileLoader,
+  getConfigDirFilePath,
+  getCaughtErrnoCode,
+  writeJsonFileAtomically,
+  type ConfigFileLoad,
+  type ConfigValidation,
+} from '../configDirFile';
+import { warnLegacyNameOnce } from '../legacyNames';
 import {
   createCustomEndpoint,
   createGroqEndpoint,
@@ -59,10 +66,8 @@ const maxTimeoutPercent = 400;
 const maxIdleMinutes = 24 * 60; // a day: longer is "never" (0)
 const maxWorkers = 64;
 const maxThreads = 32;
-const invalidJsonErrorPrefix = 'stt.json is not valid JSON';
 /** The file holds API keys: owner-only. */
 const configFileMode = 0o600;
-const unknownErrorCode = 'unknown';
 
 /** @name SttEngineSetting @description One entry of the chain, as stored in `stt.json`. */
 export interface SttEngineSetting {
@@ -128,9 +133,7 @@ const rawConfigSchema = z.strictObject({
 
 type RawSttConfig = z.infer<typeof rawConfigSchema>;
 
-type SttJsonValue = string | number | boolean | null | SttJsonValue[] | { [key: string]: SttJsonValue };
-
-export type SttConfigResult = { ok: true; config: SttConfigFile } | { ok: false; errors: string[] };
+export type SttConfigResult = ConfigValidation<SttConfigFile>;
 
 /** @description The settings of an instance that has no `stt.json`: no engines, auto language. */
 export function createEmptySttConfig(): SttConfigFile {
@@ -202,27 +205,11 @@ export function validateSttConfig(parsedJson: object): SttConfigResult {
 }
 
 /**
- * @description The directory `envFile` really lives in: a symlinked `.env` (the keys kept on an encrypted
- * volume, the config dir holding only a link) resolves to its TARGET's directory, so `stt.json` — which holds
- * keys too — lands beside the real file. A plain file, or a link that cannot be resolved (dangling), keeps
- * the directory it was named in.
- */
-function getRealEnvFileDir(envFile: string): string {
-  try {
-    return path.dirname(fs.realpathSync(envFile));
-  } catch {
-    return path.dirname(envFile);
-  }
-}
-
-/**
- * @description Where `stt.json` lives: beside the instance's REAL env file (`ENV_FILE` for an isolated
- * instance, else the charness config dir's `.env` — a pre-rename config dir included), after resolving the
- * env file's symlink. With no env file at all, the canonical `~/.config/charness/`.
+ * @description Where `stt.json` lives: beside the instance's REAL env file (see {@link getConfigDirFilePath} for
+ * the rules — a symlinked `.env` is resolved, so the file that holds API keys lands beside the real one).
  */
 export function getSttConfigPath(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
-  const envFile = env.ENV_FILE || resolveGlobalConfigEnvPath(homeDir);
-  return path.join(getRealEnvFileDir(envFile), sttConfigFileName);
+  return getConfigDirFilePath(sttConfigFileName, env, homeDir);
 }
 
 /**
@@ -230,79 +217,23 @@ export function getSttConfigPath(env: NodeJS.ProcessEnv = process.env, homeDir: 
  * settings (`null` when the file was never valid in this process), so a bad hand
  * edit never takes voice down.
  */
-export type SttConfigLoad =
-  | { status: 'missing'; config: SttConfigFile }
-  | { status: 'ok'; config: SttConfigFile }
-  | { status: 'invalid'; config: SttConfigFile | null; errors: string[] };
+export type SttConfigLoad = ConfigFileLoad<SttConfigFile>;
 
-interface SttConfigCacheEntry {
-  stamp: string;
-  load: SttConfigLoad;
-  lastGood: SttConfigFile | null;
-}
-
-const configCacheByPath = new Map<string, SttConfigCacheEntry>();
-
-/** The OS error code (`ENOENT`, `EACCES`) of a failed fs call — a code names the problem, a message may quote a path. */
-export function getErrnoCode(error: Error): string {
-  return 'code' in error && typeof error.code === 'string' ? error.code : unknownErrorCode;
-}
-
-/** Position of a JSON syntax error, without the quoted source text Node puts in its message. */
-function getJsonErrorPosition(error: Error): string {
-  const position = /position (\d+)/.exec(error.message);
-  return position ? ` (at position ${position[1]})` : '';
-}
-
-function parseSttConfigText(text: string): SttConfigResult {
-  let parsed: SttJsonValue;
-  try {
-    parsed = JSON.parse(text);
-  } catch (e) {
-    // Node quotes a slice of the text in the message, and the text holds keys: name only the position.
-    return { ok: false, errors: [`${invalidJsonErrorPrefix}${e instanceof Error ? getJsonErrorPosition(e) : ''}`] };
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, errors: ['stt.json must hold a JSON object'] };
-  }
-  return validateSttConfig(parsed);
-}
+const sttConfigLoader = createConfigFileLoader<SttConfigFile>({
+  fileName: sttConfigFileName,
+  createEmpty: createEmptySttConfig,
+  validate: validateSttConfig,
+});
 
 /**
  * @description Read and validate `stt.json`, cached by the file's stamp
  * (mtime, size, inode) so a per-voice call costs one `stat`. A missing file is
  * the empty settings; an unreadable or invalid one keeps the last good settings.
  */
-export function loadSttConfig(filePath: string): SttConfigLoad {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    configCacheByPath.delete(filePath);
-    return { status: 'missing', config: createEmptySttConfig() };
-  }
-  const stamp = `${stat.mtimeMs}:${stat.size}:${stat.ino}`;
-  const cached = configCacheByPath.get(filePath);
-  if (cached?.stamp === stamp) return cached.load;
-
-  const lastGood = cached?.lastGood ?? null;
-  let result: SttConfigResult;
-  try {
-    result = parseSttConfigText(fs.readFileSync(filePath, 'utf8'));
-  } catch (e) {
-    result = { ok: false, errors: [`stt.json could not be read (${e instanceof Error ? getErrnoCode(e) : unknownErrorCode})`] };
-  }
-  const load: SttConfigLoad = result.ok
-    ? { status: 'ok', config: result.config }
-    : { status: 'invalid', config: lastGood, errors: result.errors };
-  configCacheByPath.set(filePath, { stamp, load, lastGood: result.ok ? result.config : lastGood });
-  return load;
-}
+export const loadSttConfig = sttConfigLoader.load;
 
 /** @description Forget every cached load — for tests, which swap files under one path. */
-export function resetSttConfigCache(): void {
-  configCacheByPath.clear();
-}
+export const resetSttConfigCache = sttConfigLoader.resetCache;
 
 /**
  * @description Write `config` to `filePath`: validated first (a caller that builds
@@ -313,73 +244,7 @@ export function saveSttConfig(filePath: string, config: SttConfigFile): void {
   const normalised = normaliseSttConfig(config);
   const validation = validateSttConfig(normalised);
   if (!validation.ok) throw new Error(`refusing to write an invalid stt.json: ${validation.errors.join('; ')}`);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tempPath, `${JSON.stringify(normalised, null, 2)}\n`, { mode: configFileMode });
-    fs.renameSync(tempPath, filePath);
-  } catch (e) {
-    fs.rmSync(tempPath, { force: true });
-    throw e;
-  }
-}
-
-/** The nearest directory of `filePath`'s ancestors that exists (the save creates the rest), or the errno code that stops the walk. */
-function findNearestExistingDirectory(filePath: string): { directory: string } | { errorCode: string } {
-  let directory = path.dirname(filePath);
-  for (;;) {
-    try {
-      fs.statSync(directory);
-      return { directory };
-    } catch (e) {
-      const code = e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
-      const parent = path.dirname(directory);
-      if (code !== 'ENOENT' || parent === directory) return { errorCode: code };
-      directory = parent;
-    }
-  }
-}
-
-/**
- * @description Why {@link saveSttConfig} could not write beside `filePath` — an errno code (`EACCES`, `EROFS`,
- * `ENOTDIR`, …) — or `null` when it can. The directory may not exist yet (the save creates it): the nearest
- * existing ancestor must be a directory that accepts a new file.
- */
-export function getSttConfigWriteBlock(filePath: string): string | null {
-  const nearest = findNearestExistingDirectory(filePath);
-  if ('errorCode' in nearest) return nearest.errorCode;
-  try {
-    fs.accessSync(nearest.directory, fs.constants.W_OK);
-    return fs.statSync(nearest.directory).isDirectory() ? null : 'ENOTDIR';
-  } catch (e) {
-    return e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
-  }
-}
-
-/** Files a container runtime creates inside every container it starts (Docker, Podman). */
-const containerMarkerFiles: readonly string[] = ['/.dockerenv', '/run/.containerenv'];
-const rootDirectory = '/';
-
-/**
- * @description Is `stt.json` kept on a container's OWN disk — the bot runs in a container and the directory that
- * holds the file is not a mount (it shares the device of `/`)? Then every change made in `/stt` is lost when the
- * container is re-created, and the old env keys are migrated again into a fresh file. The write check cannot see it:
- * the container's disk is writable. Typical cause: only the env FILE was mounted, not its directory. A host, or
- * a path that cannot be read, is never reported.
- */
-export function checkIsSttConfigOnContainerDisk(
-  filePath: string,
-  checkIsPresent: (candidate: string) => boolean = fs.existsSync,
-  readDeviceId: (directory: string) => number = (directory) => fs.statSync(directory).dev,
-): boolean {
-  if (!containerMarkerFiles.some(checkIsPresent)) return false;
-  const nearest = findNearestExistingDirectory(filePath);
-  if ('errorCode' in nearest) return false;
-  try {
-    return readDeviceId(nearest.directory) === readDeviceId(rootDirectory);
-  } catch {
-    return false;
-  }
+  writeJsonFileAtomically(filePath, normalised, configFileMode);
 }
 
 /** The env variables the one-time migration reads: the only place that does. */
@@ -419,7 +284,7 @@ export function migrateLegacySttKeys(
   try {
     saveSttConfig(filePath, config);
   } catch (e) {
-    return { status: 'writeFailed', error: e instanceof Error ? getErrnoCode(e) : unknownErrorCode };
+    return { status: 'writeFailed', error: getCaughtErrnoCode(e) };
   }
   return { status: 'migrated', engineNames: config.engines.map((engine) => engine.kind) };
 }

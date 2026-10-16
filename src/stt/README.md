@@ -5,7 +5,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 
 | File | Role |
 |------|------|
-| `sttSettings.ts` | `stt.json`: types, strict validation, cached load, atomic save, the one-time env-key migration, the resolver (settings → the chain a voice walks), the timeout math, the `[STT]` log lines |
+| `sttSettings.ts` | `stt.json`: types, strict validation, the load and save over the shared [`configDirFile.ts`](../configDirFile.ts), the one-time env-key migration, the resolver (settings → the chain a voice walks), the timeout math, the `[STT]` log lines |
 | `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file |
 | `sttInstall.ts` | The local engine's install: plan (uv / python3 venv), idempotent run with a lock and progress, `isGigaamInstalled` / `isGigaamInstalling`, remove |
 | `sttInstallEntry.ts` | The detached install job the bot launches (not a user command): `node dist/stt/sttInstallEntry.js <dataDir> [--force]` |
@@ -19,16 +19,16 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 
 ## `stt.json` — the one source of truth
 
-`~/.config/charness/stt.json`, in the directory of the instance's REAL env file (`getSttConfigPath`): `ENV_FILE`
+`~/.config/charness/stt.json`, in the directory of the instance's REAL env file (`getSttConfigPath` → `getConfigDirFilePath`, shared with `settings.json`): `ENV_FILE`
 for an isolated instance, else the charness config dir's `.env` (a pre-rename config dir is kept). The env file's
 symlink is resolved first — `.env` linked to a file on an encrypted volume puts `stt.json` beside the TARGET, so
 the keys it holds stay with the other secrets; a dangling link keeps the directory it was named in. Settings AND
 keys, mode 0600, written through a temp file and a rename. **No `STT_*` env variables exist.** The directory must be
 writable and persistent (Docker: mount the config DIRECTORY, not only the env file): there is NO fallback to another
-location — `init` probes it (`getSttConfigWriteBlock`) and logs `[STT] … cannot be written` once, and a `/stt` save that
+location — `init` probes it (`getConfigFileWriteBlock`) and logs `[STT] … cannot be written` once, and a `/stt` save that
 fails says so naming the path. A writable directory can still be the container's OWN disk (only the env file was mounted):
 in a container (`/.dockerenv`, `/run/.containerenv`) with the directory on the device of `/`, `init` logs `[STT] … is on this
-container's own disk` once (`checkIsSttConfigOnContainerDisk`) — also in the fresh container that migrates the old env
+container's own disk` once (`checkIsConfigFileOnContainerDisk`) — also in the fresh container that migrates the old env
 keys again.
 
 - **Validation is strict and all-or-nothing** (zod, like `jira.json`): an unknown key, kind, duplicate id, a

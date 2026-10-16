@@ -17,10 +17,8 @@ import {
   createSttEngineId,
   defaultSttTimeout,
   getEngineTimeoutMs,
-  checkIsSttConfigOnContainerDisk,
   getNoEngineNoticeCode,
   getSttConfigPath,
-  getSttConfigWriteBlock,
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
@@ -221,87 +219,8 @@ test('a file that cannot be read is invalid, naming the OS error code', () => {
   assert.deepEqual(load.status === 'invalid' ? load.errors : [], ['stt.json could not be read (EISDIR)']);
 });
 
-test('the config path: next to the loaded env file, an isolated instance beside its ENV_FILE', () => {
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stt-home-'));
-  try {
-    assert.equal(getSttConfigPath({}, homeDir), path.join(homeDir, '.config', 'charness', 'stt.json'));
-    const legacyDir = path.join(homeDir, '.config', 'telegramcode');
-    fs.mkdirSync(legacyDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyDir, '.env'), '');
-    assert.equal(getSttConfigPath({}, homeDir), path.join(legacyDir, 'stt.json'), 'a pre-rename config dir is kept');
-    assert.equal(getSttConfigPath({ ENV_FILE: '/srv/instance/.env' }, homeDir), '/srv/instance/stt.json');
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
-});
-
-/** A throwaway home dir whose real path is known (a tmp dir may itself sit behind a symlink). */
-function withTempHome(run: (homeDir: string) => void): void {
-  const homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stt-home-')));
-  try {
-    run(homeDir);
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
-}
-
-test('the config path: a symlinked .env puts stt.json beside the REAL file, not beside the link', () => {
-  withTempHome((homeDir) => {
-    const secretsDir = path.join(homeDir, 'secrets', 'instance');
-    fs.mkdirSync(secretsDir, { recursive: true });
-    fs.writeFileSync(path.join(secretsDir, '.env'), 'TELEGRAM_BOT_TOKEN=x\n');
-    const configDir = path.join(homeDir, '.config', 'charness');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.symlinkSync(path.join(secretsDir, '.env'), path.join(configDir, '.env'));
-
-    const sttPath = getSttConfigPath({}, homeDir);
-    assert.equal(sttPath, path.join(secretsDir, 'stt.json'));
-
-    // The whole round trip lands there too: nothing is written into the config dir that only holds the link.
-    saveSttConfig(sttPath, createConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] }));
-    assert.deepEqual(fs.readdirSync(secretsDir).sort(), ['.env', 'stt.json']);
-    assert.deepEqual(fs.readdirSync(configDir), ['.env']);
-    assert.equal(loadSttConfig(getSttConfigPath({}, homeDir)).status, 'ok');
-  });
-});
-
-test('the config path: the link may sit in a pre-rename config dir, and an ENV_FILE link is followed too', () => {
-  withTempHome((homeDir) => {
-    const secretsDir = path.join(homeDir, 'secrets');
-    fs.mkdirSync(secretsDir);
-    fs.writeFileSync(path.join(secretsDir, '.env'), '');
-    const legacyDir = path.join(homeDir, '.config', 'telegram-code');
-    fs.mkdirSync(legacyDir, { recursive: true });
-    fs.symlinkSync(path.join(secretsDir, '.env'), path.join(legacyDir, '.env'));
-    assert.equal(getSttConfigPath({}, homeDir), path.join(secretsDir, 'stt.json'));
-
-    const isolatedLink = path.join(homeDir, 'isolated.env');
-    fs.symlinkSync(path.join(secretsDir, '.env'), isolatedLink);
-    assert.equal(getSttConfigPath({ ENV_FILE: isolatedLink }, homeDir), path.join(secretsDir, 'stt.json'));
-  });
-});
-
-test('the config path: a plain .env behaves as before, and a dangling link keeps the directory it was named in', () => {
-  withTempHome((homeDir) => {
-    const configDir = path.join(homeDir, '.config', 'charness');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, '.env'), '');
-    assert.equal(getSttConfigPath({}, homeDir), path.join(configDir, 'stt.json'));
-
-    fs.rmSync(path.join(configDir, '.env'));
-    fs.symlinkSync(path.join(homeDir, 'nowhere', '.env'), path.join(configDir, '.env'));
-    assert.equal(getSttConfigPath({}, homeDir), path.join(configDir, 'stt.json'));
-  });
-});
-
-test('the config path: a pre-rename config dir that is now a link to the canonical one resolves to the canonical dir', () => {
-  withTempHome((homeDir) => {
-    const canonicalDir = path.join(homeDir, '.config', 'charness');
-    fs.mkdirSync(canonicalDir, { recursive: true });
-    fs.writeFileSync(path.join(canonicalDir, '.env'), '');
-    fs.symlinkSync('charness', path.join(homeDir, '.config', 'telegramcode'));
-    assert.equal(getSttConfigPath({ ENV_FILE: path.join(homeDir, '.config', 'telegramcode', '.env') }, homeDir), path.join(canonicalDir, 'stt.json'));
-  });
+test('the config path: stt.json sits in the config directory beside the real env file (the rules are tested with the shared helper)', () => {
+  assert.equal(getSttConfigPath({ ENV_FILE: '/srv/instance/.env' }, os.tmpdir()), '/srv/instance/stt.json');
 });
 
 test('migration: no file + GROQ_API_KEY and OPENAI_API_KEY → stt.json with Groq first, the deprecation said once', () => {
@@ -501,27 +420,6 @@ test('the report: file errors say what the bot does instead, skipped engines say
   assert.deepEqual(getSttReportLines(healthy), []);
 });
 
-test('write block: a writable directory — existing or still to be created — has none; a file in the way and a read-only directory name their errno', () => {
-  assert.equal(getSttConfigWriteBlock(configPath), null);
-  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'not', 'yet', 'there', 'stt.json')), null, 'the save creates the missing directories');
-
-  fs.writeFileSync(path.join(configDir, 'plainFile'), '');
-  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'plainFile', 'stt.json')), 'ENOTDIR');
-  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'plainFile', 'deeper', 'stt.json')), 'ENOTDIR', 'a file anywhere on the way blocks it');
-});
-
-test('write block: a read-only directory is EACCES (a permission check root passes, so it is skipped there)', { skip: process.getuid?.() === 0 }, () => {
-  const readOnlyDir = path.join(configDir, 'readOnly');
-  fs.mkdirSync(readOnlyDir);
-  fs.chmodSync(readOnlyDir, 0o500);
-  try {
-    assert.equal(getSttConfigWriteBlock(path.join(readOnlyDir, 'stt.json')), 'EACCES');
-    assert.equal(getSttConfigWriteBlock(path.join(readOnlyDir, 'sub', 'stt.json')), 'EACCES', 'the nearest existing directory decides');
-  } finally {
-    fs.chmodSync(readOnlyDir, 0o700);
-  }
-});
-
 test('the notice a voice gets when no engine can take it names the real cause', () => {
   const resolveWith = (engines: SttConfigFile['engines'], facts: Partial<SttFacts> = {}) =>
     resolveSttSettings({ status: 'ok', config: createConfig({ engines }) }, { ...installedFacts, ...facts }, { getGigaamEndpoint: gigaamHook });
@@ -542,23 +440,4 @@ test('the notice a voice gets when no engine can take it names the real cause', 
     'voice.config_invalid',
     'a broken file outranks everything',
   );
-});
-
-test('container disk: only inside a container, and only when the settings directory shares the device of / (no mount of its own)', () => {
-  const insideContainer = (candidate: string): boolean => candidate === '/.dockerenv';
-  const onHost = (): boolean => false;
-  const deviceOf = (devices: Record<string, number>) => (directory: string): number => {
-    const match = Object.keys(devices).filter((mounted) => directory === mounted || directory.startsWith(`${mounted}/`) || mounted === '/').sort((a, b) => b.length - a.length)[0];
-    return devices[match];
-  };
-  const unmounted = deviceOf({ '/': 10 });
-  const mounted = deviceOf({ '/': 10, [configDir]: 20 });
-
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, unmounted), true, 'the old single-file mount: the directory is the container\'s own disk');
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, mounted), false, 'a mounted config directory is fine');
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, onHost, unmounted), false, 'a host is never reported');
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, (candidate) => candidate === '/run/.containerenv', unmounted), true, 'Podman marks its containers too');
-  assert.equal(checkIsSttConfigOnContainerDisk(path.join(configDir, 'not', 'yet', 'there', 'stt.json'), insideContainer, mounted), false, 'a directory the save will create sits on the nearest existing one\'s mount');
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, () => { throw new Error('EIO'); }), false, 'what cannot be read is not guessed');
-  assert.equal(checkIsSttConfigOnContainerDisk(configPath, onHost), false, 'the real device check is not reached without a container marker');
 });
