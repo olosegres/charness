@@ -1,11 +1,23 @@
 import type { SessionKey } from '../../sessionKey';
-import type { AnswerSink, AnswerDeliveryResult } from '../../platform/answerSink';
-import type { RequestAlertReason } from '../../requests/types';
+import type { AnswerSink, AnswerDeliveryResult, RequestAnswerDelivery } from '../../platform/answerSink';
+import type { RequestAlertReason, RequestOrigin } from '../../requests/types';
 import { emptyRequester, getRequestRequester } from '../../requests/requestGroup';
-import { convertMarkdownToAdf, createCommentBodies, createPlainTextAdf, getAdfText, type AdfDocument } from './adf';
+import {
+  convertMarkdownToAdf,
+  createCommentBodies,
+  createCommentBodiesWithLeadingNode,
+  createMentionParagraph,
+  createPlainTextAdf,
+  getAdfText,
+  type AdfDocument,
+} from './adf';
 import { getSingleLineText } from './promptText';
-import type { JiraAccount, JiraClient } from './client';
+import { JiraHttpError, type JiraAccount, type JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
+import { mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
+import { checkIsCommentTrusted } from './issueBlocks';
+import type { JiraContextLedger } from './contextLedger';
+import type { JiraTrust } from './trustedGroup';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -51,11 +63,29 @@ export function buildJiraAlertText(requestId: string, reason: RequestAlertReason
   return `⚠️ The AI could not finish request ${requestId}: ${alertTexts[reason]}. A person needs to look at this issue.`;
 }
 
-/** @description The park notice (D12): over the run budget, handed back without a new request. */
+/** @description The park notice (D12): over the run budget, handed back without a new request. Hand-overs and mentions share the budget. */
 export function buildJiraParkText(runBudgetPer24h: number): string {
-  return `⏸ This issue was handed to the AI ${runBudgetPer24h} times in the last 24 hours, its limit, so no new request was opened. ` +
-    'Assign it to the AI again later, or ask the operator to raise the limit.';
+  return `⏸ The AI was asked to work on this issue ${runBudgetPer24h} times in the last 24 hours (hand-overs and mentions together), ` +
+    'its limit, so no new request was opened. Assign it to the AI again later, or ask the operator to raise the limit.';
 }
+
+/** @description The mention park notice (D10): over the run budget, nothing is handed back — the issue was never handed over. */
+export function buildJiraMentionParkText(runBudgetPer24h: number): string {
+  return `⏸ The AI was asked about this issue ${runBudgetPer24h} times in the last 24 hours (hand-overs and mentions together), ` +
+    'its limit, so this mention was not answered. Mention it again later, or ask the operator to raise the limit.';
+}
+
+/**
+ * @description The warning that rides an answer's result when some of `replyToCommentIds` were left out: the
+ * answer itself was delivered, so the agent is told what to know, never to resend it.
+ */
+export function buildJiraReplyLeftOutWarning(commentIds: readonly string[]): string {
+  return `Delivered, but these comments' authors were not mentioned: ${commentIds.join(', ')}. ` +
+    'Only comments you were shown in this conversation, written by a trusted person, can be replied to this way.';
+}
+
+/** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
+export const jiraQuestionContinueText = 'To let me go on, answer in a comment and assign the issue back to me.';
 
 /**
  * @description The notice of a hand-over the trusted group does not back (T1): nothing was started, and who can
@@ -66,8 +96,12 @@ export function buildJiraUntrustedText(groupName: string): string {
 }
 
 export interface JiraAnswerSinkDeps {
-  client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue'>;
+  client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'>;
   aiAccountId: string;
+  /** What each issue's conversation was shown: only a comment it was shown can be replied to. */
+  contextLedger: Pick<JiraContextLedger, 'getShownBlock'>;
+  /** The trusted group's trust, or `null` without a group (or before it is first read): nobody is judged then. */
+  getTrust: () => JiraTrust | null;
   runBudgetPer24h: number;
   now: () => number;
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
@@ -101,9 +135,17 @@ function getTextPreview(body: AdfDocument): string {
   return characters.length > missingPartPreviewChars ? `${characters.slice(0, missingPartPreviewChars).join('')}…` : characters.join('');
 }
 
+/** `body` with {@link jiraQuestionContinueText} as one more paragraph — plain text, never run through Markdown. */
+function getBodyWithContinueLine(body: AdfDocument): AdfDocument {
+  const [continueParagraph] = createPlainTextAdf(jiraQuestionContinueText).content;
+  return { ...body, content: [...body.content, continueParagraph] };
+}
+
 export interface JiraAnswerSink extends AnswerSink {
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
   parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
+  /** A mention over the run budget (D10): the park notice, no hand-back (nothing was handed over). Never rejects. */
+  parkMention(issueKey: string): Promise<void>;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
   refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
 }
@@ -169,6 +211,66 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     return { postedCount, failure: null };
   }
 
+  /**
+   * The person a mention request is about: its comment's author, when it is the request's requester and a person
+   * (an app cannot be notified). `null` — nobody to mention; the answer goes without.
+   */
+  async function getMentionRequester(issueKey: string, origin: RequestOrigin): Promise<JiraAccount | null> {
+    const requesterAccountId = getRequestRequester(origin);
+    const triggerId = origin.attributes.triggerId ?? '';
+    if (requesterAccountId === emptyRequester || !triggerId.startsWith(mentionTriggerIdPrefix)) return null;
+    try {
+      const comment = await client.getComment(issueKey, triggerId.slice(mentionTriggerIdPrefix.length));
+      const { author } = comment;
+      return author && author.accountId === requesterAccountId && checkIsPersonAccount(author) ? author : null;
+    } catch (error) {
+      // The comment was deleted, or Jira did not answer: the answer is worth more than its mention.
+      console.warn(`[jira] ${issueKey}: the requester of ${triggerId} could not be read, so it is not mentioned: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * The author of comment `commentId` when the agent may reply to it that way: the conversation was shown it and
+   * its text was readable then, its author is a person other than the AI account, and — with a trusted group —
+   * the comment is trusted now (author and last editor). `null` otherwise.
+   */
+  async function getReplyTarget(issueKey: string, commentId: string): Promise<JiraAccount | null> {
+    const shown = deps.contextLedger.getShownBlock(issueKey, `comment:${commentId}`);
+    if (!shown || shown.isWithheld) return null;
+    try {
+      const comment = await client.getComment(issueKey, commentId);
+      const { author } = comment;
+      if (!author || author.accountId === deps.aiAccountId || !checkIsPersonAccount(author)) return null;
+      const trust = deps.getTrust();
+      return trust && !checkIsCommentTrusted(comment, trust) ? null : author;
+    } catch (error) {
+      // An id Jira does not know is the agent's slip, told to it in the result; anything else is the operator's to see.
+      const isUnknownComment = error instanceof JiraHttpError && error.status === 404;
+      if (!isUnknownComment) console.warn(`[jira] ${issueKey}: comment ${commentId} could not be read, so its author is not mentioned: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Whom an answer notifies, requester first, each once: the requester of a mention request, and the authors of the
+   * comments the answer replies to. `leftOutCommentIds` are the replies that did not qualify.
+   */
+  async function resolveMentionTargets(issueKey: string, delivery: RequestAnswerDelivery): Promise<{ targets: JiraAccount[]; leftOutCommentIds: string[] }> {
+    const targets = new Map<string, JiraAccount>();
+    if (delivery.origin.kind === 'trackerMention') {
+      const requester = await getMentionRequester(issueKey, delivery.origin);
+      if (requester) targets.set(requester.accountId, requester);
+    }
+    const leftOutCommentIds: string[] = [];
+    for (const commentId of new Set(delivery.replyToCommentIds ?? [])) {
+      const author = await getReplyTarget(issueKey, commentId);
+      if (author) targets.set(author.accountId, author);
+      else leftOutCommentIds.push(commentId);
+    }
+    return { targets: [...targets.values()], leftOutCommentIds };
+  }
+
   /** Hand the issue back to the requester while it is still the AI's; a warning when that could not happen. */
   async function handBack(issueKey: string, requesterAccountId: string): Promise<string | null> {
     if (requesterAccountId === emptyRequester) return 'no requester is known, so the issue stays assigned to the AI account';
@@ -188,13 +290,19 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * is a warning and no hand-back: the issue stays the AI's, and the trigger is recorded already, so it is not repeated.
    */
   async function postNoticeAndHandBack(issueKey: string, requester: JiraAccount | null, notice: AdfDocument, noticeKind: 'park' | 'untrusted'): Promise<void> {
+    if (!await postNotice(issueKey, notice, noticeKind)) return;
+    const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
+    if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
+  }
+
+  /** A notice the bot writes itself; `false` (and a warning) when it did not land. */
+  async function postNotice(issueKey: string, notice: AdfDocument, noticeKind: 'park' | 'untrusted' | 'mention park'): Promise<boolean> {
     const posted = await postComments(issueKey, [notice], null);
     if (posted.postedCount === 0 && posted.failure) {
       console.warn(`[jira] ${issueKey}: ${noticeKind} notice not posted: ${getNothingPostedError(posted.failure)}`);
-      return;
+      return false;
     }
-    const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
-    if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
+    return true;
   }
 
   /**
@@ -234,14 +342,23 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   return {
     async deliverAnswer(key: SessionKey, delivery): Promise<AnswerDeliveryResult> {
       const issueKey = key.thread;
-      const bodies = createCommentBodies(delivery.body);
+      const { targets, leftOutCommentIds } = await resolveMentionTargets(issueKey, delivery);
+      const bodies = targets.length > 0
+        ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
+        : createCommentBodies(delivery.body);
       if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      // Only a hand-over's question hands the issue back, so only it carries the line saying how to give it back —
+      // and only while its request is open: a superseded request's question hands nothing back.
+      const isHandOver = delivery.origin.kind === 'trackerEvent';
+      if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       const warnings: string[] = [];
+      if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
-      if (delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
+      // A mention request never had the issue handed over: its answer is a comment, and the issue stays where it is.
+      if (isHandOver && delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
         const handBackWarning = await handBack(issueKey, getRequestRequester(delivery.origin));
         if (handBackWarning) warnings.push(handBackWarning);
       }
@@ -252,8 +369,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
-      if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
+      if (alert.origin.kind === 'trackerEvent') {
+        const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
+        if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
+      }
       // A comment needs no release: nothing is pinned.
       return { ok: true };
     },
@@ -262,6 +381,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     parkIssue: (issueKey, requester) =>
       postNoticeAndHandBack(issueKey, requester, convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h)), 'park'),
+
+    parkMention: async (issueKey) => {
+      await postNotice(issueKey, convertMarkdownToAdf(buildJiraMentionParkText(deps.runBudgetPer24h)), 'mention park');
+    },
 
     refuseUntrusted: (issueKey, requester, groupName) =>
       postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted'),

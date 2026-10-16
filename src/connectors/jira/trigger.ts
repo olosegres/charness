@@ -17,14 +17,27 @@ const personAccountType = 'atlassian';
 /** Jira's `accountType` of an app or automation. */
 const appAccountType = 'app';
 
-export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created';
+export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created' | 'mentioned';
 
-/** @name JiraIssueTrigger @description `author` is `null` when Jira names no one (an automation without an actor). */
+/** The trigger id of a comment that mentioned the AI account is this prefix and the comment's id (a changelog id is numeric: no clash). */
+export const mentionTriggerIdPrefix = 'mention:';
+
+/**
+ * @name JiraIssueTrigger
+ * @description `author` is `null` when Jira names no one (an automation without an actor); for a mention it is the
+ * comment's author. `commentId` is set for a `mentioned` trigger only.
+ */
 export interface JiraIssueTrigger {
-  /** The changelog history id, or {@link createdTriggerId}. */
+  /** The changelog history id, {@link createdTriggerId}, or {@link mentionTriggerIdPrefix} and a comment id. */
   triggerId: string;
   kind: JiraTriggerKind;
   author: JiraAccount | null;
+  commentId?: string;
+}
+
+/** @description The trigger of the comment `commentId`, written by `author`, that mentions the AI account. */
+export function createMentionTrigger(commentId: string, author: JiraAccount | null): JiraIssueTrigger {
+  return { triggerId: `${mentionTriggerIdPrefix}${commentId}`, kind: 'mentioned', author, commentId };
 }
 
 export interface JiraTriggerMatch {

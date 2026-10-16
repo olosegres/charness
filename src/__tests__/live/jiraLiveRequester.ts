@@ -10,7 +10,7 @@
 
 import type { Browser, Page } from 'playwright-core';
 import { z } from 'zod';
-import { adfNodeSchema, convertMarkdownToAdf, getAdfText } from '../../connectors/jira/adf';
+import { adfNodeSchema, convertMarkdownToAdf, getAdfText, getMentionedAccountIds } from '../../connectors/jira/adf';
 
 /** What a REST call from the page returned. */
 interface PageRestResponse {
@@ -20,6 +20,7 @@ interface PageRestResponse {
 
 const myselfSchema = z.object({ accountId: z.string().min(1) });
 const createdIssueSchema = z.object({ key: z.string().min(1) });
+const createdCommentSchema = z.object({ id: z.string().min(1) });
 const issueTypesSchema = z.object({ issueTypes: z.array(z.object({ id: z.string(), subtask: z.boolean() })) });
 const transitionsSchema = z.object({
   transitions: z.array(z.object({ id: z.string(), to: z.object({ statusCategory: z.object({ key: z.string() }) }) })),
@@ -45,6 +46,8 @@ export interface LiveComment {
   text: string;
   /** The length of the comment body's serialized ADF, as Jira returns it. */
   adfLength: number;
+  /** The account ids of the mention nodes of the body's FIRST paragraph, in order — who the comment notifies at its top. */
+  leadingMentionAccountIds: string[];
 }
 
 /** @name LiveIssueState @description An issue's assignee, whether it is finished, and its comments, oldest first. */
@@ -134,6 +137,21 @@ export class JiraLiveRequester {
     await this.callJson('POST', `/rest/api/3/issue/${issueKey}/comment`, null, { body: convertMarkdownToAdf(markdown) });
   }
 
+  /**
+   * @description A comment that @-mentions `accountId` the way Jira's editor writes it — a `mention` node holding the
+   * account id, first in the paragraph — followed by `text`. Resolves the new comment's id.
+   */
+  async addMentionComment(issueKey: string, accountId: string, text: string): Promise<string> {
+    const body = {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'mention', attrs: { id: accountId, text: '@AI' } }, { type: 'text', text: ` ${text}` }] }],
+    };
+    const created = await this.callJson('POST', `/rest/api/3/issue/${issueKey}/comment`, createdCommentSchema, { body });
+    if (!created) throw new Error('Jira returned no id for the created comment');
+    return created.id;
+  }
+
   /** @description Move the issue to a finished status (the first transition into the `done` category). */
   async moveToDone(issueKey: string): Promise<void> {
     const transitions = await this.callJson('GET', `/rest/api/3/issue/${issueKey}/transitions`, transitionsSchema);
@@ -162,6 +180,7 @@ export class JiraLiveRequester {
         authorAccountId: comment.author.accountId,
         text: getAdfText(comment.body),
         adfLength: JSON.stringify(comment.body).length,
+        leadingMentionAccountIds: getMentionedAccountIds(comment.body.content?.[0]),
       })),
     };
   }

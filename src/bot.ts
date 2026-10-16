@@ -12100,6 +12100,7 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
+    listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),
     postRequest: async (key, requestId, prompt) => {
       // A request is the issue's "user message" (L-D5): it clears the spent idle-compaction
       // latch like a topic's message does, or the issue would never compact again.

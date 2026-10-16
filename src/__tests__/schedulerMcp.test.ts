@@ -170,7 +170,9 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const telegram = getBotMcpToolDigest(deps, 'telegram');
     assert.equal(getBotMcpToolDigest(deps, 'telegram'), telegram, 'deterministic');
     assert.notEqual(getBotMcpToolDigest(deps, 'jira'), telegram, 'an issue gets the two neutral tools only');
-    assert.equal(getBotMcpToolDigest(deps, 'jira'), getBotMcpToolDigest(deps, null), 'a key no codec reads gets the neutral set');
+    // The one difference from the neutral set: a Jira session's answer_request takes the comments it replies to.
+    assert.notEqual(getBotMcpToolDigest(deps, 'jira'), getBotMcpToolDigest(deps, null), 'a Jira session\'s answer_request has the reply field');
+    assert.equal(getBotMcpToolDigest(deps, 'test'), getBotMcpToolDigest(deps, null), 'any other platform gets the neutral set');
     assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram'), telegram);
   });
 

@@ -15,6 +15,12 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * credentials than the AI account's, and 400 to a comment body that is not a
  * valid ADF document (an empty text node included). Groups ({@link FakeJira.addGroup})
  * are served by `group/bulk` (by exact name) and `group/member` (paged).
+ *
+ * The search keeps ignoring its JQL — except for the mention branch (`comment ~ currentUser()`): a JQL
+ * that carries it is answered as Jira answers it — the issues assigned to the AI account in the listed
+ * statuses, and the issues with a comment that holds a mention node of the AI account and changed within
+ * the window — so a connector that forgot the branch finds no mention. Every change of an issue moves its
+ * `updated` (strictly forward), as in Jira.
  */
 
 export interface FakeJiraStatus {
@@ -71,6 +77,8 @@ export interface FakeJiraIssue {
   assignee: JiraAccount | null;
   reporter: JiraAccount;
   created: string;
+  /** Moves forward with every change of the issue: a comment added, edited or deleted, the description, the assignee. */
+  updated: string;
   histories: FakeJiraHistory[];
   comments: FakeJiraComment[];
   attachments: FakeJiraAttachment[];
@@ -92,7 +100,19 @@ interface FakeJiraRequestBody {
   expand?: string;
   body?: AdfDocument;
   accountId?: string;
+  jql?: string;
 }
+
+/** A person's comment or edit: who it mentions (each a real ADF mention node, first in the paragraph, as the editor writes them). */
+export interface FakeJiraCommentOptions {
+  mentions?: JiraAccount[];
+}
+
+/** The mention clause of the connector's poll JQL, and the pieces the fake reads out of that JQL. */
+const mentionClause = 'comment ~ currentUser()';
+const mentionWindowRe = /updated >= -(\d+)m/;
+const assignedStatusesRe = /assignee = currentUser\(\) AND status in \(([^)]*)\)/;
+const msPerMinute = 60 * 1000;
 
 const jsonContentType = 'application/json';
 const restPrefix = '/rest/api/3';
@@ -102,8 +122,17 @@ export const fakeJiraSearchRequest = `POST ${restPrefix}/search/jql`;
 /** A comment body as Jira validates it: an ADF document. */
 const commentBodySchema = z.object({ type: z.literal('doc'), version: z.literal(1), content: z.array(adfNodeSchema) });
 
-function createAdfParagraph(text: string): AdfDocument {
-  return { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+function createAdfParagraph(text: string, mentions: readonly JiraAccount[] = []): AdfDocument {
+  const mentionNodes: AdfNode[] = mentions.flatMap((account) => [
+    { type: 'mention', attrs: { id: account.accountId, text: `@${account.displayName ?? account.accountId}` } },
+    { type: 'text', text: ' ' },
+  ]);
+  return { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [...mentionNodes, { type: 'text', text }] }] };
+}
+
+/** Does any mention node in `nodes` carry `accountId`? */
+function checkHasMentionOf(nodes: readonly AdfNode[], accountId: string): boolean {
+  return nodes.some((node) => (node.type === 'mention' && node.attrs?.id === accountId) || checkHasMentionOf(node.content ?? [], accountId));
 }
 
 /** ADF refuses an empty text node (`minLength: 1`). */
@@ -118,6 +147,8 @@ export class FakeJira {
   private nextHistoryId = 1000;
   private nextCommentId = 5000;
   private nextAttachmentId = 9000;
+  /** The last `updated` handed out (epoch ms): the next one is always later, so two changes in one millisecond still differ. */
+  private lastUpdatedMs = 0;
   /** `METHOD path` of every request, in order. */
   readonly requestLog: string[] = [];
 
@@ -150,11 +181,13 @@ export class FakeJira {
 
   /** @description A new issue, unassigned, as its reporter created it. */
   createIssue(issue: FakeJiraNewIssue): void {
+    const created = new Date().toISOString();
     this.issues.set(issue.key, {
       ...issue,
       id: (this.issues.size + 1).toString(),
       assignee: null,
-      created: new Date().toISOString(),
+      created,
+      updated: created,
       histories: [],
       comments: [],
       attachments: [],
@@ -162,29 +195,36 @@ export class FakeJira {
   }
 
   /** @description A comment by a person (not the AI account) — what a requester writes on the issue. Resolves its id. */
-  addComment(issueKey: string, author: JiraAccount, text: string): string {
+  addComment(issueKey: string, author: JiraAccount, text: string, options: FakeJiraCommentOptions = {}): string {
     this.nextCommentId += 1;
     const id = this.nextCommentId.toString();
-    this.getIssue(issueKey).comments.push({ id, author, created: new Date().toISOString(), body: createAdfParagraph(text) });
+    const issue = this.getIssue(issueKey);
+    issue.comments.push({ id, author, created: new Date().toISOString(), body: createAdfParagraph(text, options.mentions) });
+    this.touch(issue);
     return id;
   }
 
   /** @description Edit a comment's text as `editor` does: `updated` and `updateAuthor` move, the author and date stay. */
-  editComment(issueKey: string, commentId: string, text: string, editor: JiraAccount): void {
-    const comment = this.getIssue(issueKey).comments.find((candidate) => candidate.id === commentId);
+  editComment(issueKey: string, commentId: string, text: string, editor: JiraAccount, options: FakeJiraCommentOptions = {}): void {
+    const issue = this.getIssue(issueKey);
+    const comment = issue.comments.find((candidate) => candidate.id === commentId);
     if (!comment) throw new Error(`fake Jira has no comment ${commentId} on ${issueKey}`);
-    comment.body = createAdfParagraph(text);
+    comment.body = createAdfParagraph(text, options.mentions);
     comment.updated = new Date().toISOString();
     comment.updateAuthor = editor;
+    this.touch(issue);
   }
 
   deleteComment(issueKey: string, commentId: string): void {
     const issue = this.getIssue(issueKey);
     issue.comments = issue.comments.filter((comment) => comment.id !== commentId);
+    this.touch(issue);
   }
 
   setDescription(issueKey: string, description: string): void {
-    this.getIssue(issueKey).description = description;
+    const issue = this.getIssue(issueKey);
+    issue.description = description;
+    this.touch(issue);
   }
 
   /** @description Attach a file to an issue; its id is unique across the site, as Jira's are. */
@@ -200,8 +240,33 @@ export class FakeJira {
     const issue = this.getIssue(issueKey);
     this.addHistory(issue, author, { field: 'assignee', fieldId: 'assignee', from: issue.assignee?.accountId ?? null, to: assignee.accountId });
     issue.assignee = assignee;
+    this.touch(issue);
   }
 
+  /** The issue changed: its `updated` moves forward, never to a time it already had. */
+  private touch(issue: FakeJiraIssue): void {
+    this.lastUpdatedMs = Math.max(Date.now(), this.lastUpdatedMs + 1);
+    issue.updated = new Date(this.lastUpdatedMs).toISOString();
+  }
+
+  /**
+   * What the search returns for `jql`: every issue (the connector's own re-check is under test), or — when the
+   * JQL carries the mention branch — what Jira would return for it.
+   */
+  private getSearchedIssues(jql: string | undefined): FakeJiraIssue[] {
+    const issues = [...this.issues.values()];
+    if (jql === undefined || !jql.includes(mentionClause)) return issues;
+    const windowMinutes = Number(mentionWindowRe.exec(jql)?.[1]);
+    if (!Number.isFinite(windowMinutes)) throw new Error(`fake Jira: no "updated >= -<n>m" next to the mention clause in ${jql}`);
+    const statusIds = (assignedStatusesRe.exec(jql)?.[1] ?? '').split(',').map((statusId) => statusId.trim().replace(/^"|"$/g, '')).filter(Boolean);
+    const windowStartMs = Date.now() - windowMinutes * msPerMinute;
+    return issues.filter((issue) => {
+      const isAssigned = issue.assignee?.accountId === this.options.aiAccount.accountId && statusIds.includes(issue.statusId);
+      const isMentioned = Date.parse(issue.updated) >= windowStartMs
+        && issue.comments.some((comment) => checkHasMentionOf(comment.body.content, this.options.aiAccount.accountId));
+      return isAssigned || isMentioned;
+    });
+  }
   getIssue(issueKey: string): FakeJiraIssue {
     const issue = this.issues.get(issueKey);
     if (!issue) throw new Error(`fake Jira has no issue ${issueKey}`);
@@ -229,6 +294,7 @@ export class FakeJira {
         reporter: issue.reporter,
         creator: issue.reporter,
         created: issue.created,
+        updated: issue.updated,
         description: createAdfParagraph(issue.description),
         comment: { total: issue.comments.length, comments: issue.comments },
         attachment: issue.attachments.map((attachment) => ({
@@ -260,7 +326,7 @@ export class FakeJira {
     }
     const requestBody = await this.readBody(request);
     const route = url.pathname.startsWith(restPrefix) ? url.pathname.slice(restPrefix.length) : url.pathname;
-    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink))?$/.exec(route);
+    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink)(?:\/([^/]+))?)?$/.exec(route);
     const statusesMatch = /^\/project\/([^/]+)\/statuses$/.exec(route);
     const attachmentContentMatch = /^\/attachment\/content\/([^/]+)$/.exec(route);
 
@@ -294,14 +360,14 @@ export class FakeJira {
       response.end(attachment.content);
     } else if (method === 'POST' && route === '/search/jql') {
       const isChangelogExpanded = requestBody.expand === 'changelog';
-      send(200, { issues: [...this.issues.values()].map((issue) => this.getIssueJson(issue, isChangelogExpanded)), isLast: true });
+      send(200, { issues: this.getSearchedIssues(requestBody.jql).map((issue) => this.getIssueJson(issue, isChangelogExpanded)), isLast: true });
     } else if (issueMatch) {
       const issue = this.issues.get(decodeURIComponent(issueMatch[1]));
       if (!issue) {
         send(404, { errorMessages: ['Issue does not exist or you do not have permission to see it.'] });
         return;
       }
-      this.handleIssueRoute(method, issue, issueMatch[3], url, requestBody, send);
+      this.handleIssueRoute(method, issue, issueMatch[3], issueMatch[4], url, requestBody, send);
     } else {
       send(404, { errorMessages: [`fake Jira does not serve ${method} ${url.pathname}`] });
     }
@@ -311,6 +377,7 @@ export class FakeJira {
     method: string,
     issue: FakeJiraIssue,
     subresource: string | undefined,
+    subresourceId: string | undefined,
     url: URL,
     requestBody: FakeJiraRequestBody,
     send: (status: number, body?: object) => void,
@@ -336,7 +403,12 @@ export class FakeJira {
         body: parsedBody.data,
       };
       issue.comments.push(comment);
+      this.touch(issue);
       send(201, { id: comment.id });
+    } else if (method === 'GET' && subresource === 'comment' && subresourceId !== undefined) {
+      const comment = issue.comments.find((candidate) => candidate.id === decodeURIComponent(subresourceId));
+      if (comment) send(200, comment);
+      else send(404, { errorMessages: [`Can not find a comment with id ${subresourceId}`] });
     } else if (method === 'GET' && subresource === 'comment') {
       // `orderBy=-created` is newest first (the read-back); `created` (or none) is oldest first, paged like Jira's.
       const ordered = url.searchParams.get('orderBy') === '-created' ? [...issue.comments].reverse() : [...issue.comments];
@@ -353,6 +425,7 @@ export class FakeJira {
       }
       this.addHistory(issue, this.options.aiAccount, { field: 'assignee', fieldId: 'assignee', from: issue.assignee?.accountId ?? null, to: accountId });
       issue.assignee = { accountId };
+      this.touch(issue);
       send(204);
     } else {
       send(404, { errorMessages: [`fake Jira does not serve ${method} on an issue's ${subresource ?? 'fields'}`] });

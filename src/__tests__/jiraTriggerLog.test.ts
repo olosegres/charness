@@ -66,6 +66,44 @@ describe('JiraTriggerLog', () => {
     assert.equal(reloaded.getRequestCountLastDay('PROJ-12', nowMs), 0);
   });
 
+  it('a covered mention is seen — after a restart too — and never counts against the budget', async () => {
+    const log = await createLoadedLog();
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:10240', outcome: 'covered', at: nowMs });
+    assert.equal(log.checkIsSeen('PROJ-12', 'mention:10240'), true);
+    assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 0);
+    const reloaded = await createLoadedLog();
+    assert.equal(reloaded.checkIsSeen('PROJ-12', 'mention:10240'), true);
+    assert.equal(reloaded.getRequestCountLastDay('PROJ-12', nowMs), 0);
+  });
+
+  it('a mention request counts in the run budget with the hand-overs, under its own trigger id', async () => {
+    const log = await createLoadedLog();
+    log.record({ issueKey: 'PROJ-12', triggerId: '100', outcome: 'request', at: nowMs - hourMs });
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:10240', outcome: 'request', at: nowMs - hourMs, requestId: 'req_2' });
+    assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 2);
+    assert.equal((await createLoadedLog()).getRequestCountLastDay('PROJ-12', nowMs), 2, 'the same after a reload');
+  });
+
+  it('the mention park notice: posted at most once per issue per rolling 24 h — a silent park does not count as the notice', async () => {
+    const log = await createLoadedLog();
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), false);
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:1', outcome: 'parked', at: nowMs - 2 * hourMs, isNoticePosted: false });
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), false, 'a record without a notice is not one');
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:2', outcome: 'parked', at: nowMs - hourMs, isNoticePosted: true });
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), true);
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-13', nowMs), false, 'per issue');
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs + 24 * hourMs), false, 'a day later it is due again');
+    assert.equal((await createLoadedLog()).checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), true, 'the same after a reload');
+  });
+
+  it('a hand-over park never reads as a mention notice, and a park line without the flag reads as posted (older lines)', async () => {
+    const log = await createLoadedLog();
+    log.record({ issueKey: 'PROJ-12', triggerId: '300', outcome: 'parked', at: nowMs - hourMs });
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), false);
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:5', outcome: 'parked', at: nowMs - hourMs });
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), true);
+  });
+
   it('unreadable lines are skipped; the rest still load', async () => {
     fs.writeFileSync(logPath, [
       '{not json',

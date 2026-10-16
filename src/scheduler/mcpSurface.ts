@@ -33,6 +33,8 @@ import {
   type AnswerRequestArgs,
   type AnswerRequestOutcome,
 } from '../requests/answerRequest';
+import { answerStyleInstruction } from '../requests/answerStyle';
+import type { RequestAnswerKind } from '../requests/types';
 
 /**
  * @description The bot-owned MCP server exposes the agent-facing tools —
@@ -120,7 +122,8 @@ const mcpServerVersion = '1.0.0';
 const compactConversationInstruction =
   '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
 const answerRequestInstruction =
-  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request.';
+  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. ' +
+  answerStyleInstruction;
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
@@ -1186,6 +1189,9 @@ export function checkIsConversationInScope(
   return getThreadsForDirectory(scope.directory).includes(conversationKey);
 }
 
+/** The most comment ids one answer may name in `replyToCommentIds`. */
+export const answerReplyToCommentIdsMaxCount = 10;
+
 const answerRequestShape = {
   requestId: z
     .string()
@@ -1204,7 +1210,20 @@ const answerRequestShape = {
     .trim()
     .min(1)
     .max(answerBodyMaxLength)
-    .describe('The answer itself, in Markdown. Write it for the requester: they do not see your other output.'),
+    .describe(`The answer itself, in Markdown. The requester does not see your other output. ${answerStyleInstruction}`),
+};
+
+/** `answer_request` in a Jira session: the same, and the comments the answer replies to. */
+const jiraAnswerRequestShape = {
+  ...answerRequestShape,
+  replyToCommentIds: z
+    .array(z.string().regex(/^\d+$/))
+    .max(answerReplyToCommentIdsMaxCount)
+    .optional()
+    .describe(
+      'Ids of the issue\'s comments this answer replies to, e.g. ["10240"]. The bot mentions each comment\'s ' +
+        'author at the top of your answer so they are notified. Only comments you were shown in this conversation count.',
+    ),
 };
 
 /**
@@ -1213,31 +1232,32 @@ const answerRequestShape = {
  * scope check is passed in so a session can only answer requests of the
  * conversations its token covers; an id outside it reads as unknown.
  */
-function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
-  server.registerTool(
-    'answer_request',
-    {
-      title: 'Answer a request',
-      description:
-        'Send your answer to a request — a message that carries a "[Request <id> · from: …]" header — to ' +
-        'the person who made it, on the surface it came from. The requester may not see your plain text, so ' +
-        'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
-        'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +
-        'note. You may call it several times for one request; only "question" and "final" close it. Do not ' +
-        'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice.',
-      inputSchema: answerRequestShape,
-    },
-    async (args) => {
-      const outcome = await deps.answerRequest({
-        requestId: args.requestId,
-        kind: args.kind,
-        body: args.body,
-        checkIsConversationInScope: (conversationKey) =>
-          checkIsConversationInScope(scope, conversationKey, deps.getThreadsForDirectory),
-      });
-      return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
-    },
-  );
+function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope, platform: PlatformId | null): void {
+  const definition = {
+    title: 'Answer a request',
+    description:
+      'Send your answer to a request — a message that carries a "[Request <id> · from: …]" header — to ' +
+      'the person who made it, on the surface it came from. The requester may not see your plain text, so ' +
+      'anything they must read goes through this tool. Call it with kind "final" and the full result at the ' +
+      'end of your turn; "question" when you need them before you can continue; "progress" for an interim ' +
+      'note. You may call it several times for one request; only "question" and "final" close it. Do not ' +
+      'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice. ' +
+      answerStyleInstruction,
+  };
+  const handle = async (args: { requestId: string; kind: RequestAnswerKind; body: string; replyToCommentIds?: string[] }) => {
+    const outcome = await deps.answerRequest({
+      requestId: args.requestId,
+      kind: args.kind,
+      body: args.body,
+      ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
+      checkIsConversationInScope: (conversationKey) =>
+        checkIsConversationInScope(scope, conversationKey, deps.getThreadsForDirectory),
+    });
+    return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
+  };
+  // The reply field names a tracker's comments: only a Jira session is offered it.
+  if (platform === 'jira') server.registerTool('answer_request', { ...definition, inputSchema: jiraAnswerRequestShape }, handle);
+  else server.registerTool('answer_request', { ...definition, inputSchema: answerRequestShape }, handle);
 }
 
 // ─── server factory ──────────────────────────────────────────────────
@@ -1423,7 +1443,7 @@ function registerBotTools(
   // The original files of the conversation's own issue: only a Jira session, and only with the connector loaded.
   if (platform === 'jira' && deps.fetchJiraAttachment) registerJiraAttachmentTool(server, deps, deps.fetchJiraAttachment, scope);
   registerCompactConversationTool(server, deps, scope);
-  registerAnswerRequestTool(server, deps, scope);
+  registerAnswerRequestTool(server, deps, scope, platform);
   if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps.listClaudeProfiles);
 }
 

@@ -3,7 +3,7 @@ import { resolveThreadFilesDir } from '../../botFileStorage';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
 import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
-import { buildJiraTriggerJql, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
+import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraContextLedger } from './contextLedger';
 import { createJiraTrust, readJiraTrustedGroup, type JiraTrust, type JiraTrustedGroupSnapshot } from './trustedGroup';
@@ -32,7 +32,7 @@ export class JiraConnectorStartError extends Error {
 }
 
 /** What the connector needs from the core to open and post requests. */
-export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest'>;
+export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest' | 'listOpenRequests'>;
 
 export interface JiraConnector {
   /** The backend Jira sessions run on (D16, R14). */
@@ -166,6 +166,18 @@ export const jiraSpillDirName = 'text';
 /** Logged at boot when `jira.json` has no `trustedGroup`: nothing filters whose text reaches the agents. */
 export const jiraNoTrustedGroupLogLine = '[jira] no trustedGroup: the text of everyone who can edit or comment reaches the agents';
 
+/** Logged at boot: what an @-mention of the AI account does on this instance. */
+export const jiraMentionWakeOnLogLine = '[jira] mentions of the AI account in a comment wake it (answer only)';
+export const jiraMentionWakeNoGroupLogLine = '[jira] no trustedGroup: mentions of the AI account do not wake it';
+export const jiraMentionWakeOffLogLine = '[jira] wakeOnMention is off: mentions of the AI account do not wake it';
+
+/** @description The boot line that says whether mentions wake the AI on this instance, and why not when they do not. */
+export function getJiraMentionWakeLogLine(config: Pick<JiraConfig, 'isMentionWakeOn' | 'trustedGroupName' | 'wakeOnMentionSetting'>): string {
+  if (config.isMentionWakeOn) return jiraMentionWakeOnLogLine;
+  if (config.wakeOnMentionSetting === false) return jiraMentionWakeOffLogLine;
+  return config.trustedGroupName === null ? jiraMentionWakeNoGroupLogLine : jiraMentionWakeOffLogLine;
+}
+
 /** The start-of-polling log line that carries the poll's JQL. */
 export const jiraPollJqlLogPrefix = '[jira] poll JQL: ';
 
@@ -193,6 +205,7 @@ export async function prepareJiraConnector(context: {
   if (firstCheck.kind === 'refused') throw new JiraConnectorStartError(firstCheck.reasons);
   if (firstCheck.kind === 'unreachable') console.warn(`[jira] Jira unreachable at start (${firstCheck.detail}); polling starts once it answers`);
   if (config.trustedGroupName === null) console.log(jiraNoTrustedGroupLogLine);
+  console.log(getJiraMentionWakeLogLine(config));
 
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
   await triggerLog.load();
@@ -204,17 +217,19 @@ export async function prepareJiraConnector(context: {
   const contextLedger = JiraContextLedger.createForDataDir(context.dataDir);
   // C11: the tools the agents should find on their PATH, linked once per boot; a name dropped from the config is unlinked.
   registerAgentBinDir(linkAgentBinaries(context.dataDir, config.agentBinaries));
+  /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
+  let trust: JiraTrust | null = null;
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
+    contextLedger,
+    getTrust: () => trust,
     runBudgetPer24h: config.runBudgetPer24h,
     now,
     wait: sleep,
     unconfirmedPosts,
   });
   let inbound: JiraInbound | null = null;
-  /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
-  let trust: JiraTrust | null = null;
   const adoptTrustedGroup = (ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
     const { trustedGroup } = ready;
     trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;
@@ -246,14 +261,17 @@ export async function prepareJiraConnector(context: {
       getSpillDir: (key) => path.join(getJiraFilesDir(key), jiraSpillDirName),
       triggerLog,
       trust,
+      isMentionWakeOn: config.isMentionWakeOn,
       now,
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
+      parkMention: (issueKey) => answerSink.parkMention(issueKey),
     });
     inbound.start();
     console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${config.pollIntervalMs / 1000} s`);
     // The allowlist as Jira receives it — what an operator reads to see which projects the AI account may act in.
-    console.log(`${jiraPollJqlLogPrefix}${buildJiraTriggerJql(projects)}`);
+    const mentionWindowMs = config.isMentionWakeOn && trust !== null ? getJiraMentionWindowMs(config.pollIntervalMs) : null;
+    console.log(`${jiraPollJqlLogPrefix}${buildJiraTriggerJql(projects, mentionWindowMs)}`);
   };
 
   /** Check the setup again, with backoff, until Jira answers; then poll — or, if the setup turns out wrong, stop loudly (the process stays up). */

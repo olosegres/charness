@@ -1,4 +1,5 @@
 import type { OutboundHints } from '../platform/outbound';
+import { answerStyleInstruction } from './answerStyle';
 import type { SessionTurnProbe } from './wakeUpRules';
 
 /**
@@ -115,5 +116,6 @@ export function buildAnswerTailReminder(requestId: string): string {
     'You kept working after that answer and wrote more in your own output. The requester does not see it: only answer_request reaches them.',
     `If any of it matters to them (a result, a change, a problem), send it with answer_request (requestId "${requestId}", kind "final"). ` +
       'If nothing new came of it, send nothing.',
+    answerStyleInstruction,
   ].join('\n');
 }

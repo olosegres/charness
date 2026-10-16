@@ -149,7 +149,7 @@ export interface CreateRequestOptions {
 }
 
 const closeReasons: ReadonlySet<RequestCloseReason> = new Set(['final', 'question', 'superseded', 'cancelled']);
-const originKinds: ReadonlySet<RequestOriginKind> = new Set(['message', 'scheduledRun', 'trackerEvent']);
+const originKinds: ReadonlySet<RequestOriginKind> = new Set(['message', 'scheduledRun', 'trackerEvent', 'trackerMention']);
 
 /** Default history path under the live `DATA_DIR`. */
 function getDefaultHistoryPath(): string {

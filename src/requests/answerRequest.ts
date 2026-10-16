@@ -1,5 +1,6 @@
 import { tryKeyFromString, type SessionKey } from '../sessionKey';
 import { getAnswerSink, type AnswerSinks } from '../platform/answerSink';
+import { answerStyleInstruction } from './answerStyle';
 import type { RequestLedger } from './requestLedger';
 import type { ClosedRequestRecord, RequestAnswerKind, RequestCloseReason } from './types';
 
@@ -53,6 +54,8 @@ export interface AnswerRequestArgs {
   requestId: string;
   kind: RequestAnswerKind;
   body: string;
+  /** Platform-owned (a tracker's comment ids); handed to the sink untouched. */
+  replyToCommentIds?: readonly string[];
   checkIsConversationInScope: (conversationKey: string) => boolean;
 }
 
@@ -69,7 +72,7 @@ function buildOpenAnswerMessage(requestId: string, kind: RequestAnswerKind, wasC
     return `Delivered. Request ${requestId} had just been closed (by a newer request or another answer), so nothing about it changed.`;
   }
   if (kind === 'progress') {
-    return `Delivered. Request ${requestId} stays open — send the full result with kind "final" (or "question" if you need the requester) at the end of your turn.`;
+    return `Delivered. Request ${requestId} stays open — send the full result with kind "final" (or "question" if you need the requester) at the end of your turn. ${answerStyleInstruction}`;
   }
   return `Delivered. Request ${requestId} is now closed (${kind}).`;
 }
@@ -104,6 +107,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     body: args.body,
     origin: lookup.request.origin,
     isRequestOpen: lookup.isOpen,
+    ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
   });
   if (!delivery.ok) {
     return { ok: false, error: `The answer was NOT delivered: ${delivery.error}. Request ${args.requestId} is unchanged; you may retry.` };

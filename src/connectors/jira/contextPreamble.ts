@@ -1,3 +1,4 @@
+import { answerStyleInstruction } from '../../requests/answerStyle';
 import type { SessionKey } from '../../sessionKey';
 
 /**
@@ -24,9 +25,11 @@ export function buildJiraContextPreamble(input: JiraContextPreambleInput): strin
   return [
     jiraContextPreambleHeader,
     placeParts.join(' | '),
-    'You work on this issue for its requester — the person who assigned it to you. ' +
-      'They see none of your plain output: each answer_request answer becomes a comment on the issue, ' +
-      'and a question or a final answer hands the issue back to them.',
+    'You work on this issue for its requesters: the person who handed it to you, or someone who mentioned you in a comment. ' +
+      'They see none of your plain output: each answer_request answer becomes a comment on the issue. ' +
+      'On a hand-over, a question or a final answer hands the issue back to its requester; on a mention, the issue stays where it is. ' +
+      'To reply to someone\'s comment, put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified.',
+    answerStyleInstruction,
     // C12: restricted and internal comments are given to the agent, marked; what they say stays among those who may read them.
     'A comment marked [restricted to …] or [internal] is not for everyone who can read this issue: ' +
       'never quote or paraphrase it, or what it says, in an answer.',

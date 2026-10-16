@@ -82,6 +82,8 @@ import {
  *  - `fetch-attachment` — calls `jira_get_attachment` for each id of a `[fetch:<id>,<id>]` token in the request's
  *    text, logs every outcome to `tool-calls.jsonl`, then answers `final`;
  *  - `run-tool`    — runs `e2e-tool` BY NAME on its own PATH and logs what it printed, then answers `final`;
+ *  - `reply-to`    — answers `final` naming the comments of a `[reply-to:<id>,<id>]` token in the request's text in
+ *    `replyToCommentIds` (what the bot then mentions; the answer's outcome is in `answers.jsonl`);
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
  *    turns and the idle stop must keep it (lifecycle plan L-D2).
@@ -99,8 +101,8 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
 /** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
@@ -119,6 +121,7 @@ const attachmentToolName = 'jira_get_attachment';
 /** The program `run-tool` runs by name: found only on a PATH the connector's `agentBinaries` put it on. */
 const probeToolName = 'e2e-tool';
 const fetchIdsRe = /\[fetch:([0-9,]+)\]/;
+const replyToIdsRe = /\[reply-to:([0-9,]+)\]/;
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
 const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
 /** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
@@ -176,6 +179,7 @@ type AnswerRequestArgs = {
   requestId: string;
   kind: string;
   body: string;
+  replyToCommentIds?: string[];
 };
 
 /** A stdin line of the stream-json protocol — only the fields the fake reads. */
@@ -283,7 +287,7 @@ function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
   return null;
 }
 
-async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, string>): Promise<string> {
+async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, string | string[]>): Promise<string> {
   if (!server.url) throw new Error('the bot MCP server has no url');
   const client = new Client({ name: 'fake-claude', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers ?? {} } }));
@@ -371,8 +375,11 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));
   }
   const server = getBotMcpServer(argv);
+  const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
-    const outcome = server ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body }) : 'error: no bot MCP server in --mcp-config';
+    const outcome = server
+      ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
+      : 'error: no bot MCP server in --mcp-config';
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
   };

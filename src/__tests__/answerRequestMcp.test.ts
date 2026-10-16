@@ -20,6 +20,7 @@ import { StateStore } from '../state';
 import { keyToString } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { answerRequest } from '../requests/answerRequest';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import type { AnswerSinks, RequestAnswerDelivery } from '../platform/answerSink';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import {
@@ -67,8 +68,10 @@ beforeEach(async () => {
   attachmentCalls = [];
   isJiraAttachmentOffered = true;
   clients = [];
+  const recordingSink = { deliverAnswer: async (_key: unknown, delivery: RequestAnswerDelivery) => { deliveries.push(delivery); return { ok: true as const }; }, deliverAlert: async () => ({ ok: true as const }), releaseAlert: async () => {} };
   const answerSinks: AnswerSinks = new Map([
-    ['telegram', { deliverAnswer: async (_key, delivery) => { deliveries.push(delivery); return { ok: true }; }, deliverAlert: async () => ({ ok: true }), releaseAlert: async () => {} }],
+    ['telegram', recordingSink],
+    ['jira', recordingSink],
   ]);
   const sessionsRestored = new Promise<void>((resolve) => { openSessionsGate = resolve; });
   handle = createSchedulerMcpServer({
@@ -159,6 +162,31 @@ describe('answer_request over the bot MCP server', () => {
   });
 });
 
+describe('how the agent is told to write an answer', () => {
+  const scopes = [
+    { label: 'a Telegram topic', scope: { kind: 'thread' as const, threadKey: keyToString(topicKey) } },
+    { label: 'an OpenCode folder session', scope: { kind: 'dir' as const, directory: sharedFolder } },
+    { label: 'a Jira issue', scope: { kind: 'thread' as const, threadKey: keyToString(makeJiraKey('PROJ-12')) } },
+    { label: 'a conversation on no known platform', scope: { kind: 'thread' as const, threadKey: 'a-key-no-codec-reads' } },
+  ];
+
+  for (const { label, scope } of scopes) {
+    it(`${label}: the connect-time instructions, the tool description and the body field carry the shared style sentence`, async () => {
+      const client = await connectAgent(scope);
+      assert.ok((client.getInstructions() ?? '').includes(answerStyleInstruction), 'instructions');
+      const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'answer_request');
+      assert.ok(tool?.description?.includes(answerStyleInstruction), 'tool description');
+      assert.ok(JSON.stringify(tool?.inputSchema.properties?.body).includes(answerStyleInstruction), 'body field description');
+    });
+  }
+
+  it('a Jira session without the attachment tool gets the neutral instructions, the style sentence still in them', async () => {
+    isJiraAttachmentOffered = false;
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
+    assert.ok((client.getInstructions() ?? '').includes(answerStyleInstruction));
+  });
+});
+
 describe('the boot gate', () => {
   it('compact_conversation waits until the sessions are restored', async () => {
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(topicKey) });
@@ -188,6 +216,55 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
     assert.match(instructions, /jira_get_attachment/);
     for (const name of telegramOnlyToolNames) assert.doesNotMatch(instructions, new RegExp(name), name);
     assert.doesNotMatch(instructions, /Telegram/);
+  });
+
+  describe('replyToCommentIds — the comments an answer replies to (T11)', () => {
+    const jiraScope = { kind: 'thread' as const, threadKey: keyToString(makeJiraKey('PROJ-12')) };
+    const t11 = 'Ids of the issue\'s comments this answer replies to, e.g. ["10240"]. The bot mentions each comment\'s ' +
+      'author at the top of your answer so they are notified. Only comments you were shown in this conversation count.';
+    const getAnswerTool = async (client: Client) => (await client.listTools()).tools.find((tool) => tool.name === 'answer_request');
+
+    it('a Jira session is offered the field, described by T11, at most 10 numeric ids — nobody else is', async () => {
+      const jiraClient = await connectAgent(jiraScope);
+      const jiraTool = await getAnswerTool(jiraClient);
+      assert.deepEqual(Object.keys(jiraTool?.inputSchema.properties ?? {}).sort(), ['body', 'kind', 'replyToCommentIds', 'requestId']);
+      const field = jiraTool?.inputSchema.properties?.replyToCommentIds as { description?: string; maxItems?: number; type?: string; items?: { pattern?: string } };
+      assert.equal(field.description, t11);
+      assert.equal(field.type, 'array');
+      assert.equal(field.maxItems, 10);
+      assert.equal(field.items?.pattern, '^\\d+$');
+      assert.ok(!(jiraTool?.inputSchema.required ?? []).includes('replyToCommentIds'), 'optional');
+
+      for (const scope of [{ kind: 'thread' as const, threadKey: keyToString(topicKey) }, { kind: 'dir' as const, directory: sharedFolder }]) {
+        const otherTool = await getAnswerTool(await connectAgent(scope));
+        assert.deepEqual(Object.keys(otherTool?.inputSchema.properties ?? {}).sort(), ['body', 'kind', 'requestId'], scope.kind);
+      }
+    });
+
+    it('the ids reach the platform\'s sink untouched; an answer without them carries none', async () => {
+      const request = await ledger.createRequest(makeJiraKey('PROJ-12'), { kind: 'trackerMention', attributes: { issueKey: 'PROJ-12', triggerId: 'mention:10240', requester: 'a' } });
+      const client = await connectAgent(jiraScope);
+      const withIds = CallToolResultSchema.parse(await client.callTool({
+        name: 'answer_request',
+        arguments: { requestId: request.id, kind: 'progress', body: 'Looking.', replyToCommentIds: ['10240', '10241'] },
+      }));
+      assert.equal(withIds.isError, undefined);
+      assert.deepEqual(deliveries[0].replyToCommentIds, ['10240', '10241']);
+      await client.callTool({ name: 'answer_request', arguments: { requestId: request.id, kind: 'final', body: 'Done.' } });
+      assert.equal(deliveries[1].replyToCommentIds, undefined);
+    });
+
+    it('more than ten ids, or an id that is not a number, is refused by the schema — nothing is sent', async () => {
+      const request = await ledger.createRequest(makeJiraKey('PROJ-12'), { kind: 'trackerMention', attributes: { issueKey: 'PROJ-12', triggerId: 'mention:10240', requester: 'a' } });
+      const client = await connectAgent(jiraScope);
+      const tooMany = Array.from({ length: 11 }, (_, index) => `${10000 + index}`);
+      for (const replyToCommentIds of [tooMany, ['10240/../x'], ['abc']]) {
+        const refused = await client.callTool({ name: 'answer_request', arguments: { requestId: request.id, kind: 'final', body: 'Done.', replyToCommentIds } })
+          .then((result) => CallToolResultSchema.parse(result).isError === true, () => true);
+        assert.equal(refused, true, JSON.stringify(replyToCommentIds));
+      }
+      assert.deepEqual(deliveries, []);
+    });
   });
 
   it('C10: a Jira session without the connector\'s port is not offered the tool', async () => {

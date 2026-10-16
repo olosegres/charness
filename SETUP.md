@@ -399,7 +399,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
        "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "trustedGroup": "ai-trusted",
-     "pollIntervalSeconds": 90,
+     "wakeOnMention": true,
+     "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
      "effort": "high"
@@ -418,11 +419,15 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    of a comment's edits, so a comment is judged by its author and its LAST editor only — an outsider's edit of a
    member's comment, followed by a member's own edit, reads as trusted.
 
+   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it to answer
+   only, without the issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true`
+   without a group is refused — without one, anyone who can comment could start the AI.
+
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
    and in every parent) like any Claude Code session, while your user-level Claude setup stays out of its
    sessions — except that for a folder under HOME that walk reads `~/.claude/CLAUDE.md` back in.
-   `pollIntervalSeconds` is 10–600 (default 90);
+   `pollIntervalSeconds` is 10–600 (default 30);
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard

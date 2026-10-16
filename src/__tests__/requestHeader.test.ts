@@ -12,7 +12,14 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRequestHeader, buildSupersededRequestsLine, joinPromptsNotTakenIn } from '../requests/requestHeader';
+import { answerStyleInstruction } from '../requests/answerStyle';
+import {
+  buildRequestHeader,
+  buildSupersededRequestsLine,
+  buildWakeUpReminder,
+  getWakeUpMessage,
+  joinPromptsNotTakenIn,
+} from '../requests/requestHeader';
 import type { OpenRequestState } from '../requests/types';
 
 function createOpenRequest(id: string, prompt: string | undefined, isPromptTakenIn: boolean | undefined): OpenRequestState {
@@ -42,6 +49,14 @@ describe('buildRequestHeader', () => {
     assert.ok(header.endsWith('\n\n'));
   });
 
+  it('asks for an answer a manager or QA can read — the shared style sentence, right after the answer_request line', () => {
+    for (const isPlainTextHidden of [false, true]) {
+      const lines = buildRequestHeader({ requestId: 'req_AbCd1234', originDescription: 'a message in this topic', isPlainTextHidden }).split('\n');
+      assert.match(lines[1], /^Answer it with the answer_request tool/);
+      assert.equal(lines[2], answerStyleInstruction, `isPlainTextHidden ${isPlainTextHidden}`);
+    }
+  });
+
   it('warns that plain text and thinking are not shown when the requester cannot see them', () => {
     const header = buildRequestHeader({
       requestId: 'req_AbCd1234',
@@ -59,14 +74,15 @@ describe('buildRequestHeader', () => {
       supersededRequestIds: ['req_Aaaa1111', 'req_Bbbb2222'],
     });
     const lines = header.trimEnd().split('\n');
-    assert.equal(lines.length, 3);
-    assert.equal(lines[2], buildSupersededRequestsLine(['req_Aaaa1111', 'req_Bbbb2222']));
-    assert.match(lines[2], /earlier requests req_Aaaa1111, req_Bbbb2222\./);
+    assert.equal(lines.length, 4);
+    const supersededLine = lines[3];
+    assert.equal(supersededLine, buildSupersededRequestsLine(['req_Aaaa1111', 'req_Bbbb2222']));
+    assert.match(supersededLine, /earlier requests req_Aaaa1111, req_Bbbb2222\./);
     // The agent may have answered them already (a message written mid-turn reaches it only after the turn
     // ends) or not yet: the line must hold either way.
-    assert.match(lines[2], /If you already answered them, do not repeat that answer: reply only to what this message adds/);
-    assert.match(lines[2], /If it adds nothing new, say briefly that the answer is above/);
-    assert.doesNotMatch(lines[2], /still unanswered|one answer .* covers/, 'never claims the replaced requests are unanswered or that one answer covers all');
+    assert.match(supersededLine, /If you already answered them, do not repeat that answer: reply only to what this message adds/);
+    assert.match(supersededLine, /If it adds nothing new, say briefly that the answer is above/);
+    assert.doesNotMatch(supersededLine, /still unanswered|one answer .* covers/, 'never claims the replaced requests are unanswered or that one answer covers all');
   });
 
   it('says nothing about replaced requests when there are none', () => {
@@ -77,6 +93,29 @@ describe('buildRequestHeader', () => {
 
   it('the replaced-requests line uses the singular for one request', () => {
     assert.match(buildSupersededRequestsLine(['req_Aaaa1111']), /earlier request req_Aaaa1111\. If you already answered it, do not repeat that answer/);
+  });
+});
+
+describe('buildWakeUpReminder', () => {
+  it('names the open request and the reason, asks for answer_request, and carries the shared style sentence', () => {
+    const lines = buildWakeUpReminder({ requestId: 'req_AbCd1234', reason: 'silentTurn' }).split('\n');
+    assert.equal(lines[0], '[Reminder · request req_AbCd1234 is still open]');
+    assert.equal(lines[1], 'Your last turn ended without answering it.');
+    assert.match(lines[2], /^Answer it with answer_request \(requestId "req_AbCd1234"\): kind "final" if the work is done/);
+    assert.equal(lines[3], answerStyleInstruction);
+    assert.equal(lines.length, 4);
+  });
+
+  it('every reason\'s reminder carries the style sentence, and a request\'s own prompt (not a reminder) is forwarded untouched', () => {
+    for (const reason of ['silentTurn', 'progressFollowUp', 'backstop', 'postRetry'] as const) {
+      assert.ok(buildWakeUpReminder({ requestId: 'req_AbCd1234', reason }).includes(answerStyleInstruction), reason);
+    }
+    const reminder = getWakeUpMessage(createOpenRequest('req_1', undefined, undefined), 'backstop');
+    assert.equal(reminder.isRequestPrompt, false);
+    assert.ok(reminder.text.includes(answerStyleInstruction));
+    const prompt = getWakeUpMessage(createOpenRequest('req_2', '[Request req_2] the prompt', false), 'postRetry');
+    assert.equal(prompt.isRequestPrompt, true);
+    assert.equal(prompt.text, '[Request req_2] the prompt');
   });
 });
 

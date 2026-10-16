@@ -290,6 +290,18 @@ describe('createJiraClient', () => {
       assert.equal(requests[0].url, '/rest/api/3/issue/PROJ-7/comment?orderBy=-created&maxResults=20');
     });
 
+    it('getComment reads one comment by its id; a comment that is gone is a JiraHttpError with its 404', async () => {
+      respondWith({ status: 200, body: json({ id: '10240', author: { accountId: 'a', accountType: 'atlassian', displayName: 'Ann' }, created: '2026-10-03T10:00:00.000+0000', body: null }) });
+      const comment = await createClient().getComment('PROJ-7', '10240');
+      assert.equal(comment.id, '10240');
+      assert.equal(comment.author?.displayName, 'Ann');
+      assert.equal(requests[0].url, '/rest/api/3/issue/PROJ-7/comment/10240');
+      requests = [];
+      respondWith({ status: 404, body: json({ errorMessages: ['Can not find a comment with id 10241'] }) });
+      await assert.rejects(createClient().getComment('PROJ-7', '10241'), (error: Error) => error instanceof JiraHttpError && error.status === 404);
+      assert.equal(requests.length, 1, 'a missing comment is not retried');
+    });
+
     it('getComments (C2): EVERY comment, oldest first, page after page — the next page starts after what the last one held', async () => {
       const createComments = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({
         id: `${from + index}`, author: { accountId: 'a' }, created: '2026-10-03T10:00:00.000+0000', body: null,

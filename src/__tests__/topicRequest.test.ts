@@ -14,6 +14,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import { topicViewOptions } from '../utils/topicView';
 import {
   buildTopicRequestHeader,
@@ -75,6 +76,12 @@ describe('buildTopicRequestHeader', () => {
     assert.match(header, /^\[Request req_abc · from: a voice message in this topic\]\n/);
     assert.match(header, /answer_request/);
     assert.ok(header.endsWith('\n\n'));
+  });
+
+  it('carries the shared answer-style sentence in every view, whether the plain text is hidden or shown', () => {
+    for (const view of ['answers', 'streamAnswers', 'stream'] as const) {
+      assert.ok(buildTopicRequestHeader('req_abc', 'text', view).split('\n').includes(answerStyleInstruction), view);
+    }
   });
 
   it('tells the agent its plain text and thinking are not shown ONLY in the answers-only view', () => {

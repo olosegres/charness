@@ -20,6 +20,7 @@ import {
   decideAnswerTail,
   type AnswerTail,
 } from '../requests/answerTail';
+import { answerStyleInstruction } from '../requests/answerStyle';
 import type { SessionTurnProbe } from '../requests/wakeUpRules';
 
 const answeredAt = 1_000_000_000;
@@ -93,5 +94,9 @@ describe('buildAnswerTailReminder', () => {
     assert.match(reminder, /^\[Reminder · after your final answer to request req_AbC\]/);
     assert.match(reminder, /answer_request \(requestId "req_AbC", kind "final"\)/);
     assert.match(reminder, /If nothing new came of it, send nothing\./);
+  });
+
+  it('asks that what it sends is written for a manager or QA — the shared style sentence', () => {
+    assert.ok(buildAnswerTailReminder('req_AbC').split('\n').includes(answerStyleInstruction));
   });
 });

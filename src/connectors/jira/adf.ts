@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { markdownToAdf } from 'marklassian';
+import { getSingleLineText } from './promptText';
 
 /**
  * @description Atlassian Document Format for the Jira connector (plan J4, D3):
@@ -201,6 +202,16 @@ const maxConsecutiveNewlines = 2;
 export function getStringAttribute(node: AdfNode | AdfMark, name: string): string | null {
   const value = node.attrs?.[name];
   return typeof value === 'string' ? value : null;
+}
+
+/**
+ * @description The account ids of every `mention` node in `node`, in document order. Read from the node's own
+ * `id` attribute — never from its display text, which anyone can type.
+ */
+export function getMentionedAccountIds(node: AdfNode | AdfDocument | null | undefined): string[] {
+  if (!node) return [];
+  const own = node.type === 'mention' ? getStringAttribute(node, 'id') : null;
+  return [...(own === null ? [] : [own]), ...(node.content ?? []).flatMap((child) => getMentionedAccountIds(child))];
 }
 
 /** A text node; a linked one keeps its address, which the agent may need to follow. */
@@ -454,4 +465,36 @@ export function createCommentBodies(
   limits: { markdownMaxChars: number; adfMaxChars: number } = { markdownMaxChars: jiraCommentMarkdownMaxChars, adfMaxChars: jiraCommentAdfMaxChars },
 ): AdfDocument[] {
   return splitMarkdownForComments(markdown, limits.markdownMaxChars).flatMap((piece) => getFittingBodies(piece, limits.adfMaxChars));
+}
+
+/** A person a comment can notify: the account id is what Jira notifies, the name only what the node reads as. */
+export interface AdfMentionTarget {
+  accountId: string;
+  displayName?: string;
+}
+
+/**
+ * @description One paragraph of real mention nodes, one per person, separated by one space, nothing else — what
+ * Jira shows as `@Name` and notifies. Only the bot builds mention nodes: an agent's own ADF never reaches a
+ * comment (R17), so an agent cannot notify anyone it was not shown.
+ */
+export function createMentionParagraph(targets: readonly AdfMentionTarget[]): AdfNode {
+  const content = targets.flatMap((target, index): AdfNode[] => {
+    const name = getSingleLineText(target.displayName ?? '') || 'user';
+    const mention: AdfNode = { type: 'mention', attrs: { id: target.accountId, text: `@${name}` } };
+    return index === 0 ? [mention] : [{ type: 'text', text: ' ' }, mention];
+  });
+  return { type: 'paragraph', content };
+}
+
+/**
+ * @description An answer as comment bodies (R19) whose FIRST body starts with `leadingNode`. The node's own
+ * serialized size is taken off the ADF limit for every body, so the first still fits once it is prepended.
+ */
+export function createCommentBodiesWithLeadingNode(markdown: string, leadingNode: AdfNode): AdfDocument[] {
+  const reservedChars = JSON.stringify(leadingNode).length;
+  const bodies = createCommentBodies(markdown, { markdownMaxChars: jiraCommentMarkdownMaxChars, adfMaxChars: jiraCommentAdfMaxChars - reservedChars });
+  if (bodies.length === 0) return bodies;
+  const [first, ...rest] = bodies;
+  return [{ ...first, content: [leadingNode, ...first.content] }, ...rest];
 }

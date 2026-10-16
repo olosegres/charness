@@ -21,12 +21,16 @@ import type { JiraExtraField } from './issueBlocks';
 /** Poll interval bounds and default, seconds (D13). */
 export const jiraPollIntervalMinSeconds = 10;
 export const jiraPollIntervalMaxSeconds = 600;
-export const jiraPollIntervalDefaultSeconds = 90;
+export const jiraPollIntervalDefaultSeconds = 30;
 /** Requests per issue per rolling 24 h (D12). */
 export const jiraRunBudgetDefault = 5;
 /** What a Jira session runs on when `jira.json` names neither (C14); either key still overrides its own default. */
 export const jiraDefaultModel = 'opus';
 export const jiraDefaultEffort: ClaudeEffortLevel = 'high';
+
+/** The refusal of `wakeOnMention: true` without a `trustedGroup`. */
+export const wakeOnMentionNeedsGroupError =
+  'jira.json wakeOnMention needs trustedGroup: without a group, anyone who can comment could start the AI';
 
 /** The backend a Jira session runs on by default (D16, R14); `claude-per-turn` is the other allowed one (L-D12). */
 const jiraAdapterName = claudeJsonStreamAdapterName;
@@ -76,6 +80,9 @@ const rawConfigSchema = z.strictObject({
   runBudgetPer24h: z.number().int().min(1).optional(),
   // The NAME of one Jira group: only its members' text steers the agent (see `trustedGroup.ts`); absent → everyone's does.
   trustedGroup: z.string().min(1).optional(),
+  // An @-mention of the AI account in a comment wakes it (answer only). Absent → on with a `trustedGroup`, off without;
+  // `true` without a group is refused: anyone who can comment could start the agent.
+  wakeOnMention: z.boolean().optional(),
   adapter: z.string().min(1).optional(),
   // R15: user settings no longer apply in a Jira session, so its model and effort come from here.
   model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
@@ -109,6 +116,13 @@ export interface JiraConfig {
   runBudgetPer24h: number;
   /** The trusted group's name as `jira.json` gives it; `null` → no filter, the text of everyone who can edit or comment reaches the agents. */
   trustedGroupName: string | null;
+  /**
+   * Whether an @-mention of the AI account in a comment starts a request (it answers only, nothing is handed
+   * over). `wakeOnMention` from `jira.json`; absent → on exactly when `trustedGroup` is set.
+   */
+  isMentionWakeOn: boolean;
+  /** `wakeOnMention` as `jira.json` gives it, `null` when absent: the boot line tells a deliberate "off" from "no group". */
+  wakeOnMentionSetting: boolean | null;
   adapter: JiraAdapterName;
   /** The sessions' model; absent from `jira.json` → {@link jiraDefaultModel}. */
   model: string;
@@ -212,6 +226,7 @@ export function validateJiraConfig(
   }
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
+  if (raw.wakeOnMention === true && raw.trustedGroup === undefined) errors.push(wakeOnMentionNeedsGroupError);
 
   const agentBinaries = new Map<string, string>();
   for (const [name, binaryPath] of Object.entries(raw.agentBinaries ?? {})) {
@@ -252,6 +267,8 @@ export function validateJiraConfig(
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
       trustedGroupName: raw.trustedGroup ?? null,
+      isMentionWakeOn: raw.trustedGroup !== undefined && (raw.wakeOnMention ?? true),
+      wakeOnMentionSetting: raw.wakeOnMention ?? null,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
       model: raw.model ?? jiraDefaultModel,
       effort: raw.effort ?? jiraDefaultEffort,
