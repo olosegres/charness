@@ -232,6 +232,75 @@ test('the config path: next to the loaded env file, an isolated instance beside 
   }
 });
 
+/** A throwaway home dir whose real path is known (a tmp dir may itself sit behind a symlink). */
+function withTempHome(run: (homeDir: string) => void): void {
+  const homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stt-home-')));
+  try {
+    run(homeDir);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
+test('the config path: a symlinked .env puts stt.json beside the REAL file, not beside the link', () => {
+  withTempHome((homeDir) => {
+    const secretsDir = path.join(homeDir, 'secrets', 'instance');
+    fs.mkdirSync(secretsDir, { recursive: true });
+    fs.writeFileSync(path.join(secretsDir, '.env'), 'TELEGRAM_BOT_TOKEN=x\n');
+    const configDir = path.join(homeDir, '.config', 'charness');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.symlinkSync(path.join(secretsDir, '.env'), path.join(configDir, '.env'));
+
+    const sttPath = getSttConfigPath({}, homeDir);
+    assert.equal(sttPath, path.join(secretsDir, 'stt.json'));
+
+    // The whole round trip lands there too: nothing is written into the config dir that only holds the link.
+    saveSttConfig(sttPath, createConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] }));
+    assert.deepEqual(fs.readdirSync(secretsDir).sort(), ['.env', 'stt.json']);
+    assert.deepEqual(fs.readdirSync(configDir), ['.env']);
+    assert.equal(loadSttConfig(getSttConfigPath({}, homeDir)).status, 'ok');
+  });
+});
+
+test('the config path: the link may sit in a pre-rename config dir, and an ENV_FILE link is followed too', () => {
+  withTempHome((homeDir) => {
+    const secretsDir = path.join(homeDir, 'secrets');
+    fs.mkdirSync(secretsDir);
+    fs.writeFileSync(path.join(secretsDir, '.env'), '');
+    const legacyDir = path.join(homeDir, '.config', 'telegram-code');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.symlinkSync(path.join(secretsDir, '.env'), path.join(legacyDir, '.env'));
+    assert.equal(getSttConfigPath({}, homeDir), path.join(secretsDir, 'stt.json'));
+
+    const isolatedLink = path.join(homeDir, 'isolated.env');
+    fs.symlinkSync(path.join(secretsDir, '.env'), isolatedLink);
+    assert.equal(getSttConfigPath({ ENV_FILE: isolatedLink }, homeDir), path.join(secretsDir, 'stt.json'));
+  });
+});
+
+test('the config path: a plain .env behaves as before, and a dangling link keeps the directory it was named in', () => {
+  withTempHome((homeDir) => {
+    const configDir = path.join(homeDir, '.config', 'charness');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, '.env'), '');
+    assert.equal(getSttConfigPath({}, homeDir), path.join(configDir, 'stt.json'));
+
+    fs.rmSync(path.join(configDir, '.env'));
+    fs.symlinkSync(path.join(homeDir, 'nowhere', '.env'), path.join(configDir, '.env'));
+    assert.equal(getSttConfigPath({}, homeDir), path.join(configDir, 'stt.json'));
+  });
+});
+
+test('the config path: a pre-rename config dir that is now a link to the canonical one resolves to the canonical dir', () => {
+  withTempHome((homeDir) => {
+    const canonicalDir = path.join(homeDir, '.config', 'charness');
+    fs.mkdirSync(canonicalDir, { recursive: true });
+    fs.writeFileSync(path.join(canonicalDir, '.env'), '');
+    fs.symlinkSync('charness', path.join(homeDir, '.config', 'telegramcode'));
+    assert.equal(getSttConfigPath({ ENV_FILE: path.join(homeDir, '.config', 'telegramcode', '.env') }, homeDir), path.join(canonicalDir, 'stt.json'));
+  });
+});
+
 test('migration: no file + GROQ_API_KEY and OPENAI_API_KEY → stt.json with Groq first, the deprecation said once', () => {
   const lines: string[] = [];
   const first = migrateLegacySttKeys(configPath, { GROQ_API_KEY: sampleKey, OPENAI_API_KEY: 'sk-other' }, (text) => lines.push(text));

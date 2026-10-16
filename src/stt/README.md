@@ -14,9 +14,11 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 
 ## `stt.json` — the one source of truth
 
-`~/.config/charness/stt.json` (the directory of the loaded env file; `dirname(ENV_FILE)` for an isolated
-instance; a pre-rename config dir is kept). Settings AND keys, mode 0600, written through a temp file and a
-rename. **No `STT_*` env variables exist.**
+`~/.config/charness/stt.json`, in the directory of the instance's REAL env file (`getSttConfigPath`): `ENV_FILE`
+for an isolated instance, else the charness config dir's `.env` (a pre-rename config dir is kept). The env file's
+symlink is resolved first — `.env` linked to a file on an encrypted volume puts `stt.json` beside the TARGET, so
+the keys it holds stay with the other secrets; a dangling link keeps the directory it was named in. Settings AND
+keys, mode 0600, written through a temp file and a rename. **No `STT_*` env variables exist.**
 
 - **Validation is strict and all-or-nothing** (zod, like `jira.json`): an unknown key, kind, duplicate id, a
   second local engine, an out-of-range number or a bad language is an error that names the field

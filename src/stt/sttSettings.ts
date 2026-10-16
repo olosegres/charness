@@ -202,13 +202,27 @@ export function validateSttConfig(parsedJson: object): SttConfigResult {
 }
 
 /**
- * @description Where `stt.json` lives: the directory of the instance's env file
- * (`ENV_FILE` for an isolated instance), else the charness config dir — the
- * same one `.env` is read from, a pre-rename one included.
+ * @description The directory `envFile` really lives in: a symlinked `.env` (the keys kept on an encrypted
+ * volume, the config dir holding only a link) resolves to its TARGET's directory, so `stt.json` — which holds
+ * keys too — lands beside the real file. A plain file, or a link that cannot be resolved (dangling), keeps
+ * the directory it was named in.
+ */
+function getRealEnvFileDir(envFile: string): string {
+  try {
+    return path.dirname(fs.realpathSync(envFile));
+  } catch {
+    return path.dirname(envFile);
+  }
+}
+
+/**
+ * @description Where `stt.json` lives: beside the instance's REAL env file (`ENV_FILE` for an isolated
+ * instance, else the charness config dir's `.env` — a pre-rename config dir included), after resolving the
+ * env file's symlink. With no env file at all, the canonical `~/.config/charness/`.
  */
 export function getSttConfigPath(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
-  const configDir = env.ENV_FILE ? path.dirname(env.ENV_FILE) : path.dirname(resolveGlobalConfigEnvPath(homeDir));
-  return path.join(configDir, sttConfigFileName);
+  const envFile = env.ENV_FILE || resolveGlobalConfigEnvPath(homeDir);
+  return path.join(getRealEnvFileDir(envFile), sttConfigFileName);
 }
 
 /**

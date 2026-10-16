@@ -283,8 +283,11 @@ and when it fails (refused connection, timeout, an error answer) the next one an
 at once. Only the last engine retries a temporary failure (after 5 s, then 15 s). An empty transcript is
 final — silence is never "fixed" by asking another engine.
 
-Everything lives in one file, **`stt.json`**, next to your `.env` (`~/.config/charness/stt.json`; for an
-isolated instance, beside its `ENV_FILE`). It holds the settings and the API keys, is written with mode
+Everything lives in one file, **`stt.json`**, in the same directory as your real `.env`
+(`~/.config/charness/stt.json`; for an isolated instance, beside its `ENV_FILE`). If that `.env` is a symlink — the
+keys kept on an encrypted volume, say — `stt.json` goes beside the symlink's **target**, so the API keys stay where
+the rest of your secrets are and never land in the directory that only holds the link. It holds the settings and the
+API keys, is written with mode
 `0600`, and is re-read when it changes — an edit applies to the next voice note, no restart. If the file is
 invalid, the bot keeps the last good settings, logs a `[STT]` line naming the field (never a value), and
 refuses voice with a notice when nothing valid was ever loaded.
