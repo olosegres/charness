@@ -271,7 +271,8 @@ import {
   getStatusFrameStoreDecision,
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
-import { defaultEffortLevel } from './effortLevels';
+import { getThreadEffortInForce, setInstanceDefaultEffortReader } from './effortLevels';
+import { createInstanceDefaultEffortReader, getInstanceSettingsPath } from './instanceSettings';
 import {
   buildThreadContextPreamble,
   prependThreadContextPreamble,
@@ -510,6 +511,9 @@ function parseEnv() {
 }
 
 const ENV = parseEnv();
+
+// The instance default effort (`/effort` in General) is `settings.json`'s `defaultEffort`, re-read when the file changes.
+setInstanceDefaultEffortReader(createInstanceDefaultEffortReader(() => getInstanceSettingsPath(), (line) => console.error(line)));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Effective group id — single source of truth for the forum supergroup
@@ -2895,7 +2899,7 @@ function computePinnedStatusText(key: SessionKey): string | null {
       agentLabel = adapter.label;
       isActive = adapter.checkIsActive(key);
       model = adapter.getCurrentModel?.(key) ?? agent.model ?? null;
-      effort = adapter.getEffort?.(key) ?? null;
+      effort = getThreadEffortInForce(adapter, key);
     } catch {
       // Unknown adapter name from a stale binding — fall back to raw name
       // so the banner is still informative.
@@ -4605,7 +4609,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
     // async transcript/HTTP read and must not be added to the start path. The
     // agent row was just written by `persistAdapterSessionIds`, so the persisted
     // fallback is populated by now.
-    const effort = adapter.getEffort ? (adapter.getEffort(key) ?? defaultEffortLevel) : null;
+    const effort = getThreadEffortInForce(adapter, key);
     const model = getThreadStatusModel({
       adapterModel: adapter.getCurrentModel?.(key) ?? null,
       runtimeModel: null,
@@ -5443,8 +5447,8 @@ command('status', async (_ctx, key) => {
   }
   // Model / effort / start date are session properties — only meaningful while
   // a session is live. Effort resolves exactly like the pinned banner
-  // (`computePinnedStatusText`), plus a fallback to the default the agent
-  // actually runs when none is picked. Model resolution is DELIBERATELY wider
+  // (`computePinnedStatusText`) and the ready notice: the topic's pick, else the
+  // instance default (`getThreadEffortInForce`). Model resolution is DELIBERATELY wider
   // than the banner's: it adds the runtime's self-reported model, which the
   // banner cannot share because `computePinnedStatusText` is synchronous while
   // reading runtime info is an async transcript/HTTP read. So on the Claude tmux
@@ -5455,7 +5459,7 @@ command('status', async (_ctx, key) => {
   let runtime: AgentRuntimeInfo | null = null;
   if (isActive) {
     const agent = state.getAgent(key);
-    effort = adapter.getEffort ? (adapter.getEffort(key) ?? defaultEffortLevel) : null;
+    effort = getThreadEffortInForce(adapter, key);
     startedAt = agent?.startedAt ?? null;
 
     if (adapter.getRuntimeInfo) {
@@ -6603,6 +6607,7 @@ const {
   connectMethodLists,
   disconnectProviderLists,
   startOpenCodeOAuthLogin,
+  getInstanceSettingsPath: () => getInstanceSettingsPath(),
 });
 
 command('claude', (_ctx, key, parsed) => handleStartCommand(parsed, key, 'claude'));

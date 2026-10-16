@@ -3,15 +3,12 @@
  * provider credential flows — with their buttons. See README.md in this folder.
  */
 import { Markup, type Context } from 'telegraf';
-import type { Message } from 'telegraf/typings/core/types/typegram';
 import { getAdapter, getThreadAdapter } from '../../../adapters/createAdapter';
 import { openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
-import { getTelegramChatId } from '../sessionKeyCodec';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
-import { enqueueSend } from '../../../rateLimiter';
 import { t } from '../../../i18n';
 import { paginateList } from '../../../utils/paginateList';
 import {
@@ -47,7 +44,10 @@ import {
 import type { InboundCommand } from '../../../platform/inbound';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { getModelSetReplyDecision } from '../../../utils/modelSetReplyDecision';
-import { defaultEffortLevel } from '../../../effortLevels';
+import { checkIsClaudeEffortLevel, claudeEffortLevels, clampEffortToAvailable, getInstanceDefaultEffort, getThreadEffortInForce, type ClaudeEffortLevel } from '../../../effortLevels';
+import { getCaughtErrnoCode } from '../../../configDirFile';
+import { loadInstanceSettingsForUpdate, saveInstanceSettings } from '../../../instanceSettings';
+import { buildEffortPicker, effortLevelCallbackRe, effortSameCallback, type EffortPicker } from '../../../utils/effortPickerPlan';
 import {
   type OpenCodeAuthMethod,
   checkIsPlausibleProviderApiKey,
@@ -356,19 +356,9 @@ async function editModelPickerMessage(
   }
 }
 
-/**
- * @description Build the `/effort` level picker keyboard.
- *
- * One callback button per available reasoning-effort level (3 per row);
- * the level matching `current` carries a `✓` marker. Shared by the
- * `/effort` command (initial render) and the `effort_<level>` callback
- * (re-render after a press) so the marker can never drift between the two.
- */
-function buildEffortKeyboard(levels: readonly string[], current: string | null) {
-  const buttons = levels.map((l) =>
-    Markup.button.callback(l === current ? `${l} ✓` : l, `effort_${l}`),
-  );
-  return Markup.inlineKeyboard(buttons, { columns: 3 });
+/** @description The inline keyboard of an `/effort` picker plan (a thin Markup wrapper over its rows). */
+function buildEffortKeyboard(picker: EffortPicker) {
+  return Markup.inlineKeyboard(picker.rows.map((row) => row.map((button) => Markup.button.callback(button.text, button.data))));
 }
 
 /**
@@ -379,7 +369,7 @@ function buildEffortKeyboard(levels: readonly string[], current: string | null) 
 export interface ModelProvidersPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'updatePinnedStatus' | 'wakeSleepingSession'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'deleteThreadMessage' | 'authoriseContext' | 'updatePinnedStatus' | 'wakeSleepingSession' | 'checkIsGeneral'
   > {
   awaitingModelSelection: Set<string>;
   awaitingSessionSelection: Set<string>;
@@ -389,6 +379,8 @@ export interface ModelProvidersPorts
   connectMethodLists: Map<string, { providerId: string; methods: OpenCodeAuthMethod[] }>;
   disconnectProviderLists: Map<string, string[]>;
   startOpenCodeOAuthLogin: (key: SessionKey, providerId: string, methodLabel: string) => Promise<void>;
+  /** Where `settings.json` (the instance default effort `/effort` sets in General) lives. */
+  getInstanceSettingsPath: () => string;
 }
 
 /**
@@ -397,7 +389,7 @@ export interface ModelProvidersPorts
  * bot makes at the positions its neighbouring commands and buttons are registered.
  */
 export function createModelProviders(ports: ModelProvidersPorts) {
-  const { awaitingModelSelection, awaitingSessionSelection, awaitingFolderName, threadModelLists, pendingProviderConnects, connectMethodLists, disconnectProviderLists, startOpenCodeOAuthLogin, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, updatePinnedStatus, wakeSleepingSession } = ports;
+  const { awaitingModelSelection, awaitingSessionSelection, awaitingFolderName, threadModelLists, pendingProviderConnects, connectMethodLists, disconnectProviderLists, startOpenCodeOAuthLogin, getInstanceSettingsPath, bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, updatePinnedStatus, wakeSleepingSession, checkIsGeneral } = ports;
 
   /**
    * @description Single choke point for the four `/model`-set paths (the
@@ -424,7 +416,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     // clears it (`effort.cleared_on_model_switch`), so a pre-switch read would
     // report a level the new model no longer runs. Same resolution rule as
     // `/status` — no `getEffort` means the backend has no effort concept at all.
-    const effort = adapter.getEffort ? (adapter.getEffort(key) ?? defaultEffortLevel) : null;
+    const effort = getThreadEffortInForce(adapter, key);
     const decision = getModelSetReplyDecision(
       {
         hasSetModel: Boolean(adapter.setModel),
@@ -797,6 +789,109 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     });
   }
 
+  /**
+   * @description The `/effort` picker of a regular topic: the level it runs at, whether that is its own pick or
+   * General's value, and a button per level the backend offers. `null` when the backend offers none.
+   */
+  async function buildTopicEffortPicker(key: SessionKey, adapter: AgentAdapter): Promise<EffortPicker | null> {
+    let levels: string[] = [];
+    try {
+      levels = (await adapter.getAvailableEffortLevels?.(key)) ?? [];
+    } catch (e) {
+      console.error('[Bot] getAvailableEffortLevels:', e);
+    }
+    if (levels.length === 0) return null;
+    const instanceDefault = getInstanceDefaultEffort();
+    const inForce = getThreadEffortInForce(adapter, key) ?? instanceDefault;
+    return buildEffortPicker(
+      {
+        isGeneral: false,
+        levels,
+        // OpenCode offers the model's variants only: a default it lacks runs as the nearest one it has.
+        inForce: levels.includes(inForce) ? inForce : (clampEffortToAvailable(inForce, levels) ?? inForce),
+        isOwnPick: (adapter.getOwnEffort?.(key) ?? null) !== null,
+        instanceDefault,
+        canClear: Boolean(adapter.clearEffort),
+      },
+      t,
+    );
+  }
+
+  /** @description The `/effort` picker as it stands now, for the screen of `key`; `null` when there is nothing to pick. */
+  async function buildEffortPickerFor(key: SessionKey): Promise<EffortPicker | null> {
+    if (checkIsGeneral(key)) {
+      return buildEffortPicker({ isGeneral: true, levels: claudeEffortLevels, instanceDefault: getInstanceDefaultEffort() }, t);
+    }
+    return buildTopicEffortPicker(key, getThreadAdapter(key));
+  }
+
+  /**
+   * @description Re-render the picker a tap came from, text and buttons: the ✓ AND the level named in the text
+   * (and its source) follow the new state instead of staying on the previous one. "Message is not modified" (the
+   * same tap twice) is swallowed by the shared edit helper.
+   */
+  async function rerenderEffortPicker(ctx: Context, key: SessionKey): Promise<void> {
+    const messageId = getCallbackMessageId(ctx);
+    if (messageId === null) return;
+    const picker = await buildEffortPickerFor(key);
+    if (!picker) return;
+    await editThreadMessage(key, messageId, picker.text, buildEffortKeyboard(picker));
+  }
+
+  /**
+   * @description Write the instance default effort (`settings.json`) on top of what the file already holds.
+   * Returns `null` on success, else the errno code of the failed write — logged here with the file's path; the
+   * caller words it for the user.
+   */
+  function saveInstanceDefaultEffort(level: ClaudeEffortLevel): string | null {
+    const filePath = getInstanceSettingsPath();
+    try {
+      saveInstanceSettings(filePath, { ...loadInstanceSettingsForUpdate(filePath), defaultEffort: level });
+      return null;
+    } catch (e) {
+      const code = getCaughtErrnoCode(e);
+      console.warn(`[Settings] could not write ${filePath} (${code})`);
+      return code;
+    }
+  }
+
+  /** @description `/effort` in General: the picker of the instance default, or `/effort <level>` to set it. */
+  async function handleGeneralEffortCommand(key: SessionKey, args: string): Promise<void> {
+    if (!args) {
+      const picker = await buildEffortPickerFor(key);
+      if (picker) await replyToThread(key, picker.text, buildEffortKeyboard(picker));
+      return;
+    }
+    if (!checkIsClaudeEffortLevel(args)) {
+      await replyToThread(key, t('effort.invalid_level', { level: args, valid: claudeEffortLevels.join(', ') }));
+      return;
+    }
+    const writeCode = saveInstanceDefaultEffort(args);
+    await replyToThread(
+      key,
+      writeCode === null
+        ? t('effort.general.setConfirmation', { level: args })
+        : t('effort.general.writeFailedNotice', { path: getInstanceSettingsPath(), code: writeCode }),
+    );
+  }
+
+  /** @description A level button in General: save it as the instance default, confirm, and re-render the picker. */
+  async function handleGeneralEffortTap(ctx: Context, key: SessionKey, level: string): Promise<void> {
+    if (!checkIsClaudeEffortLevel(level)) {
+      await ctx.answerCbQuery(t('cb.effort_error', { error: level }));
+      return;
+    }
+    const writeCode = saveInstanceDefaultEffort(level);
+    if (writeCode !== null) {
+      await ctx.answerCbQuery(t('cb.effort_error', { error: writeCode }));
+      await replyToThread(key, t('effort.general.writeFailedNotice', { path: getInstanceSettingsPath(), code: writeCode }));
+      return;
+    }
+    await ctx.answerCbQuery(t('cb.effort_set', { level }));
+    await replyToThread(key, t('effort.general.setConfirmation', { level }));
+    await rerenderEffortPicker(ctx, key);
+  }
+
   function registerModelCommands(): void {
     command('model', async (_ctx, key, parsed) => {
       const adapter = getThreadAdapter(key);
@@ -821,8 +916,15 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     });
 
     command('effort', async (_ctx, key, parsed) => {
-      const adapter = getThreadAdapter(key);
       const args = parsed.argsText;
+
+      // General sets the instance default, which needs no backend at all.
+      if (checkIsGeneral(key)) {
+        await handleGeneralEffortCommand(key, args);
+        return;
+      }
+
+      const adapter = getThreadAdapter(key);
 
       // Backend must support the effort contract (both methods are optional).
       if (!adapter.setEffort || !adapter.getAvailableEffortLevels) {
@@ -850,25 +952,15 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         return;
       }
 
-      // No arg: show current effort + a button per available level.
-      let levels: string[] = [];
-      try {
-        levels = await adapter.getAvailableEffortLevels(key);
-      } catch (e) {
-        console.error('[Bot] getAvailableEffortLevels:', e);
-      }
-      if (levels.length === 0) {
+      // No arg: the level in force, where it comes from, and a button per available level.
+      const picker = await buildTopicEffortPicker(key, adapter);
+      if (!picker) {
         // Empty means the current model declares no variants (OpenCode) or the
         // backend reports no levels — not an error, just nothing to pick.
         await replyToThread(key, t('effort.not_available'));
         return;
       }
-      const cur = adapter.getEffort?.(key) ?? null;
-      await replyToThread(
-        key,
-        t('effort.choose', { current: cur ?? t('effort.current_none') }),
-        buildEffortKeyboard(levels, cur),
-      );
+      await replyToThread(key, picker.text, buildEffortKeyboard(picker));
     });
   }
 
@@ -1078,10 +1170,16 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       await replyToThread(key, t('connect.prompt_key', { provider: entry.providerId }));
     });
 
-    bot.action(/^effort_(.+)$/, async (ctx) => {
+    bot.action(effortLevelCallbackRe, async (ctx) => {
       const key = await authoriseContext(ctx);
       if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
       const level = ctx.match[1];
+
+      if (checkIsGeneral(key)) {
+        await handleGeneralEffortTap(ctx, key, level);
+        return;
+      }
+
       const adapter = getThreadAdapter(key);
       // No `checkIsActive` gate — effort is persisted pre-session (mirrors the
       // `/effort` command and `/model`). The adapter returns its own notice if the
@@ -1093,40 +1191,36 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
       if (wakeNotice) await replyToThread(key, wakeNotice);
       const err = await adapter.setEffort(key, level);
-      if (err) { await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) })); return; }
+      if (err) {
+        await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) }));
+        // A pick the adapter stored but could not apply yet (no agent running) comes back as a notice: the
+        // picker still has to show the new level and that it is the topic's own.
+        if (adapter.getOwnEffort?.(key) === level) await rerenderEffortPicker(ctx, key);
+        return;
+      }
       await ctx.answerCbQuery(t('cb.effort_set', { level }));
       await replyToThread(key, t('effort.set_success', { level }));
       await updatePinnedStatus(key).catch(() => {});
+      await rerenderEffortPicker(ctx, key);
+    });
 
-      // Re-render the picker so the `✓` marker follows the new level instead of
-      // staying stuck on the previously-selected one (B12). The current level is
-      // the freshly-set one; fall back to `level` if the adapter can't report it.
-      const cbMsg = ctx.callbackQuery?.message as Message | undefined;
-      if (cbMsg && adapter.getAvailableEffortLevels) {
-        let levels: string[] = [];
-        try {
-          levels = await adapter.getAvailableEffortLevels(key);
-        } catch (e) {
-          console.error('[effort_cb] getAvailableEffortLevels:', e);
-        }
-        if (levels.length > 0) {
-          const cur = adapter.getEffort?.(key) ?? level;
-          const keyboard = buildEffortKeyboard(levels, cur);
-          try {
-            await enqueueSend(
-              key,
-              () => bot.telegram.editMessageReplyMarkup(
-                getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
-              ),
-            );
-          } catch (e) {
-            const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-            if (!/message is not modified/i.test(desc)) {
-              console.warn('[effort_cb] keyboard re-render failed:', desc || e);
-            }
-          }
-        }
+    // «As in General»: drop the topic's own pick. Registered with the level buttons: `effortsame` has no
+    // underscore, so `effortLevelCallbackRe` never takes it.
+    bot.action(effortSameCallback, async (ctx) => {
+      const key = await authoriseContext(ctx);
+      if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+      const adapter = getThreadAdapter(key);
+      if (!adapter.clearEffort) {
+        await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
+        return;
       }
+      const err = await adapter.clearEffort(key);
+      if (err) { await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) })); return; }
+      const level = getThreadEffortInForce(adapter, key) ?? getInstanceDefaultEffort();
+      await ctx.answerCbQuery(t('cb.effort_same', { level }));
+      await replyToThread(key, t('effort.sameAsGeneralConfirmation', { level }));
+      await updatePinnedStatus(key).catch(() => {});
+      await rerenderEffortPicker(ctx, key);
     });
   }
 

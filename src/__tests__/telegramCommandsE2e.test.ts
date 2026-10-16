@@ -15,7 +15,7 @@
  *   → `/thinking` `/tool_results` `/subagent`: a picker per family, a tap persists
  *     the mode and re-renders the picker
  *   → `/model` `/effort`: the pickers, a tap and a typed pick answered while no
- *     agent runs
+ *     agent runs (the default effort and «as in General»: `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs
@@ -469,14 +469,16 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
   });
 
   it('/effort offers the levels; a tap is saved for the next session', async () => {
-    const picker = await topic.sendAndAwaitReply('/effort', 'Current effort: not set');
+    const picker = await topic.sendAndAwaitReply('/effort', 'Effort in this topic: medium — as in General');
     assert.deepEqual(topic.getKeyboardData(picker), [
       ['effort_low', 'effort_medium', 'effort_high'],
       ['effort_xhigh', 'effort_max', 'effort_auto'],
       ['effort_ultracode'],
+      ['effortsame'],
     ]);
     const answer = await topic.tapAndAwaitAnswer(picker, 'effort_high');
     assert.match(answer, /Level saved/);
+    await topic.waitForMessageText('the picker shows the pick as the topic\'s own', picker, (text) => text === '⚙️ Effort in this topic: high — set for this topic');
   });
 
   // ── /connect /disconnect ─────────────────────────────────────────────

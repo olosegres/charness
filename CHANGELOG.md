@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+**A default reasoning effort for the whole instance: `/effort` in General.** New sessions no longer start on `xhigh`
+in every topic that never picked a level: the default is `medium`, and the General topic's `/effort` sets it for all
+topics at once (saved in `settings.json`, see [SETUP.md § Instance settings](SETUP.md#instance-settings-settingsjson)).
+A topic's own `/effort` pick still wins, and «As in General» in a topic gives it up again.
+
 **Voice recognition: one settings file, `/stt`, and a recogniser that runs on your machine.** The speech engines
 (Groq, OpenAI, any OpenAI-compatible server, and the local GigaAM v3) are an ordered list in `stt.json`, edited from
 `/stt` or by hand. Details: [SETUP.md § Voice input](SETUP.md#voice-input).
 
 ### Upgrading
+- **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next
+  session on `medium`; running sessions keep their level. To get the old behaviour back, pick `xhigh` in General's
+  `/effort` (or write `{ "defaultEffort": "xhigh" }` into `settings.json` beside your env file).
 - **`GROQ_API_KEY` / `OPENAI_API_KEY` move out of the env file.** At the first start without a `stt.json` the bot
   copies them into it (Groq first) and logs a `[deprecated]` line; from then on the env keys are ignored. Use `/stt`
   or edit `stt.json`, and delete the keys from the env file when convenient.
@@ -22,6 +30,9 @@
   the Docker image yet (no `python3-venv`).
 
 ### Added
+- **`/effort` in General** sets the instance default; **`/effort` in a topic** shows where its level comes from and
+  offers «As in General». `/status`, the ready notice and the pinned banner show the level a topic really starts with.
+  The default lives in `settings.json` (beside `stt.json`), hand-editable without a restart.
 - **`/stt`**: the engine list (order, use / don't use, timeout, key, remove), adding Groq, OpenAI or a custom server,
   the language, and the local engine (install with a live progress message, idle exit, workers, try again after failed
   starts, remove its files). A pasted key or an address with a login is deleted from the topic at once and kept out of

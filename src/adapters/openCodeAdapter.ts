@@ -31,7 +31,7 @@ import {
   checkIsMeaningfulPrompt,
   checkIsPlaceholderTitle,
 } from '../openCodeSessionTitle';
-import { clampEffortToAvailable, defaultEffortLevel } from '../effortLevels';
+import { clampEffortToAvailable, getInstanceDefaultEffort } from '../effortLevels';
 import { getProviderDisconnectOutcome } from '../utils/providerDisconnectPlan';
 import { getSseStreamTransition } from '../utils/sseStreamLifecycle';
 import {
@@ -2514,7 +2514,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         }
       } else {
         session.effortLevel = clampEffortToAvailable(
-          defaultEffortLevel,
+          getInstanceDefaultEffort(),
           await this.getModelVariants(resolved),
         );
       }
@@ -2650,7 +2650,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * started/resumed session that has NO explicit per-thread `/effort` pref.
    *
    * Explicit prefs always win and are left untouched (early return). With no
-   * pref, the default (`defaultEffortLevel`) is clamped to the resolved
+   * pref, the instance default (`getInstanceDefaultEffort`) is clamped to the resolved
    * model's variants — OpenCode effort is a model variant and not every model
    * ships `xhigh`, so an unclamped value would POST an invalid `body.variant`.
    * A model with no variants resolves to `null` (no effort), which is correct.
@@ -2663,7 +2663,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     if (!session?.isActive) return;
     if (loadSavedEffort(key) !== null) return; // explicit pref wins
     const variants = await this.getModelVariants(this.getSessionModelRef(session));
-    session.effortLevel = clampEffortToAvailable(defaultEffortLevel, variants);
+    session.effortLevel = clampEffortToAvailable(getInstanceDefaultEffort(), variants);
   }
 
   /**
@@ -2737,6 +2737,21 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const session = this.sessions.get(keyToString(key));
     if (session) return session.effortLevel;
     return loadSavedEffort(key);
+  }
+
+  /** Only the persisted pick: a live session's `effortLevel` may be the clamped default (see {@link getEffort}). */
+  getOwnEffort(key: SessionKey): string | null {
+    return loadSavedEffort(key);
+  }
+
+  /**
+   * @description Forget the thread's own pick; a live session takes the clamped instance default for its next
+   * prompt ({@link applyDefaultEffortIfUnset}), a later one seeds it at creation.
+   */
+  async clearEffort(key: SessionKey): Promise<string | null> {
+    clearEffortPref(key);
+    await this.applyDefaultEffortIfUnset(key);
+    return null;
   }
 
   /**

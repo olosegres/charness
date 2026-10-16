@@ -51,8 +51,11 @@ afterEach(() => {
   fs.rmSync(configDir, { recursive: true, force: true });
 });
 
+/** A hand edit the way an editor saves it: a new file renamed over the old (a new inode, so the change stamp always moves). */
 function writeRaw(text: string): void {
-  fs.writeFileSync(configPath, text);
+  const tempPath = `${configPath}.by-hand`;
+  fs.writeFileSync(tempPath, text);
+  fs.renameSync(tempPath, configPath);
 }
 
 test('the config path: next to the loaded env file, an isolated instance beside its ENV_FILE', () => {

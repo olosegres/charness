@@ -13,7 +13,11 @@ import {
   checkIsClaudeEffortLevel,
   defaultEffortLevel,
   clampEffortToAvailable,
+  getInstanceDefaultEffort,
+  getThreadEffortInForce,
+  setInstanceDefaultEffortReader,
 } from '../effortLevels';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 // ── Claude canonical catalog ────────────────────────────────────────────────
 
@@ -49,8 +53,38 @@ test('checkIsClaudeEffortLevel — accept canonical, reject anything else', () =
 
 // ── Default level + clamp ───────────────────────────────────────────────────
 
-test('defaultEffortLevel is xhigh', () => {
-  assert.equal(defaultEffortLevel, 'xhigh');
+test('defaultEffortLevel is medium', () => {
+  assert.equal(defaultEffortLevel, 'medium');
+});
+
+// ── The instance default (settings.json) ────────────────────────────────────
+
+test('getInstanceDefaultEffort — no reader registered: the code fallback', () => {
+  assert.equal(getInstanceDefaultEffort(), defaultEffortLevel);
+});
+
+test('getInstanceDefaultEffort — the registered reader wins, and null falls back to the code default; read per call', () => {
+  try {
+    let fileSays: 'high' | null = 'high';
+    setInstanceDefaultEffortReader(() => fileSays);
+    assert.equal(getInstanceDefaultEffort(), 'high');
+    fileSays = null;
+    assert.equal(getInstanceDefaultEffort(), defaultEffortLevel, 'a hand edit that removes the field applies to the next read');
+  } finally {
+    setInstanceDefaultEffortReader(() => null);
+  }
+});
+
+test('getThreadEffortInForce — the adapter\'s own answer, else the instance default; null for a backend with no effort concept', () => {
+  const key = makeTelegramKey(-1001111111111, 9);
+  try {
+    setInstanceDefaultEffortReader(() => 'low');
+    assert.equal(getThreadEffortInForce({ getEffort: () => 'max' }, key), 'max');
+    assert.equal(getThreadEffortInForce({ getEffort: () => null }, key), 'low');
+    assert.equal(getThreadEffortInForce({}, key), null);
+  } finally {
+    setInstanceDefaultEffortReader(() => null);
+  }
 });
 
 test('clampEffortToAvailable — xhigh against full opus-4-8 set is kept', () => {

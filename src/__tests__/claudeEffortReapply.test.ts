@@ -31,7 +31,7 @@
  * imported FIRST so the adapter reads its prefs file from a temp `DATA_DIR`;
  * private members reached via bracket access.
  */
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   seededThreadKeyString,
@@ -39,7 +39,7 @@ import {
   noPrefThreadKeyString,
 } from './claudeEffortReapply.testSetup';
 import { ClaudeCliAdapter, checkIsClaudePromptReady, type ClaudeSession } from '../adapters/claudeCliAdapter';
-import { defaultEffortLevel } from '../effortLevels';
+import { defaultEffortLevel, setInstanceDefaultEffortReader } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
 const seededKey: SessionKey = keyFromString(seededThreadKeyString);
@@ -100,8 +100,8 @@ describe('Claude effort re-apply on fresh spawn (S7)', () => {
       ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
       assert.equal(adapter.getEffort(noPrefKey), null, 'precondition: no pref for this thread');
       adapter['applyStoredEffortOnSpawn'](noPrefKey);
-      // No explicit pref now arms the bot's default (xhigh), not nothing — so a
-      // fresh spawn types `/effort xhigh` instead of inheriting claude's global.
+      // No explicit pref arms the bot's default (medium: no settings.json in this test), not nothing — so a
+      // fresh spawn types `/effort medium` instead of inheriting claude's global.
       assert.equal(
         session.pendingEffortReapply,
         defaultEffortLevel,
@@ -177,6 +177,52 @@ describe('Claude effort re-apply on fresh spawn (S7)', () => {
       // A further ready poll must NOT re-type (one-shot survives the loop).
       runPollTick(readyPane);
       assert.equal(typed.length, 1, 'one-shot: the loop never re-types after consumption');
+    });
+  });
+  describe('the instance default (settings.json) and «as in General»', () => {
+    afterEach(async () => {
+      setInstanceDefaultEffortReader(() => null);
+      await adapter.clearEffort(noPrefKey);
+    });
+
+    it('a no-pref fresh spawn arms the INSTANCE default, not the code fallback', () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      adapter['applyStoredEffortOnSpawn'](noPrefKey);
+      assert.equal(session.pendingEffortReapply, 'low');
+      assert.notEqual(defaultEffortLevel, 'low', 'the fixture default differs from the fallback, or the test proves nothing');
+    });
+
+    it('the topic\'s own pick still wins over the instance default', () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(seededKey));
+      adapter['applyStoredEffortOnSpawn'](seededKey);
+      assert.equal(session.pendingEffortReapply, seededEffortLevel);
+    });
+
+    it('clearing a pick on a live session removes it and types the instance default into the TUI', async () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      assert.equal(await adapter.setEffort(noPrefKey, 'max'), null);
+      assert.equal(adapter.getOwnEffort(noPrefKey), 'max');
+      typed.length = 0;
+
+      assert.equal(await adapter.clearEffort(noPrefKey), null);
+      assert.equal(adapter.getOwnEffort(noPrefKey), null, 'the pick is gone from disk');
+      assert.equal(adapter.getEffort(noPrefKey), null);
+      assert.deepEqual(typed, ['/effort low'], 'the live TUI is brought to the default, like a pick would be');
+    });
+
+    it('clearing without a running session only removes the pick: the next spawn arms the default', async () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      await adapter.setEffort(noPrefKey, 'max');
+      typed.length = 0;
+      session.isActive = false;
+
+      assert.equal(await adapter.clearEffort(noPrefKey), null);
+      assert.deepEqual(typed, []);
+      assert.equal(adapter.getOwnEffort(noPrefKey), null);
     });
   });
 });

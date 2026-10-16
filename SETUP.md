@@ -347,6 +347,34 @@ next start and shows the progress in General (or in its log).
 - It listens on `127.0.0.1` only, on a port the OS picks, and answers only a per-start secret token.
 - **Docker is not supported yet** (the image has no `python3-venv`).
 
+### Instance settings (`settings.json`)
+
+Settings that belong to the whole instance, not to a topic, live in one file, **`settings.json`**, in the same
+directory as your real `.env` and `stt.json` (`~/.config/charness/settings.json`; for an isolated instance, beside its
+`ENV_FILE`; a symlinked `.env` is resolved exactly as for `stt.json`). The directory must be writable and survive
+restarts — under Docker the mounted config directory covers it ([Run with Docker](#run-with-docker)); when it cannot
+be written, the tap that needed it says so and names the path. The file is optional and is re-read when it changes:
+a hand edit applies to the next session start, no restart.
+
+```json
+{ "defaultEffort": "medium" }
+```
+
+| Field | Meaning |
+|---|---|
+| `defaultEffort` | The reasoning effort of every topic that has no `/effort` pick of its own: `low`, `medium`, `high`, `xhigh`, `max`, `auto` or `ultracode`. Set it from **`/effort` in the General topic** (a tap writes the file), or by hand. Leave it out and the built-in default, `medium`, applies |
+
+What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
+(a Jira conversation: `effort` in `jira.json`, `high` when absent — Jira never reads `defaultEffort`), `defaultEffort`,
+then `medium`. A change applies from each topic's next session start
+or wake-up — running sessions are not restarted. OpenCode takes the same level and runs the nearest variant its model
+offers. In a topic, `/effort` shows the level and whether it is the topic's own or «as in General», and «As in
+General» drops the topic's pick (a live session is brought to the default at once).
+
+The file is checked strictly: an unknown level or a mistyped key is logged once as `[Settings] settings.json
+defaultEffort: …` (naming the field, never echoing a value) and the built-in defaults apply until it is fixed — a
+stale copy of an earlier valid file is not used. A `/effort` tap in General over a broken file replaces it.
+
 ### Required files structure
 
 Launch `charness` from the parent folder that holds your project repos —
@@ -564,7 +592,7 @@ the agents' home folder           ──────▶    /home/charness: their
    image and builds it; the bot installs Claude Code and OpenCode into the agents' home.
 2. **Instance config directory**, with the env file as for a host install inside it (`TELEGRAM_BOT_TOKEN`,
    `DATA_DIR`, `WORK_ROOT`, …): `/srv/charness/config/instance.env`. It stays on the host and the **directory** is
-   mounted writable, not just the file: the voice settings (`stt.json`, with the speech-engine API keys) are saved
+   mounted writable, not just the file: the voice settings (`stt.json`, with the speech-engine API keys) and the instance settings (`settings.json`) are saved
    beside the env file, and a container's own disk is gone when the container is re-created. Every host path the
    env file names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is mounted at the SAME path, so `state.json`,
    sessions and file paths stay valid inside and an instance can move between host and container unchanged.

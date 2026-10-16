@@ -15,16 +15,18 @@
  * imported FIRST so the adapter reads the seeded pref from a temp `DATA_DIR`.
  * Private members reached via bracket access.
  */
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { useStubbedOpenCodeServer } from './openCodeServerStub';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import {
+  effortPrefsFile,
   seededThreadKeyString,
   seededEffortLevel,
   noPrefThreadKeyString,
 } from './openCodeEffortSeed.testSetup';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
-import { defaultEffortLevel } from '../effortLevels';
+import { defaultEffortLevel, setInstanceDefaultEffortReader } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
 const openCodeServer = useStubbedOpenCodeServer();
@@ -33,7 +35,7 @@ const newSessionId = 'ses_effort_seed';
 
 /**
  * `GET /config/providers` reply for the stub: opus-4-8 ships the full
- * low…max variant set, so the unclamped default `xhigh` lands verbatim.
+ * low…max variant set, so every default the bot can have lands verbatim.
  */
 const providersConfigStub = {
   providers: [
@@ -99,7 +101,7 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
     );
   });
 
-  it('a fresh startSession with NO pref seeds the clamped default (xhigh)', async () => {
+  it('a fresh startSession with NO pref seeds the clamped default (medium, as no settings.json says otherwise)', async () => {
     const key: SessionKey = keyFromString(noPrefThreadKeyString);
     const adapter = createStubbedAdapter();
 
@@ -109,12 +111,58 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
     assert.ok(session, 'session must be created');
     // Load-bearing: with no on-disk pref the session must seed the bot's
     // default effort, clamped to the resolved model's variants. opus-4-8 ships
-    // xhigh (providersConfigStub), so the default lands verbatim. A regression
+    // medium (providersConfigStub), so the default lands verbatim. A regression
     // (no default applied → null) fails here.
     assert.equal(
       (session as { effortLevel: string | null }).effortLevel,
       defaultEffortLevel,
-      'a new session with no explicit pref must seed the clamped default xhigh',
+      'a new session with no explicit pref must seed the clamped default',
     );
+  });
+  describe('the instance default (settings.json) and «as in General»', () => {
+    afterEach(() => {
+      setInstanceDefaultEffortReader(() => null);
+      // The «clear» test removes the seeded thread's pick; put the fixture back for whatever runs after.
+      fs.writeFileSync(effortPrefsFile, JSON.stringify({ [seededThreadKeyString]: seededEffortLevel }));
+    });
+
+    it('a no-pref session seeds the INSTANCE default, clamped to the model\'s variants', async () => {
+      setInstanceDefaultEffortReader(() => 'max');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter();
+
+      void adapter.startSession(key, '/tmp/work');
+      const session = await waitForSession(adapter, keyToString(key));
+
+      assert.equal((session as { effortLevel: string | null }).effortLevel, 'max');
+    });
+
+    it('a session whose model lacks the instance default runs the nearest variant it has', async () => {
+      setInstanceDefaultEffortReader(() => 'ultracode');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter();
+
+      void adapter.startSession(key, '/tmp/work');
+      const session = await waitForSession(adapter, keyToString(key));
+
+      // `ultracode` is Claude-only and has no rank: the model gets what it can take, never an unknown variant.
+      assert.notEqual((session as { effortLevel: string | null }).effortLevel, 'ultracode');
+    });
+
+    it('clearing a pick on a live session drops it and takes the clamped instance default for the next prompt', async () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      const key: SessionKey = keyFromString(seededThreadKeyString);
+      const adapter = createStubbedAdapter();
+      void adapter.startSession(key, '/tmp/work');
+      const session = (await waitForSession(adapter, keyToString(key))) as { effortLevel: string | null };
+      assert.equal(session.effortLevel, seededEffortLevel, 'precondition: the live session runs the thread\'s own pick');
+      assert.equal(adapter.getOwnEffort(key), seededEffortLevel);
+
+      assert.equal(await adapter.clearEffort(key), null);
+
+      assert.equal(adapter.getOwnEffort(key), null, 'the pick is gone from disk');
+      assert.equal(session.effortLevel, 'low', 'the live session follows the instance default');
+      assert.equal(adapter.getEffort(key), 'low', 'getEffort answers with the level in force; getOwnEffort says it is no pick');
+    });
   });
 });

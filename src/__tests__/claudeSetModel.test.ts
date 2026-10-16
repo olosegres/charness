@@ -53,7 +53,7 @@ describe('Claude setModel session guard (S3)', () => {
     assert.deepEqual(sent, [], 'no keystrokes when there is no session (was: silent no-op + false success)');
   });
 
-  it('active session with NO effort pref → sends "/model <id>" then the default "/effort xhigh"', async () => {
+  it('active session with NO effort pref → sends "/model <id>" then the default "/effort medium"', async () => {
     // Thread absent from the seeded prefs file → getEffort returns null → the
     // bot re-applies its default effort for the newly picked model.
     const key: SessionKey = makeTelegramKey(-100555, 2);

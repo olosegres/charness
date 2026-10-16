@@ -50,6 +50,8 @@ export class CommandHarness {
   readonly registeredCommandNames: string[] = [];
   /** Every `bot.action` trigger, in registration order, as telegraf was given it (a regex as its source text). */
   readonly registeredActionPatterns: string[] = [];
+  /** Does the module see the General topic? Flip it to drive a command as the operator in General. */
+  isGeneral = false;
   readonly core: BotCore;
   private readonly commandHandlers = new Map<string, CommandHandler>();
   private nextSentMessageId = firstRecordedMessageId;
@@ -90,7 +92,7 @@ export class CommandHarness {
       },
       authoriseContext: async () => this.key,
       withThreadLocale: (_key, run) => run(),
-      checkIsGeneral: () => false,
+      checkIsGeneral: () => this.isGeneral,
       updatePinnedStatus: async (key) => {
         this.pinnedStatusUpdateKeys.push(key);
       },

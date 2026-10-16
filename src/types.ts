@@ -1008,6 +1008,21 @@ export interface AgentAdapter extends EventEmitter {
   getEffort?(key: SessionKey): string | null;
 
   /**
+   * The level this thread picked itself with `/effort`, or `null` when it follows the instance default
+   * (`settings.json`). Unlike {@link getEffort} it is never a derived default — OpenCode's `getEffort` answers
+   * with the clamped default of a live session — so `/effort` can tell "set for this topic" from "as in General".
+   */
+  getOwnEffort?(key: SessionKey): string | null;
+
+  /**
+   * Drop the thread's own `/effort` pick so it follows the instance default again. A live session is brought to
+   * that default the way a pick would be (Claude json-stream: a `--resume` re-spawn when the level differs;
+   * tmux Claude: the `/effort` keystroke; OpenCode: the per-prompt variant); a stopped one reads it at its next
+   * start. Same return convention as {@link setEffort}: `null` on success, a short notice otherwise.
+   */
+  clearEffort?(key: SessionKey): Promise<string | null>;
+
+  /**
    * Levels valid for the thread's current backend + model. Returns an
    * empty array when the adapter has no opinion on effort (e.g. an OpenCode
    * model that declares no `variants`) — the caller surfaces a "not

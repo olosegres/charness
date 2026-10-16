@@ -19,6 +19,9 @@
  *   the chosen variant per-prompt. See `openCodeAdapter.ts`.
  */
 
+import type { SessionKey } from './sessionKey';
+import type { AgentAdapter } from './types';
+
 // ── Claude (canonical set) ──────────────────────────────────────────────────
 
 /**
@@ -41,16 +44,51 @@ export const claudeEffortLevels = [
 export type ClaudeEffortLevel = (typeof claudeEffortLevels)[number];
 
 /**
- * @description The bot's default reasoning effort, auto-applied to a
- * bot-started session whenever the thread has NO explicit per-thread
- * `/effort` pref. An explicit pick always wins and is never overwritten;
- * the default is a derived fallback, never persisted as a pref.
+ * @description The code fallback for the reasoning effort of a bot-started session — the last link of the chain
+ * that decides what a session runs with, first that exists wins:
  *
- * The only real levels are `low`/`medium`/`high`/`xhigh`/`max` (there is no
- * `xlarge`). OpenCode clamps this to the resolved model's variants via
- * {@link clampEffortToAvailable}; Claude clamps unsupported levels itself.
+ * 1. the topic's own `/effort` pick (the per-thread pref);
+ * 2. the platform's default (Jira: `jira.json`'s effort, `sessionLaunchDefaults.ts`);
+ * 3. the instance default — `defaultEffort` in `settings.json`, set from `/effort` in General
+ *    ({@link getInstanceDefaultEffort});
+ * 4. this constant.
+ *
+ * An explicit pick always wins and is never overwritten; the default is a derived fallback, never persisted as a
+ * pref. The only real levels are `low`/`medium`/`high`/`xhigh`/`max` (there is no `xlarge`). OpenCode clamps the
+ * result to the resolved model's variants via {@link clampEffortToAvailable}; Claude clamps unsupported levels itself.
  */
-export const defaultEffortLevel: ClaudeEffortLevel = 'xhigh';
+export const defaultEffortLevel: ClaudeEffortLevel = 'medium';
+
+/**
+ * @description Where the instance default effort comes from (`settings.json`). `null` = nothing set. The
+ * composition root registers the file-backed reader; a module that merely needs the level never touches the file.
+ */
+export type InstanceDefaultEffortReader = () => ClaudeEffortLevel | null;
+
+let instanceDefaultEffortReader: InstanceDefaultEffortReader = () => null;
+
+/** @description Register where {@link getInstanceDefaultEffort} reads the instance default from (the bot, once, at start-up). */
+export function setInstanceDefaultEffortReader(reader: InstanceDefaultEffortReader): void {
+  instanceDefaultEffortReader = reader;
+}
+
+/**
+ * @description The reasoning effort of every topic that has no `/effort` pick of its own: the instance default
+ * from `settings.json`, else the code fallback {@link defaultEffortLevel}. Read per call (the reader caches by the
+ * file's stamp), so a hand edit applies to the next session start without a restart.
+ */
+export function getInstanceDefaultEffort(): ClaudeEffortLevel {
+  return instanceDefaultEffortReader() ?? defaultEffortLevel;
+}
+
+/**
+ * @description The level a thread runs at, for display (`/status`, the banner, the ready notice, `/effort`): the
+ * adapter's own answer, else the instance default. `null` for a backend with no effort concept (no `getEffort`) —
+ * then there is nothing to show.
+ */
+export function getThreadEffortInForce(adapter: Pick<AgentAdapter, 'getEffort'>, key: SessionKey): string | null {
+  return adapter.getEffort ? (adapter.getEffort(key) ?? getInstanceDefaultEffort()) : null;
+}
 
 /**
  * @description Internal rank order shared by {@link clampEffortToAvailable}.

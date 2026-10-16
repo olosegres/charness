@@ -24,6 +24,12 @@
 import * as http from 'http';
 import type { AddressInfo, Socket } from 'net';
 
+/**
+ * The forum's General topic. Telegram delivers an operator's message there with thread id 1, and a bot send WITHOUT
+ * `message_thread_id` (which is how the bot addresses General — an explicit 1 is refused) lands in it.
+ */
+export const generalTopicThreadId = 1;
+
 /** The Bot API's own shape of a successful answer. */
 interface ApiOk { ok: true; result: unknown }
 interface ApiError { ok: false; error_code: number; description: string }
@@ -329,7 +335,7 @@ export class FakeTelegram {
         return { ok: true, result: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_size: file.bytes.length, file_path: file.filePath } };
       }
       case 'sendMessage': {
-        const message = this.storeMessage(Number(payload.message_thread_id), String(payload.text), this.options.botUser, {
+        const message = this.storeMessage(Number(payload.message_thread_id ?? generalTopicThreadId), String(payload.text), this.options.botUser, {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
           isSilent: payload.disable_notification === true,
         });

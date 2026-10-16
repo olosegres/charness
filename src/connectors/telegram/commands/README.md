@@ -34,7 +34,7 @@ must make ONE reminder) and `finishReminderWizard` / `expireReminderWizard`, and
 
 ## `modelProviders.ts`
 
-`/model` (the provider → models picker), `/effort`, `/connect`, `/disconnect` and the twelve buttons behind them. The
+`/model` (the provider → models picker), `/effort`, `/connect`, `/disconnect` and the thirteen buttons behind them. The
 module registers in THREE places: `registerProviderCommands` (where `/connect` and `/disconnect` sat),
 `registerModelCommands` (`/model`, `/effort`) and `registerModelCallbacks`; the neighbouring `/claude_mode`
 stays in `bot.ts` between the first two. On an OpenCode topic the provider level opens with a "Recently used"
@@ -49,6 +49,20 @@ pick only while `awaitingModelSelection` holds the thread, and every numbered pi
 it. A pasted provider key is deleted from the topic as a secret only when it can be a real key; an implausible
 one stays visible and the connect stays armed. The OAuth buttons reach the sign-in driver
 (`../../../agentLogin/`) through the `startOpenCodeOAuthLogin` port.
+
+`/effort` has two faces (`utils/effortPickerPlan.ts` builds the text and rows, the module renders them). **In General** it
+is the INSTANCE default effort: the picker says it is the default of every topic without an effort of its own, offers the
+Claude levels with ✓ on the current one, and a tap (or `/effort <level>`) writes `defaultEffort` into `settings.json`
+(`instanceSettings.ts`, path from the `getInstanceSettingsPath` port) — no adapter involved — then confirms that it applies
+from each topic's next session start or wake-up (running sessions are not restarted); a write that fails is said
+with the file's path and the errno code, on the button and in the topic, with no confirmation. **In a topic** it shows the
+level in force and its source (`getOwnEffort` ≠ null → «set for this topic», else «as in General»), a button per level the
+backend offers (OpenCode: the model's variants; a default the model lacks is shown as the nearest variant) and, when the
+adapter has `clearEffort`, «As in General (<value>)» (`effortsame`, disjoint from the `effort_<level>` pattern). A pick the
+adapter stored but could not apply yet (no agent running → a notice) still re-renders the picker. Both screens re-render in
+place, text and keyboard, after a tap. `/status`, the ready notice and the pinned banner show `getThreadEffortInForce`
+(the pick, else the instance default); other topics' banners are refreshed by their own lifecycle events, not by a
+General change (a burst of edits would queue ahead of agent output).
 
 ## `compaction.ts`
 

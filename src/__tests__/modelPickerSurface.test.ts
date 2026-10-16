@@ -57,6 +57,7 @@ const { applyModelPagePickArming, checkIsNumberedModelPickArmed, getNumberedMode
   connectMethodLists: new Map(),
   disconnectProviderLists: new Map(),
   startOpenCodeOAuthLogin: async () => {},
+  getInstanceSettingsPath: () => '/nowhere/settings.json',
 });
 
 /** A two-provider catalog with enough models to paginate (page size is 10). */

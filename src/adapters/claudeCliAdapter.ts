@@ -58,7 +58,7 @@ import { checkIsProgressChunk } from '../progressLine';
 import { createSerialQueue, type SerialQueue } from '../utils/serialQueue';
 import { t, runWithLocale, defaultLocale } from '../i18n';
 import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
-import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, defaultEffortLevel } from '../effortLevels';
+import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, getInstanceDefaultEffort } from '../effortLevels';
 import { getNextPollDelay, basePollIntervalMs } from '../utils/pollBackoff';
 import {
   tmuxAsync,
@@ -442,6 +442,18 @@ export function saveEffortPref(key: SessionKey, level: string): void {
     fs.writeFileSync(effortPrefsFile, JSON.stringify(data, null, 2));
   } catch (e) {
     console.error(`[Claude] saveEffortPref failed:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/** @description Drop the thread's own `/effort` pick, so it follows the instance default again. */
+export function clearEffortPref(key: SessionKey): void {
+  try {
+    const data = loadEffortPrefs();
+    if (!(keyToString(key) in data)) return;
+    delete data[keyToString(key)];
+    fs.writeFileSync(effortPrefsFile, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error(`[Claude] clearEffortPref failed:`, e instanceof Error ? e.message : e);
   }
 }
 
@@ -3796,7 +3808,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     // No explicit /effort pref → (re)apply the bot's default for the newly
     // picked model (claude self-clamps unsupported levels). An explicit pick
     // is left alone — claude carries it across the model switch.
-    if (this.getEffort(key) === null) this.sendInput(key, `/effort ${defaultEffortLevel}`);
+    if (this.getEffort(key) === null) this.sendInput(key, `/effort ${getInstanceDefaultEffort()}`);
     return null;
   }
 
@@ -3861,6 +3873,22 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     return prefs[keyToString(key)] ?? null;
   }
 
+  /** The pref IS the thread's own pick here: the instance default is never stored as one. */
+  getOwnEffort(key: SessionKey): string | null {
+    return this.getEffort(key);
+  }
+
+  /**
+   * @description Forget the thread's own pick and type the instance default into a running TUI, exactly as a
+   * pick would be applied. No session → nothing to type: the next spawn arms the default
+   * ({@link applyStoredEffortOnSpawn}).
+   */
+  async clearEffort(key: SessionKey): Promise<string | null> {
+    clearEffortPref(key);
+    if (this.sessions.get(keyToString(key))?.isActive) this.sendInput(key, `/effort ${getInstanceDefaultEffort()}`);
+    return null;
+  }
+
   /**
    * @description ARM the thread's stored `/effort` choice for re-apply on a
    * FRESH TUI spawn (S7) — deferred, not typed immediately. claude persists
@@ -3884,15 +3912,15 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * its in-TUI effort intact and may be mid-turn, so re-applying would be both
    * unnecessary and risk interleaving with a running stream.
    *
-   * No stored pref → the bot's default (`defaultEffortLevel` = xhigh) is armed
-   * instead of claude's own default, so a no-pref spawn types `/effort xhigh`
+   * No stored pref → the instance default (`getInstanceDefaultEffort`: `settings.json`, else medium) is armed
+   * instead of claude's own default, so a no-pref spawn types `/effort <default>`
    * (claude clamps per model — same as a manual `/effort` or an explicit pref).
    * An explicit per-thread pref still wins and is armed verbatim.
    */
   private applyStoredEffortOnSpawn(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session) return;
-    const level = this.getEffort(key) ?? defaultEffortLevel;
+    const level = this.getEffort(key) ?? getInstanceDefaultEffort();
     if (!getEffortStartupKeystroke(level)) return;
     session.pendingEffortReapply = level;
   }

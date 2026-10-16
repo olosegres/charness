@@ -326,7 +326,9 @@ resumable in the other.
   child session is busy); OpenCode injects its result back when it finishes.
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
-- **Effort** rides the prompt as `body.variant`, clamped to the model's variants. Provider auth is NOT
+- **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
+  runs the instance default (`getInstanceDefaultEffort`: `settings.json`, else medium), clamped the same way, and
+  `clearEffort` («as in General») drops the pick and takes that default for the next prompt. Provider auth is NOT
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
 
 ## Claude, every backend
@@ -335,7 +337,11 @@ resumable in the other.
   topic's level. On every fresh spawn the tmux adapter arms the thread's stored level (`pendingEffortReapply`)
   and types `/effort <level>` the FIRST time the input box is ready — not at the spawn instant, when the banner
   is still painting and the command is left unsubmitted. Never on adopt/reattach (the surviving process keeps
-  its state).
+  its state). A thread with no pick arms the INSTANCE default (`getInstanceDefaultEffort`: `settings.json`'s
+  `defaultEffort`, else `medium`) — the same level the json-stream backends launch with (`--effort`, after the
+  platform default). `getOwnEffort` is the thread's own pick only (the instance default is never stored as one);
+  `clearEffort` drops it and brings a live session to the default (tmux: the `/effort` keystroke; json-stream: a
+  `--resume` re-spawn, only when it runs another level).
 - **Survey.** The end-of-turn feedback survey is dismissed (one Escape per appearance) by `extractClaudeSurvey`,
   whose header list (`CLAUDE_SURVEY_HEADER_REGEX`) is CLOSED and anchored on purpose — an open prose pattern
   once fired on a quoted survey. A new wording left unrecognised sits on the pane and swallows the Enter of

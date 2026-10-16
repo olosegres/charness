@@ -32,7 +32,7 @@ import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import { t } from '../i18n';
 import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
-import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, defaultEffortLevel } from '../effortLevels';
+import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, getInstanceDefaultEffort } from '../effortLevels';
 import {
   checkIsValidUuid,
   getClaudeProjectsRoot,
@@ -40,6 +40,7 @@ import {
   listClaudeSessionsForWorkDir,
   readRecentClaudeTurns,
   readClaudeReattachTranscript,
+  clearEffortPref,
   loadEffortPrefs,
   saveEffortPref,
 } from './claudeCliAdapter';
@@ -420,7 +421,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return getSessionLaunchOptions({
       savedEffort: this.getEffort(key),
       defaults: this.sessionLaunchDefaultsReader?.(key) ?? null,
-      botDefaultEffort: defaultEffortLevel,
+      botDefaultEffort: getInstanceDefaultEffort(),
     });
   }
 
@@ -1915,6 +1916,25 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   getEffort(key: SessionKey): string | null {
     return loadEffortPrefs()[keyToString(key)] ?? null;
+  }
+
+  /** The pref IS the thread's own pick here: a default is never stored as one. */
+  getOwnEffort(key: SessionKey): string | null {
+    return this.getEffort(key);
+  }
+
+  /**
+   * @description Forget the thread's own pick. A live process that runs a different level than the conversation now
+   * resolves to (the platform's default, the instance default) is re-spawned with it, like a pick; one that
+   * already runs it is left alone, and a stopped conversation reads the default at its next start.
+   */
+  async clearEffort(key: SessionKey): Promise<string | null> {
+    clearEffortPref(key);
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return null;
+    const { effort } = this.getLaunchOptions(key);
+    if (session.effort !== effort) await this.respawnWithChange(session, { model: session.model, effort });
+    return null;
   }
 
   async getAvailableEffortLevels(_key: SessionKey): Promise<string[]> {
