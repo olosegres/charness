@@ -708,9 +708,10 @@ test('two starts at once: the later one finds the record claimed, leaves, and it
   const owner = createSttSidecarOwner(createDeps());
   for (let round = 1; round <= 3; round++) {
     fakeArgs = ['--claim-delay-ms', '500']; // OUR spawn claims late: the earlier start gets in first
+    const identitiesBefore = startedIdentities.length;
     const ensuring = owner.ensure(defaultSettings);
-    await getCharnessWait(() => startCalls.length === round, 10_000, 'our spawn');
-    const ours = startedIdentities[startedIdentities.length - 1];
+    await getCharnessWait(() => startedIdentities.length > identitiesBefore, 10_000, 'our spawn');
+    const ours = startedIdentities[identitiesBefore];
     const earlier = await startEarlierSidecar(['--ready-delay-ms', '900'], `earlier-token-${round}`);
 
     const endpoint = await ensuring;
