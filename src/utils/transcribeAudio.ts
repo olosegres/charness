@@ -1,7 +1,8 @@
 /**
- * @description Voice-note transcription against a Whisper-compatible HTTP API
- * (Groq when its key is set, else OpenAI), with automatic retries on transient
- * failures.
+ * @description Voice-note transcription against an OpenAI-compatible
+ * `/audio/transcriptions` HTTP API (Groq, OpenAI, a custom server or the local
+ * GigaAM sidecar), with automatic retries on transient failures. Which engine
+ * answers, and in which order, is decided by `../stt/transcribeChain`.
  *
  * Extracted from `bot.ts` so it is side-effect-free and testable against a
  * local HTTP server (importing `bot.ts` would construct a Telegraf instance and
@@ -44,8 +45,11 @@ const errorBodyPreviewLength = 500;
  */
 export interface TranscriptionEndpoint {
   url: string;
-  apiKey: string;
+  /** Sent as a bearer token; a keyless custom server has none. */
+  apiKey?: string;
   model: string;
+  /** ISO-639-1 hint (`ru`); absent → the engine detects the language itself, and no field is sent. */
+  language?: string;
 }
 
 /**
@@ -58,11 +62,11 @@ export type TranscribeFailureKind = 'transient' | 'rateLimited' | 'permanent';
 
 export type TranscribeResult =
   | { ok: true; text: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; isDefinitive?: true };
 
 type TranscribeAttemptResult =
   | { ok: true; text: string }
-  | { ok: false; error: string; failureKind: TranscribeFailureKind; retryAfterSec?: number };
+  | { ok: false; error: string; failureKind: TranscribeFailureKind; retryAfterSec?: number; isDefinitive?: true };
 
 /**
  * @description Details of a failed attempt that is about to be retried.
@@ -84,21 +88,19 @@ export interface TranscribeAudioOptions {
   onRetry?: (info: TranscribeRetryInfo) => void;
 }
 
-/**
- * @description Pick the transcription provider from the configured API keys:
- * Groq wins when both are set; `null` when neither is.
- */
-export function getTranscriptionEndpoint(apiKeys: {
-  groqApiKey?: string;
-  openaiApiKey?: string;
-}): TranscriptionEndpoint | null {
-  if (apiKeys.groqApiKey) {
-    return { url: groqTranscriptionUrl, apiKey: apiKeys.groqApiKey, model: groqTranscriptionModel };
-  }
-  if (apiKeys.openaiApiKey) {
-    return { url: openAiTranscriptionUrl, apiKey: apiKeys.openaiApiKey, model: openAiTranscriptionModel };
-  }
-  return null;
+/** @description The Groq Whisper endpoint for `apiKey`. */
+export function createGroqEndpoint(apiKey: string): TranscriptionEndpoint {
+  return { url: groqTranscriptionUrl, apiKey, model: groqTranscriptionModel };
+}
+
+/** @description The OpenAI Whisper endpoint for `apiKey`. */
+export function createOpenAiEndpoint(apiKey: string): TranscriptionEndpoint {
+  return { url: openAiTranscriptionUrl, apiKey, model: openAiTranscriptionModel };
+}
+
+/** @description A custom OpenAI-compatible server; `model` defaults to `whisper-1`. */
+export function createCustomEndpoint(input: { url: string; apiKey?: string; model?: string }): TranscriptionEndpoint {
+  return { url: input.url, apiKey: input.apiKey, model: input.model ?? openAiTranscriptionModel };
 }
 
 /**
@@ -164,9 +166,9 @@ async function transcribeAudioOnce(
   try {
     fileSize = (await fsp.stat(filePath)).size;
   } catch (e) {
-    return { ok: false, error: `stat failed: ${e instanceof Error ? e.message : e}`, failureKind: 'permanent' };
+    return { ok: false, error: `stat failed: ${e instanceof Error ? e.message : e}`, failureKind: 'permanent', isDefinitive: true };
   }
-  if (fileSize === 0) return { ok: false, error: 'downloaded audio is empty', failureKind: 'permanent' };
+  if (fileSize === 0) return { ok: false, error: 'downloaded audio is empty', failureKind: 'permanent', isDefinitive: true };
 
   const form = new FormData();
   // Explicit filename + content-type: form-data's auto-detection from the
@@ -177,6 +179,7 @@ async function transcribeAudioOnce(
     contentType: 'audio/ogg',
   });
   form.append('model', endpoint.model);
+  if (endpoint.language) form.append('language', endpoint.language);
 
   const url = new URL(endpoint.url);
   const client = url.protocol === 'https:' ? https : http;
@@ -188,7 +191,10 @@ async function transcribeAudioOnce(
     // voice-message path indefinitely.
     const req = client.request(url, {
       method: 'POST',
-      headers: { ...form.getHeaders(), Authorization: `Bearer ${endpoint.apiKey}` },
+      headers: {
+        ...form.getHeaders(),
+        ...(endpoint.apiKey ? { Authorization: `Bearer ${endpoint.apiKey}` } : {}),
+      },
     }, (res) => {
       // Decode across chunk boundaries: per-chunk `toString()` garbled a
       // multi-byte character (e.g. Cyrillic) split between two chunks.
@@ -218,7 +224,8 @@ async function transcribeAudioOnce(
             resolve({ ok: true, text: json.text });
             return;
           }
-          resolve({ ok: false, error: 'transcription returned empty text', failureKind: 'permanent' });
+          // Definitive: Groq hallucinates on silence, so another engine's text would not be more true.
+          resolve({ ok: false, error: 'transcription returned empty text', failureKind: 'permanent', isDefinitive: true });
         } catch {
           resolve({
             ok: false,
@@ -263,6 +270,7 @@ export async function transcribeAudio(
       return {
         ok: false,
         error: attemptCount > 1 ? `${attempt.error} (after ${attemptCount} attempts)` : attempt.error,
+        ...(attempt.isDefinitive ? { isDefinitive: true as const } : {}),
       };
     }
     options.onRetry?.({ attemptNumber: attemptCount, error: attempt.error, delayMs });

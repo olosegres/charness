@@ -396,7 +396,9 @@ export const frDict: Record<string, string> = {
     "✏️ Je ne traite pas les messages modifiés comme une nouvelle entrée — envoyez la correction dans un message séparé.",
 
   'voice.no_api_key':
-    'La voix nécessite `GROQ_API_KEY` (gratuit) ou `OPENAI_API_KEY`.',
+    'La voix nécessite un moteur de reconnaissance vocale — ouvrez /stt pour en configurer un.',
+  'voice.config_invalid':
+    'La voix est désactivée : le fichier de réglages stt.json est invalide. Le journal du bot indique le problème — corrigez le fichier ou ouvrez /stt.',
   'voice.failed': 'Échec de la transcription du message vocal.',
   'voice.retrying': '⚠️ Échec de la transcription du message vocal ({error}). Nouvel essai dans {seconds} s…',
   'voice.transcribed': '🎤 {text}',
@@ -635,7 +637,7 @@ export const frDict: Record<string, string> = {
   'startup.item.install_agent':
     'Installez un CLI d’agent — claude ou opencode.',
   'startup.item.optional_groq':
-    '(optionnel) Ajoutez GROQ_API_KEY à votre .env et redémarrez pour activer la saisie vocale.',
+    '(optionnel) Configurez la saisie vocale avec /stt (reconnaissance locale, Groq, OpenAI ou votre propre serveur).',
   'startup.item.optional_owner':
     '(optionnel) Définissez OWNER_USER_ID pour recevoir ce statut dans votre chat privé.',
   'requests.alert.notAnsweringNotice': "⚠️ La demande {requestId} est restée sans réponse : l'agent a terminé ses tours sans répondre et les rappels ont abandonné. Vérifiez la session dans ce sujet.",

@@ -396,7 +396,9 @@ export const uzDict: Record<string, string> = {
     '✏️ Men tahrirlangan xabarlarni yangi kirish deb hisoblamayman — tuzatishni alohida xabar sifatida yuboring.',
 
   'voice.no_api_key':
-    'Ovoz uchun `GROQ_API_KEY` (bepul) yoki `OPENAI_API_KEY` kerak.',
+    'Ovoz uchun nutqni aniqlash dvigateli kerak — uni sozlash uchun /stt ni oching.',
+  'voice.config_invalid':
+    'Ovoz o‘chirilgan: sozlamalar fayli stt.json noto‘g‘ri. Muammo bot logida ko‘rsatilgan — faylni tuzating yoki /stt ni oching.',
   'voice.failed': 'Ovoz xabarini transkripsiya qilib bo‘lmadi.',
   'voice.retrying': '⚠️ Ovoz xabarini transkripsiya qilib bo‘lmadi ({error}). {seconds} soniyadan keyin qayta urinaman…',
   'voice.transcribed': '🎤 {text}',
@@ -635,7 +637,7 @@ export const uzDict: Record<string, string> = {
   'startup.item.install_agent':
     'Agent CLI o‘rnating — claude yoki opencode.',
   'startup.item.optional_groq':
-    '(ixtiyoriy) Ovozli kiritishni yoqish uchun .env fayliga GROQ_API_KEY qo‘shing va qayta ishga tushiring.',
+    '(ixtiyoriy) Ovozli kiritishni /stt orqali sozlang (lokal aniqlash, Groq, OpenAI yoki o‘zingizning serveringiz).',
   'startup.item.optional_owner':
     '(ixtiyoriy) Ushbu holatni shaxsiy chatingizda olish uchun OWNER_USER_ID ni belgilang.',
   'requests.alert.notAnsweringNotice': '⚠️ {requestId} so‘roviga javob berilmadi: agent javob bermay navbatlarini yakunladi va eslatmalar to‘xtatildi. Ushbu mavzudagi seansni tekshiring.',

@@ -14,9 +14,11 @@ import { promises as fsp } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  createCustomEndpoint,
+  createGroqEndpoint,
+  createOpenAiEndpoint,
   getTranscribeFailureKind,
   getTranscribeRetryDelayMs,
-  getTranscriptionEndpoint,
   transcribeAudio,
   transcribeRetryDelaysMs,
   type TranscribeRetryInfo,
@@ -123,18 +125,23 @@ test('default retry schedule: 1st retry after 5 s, 2nd after 15 s', () => {
   assert.deepEqual(transcribeRetryDelaysMs, [5_000, 15_000]);
 });
 
-test('endpoint: Groq wins when both keys are set, OpenAI is the fallback, none → null', () => {
-  const groqEndpoint = getTranscriptionEndpoint({ groqApiKey: 'gsk', openaiApiKey: 'sk' });
-  assert.equal(groqEndpoint?.url, 'https://api.groq.com/openai/v1/audio/transcriptions');
-  assert.equal(groqEndpoint?.apiKey, 'gsk');
-  assert.equal(groqEndpoint?.model, 'whisper-large-v3');
-
-  const openAiEndpoint = getTranscriptionEndpoint({ openaiApiKey: 'sk' });
-  assert.equal(openAiEndpoint?.url, 'https://api.openai.com/v1/audio/transcriptions');
-  assert.equal(openAiEndpoint?.apiKey, 'sk');
-  assert.equal(openAiEndpoint?.model, 'whisper-1');
-
-  assert.equal(getTranscriptionEndpoint({}), null);
+test('endpoint builders: Groq and OpenAI carry their URL and model, a custom server defaults to whisper-1', () => {
+  assert.deepEqual(createGroqEndpoint('gsk'), {
+    url: 'https://api.groq.com/openai/v1/audio/transcriptions',
+    apiKey: 'gsk',
+    model: 'whisper-large-v3',
+  });
+  assert.deepEqual(createOpenAiEndpoint('sk'), {
+    url: 'https://api.openai.com/v1/audio/transcriptions',
+    apiKey: 'sk',
+    model: 'whisper-1',
+  });
+  assert.deepEqual(createCustomEndpoint({ url: 'http://stt.example/v1/audio/transcriptions' }), {
+    url: 'http://stt.example/v1/audio/transcriptions',
+    apiKey: undefined,
+    model: 'whisper-1',
+  });
+  assert.equal(createCustomEndpoint({ url: 'http://stt.example/x', model: 'custom-model' }).model, 'custom-model');
 });
 
 test('failure kind: 429 is rate-limited, 408/409/5xx transient, other 4xx permanent', () => {
@@ -170,6 +177,23 @@ test('succeeds on the first attempt: sends the key and model, no retry', async (
   assert.match(receivedRequests[0].body, /whisper-test-model/);
   assert.match(receivedRequests[0].body, /fake-ogg-bytes/);
   assert.deepEqual(retries, []);
+});
+
+test('the language hint is a form field only when it is set', async () => {
+  resetServer([transcribed('with language'), transcribed('without language')]);
+  const withLanguage = await transcribeAudio(audioPath, { ...endpoint, language: 'ru' }, { timeoutMs: testTimeoutMs });
+  assert.deepEqual(withLanguage, { ok: true, text: 'with language' });
+  const withoutLanguage = await transcribeAudio(audioPath, endpoint, { timeoutMs: testTimeoutMs });
+  assert.deepEqual(withoutLanguage, { ok: true, text: 'without language' });
+  assert.match(receivedRequests[0].body, /name="language"\r\n\r\nru\r\n/);
+  assert.doesNotMatch(receivedRequests[1].body, /name="language"/);
+});
+
+test('a keyless custom server gets no Authorization header', async () => {
+  resetServer([transcribed('no key')]);
+  const keyless = await transcribeAudio(audioPath, { url: endpoint.url, model: endpoint.model }, { timeoutMs: testTimeoutMs });
+  assert.deepEqual(keyless, { ok: true, text: 'no key' });
+  assert.equal(receivedRequests[0].authorization, undefined);
 });
 
 test('recovers after a TIMEOUT (the reported symptom) and announces the retry', async () => {
@@ -237,7 +261,7 @@ test('retries a 408 Request Timeout from the provider', async () => {
 test('a 2xx with no text or a malformed body fails at once, without a retry', async () => {
   resetServer([respondWith(200, JSON.stringify({ text: '' })), transcribed('never reached')]);
   const emptyText = runTranscription();
-  assert.deepEqual(await emptyText.resultPromise, { ok: false, error: 'transcription returned empty text' });
+  assert.deepEqual(await emptyText.resultPromise, { ok: false, error: 'transcription returned empty text', isDefinitive: true });
   assert.equal(receivedRequests.length, 1);
   assert.deepEqual(emptyText.retries, []);
 
@@ -262,6 +286,7 @@ test('gives up after 3 attempts and reports the last error with the attempt coun
 test('fails at once on a permanent 4xx, without a retry', async () => {
   resetServer([respondWith(401, '{"error":{"message":"invalid api key"}}'), transcribed('never reached')]);
   const { resultPromise, retries } = runTranscription();
+  // Not definitive: another engine may well accept what this one refused.
   assert.deepEqual(await resultPromise, { ok: false, error: 'HTTP 401: invalid api key' });
   assert.equal(receivedRequests.length, 1);
   assert.deepEqual(retries, []);
@@ -270,7 +295,7 @@ test('fails at once on a permanent 4xx, without a retry', async () => {
 test('an empty download fails at once without calling the provider', async () => {
   resetServer([transcribed('never reached')]);
   const { resultPromise, retries } = runTranscription(emptyAudioPath);
-  assert.deepEqual(await resultPromise, { ok: false, error: 'downloaded audio is empty' });
+  assert.deepEqual(await resultPromise, { ok: false, error: 'downloaded audio is empty', isDefinitive: true });
   assert.equal(receivedRequests.length, 0);
   assert.deepEqual(retries, []);
 });

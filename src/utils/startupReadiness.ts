@@ -46,8 +46,8 @@ export interface ReadinessFacts {
   hasBinding: boolean;
   /** Installed agent CLIs among `claude` / `opencode` (empty ⇒ none installed). */
   availableAgents: string[];
-  /** `GROQ_API_KEY` is present (optional — enables voice input). */
-  hasGroq: boolean;
+  /** At least one speech engine is available (optional — enables voice input). */
+  hasSpeechEngine: boolean;
   /** `OWNER_USER_ID` is set. */
   ownerSet: boolean;
   /**
@@ -121,7 +121,7 @@ export function formatMissingRights(keys: BotRightKey[]): string {
  *
  * `isReady` is true iff NONE of the required items are unmet:
  *   groupPaired  &&  all admin rights held  &&  a binding exists  &&  an agent CLI installed.
- * The optional groq / owner items are informational — they populate `unmetKeys`
+ * The optional speech-engine / owner items are informational — they populate `unmetKeys`
  * (so they render inside a not-ready checklist) but never flip `isReady`.
  *
  * `grant_admin` is only unmet while a group IS paired (you cannot grant admin
@@ -135,7 +135,7 @@ export function buildReadinessReport(facts: ReadinessFacts): ReadinessReport {
   if (facts.groupPaired && missingRights.length > 0) unmet.add('grant_admin');
   if (!facts.hasBinding) unmet.add('bind_topic');
   if (facts.availableAgents.length === 0) unmet.add('install_agent');
-  if (!facts.hasGroq) unmet.add('optional_groq');
+  if (!facts.hasSpeechEngine) unmet.add('optional_groq');
   if (!facts.ownerSet && facts.usedGeneralFallback) unmet.add('optional_owner');
 
   const isReady = requiredItemKeys.every((key) => !unmet.has(key));

@@ -396,7 +396,9 @@ export const esDict: Record<string, string> = {
     '✏️ No trato los mensajes editados como nueva entrada — envía la corrección como un mensaje separado.',
 
   'voice.no_api_key':
-    'La voz requiere `GROQ_API_KEY` (gratis) o `OPENAI_API_KEY`.',
+    'La voz necesita un motor de reconocimiento de voz — abre /stt para configurar uno.',
+  'voice.config_invalid':
+    'La voz está desactivada: el archivo de ajustes stt.json no es válido. El registro del bot indica el problema — corrige el archivo o abre /stt.',
   'voice.failed': 'Error al transcribir el mensaje de voz.',
   'voice.retrying': '⚠️ Error al transcribir el mensaje de voz ({error}). Reintento en {seconds} s…',
   'voice.transcribed': '🎤 {text}',
@@ -635,7 +637,7 @@ export const esDict: Record<string, string> = {
   'startup.item.install_agent':
     'Instala una CLI de agente — claude u opencode.',
   'startup.item.optional_groq':
-    '(opcional) Añade GROQ_API_KEY a tu .env y reinicia para habilitar la entrada de voz.',
+    '(opcional) Configura la entrada de voz con /stt (reconocimiento local, Groq, OpenAI o tu propio servidor).',
   'startup.item.optional_owner':
     '(opcional) Configura OWNER_USER_ID para recibir este estado en tu chat privado.',
   'requests.alert.notAnsweringNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: el agente terminó sus turnos sin responder y los recordatorios se rindieron. Revisa la sesión en este tema.',

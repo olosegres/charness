@@ -396,7 +396,9 @@ export const hiDict: Record<string, string> = {
     '✏️ मैं संपादित संदेशों को नया इनपुट नहीं मानता — सुधार एक अलग संदेश के रूप में भेजें।',
 
   'voice.no_api_key':
-    'वॉइस के लिए `GROQ_API_KEY` (मुफ़्त) या `OPENAI_API_KEY` चाहिए।',
+    'वॉइस के लिए स्पीच-रिकग्निशन इंजन चाहिए — इसे सेट करने के लिए /stt खोलें।',
+  'voice.config_invalid':
+    'वॉइस बंद है: सेटिंग फ़ाइल stt.json अमान्य है। समस्या बॉट लॉग में है — फ़ाइल ठीक करें या /stt खोलें।',
   'voice.failed': 'वॉइस संदेश ट्रांसक्राइब करने में विफल।',
   'voice.retrying': '⚠️ वॉइस संदेश ट्रांसक्राइब करने में विफल ({error})। {seconds} सेकंड में फिर से कोशिश की जाएगी…',
   'voice.transcribed': '🎤 {text}',
@@ -634,7 +636,7 @@ export const hiDict: Record<string, string> = {
   'startup.item.install_agent':
     'एक एजेंट CLI इंस्टॉल करें — claude या opencode।',
   'startup.item.optional_groq':
-    '(वैकल्पिक) वॉइस इनपुट सक्षम करने के लिए अपनी .env में GROQ_API_KEY जोड़ें और पुनः आरंभ करें।',
+    '(वैकल्पिक) /stt से वॉइस इनपुट सेट करें (लोकल रिकग्निशन, Groq, OpenAI या आपका अपना सर्वर)।',
   'startup.item.optional_owner':
     '(वैकल्पिक) यह स्थिति अपने निजी चैट में पाने के लिए OWNER_USER_ID सेट करें।',
   'requests.alert.notAnsweringNotice': '⚠️ अनुरोध {requestId} का जवाब नहीं मिला: एजेंट ने बिना जवाब दिए अपने टर्न खत्म किए और रिमाइंडर बंद कर दिए गए। इस टॉपिक में सत्र जाँचें।',

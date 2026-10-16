@@ -396,7 +396,9 @@ export const deDict: Record<string, string> = {
     "✏️ Bearbeitete Nachrichten behandle ich nicht als neue Eingabe — sende die Korrektur als separate Nachricht.",
 
   'voice.no_api_key':
-    'Sprache erfordert `GROQ_API_KEY` (kostenlos) oder `OPENAI_API_KEY`.',
+    'Für Sprache wird eine Spracherkennungs-Engine benötigt — öffne /stt, um eine einzurichten.',
+  'voice.config_invalid':
+    'Sprache ist aus: Die Einstellungsdatei stt.json ist ungültig. Das Problem steht im Bot-Log — korrigiere die Datei oder öffne /stt.',
   'voice.failed': 'Sprachnachricht konnte nicht transkribiert werden.',
   'voice.retrying': '⚠️ Sprachnachricht konnte nicht transkribiert werden ({error}). Neuer Versuch in {seconds} s…',
   'voice.transcribed': '🎤 {text}',
@@ -635,7 +637,7 @@ export const deDict: Record<string, string> = {
   'startup.item.install_agent':
     'Installiere ein Agent-CLI — claude oder opencode.',
   'startup.item.optional_groq':
-    '(optional) Füge GROQ_API_KEY zu deiner .env hinzu und starte neu, um Spracheingabe zu aktivieren.',
+    '(optional) Richte die Spracheingabe mit /stt ein (lokale Erkennung, Groq, OpenAI oder dein eigener Server).',
   'startup.item.optional_owner':
     '(optional) Setze OWNER_USER_ID, um diesen Status in deinem privaten Chat zu erhalten.',
   'requests.alert.notAnsweringNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Der Agent hat seine Züge ohne Antwort beendet, und die Erinnerungen haben aufgegeben. Prüfe die Sitzung in diesem Thema.',

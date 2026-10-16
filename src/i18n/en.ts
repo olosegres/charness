@@ -409,7 +409,9 @@ export const enDict: Record<string, string> = {
     '✏️ I don\'t treat edited messages as new input — send the correction as a separate message.',
 
   'voice.no_api_key':
-    'Voice requires `GROQ_API_KEY` (free) or `OPENAI_API_KEY`.',
+    'Voice needs a speech-recognition engine — open /stt to set one up.',
+  'voice.config_invalid':
+    'Voice is off: the settings file stt.json is invalid. The bot log names the problem — fix the file or open /stt.',
   'voice.failed': 'Failed to transcribe voice message.',
   'voice.retrying': '⚠️ Failed to transcribe voice message ({error}). Retrying in {seconds} s…',
   'voice.transcribed': '🎤 {text}',
@@ -679,7 +681,7 @@ export const enDict: Record<string, string> = {
   'startup.item.install_agent':
     'Install an agent CLI — claude or opencode.',
   'startup.item.optional_groq':
-    '(optional) Add GROQ_API_KEY to your .env and restart to enable voice input.',
+    '(optional) Set up voice input with /stt (local recognition, Groq, OpenAI or your own server).',
   'startup.item.optional_owner':
     '(optional) Set OWNER_USER_ID to receive this status in your private chat.',
   'requests.alert.notAnsweringNotice': '⚠️ Request {requestId} got no answer: the agent ended its turns without answering and the reminders gave up. Check the session in this topic.',

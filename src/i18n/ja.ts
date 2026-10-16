@@ -396,7 +396,9 @@ export const jaDict: Record<string, string> = {
     '✏️ 編集されたメッセージは新しい入力として扱いません — 修正を別のメッセージとして送信してください。',
 
   'voice.no_api_key':
-    '音声には `GROQ_API_KEY`（無料）または `OPENAI_API_KEY` が必要です。',
+    '音声には音声認識エンジンが必要です — /stt を開いて設定してください。',
+  'voice.config_invalid':
+    '音声はオフです：設定ファイル stt.json が無効です。問題点はボットのログにあります — ファイルを修正するか /stt を開いてください。',
   'voice.failed': '音声メッセージの文字起こしに失敗しました。',
   'voice.retrying': '⚠️ 音声メッセージの文字起こしに失敗しました（{error}）。{seconds} 秒後に再試行します…',
   'voice.transcribed': '🎤 {text}',
@@ -629,7 +631,7 @@ export const jaDict: Record<string, string> = {
   'startup.item.install_agent':
     'エージェント CLI をインストールしてください — claude または opencode。',
   'startup.item.optional_groq':
-    '（任意）音声入力を有効にするには、.env に GROQ_API_KEY を追加して再起動してください。',
+    '（任意）/stt で音声入力を設定してください（ローカル認識、Groq、OpenAI、または自前のサーバー）。',
   'startup.item.optional_owner':
     '（任意）このステータスをプライベートチャットで受け取るには OWNER_USER_ID を設定してください。',
   'requests.alert.notAnsweringNotice': '⚠️ リクエスト {requestId} に回答がありません：エージェントは回答せずにターンを終え、リマインダーも打ち切られました。このトピックのセッションを確認してください。',

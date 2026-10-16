@@ -396,7 +396,9 @@ export const zhDict: Record<string, string> = {
     '✏️ 我不将编辑的消息视为新输入 — 请将更正作为单独消息发送。',
 
   'voice.no_api_key':
-    '语音需要 `GROQ_API_KEY`（免费）或 `OPENAI_API_KEY`。',
+    '语音需要语音识别引擎——打开 /stt 进行设置。',
+  'voice.config_invalid':
+    '语音已关闭：设置文件 stt.json 无效。问题见机器人日志——请修正该文件或打开 /stt。',
   'voice.failed': '语音转录失败。',
   'voice.retrying': '⚠️ 语音转录失败（{error}）。{seconds} 秒后重试…',
   'voice.transcribed': '🎤 {text}',
@@ -629,7 +631,7 @@ export const zhDict: Record<string, string> = {
   'startup.item.install_agent':
     '安装一个智能体 CLI —— claude 或 opencode。',
   'startup.item.optional_groq':
-    '（可选）将 GROQ_API_KEY 添加到你的 .env 并重启以启用语音输入。',
+    '（可选）用 /stt 设置语音输入（本地识别、Groq、OpenAI 或你自己的服务器）。',
   'startup.item.optional_owner':
     '（可选）设置 OWNER_USER_ID 以在你的私聊中接收此状态。',
   'requests.alert.notAnsweringNotice': '⚠️ 请求 {requestId} 未获回复：智能体多次结束回合却未作答，提醒已停止。请检查此话题中的会话。',

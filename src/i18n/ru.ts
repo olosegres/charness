@@ -400,7 +400,9 @@ export const ruDict: Record<string, string> = {
     '✏️ Редактирование сообщений я не вижу как новый ввод — отправь правку отдельным сообщением.',
 
   'voice.no_api_key':
-    'Для голоса нужен `GROQ_API_KEY` (бесплатно) или `OPENAI_API_KEY`.',
+    'Для голоса нужен движок распознавания речи — откройте /stt, чтобы настроить.',
+  'voice.config_invalid':
+    'Голос выключен: файл настроек stt.json некорректен. Что не так — в логе бота; исправьте файл или откройте /stt.',
   'voice.failed': 'Не удалось распознать голосовое.',
   'voice.retrying': '⚠️ Не удалось распознать голосовое ({error}). Повторю через {seconds} с…',
   'voice.transcribed': '🎤 {text}',
@@ -639,7 +641,7 @@ export const ruDict: Record<string, string> = {
   'startup.item.install_agent':
     'Установите агентский CLI — claude или opencode.',
   'startup.item.optional_groq':
-    '(необязательно) Добавьте GROQ_API_KEY в .env и перезапустите, чтобы включить голосовой ввод.',
+    '(необязательно) Настройте голосовой ввод через /stt (локальное распознавание, Groq, OpenAI или свой сервер).',
   'startup.item.optional_owner':
     '(необязательно) Задайте OWNER_USER_ID, чтобы получать этот статус в личном чате.',
   'requests.alert.notAnsweringNotice': '⚠️ Запрос {requestId} остался без ответа: агент завершал ходы, не отвечая, и напоминания прекращены. Проверьте сессию в этой теме.',

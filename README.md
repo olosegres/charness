@@ -48,7 +48,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 - **Reminders** — `/reminders` sets a plain reminder with inline buttons (how often, which day, what time, then the text by typing or voice); at the due time the bot posts and pins it itself, so even a muted topic notifies you. No agent, no bound folder, no date parsing — works in any topic, General included
 - **Inbound files** — photos / documents / video / audio sent to a topic are saved and announced to the agent; albums arrive as one prompt
 - **Outbound files** — the agent sends files back to you — a generated chart, a screenshot, a log, a rendered PDF — single files or albums, straight into the topic
-- **Voice input** — Whisper transcription via Groq (preferred) or OpenAI
+- **Voice input** — voice notes are transcribed by an ordered chain of engines — Groq, OpenAI or your own OpenAI-compatible server — configured in `stt.json`; if one fails, the next takes over
 - **Display verbosity and view** — `/verbosity` (plus `/thinking`, `/tool_results`, `/subagent`) per topic: detail `minimal|short|full`, and what the topic shows — `stream` (default), `stream_answers` or `answers` (only the agent's pinned answers, no stream)
 - **Time-aware prompts** — `/timestamps on` prepends each forwarded prompt's send time (local-offset ISO), so a days-long session knows what "yesterday" or "2 days ago" means; agent-facing only, per topic
 - **Reply context** — reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text, voice and files (a photo, a document, an album…), both agents; a reply TO a photo, file or voice note names it, with the path of the bot's saved copy when it has one
@@ -150,10 +150,11 @@ In a bound topic you can also type:
 - `claude fix the bug` / `opencode add tests`
 - A plain message after `/claude` is already running → routed as input.
 
-Voice messages are transcribed via Groq Whisper (free) or OpenAI Whisper
-(fallback) and follow the same routing. If the provider times out or fails
-temporarily, the bot says so in the topic and retries automatically (after 5 s,
-then 15 s) — no need to re-record the voice note.
+Voice messages are transcribed by the speech engines you set up (Groq,
+OpenAI, or any OpenAI-compatible server — see [Voice input](SETUP.md#voice-input)) and follow
+the same routing. The engines form an ordered chain: when one fails, the next one answers within the
+same voice note. The last one retries a temporary failure automatically (after 5 s, then 15 s) and
+says so in the topic — no need to re-record the voice note.
 
 `/terminal` is never started from a natural-language phrase — only the
 explicit command opens a shell.
@@ -668,7 +669,7 @@ Yes, both a bot restart and an agent-server restart. State is persisted to disk;
 Yes. Each topic picks its backend independently: OpenCode over its native HTTP+SSE server, or Claude Code (tmux or json-stream). One topic is one project with its own isolated session, like terminal tabs, and two topics can point at the same folder for parallel work.
 
 **Can I talk to the agent by voice?**
-Yes. Send a voice message to a topic and it is transcribed with Whisper (via Groq or OpenAI) and forwarded to the agent as a normal prompt, so you can vibe code hands-free from your phone.
+Yes. Send a voice message to a topic and it is transcribed (by Groq, OpenAI or your own Whisper-compatible server) and forwarded to the agent as a normal prompt, so you can vibe code hands-free from your phone.
 
 ### Documentation
 

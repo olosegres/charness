@@ -860,6 +860,21 @@ test('startup readiness status keys exist in every locale', () => {
   }
 });
 
+test('the voice setup hints point at /stt (and the broken-file notice at stt.json) in every locale', () => {
+  for (const locale of localeCodes) {
+    for (const code of ['voice.no_api_key', 'startup.item.optional_groq', 'voice.config_invalid'] as const) {
+      const out = runWithLocale(locale, () => t(code));
+      assert.ok(out.includes('/stt'), `expected "/stt" in ${locale} ${code}: "${out}"`);
+    }
+    const brokenFile = runWithLocale(locale, () => t('voice.config_invalid'));
+    assert.ok(brokenFile.includes('stt.json'), `expected "stt.json" in ${locale}: "${brokenFile}"`);
+    for (const code of ['voice.no_api_key', 'startup.item.optional_groq'] as const) {
+      const out = runWithLocale(locale, () => t(code));
+      assert.ok(!out.includes('GROQ_API_KEY'), `${locale} ${code} still points at the retired env key: "${out}"`);
+    }
+  }
+});
+
 test('startup.item.grant_admin substitutes the {missing} rights list', () => {
   const out = t('startup.item.grant_admin', { missing: 'Manage Topics, Pin Messages' });
   assert.ok(out.includes('Manage Topics, Pin Messages'), `expected the rights in "${out}"`);

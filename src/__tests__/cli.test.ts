@@ -155,9 +155,11 @@ function writePreRenameInstall(): { legacyDataDir: string; legacyConfigDir: stri
 
 /** What the start needs to get past the lock and into the bot, which then fails fast on the fake token. */
 function runPastTheLock(entryPath: string, workRoot: string): { status: number | null; stderr: string } {
+  // The old voice keys would make the child announce its own (unrelated) deprecation and write a stt.json.
+  const { GROQ_API_KEY: _groqApiKey, OPENAI_API_KEY: _openAiApiKey, ...inheritedEnv } = process.env;
   const r = spawnSync(process.execPath, [entryPath], {
     env: {
-      ...process.env,
+      ...inheritedEnv,
       CLAUDE_BIN: claudeShim,
       HOME: tmpRoot,
       DATA_DIR: '',

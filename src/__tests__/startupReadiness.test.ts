@@ -29,7 +29,7 @@ function readyFacts(overrides: Partial<ReadinessFacts> = {}): ReadinessFacts {
     botRights: allRights,
     hasBinding: true,
     availableAgents: ['claude', 'opencode'],
-    hasGroq: true,
+    hasSpeechEngine: true,
     ownerSet: true,
     usedGeneralFallback: false,
     ...overrides,
@@ -46,7 +46,7 @@ test('all required items met → isReady, no unmet keys', () => {
 });
 
 test('a ready bot with GROQ missing stays ready (optional never blocks)', () => {
-  const report = buildReadinessReport(readyFacts({ hasGroq: false }));
+  const report = buildReadinessReport(readyFacts({ hasSpeechEngine: false }));
   // Ready → the ready message wins and no checklist renders, but the optional
   // key is still tracked in unmetKeys.
   assert.equal(report.isReady, true);
@@ -114,7 +114,7 @@ test('fresh install → unmetKeys in the canonical render order (create → opti
     botRights: null,
     hasBinding: false,
     availableAgents: [],
-    hasGroq: false,
+    hasSpeechEngine: false,
     ownerSet: false,
     usedGeneralFallback: true,
   });
@@ -217,7 +217,7 @@ test('not-ready report renders header + renumbered unmet items', () => {
       botRights: null,
       hasBinding: false,
       availableAgents: [],
-      hasGroq: false,
+      hasSpeechEngine: false,
     }),
   );
   const text = buildStartupStatusText(report, echoTranslate);

@@ -177,7 +177,17 @@ import {
 import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
-import { getTranscriptionEndpoint, transcribeAudio, type TranscribeResult } from './utils/transcribeAudio';
+import type { TranscribeResult } from './utils/transcribeAudio';
+import {
+  getSttConfigPath,
+  getSttReportLines,
+  loadSttConfig,
+  migrateLegacySttKeys,
+  resolveSttSettings,
+  type ResolvedSttSettings,
+  type SttFacts,
+} from './stt/sttSettings';
+import { transcribeWithEngines } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
 import {
@@ -495,8 +505,6 @@ function parseEnv() {
     isDmSurfaceInert,
     allowedGroupId,
     workRoot,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    groqApiKey: process.env.GROQ_API_KEY,
   };
 }
 
@@ -4016,25 +4024,85 @@ const FILE_DOWNLOAD_CAP_MB = Math.floor(telegramFileDownloadCapBytes / (1024 * 1
 const ALBUM_DEBOUNCE_MS = 2_000;
 
 /**
- * @description Transcribe a downloaded voice note for thread `key`. Transient
- * provider failures (timeout / network error / 408 / 409 / 5xx / 429) are
- * retried inside `transcribeAudio`; before each retry the topic gets a short
- * notice naming the error and the pause, so the user knows the voice note
- * isn't lost. The notice is UNPACED like the transcript echo it precedes:
- * queued behind agent output it could land after the retry already succeeded.
+ * What the speech-engine chain needs to know about the local engine's lifecycle.
+ * Until the on-demand sidecar owner exists there is no process to own it, so the
+ * local engine is never available.
  */
-async function transcribeVoiceFile(key: SessionKey, filePath: string): Promise<TranscribeResult> {
-  const endpoint = getTranscriptionEndpoint({ groqApiKey: ENV.groqApiKey, openaiApiKey: ENV.openaiApiKey });
-  if (!endpoint) return { ok: false, error: 'no api key configured' };
-  const result = await transcribeAudio(filePath, endpoint, {
-    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+const sttFacts: SttFacts = {
+  isGigaamInstalled: false,
+  isGigaamInstalling: false,
+  isGigaamUnhealthy: false,
+  hasOwnerContext: false,
+};
+
+/** The `[STT]` lines last logged, so an unchanged state is reported once, not per voice note. */
+let lastSttReport = '';
+
+/**
+ * @description The speech-engine chain in effect NOW: `stt.json` is re-read when
+ * its stamp changes (a hand edit or a `/stt` save applies to the next voice, no
+ * restart), and a change in what is wrong with it is logged once as `[STT] …`.
+ */
+function getResolvedSttSettings(): ResolvedSttSettings {
+  const resolved = resolveSttSettings(loadSttConfig(getSttConfigPath()), sttFacts);
+  const report = getSttReportLines(resolved).join('\n');
+  if (report !== lastSttReport) {
+    lastSttReport = report;
+    if (report) console.warn(report);
+  }
+  return resolved;
+}
+
+/**
+ * @description Boot step of the voice settings: the one-time move of the old
+ * `GROQ_API_KEY` / `OPENAI_API_KEY` env keys into `stt.json`, then the first
+ * `[STT]` report.
+ */
+function initSttSettings(): void {
+  const configPath = getSttConfigPath();
+  const migration = migrateLegacySttKeys(configPath);
+  if (migration.status === 'migrated') {
+    console.log(`[STT] moved ${migration.engineNames.join(' + ')} from the environment into ${configPath}`);
+  } else if (migration.status === 'writeFailed') {
+    console.error(`[STT] could not write ${configPath} (${migration.error}): voice input stays off until it can be written`);
+  }
+  getResolvedSttSettings();
+}
+
+/**
+ * @description Transcribe a downloaded voice note for thread `key` through the
+ * engine chain. A failing engine falls through to the next one at once (logged
+ * only); the LAST engine retries transient failures, and before each retry the
+ * topic gets a short notice naming the error and the pause, so the user knows
+ * the voice note isn't lost. The notice is UNPACED like the transcript echo it
+ * precedes: queued behind agent output it could land after the retry already
+ * succeeded.
+ */
+async function transcribeVoiceFile(
+  key: SessionKey,
+  filePath: string,
+  durationSeconds: number,
+): Promise<TranscribeResult> {
+  const { engines, settings } = getResolvedSttSettings();
+  if (engines.length === 0) return { ok: false, error: 'no speech engine available' };
+  const startedAtMs = Date.now();
+  const result = await transcribeWithEngines(filePath, engines, {
+    durationSeconds,
+    language: settings.language,
+    onFallback: ({ from, to, error }) => {
+      console.warn(`[transcribe] ${from} failed (${error}); falling back to ${to}`);
+    },
     onRetry: ({ attemptNumber, error, delayMs }) => {
       console.warn(`[transcribe] attempt ${attemptNumber} failed (${error}); retrying in ${delayMs}ms`);
       const seconds = Math.round(delayMs / 1000);
       void replyToThread(key, t('voice.retrying', { error, seconds }), {}, { unpaced: true }).catch(() => {});
     },
   });
-  if (!result.ok) console.warn(`[transcribe] failed: ${result.error}`);
+  if (result.ok) {
+    console.log(`[transcribe] ok via ${result.engine} in ${Date.now() - startedAtMs}ms (${durationSeconds}s audio)`);
+  } else {
+    console.warn(`[transcribe] failed: ${result.error}`);
+  }
   return result;
 }
 
@@ -8143,8 +8211,9 @@ bot.on(message('voice'), async (ctx) => {
 
   await state.pushMessageId(key, ctx.message.message_id);
 
-  if (!ENV.groqApiKey && !ENV.openaiApiKey) {
-    await replyToThread(key, t('voice.no_api_key'));
+  const sttSettings = getResolvedSttSettings();
+  if (sttSettings.engines.length === 0) {
+    await replyToThread(key, t(sttSettings.errors.length > 0 ? 'voice.config_invalid' : 'voice.no_api_key'));
     return;
   }
 
@@ -8156,13 +8225,14 @@ bot.on(message('voice'), async (ctx) => {
   // rejected job is guarded so it can never become an unhandledRejection
   // (processVoiceJob already reports its own errors via replyToThread).
   const fileId = ctx.message.voice.file_id;
+  const durationSeconds = ctx.message.voice.duration;
   const sentAtMs = ctx.message.date * 1000;
   // A Telegram REPLY on the voice note folds the quoted message into the prompt.
   // Compute it HERE (only the handler has `ctx`); the job runs later off the
   // update loop and only sees `key`/`bot`.
   const replyBlock = getReplyQuoteBlock(key, ctx.message);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, getTopicRequesterId(ctx.from), sentAtMs, replyBlock))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), sentAtMs, replyBlock))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     });
@@ -8184,6 +8254,7 @@ bot.on(message('voice'), async (ctx) => {
 async function processVoiceJob(
   key: SessionKey,
   fileId: string,
+  durationSeconds: number,
   requesterId: string,
   sentAtMs?: number,
   replyContext?: string,
@@ -8217,7 +8288,7 @@ async function processVoiceJob(
       await replyToThread(key, `${t('voice.failed')} (${msg})`);
       return;
     }
-    const result = await transcribeVoiceFile(key, tempFile);
+    const result = await transcribeVoiceFile(key, tempFile, durationSeconds);
     fs.unlink(tempFile, () => {});
 
     if (!result.ok) {
@@ -12003,7 +12074,7 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
     botRights,
     hasBinding,
     availableAgents,
-    hasGroq: !!ENV.groqApiKey,
+    hasSpeechEngine: getResolvedSttSettings().engines.length > 0,
     ownerSet,
     usedGeneralFallback: !ownerSet,
   };
@@ -12148,6 +12219,10 @@ export async function startBot(): Promise<void> {
   //     environment is left exactly as launched.
   applyProcessTimezone(state.getTimezone());
   console.log(`Timezone:         ${getEffectiveTimezone(state.getTimezone())} (host: ${getHostTimezone()})`);
+
+  // 1a''. The voice settings (`stt.json`): the old env keys move into it once,
+  //     before the first voice note or the readiness check reads the chain.
+  initSttSettings();
 
   // 1a'. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
   //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the

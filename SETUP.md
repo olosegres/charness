@@ -172,17 +172,16 @@ $EDITOR ~/.config/charness/.env
 ```
 
 ```dotenv
-# ~/.config/charness/.env — the one place your keys live
+# ~/.config/charness/.env — the bot token and the instance settings
 TELEGRAM_BOT_TOKEN=123456789:ABCdef...
-# GROQ_API_KEY=...     # optional: free voice transcription
 # OWNER_USER_ID=...    # set to drive the bot from its DM (step 2)
 ```
 
-All keys the bot needs live in this one file — the bot token and the optional
-`GROQ_API_KEY` for voice sit side by side, no separate stores. (Agent
-provider auth is the exception, and lives inside the agents themselves:
-`claude login` for Claude, `/connect` or OpenCode's own config for OpenCode —
-see [Environment Variables](#environment-variables).) The wrapper loads env
+The bot token lives in this file; the voice-recognition keys live next to it, in
+[`stt.json`](#voice-input). (Agent provider auth is the exception, and lives
+inside the agents themselves: `claude login` for Claude, `/connect` or
+OpenCode's own config for OpenCode — see
+[Environment Variables](#environment-variables).) The wrapper loads env
 from two locations, in order — a global base and an optional per-project
 override:
 
@@ -277,6 +276,45 @@ Then: `/quit` ends the session; bare `/bind` inspects/reconfigures the binding;
 > uses, so a thread started in Telegram can be picked up with `claude --resume`
 > and vice versa.
 
+### Voice input
+
+Voice notes are transcribed by an **ordered chain of speech engines**: the first available one is tried,
+and when it fails (refused connection, timeout, an error answer) the next one answers the same voice note
+at once. Only the last engine retries a temporary failure (after 5 s, then 15 s). An empty transcript is
+final — silence is never "fixed" by asking another engine.
+
+Everything lives in one file, **`stt.json`**, next to your `.env` (`~/.config/charness/stt.json`; for an
+isolated instance, beside its `ENV_FILE`). It holds the settings and the API keys, is written with mode
+`0600`, and is re-read when it changes — an edit applies to the next voice note, no restart. If the file is
+invalid, the bot keeps the last good settings, logs a `[STT]` line naming the field (never a value), and
+refuses voice with a notice when nothing valid was ever loaded.
+
+```json
+{
+  "engines": [
+    { "id": "q1", "kind": "groq", "apiKey": "gsk_..." },
+    { "id": "o1", "kind": "openai", "apiKey": "sk-...", "timeout": { "baseSeconds": 10, "percentOfDuration": 25 } },
+    { "id": "u1", "kind": "url", "url": "http://127.0.0.1:8000/v1/audio/transcriptions", "model": "whisper-1" }
+  ],
+  "language": "ru"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `engines` | Ordered, at most 6. `kind`: `groq`, `openai`, `url` (any OpenAI-compatible `/audio/transcriptions` endpoint — give the full URL; `apiKey` is optional there) or `gigaam` (the local engine). `id` is 1–8 lowercase letters or digits, unique. `isDisabled: true` keeps an engine listed but unused |
+| `timeout` | Per engine: `baseSeconds` + `percentOfDuration` % of the voice's length (default 10 s + 25 %), so a 30 s voice gets 17.5 s and a 5 min voice 85 s |
+| `language` | Two-letter code (`ru`, `en`, …) sent to the engines as a hint; leave it out to let the engine detect the language |
+| `gigaam` | `idleMinutes` (default 15, `0` = never) and `workers` (1, 2, 4 or 8; default 4) of the local engine |
+
+An engine without what it needs (no key, no URL) is skipped and logged once. With no usable engine, a voice
+note is answered with a pointer to this setup.
+
+**Coming from `GROQ_API_KEY` / `OPENAI_API_KEY` in `.env`?** On the first start without a `stt.json`, the bot
+writes one from those keys (Groq first, then OpenAI) and logs
+`[deprecated] GROQ_API_KEY/OPENAI_API_KEY in .env is deprecated, voice settings now live in stt.json`. From then
+on the env keys are ignored — edit `stt.json` instead.
+
 ### Required files structure
 
 Launch `charness` from the parent folder that holds your project repos —
@@ -341,7 +379,6 @@ talk to the bot there.
 | `ALLOWED_GROUP_ID` | (auto-pair) | Numeric forum supergroup id (`-100…`). Leave empty to auto-pair with the first forum group a group **admin/creator** contacts the bot from (id is saved to `state.json`; re-point with `/pair`). A **name** is not accepted. A numeric value disables auto-pairing |
 | `CHAT_MODE` | `both` | Which surface(s) this instance serves: `group`, `dm`, or `both` — see [Two surfaces](README.md#two-surfaces-group-topics-bot-dm-or-both) |
 | `OWNER_USER_ID` | — | **Optional.** Numeric Telegram user id of the owner — leave it unset to run group-only (the DM surface stays inert; a group works fully without it). Set it only to enable the owner-DM surface; **required** solely for `CHAT_MODE=dm` |
-| `GROQ_API_KEY` | — | Recommended for voice transcription. Without it, voice messages are not transcribed unless you intentionally configure the OpenAI fallback |
 
 **Localized in 12 languages** — the bot UI (commands, buttons, notices) speaks
 中文, English, Français, ქართული, Deutsch, हिन्दी, 日本語, Português, Русский,
@@ -360,7 +397,6 @@ disappears and a short confirmation stays in the chosen language;
 
 | Variable | Default | Set only when |
 |---|---|---|
-| `OPENAI_API_KEY` | — | You intentionally use OpenAI Whisper as the voice fallback instead of Groq |
 | `SHELL` | `/bin/bash` | You want `/terminal` to open a different shell than your login shell (host env var, not set by the bot) |
 
 ## Jira setup

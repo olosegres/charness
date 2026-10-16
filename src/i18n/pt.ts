@@ -396,7 +396,9 @@ export const ptDict: Record<string, string> = {
     '✏️ Não trato mensagens editadas como nova entrada — envia a correção como uma mensagem separada.',
 
   'voice.no_api_key':
-    'A voz requer `GROQ_API_KEY` (grátis) ou `OPENAI_API_KEY`.',
+    'A voz precisa de um mecanismo de reconhecimento de fala — abra /stt para configurar um.',
+  'voice.config_invalid':
+    'A voz está desligada: o arquivo de configurações stt.json é inválido. O log do bot indica o problema — corrija o arquivo ou abra /stt.',
   'voice.failed': 'Falha ao transcrever a mensagem de voz.',
   'voice.retrying': '⚠️ Falha ao transcrever a mensagem de voz ({error}). Nova tentativa em {seconds} s…',
   'voice.transcribed': '🎤 {text}',
@@ -636,7 +638,7 @@ export const ptDict: Record<string, string> = {
   'startup.item.install_agent':
     'Instale uma CLI de agente — claude ou opencode.',
   'startup.item.optional_groq':
-    '(opcional) Adicione GROQ_API_KEY ao seu .env e reinicie para ativar a entrada de voz.',
+    '(opcional) Configure a entrada de voz com /stt (reconhecimento local, Groq, OpenAI ou seu próprio servidor).',
   'startup.item.optional_owner':
     '(opcional) Defina OWNER_USER_ID para receber este status no seu chat privado.',
   'requests.alert.notAnsweringNotice': '⚠️ A solicitação {requestId} ficou sem resposta: o agente terminou seus turnos sem responder e os lembretes desistiram. Verifique a sessão neste tópico.',
