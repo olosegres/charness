@@ -14,7 +14,7 @@ import * as path from 'path';
 import type { Context } from 'telegraf';
 import { createStt, sttInputTimeoutMs, type SttPorts } from '../connectors/telegram/commands/stt';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import type { SessionKey } from '../sessionKey';
+import { keyToString, type SessionKey } from '../sessionKey';
 import type { SttInstallProgressMessage } from '../state';
 import { getSttPaths, gigaamPinnedRequirements, gigaamScriptVersion, type SttInstallProgress } from '../stt/sttInstall';
 import { computeSttRevision } from '../stt/sttScreenPlan';
@@ -30,6 +30,7 @@ import type { SttInstallJobOptions } from '../stt/sttAutoInstall';
 
 const sampleKey = 'gsk_sampleSecretKey1234567890';
 const key: SessionKey = makeTelegramKey(-1001111111111, 77);
+const generalKey: SessionKey = makeTelegramKey(-1001111111111, 1);
 const messageId = 900;
 
 interface SentMessage {
@@ -51,6 +52,7 @@ let nextMessageId = 1000;
 let commandHandler: ((ctx: Context, key: SessionKey) => Promise<void>) | null = null;
 let actionHandler: ((ctx: Context) => Promise<void>) | null = null;
 let isAuthorised = true;
+let pairedGeneralKey: SessionKey | null = generalKey;
 
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stt-command-'));
@@ -67,6 +69,7 @@ beforeEach(() => {
   commandHandler = null;
   actionHandler = null;
   isAuthorised = true;
+  pairedGeneralKey = generalKey;
 });
 
 afterEach(() => {
@@ -84,6 +87,23 @@ function writeInstalledMarker(): void {
   fs.mkdirSync(path.dirname(paths.venvPython), { recursive: true });
   fs.writeFileSync(paths.venvPython, '#!/bin/sh\n', { mode: 0o755 });
   fs.writeFileSync(paths.markerFile, JSON.stringify({ scriptVersion: gigaamScriptVersion, pins: gigaamPinnedRequirements, installedAt: 'now' }));
+}
+
+function holdInstallLock(): void {
+  const paths = getSttPaths(dataDir);
+  fs.mkdirSync(paths.lockDir, { recursive: true });
+  fs.writeFileSync(path.join(paths.lockDir, 'owner'), `${process.pid}\n`);
+}
+
+function writeInstallProgressFile(progress: SttInstallProgress): void {
+  const paths = getSttPaths(dataDir);
+  fs.mkdirSync(paths.root, { recursive: true });
+  fs.appendFileSync(paths.progressFile, `${JSON.stringify(progress)}\n`);
+}
+
+/** Let the fire-and-forget parts of a tap (the install flow) run to their end. */
+async function settle(): Promise<void> {
+  for (let round = 0; round < 10; round++) await new Promise((resolve) => setImmediate(resolve));
 }
 
 function createFeature(overrides: Partial<SttPorts> = {}) {
@@ -131,6 +151,7 @@ function createFeature(overrides: Partial<SttPorts> = {}) {
         return installOutcome;
       },
     },
+    getGeneralKey: () => pairedGeneralKey,
     ...overrides,
   };
   const feature = createStt(ports);
@@ -359,8 +380,7 @@ test('Enable local recognition: confirm screen, then Install hands the SAME mess
   assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬇️ Install|stt_ei_')));
 
   await tap('ei');
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   assert.equal(installRuns.length, 1);
   const installEdits = edits.filter((edit) => edit.id === messageId);
   assert.ok(installEdits.some((edit) => edit.text.includes('Downloading the model 1/216 MB')), installEdits.map((edit) => edit.text).join(' | '));
@@ -377,13 +397,209 @@ test('a failed install shows the error and the log tail with Retry, and leaves t
   installOutcome = { phase: 'failed', detail: '', bytesDownloaded: 0, error: 'the model check failed', logTail: ['boom'] };
   createFeature();
   await tap('ei');
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle();
   const finalEdit = lastEdit();
   assert.match(finalEdit.text, /could not be installed: the model check failed/);
   assert.match(finalEdit.text, /boom/);
   assert.ok(finalEdit.buttons.some((button) => button.startsWith('🔁 Retry|stt_er_')));
   assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1']);
+  assert.equal(storedInstallMessage, null, 'a failed install is forgotten too');
+});
+
+test('an install started from /stt remembers its message WITH the enable flag while it runs, and forgets it at the end', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  let rememberedWhileRunning: SttInstallProgressMessage | null = null;
+  createFeature({
+    installJobs: {
+      start: async ({ reportTo }: SttInstallJobOptions) => {
+        rememberedWhileRunning = storedInstallMessage;
+        await reportTo({ phase: 'checking', detail: '', bytesDownloaded: 0 });
+        writeInstalledMarker();
+        return installOutcome;
+      },
+    },
+  });
+  await tap('ei');
+  await settle();
+  assert.deepEqual(rememberedWhileRunning, { threadKey: keyToString(key), messageId, shouldEnableOnDone: true });
+  assert.equal(storedInstallMessage, null);
+});
+
+test('a finished install into a FULL engine list says so instead of "ready", and leaves the list alone', async () => {
+  const sixEngines = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6'].map((id) => ({ id, kind: 'groq' as const, apiKey: sampleKey }));
+  writeConfig({ engines: sixEngines });
+  createFeature();
+  await tap('ei');
+  await settle();
+  assert.match(lastEdit().text, /not in the engine list: the list is full \(6 engines\)/);
+  assert.doesNotMatch(lastEdit().text, /is ready/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']);
+  assert.equal(storedInstallMessage, null);
+});
+
+test('a finished install whose settings file cannot be written names the file instead of "ready"', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  createFeature();
+  // From here on the settings directory is a plain file: the next write fails (ENOTDIR).
+  fs.rmSync(path.dirname(configPath), { recursive: true, force: true });
+  fs.writeFileSync(path.dirname(configPath), 'not a directory');
+  await tap('ei', [], computeSttRevision(createEmptySttConfig()));
+  await settle();
+  assert.match(lastEdit().text, new RegExp(`could not be written \\(${configPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+  assert.doesNotMatch(lastEdit().text, /is ready/);
+});
+
+const rememberedHere = (shouldEnableOnDone: boolean | undefined): SttInstallProgressMessage => ({
+  threadKey: keyToString(key),
+  messageId: 321,
+  ...(shouldEnableOnDone === undefined ? {} : { shouldEnableOnDone }),
+});
+
+test('boot, the install job still runs (a reload mid-install): the remembered message is continued and, at the end, the engine joins the list', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  holdInstallLock();
+  storedInstallMessage = rememberedHere(true);
+  const feature = createFeature();
+  await feature.resumeSttInstallAtBoot();
+
+  assert.equal(installRuns.length, 1, 'attached to the job');
+  const ownEdits = edits.filter((edit) => edit.id === 321);
+  assert.ok(ownEdits.some((edit) => edit.text.includes('Downloading the model 1/216 MB')), ownEdits.map((edit) => edit.text).join(' | '));
+  assert.equal(lastEdit().id, 321);
+  assert.match(lastEdit().text, /Local recognition is ready/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')), 'the re-attached message keeps its buttons');
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1'], 'the local engine joined although this is not the process that started the install');
+  assert.equal(storedInstallMessage, null);
+  assert.equal(sent.length, 0);
+});
+
+test('boot, the install job failed while the bot was running before the reload: the same message ends with the error and Retry', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  holdInstallLock();
+  storedInstallMessage = rememberedHere(true);
+  installOutcome = { phase: 'failed', detail: '', bytesDownloaded: 0, error: 'the model check failed', logTail: ['boom'] };
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(lastEdit().id, 321);
+  assert.match(lastEdit().text, /could not be installed: the model check failed/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('🔁 Retry|stt_er_')));
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1']);
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, the install FINISHED while the bot was down: the frozen message becomes "ready" with its buttons and the engine joins the list', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeInstalledMarker();
+  writeInstallProgressFile({ phase: 'done', detail: '', bytesDownloaded: 0 });
+  storedInstallMessage = rememberedHere(true);
+  await createFeature().resumeSttInstallAtBoot();
+
+  assert.equal(installRuns.length, 0, 'no job is started for an install that already ended');
+  assert.equal(lastEdit().id, 321);
+  assert.match(lastEdit().text, /Local recognition is ready/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1']);
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, an install started by stt.json (no flag) that finished while down leaves the engine list as the file has it', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam', isDisabled: true }] });
+  writeInstalledMarker();
+  writeInstallProgressFile({ phase: 'done', detail: '', bytesDownloaded: 0 });
+  storedInstallMessage = rememberedHere(undefined);
+  await createFeature().resumeSttInstallAtBoot();
+  assert.match(lastEdit().text, /Local recognition is ready/);
+  assert.equal(readConfig().engines[0].isDisabled, true, 'a switched-off local engine is not switched on behind the operator\'s back');
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, the install job died while the bot was down: the message says it ended without a result, with Retry', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  storedInstallMessage = rememberedHere(true);
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(installRuns.length, 0);
+  assert.match(lastEdit().text, /could not be installed: the install job ended without a result/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('🔁 Retry|stt_er_')));
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1']);
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, a "done" line whose files are gone is not trusted: it is reported as ended without a result', async () => {
+  writeConfig({});
+  writeInstallProgressFile({ phase: 'done', detail: '', bytesDownloaded: 0 });
+  storedInstallMessage = rememberedHere(true);
+  await createFeature().resumeSttInstallAtBoot();
+  assert.match(lastEdit().text, /ended without a result/);
+  assert.deepEqual(readConfig().engines, []);
+});
+
+test('boot, a job that failed while the bot was down shows ITS error and log tail', async () => {
+  writeConfig({});
+  writeInstallProgressFile({ phase: 'failed', detail: '', bytesDownloaded: 0, error: 'no space left', logTail: ['write failed'] });
+  storedInstallMessage = rememberedHere(true);
+  await createFeature().resumeSttInstallAtBoot();
+  assert.match(lastEdit().text, /no space left/);
+  assert.match(lastEdit().text, /write failed/);
+});
+
+test('boot, a remembered message that was deleted gets a fresh one with the outcome', async () => {
+  writeConfig({});
+  writeInstalledMarker();
+  writeInstallProgressFile({ phase: 'done', detail: '', bytesDownloaded: 0 });
+  storedInstallMessage = rememberedHere(true);
+  await createFeature({ editThreadMessage: async () => false }).resumeSttInstallAtBoot();
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Local recognition is ready/);
+  assert.ok(sent[0].buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, a remembered message with an unreadable topic key is dropped without a crash', async () => {
+  writeConfig({});
+  storedInstallMessage = { threadKey: 'not a key', messageId: 5 };
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(storedInstallMessage, null);
+  assert.equal(edits.length + sent.length, 0);
+});
+
+test('boot, stt.json names the local engine before it is installed: the install reports into General and enables nothing', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }] });
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(installRuns.length, 1);
+  assert.equal(sent.length, 1, 'one message in General');
+  assert.match(sent[0].text, /Downloading the model 1\/216 MB/);
+  assert.match(lastEdit().text, /Local recognition is ready/);
+  assert.equal(lastEdit().id, sent[0].id, 'the same message is edited into the outcome');
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.deepEqual(readConfig().engines, [{ id: 'g', kind: 'gigaam' }]);
+  assert.equal(storedInstallMessage, null);
+});
+
+test('boot, with no group paired the auto-install reports as log lines only', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }] });
+  pairedGeneralKey = null;
+  const logLines: string[] = [];
+  mock.method(console, 'log', (line: string) => { logLines.push(line); });
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(sent.length + edits.length, 0);
+  assert.ok(logLines.includes('[STT] install: downloadingModel 1/216 MB'), logLines.join('\n'));
+  assert.ok(logLines.includes('[STT] install finished: the local engine starts with the next voice note'), logLines.join('\n'));
+});
+
+test('boot, nothing to resume: no message, no running job, a settings file that needs nothing — nothing happens', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  await createFeature().resumeSttInstallAtBoot();
+  assert.equal(installRuns.length, 0);
+  assert.equal(sent.length + edits.length, 0);
+});
+
+test('an auto-install does not start a second reporter while a message already owns the running install', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }] });
+  holdInstallLock();
+  storedInstallMessage = rememberedHere(true);
+  await createFeature().startSttAutoInstall();
+  assert.equal(installRuns.length, 0);
+  assert.equal(sent.length + edits.length, 0);
 });
 
 test('the install button is refused once the engine is installed (a stale screen)', async () => {

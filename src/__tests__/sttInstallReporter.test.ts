@@ -1,7 +1,8 @@
 /**
  * @description The install progress message: one message per install, edited in place, remembered in
- * state.json so a reloaded bot continues the SAME message; a deleted message is replaced; the end clears the
- * memory; with no group the progress goes to the log, one line per phase.
+ * state.json (with the "enable on done" flag) so a reloaded bot continues the SAME message; a deleted message
+ * is replaced; the END of the job is not this reporter's business (the finisher edits and forgets the
+ * message); with no group the progress goes to the log, one line per phase.
  */
 
 import { test } from 'node:test';
@@ -80,7 +81,7 @@ test('elapsed time and log lines', () => {
 
 test('the message reporter posts once, then edits that message and remembers its id', async () => {
   const { ports, calls, getRemembered, advance } = createPorts();
-  const report = createSttInstallMessageReporter(ports, generalKey);
+  const { report } = createSttInstallMessageReporter(ports, generalKey);
 
   await report(progress('creatingEnvironment'));
   advance(3000);
@@ -97,40 +98,69 @@ test('the message reporter posts once, then edits that message and remembers its
   assert.deepEqual(getRemembered(), { threadKey: keyToString(generalKey), messageId: 500 });
 });
 
-test('the end edits the message into the outcome and forgets it', async () => {
+test('the end of the job leaves the message and its memory to the finisher', async () => {
   const { ports, calls, getRemembered } = createPorts();
-  const report = createSttInstallMessageReporter(ports, generalKey);
+  const { report, getMessageId } = createSttInstallMessageReporter(ports, generalKey);
   await report(progress('checking'));
+  const callsBeforeEnd = calls.length;
   await report(progress('done'));
-  assert.equal(calls.at(-2), 'edit:500:stt.install.done');
-  assert.equal(calls.at(-1), 'remember:none');
-  assert.equal(getRemembered(), null);
+  await report(progress('failed', { error: 'boom' }));
+  assert.equal(calls.length, callsBeforeEnd, 'neither a done nor a failed report touches the message or the state');
+  assert.deepEqual(getRemembered(), { threadKey: keyToString(generalKey), messageId: 500 }, 'the message stays remembered until the finisher forgets it');
+  assert.equal(getMessageId(), 500);
+});
+
+test('the reporter hands out the id of the message it edits, including a replacement for a deleted one', async () => {
+  const { ports } = createPorts({ threadKey: keyToString(generalKey), messageId: 321 }, { editFails: true });
+  const { report, getMessageId } = createSttInstallMessageReporter(ports, generalKey);
+  assert.equal(getMessageId(), 321, 'before the first report: the remembered message');
+  await report(progress('installingPackages'));
+  assert.equal(getMessageId(), 500, 'the edit failed, a new message took over');
+});
+
+test('the "enable on done" flag is remembered with the message — also with a replaced one — so a reload still finishes the job', async () => {
+  const { ports, getRemembered } = createPorts();
+  const existing = { threadKey: keyToString(otherKey), messageId: 777, shouldEnableOnDone: true };
+  const first = createSttInstallMessageReporter(ports, otherKey, existing);
+  await first.report(progress('creatingEnvironment'));
+  assert.deepEqual(getRemembered(), existing);
+
+  // A reloaded bot: the flag comes back from the remembered message, and survives a replacement of the message.
+  const reloaded = createPorts({ threadKey: keyToString(otherKey), messageId: 777, shouldEnableOnDone: true }, { editFails: true });
+  await createSttInstallMessageReporter(reloaded.ports, otherKey).report(progress('downloadingModel', { detail: '1/216 MB' }));
+  assert.deepEqual(reloaded.getRemembered(), { threadKey: keyToString(otherKey), messageId: 500, shouldEnableOnDone: true });
+});
+
+test('an install nobody asked for in /stt is remembered without the flag', async () => {
+  const { ports, getRemembered } = createPorts();
+  await createSttInstallMessageReporter(ports, generalKey).report(progress('creatingEnvironment'));
+  assert.equal(getRemembered()?.shouldEnableOnDone, undefined);
 });
 
 test('a reloaded bot continues the remembered message of that topic, not a new one', async () => {
   const { ports, calls } = createPorts({ threadKey: keyToString(generalKey), messageId: 321 });
-  await createSttInstallMessageReporter(ports, generalKey)(progress('downloadingModel', { detail: '1/216 MB' }));
+  await createSttInstallMessageReporter(ports, generalKey).report(progress('downloadingModel', { detail: '1/216 MB' }));
   assert.ok(calls[0].startsWith('edit:321:'), calls[0]);
   assert.ok(!calls.some((call) => call.startsWith('send:')));
 });
 
 test('a remembered message of ANOTHER topic is not edited', async () => {
   const { ports, calls } = createPorts({ threadKey: keyToString(otherKey), messageId: 321 });
-  await createSttInstallMessageReporter(ports, generalKey)(progress('checking'));
+  await createSttInstallMessageReporter(ports, generalKey).report(progress('checking'));
   assert.ok(calls[0].startsWith('send:'), calls[0]);
 });
 
 test('a message the caller already posted (the /stt confirm screen) is the one edited, and gets remembered', async () => {
   const { ports, calls, getRemembered } = createPorts();
   const existing = { threadKey: keyToString(otherKey), messageId: 777 };
-  await createSttInstallMessageReporter(ports, otherKey, existing)(progress('creatingEnvironment'));
+  await createSttInstallMessageReporter(ports, otherKey, existing).report(progress('creatingEnvironment'));
   assert.ok(calls[0].startsWith('edit:777:'));
   assert.deepEqual(getRemembered(), existing);
 });
 
 test('an edit that fails (the message was deleted) posts a fresh message and remembers THAT', async () => {
   const { ports, calls, getRemembered } = createPorts({ threadKey: keyToString(generalKey), messageId: 321 }, { editFails: true });
-  await createSttInstallMessageReporter(ports, generalKey)(progress('installingPackages'));
+  await createSttInstallMessageReporter(ports, generalKey).report(progress('installingPackages'));
   assert.ok(calls[0].startsWith('edit:321:'));
   assert.ok(calls[1].startsWith('send:'));
   assert.deepEqual(getRemembered(), { threadKey: keyToString(generalKey), messageId: 500 });

@@ -405,6 +405,8 @@ export const frDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Téléchargement du modèle {progress}…',
   'stt.install.checking': 'Vérification du modèle…',
   'stt.install.done': '✅ La reconnaissance locale est prête — elle démarre avec le prochain message vocal.',
+  'stt.install.doneNotAdded': '✅ La reconnaissance locale est installée, mais elle n\'est pas dans la liste des moteurs : la liste est pleine ({limit} moteurs). Supprimez-en un, puis ajoutez le moteur local dans les réglages.',
+  'stt.install.doneNotSaved': '✅ La reconnaissance locale est installée, mais le fichier de réglages n\'a pas pu être écrit ({path}) : le moteur local n\'est donc pas encore dans la liste. Rendez ce dossier accessible en écriture, puis ajoutez le moteur local dans les réglages.',
   'stt.install.failed': '❌ La reconnaissance locale n\'a pas pu être installée : {error}',
   'stt.engine.gigaam': 'GigaAM (local)',
   'stt.engine.url': 'Serveur personnalisé',

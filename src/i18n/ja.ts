@@ -405,6 +405,8 @@ export const jaDict: Record<string, string> = {
   'stt.install.downloadingModel': 'モデルをダウンロード中 {progress}…',
   'stt.install.checking': 'モデルを確認中…',
   'stt.install.done': '✅ ローカル認識の準備ができました — 次の音声メッセージから起動します。',
+  'stt.install.doneNotAdded': '✅ ローカル認識はインストールされましたが、エンジン一覧に入っていません。一覧がいっぱいです（{limit} 件）。1 つ削除してから、設定でローカルエンジンを追加してください。',
+  'stt.install.doneNotSaved': '✅ ローカル認識はインストールされましたが、設定ファイル（{path}）に書き込めなかったため、ローカルエンジンはまだ一覧に入っていません。そのフォルダを書き込み可能にしてから、設定でローカルエンジンを追加してください。',
   'stt.install.failed': '❌ ローカル認識をインストールできませんでした: {error}',
   'stt.engine.gigaam': 'GigaAM（ローカル）',
   'stt.engine.url': '独自サーバー',

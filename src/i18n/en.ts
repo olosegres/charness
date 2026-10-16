@@ -418,6 +418,8 @@ export const enDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Downloading the model {progress}…',
   'stt.install.checking': 'Checking the model…',
   'stt.install.done': '✅ Local recognition is ready — it starts with the next voice note.',
+  'stt.install.doneNotAdded': '✅ Local recognition is installed, but it is not in the engine list: the list is full ({limit} engines). Remove one, then add the local engine in the settings.',
+  'stt.install.doneNotSaved': '✅ Local recognition is installed, but the settings file could not be written ({path}), so the local engine is not in the list yet. Make that folder writable, then add the local engine in the settings.',
   'stt.install.failed': '❌ Local recognition could not be installed: {error}',
   'stt.engine.gigaam': 'GigaAM (local)',
   'stt.engine.url': 'Custom server',

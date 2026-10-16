@@ -30,7 +30,8 @@ import {
 const pollIntervalMs = 3_000;
 const entryFileName = 'sttInstallEntry.js';
 const forceFlag = '--force';
-const jobEndedWithoutResultError = 'the install job ended without a result (see install.log)';
+/** What a job that left nothing readable behind is reported as. */
+export const installJobEndedWithoutResultError = 'the install job ended without a result (see install.log)';
 
 /** Gets every progress report of a job, the final one included; an error in it never stops the job. */
 export type SttInstallReporter = (progress: SttInstallProgress) => void | Promise<void>;
@@ -64,7 +65,7 @@ function checkIsTerminal(progress: SttInstallProgress | null): progress is SttIn
   return progress !== null && (progress.phase === 'done' || progress.phase === 'failed');
 }
 
-function createFailedProgress(error: string): SttInstallProgress {
+export function createFailedInstallProgress(error: string): SttInstallProgress {
   return { phase: 'failed', detail: '', bytesDownloaded: 0, error, logTail: [] };
 }
 
@@ -114,7 +115,7 @@ export function createSttInstallJobManager(deps: SttInstallJobDeps): SttInstallJ
       try {
         launched = await deps.launchEntry(force ? [forceFlag] : []);
       } catch (error) {
-        const failed = createFailedProgress(`the install job could not be started: ${error instanceof Error ? error.message : 'unknown error'}`);
+        const failed = createFailedInstallProgress(`the install job could not be started: ${error instanceof Error ? error.message : 'unknown error'}`);
         await notify(reporters, failed);
         return failed;
       }
@@ -134,7 +135,7 @@ export function createSttInstallJobManager(deps: SttInstallJobDeps): SttInstallJ
         await notify(reporters, last);
         return last;
       }
-      const failed = createFailedProgress(jobEndedWithoutResultError);
+      const failed = createFailedInstallProgress(installJobEndedWithoutResultError);
       await notify(reporters, failed);
       return failed;
     }

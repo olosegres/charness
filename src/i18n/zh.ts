@@ -405,6 +405,8 @@ export const zhDict: Record<string, string> = {
   'stt.install.downloadingModel': '正在下载模型 {progress}…',
   'stt.install.checking': '正在检查模型…',
   'stt.install.done': '✅ 本地识别已就绪——下一条语音消息起即会启动。',
+  'stt.install.doneNotAdded': '✅ 本地识别已安装，但不在引擎列表中：列表已满（{limit} 个引擎）。请先删除一个，再在设置中添加本地引擎。',
+  'stt.install.doneNotSaved': '✅ 本地识别已安装，但无法写入设置文件（{path}），因此本地引擎还不在列表中。请让该文件夹可写，然后在设置中添加本地引擎。',
   'stt.install.failed': '❌ 无法安装本地识别：{error}',
   'stt.engine.gigaam': 'GigaAM（本地）',
   'stt.engine.url': '自定义服务器',

@@ -405,6 +405,8 @@ export const deDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Modell wird heruntergeladen {progress}…',
   'stt.install.checking': 'Modell wird geprüft…',
   'stt.install.done': '✅ Die lokale Erkennung ist bereit — sie startet mit der nächsten Sprachnachricht.',
+  'stt.install.doneNotAdded': '✅ Die lokale Erkennung ist installiert, steht aber nicht in der Engine-Liste: Die Liste ist voll ({limit} Engines). Entferne eine und füge die lokale Engine in den Einstellungen hinzu.',
+  'stt.install.doneNotSaved': '✅ Die lokale Erkennung ist installiert, aber die Einstellungsdatei konnte nicht geschrieben werden ({path}), daher steht die lokale Engine noch nicht in der Liste. Mache den Ordner beschreibbar und füge die lokale Engine in den Einstellungen hinzu.',
   'stt.install.failed': '❌ Die lokale Erkennung konnte nicht installiert werden: {error}',
   'stt.engine.gigaam': 'GigaAM (lokal)',
   'stt.engine.url': 'Eigener Server',

@@ -180,8 +180,16 @@ button). A request failure after a successful `ensure` is not a spawn failure.
 **Auto-install.** `stt.json` naming an enabled `gigaam` engine that is not installed starts the install job at boot and
 whenever the file changes (once per change, never per voice). The job runs detached (`sttInstallEntry`); the bot polls
 its progress file every 3 s and edits ONE message — in General of the paired group, or the message a reload left in
-`state.json` (`sttInstallProgress`) — or writes `[STT] install:` lines when no group is paired. A reloaded worker
-re-attaches to a running job (its lock is held); a failure is reported once with the log tail and not retried.
+`state.json` (`sttInstallProgress`) — or writes `[STT] install:` lines when no group is paired. A failure is reported
+once with the log tail and not retried.
+
+**An install outlives the bot, so its END is one shared path.** The progress reporter only edits and remembers the
+message (`{threadKey, messageId, shouldEnableOnDone}`; the flag is set by the `/stt` button, not by `stt.json`). The job
+ends through `finishInstall` (`commands/stt.ts`) whoever is attached: *job done → put the local engine into the list (flag
+set) → save → final edit with the buttons → forget the message* (a reload between the steps repeats an idempotent step).
+At boot (`resumeInstallAtBoot`) a remembered message is attached to while its job still runs, and **settled at once when
+the job ended while the bot was down** — "done" only while the engine is really installed, else «ended without a
+result» with Retry. A full engine list or an unwritable `stt.json` ends in a message that says so, never «ready».
 
 ## `/stt` — the settings screen
 
@@ -193,5 +201,5 @@ acting on a list that moved. An edit made from `/stt` while the file is invalid 
 Typed steps (a custom server's address, an API key) belong to the Telegram module: a plausible key is deleted from the
 topic the moment it is accepted and never echoed or logged; the output trace records `[redacted: speech engine key]` for
 the message while a key is awaited. Install: «Enable local recognition» confirms the cost, then the install job edits ONE
-message with its progress (remembered in `state.json`); on success the engine joins the list first. Details and the
+message with its progress (remembered in `state.json` with the enable flag); on success the engine joins the list first. Details and the
 registration contract: `connectors/telegram/commands/README.md` § `stt.ts`.

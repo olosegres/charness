@@ -9,7 +9,7 @@
  */
 import { Markup, type Context } from 'telegraf';
 import { t } from '../../../i18n';
-import { keyToString, type SessionKey } from '../../../sessionKey';
+import { keyToString, tryKeyFromString, type SessionKey } from '../../../sessionKey';
 import {
   isGigaamInstalled,
   isGigaamInstalling,
@@ -18,8 +18,16 @@ import {
   type SttInstallProgress,
 } from '../../../stt/sttInstall';
 import { addSttEngine, dropLocalSttEngine, enableLocalSttEngine, setSttEngineApiKey, type SttEditResult } from '../../../stt/sttConfigEdit';
-import type { SttInstallJobManager } from '../../../stt/sttAutoInstall';
-import { createSttInstallMessagePorts, createSttInstallMessageReporter } from '../../../stt/sttInstallReporter';
+import {
+  createFailedInstallProgress,
+  installJobEndedWithoutResultError,
+  type SttInstallJobManager,
+} from '../../../stt/sttAutoInstall';
+import {
+  createSttInstallLogReporter,
+  createSttInstallMessagePorts,
+  createSttInstallMessageReporter,
+} from '../../../stt/sttInstallReporter';
 import {
   buildSttCancelRow,
   buildSttCallback,
@@ -36,7 +44,7 @@ import {
   type SttScreenId,
   type SttScreenInput,
 } from '../../../stt/sttScreenPlan';
-import { getErrnoCode, saveSttConfig, type ResolvedSttSettings, type SttConfigFile } from '../../../stt/sttSettings';
+import { getErrnoCode, saveSttConfig, sttEngineLimit, type ResolvedSttSettings, type SttConfigFile } from '../../../stt/sttSettings';
 import type { SttOwnerContext, SttSidecarOwner } from '../../../stt/sttSidecarOwner';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
@@ -59,6 +67,14 @@ export interface SttPorts
   getOwnerContext: () => SttOwnerContext | null;
   owner: Pick<SttSidecarOwner, 'getStatus' | 'stop' | 'applySettingsChange' | 'resetSpawnGuard'>;
   installJobs: SttInstallJobManager;
+  /** General of the paired group — where an install that `stt.json` asked for reports; `null` when no group is paired. */
+  getGeneralKey: () => SessionKey | null;
+}
+
+/** How an install message ends: its text and the buttons under it. */
+interface SttInstallEnding {
+  text: string;
+  rows: SttButton[][];
 }
 
 /** A typed-input step the next plain message of a topic answers. Only `url` and `key` consume text. */
@@ -77,7 +93,7 @@ interface PendingSttInput {
 export function createStt(ports: SttPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale,
-    getConfigPath, getDataDir, getResolvedSettings, getOwnerContext, owner, installJobs,
+    getConfigPath, getDataDir, getResolvedSettings, getOwnerContext, owner, installJobs, getGeneralKey,
   } = ports;
 
   const pendingInputs = new Map<string, PendingSttInput>();
@@ -240,32 +256,135 @@ export function createStt(ports: SttPorts) {
 
   // ── the install ──
 
+  /** True while this process runs an install report that `stt.json` asked for (never two messages for one job). */
+  let isAutoInstallRunning = false;
+
+  function logInstallOutcome(outcome: SttInstallProgress): void {
+    if (outcome.phase === 'failed') console.warn(`[STT] install failed: ${outcome.error ?? 'unknown error'}`);
+    else console.log('[STT] install finished: the local engine starts with the next voice note');
+  }
+
+  /**
+   * The install is over: a finished one puts the local engine into the chain (when the install was asked for in
+   * `/stt`) and says so — or names why it could not; a failed one shows the error and the log tail with Retry.
+   */
+  async function buildInstallEnding(outcome: SttInstallProgress, shouldEnable: boolean): Promise<SttInstallEnding> {
+    // Read after the save: a button must carry the revision of the settings it now opens.
+    const buildButton = (text: string, action: 'er' | 'bk'): SttButton => ({
+      text,
+      data: buildSttCallback(action, [], computeSttRevision(getResolvedSettings().settings)),
+    });
+    const openSettingsText = t('stt.btn.openSettings');
+    if (outcome.phase !== 'done') {
+      return {
+        text: buildSttInstallProgressText(outcome, 0, t),
+        rows: [[buildButton(t('stt.btn.retry'), 'er'), buildButton(openSettingsText, 'bk')]],
+      };
+    }
+    let text = t('stt.install.done');
+    if (shouldEnable) {
+      const previous = getResolvedSettings().settings;
+      const enabled = enableLocalSttEngine(previous);
+      if (!enabled.ok) text = t('stt.install.doneNotAdded', { limit: sttEngineLimit });
+      else if (enabled.config !== previous && !(await save(previous, enabled.config))) text = t('stt.install.doneNotSaved', { path: getConfigPath() });
+    }
+    return { text, rows: [[buildButton(openSettingsText, 'bk')]] };
+  }
+
+  /**
+   * The ONE way an install that reports into a message ends — the tapped button, a re-attach after a reload and an
+   * install that finished while the bot was down all come through here: enable, save, the final edit, and only
+   * then forget the message (a reload in between repeats this idempotent step instead of losing it).
+   */
+  async function finishInstall(key: SessionKey, messageId: number | null, outcome: SttInstallProgress, shouldEnable: boolean): Promise<void> {
+    logInstallOutcome(outcome);
+    await withThreadLocale(key, async () => {
+      const ending = await buildInstallEnding(outcome, shouldEnable);
+      const markup = toMarkup(ending.rows);
+      if (messageId === null || !(await editThreadMessage(key, messageId, ending.text, markup))) {
+        await replyToThread(key, ending.text, markup);
+      }
+    });
+    const remembered = getState().getSttInstallProgressMessage();
+    // Only the message this job owned: another job's message (a /stt tap during an auto-install) stays remembered.
+    if (remembered && remembered.threadKey === keyToString(key) && (messageId === null || remembered.messageId === messageId)) {
+      await getState().setSttInstallProgressMessage(null);
+    }
+  }
+
   /** Install (or attach to the running install) with the progress edited into `messageId`; on success the local engine joins the chain. */
   async function runInstall(key: SessionKey, messageId: number, isAttach: boolean): Promise<void> {
     const threadKey = keyToString(key);
     if (!isAttach) {
       await editThreadMessage(key, messageId, buildSttInstallProgressText(initialInstallProgress, 0, t));
     }
-    await getState().setSttInstallProgressMessage({ threadKey, messageId });
-    const reporter = createSttInstallMessageReporter(installMessagePorts, key, { threadKey, messageId });
-    const outcome = await installJobs.start({ reportTo: reporter });
-    await withThreadLocale(key, async () => {
-      const revisionAfter = (): string => computeSttRevision(getResolvedSettings().settings);
-      if (outcome.phase === 'done') {
-        const previous = getResolvedSettings().settings;
-        const enabled = enableLocalSttEngine(previous);
-        if (enabled.ok && enabled.config !== previous) await save(previous, enabled.config);
-        await editThreadMessage(key, messageId, t('stt.install.done'), toMarkup([
-          [{ text: t('stt.btn.openSettings'), data: buildSttCallback('bk', [], revisionAfter()) }],
-        ]));
+    const message = { threadKey, messageId, shouldEnableOnDone: true };
+    await getState().setSttInstallProgressMessage(message);
+    const reporter = createSttInstallMessageReporter(installMessagePorts, key, message);
+    const outcome = await installJobs.start({ reportTo: reporter.report });
+    await finishInstall(key, reporter.getMessageId() ?? messageId, outcome, true);
+  }
+
+  /**
+   * `stt.json` names the local engine before it is installed (a hand edit, or boot): fetch it with the progress in
+   * one message in General — or as `[STT] install:` lines when no group is paired. The engine is already named, so
+   * nothing is enabled at the end. A job whose message is already owned (a `/stt` tap, a boot re-attach) is left
+   * to that owner; a failure is reported once and not retried.
+   */
+  async function startAutoInstall(): Promise<void> {
+    if (isAutoInstallRunning || getState().getSttInstallProgressMessage()) return;
+    isAutoInstallRunning = true;
+    try {
+      const generalKey = getGeneralKey();
+      if (generalKey === null) {
+        logInstallOutcome(await installJobs.start({ reportTo: createSttInstallLogReporter((line) => console.log(line)) }));
         return;
       }
-      const failureText = buildSttInstallProgressText(outcome, 0, t);
-      await editThreadMessage(key, messageId, failureText, toMarkup([[
-        { text: t('stt.btn.retry'), data: buildSttCallback('er', [], revisionAfter()) },
-        { text: t('stt.btn.openSettings'), data: buildSttCallback('bk', [], revisionAfter()) },
-      ]]));
-    });
+      const reporter = createSttInstallMessageReporter(installMessagePorts, generalKey);
+      const outcome = await installJobs.start({ reportTo: reporter.report });
+      await finishInstall(generalKey, reporter.getMessageId(), outcome, false);
+    } catch (e) {
+      console.warn('[STT] install job error:', e instanceof Error ? e.message : e);
+    } finally {
+      isAutoInstallRunning = false;
+    }
+  }
+
+  /** How a job that is no longer running ended, from what it left on disk: done only while the engine is really installed. */
+  function readEndedInstallOutcome(): SttInstallProgress {
+    const dataDir = getDataDir();
+    const last = readSttInstallProgress(dataDir);
+    if (last?.phase === 'failed') return last;
+    if (last?.phase === 'done' && isGigaamInstalled(dataDir)) return last;
+    return createFailedInstallProgress(installJobEndedWithoutResultError);
+  }
+
+  /**
+   * Boot, after the state is loaded: an install a reload interrupted is picked up where it stands — attached to
+   * while its job still runs, or settled at once when it ended while the bot was down (the remembered message is
+   * turned into the outcome, never left frozen at "installing"); with no message to continue, a running job or a
+   * `stt.json` that names the missing engine starts the auto-install.
+   */
+  async function resumeInstallAtBoot(): Promise<void> {
+    const remembered = getState().getSttInstallProgressMessage();
+    const rememberedKey = remembered ? tryKeyFromString(remembered.threadKey) : null;
+    if (remembered && rememberedKey) {
+      const shouldEnable = remembered.shouldEnableOnDone === true;
+      if (!isGigaamInstalling(getDataDir())) {
+        await finishInstall(rememberedKey, remembered.messageId, readEndedInstallOutcome(), shouldEnable);
+        return;
+      }
+      try {
+        const reporter = createSttInstallMessageReporter(installMessagePorts, rememberedKey, remembered);
+        const outcome = await installJobs.start({ reportTo: reporter.report });
+        await finishInstall(rememberedKey, reporter.getMessageId() ?? remembered.messageId, outcome, shouldEnable);
+      } catch (e) {
+        console.warn('[STT] install job error:', e instanceof Error ? e.message : e);
+      }
+      return;
+    }
+    if (remembered) await getState().setSttInstallProgressMessage(null);
+    if (isGigaamInstalling(getDataDir()) || getResolvedSettings().needsAutoInstall) await startAutoInstall();
   }
 
   async function removeLocalEngineFiles(): Promise<boolean> {
@@ -391,6 +510,8 @@ export function createStt(ports: SttPorts) {
   return {
     registerSttCommands,
     registerSttCallbacks,
+    startSttAutoInstall: startAutoInstall,
+    resumeSttInstallAtBoot: resumeInstallAtBoot,
     checkIsAwaitingSttInput: checkIsAwaitingInput,
     checkIsAwaitingSttKey: checkIsAwaitingKey,
     submitSttInput: submitInput,

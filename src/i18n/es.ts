@@ -405,6 +405,8 @@ export const esDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Descargando el modelo {progress}…',
   'stt.install.checking': 'Comprobando el modelo…',
   'stt.install.done': '✅ El reconocimiento local está listo — se inicia con la próxima nota de voz.',
+  'stt.install.doneNotAdded': '✅ El reconocimiento local está instalado, pero no está en la lista de motores: la lista está llena ({limit} motores). Elimina uno y añade el motor local en los ajustes.',
+  'stt.install.doneNotSaved': '✅ El reconocimiento local está instalado, pero no se pudo escribir el archivo de ajustes ({path}), así que el motor local aún no está en la lista. Haz que esa carpeta sea escribible y añade el motor local en los ajustes.',
   'stt.install.failed': '❌ No se pudo instalar el reconocimiento local: {error}',
   'stt.engine.gigaam': 'GigaAM (local)',
   'stt.engine.url': 'Servidor propio',

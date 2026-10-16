@@ -177,7 +177,10 @@ prompt message) ends the step. While a KEY is awaited (`checkIsAwaitingSttKey`) 
 `[redacted: speech engine key]`.
 
 **Install**: «Enable local recognition» → a confirm screen with the cost → `Install` hands the SAME message to the install
-job (`installJobs.start`, the progress is edited into it and remembered in `state.json` so a reload re-attaches); on
-success the local engine joins the list first, on failure the message shows the error, the log tail and `Retry`. The
-tap handler never waits for the job. «Remove local engine files» stops the sidecar, deletes the install and drops the
+job (`installJobs.start`, the progress is edited into it and remembered in `state.json` with `shouldEnableOnDone`); the
+tap handler never waits for the job. EVERY end — the tap's own continuation, a boot re-attach to a running job, a job that
+finished while the bot was down — goes through `finishInstall`: on success (flag set) the local engine joins the list
+first (a full list or an unwritable file is said in the message, never «ready»), on failure the message shows the error,
+the log tail and `Retry`; the message is forgotten last. `resumeSttInstallAtBoot` / `startSttAutoInstall` are the
+boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). «Remove local engine files» stops the sidecar, deletes the install and drops the
 engine from the list; it is refused while an install runs.

@@ -187,8 +187,6 @@ import {
   resolveSttOwnerContext,
 } from './stt/sttSidecarOwner';
 import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
-import { isGigaamInstalling } from './stt/sttInstall';
-import { createSttInstallLogReporter, createSttInstallMessagePorts, createSttInstallMessageReporter } from './stt/sttInstallReporter';
 import { transcribeWithEngines } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
@@ -4035,8 +4033,6 @@ const ALBUM_DEBOUNCE_MS = 2_000;
  */
 const sttOwner = createSttSidecarOwner(createDefaultSttSidecarOwnerDeps(resolveDataDir));
 const sttInstallJobs = createSttInstallJobManager(createDefaultSttInstallJobDeps(resolveDataDir));
-/** How an install job's progress reaches people: one edited message in a topic. */
-const sttInstallMessagePorts = createSttInstallMessagePorts({ getState: () => state, replyToThread, editThreadMessage, withThreadLocale }, t);
 const sttRuntime = createSttRuntime({
   getDataDir: resolveDataDir,
   getConfigPath: () => getSttConfigPath(),
@@ -4058,43 +4054,14 @@ function getResolvedSttSettings(): ResolvedSttSettings {
 }
 
 /**
- * @description Fetch the local engine because `stt.json` names it (at boot, or on an edit): the progress is one
- * edited message in General of the paired group — the message a reload left behind when one is remembered — or
- * `[STT] install:` log lines when no group is paired. A job already running is attached to, never doubled; a
- * failure is reported once and not retried.
- */
-async function startSttAutoInstall(): Promise<void> {
-  const remembered = state.getSttInstallProgressMessage();
-  const groupId = getAllowedGroupId();
-  const rememberedKey = remembered ? tryKeyFromString(remembered.threadKey) : null;
-  const generalKey = groupId !== null ? makeTelegramKey(groupId, GENERAL_THREAD_ID) : null;
-  const targetKey = rememberedKey ?? generalKey;
-  const reportTo = targetKey
-    ? createSttInstallMessageReporter(sttInstallMessagePorts, targetKey)
-    : createSttInstallLogReporter((line) => console.log(line));
-  try {
-    const outcome = await sttInstallJobs.start({ reportTo });
-    if (outcome.phase === 'failed') console.warn(`[STT] install failed: ${outcome.error ?? 'unknown error'}`);
-    else console.log('[STT] install finished: the local engine starts with the next voice note');
-  } catch (e) {
-    console.warn('[STT] install job error:', e instanceof Error ? e.message : e);
-  }
-}
-
-/**
  * @description The local engine at boot, after the state is loaded: NO process is started (the first voice that
  * needs it does that); a stale record of a dead or foreign sidecar is cleaned; an install a reload interrupted
- * is re-attached to; and a `stt.json` that names the engine before it is installed starts the install.
+ * is picked up (or settled, when it ended while the bot was down); and a `stt.json` that names the engine before
+ * it is installed starts the install.
  */
 async function bootSttLocalEngine(): Promise<void> {
   await sttOwner.cleanupAtBoot();
-  const isInstalling = isGigaamInstalling(resolveDataDir());
-  if (isInstalling || sttRuntime.getResolved().needsAutoInstall) {
-    await startSttAutoInstall();
-    return;
-  }
-  // A message left over from an install that ended while the bot was down is not an install in progress.
-  if (state.getSttInstallProgressMessage()) await state.setSttInstallProgressMessage(null);
+  await resumeSttInstallAtBoot();
 }
 
 /**
@@ -7245,6 +7212,8 @@ claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 const {
   registerSttCommands,
   registerSttCallbacks,
+  startSttAutoInstall,
+  resumeSttInstallAtBoot,
   checkIsAwaitingSttInput,
   checkIsAwaitingSttKey,
   submitSttInput,
@@ -7257,6 +7226,10 @@ const {
   getOwnerContext: () => resolveSttOwnerContext(),
   owner: sttOwner,
   installJobs: sttInstallJobs,
+  getGeneralKey: () => {
+    const groupId = getAllowedGroupId();
+    return groupId !== null ? makeTelegramKey(groupId, GENERAL_THREAD_ID) : null;
+  },
 });
 
 registerClaudeAccountCommands();

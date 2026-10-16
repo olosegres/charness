@@ -405,6 +405,8 @@ export const uzDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Model yuklab olinmoqda {progress}…',
   'stt.install.checking': 'Model tekshirilmoqda…',
   'stt.install.done': '✅ Lokal aniqlash tayyor — u keyingi ovozli xabar bilan ishga tushadi.',
+  'stt.install.doneNotAdded': '✅ Lokal tanib olish o\'rnatildi, lekin u dvigatellar ro\'yxatida yo\'q: ro\'yxat to\'lgan ({limit} ta dvigatel). Bittasini o\'chiring va sozlamalardan lokal dvigatelni qo\'shing.',
+  'stt.install.doneNotSaved': '✅ Lokal tanib olish o\'rnatildi, lekin sozlamalar faylini yozib bo\'lmadi ({path}), shuning uchun lokal dvigatel hali ro\'yxatda yo\'q. Shu papkani yozish mumkin qiling va sozlamalardan lokal dvigatelni qo\'shing.',
   'stt.install.failed': '❌ Lokal aniqlashni o‘rnatib bo‘lmadi: {error}',
   'stt.engine.gigaam': 'GigaAM (lokal)',
   'stt.engine.url': 'Shaxsiy server',

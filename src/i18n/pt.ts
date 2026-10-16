@@ -405,6 +405,8 @@ export const ptDict: Record<string, string> = {
   'stt.install.downloadingModel': 'Baixando o modelo {progress}…',
   'stt.install.checking': 'Verificando o modelo…',
   'stt.install.done': '✅ O reconhecimento local está pronto — ele inicia com a próxima mensagem de voz.',
+  'stt.install.doneNotAdded': '✅ O reconhecimento local está instalado, mas não está na lista de motores: a lista está cheia ({limit} motores). Remova um e adicione o motor local nas configurações.',
+  'stt.install.doneNotSaved': '✅ O reconhecimento local está instalado, mas não foi possível gravar o arquivo de configurações ({path}), então o motor local ainda não está na lista. Torne essa pasta gravável e adicione o motor local nas configurações.',
   'stt.install.failed': '❌ Não foi possível instalar o reconhecimento local: {error}',
   'stt.engine.gigaam': 'GigaAM (local)',
   'stt.engine.url': 'Servidor próprio',

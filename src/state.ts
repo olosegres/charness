@@ -65,6 +65,12 @@ export interface SttInstallProgressMessage {
   /** The topic's serialised session key. */
   threadKey: string;
   messageId: number;
+  /**
+   * The install was started from `/stt` ("Enable local recognition"): when it ends, the local engine joins the
+   * chain. Kept with the message so a reload — or a restart the install outlives — still finishes the job; an
+   * install that `stt.json` itself asked for needs no such step.
+   */
+  shouldEnableOnDone?: boolean;
 }
 
 export interface BindingData {
@@ -1959,7 +1965,8 @@ export class StateStore {
 
   getSttInstallProgressMessage(): SttInstallProgressMessage | null {
     const message = this.state.sttInstallProgress;
-    return message && typeof message.threadKey === 'string' && Number.isInteger(message.messageId) ? message : null;
+    if (!message || typeof message.threadKey !== 'string' || !Number.isInteger(message.messageId)) return null;
+    return { threadKey: message.threadKey, messageId: message.messageId, ...(message.shouldEnableOnDone === true ? { shouldEnableOnDone: true } : {}) };
   }
 
   /** Remember (or, with `null`, forget) the message an install job edits. */

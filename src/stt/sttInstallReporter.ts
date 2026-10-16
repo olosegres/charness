@@ -23,36 +23,43 @@ export interface SttInstallMessagePorts {
   nowMs: () => number;
 }
 
+/** @description A message reporter and the id of the message it currently edits (it can change when a deleted message is replaced). */
+export interface SttInstallMessageReporter {
+  report: SttInstallReporter;
+  getMessageId: () => number | null;
+}
+
 /**
- * @description The message to edit: `existing` (a message the caller already posted — the `/stt` confirm screen),
- * else the one `state.json` remembers for THIS topic, else a new one on the first report.
+ * @description Keep ONE message up to date with a running install. It edits `existing` (a message the caller
+ * already posted — the `/stt` confirm screen), else the one `state.json` remembers for THIS topic, else posts one
+ * on the first report, and remembers its id together with the "enable on done" flag. The END of the job is not
+ * reported here: the finisher turns the message into the outcome (with its buttons) and forgets it, so a job that
+ * outlives the bot is finished the same way by whoever re-attaches.
  */
 export function createSttInstallMessageReporter(
   ports: SttInstallMessagePorts,
   key: SessionKey,
   existing?: SttInstallProgressMessage,
-): SttInstallReporter {
+): SttInstallMessageReporter {
   const threadKey = keyToString(key);
   const startedAtMs = ports.nowMs();
   const remembered = ports.getState().getSttInstallProgressMessage();
-  const rememberedId = remembered?.threadKey === threadKey ? remembered.messageId : null;
-  let messageId: number | null = existing?.messageId ?? rememberedId;
-  let persistedId: number | null = rememberedId;
+  const rememberedHere = remembered?.threadKey === threadKey ? remembered : null;
+  const shouldEnableOnDone = (existing ?? rememberedHere)?.shouldEnableOnDone === true;
+  let messageId: number | null = existing?.messageId ?? rememberedHere?.messageId ?? null;
+  let persistedId: number | null = rememberedHere?.messageId ?? null;
 
-  return async (progress: SttInstallProgress) => {
+  const report: SttInstallReporter = async (progress: SttInstallProgress) => {
+    if (progress.phase === 'done' || progress.phase === 'failed') return;
     const text = buildSttInstallProgressText(progress, (ports.nowMs() - startedAtMs) / 1000, ports.translateFor(key));
     const isEdited = messageId !== null && (await ports.editThreadMessage(key, messageId, text));
     if (!isEdited) messageId = await ports.replyToThread(key, text);
-
-    const isEnded = progress.phase === 'done' || progress.phase === 'failed';
-    if (isEnded) {
-      if (persistedId !== null) await ports.getState().setSttInstallProgressMessage(null);
-      persistedId = null;
-    } else if (messageId !== null && messageId !== persistedId) {
-      await ports.getState().setSttInstallProgressMessage({ threadKey, messageId });
+    if (messageId !== null && messageId !== persistedId) {
+      await ports.getState().setSttInstallProgressMessage({ threadKey, messageId, ...(shouldEnableOnDone ? { shouldEnableOnDone } : {}) });
       persistedId = messageId;
     }
   };
+  return { report, getMessageId: () => messageId };
 }
 
 /** @description The reporter for an install nobody is watching in a chat: one `[STT] install: …` line per phase change. */
