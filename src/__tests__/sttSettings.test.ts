@@ -18,6 +18,7 @@ import {
   defaultSttTimeout,
   getEngineTimeoutMs,
   getSttConfigPath,
+  getSttConfigWriteBlock,
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
@@ -496,4 +497,25 @@ test('the report: file errors say what the bot does instead, skipped engines say
 
   const healthy = resolveSttSettings({ status: 'ok', config: createConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] }) }, installedFacts);
   assert.deepEqual(getSttReportLines(healthy), []);
+});
+
+test('write block: a writable directory — existing or still to be created — has none; a file in the way and a read-only directory name their errno', () => {
+  assert.equal(getSttConfigWriteBlock(configPath), null);
+  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'not', 'yet', 'there', 'stt.json')), null, 'the save creates the missing directories');
+
+  fs.writeFileSync(path.join(configDir, 'plainFile'), '');
+  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'plainFile', 'stt.json')), 'ENOTDIR');
+  assert.equal(getSttConfigWriteBlock(path.join(configDir, 'plainFile', 'deeper', 'stt.json')), 'ENOTDIR', 'a file anywhere on the way blocks it');
+});
+
+test('write block: a read-only directory is EACCES (a permission check root passes, so it is skipped there)', { skip: process.getuid?.() === 0 }, () => {
+  const readOnlyDir = path.join(configDir, 'readOnly');
+  fs.mkdirSync(readOnlyDir);
+  fs.chmodSync(readOnlyDir, 0o500);
+  try {
+    assert.equal(getSttConfigWriteBlock(path.join(readOnlyDir, 'stt.json')), 'EACCES');
+    assert.equal(getSttConfigWriteBlock(path.join(readOnlyDir, 'sub', 'stt.json')), 'EACCES', 'the nearest existing directory decides');
+  } finally {
+    fs.chmodSync(readOnlyDir, 0o700);
+  }
 });

@@ -490,7 +490,7 @@ export const uzDict: Record<string, string> = {
   'stt.notice.guardReset': 'Keyingi ovozli xabar bilan yana urinaman.',
   'stt.notice.busyInstalling': 'O‘rnatish hali davom etmoqda.',
   'stt.notice.localRemoved': 'Lokal dvigatel fayllari o‘chirildi.',
-  'stt.saveFailed': '❌ Sozlamalar faylini yozib bo‘lmadi — bot logiga qarang.',
+  'stt.saveFailed': '❌ Sozlamalar faylini ({path}) yozib bo‘lmadi — bot logiga qarang.',
   'stt.stale': 'Sozlamalar o‘zgardi — ekran yangilandi.',
   'voice.failed': 'Ovoz xabarini transkripsiya qilib bo‘lmadi.',
   'voice.retrying': '⚠️ Ovoz xabarini transkripsiya qilib bo‘lmadi ({error}). {seconds} soniyadan keyin qayta urinaman…',

@@ -490,7 +490,7 @@ export const jaDict: Record<string, string> = {
   'stt.notice.guardReset': '次の音声メッセージで再試行します。',
   'stt.notice.busyInstalling': 'インストールはまだ実行中です。',
   'stt.notice.localRemoved': 'ローカルエンジンのファイルを削除しました。',
-  'stt.saveFailed': '❌ 設定ファイルを書き込めませんでした — ボットのログを確認してください。',
+  'stt.saveFailed': '❌ 設定ファイル {path} を書き込めませんでした — ボットのログを確認してください。',
   'stt.stale': '設定が変更されました — 更新しました。',
   'voice.failed': '音声メッセージの文字起こしに失敗しました。',
   'voice.retrying': '⚠️ 音声メッセージの文字起こしに失敗しました（{error}）。{seconds} 秒後に再試行します…',

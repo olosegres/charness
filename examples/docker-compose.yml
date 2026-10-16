@@ -4,11 +4,13 @@
 #   cd <checkout> && docker build -t charness -f docker/Dockerfile .
 #
 # Copy .env.example to .env next to this file and fill in the paths. The bot's own settings and tokens are NOT
-# here: they live in your instance env file (INSTANCE_ENV_FILE), which the container reads read-only. Every host
-# path that file names (DATA_DIR, WORK_ROOT, TMUX_TMPDIR, …) is mounted at the SAME path: CHARNESS_DATA_DIR
-# and CHARNESS_WORK_ROOT are its DATA_DIR and WORK_ROOT (prefixed, because compose prefers a variable your
-# shell exports over .env). A .env written before the rename, with TELEGRAMCODE_DATA_DIR and
-# TELEGRAMCODE_WORK_ROOT, is still read.
+# here: they live in your instance env file inside the config directory (INSTANCE_CONFIG_DIR, mounted WRITABLE: the
+# bot saves the voice settings, stt.json, beside the env file, and a container's own disk is gone when it is
+# re-created). Every host path the env file names (DATA_DIR, WORK_ROOT, TMUX_TMPDIR, …) is mounted at the SAME
+# path: CHARNESS_DATA_DIR and CHARNESS_WORK_ROOT are its DATA_DIR and WORK_ROOT (prefixed, because compose prefers
+# a variable your shell exports over .env). A .env written before the rename, with TELEGRAMCODE_DATA_DIR and
+# TELEGRAMCODE_WORK_ROOT, is still read. A .env from before the config directory (INSTANCE_ENV_FILE) needs
+# INSTANCE_CONFIG_DIR: move the env file into that directory.
 #
 # A second instance: copy the service with its own name, hostname, checkout, home, data dir and env file
 # (another bot token and group). Ports and tmux servers are private to each container.
@@ -32,6 +34,6 @@ services:
       - ${AGENTS_HOME}:/home/charness
       - ${CHARNESS_DATA_DIR:-${TELEGRAMCODE_DATA_DIR}}:${CHARNESS_DATA_DIR:-${TELEGRAMCODE_DATA_DIR}}
       - ${CHARNESS_WORK_ROOT:-${TELEGRAMCODE_WORK_ROOT}}:${CHARNESS_WORK_ROOT:-${TELEGRAMCODE_WORK_ROOT}}
-      - ${INSTANCE_ENV_FILE}:${INSTANCE_ENV_FILE}:ro
+      - ${INSTANCE_CONFIG_DIR:?set INSTANCE_CONFIG_DIR in .env - the directory that holds the env file and stt.json}:${INSTANCE_CONFIG_DIR}
     environment:
-      - ENV_FILE=${INSTANCE_ENV_FILE}
+      - ENV_FILE=${INSTANCE_CONFIG_DIR}/${INSTANCE_ENV_FILE_NAME:-instance.env}

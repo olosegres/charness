@@ -490,7 +490,7 @@ export const zhDict: Record<string, string> = {
   'stt.notice.guardReset': '下一条语音消息会再次尝试。',
   'stt.notice.busyInstalling': '安装仍在进行。',
   'stt.notice.localRemoved': '本地引擎文件已删除。',
-  'stt.saveFailed': '❌ 无法写入设置文件——请查看机器人日志。',
+  'stt.saveFailed': '❌ 无法写入设置文件 {path}——请查看机器人日志。',
   'stt.stale': '设置已更改——已刷新。',
   'voice.failed': '语音转录失败。',
   'voice.retrying': '⚠️ 语音转录失败（{error}）。{seconds} 秒后重试…',

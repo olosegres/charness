@@ -490,7 +490,7 @@ export const hiDict: Record<string, string> = {
   'stt.notice.guardReset': 'अगले वॉइस नोट के साथ फिर कोशिश होगी।',
   'stt.notice.busyInstalling': 'इंस्टॉल अभी चल रहा है।',
   'stt.notice.localRemoved': 'लोकल इंजन की फ़ाइलें हटा दी गईं।',
-  'stt.saveFailed': '❌ सेटिंग्स फ़ाइल नहीं लिखी जा सकी — बॉट लॉग देखें।',
+  'stt.saveFailed': '❌ सेटिंग्स फ़ाइल {path} नहीं लिखी जा सकी — बॉट लॉग देखें।',
   'stt.stale': 'सेटिंग्स बदल गईं — स्क्रीन ताज़ा की गई।',
   'voice.failed': 'वॉइस संदेश ट्रांसक्राइब करने में विफल।',
   'voice.retrying': '⚠️ वॉइस संदेश ट्रांसक्राइब करने में विफल ({error})। {seconds} सेकंड में फिर से कोशिश की जाएगी…',

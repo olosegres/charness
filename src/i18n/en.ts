@@ -503,7 +503,7 @@ export const enDict: Record<string, string> = {
   'stt.notice.guardReset': 'Trying again with the next voice note.',
   'stt.notice.busyInstalling': 'The install is still running.',
   'stt.notice.localRemoved': 'Local engine files removed.',
-  'stt.saveFailed': '❌ Could not write the settings file — see the bot log.',
+  'stt.saveFailed': '❌ Could not write the settings file {path} — see the bot log.',
   'stt.stale': 'The settings changed — refreshed.',
   'voice.failed': 'Failed to transcribe voice message.',
   'voice.retrying': '⚠️ Failed to transcribe voice message ({error}). Retrying in {seconds} s…',

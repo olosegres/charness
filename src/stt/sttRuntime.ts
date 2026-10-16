@@ -1,5 +1,6 @@
 import {
   createEmptySttConfig,
+  getSttConfigWriteBlock,
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
@@ -90,6 +91,12 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
         deps.logInfo(`[STT] moved ${migration.engineNames.join(' + ')} from the environment into ${configPath}`);
       } else if (migration.status === 'writeFailed') {
         deps.logProblem(`[STT] could not write ${configPath} (${migration.error}): voice input stays off until it can be written`);
+      } else {
+        // Said once, at boot: a settings file that cannot be kept (a read-only or unmounted directory) loses every /stt edit.
+        const writeBlock = getSttConfigWriteBlock(configPath);
+        if (writeBlock !== null) {
+          deps.logProblem(`[STT] ${configPath} cannot be written (${writeBlock}): changes made in /stt will not be kept — make its directory writable`);
+        }
       }
       resolveNow(true);
     },

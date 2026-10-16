@@ -185,3 +185,49 @@ test('init says so when stt.json cannot be written, and the chain stays empty', 
     else process.env.GROQ_API_KEY = previousGroq;
   }
 });
+
+/** Run `fn` with the old env keys unset, so the one-time migration has nothing to move (the host may export them). */
+function withoutLegacyKeys(fn: () => void): void {
+  const saved = { groq: process.env.GROQ_API_KEY, openai: process.env.OPENAI_API_KEY };
+  delete process.env.GROQ_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    fn();
+  } finally {
+    if (saved.groq !== undefined) process.env.GROQ_API_KEY = saved.groq;
+    if (saved.openai !== undefined) process.env.OPENAI_API_KEY = saved.openai;
+  }
+}
+
+test('init says ONCE that stt.json cannot be written, naming the file; a writable one says nothing', () => withoutLegacyKeys(() => {
+  const blocked = createHarness();
+  blocked.deps = { ...blocked.deps, getConfigPath: () => path.join(dataDir, 'blocker', 'stt.json') };
+  fs.writeFileSync(path.join(dataDir, 'blocker'), '');
+  const blockedRuntime = createSttRuntime(blocked.deps);
+  blockedRuntime.init();
+  blockedRuntime.getResolved();
+  blockedRuntime.getResolved();
+  const lines = blocked.problems.filter((line) => line.includes('cannot be written'));
+  assert.equal(lines.length, 1, blocked.problems.join('\n'));
+  assert.ok(lines[0].includes(path.join(dataDir, 'blocker', 'stt.json')), 'the line names the file');
+  assert.ok(lines[0].includes('ENOTDIR'));
+
+  const writable = createHarness();
+  createSttRuntime(writable.deps).init();
+  assert.ok(!writable.problems.some((line) => line.includes('cannot be written')), writable.problems.join('\n'));
+}));
+
+test('init does not repeat itself when the old-key migration already reported the write failure', () => {
+  const harness = createHarness();
+  harness.deps = { ...harness.deps, getConfigPath: () => path.join(dataDir, 'blocker', 'stt.json') };
+  fs.writeFileSync(path.join(dataDir, 'blocker'), '');
+  const previousGroq = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'gsk_fromTheEnvironment1234';
+  try {
+    createSttRuntime(harness.deps).init();
+    assert.equal(harness.problems.filter((line) => /could not write|cannot be written/.test(line)).length, 1, harness.problems.join('\n'));
+  } finally {
+    if (previousGroq === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = previousGroq;
+  }
+});

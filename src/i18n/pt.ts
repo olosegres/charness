@@ -490,7 +490,7 @@ export const ptDict: Record<string, string> = {
   'stt.notice.guardReset': 'Tento de novo com a próxima mensagem de voz.',
   'stt.notice.busyInstalling': 'A instalação ainda está em andamento.',
   'stt.notice.localRemoved': 'Arquivos do motor local removidos.',
-  'stt.saveFailed': '❌ Não foi possível gravar o arquivo de configurações — veja o log do bot.',
+  'stt.saveFailed': '❌ Não foi possível gravar o arquivo de configurações {path} — veja o log do bot.',
   'stt.stale': 'As configurações mudaram — tela atualizada.',
   'voice.failed': 'Falha ao transcrever a mensagem de voz.',
   'voice.retrying': '⚠️ Falha ao transcrever a mensagem de voz ({error}). Nova tentativa em {seconds} s…',

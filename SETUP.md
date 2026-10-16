@@ -291,8 +291,10 @@ final — silence is never "fixed" by asking another engine.
 Everything lives in one file, **`stt.json`**, in the same directory as your real `.env`
 (`~/.config/charness/stt.json`; for an isolated instance, beside its `ENV_FILE`). If that `.env` is a symlink — the
 keys kept on an encrypted volume, say — `stt.json` goes beside the symlink's **target**, so the API keys stay where
-the rest of your secrets are and never land in the directory that only holds the link. It holds the settings and the
-API keys, is written with mode
+the rest of your secrets are and never land in the directory that only holds the link. **That directory must be
+writable and survive a restart** — under Docker, mount the config directory, not only the env file
+([Run with Docker](#run-with-docker)); when the file cannot be written, `/stt` says so and names the path, and the boot
+log says it once (`[STT] … cannot be written`). It holds the settings and the API keys, is written with mode
 `0600`, and is re-read when it changes — an edit applies to the next voice note, no restart. If the file is
 invalid, the bot keeps the last good settings, logs a `[STT]` line naming the field (never a value), and
 refuses voice with a notice when nothing valid was ever loaded.
@@ -538,7 +540,8 @@ lends the container the folders it mounts, so the bot and its agents see nothing
 
 ```
 host                                        container charness-<instance>
-your instance env file (tokens)   ── ro ──▶  the bot (hot mode) + a restart loop
+your config directory             ──────▶    the bot (hot mode) + a restart loop;
+  (instance.env and stt.json)                the env file is read, stt.json is written
 DATA_DIR, WORK_ROOT               ──────▶    tmux, the agents, OpenCode, the bot MCP
 a clone of this repository        ──────▶    /opt/charness
 the agents' home folder           ──────▶    /home/charness: their Claude / OpenCode
@@ -557,10 +560,12 @@ the agents' home folder           ──────▶    /home/charness: their
    names (build from the checkout's root, which is how the build reads it; rebuild after a yarn bump so no
    container has to download it). On first start the container installs the checkout's dependencies for the
    image and builds it; the bot installs Claude Code and OpenCode into the agents' home.
-2. **Instance env file**, as for a host install (`TELEGRAM_BOT_TOKEN`, `DATA_DIR`, `WORK_ROOT`, …). It stays on
-   the host and is mounted read-only. Every host path it names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is
-   mounted at the SAME path, so `state.json`, sessions and file paths stay valid inside and an instance can move
-   between host and container unchanged.
+2. **Instance config directory**, with the env file as for a host install inside it (`TELEGRAM_BOT_TOKEN`,
+   `DATA_DIR`, `WORK_ROOT`, …): `/srv/charness/config/instance.env`. It stays on the host and the **directory** is
+   mounted writable, not just the file: the voice settings (`stt.json`, with the speech-engine API keys) are saved
+   beside the env file, and a container's own disk is gone when the container is re-created. Every host path the
+   env file names (`DATA_DIR`, `WORK_ROOT`, `TMUX_TMPDIR`, …) is mounted at the SAME path, so `state.json`,
+   sessions and file paths stay valid inside and an instance can move between host and container unchanged.
 3. **Run** (or use `examples/docker-compose.yml`):
 
    ```bash
@@ -570,8 +575,8 @@ the agents' home folder           ──────▶    /home/charness: their
      -v /srv/charness/home:/home/charness \
      -v /srv/charness/data:/srv/charness/data \
      -v /srv/projects:/srv/projects \
-     -v /srv/charness/instance.env:/srv/charness/instance.env:ro \
-     -e ENV_FILE=/srv/charness/instance.env \
+     -v /srv/charness/config:/srv/charness/config \
+     -e ENV_FILE=/srv/charness/config/instance.env \
      charness
    ```
 

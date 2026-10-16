@@ -23,7 +23,10 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 for an isolated instance, else the charness config dir's `.env` (a pre-rename config dir is kept). The env file's
 symlink is resolved first — `.env` linked to a file on an encrypted volume puts `stt.json` beside the TARGET, so
 the keys it holds stay with the other secrets; a dangling link keeps the directory it was named in. Settings AND
-keys, mode 0600, written through a temp file and a rename. **No `STT_*` env variables exist.**
+keys, mode 0600, written through a temp file and a rename. **No `STT_*` env variables exist.** The directory must be
+writable and persistent (Docker: mount the config DIRECTORY, not only the env file): there is NO fallback to another
+location — `init` probes it (`getSttConfigWriteBlock`) and logs `[STT] … cannot be written` once, and a `/stt` save that
+fails says so naming the path.
 
 - **Validation is strict and all-or-nothing** (zod, like `jira.json`): an unknown key, kind, duplicate id, a
   second local engine, an out-of-range number or a bad language is an error that names the field

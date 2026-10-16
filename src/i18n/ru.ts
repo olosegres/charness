@@ -494,7 +494,7 @@ export const ruDict: Record<string, string> = {
   'stt.notice.guardReset': 'Повторю со следующим голосовым.',
   'stt.notice.busyInstalling': 'Установка ещё идёт.',
   'stt.notice.localRemoved': 'Файлы локального движка удалены.',
-  'stt.saveFailed': '❌ Не удалось записать файл настроек — смотрите лог бота.',
+  'stt.saveFailed': '❌ Не удалось записать файл настроек {path} — смотрите лог бота.',
   'stt.stale': 'Настройки изменились — экран обновлён.',
   'voice.failed': 'Не удалось распознать голосовое.',
   'voice.retrying': '⚠️ Не удалось распознать голосовое ({error}). Повторю через {seconds} с…',

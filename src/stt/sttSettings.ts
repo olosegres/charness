@@ -324,6 +324,26 @@ export function saveSttConfig(filePath: string, config: SttConfigFile): void {
   }
 }
 
+/**
+ * @description Why {@link saveSttConfig} could not write beside `filePath` — an errno code (`EACCES`, `EROFS`,
+ * `ENOTDIR`, …) — or `null` when it can. The directory may not exist yet (the save creates it): the nearest
+ * existing ancestor must be a directory that accepts a new file.
+ */
+export function getSttConfigWriteBlock(filePath: string): string | null {
+  let directory = path.dirname(filePath);
+  for (;;) {
+    try {
+      fs.accessSync(directory, fs.constants.W_OK);
+      return fs.statSync(directory).isDirectory() ? null : 'ENOTDIR';
+    } catch (e) {
+      const code = e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
+      const parent = path.dirname(directory);
+      if (code !== 'ENOENT' || parent === directory) return code;
+      directory = parent;
+    }
+  }
+}
+
 /** The env variables the one-time migration reads: the only place that does. */
 const legacyGroqKeyName = 'GROQ_API_KEY';
 const legacyOpenAiKeyName = 'OPENAI_API_KEY';

@@ -52,6 +52,9 @@ import { getCallbackMessageId } from './callbackMessage';
 /** How long a typed-input step (the address, the key) waits before it is given up and its prompt retired. */
 export const sttInputTimeoutMs = 10 * 60 * 1000;
 
+/** Telegram caps a callback toast at 200 characters; stay under it. */
+const sttToastMaxLength = 180;
+
 /** The first line of the install progress before the job reports anything. */
 const initialInstallProgress: SttInstallProgress = { phase: 'creatingEnvironment', detail: '', bytesDownloaded: 0 };
 
@@ -140,7 +143,7 @@ export function createStt(ports: SttPorts) {
     try {
       saveSttConfig(getConfigPath(), next);
     } catch (e) {
-      console.warn(`[STT] could not write stt.json (${e instanceof Error ? getErrnoCode(e) : 'unknown'})`);
+      console.warn(`[STT] could not write ${getConfigPath()} (${e instanceof Error ? getErrnoCode(e) : 'unknown'})`);
       return false;
     }
     try {
@@ -247,7 +250,7 @@ export function createStt(ports: SttPorts) {
       const target = pending.target;
       const saved = target ? await saveNewKey(previous, target, decision.value) : { ok: false as const };
       if (!saved.ok) {
-        await render(key, pending.promptMessageId, { id: 'main' }, { code: 'stt.saveFailed' });
+        await render(key, pending.promptMessageId, { id: 'main' }, buildSaveFailedNotice());
         return;
       }
       await render(key, pending.promptMessageId, { id: 'card', engineId: saved.engineId }, { code: 'stt.input.keySaved' });
@@ -409,10 +412,20 @@ export function createStt(ports: SttPorts) {
     await withThreadLocale(key, () => run(key, getCallbackMessageId(ctx)));
   }
 
-  /** `answerCbQuery` is capped at 200 characters; a notice is short, but never trust it. */
-  async function answerWith(ctx: Context, notice: SttNotice | undefined): Promise<void> {
+  /** The notice for a save that failed: it names the file, so the operator knows which directory to fix. */
+  function buildSaveFailedNotice(): SttNotice {
+    return { code: 'stt.saveFailed', vars: { path: getConfigPath() } };
+  }
+
+  /** `answerCbQuery` is capped at 200 characters: a longer notice (a long path) goes to the topic as a message instead. */
+  async function answerWith(ctx: Context, key: SessionKey, notice: SttNotice | undefined): Promise<void> {
     const text = formatNotice(notice);
-    await ctx.answerCbQuery(text !== undefined && text.length <= 180 ? text : undefined);
+    if (text !== undefined && text.length > sttToastMaxLength) {
+      await ctx.answerCbQuery();
+      await replyToThread(key, text);
+      return;
+    }
+    await ctx.answerCbQuery(text);
   }
 
   function registerSttCallbacks(): void {
@@ -439,10 +452,10 @@ export function createStt(ports: SttPorts) {
           return;
         case 'save':
           if (!(await save(settings, outcome.config))) {
-            await ctx.answerCbQuery(t('stt.saveFailed'));
+            await answerWith(ctx, key, buildSaveFailedNotice());
             return;
           }
-          await answerWith(ctx, outcome.notice);
+          await answerWith(ctx, key, outcome.notice);
           await render(key, messageId, outcome.screen);
           return;
         case 'armKey':

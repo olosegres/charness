@@ -653,8 +653,31 @@ test('an unwritable stt.json answers "could not write", changes nothing and does
   fs.mkdirSync(`${configPath}.${process.pid}.tmp`); // the temp file of the atomic write cannot be created
   const editsBefore = edits.length;
   const { answers } = await tap('us', ['q1']);
-  assert.deepEqual(answers, ['❌ Could not write the settings file — see the bot log.']);
+  assert.deepEqual(answers, [`❌ Could not write the settings file ${configPath} — see the bot log.`], 'the toast names the file');
   assert.equal(fs.readFileSync(configPath, 'utf8'), before);
   assert.equal(edits.length, editsBefore, 'the screen is not re-rendered as if it had worked');
   assert.ok(!ownerCalls.includes('applySettingsChange'));
+});
+
+test('a path too long for a toast is told as a message in the topic instead of being cut', async () => {
+  configPath = path.join(dataDir, 'a-very-long-directory-name-'.repeat(8), 'stt.json');
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  createFeature();
+  fs.mkdirSync(`${configPath}.${process.pid}.tmp`);
+  const { answers } = await tap('us', ['q1']);
+  assert.deepEqual(answers, [undefined], 'the toast is only the acknowledgement');
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes(configPath), 'the whole path is in the message');
+});
+
+test('a key that cannot be saved is still deleted from the topic, and the screen names the file', async () => {
+  writeConfig({});
+  const feature = createFeature();
+  await tap('an', ['gq']);
+  fs.rmSync(path.dirname(configPath), { recursive: true, force: true });
+  fs.writeFileSync(path.dirname(configPath), 'not a directory');
+  await feature.submitSttInput(key, sampleKey, 801);
+  assert.deepEqual(deleted, [801], 'the pasted key leaves the topic first');
+  assert.ok(lastEdit().text.includes(configPath), lastEdit().text);
+  assert.ok(![...sent, ...edits].some((message) => message.text.includes(sampleKey)), 'the key is shown nowhere');
 });

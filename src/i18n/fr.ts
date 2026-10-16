@@ -490,7 +490,7 @@ export const frDict: Record<string, string> = {
   'stt.notice.guardReset': 'Nouvel essai avec le prochain message vocal.',
   'stt.notice.busyInstalling': 'L’installation est encore en cours.',
   'stt.notice.localRemoved': 'Fichiers du moteur local supprimés.',
-  'stt.saveFailed': '❌ Impossible d’écrire le fichier de réglages — voir le journal du bot.',
+  'stt.saveFailed': '❌ Impossible d’écrire le fichier de réglages {path} — voir le journal du bot.',
   'stt.stale': 'Les réglages ont changé — écran actualisé.',
   'voice.failed': 'Échec de la transcription du message vocal.',
   'voice.retrying': '⚠️ Échec de la transcription du message vocal ({error}). Nouvel essai dans {seconds} s…',

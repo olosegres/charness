@@ -490,7 +490,7 @@ export const deDict: Record<string, string> = {
   'stt.notice.guardReset': 'Beim nächsten Sprachbeitrag wird es erneut versucht.',
   'stt.notice.busyInstalling': 'Die Installation läuft noch.',
   'stt.notice.localRemoved': 'Dateien der lokalen Engine gelöscht.',
-  'stt.saveFailed': '❌ Die Einstellungsdatei konnte nicht geschrieben werden — siehe Bot-Log.',
+  'stt.saveFailed': '❌ Die Einstellungsdatei {path} konnte nicht geschrieben werden — siehe Bot-Log.',
   'stt.stale': 'Die Einstellungen haben sich geändert — aktualisiert.',
   'voice.failed': 'Sprachnachricht konnte nicht transkribiert werden.',
   'voice.retrying': '⚠️ Sprachnachricht konnte nicht transkribiert werden ({error}). Neuer Versuch in {seconds} s…',

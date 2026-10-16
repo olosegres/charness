@@ -490,7 +490,7 @@ export const esDict: Record<string, string> = {
   'stt.notice.guardReset': 'Se reintentará con la próxima nota de voz.',
   'stt.notice.busyInstalling': 'La instalación sigue en curso.',
   'stt.notice.localRemoved': 'Archivos del motor local eliminados.',
-  'stt.saveFailed': '❌ No se pudo escribir el archivo de ajustes — mira el registro del bot.',
+  'stt.saveFailed': '❌ No se pudo escribir el archivo de ajustes {path} — mira el registro del bot.',
   'stt.stale': 'Los ajustes cambiaron — pantalla actualizada.',
   'voice.failed': 'Error al transcribir el mensaje de voz.',
   'voice.retrying': '⚠️ Error al transcribir el mensaje de voz ({error}). Reintento en {seconds} s…',
