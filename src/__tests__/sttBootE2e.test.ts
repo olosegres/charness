@@ -6,7 +6,10 @@
  *   - an old `GROQ_API_KEY` in the env file is moved into `stt.json` beside it, once, mode 0600, with a
  *     deprecation notice; after a hand edit that empties the list the next boot does NOT move it again;
  *   - a settings directory that cannot be written (a read-only mount, the Docker case) is said at boot once, and
- *     a `/stt` change that cannot be kept names the file instead of pretending, the pasted key still deleted.
+ *     a `/stt` change that cannot be kept names the file instead of pretending, the pasted key still deleted;
+ *   - the END of a local-engine install that a reload (or a restart) interrupted: the remembered progress message is
+ *     picked up where it stands — attached to a job that still runs, or settled when the job ended while the bot was
+ *     down — and the engine joins the list, with the message turned into its outcome and its buttons.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -20,6 +23,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
+import { appendInstallProgress, holdInstallLock, releaseInstallLock, writeInstalledMarker } from './fixtures/sttInstallFiles';
+import { getSttPaths } from '../stt/sttInstall';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -104,6 +109,33 @@ function getSttConfigFilePath(instance: IsolatedInstanceLayout): string {
   return path.join(path.dirname(instance.envFile), 'stt.json');
 }
 
+/** The slice of `stt.json` the install steps read and seed. */
+interface SttFileSlice {
+  engines: Array<{ id: string; kind: string; apiKey?: string }>;
+}
+
+function readSttFile(instance: IsolatedInstanceLayout): SttFileSlice {
+  return JSON.parse(fs.readFileSync(getSttConfigFilePath(instance), 'utf8'));
+}
+
+/** The remembered install message in `state.json` (`undefined`: none). Written by the bot before it answers, so a read is current. */
+function readRememberedInstallMessage(instance: IsolatedInstanceLayout): { threadKey: string; messageId: number; shouldEnableOnDone?: boolean } | undefined {
+  return JSON.parse(fs.readFileSync(path.join(instance.dataDir, 'state.json'), 'utf8')).sttInstallProgress;
+}
+
+/** What a bot that went down in the middle of an install `/stt` started leaves in `state.json`: the progress message. */
+function seedRememberedInstallMessage(instance: IsolatedInstanceLayout, messageId: number, shouldEnableOnDone: boolean): void {
+  const statePath = path.join(instance.dataDir, 'state.json');
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  state.sttInstallProgress = { threadKey: `${group.id}:${topicThreadId}`, messageId, ...(shouldEnableOnDone ? { shouldEnableOnDone } : {}) };
+  fs.writeFileSync(statePath, JSON.stringify(state));
+}
+
+/** A list with one hosted engine, so "the local engine joins FIRST" is visible. */
+function seedOneHostedEngine(instance: IsolatedInstanceLayout): void {
+  fs.writeFileSync(getSttConfigFilePath(instance), `${JSON.stringify({ engines: [{ id: 'q1', kind: 'groq', apiKey: legacyGroqKey }] }, null, 2)}\n`, { mode: ownerOnlyFileMode });
+}
+
 describe('Voice settings at boot, end to end: built charness, fake Bot API', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
@@ -161,6 +193,61 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     assert.ok(!getCharness().output.includes('[STT] moved'), 'nothing is migrated: the file exists');
     assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { engines: unknown[] }).engines, []);
     await topic.sendAndAwaitReply('/stt', 'No engines yet');
+  });
+
+  it('an install that was still running when the bot reloaded: the same message follows it and, when it ends, the engine joins the list FIRST', async () => {
+    const instance = getLayout();
+    const installMessage = await topic.sendAndAwaitReply('/stt', 'No engines yet');
+    await getCharness().stop();
+    seedRememberedInstallMessage(instance, installMessage.message_id, true);
+    seedOneHostedEngine(instance);
+    holdInstallLock(instance.dataDir);
+    appendInstallProgress(instance.dataDir, { phase: 'downloadingModel', detail: '12/216 MB', bytesDownloaded: 12 * 1024 * 1024 });
+
+    await bootCharness(instance);
+    await topic.waitForMessageText('the progress follows the running job', installMessage, (text) => text.includes('Downloading the model 12/216 MB'));
+    assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['groq'], 'nothing joins the list before the job ends');
+
+    writeInstalledMarker(instance.dataDir);
+    appendInstallProgress(instance.dataDir, { phase: 'done', detail: '', bytesDownloaded: 0 });
+    releaseInstallLock(instance.dataDir);
+    await topic.waitForMessageText('the message turns into the outcome', installMessage, (text) => text.includes('Local recognition is ready'));
+    assert.ok(topic.getKeyboardData(installMessage).flat().some((data) => data.startsWith('stt_bk_')), 'with its Settings button');
+    assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['gigaam', 'groq'], 'the process that saw the install end is not the one that started it, and it still enabled the engine');
+    assert.equal(readRememberedInstallMessage(instance), undefined, 'the message is forgotten at the end');
+  });
+
+  it('an install that finished while the bot was down: the frozen message becomes "ready" at boot and the engine joins the list', async () => {
+    const instance = getLayout();
+    const frozenMessage = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await getCharness().stop();
+    seedRememberedInstallMessage(instance, frozenMessage.message_id, true);
+    seedOneHostedEngine(instance); // the engine was not listed yet when the bot went down
+    fs.rmSync(getSttPaths(instance.dataDir).progressFile, { force: true });
+    appendInstallProgress(instance.dataDir, { phase: 'done', detail: '', bytesDownloaded: 0 });
+    writeInstalledMarker(instance.dataDir);
+
+    await bootCharness(instance);
+    await topic.waitForMessageText('the frozen message settled at boot', frozenMessage, (text) => text.includes('Local recognition is ready'));
+    assert.ok(topic.getKeyboardData(frozenMessage).flat().some((data) => data.startsWith('stt_bk_')), 'with its Settings button');
+    assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['gigaam', 'groq']);
+    assert.equal(readRememberedInstallMessage(instance), undefined);
+  });
+
+  it('an install job that died while the bot was down: the message says it ended without a result, with Retry, and the list is untouched', async () => {
+    const instance = getLayout();
+    const lostMessage = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await getCharness().stop();
+    seedRememberedInstallMessage(instance, lostMessage.message_id, true);
+    seedOneHostedEngine(instance);
+    fs.rmSync(getSttPaths(instance.dataDir).progressFile, { force: true });
+    fs.rmSync(getSttPaths(instance.dataDir).markerFile, { force: true });
+
+    await bootCharness(instance);
+    await topic.waitForMessageText('the message reports the lost job', lostMessage, (text) => text.includes('the install job ended without a result'));
+    assert.ok(topic.getKeyboardData(lostMessage).flat().some((data) => data.startsWith('stt_er_')), 'Retry is offered');
+    assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['groq']);
+    assert.equal(readRememberedInstallMessage(instance), undefined);
   });
 
   it('a settings directory that cannot be written is said at boot once, and /stt names the file when a pasted key cannot be kept', { skip: isRoot }, async () => {
