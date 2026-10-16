@@ -399,6 +399,13 @@ export const kaDict: Record<string, string> = {
     'ხმისთვის საჭიროა მეტყველების ამოცნობის ძრავა — გახსენით /stt მის დასაყენებლად.',
   'voice.config_invalid':
     'ხმა გამორთულია: პარამეტრების ფაილი stt.json არასწორია. პრობლემა ბოტის ლოგშია — გაასწორეთ ფაილი ან გახსენით /stt.',
+  'stt.install.header': '🖥 ლოკალური მეტყველების ამოცნობა ინსტალირდება… ({elapsed})',
+  'stt.install.creatingEnvironment': 'იქმნება Python-ის გარემო…',
+  'stt.install.installingPackages': 'ინსტალირდება პაკეტები…',
+  'stt.install.downloadingModel': 'მოდელი იტვირთება {progress}…',
+  'stt.install.checking': 'მოდელი მოწმდება…',
+  'stt.install.done': '✅ ლოკალური ამოცნობა მზადაა — ის შემდეგი ხმოვანი შეტყობინებით ჩაირთვება.',
+  'stt.install.failed': '❌ ლოკალური ამოცნობის ინსტალაცია ვერ მოხერხდა: {error}',
   'voice.failed': 'ხმოვანი შეტყობინების ტრანსკრიფცია ვერ მოხერხდა.',
   'voice.retrying': '⚠️ ხმოვანი შეტყობინების ტრანსკრიფცია ვერ მოხერხდა ({error}). ხელახლა ვცდი {seconds} წამში…',
   'voice.transcribed': '🎤 {text}',

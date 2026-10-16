@@ -80,6 +80,7 @@ import {
   stopOpenCodeServer,
   ensureOpenCodeServer,
   checkIsInstalled,
+  checkIsOpenCodeExternalHost,
 } from './installManager';
 import {
   buildReadinessReport,
@@ -178,15 +179,16 @@ import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
 import type { TranscribeResult } from './utils/transcribeAudio';
+import { getSttConfigPath, type ResolvedSttSettings } from './stt/sttSettings';
+import { createSttRuntime } from './stt/sttRuntime';
 import {
-  getSttConfigPath,
-  getSttReportLines,
-  loadSttConfig,
-  migrateLegacySttKeys,
-  resolveSttSettings,
-  type ResolvedSttSettings,
-  type SttFacts,
-} from './stt/sttSettings';
+  createDefaultSttSidecarOwnerDeps,
+  createSttSidecarOwner,
+  resolveSttOwnerContext,
+} from './stt/sttSidecarOwner';
+import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
+import { isGigaamInstalling } from './stt/sttInstall';
+import { createSttInstallLogReporter, createSttInstallMessageReporter } from './stt/sttInstallReporter';
 import { transcribeWithEngines } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
@@ -4024,49 +4026,80 @@ const FILE_DOWNLOAD_CAP_MB = Math.floor(telegramFileDownloadCapBytes / (1024 * 1
 const ALBUM_DEBOUNCE_MS = 2_000;
 
 /**
- * What the speech-engine chain needs to know about the local engine's lifecycle.
- * Until the on-demand sidecar owner exists there is no process to own it, so the
- * local engine is never available.
+ * The local speech engine's process (started on demand, adopted across hot reloads, stopped with its owner),
+ * the voice settings resolved against it, and the install job that fetches the engine. See `src/stt/README.md`.
  */
-const sttFacts: SttFacts = {
-  isGigaamInstalled: false,
-  isGigaamInstalling: false,
-  isGigaamUnhealthy: false,
-  hasOwnerContext: false,
-};
-
-/** The `[STT]` lines last logged, so an unchanged state is reported once, not per voice note. */
-let lastSttReport = '';
+const sttOwner = createSttSidecarOwner(createDefaultSttSidecarOwnerDeps(resolveDataDir));
+const sttInstallJobs = createSttInstallJobManager(createDefaultSttInstallJobDeps(resolveDataDir));
+const sttRuntime = createSttRuntime({
+  getDataDir: resolveDataDir,
+  getConfigPath: () => getSttConfigPath(),
+  owner: sttOwner,
+  getOwnerContext: () => resolveSttOwnerContext(),
+  logInfo: (line) => console.log(line),
+  logProblem: (line) => console.warn(line),
+  // A hand edit (or a save) that names the local engine before it is installed: fetch it by itself.
+  onNeedsAutoInstall: () => { void startSttAutoInstall(); },
+});
 
 /**
- * @description The speech-engine chain in effect NOW: `stt.json` is re-read when
- * its stamp changes (a hand edit or a `/stt` save applies to the next voice, no
- * restart), and a change in what is wrong with it is logged once as `[STT] …`.
+ * @description The speech-engine chain in effect NOW: `stt.json` is re-read when its stamp changes (a hand edit
+ * or a `/stt` save applies to the next voice, no restart), and a change in what is wrong with it is logged once
+ * as `[STT] …`.
  */
 function getResolvedSttSettings(): ResolvedSttSettings {
-  const resolved = resolveSttSettings(loadSttConfig(getSttConfigPath()), sttFacts);
-  const report = getSttReportLines(resolved).join('\n');
-  if (report !== lastSttReport) {
-    lastSttReport = report;
-    if (report) console.warn(report);
-  }
-  return resolved;
+  return sttRuntime.getResolved();
+}
+
+/** How an install job's progress reaches people: one edited message in `key`'s topic. */
+function createSttInstallMessagePorts() {
+  return {
+    getState: () => state,
+    replyToThread: (key: SessionKey, text: string) => replyToThread(key, text),
+    editThreadMessage: (key: SessionKey, messageId: number, text: string) => editThreadMessage(key, messageId, text),
+    translateFor: (key: SessionKey) => (code: string, vars?: Record<string, string | number>) => withThreadLocale(key, () => t(code, vars)),
+    nowMs: () => Date.now(),
+  };
 }
 
 /**
- * @description Boot step of the voice settings: the one-time move of the old
- * `GROQ_API_KEY` / `OPENAI_API_KEY` env keys into `stt.json`, then the first
- * `[STT]` report.
+ * @description Fetch the local engine because `stt.json` names it (at boot, or on an edit): the progress is one
+ * edited message in General of the paired group — the message a reload left behind when one is remembered — or
+ * `[STT] install:` log lines when no group is paired. A job already running is attached to, never doubled; a
+ * failure is reported once and not retried.
  */
-function initSttSettings(): void {
-  const configPath = getSttConfigPath();
-  const migration = migrateLegacySttKeys(configPath);
-  if (migration.status === 'migrated') {
-    console.log(`[STT] moved ${migration.engineNames.join(' + ')} from the environment into ${configPath}`);
-  } else if (migration.status === 'writeFailed') {
-    console.error(`[STT] could not write ${configPath} (${migration.error}): voice input stays off until it can be written`);
+async function startSttAutoInstall(): Promise<void> {
+  const remembered = state.getSttInstallProgressMessage();
+  const groupId = getAllowedGroupId();
+  const rememberedKey = remembered ? tryKeyFromString(remembered.threadKey) : null;
+  const generalKey = groupId !== null ? makeTelegramKey(groupId, GENERAL_THREAD_ID) : null;
+  const targetKey = rememberedKey ?? generalKey;
+  const reportTo = targetKey
+    ? createSttInstallMessageReporter(createSttInstallMessagePorts(), targetKey)
+    : createSttInstallLogReporter((line) => console.log(line));
+  try {
+    const outcome = await sttInstallJobs.start({ reportTo });
+    if (outcome.phase === 'failed') console.warn(`[STT] install failed: ${outcome.error ?? 'unknown error'}`);
+    else console.log('[STT] install finished: the local engine starts with the next voice note');
+  } catch (e) {
+    console.warn('[STT] install job error:', e instanceof Error ? e.message : e);
   }
-  getResolvedSttSettings();
+}
+
+/**
+ * @description The local engine at boot, after the state is loaded: NO process is started (the first voice that
+ * needs it does that); a stale record of a dead or foreign sidecar is cleaned; an install a reload interrupted
+ * is re-attached to; and a `stt.json` that names the engine before it is installed starts the install.
+ */
+async function bootSttLocalEngine(): Promise<void> {
+  await sttOwner.cleanupAtBoot();
+  const isInstalling = isGigaamInstalling(resolveDataDir());
+  if (isInstalling || sttRuntime.getResolved().needsAutoInstall) {
+    await startSttAutoInstall();
+    return;
+  }
+  // A message left over from an install that ended while the bot was down is not an install in progress.
+  if (state.getSttInstallProgressMessage()) await state.setSttInstallProgressMessage(null);
 }
 
 /**
@@ -12222,7 +12255,7 @@ export async function startBot(): Promise<void> {
 
   // 1a''. The voice settings (`stt.json`): the old env keys move into it once,
   //     before the first voice note or the readiness check reads the chain.
-  initSttSettings();
+  sttRuntime.init();
 
   // 1a'. The Jira connector (Jira plan J5), loaded only when CONNECTORS lists it
   //     (R20: a Telegram-only instance never loads its code). Prepared BEFORE the
@@ -12740,6 +12773,8 @@ export async function startBot(): Promise<void> {
       drainPendingUpdates: () => updateDispatcher.drainIdle(updateDrainTimeoutMs),
       finalizePendingOutput: () => finalizePendingOutputOnShutdown(),
       clearTransientFrames: () => sweepTransientFramesOnShutdown(),
+      // A hot worker's reload keeps the sidecar for the next worker to adopt; the supervisor stops it for good.
+      stopSidecars: checkIsOpenCodeExternalHost() ? undefined : () => sttOwner.stop(),
       cleanupTimers: () => {
         clearInterval(inMemoryGcInterval);
         clearInterval(heartbeatInterval);
@@ -12780,6 +12815,8 @@ export async function startBot(): Promise<void> {
   } catch (e) {
     console.warn('[startup-status] failed:', e instanceof Error ? e.message : e);
   }
+  // The local speech engine: clean up after an earlier run, re-attach to / start its install. Starts no process.
+  void bootSttLocalEngine().catch((e) => console.warn('[STT] boot step failed:', e instanceof Error ? e.message : e));
 
   console.log(`Launching Telegraf bot (long polling, dropPendingUpdates=${bootMode.dropPendingUpdates})...`);
   try {

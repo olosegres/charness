@@ -399,6 +399,13 @@ export const uzDict: Record<string, string> = {
     'Ovoz uchun nutqni aniqlash dvigateli kerak — uni sozlash uchun /stt ni oching.',
   'voice.config_invalid':
     'Ovoz o‘chirilgan: sozlamalar fayli stt.json noto‘g‘ri. Muammo bot logida ko‘rsatilgan — faylni tuzating yoki /stt ni oching.',
+  'stt.install.header': '🖥 Lokal nutqni aniqlash o‘rnatilmoqda… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Python muhiti yaratilmoqda…',
+  'stt.install.installingPackages': 'Paketlar o‘rnatilmoqda…',
+  'stt.install.downloadingModel': 'Model yuklab olinmoqda {progress}…',
+  'stt.install.checking': 'Model tekshirilmoqda…',
+  'stt.install.done': '✅ Lokal aniqlash tayyor — u keyingi ovozli xabar bilan ishga tushadi.',
+  'stt.install.failed': '❌ Lokal aniqlashni o‘rnatib bo‘lmadi: {error}',
   'voice.failed': 'Ovoz xabarini transkripsiya qilib bo‘lmadi.',
   'voice.retrying': '⚠️ Ovoz xabarini transkripsiya qilib bo‘lmadi ({error}). {seconds} soniyadan keyin qayta urinaman…',
   'voice.transcribed': '🎤 {text}',

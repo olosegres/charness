@@ -399,6 +399,13 @@ export const jaDict: Record<string, string> = {
     '音声には音声認識エンジンが必要です — /stt を開いて設定してください。',
   'voice.config_invalid':
     '音声はオフです：設定ファイル stt.json が無効です。問題点はボットのログにあります — ファイルを修正するか /stt を開いてください。',
+  'stt.install.header': '🖥 ローカル音声認識をインストール中… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Python 環境を作成中…',
+  'stt.install.installingPackages': 'パッケージをインストール中…',
+  'stt.install.downloadingModel': 'モデルをダウンロード中 {progress}…',
+  'stt.install.checking': 'モデルを確認中…',
+  'stt.install.done': '✅ ローカル認識の準備ができました — 次の音声メッセージから起動します。',
+  'stt.install.failed': '❌ ローカル認識をインストールできませんでした: {error}',
   'voice.failed': '音声メッセージの文字起こしに失敗しました。',
   'voice.retrying': '⚠️ 音声メッセージの文字起こしに失敗しました（{error}）。{seconds} 秒後に再試行します…',
   'voice.transcribed': '🎤 {text}',

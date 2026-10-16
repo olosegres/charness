@@ -875,6 +875,27 @@ test('the voice setup hints point at /stt (and the broken-file notice at stt.jso
   }
 });
 
+test('the local engine install progress strings exist in every locale and keep their placeholders', () => {
+  const expectedPlaceholders: Record<string, string[]> = {
+    'stt.install.header': ['{elapsed}'],
+    'stt.install.creatingEnvironment': [],
+    'stt.install.installingPackages': [],
+    'stt.install.downloadingModel': ['{progress}'],
+    'stt.install.checking': [],
+    'stt.install.done': [],
+    'stt.install.failed': ['{error}'],
+  };
+  for (const [code, placeholders] of Object.entries(expectedPlaceholders)) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+    for (const locale of localeCodes) {
+      const raw = runWithLocale(locale, () => t(code));
+      for (const placeholder of placeholders) {
+        assert.ok(raw.includes(placeholder), `${locale} ${code} lost ${placeholder}: "${raw}"`);
+      }
+    }
+  }
+});
+
 test('startup.item.grant_admin substitutes the {missing} rights list', () => {
   const out = t('startup.item.grant_admin', { missing: 'Manage Topics, Pin Messages' });
   assert.ok(out.includes('Manage Topics, Pin Messages'), `expected the rights in "${out}"`);

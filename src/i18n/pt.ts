@@ -399,6 +399,13 @@ export const ptDict: Record<string, string> = {
     'A voz precisa de um mecanismo de reconhecimento de fala — abra /stt para configurar um.',
   'voice.config_invalid':
     'A voz está desligada: o arquivo de configurações stt.json é inválido. O log do bot indica o problema — corrija o arquivo ou abra /stt.',
+  'stt.install.header': '🖥 Instalando o reconhecimento de voz local… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Criando o ambiente Python…',
+  'stt.install.installingPackages': 'Instalando pacotes…',
+  'stt.install.downloadingModel': 'Baixando o modelo {progress}…',
+  'stt.install.checking': 'Verificando o modelo…',
+  'stt.install.done': '✅ O reconhecimento local está pronto — ele inicia com a próxima mensagem de voz.',
+  'stt.install.failed': '❌ Não foi possível instalar o reconhecimento local: {error}',
   'voice.failed': 'Falha ao transcrever a mensagem de voz.',
   'voice.retrying': '⚠️ Falha ao transcrever a mensagem de voz ({error}). Nova tentativa em {seconds} s…',
   'voice.transcribed': '🎤 {text}',

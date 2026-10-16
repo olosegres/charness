@@ -74,6 +74,21 @@ Each adapter implements `AgentAdapter` from `src/types.ts`:
   `toolResult`, `subagentStatus`, `apiError`, `started`, `stopped`, `closed`,
   `error` (all emit `SessionKey` first)
 
+### Voice recognition (the engine chain and the local sidecar)
+
+A voice note walks an ordered chain of speech engines read from `stt.json` (`src/stt/`). The local GigaAM engine is
+the one engine that is a PROCESS of ours, owned by the bot like OpenCode's server but started on demand and stopped
+with its owner:
+
+```
+voice note ──> transcribeWithEngines ──> engine 1 (local) ──ensure──> sttSidecarOwner ──> gigaam_sidecar.py
+                  │   fall back on any      engine 2 (Groq)               │  adopt the record, or spawn;     (ONE process, 127.0.0.1:0,
+                  │   failure, no retry     engine 3 (your URL)           │  hosted outside the bot's tree    token, idle exit)
+                  └── last engine retries                                 └── DATA_DIR/stt/sidecar.json
+owner = the `charness hot` supervisor (a worker reload keeps the sidecar) or the plain bot process;
+the sidecar polls its owner and exits within ~2 s of its death, even after a SIGKILL.
+```
+
 ## Local development
 
 ```bash

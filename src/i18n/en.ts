@@ -412,6 +412,13 @@ export const enDict: Record<string, string> = {
     'Voice needs a speech-recognition engine — open /stt to set one up.',
   'voice.config_invalid':
     'Voice is off: the settings file stt.json is invalid. The bot log names the problem — fix the file or open /stt.',
+  'stt.install.header': '🖥 Installing local speech recognition… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Creating the Python environment…',
+  'stt.install.installingPackages': 'Installing packages…',
+  'stt.install.downloadingModel': 'Downloading the model {progress}…',
+  'stt.install.checking': 'Checking the model…',
+  'stt.install.done': '✅ Local recognition is ready — it starts with the next voice note.',
+  'stt.install.failed': '❌ Local recognition could not be installed: {error}',
   'voice.failed': 'Failed to transcribe voice message.',
   'voice.retrying': '⚠️ Failed to transcribe voice message ({error}). Retrying in {seconds} s…',
   'voice.transcribed': '🎤 {text}',

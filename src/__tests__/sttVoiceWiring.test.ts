@@ -53,8 +53,31 @@ test('the voice gate asks the resolved chain, and a broken stt.json gets its own
 
 test('readiness and boot use the same chain: the check asks for an engine, boot migrates the old env keys first', () => {
   assert.match(botSource, /hasSpeechEngine:\s*getResolvedSttSettings\(\)\.engines\.length > 0/);
-  assert.match(botSource, /\n {2}initSttSettings\(\);\n/);
-  assert.match(getFunctionBody('initSttSettings'), /migrateLegacySttKeys\(configPath\)/);
+  assert.match(botSource, /\n {2}sttRuntime\.init\(\);\n/);
+});
+
+test('boot starts NO sidecar: it cleans up, re-attaches to or starts the INSTALL, and the first voice that needs the engine starts it', () => {
+  const boot = getFunctionBody('bootSttLocalEngine');
+  assert.match(boot, /sttOwner\.cleanupAtBoot\(\)/);
+  assert.match(boot, /isGigaamInstalling\(resolveDataDir\(\)\)/);
+  assert.match(boot, /needsAutoInstall/);
+  assert.doesNotMatch(boot, /\.ensure\(/, 'only a voice reaching the local engine may start the process');
+  assert.match(botSource, /void bootSttLocalEngine\(\)/);
+  // After the startup status, i.e. once Telegram is up and General can take the progress message.
+  assert.ok(botSource.indexOf('void bootSttLocalEngine()') > botSource.indexOf('await sendStartupStatus(bootMode.isHotReload)'));
+});
+
+test('the auto-install reports into General (or the remembered message), else into the log, and edits are never retried by a loop', () => {
+  const body = getFunctionBody('startSttAutoInstall');
+  assert.match(body, /makeTelegramKey\(groupId, GENERAL_THREAD_ID\)/);
+  assert.match(body, /createSttInstallMessageReporter\(createSttInstallMessagePorts\(\), targetKey\)/);
+  assert.match(body, /createSttInstallLogReporter/);
+  assert.match(body, /sttInstallJobs\.start\(\{ reportTo \}\)/);
+  assert.doesNotMatch(body, /for \(|while \(/, 'no retry loop');
+});
+
+test('the plain bot stops the sidecar in its graceful shutdown; a hot worker leaves it to its supervisor', () => {
+  assert.match(botSource, /stopSidecars: checkIsOpenCodeExternalHost\(\) \? undefined : \(\) => sttOwner\.stop\(\),/);
 });
 
 test('no module reads the old voice env keys from the environment any more (the migration takes them as an argument)', () => {

@@ -36,6 +36,16 @@ import {
 
 const launchCwd = '/home/op/src';
 
+test('hands the worker the supervisor as the local speech engine\'s owner, and nothing when it has none', () => {
+  const withOwner = buildHotWorkerEnv({ PATH: '/usr/bin' }, launchCwd, { pid: 4242, startToken: '987654' });
+  assert.equal(withOwner.CHARNESS_STT_OWNER_PID, '4242');
+  assert.equal(withOwner.CHARNESS_STT_OWNER_START_TOKEN, '987654');
+
+  const withoutOwner = buildHotWorkerEnv({ PATH: '/usr/bin' }, launchCwd);
+  assert.equal(withoutOwner.CHARNESS_STT_OWNER_PID, undefined);
+  assert.equal(withoutOwner.CHARNESS_STT_OWNER_START_TOKEN, undefined);
+});
+
 test('injects launchCwd as WORK_ROOT when unset', () => {
   const env = buildHotWorkerEnv({ PATH: '/usr/bin' }, launchCwd);
   assert.equal(env.WORK_ROOT, launchCwd);

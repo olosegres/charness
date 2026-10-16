@@ -399,6 +399,13 @@ export const frDict: Record<string, string> = {
     'La voix nécessite un moteur de reconnaissance vocale — ouvrez /stt pour en configurer un.',
   'voice.config_invalid':
     'La voix est désactivée : le fichier de réglages stt.json est invalide. Le journal du bot indique le problème — corrigez le fichier ou ouvrez /stt.',
+  'stt.install.header': '🖥 Installation de la reconnaissance vocale locale… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Création de l\'environnement Python…',
+  'stt.install.installingPackages': 'Installation des paquets…',
+  'stt.install.downloadingModel': 'Téléchargement du modèle {progress}…',
+  'stt.install.checking': 'Vérification du modèle…',
+  'stt.install.done': '✅ La reconnaissance locale est prête — elle démarre avec le prochain message vocal.',
+  'stt.install.failed': '❌ La reconnaissance locale n\'a pas pu être installée : {error}',
   'voice.failed': 'Échec de la transcription du message vocal.',
   'voice.retrying': '⚠️ Échec de la transcription du message vocal ({error}). Nouvel essai dans {seconds} s…',
   'voice.transcribed': '🎤 {text}',

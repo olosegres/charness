@@ -405,6 +405,13 @@ export const ukDict: Record<string, string> = {
     'Для голосу потрібен рушій розпізнавання мовлення — відкрий /stt, щоб налаштувати.',
   'voice.config_invalid':
     'Голос вимкнено: файл налаштувань stt.json некоректний. Що не так — у логах бота; виправ файл або відкрий /stt.',
+  'stt.install.header': '🖥 Встановлюю локальне розпізнавання мовлення… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Створюю середовище Python…',
+  'stt.install.installingPackages': 'Встановлюю пакети…',
+  'stt.install.downloadingModel': 'Завантажую модель {progress}…',
+  'stt.install.checking': 'Перевіряю модель…',
+  'stt.install.done': '✅ Локальне розпізнавання готове — воно запуститься з наступним голосовим.',
+  'stt.install.failed': '❌ Не вдалося встановити локальне розпізнавання: {error}',
   'voice.failed': 'Не вдалося розпізнати голосове повідомлення.',
   'voice.retrying': '⚠️ Не вдалося розпізнати голосове повідомлення ({error}). Повторю через {seconds} с…',
   'voice.transcribed': '🎤 {text}',

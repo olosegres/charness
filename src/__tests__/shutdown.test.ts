@@ -419,3 +419,70 @@ test('error thrown by state.flush does NOT skip releaseLock or exit', async () =
   assert.ok(events.includes('releaseLock'), `releaseLock missing; events=${JSON.stringify(events)}`);
   assert.equal(exitCode, 0, 'we still exit so nodemon can respawn');
 });
+
+test('stopSidecars runs after state.flush and before releaseLock, so a stopped sidecar never costs the state', async () => {
+  const { deps, events, drained } = makeDeps({
+    flushDelayMs: 10,
+    stopSidecars: async () => {
+      events.push('stopSidecars:start');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      events.push('stopSidecars:done');
+    },
+  });
+
+  await gracefulShutdown(deps);
+  await drained();
+
+  assert.deepEqual(events, [
+    'cleanupTimers',
+    'bot.stop(SIGTERM)',
+    'state.flush:start',
+    'state.flush:resolved',
+    'stopSidecars:start',
+    'stopSidecars:done',
+    'releaseLock',
+    'exit(0)',
+  ]);
+});
+
+test('a thrown stopSidecars does NOT skip releaseLock or exit', async () => {
+  const { deps, events, exitCode, drained } = makeDeps({
+    stopSidecars: async () => {
+      throw new Error('sidecar would not die');
+    },
+  });
+
+  await gracefulShutdown(deps);
+  await drained();
+
+  assert.ok(events.includes('releaseLock'));
+  assert.equal(exitCode(), 0);
+});
+
+test('a hung stopSidecars is cut off by the watchdog: the lock is still released and the process exits', async () => {
+  let releaseHungStop: () => void = () => {};
+  const { deps, events, exitCode, drained } = makeDeps({
+    watchdogMs: 50,
+    stopSidecars: () => new Promise<void>((resolve) => { releaseHungStop = resolve; }),
+  });
+
+  // The watchdog timer is unref'd (in production other handles keep the process up): hold the loop open here.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await gracefulShutdown(deps);
+    assert.ok(events.includes('releaseLock'));
+    assert.equal(exitCode(), 0);
+  } finally {
+    // Settle the orphan so the runner does not report a pending promise.
+    releaseHungStop();
+    await drained();
+    clearInterval(keepAlive);
+  }
+});
+
+test('without the dep (a hot worker, whose supervisor owns the sidecar) nothing is stopped', async () => {
+  const { deps, events, drained } = makeDeps();
+  await gracefulShutdown(deps);
+  await drained();
+  assert.ok(!events.some((event) => event.startsWith('stopSidecars')));
+});

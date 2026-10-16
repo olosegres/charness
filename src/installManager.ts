@@ -356,7 +356,7 @@ export function startExternallyParentedProcess(
   });
 }
 
-function getProcessIdentity(pid: number): ExternalProcessIdentity | null {
+export function getProcessIdentity(pid: number): ExternalProcessIdentity | null {
   const startToken = getProcessStartToken(pid);
   return startToken ? { pid, startToken } : null;
 }

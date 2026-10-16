@@ -399,6 +399,13 @@ export const esDict: Record<string, string> = {
     'La voz necesita un motor de reconocimiento de voz — abre /stt para configurar uno.',
   'voice.config_invalid':
     'La voz está desactivada: el archivo de ajustes stt.json no es válido. El registro del bot indica el problema — corrige el archivo o abre /stt.',
+  'stt.install.header': '🖥 Instalando el reconocimiento de voz local… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Creando el entorno de Python…',
+  'stt.install.installingPackages': 'Instalando paquetes…',
+  'stt.install.downloadingModel': 'Descargando el modelo {progress}…',
+  'stt.install.checking': 'Comprobando el modelo…',
+  'stt.install.done': '✅ El reconocimiento local está listo — se inicia con la próxima nota de voz.',
+  'stt.install.failed': '❌ No se pudo instalar el reconocimiento local: {error}',
   'voice.failed': 'Error al transcribir el mensaje de voz.',
   'voice.retrying': '⚠️ Error al transcribir el mensaje de voz ({error}). Reintento en {seconds} s…',
   'voice.transcribed': '🎤 {text}',

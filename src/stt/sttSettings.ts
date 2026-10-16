@@ -526,7 +526,7 @@ const unavailableReasonTexts: Record<SttUnavailableReason, string> = {
   installing: 'still installing',
   unhealthy: 'marked unhealthy after repeated start failures',
   languageNotSupported: 'the local engine only knows Russian',
-  noOwnerContext: 'there is no owner process to start it with',
+  noOwnerContext: 'it has no owner process to be tied to (a hot supervisor that predates local recognition: restart it)',
   missingKey: 'no API key',
   missingUrl: 'no URL',
 };

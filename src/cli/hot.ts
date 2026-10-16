@@ -8,11 +8,19 @@ import {
   clearOpenCodeExternalHostEnv,
   ensureOpenCodeServer,
   getDefaultOpenCodeOwnershipFilePath,
+  getProcessIdentity,
   openCodeExternalHostEnvValue,
   setOpenCodeOwnershipFileEnv,
   stopOpenCodeServer,
 } from '../installManager';
-import { hotReloadEnvName, warnLegacyNamesAtBoot } from '../legacyNames';
+import { hotReloadEnvName, resolveDefaultDataDir, warnLegacyNamesAtBoot } from '../legacyNames';
+import {
+  createDefaultSttSidecarOwnerDeps,
+  stopRecordedSttSidecar,
+  sttOwnerPidEnvName,
+  sttOwnerStartTokenEnvName,
+  type SttOwnerContext,
+} from '../stt/sttSidecarOwner';
 import { migrateLegacyNamesUnderLock } from '../legacyMigration';
 
 interface HotOpenCodeDeps {
@@ -48,6 +56,11 @@ const tscWatchTailLength = tscWatchReadyMarker.length - 1;
  * subcommand makes the same workflow reachable from any CWD — we just
  * resolve the project root from the bin's own realpath. `yarn hot` in the
  * repo is the in-project equivalent.
+ *
+ * The supervisor is also the OWNER of the local speech engine's sidecar: it exports its pid and start
+ * token to the worker (`buildHotWorkerEnv`), the sidecar dies with it (its own watchdog covers a SIGKILL), and
+ * the supervisor's shutdown stops the recorded one. A reload of the worker leaves it running for the next
+ * worker to adopt.
  *
  * **Failure modes handled:**
  *   - fresh checkout → nodemon waits until `tsc -w` produces the worker entry;
@@ -117,6 +130,13 @@ export async function runHot(): Promise<void> {
   const connectors = parseConnectors(process.env.CONNECTORS);
   if (connectors.ok && connectors.connectors.includes('telegram')) await prepareHotOpenCodeServer();
 
+  // The data dir the worker will use (a relative DATA_DIR resolves against the project root, nodemon's cwd).
+  const sttDataDir = path.resolve(projectRoot, process.env.DATA_DIR || resolveDefaultDataDir());
+  const supervisorIdentity = getProcessIdentity(process.pid);
+  const sttOwner: SttOwnerContext | undefined = supervisorIdentity
+    ? { pid: supervisorIdentity.pid, startToken: supervisorIdentity.startToken }
+    : undefined;
+
   process.stderr.write(
     `charness hot: project=${projectRoot}\n` +
       `charness hot: starting \`tsc -w\`; nodemon starts after the first completed compile.\n` +
@@ -130,6 +150,7 @@ export async function runHot(): Promise<void> {
   const children = new Set<ChildProcess>();
   let nodemonChild: ChildProcess | null = null;
   let shuttingDown = false;
+  let isSidecarStopped = false;
   let finalCode = 0;
   let resolveChildrenStopped: (() => void) | null = null;
   const childrenStopped = new Promise<void>((resolve) => {
@@ -137,7 +158,7 @@ export async function runHot(): Promise<void> {
   });
 
   const checkShouldResolveChildren = () => {
-    if (shuttingDown && children.size === 0) resolveChildrenStopped?.();
+    if (shuttingDown && children.size === 0 && isSidecarStopped) resolveChildrenStopped?.();
   };
 
   const forwardSignal = (sig: NodeJS.Signals) => {
@@ -148,6 +169,16 @@ export async function runHot(): Promise<void> {
       const childName: HotChildName = child === nodemonChild ? 'nodemon' : 'tsc';
       child.kill(getHotChildShutdownSignal(childName, sig));
     }
+    // The sidecar does not outlive its owner: stop the recorded one (guarded, bounded at ~3 s) while the
+    // watchers wind down; the wrapper exits only after both.
+    void stopRecordedSttSidecar(createDefaultSttSidecarOwnerDeps(() => sttDataDir))
+      .catch((error) => {
+        process.stderr.write(`charness hot: stopping the local speech engine failed: ${error instanceof Error ? error.message : error}\n`);
+      })
+      .finally(() => {
+        isSidecarStopped = true;
+        checkShouldResolveChildren();
+      });
     checkShouldResolveChildren();
   };
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -186,7 +217,7 @@ export async function runHot(): Promise<void> {
     nodemonChild = spawn(process.execPath, [nodemonBin], {
       cwd: projectRoot,
       stdio: 'inherit',
-      env: buildHotWorkerEnv(process.env, launchCwd),
+      env: buildHotWorkerEnv(process.env, launchCwd, sttOwner),
     });
     registerChild(nodemonChild, 'nodemon');
   };
@@ -302,6 +333,7 @@ export async function prepareHotOpenCodeServer(
 export function buildHotWorkerEnv(
   baseEnv: NodeJS.ProcessEnv,
   launchCwd: string,
+  sttOwner?: SttOwnerContext,
 ): NodeJS.ProcessEnv {
   return {
     ...baseEnv,
@@ -309,6 +341,9 @@ export function buildHotWorkerEnv(
     // Both names: this supervisor may outlive a rename of the worker's code.
     [hotReloadEnvName.current]: openCodeExternalHostEnvValue,
     [hotReloadEnvName.legacy]: openCodeExternalHostEnvValue,
+    // The long-lived process the local speech engine's sidecar dies with. Without it (an older supervisor) the
+    // worker sees no owner and keeps the engine unavailable.
+    ...(sttOwner ? { [sttOwnerPidEnvName]: sttOwner.pid.toString(), [sttOwnerStartTokenEnvName]: sttOwner.startToken } : {}),
   };
 }
 

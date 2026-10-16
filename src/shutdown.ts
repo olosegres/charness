@@ -27,6 +27,12 @@
  * the bot process by design — the reattach path on the next boot picks
  * them up. Killing them here would defeat the whole "hot reload keeps
  * agents alive" property the surrounding plan rests on.
+ *
+ * **What it does stop, when given the dep:** the local speech engine's
+ * sidecar (`stopSidecars`). Unlike an agent it is a pure helper with nothing
+ * to resume, so it must not outlive the bot (the plain bot passes the dep; in
+ * hot mode the SUPERVISOR stops it when it shuts down, and a reload of the
+ * worker keeps it running for the next worker to adopt).
  */
 
 /**
@@ -85,6 +91,12 @@ export interface ShutdownDeps {
    * into `state.flush()`'s watchdog budget; the outer watchdog is the backstop.
    */
   clearTransientFrames?: () => Promise<void>;
+  /**
+   * Optional: stop the processes this bot owns and that must not outlive it (the local speech engine's
+   * sidecar). Runs AFTER `state.flush()` so the state is safe first. MUST self-bound (the sidecar owner's stop is
+   * bounded at ~3 s); the outer watchdog is the backstop.
+   */
+  stopSidecars?: () => Promise<void>;
   /** Logger; defaults to `console.log`. Tests pass a sink to silence output. */
   log?: (msg: string) => void;
   /** Override the watchdog for tests. */
@@ -111,6 +123,8 @@ export interface ShutdownDeps {
  *   3. `await state.flush()` — atomic-write any pending state changes.
  *      THIS is the step the old `releaseLock(); process.exit(0)` raced;
  *      we wait for the on-disk rename to land here.
+ *   3b. `await stopSidecars()` — stop the helper processes this bot owns
+ *      (the local speech engine), after the state is safely on disk.
  *   4. `releaseLock()` — drop the lockfile so the incoming nodemon
  *      respawn can claim it. Idempotent and owner-checked, so the
  *      `process.on('exit')` safety net in `lock.ts` finding nothing to do
@@ -185,6 +199,13 @@ export async function gracefulShutdown(deps: ShutdownDeps): Promise<void> {
       await deps.state.flush();
     } catch (e) {
       console.error('[shutdown] state.flush failed:', e);
+    }
+    if (deps.stopSidecars) {
+      try {
+        await deps.stopSidecars();
+      } catch (e) {
+        console.error('[shutdown] stopSidecars failed:', e);
+      }
     }
     return 'sequence';
   })();

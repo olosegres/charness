@@ -399,6 +399,13 @@ export const hiDict: Record<string, string> = {
     'वॉइस के लिए स्पीच-रिकग्निशन इंजन चाहिए — इसे सेट करने के लिए /stt खोलें।',
   'voice.config_invalid':
     'वॉइस बंद है: सेटिंग फ़ाइल stt.json अमान्य है। समस्या बॉट लॉग में है — फ़ाइल ठीक करें या /stt खोलें।',
+  'stt.install.header': '🖥 लोकल स्पीच रिकग्निशन इंस्टॉल हो रहा है… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Python एनवायरनमेंट बनाया जा रहा है…',
+  'stt.install.installingPackages': 'पैकेज इंस्टॉल हो रहे हैं…',
+  'stt.install.downloadingModel': 'मॉडल डाउनलोड हो रहा है {progress}…',
+  'stt.install.checking': 'मॉडल जाँचा जा रहा है…',
+  'stt.install.done': '✅ लोकल रिकग्निशन तैयार है — यह अगले वॉइस नोट के साथ शुरू होगा।',
+  'stt.install.failed': '❌ लोकल रिकग्निशन इंस्टॉल नहीं हो सका: {error}',
   'voice.failed': 'वॉइस संदेश ट्रांसक्राइब करने में विफल।',
   'voice.retrying': '⚠️ वॉइस संदेश ट्रांसक्राइब करने में विफल ({error})। {seconds} सेकंड में फिर से कोशिश की जाएगी…',
   'voice.transcribed': '🎤 {text}',

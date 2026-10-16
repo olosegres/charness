@@ -60,6 +60,13 @@ const DEFAULT_SAVE_DEBOUNCE_MS = 500;
 // in `utils/displayVerbosity.ts` (`defaultDisplayVerbosityMode`) — one place
 // shared with the adapters' pre-wiring fallback.
 
+/** @name SttInstallProgressMessage @description The topic message the local engine's install progress is edited into. */
+export interface SttInstallProgressMessage {
+  /** The topic's serialised session key. */
+  threadKey: string;
+  messageId: number;
+}
+
 export interface BindingData {
   /** Subdirectory under `WORK_ROOT` this thread is attached to. */
   subdir: string;
@@ -443,6 +450,12 @@ export interface StateV1 {
    * release (`/new`, `/quit`) drops the parked id with the live ones.
    */
   fallbackChain?: FallbackChainEntry[];
+  /**
+   * The message the local speech engine's install edits with its progress (`stt/sttAutoInstall.ts`): runtime
+   * state, set while an install job reports and dropped when it ends, so a reloaded bot re-attaches to the SAME
+   * message. `threadKey` is the topic's serialised session key.
+   */
+  sttInstallProgress?: SttInstallProgressMessage;
   openCodeModelLimits?: Record<string, string>;
   parkedSessions?: Record<string, ParkedSession>;
   /**
@@ -1940,6 +1953,20 @@ export class StateStore {
       (this.state.claudeAutoSwitchOnLimitOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
+  }
+
+  // ── the local speech engine's install message (`/stt`) ──
+
+  getSttInstallProgressMessage(): SttInstallProgressMessage | null {
+    const message = this.state.sttInstallProgress;
+    return message && typeof message.threadKey === 'string' && Number.isInteger(message.messageId) ? message : null;
+  }
+
+  /** Remember (or, with `null`, forget) the message an install job edits. */
+  async setSttInstallProgressMessage(message: SttInstallProgressMessage | null): Promise<void> {
+    if (message === null) delete this.state.sttInstallProgress;
+    else this.state.sttInstallProgress = message;
+    await this.flush();
   }
 
   // ── the fallback chain (`/fallback`) ──

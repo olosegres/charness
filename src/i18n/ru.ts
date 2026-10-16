@@ -403,6 +403,13 @@ export const ruDict: Record<string, string> = {
     'Для голоса нужен движок распознавания речи — откройте /stt, чтобы настроить.',
   'voice.config_invalid':
     'Голос выключен: файл настроек stt.json некорректен. Что не так — в логе бота; исправьте файл или откройте /stt.',
+  'stt.install.header': '🖥 Устанавливаю локальное распознавание речи… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Создаю окружение Python…',
+  'stt.install.installingPackages': 'Устанавливаю пакеты…',
+  'stt.install.downloadingModel': 'Скачиваю модель {progress}…',
+  'stt.install.checking': 'Проверяю модель…',
+  'stt.install.done': '✅ Локальное распознавание готово — оно запустится с ближайшим голосовым.',
+  'stt.install.failed': '❌ Не удалось установить локальное распознавание: {error}',
   'voice.failed': 'Не удалось распознать голосовое.',
   'voice.retrying': '⚠️ Не удалось распознать голосовое ({error}). Повторю через {seconds} с…',
   'voice.transcribed': '🎤 {text}',

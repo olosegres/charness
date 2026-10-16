@@ -399,6 +399,13 @@ export const deDict: Record<string, string> = {
     'Für Sprache wird eine Spracherkennungs-Engine benötigt — öffne /stt, um eine einzurichten.',
   'voice.config_invalid':
     'Sprache ist aus: Die Einstellungsdatei stt.json ist ungültig. Das Problem steht im Bot-Log — korrigiere die Datei oder öffne /stt.',
+  'stt.install.header': '🖥 Lokale Spracherkennung wird installiert… ({elapsed})',
+  'stt.install.creatingEnvironment': 'Python-Umgebung wird erstellt…',
+  'stt.install.installingPackages': 'Pakete werden installiert…',
+  'stt.install.downloadingModel': 'Modell wird heruntergeladen {progress}…',
+  'stt.install.checking': 'Modell wird geprüft…',
+  'stt.install.done': '✅ Die lokale Erkennung ist bereit — sie startet mit der nächsten Sprachnachricht.',
+  'stt.install.failed': '❌ Die lokale Erkennung konnte nicht installiert werden: {error}',
   'voice.failed': 'Sprachnachricht konnte nicht transkribiert werden.',
   'voice.retrying': '⚠️ Sprachnachricht konnte nicht transkribiert werden ({error}). Neuer Versuch in {seconds} s…',
   'voice.transcribed': '🎤 {text}',

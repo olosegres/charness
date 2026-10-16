@@ -9,6 +9,10 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file |
 | `sttInstall.ts` | The local engine's install: plan (uv / python3 venv), idempotent run with a lock and progress, `isGigaamInstalled` / `isGigaamInstalling`, remove |
 | `sttInstallEntry.ts` | The detached install job the bot launches (not a user command): `node dist/stt/sttInstallEntry.js <dataDir> [--force]` |
+| `sttSidecarOwner.ts` | The sidecar's lifecycle: `ensure` (adopt or spawn on demand, one shared attempt), the record, the spawn-storm guard, `stop`, the boot cleanup, the owner context |
+| `sttAutoInstall.ts` | The install job manager: launch the detached job or attach to the running one, poll its progress file, report |
+| `sttInstallReporter.ts`, `sttScreenPlan.ts` | The install progress as ONE edited message (or `[STT]` log lines), and the pure text of it |
+| `sttRuntime.ts` | `stt.json` + the lifecycle facts resolved per call; the boot migration; the once-per-edit auto-install trigger |
 | `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests |
 | `../utils/transcribeAudio.ts` | The ONE HTTP primitive: a multipart `POST` to an OpenAI-compatible `/audio/transcriptions`, with classified failures and the retry schedule |
 
@@ -123,3 +127,46 @@ env too.
 
 Cold start (spawn → ready file) ≈ 2–2.4 s; an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads,
 peak RSS ≈ 780 MB; a short voice sent while a long one is queued is answered in ≈ 3.5 s.
+
+## Lifecycle: who starts, adopts and stops the sidecar
+
+**On demand.** A voice whose chain reaches the local engine calls `ensure` (through the engine's `getEndpoint()`):
+
+1. **Adopt** the recorded process when ALL hold: its pid + start token are current, the record's owner fields match
+   the current owner, the config hash matches, and `GET /health` with the recorded token answers within 1 s.
+2. A recorded process that is alive but not adoptable gets a guarded SIGTERM, 3 s, then SIGKILL; a dead one's record
+   is dropped.
+3. **Spawn.** A fresh token (`crypto.randomBytes`) goes to the process through the env; the process is hosted by
+   `startExternallyParentedProcess` (outside nodemon's tree, so a reload never kills it); the bot polls the ready file
+   every 100 ms for up to 15 s; on success it writes `sidecar.json` (pid, start token, port, token, config hash, owner,
+   start time) and logs `[STT] sidecar started pid N port P in Xms (workers W)`.
+
+Concurrent voices share ONE attempt (a module-level promise). Nothing starts at boot.
+
+**The owner** is the long-lived process the sidecar dies with: in hot mode the `charness hot` supervisor, which exports
+`CHARNESS_STT_OWNER_PID` + `CHARNESS_STT_OWNER_START_TOKEN` to its worker; in plain mode the bot process. A worker
+without the variables (an older supervisor) has no owner context, the engine is skipped and `/stt` says to restart the
+supervisor.
+
+**No watchdog, no restart backoff.** A crash, a refusal or a timeout makes the CURRENT voice fall back; the NEXT voice's
+`ensure` finds the dead (or non-answering) process and starts a new one. The only guard is the spawn-storm one: 3 failed
+STARTS within 10 minutes mark the engine unhealthy for 5 (skipped in the chain; `resetSpawnGuard` is the "Try again now"
+button). A request failure after a successful `ensure` is not a spawn failure.
+
+**Who stops it.**
+
+| Event | Stopped by |
+|-------|-----------|
+| `charness hot` supervisor shuts down (SIGINT/SIGTERM/HUP, or a watcher dies) | the supervisor: guarded stop of the recorded process, bounded at ~3 s, awaited before it exits |
+| plain bot shuts down gracefully | `gracefulShutdown`'s `stopSidecars`, after `state.flush()` |
+| hot WORKER reload | nobody — the next worker adopts it |
+| owner SIGKILLed | the sidecar's own owner watchdog (≤ ~2 s) |
+| idle for `idleMinutes` | the sidecar itself (deletes its own record) |
+| the local engine disabled/removed, or `idleMinutes` / `workers` / `threads` changed | `applySettingsChange` right after the save (it never spawns) |
+| boot finds a record of a dead process, or of another owner | `cleanupAtBoot` (a live record of the CURRENT owner is left for adoption) |
+
+**Auto-install.** `stt.json` naming an enabled `gigaam` engine that is not installed starts the install job at boot and
+whenever the file changes (once per change, never per voice). The job runs detached (`sttInstallEntry`); the bot polls
+its progress file every 3 s and edits ONE message — in General of the paired group, or the message a reload left in
+`state.json` (`sttInstallProgress`) — or writes `[STT] install:` lines when no group is paired. A reloaded worker
+re-attaches to a running job (its lock is held); a failure is reported once with the log tail and not retried.

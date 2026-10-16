@@ -399,6 +399,13 @@ export const zhDict: Record<string, string> = {
     '语音需要语音识别引擎——打开 /stt 进行设置。',
   'voice.config_invalid':
     '语音已关闭：设置文件 stt.json 无效。问题见机器人日志——请修正该文件或打开 /stt。',
+  'stt.install.header': '🖥 正在安装本地语音识别… ({elapsed})',
+  'stt.install.creatingEnvironment': '正在创建 Python 环境…',
+  'stt.install.installingPackages': '正在安装软件包…',
+  'stt.install.downloadingModel': '正在下载模型 {progress}…',
+  'stt.install.checking': '正在检查模型…',
+  'stt.install.done': '✅ 本地识别已就绪——下一条语音消息起即会启动。',
+  'stt.install.failed': '❌ 无法安装本地识别：{error}',
   'voice.failed': '语音转录失败。',
   'voice.retrying': '⚠️ 语音转录失败（{error}）。{seconds} 秒后重试…',
   'voice.transcribed': '🎤 {text}',
