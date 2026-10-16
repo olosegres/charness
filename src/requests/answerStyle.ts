@@ -7,6 +7,4 @@
  * engineers. Agent-facing, so English on every surface. Kept free of imports:
  * the Jira preamble, which `bot.ts` loads statically, uses it.
  */
-export const answerStyleInstruction =
-  'Write each answer for a manager or QA (non-technical readers): short, plain words; ' +
-  'status and next steps as a short numbered list of who does what; each question one line; no back-story.';
+export const answerStyleInstruction = 'Prefer to write each answer like for a manager or QA, brief and to the point.';

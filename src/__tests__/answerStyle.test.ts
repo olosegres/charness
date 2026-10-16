@@ -16,16 +16,8 @@ import { answerStyleInstruction } from '../requests/answerStyle';
 const answerStyleInstructionMaxLength = 250;
 
 describe('answerStyleInstruction', () => {
-  it('addresses a manager or QA, asks for short plain words and no back-story', () => {
-    assert.match(answerStyleInstruction, /for a manager or QA/);
-    assert.match(answerStyleInstruction, /non-technical/);
-    assert.match(answerStyleInstruction, /short, plain words/);
-    assert.match(answerStyleInstruction, /no back-story/);
-  });
-
-  it('asks for status and next steps as a short numbered who-does-what list, and a question on one line', () => {
-    assert.match(answerStyleInstruction, /status and next steps as a short numbered list of who does what/);
-    assert.match(answerStyleInstruction, /each question one line/);
+  it('is exactly the owner-given sentence', () => {
+    assert.equal(answerStyleInstruction, 'Prefer to write each answer like for a manager or QA, brief and to the point.');
   });
 
   it('is one short sentence on one line, ready to join onto a surface\'s own text', () => {
