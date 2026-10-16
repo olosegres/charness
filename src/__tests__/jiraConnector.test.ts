@@ -38,6 +38,9 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const aiAccountId = 'ai-account';
 const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
+/** How long the fake Jira must stay silent for a stopped connector's last in-flight requests to count as done. */
+const requestsSettleQuietMs = 100;
+const requestsSettleMaxAttempts = 20;
 
 let server: http.Server;
 let baseUrl = '';
@@ -186,12 +189,26 @@ describe('prepareJiraConnector', () => {
     postedCommentTexts.length = 0;
     assigneeRequests.length = 0;
   });
-  afterEach(() => {
+  afterEach(async () => {
+    const wasStarted = connector !== null;
     connector?.stop();
     connector = null;
+    // `stop()` cancels what comes next, not the work already in flight: the poll a test ends in the middle of (the
+    // mention read after a hand-over) still reaches the shared fake Jira a moment later, and without this wait it
+    // lands in the request log of the NEXT test.
+    if (wasStarted) await waitForRequestsToSettle();
     fs.rmSync(dataDir, { recursive: true, force: true });
     fs.rmSync(workRoot, { recursive: true, force: true });
   });
+
+  /** Resolves once no request has reached the fake Jira for a moment (bounded: a connector that keeps asking is left to the test). */
+  async function waitForRequestsToSettle(): Promise<void> {
+    for (let attempt = 0; attempt < requestsSettleMaxAttempts; attempt += 1) {
+      const requestCount = requestPaths.length;
+      await new Promise((resolve) => setTimeout(resolve, requestsSettleQuietMs));
+      if (requestPaths.length === requestCount) return;
+    }
+  }
 
   function writeConfig(overrides: object = {}): void {
     fs.writeFileSync(getJiraConfigPath(dataDir), JSON.stringify({
@@ -481,7 +498,7 @@ describe('prepareJiraConnector', () => {
       const posted = await startAndWaitForSearch();
       await waitForHandBack();
       // Mention wakes are on with a group: once the hand-over is decided, the issue's comments are read for a mention.
-      await waitUntil(() => requestPaths.includes('GET /rest/api/3/issue/PROJ-1/comment'));
+      await waitUntil(() => requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql')).includes('GET /rest/api/3/issue/PROJ-1/comment'));
       assert.deepEqual(posted, []);
       const afterSearch = requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql'));
       assert.deepEqual(afterSearch.filter((entry) => !entry.includes('/changelog')), [
