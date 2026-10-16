@@ -230,7 +230,7 @@ interface SttConfigCacheEntry {
 const configCacheByPath = new Map<string, SttConfigCacheEntry>();
 
 /** The OS error code (`ENOENT`, `EACCES`) of a failed fs call — a code names the problem, a message may quote a path. */
-function getErrnoCode(error: Error): string {
+export function getErrnoCode(error: Error): string {
   return 'code' in error && typeof error.code === 'string' ? error.code : unknownErrorCode;
 }
 

@@ -24,6 +24,7 @@
   ],
   "files": [
     "dist/",
+    "stt/gigaam_sidecar.py",
     "README.md",
     "DEVELOPMENT.md",
     "SETUP.md",

@@ -20,3 +20,7 @@ logs/
 
 # local-only: machine-specific instruction paths (../agent-configs sibling)
 opencode.jsonc
+
+# Python bytecode of the sidecar and its tests
+__pycache__/
+*.pyc
