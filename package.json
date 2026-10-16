@@ -1,6 +1,6 @@
 {
   "name": "charness",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "license": "MIT",
   "author": "Sergei Solo",
   "description": "Charness (formerly TelegramCode): Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
