@@ -19,12 +19,17 @@
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs
+ *   → `/stt`: the screen next to the instance's env file (also as `/voice`), a custom server added through the typed
+ *     steps (an address with a login is refused and deleted, the pasted key is deleted, neither reaches a bot
+ *     message or the output trace), a tap that saves, a keyboard from before a hand edit that is refused, and a
+ *     slash command that ends an armed step
  *   → `/claude` starts the fake agent; `/login` drives the out-of-band sign-in
  *     (`claude auth login` in a pty): the URL out, the pasted code in and its
  *     message deleted, the success notice; a pending `/login` no longer swallows
  *     the topic: a stray message is answered with a waiting hint, `/esc` cancels the
- *     sign-in and the next message reaches the agent; a second `/login` is torn
- *     down by `/quit` (its pty ends)
+ *     sign-in and the next message reaches the agent; a voice note goes through the engine chain of `stt.json`
+ *     (a broken engine falls through to a working one, the transcript is echoed and reaches the agent; a chain
+ *     with no usable engine names the cause); a second `/login` is torn down by `/quit` (its pty ends)
  *   → `/claude_mode`: a conversation whose CLI is below the lifecycle gate is
  *     refused the per-turn backend (L-D10) by the picker's tap and by the typed
  *     argument alike; the picker's third option (per-turn, lifecycle plan L5), a
@@ -42,10 +47,11 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram } from './telegramE2e/fakeTelegram';
+import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
+import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import type { ScheduleRecord } from '../scheduler/types';
-import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -83,6 +89,22 @@ const stopTimeoutMs = 20 * 1000;
 /** The code the operator pastes into the sign-in, and the sign-in link the fake CLI prints. */
 const pastedLoginCode = 'fake-oauth-code-4711';
 const fakeLoginUrl = 'https://claude.example.test/oauth/authorize?code=true';
+/** What the operator pastes into the `/stt` key step; plausible for the key check, and found nowhere afterwards. */
+const pastedSpeechKey = 'sk-e2e-speech-key-4711-abcdefgh';
+/** The login in an address the operator mistakenly types; refused, deleted and kept out of the trace. */
+const addressLogin = 'op:pw-4711';
+/** A Groq-shaped key for the step a slash command interrupts. */
+const strayGroqKey = 'gsk_e2eStrayKey1234567890';
+/** What the fake speech engine "recognises": a `KEY-n` label the fake agent records, then a mode and words. */
+const voiceTurnLabel = 'VOICE-1';
+const voiceTranscript = `${voiceTurnLabel} [fake:answer] remember the milk`;
+const voiceFileId = 'voice-e2e-1';
+const voiceFileBytes = 2048;
+const voiceDurationSeconds = 3;
+/** What the flaky engine recognises on its second try; a first reply is a 503. */
+const retriedTranscript = 'second try works';
+const redactedKeyTraceMarker = '[redacted: speech engine key]';
+const redactedAddressTraceMarker = '[redacted: speech engine address]';
 /** The localized shortcut line under every "paste the code" prompt. */
 const escToCancelHint = '/esc to cancel';
 /** A `KEY-n` label the fake agent records in its turn log — names the prompt sent after a cancelled sign-in. */
@@ -133,6 +155,13 @@ let fakeTelegram: FakeTelegram;
 let defaultTmuxSessionsBefore: string[] = [];
 let authStateDir = '';
 let topic: TopicDriver;
+/** The speech engines the voice steps talk to: one that answers, one that always fails, one that fails once. */
+let workingSpeechEngine: FakeSpeechEngine;
+let brokenSpeechEngine: FakeSpeechEngine;
+let flakySpeechEngine: FakeSpeechEngine;
+let workingSpeechUrl = '';
+let brokenSpeechUrl = '';
+let flakySpeechUrl = '';
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -209,8 +238,63 @@ function getAgentTurns(label: string): FakeClaudeTurn[] {
   return readJsonLines<FakeClaudeTurn>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.issueKey === label);
 }
 
+/** The user messages the fake agent read that carried `label`, with their whole text. */
+function getAgentPrompts(label: string): FakeClaudePrompt[] {
+  return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.issueKey === label);
+}
+
 function readLoginPid(): number {
   return Number(fs.readFileSync(path.join(authStateDir, 'login.pid'), 'utf8'));
+}
+
+/** `stt.json` sits beside the instance's env file (the symlink-free case of the config location). */
+function getSttConfigFilePath(): string {
+  return path.join(path.dirname(getLayout().envFile), 'stt.json');
+}
+
+/** The slice of `stt.json` the steps read and a hand edit changes. */
+interface SttFileSlice {
+  language?: string | null;
+  engines: Array<{ id: string; kind: string; url?: string; apiKey?: string; isDisabled?: boolean }>;
+}
+
+function readSttFile(): SttFileSlice {
+  return JSON.parse(fs.readFileSync(getSttConfigFilePath(), 'utf8'));
+}
+
+/** A hand edit the way an editor saves it: a new file renamed over the old, so the bot's change stamp moves. */
+function writeSttFileByHand(file: SttFileSlice): void {
+  const tempPath = `${getSttConfigFilePath()}.by-hand`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(file, null, 2)}\n`);
+  fs.renameSync(tempPath, getSttConfigFilePath());
+}
+
+/** Everything the output trace has recorded so far (the hourly buckets and their rollovers). */
+function readOutputTrace(): string {
+  return fs.readdirSync(getLayout().dataDir)
+    .filter((name) => /^output-trace-\d+\.jsonl(\.1)?$/.test(name))
+    .map((name) => fs.readFileSync(path.join(getLayout().dataDir, name), 'utf8'))
+    .join('');
+}
+
+/** The callback data on `message`'s keyboard that starts with `prefix` (a `/stt` button without its revision). */
+function findButtonData(message: FakeTelegramMessage, prefix: string): string {
+  const data = topic.getKeyboardData(message).flat().find((candidate) => candidate.startsWith(prefix));
+  assert.ok(data, `a button "${prefix}…" on the keyboard: ${JSON.stringify(topic.getKeyboardData(message))}`);
+  return data;
+}
+
+/** The command names in the menu the bot published (`setMyCommands`), across all its calls. */
+function listMenuCommandNames(): string[] {
+  return fakeTelegram.listCalls('setMyCommands').flatMap((call) => {
+    const { commands } = call.payload;
+    return Array.isArray(commands) ? commands.flatMap((entry) => (typeof entry?.command === 'string' ? [entry.command] : [])) : [];
+  });
+}
+
+/** Tap the `/stt` button whose data starts with `prefix`. */
+async function tapButton(message: FakeTelegramMessage, prefix: string): Promise<string> {
+  return topic.tapAndAwaitAnswer(message, findButtonData(message, prefix));
 }
 
 function removeInstanceSync(): void {
@@ -227,6 +311,12 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
 
+    workingSpeechEngine = new FakeSpeechEngine(() => ({ status: 200, text: voiceTranscript }));
+    brokenSpeechEngine = new FakeSpeechEngine(() => ({ status: 500, body: '{"error":"the engine is down"}' }));
+    flakySpeechEngine = new FakeSpeechEngine((requestIndex) => (requestIndex === 0 ? { status: 503, body: '{"error":"busy"}' } : { status: 200, text: retriedTranscript }));
+    workingSpeechUrl = await workingSpeechEngine.start();
+    brokenSpeechUrl = await brokenSpeechEngine.start();
+    flakySpeechUrl = await flakySpeechEngine.start();
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
@@ -249,6 +339,9 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
+    await workingSpeechEngine?.stop();
+    await brokenSpeechEngine?.stop();
+    await flakySpeechEngine?.stop();
     process.off('exit', removeInstanceSync);
     process.off('SIGINT', exitOnSignal);
     process.off('SIGTERM', exitOnSignal);
@@ -419,6 +512,91 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.sendAndAwaitReply('/compact_on_idle', 'applies to an active agent session');
   });
 
+  // ── /stt ─────────────────────────────────────────────────────────────
+
+  it('/stt opens the screen, also as /voice: it names the settings file beside the env file and offers Add engine and Enable local recognition', async () => {
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    assert.ok(screen.text.includes(`no file yet (${getSttConfigFilePath()})`), screen.text);
+    assert.match(screen.text, /No engines yet/);
+    findButtonData(screen, 'stt_ad_');
+    findButtonData(screen, 'stt_ec_');
+    assert.ok(findButtonData(screen, 'stt_ad_').length <= 64, 'the callback data fits Telegram\'s 64 bytes');
+    await topic.sendAndAwaitReply('/voice', '🎙 Voice recognition');
+    const menuCommands = listMenuCommandNames();
+    assert.ok(menuCommands.includes('stt'), 'the menu lists /stt');
+    assert.ok(!menuCommands.includes('voice') && !menuCommands.includes('speech'), 'the aliases stay hidden');
+  });
+
+  it('a custom server through the typed steps: the address with a login and the pasted key are deleted and never reach a bot message or the output trace', async () => {
+    await topic.sendAndAwaitReply('/trace on', 'Tracing enabled for this thread');
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await tapButton(screen, 'stt_ad_');
+    await topic.waitForMessageText('the add menu', screen, (text) => text.includes('Which engine do you want to add?'));
+    await tapButton(screen, 'stt_an_ur_');
+    await topic.waitForMessageText('the address prompt', screen, (text) => text.includes('Send the address of the server'));
+
+    const loginMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `http://${addressLogin}@stt.example.test:8000`);
+    await topic.waitForMessage('the login refusal', (message) => message.message_id > loginMessageId && message.text.includes('Do not put a login or key into the address'));
+    assert.equal(fakeTelegram.getMessage(loginMessageId)?.isDeleted, true, 'an address with a login is deleted from the topic');
+
+    const workingBaseUrl = workingSpeechUrl.replace('/v1/audio/transcriptions', '');
+    fakeTelegram.pushOperatorMessage(topicThreadId, workingBaseUrl);
+    await topic.waitForMessageText('the key question', screen, (text) => text.includes('Does this server need an API key?'));
+    await tapButton(screen, 'stt_ku_y_');
+    await topic.waitForMessageText('the key prompt', screen, (text) => text.includes('Paste the API key now'));
+    const keyMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, pastedSpeechKey);
+    await topic.waitForMessageText('the key saved', screen, (text) => text.includes('Key saved'));
+    assert.equal(fakeTelegram.getMessage(keyMessageId)?.isDeleted, true, 'the pasted key is deleted from the topic');
+
+    const file = readSttFile();
+    assert.deepEqual(file.engines.map((engine) => [engine.kind, engine.url, engine.apiKey]), [['url', workingSpeechUrl, pastedSpeechKey]], 'a base address is completed to the transcription endpoint');
+    assert.equal(fs.statSync(getSttConfigFilePath()).mode & 0o777, 0o600, 'the file with the key is private');
+
+    const everythingTheBotSaid = JSON.stringify(topic.listMessages().map((message) => message.text));
+    assert.ok(!everythingTheBotSaid.includes(pastedSpeechKey) && !everythingTheBotSaid.includes(addressLogin), 'no bot message repeats the key or the login');
+    await getCharness().waitFor('the redacted previews in the output trace', replyTimeoutMs, () => {
+      const trace = readOutputTrace();
+      return trace.includes(redactedKeyTraceMarker) && trace.includes(redactedAddressTraceMarker);
+    });
+    const trace = readOutputTrace();
+    for (const secret of [pastedSpeechKey, addressLogin, 'pw-4711@']) assert.ok(!trace.includes(secret), `the output trace does not contain ${secret}`);
+  });
+
+  it('a tap saves to stt.json, and a keyboard from before a hand edit is refused without writing anything', async () => {
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await tapButton(screen, 'stt_oe_');
+    await topic.waitForMessageText('the engine card', screen, (text) => text.includes('Ready.'));
+    await tapButton(screen, 'stt_us_');
+    await topic.waitForMessageText('the card re-rendered as switched off', screen, (text) => text.includes('Not in use'));
+    assert.equal(readSttFile().engines[0].isDisabled, true, 'the tap is saved');
+    await tapButton(screen, 'stt_us_');
+    await topic.waitForMessageText('the card re-rendered as in use', screen, (text) => text.includes('Ready.'));
+    assert.equal(readSttFile().engines[0].isDisabled, undefined, 'and switched back');
+
+    const staleButton = findButtonData(screen, 'stt_us_');
+    writeSttFileByHand({ ...readSttFile(), language: 'ru' });
+    const answer = await topic.tapAndAwaitAnswer(screen, staleButton);
+    assert.equal(answer, 'The settings changed — refreshed.');
+    await topic.waitForMessageText('the main screen after the refusal', screen, (text) => text.includes('Language: ru'));
+    assert.equal(readSttFile().engines[0].isDisabled, undefined, 'the stale tap wrote nothing');
+  });
+
+  it('a slash command ends an armed key step: the retired prompt says so and the next key-like message is no longer taken for it', async () => {
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await tapButton(screen, 'stt_ad_');
+    await topic.waitForMessageText('the add menu', screen, (text) => text.includes('Which engine do you want to add?'));
+    await tapButton(screen, 'stt_an_gq_');
+    await topic.waitForMessageText('the key prompt', screen, (text) => text.includes('Paste the API key now'));
+
+    await topic.sendAndAwaitReply('/thinking', 'Current thinking mode');
+    await topic.waitForMessageText('the prompt retired', screen, (text) => text === 'Cancelled.');
+    const enginesBefore = readSttFile().engines.length;
+    const strayMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, strayGroqKey);
+    await topic.waitForMessage('the plain message handled as ordinary text', (message) => message.message_id > strayMessageId && message.text.includes('Run /claude or /opencode'));
+    assert.notEqual(fakeTelegram.getMessage(strayMessageId)?.isDeleted, true, 'no key step is armed: the message is not taken for a key');
+    assert.equal(readSttFile().engines.length, enginesBefore, 'nothing was saved');
+  });
+
   // ── /login ───────────────────────────────────────────────────────────
 
   it('/claude starts the fake agent in the topic', async () => {
@@ -454,6 +632,60 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
 
     fakeTelegram.pushOperatorMessage(topicThreadId, `${afterCancelPromptLabel} [fake:answer] hello again`);
     await getCharness().waitFor('the prompt to reach the agent', agentStartTimeoutMs, () => getAgentTurns(afterCancelPromptLabel).length > 0);
+  });
+
+  // ── a voice note ─────────────────────────────────────────────────────
+
+  it('a voice note goes through stt.json: the broken engine in front falls through to the working one, the transcript is echoed and reaches the agent', async () => {
+    // A hand edit, applied by the next voice note with no restart: the broken engine goes first.
+    const file = readSttFile();
+    writeSttFileByHand({ ...file, engines: [{ id: 'u9', kind: 'url', url: brokenSpeechUrl }, ...file.engines] });
+    fakeTelegram.registerFile(voiceFileId, Buffer.alloc(voiceFileBytes, 7));
+
+    const voiceMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
+    await topic.waitForMessage('the transcript echo', (message) => message.message_id > voiceMessageId && message.text === `🎤 ${voiceTranscript}`);
+    await getCharness().waitFor('the transcript to reach the agent', agentStartTimeoutMs, () => getAgentTurns(voiceTurnLabel).length > 0);
+    assert.ok(getAgentPrompts(voiceTurnLabel).some((prompt) => prompt.text.includes('remember the milk')), 'the agent got the recognised words');
+
+    assert.deepEqual(fakeTelegram.downloadedFilePaths, [`voice/${voiceFileId}.oga`], 'the voice file was fetched from the file endpoint');
+    assert.equal(brokenSpeechEngine.requests.length, 1, 'a failing engine that is not the last is tried once');
+    assert.equal(workingSpeechEngine.requests.length, 1);
+    const [request] = workingSpeechEngine.requests;
+    assert.equal(request.path, '/v1/audio/transcriptions');
+    assert.equal(request.authorization, `Bearer ${pastedSpeechKey}`, 'the key typed in /stt is the bearer token');
+    assert.equal(request.language, 'ru', 'the language set by the hand edit reaches the engine');
+    assert.equal(request.model, 'whisper-1');
+    assert.equal(request.audioBytes, voiceFileBytes, 'the downloaded audio is what was uploaded');
+
+    const brokenName = `url:${new URL(brokenSpeechUrl).host}`;
+    const workingName = `url:${new URL(workingSpeechUrl).host}`;
+    const botOutput = getCharness().output;
+    assert.ok(botOutput.includes(`[transcribe] ${brokenName} failed (`), 'the fallback is logged with the failing engine');
+    assert.ok(botOutput.includes(`falling back to ${workingName}`));
+    assert.ok(botOutput.includes(`[transcribe] ok via ${workingName} in `));
+    assert.ok(botOutput.includes(`(${voiceDurationSeconds}s audio)`), 'Telegram\'s voice duration reaches the recognition');
+    assert.ok(!botOutput.includes(pastedSpeechKey), 'the key is nowhere in the bot output');
+  });
+
+  it('the last engine retries a temporary failure after telling the topic, and the retry succeeds', async () => {
+    const file = readSttFile();
+    writeSttFileByHand({ ...file, engines: [{ id: 'f1', kind: 'url', url: flakySpeechUrl }] });
+    const voiceMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
+    await topic.waitForMessage('the retry notice', (message) => message.message_id > voiceMessageId && message.text.includes('Retrying in 5 s'));
+    await topic.waitForMessage('the transcript after the retry', (message) => message.message_id > voiceMessageId && message.text === `🎤 ${retriedTranscript}`);
+    assert.equal(flakySpeechEngine.requests.length, 2, 'one failed try, one retry');
+  });
+
+  it('a voice note with no usable engine is told why: listed engines that cannot be used, or none set up', async () => {
+    const file = readSttFile();
+    writeSttFileByHand({ ...file, engines: [{ id: 'k1', kind: 'groq' }] });
+    const unusableMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
+    await topic.waitForMessage('the unusable-engines notice', (message) => message.message_id > unusableMessageId && message.text.includes('none of the listed speech engines can be used right now'));
+
+    writeSttFileByHand({ ...file, engines: [] });
+    const emptyMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
+    await topic.waitForMessage('the nothing-set-up notice', (message) => message.message_id > emptyMessageId && message.text.includes('Voice needs a speech-recognition engine'));
+    assert.equal(workingSpeechEngine.requests.length, 1, 'no engine was asked for these two');
   });
 
   it('/quit tears down a pending /login: its pty ends', async () => {

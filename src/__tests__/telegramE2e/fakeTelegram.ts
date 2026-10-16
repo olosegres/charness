@@ -3,8 +3,12 @@
  * Telegram tests (request/answer plan S6–S9): charness is pointed at it with
  * `TELEGRAM_API_ROOT` and runs its real telegraf client against it — long
  * polling, sends, edits, pins, callback answers — while the test plays the
- * operator: it pushes messages and button taps as updates and reads back what
- * the bot posted, edited, pinned and unpinned in each topic.
+ * operator: it pushes messages, voice notes and button taps as updates and reads
+ * back what the bot posted, edited, pinned and unpinned in each topic. A voice
+ * note's file is served the way Telegram serves it (`getFile`, then a download from
+ * `/file/bot<token>/<path>`), so the whole voice path can run against a fake engine.
+ * A long poll held by a stopped bot's dead connection takes no update, so a flow
+ * can restart the bot and keep pushing.
  *
  * Only what the flow needs is modelled: ONE forum supergroup with the operator
  * as its creator (plus any further admins a flow names, who may write too),
@@ -18,7 +22,7 @@
  */
 
 import * as http from 'http';
-import type { AddressInfo } from 'net';
+import type { AddressInfo, Socket } from 'net';
 
 /** The Bot API's own shape of a successful answer. */
 interface ApiOk { ok: true; result: unknown }
@@ -48,10 +52,20 @@ export interface FakeTelegramMessage {
   from: TelegramUser;
   text: string;
   entities?: Array<{ type: 'bot_command'; offset: number; length: number }>;
+  /** A voice note: its message carries no `text` on the wire (the stored `text` is just ''). */
+  voice?: FakeTelegramVoice;
   reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
   /** The `disable_notification` the send carried (bot messages only). */
   isSilent?: boolean;
   isDeleted?: boolean;
+}
+
+/** The `voice` object of a voice-note message. */
+export interface FakeTelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type: 'audio/ogg';
 }
 
 /** One Bot API call charness made, in order. */
@@ -93,10 +107,15 @@ export class FakeTelegram {
   readonly pinEvents: FakeTelegramPinEvent[] = [];
   /** Every `answerCallbackQuery` text, in order. */
   readonly callbackAnswers: string[] = [];
+  /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
+  readonly downloadedFilePaths: string[] = [];
+  /** The files `getFile` knows, by file id. */
+  private readonly files = new Map<string, { filePath: string; bytes: Buffer }>();
   private readonly messages = new Map<number, FakeTelegramMessage>();
   private readonly pinnedMessageIds = new Set<number>();
   private readonly pendingUpdates: Array<Record<string, unknown>> = [];
-  private wakePoll: (() => void) | null = null;
+  /** One waker per held long poll: a restarted bot leaves its dead predecessor's poll hanging for a moment. */
+  private readonly pollWakers = new Set<() => void>();
   private nextMessageId = 1;
   private nextUpdateId = 1;
   private nextCallbackQueryId = 1;
@@ -121,7 +140,7 @@ export class FakeTelegram {
   async stop(): Promise<void> {
     const server = this.server;
     this.server = null;
-    this.wakePoll?.();
+    this.wakeAllPolls();
     if (!server) return;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -138,6 +157,22 @@ export class FakeTelegram {
   pushUserMessage(threadId: number, text: string, from: TelegramUser): number {
     const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
     this.pushUpdate({ message });
+    return message.message_id;
+  }
+
+  /** @description Make a file downloadable: `getFile` answers its path, the file endpoint serves `bytes`. */
+  registerFile(fileId: string, bytes: Buffer): void {
+    this.files.set(fileId, { filePath: `voice/${fileId}.oga`, bytes });
+  }
+
+  /** @description The operator sends a voice note (a file registered with {@link registerFile}) in topic `threadId`; resolves the message id. */
+  pushOperatorVoice(threadId: number, fileId: string, durationSeconds: number): number {
+    if (!this.files.has(fileId)) throw new Error(`register the voice file ${fileId} first`);
+    const voice: FakeTelegramVoice = { file_id: fileId, file_unique_id: `unique-${fileId}`, duration: durationSeconds, mime_type: 'audio/ogg' };
+    const message = this.storeMessage(threadId, '', this.options.operator, { voice });
+    // On the wire a voice note has no `text` at all; an empty one would still match the bot's text handler.
+    const { text: _text, ...wireMessage } = message;
+    this.pushUpdate({ message: wireMessage });
     return message.message_id;
   }
 
@@ -183,14 +218,18 @@ export class FakeTelegram {
 
   private pushUpdate(body: Record<string, unknown>): void {
     this.pendingUpdates.push({ update_id: this.nextUpdateId++, ...body });
-    this.wakePoll?.();
+    this.wakeAllPolls();
+  }
+
+  private wakeAllPolls(): void {
+    for (const wake of [...this.pollWakers]) wake();
   }
 
   private storeMessage(
     threadId: number,
     text: string,
     from: TelegramUser,
-    extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent'> = {},
+    extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent' | 'voice'> = {},
   ): FakeTelegramMessage {
     const message: FakeTelegramMessage = {
       message_id: this.nextMessageId++,
@@ -201,6 +240,7 @@ export class FakeTelegram {
       from,
       text,
       ...(extra.entities ? { entities: extra.entities } : {}),
+      ...(extra.voice ? { voice: extra.voice } : {}),
       ...(extra.reply_markup ? { reply_markup: extra.reply_markup } : {}),
       ...(extra.isSilent !== undefined ? { isSilent: extra.isSilent } : {}),
     };
@@ -227,7 +267,24 @@ export class FakeTelegram {
     return JSON.parse(raw);
   }
 
+  /** `GET /file/bot<token>/<file_path>`: the bytes of a registered file. */
+  private serveFile(request: http.IncomingMessage, response: http.ServerResponse): boolean {
+    const fileMatch = /^\/file\/bot[^/]+\/(.+)$/.exec(request.url ?? '');
+    if (!fileMatch) return false;
+    const file = [...this.files.values()].find((candidate) => candidate.filePath === fileMatch[1]);
+    if (!file) {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 404, description: 'Not Found' }));
+      return true;
+    }
+    this.downloadedFilePaths.push(file.filePath);
+    response.writeHead(200, { 'content-type': 'audio/ogg', 'content-length': file.bytes.length });
+    response.end(file.bytes);
+    return true;
+  }
+
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    if (this.serveFile(request, response)) return;
     const match = /^\/bot[^/]+\/([A-Za-z]+)$/.exec(request.url ?? '');
     if (!match) {
       response.writeHead(404, { 'content-type': 'application/json' });
@@ -244,17 +301,17 @@ export class FakeTelegram {
       return;
     }
     this.calls.push({ method, payload });
-    const answer = await this.dispatch(method, payload);
+    const answer = await this.dispatch(method, payload, request.socket);
     response.writeHead(answer.ok ? 200 : answer.error_code, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer));
   }
 
-  private async dispatch(method: string, payload: Record<string, unknown>): Promise<ApiOk | ApiError> {
+  private async dispatch(method: string, payload: Record<string, unknown>, socket: Socket): Promise<ApiOk | ApiError> {
     switch (method) {
       case 'getMe':
         return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: true, supports_inline_queries: false } };
       case 'getUpdates':
-        return { ok: true, result: await this.takeUpdates(Number(payload.limit ?? maxUpdatesPerPoll)) };
+        return { ok: true, result: await this.takeUpdates(Number(payload.limit ?? maxUpdatesPerPoll), socket) };
       case 'getChatAdministrators':
         return {
           ok: true,
@@ -265,6 +322,12 @@ export class FakeTelegram {
         };
       case 'getChat':
         return { ok: true, result: this.chat };
+      case 'getFile': {
+        const fileId = String(payload.file_id);
+        const file = this.files.get(fileId);
+        if (!file) return { ok: false, error_code: 400, description: 'Bad Request: invalid file_id' };
+        return { ok: true, result: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_size: file.bytes.length, file_path: file.filePath } };
+      }
       case 'sendMessage': {
         const message = this.storeMessage(Number(payload.message_thread_id), String(payload.text), this.options.botUser, {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
@@ -314,18 +377,25 @@ export class FakeTelegram {
     }
   }
 
-  /** The long poll: the pending updates at once, else held until one arrives or the hold passes. */
-  private async takeUpdates(limit: number): Promise<Array<Record<string, unknown>>> {
+  /**
+   * The long poll: the pending updates at once, else held until one arrives or the hold passes. A poll whose
+   * connection is gone (a stopped bot's last request) takes nothing: an update handed to a dead socket is lost.
+   */
+  private async takeUpdates(limit: number, socket: Socket): Promise<Array<Record<string, unknown>>> {
     if (this.pendingUpdates.length === 0 && this.server) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, longPollHoldMs);
-        this.wakePoll = () => {
+        const wake = (): void => {
           clearTimeout(timer);
+          socket.off('close', wake);
+          this.pollWakers.delete(wake);
           resolve();
         };
+        const timer = setTimeout(wake, longPollHoldMs);
+        socket.once('close', wake);
+        this.pollWakers.add(wake);
       });
-      this.wakePoll = null;
     }
+    if (socket.destroyed) return [];
     return this.pendingUpdates.splice(0, Math.min(limit, maxUpdatesPerPoll));
   }
 }
