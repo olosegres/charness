@@ -438,7 +438,8 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(rows[0], 'Usage (% used)', 'the percentages are said to be USED, once, at the start');
     assert.equal(rows[1], '• personal — ⏱ 5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h · Fable 4% 🔄 in 5d 8h');
     assert.match(rows[2], /^• work — ⏱ 5h 100% 🔄 in 1h · week — \(stale\)$/, 'no Fable window: nothing about Fable, not even a dash');
-    assert.match(rows[3], /^ {4}⛔ at its limit until \d{2}:\d{2}$/, 'the limit mark hangs under its account, as in /accounts');
+    // The reset is an hour away: `23:16` today, but `Sat 00:16` when that hour crosses midnight — the shape holds either way.
+    assert.match(rows[3], /^ {4}⛔ at its limit until (?:[A-Z][a-z]{2} )?\d{2}:\d{2}$/, 'the limit mark hangs under its account, as in /accounts');
     assert.equal(rows[4], '• out — not signed in');
     assert.equal(rows.length, 5, 'an account never polled has nothing to show and is left out');
     assert.equal(usageRefreshes.length, refreshesBefore + 1, 'the usage is refreshed when the screen opens');

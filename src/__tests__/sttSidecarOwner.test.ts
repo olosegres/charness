@@ -423,8 +423,19 @@ test('the config hash tells the knobs apart and ignores nothing the process was 
   assert.match(hash({ idleMinutes: 15, workers: 4 }), /^[0-9a-f]{16}$/);
 });
 
+/** A second, REAL owner: a live process the test started, so a sidecar owned by it keeps running (its owner watchdog finds the owner alive). */
+function startOtherOwner(): SttOwnerContext {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  decoys.push(child);
+  const identity = child.pid === undefined ? null : getProcessIdentity(child.pid);
+  if (!identity) throw new Error('cannot read the second owner\'s start token');
+  return { pid: identity.pid, startToken: identity.startToken };
+}
+
 test('a record of another owner is replaced: its process is stopped and a new one starts under the current owner', async () => {
-  const otherOwner: SttOwnerContext = { pid: testOwner.pid, startToken: `${testOwner.startToken}-other` };
+  // Not the test process with a forged start token: that sidecar's watchdog would find its owner "gone" within
+  // 100 ms and end itself, racing the very start this test makes (a slow box lost the race before the record was read).
+  const otherOwner = startOtherOwner();
   const previous = createSttSidecarOwner(createDeps({ getOwnerContext: () => otherOwner }));
   await previous.ensure(defaultSettings);
   const foreignIdentity = getRecordedIdentity();
