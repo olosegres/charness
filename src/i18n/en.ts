@@ -62,6 +62,7 @@ export const enDict: Record<string, string> = {
     '/list — list threads\n' +
     '/status — status of all threads\n' +
     '/quitall — quit every running agent\n' +
+    '/stt — voice recognition settings\n' +
     '/whoami /version — debug\n\n' +
     'To talk to an agent — open a topical thread.',
   'help.thread_unbound':
@@ -410,6 +411,8 @@ export const enDict: Record<string, string> = {
 
   'voice.no_api_key':
     'Voice needs a speech-recognition engine — open /stt to set one up.',
+  'voice.local_installing': 'Voice recognition is still being set up — the local engine is installing. Send the voice note again when it is ready.',
+  'voice.engines_unavailable': 'Voice is off: none of the listed speech engines can be used right now. Open /stt to see why.',
   'voice.config_invalid':
     'Voice is off: the settings file stt.json is invalid. The bot log names the problem — fix the file or open /stt.',
   'stt.install.header': '🖥 Installing local speech recognition… ({elapsed})',

@@ -17,6 +17,7 @@ import {
   createSttEngineId,
   defaultSttTimeout,
   getEngineTimeoutMs,
+  getNoEngineNoticeCode,
   getSttConfigPath,
   getSttConfigWriteBlock,
   getSttReportLines,
@@ -518,4 +519,26 @@ test('write block: a read-only directory is EACCES (a permission check root pass
   } finally {
     fs.chmodSync(readOnlyDir, 0o700);
   }
+});
+
+test('the notice a voice gets when no engine can take it names the real cause', () => {
+  const resolveWith = (engines: SttConfigFile['engines'], facts: Partial<SttFacts> = {}) =>
+    resolveSttSettings({ status: 'ok', config: createConfig({ engines }) }, { ...installedFacts, ...facts }, { getGigaamEndpoint: gigaamHook });
+
+  assert.equal(getNoEngineNoticeCode(resolveWith([])), 'voice.no_api_key', 'nothing set up');
+  assert.equal(getNoEngineNoticeCode(resolveWith([{ id: 'q1', kind: 'groq', apiKey: sampleKey, isDisabled: true }])), 'voice.no_api_key', 'everything switched off by the operator');
+  assert.equal(
+    getNoEngineNoticeCode(resolveWith([{ id: 'g', kind: 'gigaam' }], { isGigaamInstalled: false, isGigaamInstalling: true })),
+    'voice.local_installing',
+    'GigaAM installing as the only engine is not "set up an engine"',
+  );
+  assert.equal(getNoEngineNoticeCode(resolveWith([{ id: 'g', kind: 'gigaam' }], { isGigaamInstalled: false })), 'voice.engines_unavailable', 'listed, not installed');
+  assert.equal(getNoEngineNoticeCode(resolveWith([{ id: 'g', kind: 'gigaam' }], { isGigaamUnhealthy: true })), 'voice.engines_unavailable', 'listed, paused after failed starts');
+  assert.equal(getNoEngineNoticeCode(resolveWith([{ id: 'q1', kind: 'groq' }])), 'voice.engines_unavailable', 'listed without a key');
+  assert.equal(getNoEngineNoticeCode({ errors: ['stt.json engines.0: unknown key'], unavailable: [] }), 'voice.config_invalid');
+  assert.equal(
+    getNoEngineNoticeCode({ errors: ['stt.json broken'], unavailable: [{ id: 'g', kind: 'gigaam', reason: 'installing' }] }),
+    'voice.config_invalid',
+    'a broken file outranks everything',
+  );
 });

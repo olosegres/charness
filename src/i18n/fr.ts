@@ -58,6 +58,7 @@ export const frDict: Record<string, string> = {
     '/list — lister les fils\n' +
     '/status — état de tous les fils\n' +
     '/quitall — arrêter tous les agents en cours\n' +
+    '/stt — réglages de la reconnaissance vocale\n' +
     '/whoami /version — débogage\n\n' +
     'Pour parler à un agent — ouvrez un fil thématique.',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const frDict: Record<string, string> = {
 
   'voice.no_api_key':
     'La voix nécessite un moteur de reconnaissance vocale — ouvrez /stt pour en configurer un.',
+  'voice.local_installing': 'La reconnaissance vocale est encore en cours de configuration : le moteur local s’installe. Renvoyez le message vocal quand il sera prêt.',
+  'voice.engines_unavailable': 'La voix est désactivée : aucun des moteurs de reconnaissance listés n’est utilisable pour le moment. Ouvrez /stt pour voir pourquoi.',
   'voice.config_invalid':
     'La voix est désactivée : le fichier de réglages stt.json est invalide. Le journal du bot indique le problème — corrigez le fichier ou ouvrez /stt.',
   'stt.install.header': '🖥 Installation de la reconnaissance vocale locale… ({elapsed})',

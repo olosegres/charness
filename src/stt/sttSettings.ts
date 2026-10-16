@@ -552,6 +552,20 @@ const unavailableReasonTexts: Record<SttUnavailableReason, string> = {
 };
 
 /**
+ * @description The i18n key of the notice a voice note gets when NO engine can take it, from the most specific
+ * cause down: a broken `stt.json`; the local engine still installing (the voice is not refused for good — send it
+ * again); engines that are listed but unusable right now; and none set up (or all switched off by the operator).
+ */
+export function getNoEngineNoticeCode(
+  resolved: Pick<ResolvedSttSettings, 'errors' | 'unavailable'>,
+): 'voice.config_invalid' | 'voice.local_installing' | 'voice.engines_unavailable' | 'voice.no_api_key' {
+  if (resolved.errors.length > 0) return 'voice.config_invalid';
+  if (resolved.unavailable.some((engine) => engine.reason === 'installing')) return 'voice.local_installing';
+  if (resolved.unavailable.some((engine) => engine.reason !== 'disabled')) return 'voice.engines_unavailable';
+  return 'voice.no_api_key';
+}
+
+/**
  * @description The `[STT]` log lines for what is wrong with the settings:
  * file errors (with what the bot does instead), skipped engines (a disabled one
  * is the operator's choice, not a problem) and an empty chain (unless the file itself

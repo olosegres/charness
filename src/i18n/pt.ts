@@ -58,6 +58,7 @@ export const ptDict: Record<string, string> = {
     '/list — listar tópicos\n' +
     '/status — estado de todos os tópicos\n' +
     '/quitall — parar todos os agentes em execução\n' +
+    '/stt — configurações de reconhecimento de voz\n' +
     '/whoami /version — depuração\n\n' +
     'Para falar com um agente — abre um tópico temático.',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const ptDict: Record<string, string> = {
 
   'voice.no_api_key':
     'A voz precisa de um mecanismo de reconhecimento de fala — abra /stt para configurar um.',
+  'voice.local_installing': 'O reconhecimento de voz ainda está sendo configurado: o motor local está sendo instalado. Envie a mensagem de voz novamente quando estiver pronto.',
+  'voice.engines_unavailable': 'A voz está desativada: nenhum dos motores de reconhecimento listados pode ser usado agora. Abra /stt para ver o motivo.',
   'voice.config_invalid':
     'A voz está desligada: o arquivo de configurações stt.json é inválido. O log do bot indica o problema — corrija o arquivo ou abra /stt.',
   'stt.install.header': '🖥 Instalando o reconhecimento de voz local… ({elapsed})',

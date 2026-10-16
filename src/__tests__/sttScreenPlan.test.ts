@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { getRecvTracePreview, redactedConnectKeyPreview, redactedSttKeyPreview } from '../utils/recvPreviewRedaction';
+import { getRecvTracePreview, redactedConnectKeyPreview, redactedSttAddressPreview, redactedSttKeyPreview } from '../utils/recvPreviewRedaction';
 import {
   buildSttCallback,
   buildSttScreen,
@@ -318,13 +318,17 @@ test('url input: a base address is completed, a bad one re-arms, one with a logi
   assert.deepEqual(decideSttInput('url', 'http://me:pw@stt.local/v1'), { outcome: 'retryAndDelete', hint: 'urlHasCredentials' });
 });
 
-test('the recv trace never records a pasted speech-engine key — only while that step is armed', () => {
-  assert.equal(getRecvTracePreview(sampleKey, false, true), redactedSttKeyPreview);
+test('the recv trace never records a pasted speech-engine key or a custom address (it may carry a login) — only while that step is armed', () => {
+  assert.equal(getRecvTracePreview(sampleKey, false, 'key'), redactedSttKeyPreview);
   assert.equal(redactedSttKeyPreview, '[redacted: speech engine key]');
-  assert.equal(getRecvTracePreview(sampleKey, false, false), sampleKey, 'unarmed text is recorded as before');
-  assert.equal(getRecvTracePreview('/stt', false, true), '/stt', 'a command cancels the paste, so it is not a secret');
-  assert.equal(getRecvTracePreview(sampleKey, true, false), redactedConnectKeyPreview, 'the /connect redaction is unchanged');
-  assert.equal(getRecvTracePreview('/connect sk-inline-secret-1234', false, true), '/connect <redacted>');
+  assert.equal(getRecvTracePreview('http://me:pw@stt.local/v1', false, 'url'), redactedSttAddressPreview);
+  assert.equal(redactedSttAddressPreview, '[redacted: speech engine address]');
+  assert.equal(getRecvTracePreview(sampleKey, false, null), sampleKey, 'unarmed text is recorded as before');
+  assert.equal(getRecvTracePreview('http://stt.local:8000', false), 'http://stt.local:8000');
+  assert.equal(getRecvTracePreview('/stt', false, 'key'), '/stt', 'a command cancels the paste, so it is not a secret');
+  assert.equal(getRecvTracePreview('/stt', false, 'url'), '/stt');
+  assert.equal(getRecvTracePreview(sampleKey, true, null), redactedConnectKeyPreview, 'the /connect redaction is unchanged');
+  assert.equal(getRecvTracePreview('/connect sk-inline-secret-1234', false, 'key'), '/connect <redacted>');
 });
 
 // ── the reducer ──

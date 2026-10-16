@@ -58,6 +58,7 @@ export const jaDict: Record<string, string> = {
     '/list — スレッド一覧\n' +
     '/status — 全スレッドの状態\n' +
     '/quitall — 実行中の全エージェントを終了\n' +
+    '/stt — 音声認識の設定\n' +
     '/whoami /version — デバッグ\n\n' +
     'エージェントと話すには — トピックスレッドを開いてください。',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const jaDict: Record<string, string> = {
 
   'voice.no_api_key':
     '音声には音声認識エンジンが必要です — /stt を開いて設定してください。',
+  'voice.local_installing': '音声認識はまだ準備中です — ローカルエンジンをインストールしています。準備ができたら、もう一度音声メッセージを送ってください。',
+  'voice.engines_unavailable': '音声は無効です: 一覧のどの認識エンジンも今は使えません。/stt を開いて理由を確認してください。',
   'voice.config_invalid':
     '音声はオフです：設定ファイル stt.json が無効です。問題点はボットのログにあります — ファイルを修正するか /stt を開いてください。',
   'stt.install.header': '🖥 ローカル音声認識をインストール中… ({elapsed})',

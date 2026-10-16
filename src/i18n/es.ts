@@ -58,6 +58,7 @@ export const esDict: Record<string, string> = {
     '/list — listar hilos\n' +
     '/status — estado de todos los hilos\n' +
     '/quitall — detener todos los agentes en ejecución\n' +
+    '/stt — ajustes del reconocimiento de voz\n' +
     '/whoami /version — depuración\n\n' +
     'Para hablar con un agente — abre un hilo temático.',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const esDict: Record<string, string> = {
 
   'voice.no_api_key':
     'La voz necesita un motor de reconocimiento de voz — abre /stt para configurar uno.',
+  'voice.local_installing': 'El reconocimiento de voz aún se está configurando: el motor local se está instalando. Vuelve a enviar la nota de voz cuando esté listo.',
+  'voice.engines_unavailable': 'La voz está desactivada: ahora mismo no se puede usar ninguno de los motores de reconocimiento de la lista. Abre /stt para ver el motivo.',
   'voice.config_invalid':
     'La voz está desactivada: el archivo de ajustes stt.json no es válido. El registro del bot indica el problema — corrige el archivo o abre /stt.',
   'stt.install.header': '🖥 Instalando el reconocimiento de voz local… ({elapsed})',

@@ -173,8 +173,8 @@ factory: the next plain message of the topic answers the armed step (`checkIsAwa
 (`checkIsPlausibleProviderApiKey`) is deleted from the topic the instant it is accepted and is never echoed, logged or
 put into an error; an implausible one stays visible (not a secret) and the step re-arms; an address with a login in it
 is deleted and re-asked. A slash command, the cancel button, a topic teardown or a 10-minute timeout (which retires the
-prompt message) ends the step. While a KEY is awaited (`checkIsAwaitingSttKey`) the output-trace `recv` preview is
-`[redacted: speech engine key]`.
+prompt message) ends the step. While a step is awaited (`getAwaitedSttStep`) the output-trace `recv` preview is
+`[redacted: speech engine key]` (key) or `[redacted: speech engine address]` (address, which may carry a login).
 
 **Install**: «Enable local recognition» → a confirm screen with the cost → `Install` hands the SAME message to the install
 job (`installJobs.start`, the progress is edited into it and remembered in `state.json` with `shouldEnableOnDone`); the

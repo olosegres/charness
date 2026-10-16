@@ -6,6 +6,15 @@ export const redactedConnectKeyPreview = '[redacted: provider API key]';
 /** Recorded instead of a pasted speech-engine key while `/stt` waits for one. */
 export const redactedSttKeyPreview = '[redacted: speech engine key]';
 
+/**
+ * Recorded instead of a custom speech-engine address while `/stt` waits for one: an address may carry a login
+ * (`http://user:pass@host`), and the message is deleted from the topic for that reason.
+ */
+export const redactedSttAddressPreview = '[redacted: speech engine address]';
+
+/** What `/stt` waits for as plain text: the next non-command message of the topic IS that secret-bearing input. */
+export type SttAwaitedInputStep = 'url' | 'key';
+
 /** Recorded instead of a `/connect …` invocation — its arguments may carry the key inline. */
 export const redactedConnectCommandPreview = '/connect <redacted>';
 
@@ -27,18 +36,19 @@ export function checkIsConnectCommandText(rawText: string): boolean {
  * is in the pending `/connect` state, the next non-command text IS the pasted
  * key → the preview is fully redacted (a command text cancels the flow instead,
  * so it is not a secret). The same holds while `/stt` waits for a speech-engine
- * key. Independently of the pending state, an inline `/connect <key>` carries
+ * key or for a custom server's address (it may carry a login). Independently of the pending state, an inline `/connect <key>` carries
  * the key in its arguments → only a fixed command marker is recorded.
  * Everything else records unchanged.
  */
 export function getRecvTracePreview(
   messageText: string,
   isThreadPendingProviderConnect: boolean,
-  isThreadPendingSttKey = false,
+  awaitedSttStep: SttAwaitedInputStep | null = null,
 ): string {
   if (checkIsConnectCommandText(messageText)) return redactedConnectCommandPreview;
   const isPlainText = !messageText.trim().startsWith('/');
   if (isThreadPendingProviderConnect && isPlainText) return redactedConnectKeyPreview;
-  if (isThreadPendingSttKey && isPlainText) return redactedSttKeyPreview;
+  if (awaitedSttStep === 'key' && isPlainText) return redactedSttKeyPreview;
+  if (awaitedSttStep === 'url' && isPlainText) return redactedSttAddressPreview;
   return messageText;
 }

@@ -297,7 +297,9 @@ writable and survive a restart** — under Docker, mount the config directory, n
 log says it once (`[STT] … cannot be written`). It holds the settings and the API keys, is written with mode
 `0600`, and is re-read when it changes — an edit applies to the next voice note, no restart. If the file is
 invalid, the bot keeps the last good settings, logs a `[STT]` line naming the field (never a value), and
-refuses voice with a notice when nothing valid was ever loaded.
+refuses voice with a notice when nothing valid was ever loaded. A voice note that no engine can take gets a notice
+that names the cause: nothing set up (or all switched off), the local engine still installing, or engines listed but not
+usable right now.
 
 ```json
 {

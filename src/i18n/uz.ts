@@ -58,6 +58,7 @@ export const uzDict: Record<string, string> = {
     '/list — mavzularni sanab o‘ting\n' +
     '/status — barcha mavzular holati\n' +
     '/quitall — har bir ishlayotgan agentni to‘xtating\n' +
+    '/stt — ovozni aniqlash sozlamalari\n' +
     '/whoami /version — debugging\n\n' +
     'Agent bilan gaplashish uchun — mavzu mavzusini oching.',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const uzDict: Record<string, string> = {
 
   'voice.no_api_key':
     'Ovoz uchun nutqni aniqlash dvigateli kerak — uni sozlash uchun /stt ni oching.',
+  'voice.local_installing': 'Ovozni aniqlash hali sozlanmoqda — lokal dvigatel o‘rnatilmoqda. U tayyor bo‘lgach, ovozli xabarni qayta yuboring.',
+  'voice.engines_unavailable': 'Ovoz o‘chiq: ro‘yxatdagi aniqlash dvigatellaridan hozir birortasini ham ishlatib bo‘lmaydi. Sababini ko‘rish uchun /stt ni oching.',
   'voice.config_invalid':
     'Ovoz o‘chirilgan: sozlamalar fayli stt.json noto‘g‘ri. Muammo bot logida ko‘rsatilgan — faylni tuzating yoki /stt ni oching.',
   'stt.install.header': '🖥 Lokal nutqni aniqlash o‘rnatilmoqda… ({elapsed})',

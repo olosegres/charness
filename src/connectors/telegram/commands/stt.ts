@@ -9,6 +9,7 @@
  */
 import { Markup, type Context } from 'telegraf';
 import { t } from '../../../i18n';
+import type { SttAwaitedInputStep } from '../../../utils/recvPreviewRedaction';
 import { keyToString, tryKeyFromString, type SessionKey } from '../../../sessionKey';
 import {
   isGigaamInstalled,
@@ -187,14 +188,10 @@ export function createStt(ports: SttPorts) {
     if (promptMessageId !== null) armInput(key, { ...spec, promptMessageId });
   }
 
-  function checkIsAwaitingInput(key: SessionKey): boolean {
+  /** The typed step the next plain message of the topic answers; the output trace must not record that message. */
+  function getAwaitedStep(key: SessionKey): SttAwaitedInputStep | null {
     const step = pendingInputs.get(keyToString(key))?.step;
-    return step === 'url' || step === 'key';
-  }
-
-  /** The next plain message is a speech-engine key — the output trace must not record it. */
-  function checkIsAwaitingKey(key: SessionKey): boolean {
-    return pendingInputs.get(keyToString(key))?.step === 'key';
+    return step === 'url' || step === 'key' ? step : null;
   }
 
   /** A slash command or a topic teardown ends an armed step; the prompt is retired out loud only when asked to. */
@@ -525,8 +522,7 @@ export function createStt(ports: SttPorts) {
     registerSttCallbacks,
     startSttAutoInstall: startAutoInstall,
     resumeSttInstallAtBoot: resumeInstallAtBoot,
-    checkIsAwaitingSttInput: checkIsAwaitingInput,
-    checkIsAwaitingSttKey: checkIsAwaitingKey,
+    getAwaitedSttStep: getAwaitedStep,
     submitSttInput: submitInput,
     cancelSttInput: cancelInput,
   };

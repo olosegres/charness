@@ -179,7 +179,7 @@ import type { UpdateType } from 'telegraf/typings/telegram-types';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { downloadFile } from './utils/download';
 import type { TranscribeResult } from './utils/transcribeAudio';
-import { getSttConfigPath, type ResolvedSttSettings } from './stt/sttSettings';
+import { getNoEngineNoticeCode, getSttConfigPath, type ResolvedSttSettings } from './stt/sttSettings';
 import { createSttRuntime } from './stt/sttRuntime';
 import {
   createDefaultSttSidecarOwnerDeps,
@@ -787,7 +787,7 @@ bot.use(async (ctx, next) => {
   const threadKey = messageText === undefined ? null : getThreadKey(ctx);
   const isThreadPendingProviderConnect =
     threadKey !== null && pendingProviderConnects.has(keyToString(threadKey));
-  const isThreadPendingSttKey = threadKey !== null && checkIsAwaitingSttKey(threadKey);
+  const awaitedSttStep = threadKey !== null ? getAwaitedSttStep(threadKey) : null;
   traceRecvUpdate({
     updateType: ctx.updateType,
     updateId: ctx.update.update_id,
@@ -797,7 +797,7 @@ bot.use(async (ctx, next) => {
     preview:
       messageText === undefined
         ? callbackData
-        : getRecvTracePreview(messageText, isThreadPendingProviderConnect, isThreadPendingSttKey),
+        : getRecvTracePreview(messageText, isThreadPendingProviderConnect, awaitedSttStep),
     tgDateSec: message?.date,
   });
   return next();
@@ -7214,8 +7214,7 @@ const {
   registerSttCallbacks,
   startSttAutoInstall,
   resumeSttInstallAtBoot,
-  checkIsAwaitingSttInput,
-  checkIsAwaitingSttKey,
+  getAwaitedSttStep,
   submitSttInput,
   cancelSttInput,
 } = createStt({
@@ -7969,7 +7968,7 @@ bot.on(message('text'), async (ctx) => {
 
   // `/stt` asked for a server address or an API key → this message is the answer. A plausible key is deleted at
   // once and never echoed; anything else re-arms the step. A slash command above already disarmed it.
-  if (checkIsAwaitingSttInput(key) && !text.startsWith('/')) {
+  if (getAwaitedSttStep(key) !== null && !text.startsWith('/')) {
     await submitSttInput(key, text, ctx.message.message_id);
     return;
   }
@@ -8243,7 +8242,7 @@ bot.on(message('voice'), async (ctx) => {
 
   const sttSettings = getResolvedSttSettings();
   if (sttSettings.engines.length === 0) {
-    await replyToThread(key, t(sttSettings.errors.length > 0 ? 'voice.config_invalid' : 'voice.no_api_key'));
+    await replyToThread(key, t(getNoEngineNoticeCode(sttSettings)));
     return;
   }
 

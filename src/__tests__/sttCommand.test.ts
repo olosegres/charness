@@ -258,18 +258,17 @@ test('adding Groq: the key step is armed, an implausible paste stays visible and
   await tap('ad');
   await tap('an', ['gq']);
   assert.match(lastEdit().text, /Paste the API key now/);
-  assert.equal(feature.checkIsAwaitingSttInput(key), true);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true);
+  assert.equal(feature.getAwaitedSttStep(key), 'key');
 
   await feature.submitSttInput(key, 'я перезагрузил сервис', 501);
   assert.deepEqual(deleted, [], 'not a secret: it stays visible');
   assert.equal(sent.at(-1)?.text.startsWith('❌ That does not look like an API key'), true);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true, 'still armed');
+  assert.equal(feature.getAwaitedSttStep(key), 'key', 'still armed');
   assert.deepEqual(readConfig().engines, []);
 
   await feature.submitSttInput(key, `  ${sampleKey}\n`, 502);
   assert.deepEqual(deleted, [502], 'the pasted key is removed from the topic');
-  assert.equal(feature.checkIsAwaitingSttKey(key), false);
+  assert.equal(feature.getAwaitedSttStep(key), null);
   const saved = readConfig();
   assert.deepEqual(saved.engines.map((engine) => [engine.id, engine.kind, engine.apiKey]), [['q1', 'groq', sampleKey]]);
   assert.match(lastEdit().text, /Key saved/);
@@ -297,6 +296,7 @@ test('a custom server: the address is completed, then "does it need a key?" — 
   await tap('ad');
   await tap('an', ['ur']);
   assert.match(lastEdit().text, /Send the address of the server/);
+  assert.equal(feature.getAwaitedSttStep(key), 'url', 'the output trace redacts the address message too');
 
   await feature.submitSttInput(key, 'not an address', 601);
   assert.match(sent.at(-1)?.text ?? '', /not an http\(s\) address/);
@@ -307,7 +307,7 @@ test('a custom server: the address is completed, then "does it need a key?" — 
   await feature.submitSttInput(key, 'http://stt.local:8000', 603);
   assert.deepEqual(deleted, [602], 'a plain address stays');
   assert.match(lastEdit().text, /Does this server need an API key/);
-  assert.equal(feature.checkIsAwaitingSttInput(key), false, 'the next plain message is not swallowed while the buttons are awaited');
+  assert.equal(feature.getAwaitedSttStep(key), null, 'the next plain message is not swallowed while the buttons are awaited');
 
   await tap('ku', ['n']);
   assert.deepEqual(readConfig().engines, [{ id: 'u1', kind: 'url', url: 'http://stt.local:8000/v1/audio/transcriptions' }]);
@@ -319,7 +319,7 @@ test('a custom server with a key: yes arms the paste for the new engine and the 
   await tap('an', ['ur']);
   await feature.submitSttInput(key, 'https://stt.example/v1', 701);
   await tap('ku', ['y']);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true);
+  assert.equal(feature.getAwaitedSttStep(key), 'key');
   await feature.submitSttInput(key, sampleKey, 702);
   assert.deepEqual(deleted, [702]);
   assert.deepEqual(readConfig().engines, [{ id: 'u1', kind: 'url', url: 'https://stt.example/v1/audio/transcriptions', apiKey: sampleKey }]);
@@ -331,18 +331,18 @@ test('a command, the cancel button and a silent teardown each end an armed step;
   const feature = createFeature();
   await tap('an', ['gq']);
   await feature.cancelSttInput(key);
-  assert.equal(feature.checkIsAwaitingSttInput(key), false);
+  assert.equal(feature.getAwaitedSttStep(key), null);
   assert.equal(lastEdit().text, 'Cancelled.');
 
   await tap('an', ['gq']);
   await tap('cn');
-  assert.equal(feature.checkIsAwaitingSttKey(key), false);
+  assert.equal(feature.getAwaitedSttStep(key), null);
   assert.match(lastEdit().text, /Voice recognition/, 'the cancel button returns to the main screen');
 
   await tap('an', ['gq']);
   const editsBefore = edits.length;
   await feature.cancelSttInput(key, { isSilent: true });
-  assert.equal(feature.checkIsAwaitingSttInput(key), false);
+  assert.equal(feature.getAwaitedSttStep(key), null);
   assert.equal(edits.length, editsBefore, 'a teardown says nothing');
 });
 
@@ -351,12 +351,12 @@ test('an armed step expires after ten minutes: the prompt is retired and a late 
   writeConfig({});
   const feature = createFeature();
   await tap('an', ['gq']);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true);
+  assert.equal(feature.getAwaitedSttStep(key), 'key');
   mock.timers.tick(sttInputTimeoutMs - 1);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true);
+  assert.equal(feature.getAwaitedSttStep(key), 'key');
   mock.timers.tick(1);
   await Promise.resolve();
-  assert.equal(feature.checkIsAwaitingSttKey(key), false);
+  assert.equal(feature.getAwaitedSttStep(key), null);
   assert.match(lastEdit().text, /Timed out/);
 });
 
@@ -368,7 +368,7 @@ test('re-arming (a wrong paste) restarts the ten minutes instead of leaving the 
   mock.timers.tick(sttInputTimeoutMs - 1000);
   await feature.submitSttInput(key, 'too short', 801);
   mock.timers.tick(5000);
-  assert.equal(feature.checkIsAwaitingSttKey(key), true, 'the first timer was replaced');
+  assert.equal(feature.getAwaitedSttStep(key), 'key', 'the first timer was replaced');
 });
 
 test('Enable local recognition: confirm screen, then Install hands the SAME message to the job; on success the engine is first', async () => {

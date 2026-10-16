@@ -58,6 +58,7 @@ export const zhDict: Record<string, string> = {
     '/list — 列出话题\n' +
     '/status — 所有话题的状态\n' +
     '/quitall — 退出所有运行中的代理\n' +
+    '/stt — 语音识别设置\n' +
     '/whoami /version — 调试\n\n' +
     '要与代理对话 — 打开一个主题话题。',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const zhDict: Record<string, string> = {
 
   'voice.no_api_key':
     '语音需要语音识别引擎——打开 /stt 进行设置。',
+  'voice.local_installing': '语音识别仍在设置中——本地引擎正在安装。准备好后请重新发送语音。',
+  'voice.engines_unavailable': '语音已关闭：列表中的识别引擎目前都无法使用。打开 /stt 查看原因。',
   'voice.config_invalid':
     '语音已关闭：设置文件 stt.json 无效。问题见机器人日志——请修正该文件或打开 /stt。',
   'stt.install.header': '🖥 正在安装本地语音识别… ({elapsed})',

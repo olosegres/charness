@@ -202,7 +202,7 @@ content hash of the effective settings — so a hand edit makes old keyboards an
 acting on a list that moved. An edit made from `/stt` while the file is invalid rewrites it from the last good settings.
 
 Typed steps (a custom server's address, an API key) belong to the Telegram module: a plausible key is deleted from the
-topic the moment it is accepted and never echoed or logged; the output trace records `[redacted: speech engine key]` for
-the message while a key is awaited. Install: «Enable local recognition» confirms the cost, then the install job edits ONE
+topic the moment it is accepted and never echoed or logged; the output trace records `[redacted: speech engine key]` (or, for the address step — it may carry a login —
+`[redacted: speech engine address]`) for the message while that step is awaited. Install: «Enable local recognition» confirms the cost, then the install job edits ONE
 message with its progress (remembered in `state.json` with the enable flag); on success the engine joins the list first. Details and the
 registration contract: `connectors/telegram/commands/README.md` § `stt.ts`.

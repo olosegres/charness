@@ -58,6 +58,7 @@ export const deDict: Record<string, string> = {
     '/list — Threads auflisten\n' +
     '/status — Status aller Threads\n' +
     '/quitall — jeden laufenden Agent beenden\n' +
+    '/stt — Spracherkennung einstellen\n' +
     '/whoami /version — Debug\n\n' +
     'Um mit einem Agent zu sprechen — öffne einen thematischen Thread.',
   'help.thread_unbound':
@@ -397,6 +398,8 @@ export const deDict: Record<string, string> = {
 
   'voice.no_api_key':
     'Für Sprache wird eine Spracherkennungs-Engine benötigt — öffne /stt, um eine einzurichten.',
+  'voice.local_installing': 'Die Spracherkennung wird noch eingerichtet — die lokale Engine wird installiert. Sende die Sprachnachricht erneut, wenn sie bereit ist.',
+  'voice.engines_unavailable': 'Sprache ist aus: Keine der aufgelisteten Erkennungs-Engines ist gerade nutzbar. Öffne /stt, um den Grund zu sehen.',
   'voice.config_invalid':
     'Sprache ist aus: Die Einstellungsdatei stt.json ist ungültig. Das Problem steht im Bot-Log — korrigiere die Datei oder öffne /stt.',
   'stt.install.header': '🖥 Lokale Spracherkennung wird installiert… ({elapsed})',
