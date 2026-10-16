@@ -120,6 +120,28 @@ test('scheduler MCP port: undefined by default, persisted + reloaded across rest
   assert.equal(reloaded.getPersistedSchedulerMcpPort(), 41234, 'reloaded from disk');
 });
 
+test('the install message of the local speech engine keeps its "enable on done" flag across a restart; an unreadable record reads as none', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  assert.equal(store.getSttInstallProgressMessage(), null);
+
+  await store.setSttInstallProgressMessage({ threadKey: '-1001111111111:77', messageId: 321, shouldEnableOnDone: true });
+  const reloaded = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await reloaded.init();
+  assert.deepEqual(reloaded.getSttInstallProgressMessage(), { threadKey: '-1001111111111:77', messageId: 321, shouldEnableOnDone: true });
+
+  await reloaded.setSttInstallProgressMessage({ threadKey: '-1001111111111:1', messageId: 5 });
+  assert.deepEqual(reloaded.getSttInstallProgressMessage(), { threadKey: '-1001111111111:1', messageId: 5 }, 'an install stt.json asked for carries no flag');
+
+  await reloaded.setSttInstallProgressMessage(null);
+  assert.equal(reloaded.getSttInstallProgressMessage(), null);
+
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ sttInstallProgress: { threadKey: '-1001111111111:77', messageId: 'not a number' } }));
+  const damaged = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await damaged.init();
+  assert.equal(damaged.getSttInstallProgressMessage(), null);
+});
+
 test('R6: corrupted state.json is archived and store starts fresh', async () => {
   const statePath = path.join(dataDir, 'state.json');
   fs.writeFileSync(statePath, '{ this is not valid json');
