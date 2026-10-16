@@ -1,4 +1,5 @@
 import {
+  checkIsSttConfigOnContainerDisk,
   createEmptySttConfig,
   getSttConfigWriteBlock,
   getSttReportLines,
@@ -38,6 +39,7 @@ export interface SttRuntimeDeps {
    */
   onNeedsAutoInstall?: () => void;
   /** Seams for tests; default to the real install checks. */
+  checkIsConfigOnContainerDisk?: (configPath: string) => boolean;
   checkIsInstalled?: (dataDir: string) => boolean;
   checkIsInstalling?: (dataDir: string) => boolean;
 }
@@ -52,6 +54,7 @@ export interface SttRuntime {
 export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
   const checkIsInstalled = deps.checkIsInstalled ?? isGigaamInstalled;
   const checkIsInstalling = deps.checkIsInstalling ?? isGigaamInstalling;
+  const checkIsConfigOnContainerDisk = deps.checkIsConfigOnContainerDisk ?? checkIsSttConfigOnContainerDisk;
   /** The `[STT]` lines last logged, so an unchanged state is reported once, not per voice note. */
   let lastReport = '';
   /** The load the last resolve saw: the cache hands back the SAME object until the file changes. */
@@ -82,6 +85,20 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
     return resolved;
   }
 
+  /**
+   * Said once, at boot: a settings file that cannot be kept loses every /stt edit — a read-only or missing mount
+   * (the write check), or a container's own disk (writable, so the write check is quiet, but a new container starts
+   * empty and would migrate the old env keys again).
+   */
+  function reportStorageProblem(configPath: string): void {
+    const writeBlock = getSttConfigWriteBlock(configPath);
+    if (writeBlock !== null) {
+      deps.logProblem(`[STT] ${configPath} cannot be written (${writeBlock}): changes made in /stt will not be kept — make its directory writable`);
+    } else if (checkIsConfigOnContainerDisk(configPath)) {
+      deps.logProblem(`[STT] ${configPath} is on this container's own disk, not on a mount: changes made in /stt are lost when the container is re-created — mount its directory (SETUP.md, Run with Docker)`);
+    }
+  }
+
   return {
     getResolved: () => resolveNow(false),
     init() {
@@ -91,13 +108,8 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
         deps.logInfo(`[STT] moved ${migration.engineNames.join(' + ')} from the environment into ${configPath}`);
       } else if (migration.status === 'writeFailed') {
         deps.logProblem(`[STT] could not write ${configPath} (${migration.error}): voice input stays off until it can be written`);
-      } else {
-        // Said once, at boot: a settings file that cannot be kept (a read-only or unmounted directory) loses every /stt edit.
-        const writeBlock = getSttConfigWriteBlock(configPath);
-        if (writeBlock !== null) {
-          deps.logProblem(`[STT] ${configPath} cannot be written (${writeBlock}): changes made in /stt will not be kept — make its directory writable`);
-        }
       }
+      if (migration.status !== 'writeFailed') reportStorageProblem(configPath);
       resolveNow(true);
     },
   };

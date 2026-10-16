@@ -602,6 +602,10 @@ Running it:
 - **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
 - **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
   yours. **Rootful Docker**: add `--user "$(id -u):$(id -g)"` and give that user the agents' home.
+- **Upgrading a container made with the single-file mount** (`INSTANCE_ENV_FILE`, the env file mounted `:ro`): move the
+  env file into a directory of its own, mount the directory as in step 3 and set `ENV_FILE` to the file inside it. Until
+  then `stt.json` sits on the container's own disk and is lost when the container is re-created; the bot says so at boot
+  (`[STT] … is on this container's own disk`).
 - **Moving a host instance in**: stop it first (the lock refuses a lock written on another host), mount its
   folders at their paths, and copy its conversations' folders from `~/.claude/projects/` into the agents' home
   `.claude/projects/` — without them each conversation starts a fresh session on its next message.

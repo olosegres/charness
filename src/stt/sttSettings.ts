@@ -324,23 +324,61 @@ export function saveSttConfig(filePath: string, config: SttConfigFile): void {
   }
 }
 
+/** The nearest directory of `filePath`'s ancestors that exists (the save creates the rest), or the errno code that stops the walk. */
+function findNearestExistingDirectory(filePath: string): { directory: string } | { errorCode: string } {
+  let directory = path.dirname(filePath);
+  for (;;) {
+    try {
+      fs.statSync(directory);
+      return { directory };
+    } catch (e) {
+      const code = e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
+      const parent = path.dirname(directory);
+      if (code !== 'ENOENT' || parent === directory) return { errorCode: code };
+      directory = parent;
+    }
+  }
+}
+
 /**
  * @description Why {@link saveSttConfig} could not write beside `filePath` — an errno code (`EACCES`, `EROFS`,
  * `ENOTDIR`, …) — or `null` when it can. The directory may not exist yet (the save creates it): the nearest
  * existing ancestor must be a directory that accepts a new file.
  */
 export function getSttConfigWriteBlock(filePath: string): string | null {
-  let directory = path.dirname(filePath);
-  for (;;) {
-    try {
-      fs.accessSync(directory, fs.constants.W_OK);
-      return fs.statSync(directory).isDirectory() ? null : 'ENOTDIR';
-    } catch (e) {
-      const code = e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
-      const parent = path.dirname(directory);
-      if (code !== 'ENOENT' || parent === directory) return code;
-      directory = parent;
-    }
+  const nearest = findNearestExistingDirectory(filePath);
+  if ('errorCode' in nearest) return nearest.errorCode;
+  try {
+    fs.accessSync(nearest.directory, fs.constants.W_OK);
+    return fs.statSync(nearest.directory).isDirectory() ? null : 'ENOTDIR';
+  } catch (e) {
+    return e instanceof Error ? getErrnoCode(e) : unknownErrorCode;
+  }
+}
+
+/** Files a container runtime creates inside every container it starts (Docker, Podman). */
+const containerMarkerFiles: readonly string[] = ['/.dockerenv', '/run/.containerenv'];
+const rootDirectory = '/';
+
+/**
+ * @description Is `stt.json` kept on a container's OWN disk — the bot runs in a container and the directory that
+ * holds the file is not a mount (it shares the device of `/`)? Then every change made in `/stt` is lost when the
+ * container is re-created, and the old env keys are migrated again into a fresh file. The write check cannot see it:
+ * the container's disk is writable. Typical cause: only the env FILE was mounted, not its directory. A host, or
+ * a path that cannot be read, is never reported.
+ */
+export function checkIsSttConfigOnContainerDisk(
+  filePath: string,
+  checkIsPresent: (candidate: string) => boolean = fs.existsSync,
+  readDeviceId: (directory: string) => number = (directory) => fs.statSync(directory).dev,
+): boolean {
+  if (!containerMarkerFiles.some(checkIsPresent)) return false;
+  const nearest = findNearestExistingDirectory(filePath);
+  if ('errorCode' in nearest) return false;
+  try {
+    return readDeviceId(nearest.directory) === readDeviceId(rootDirectory);
+  } catch {
+    return false;
   }
 }
 

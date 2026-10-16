@@ -17,6 +17,7 @@ import {
   createSttEngineId,
   defaultSttTimeout,
   getEngineTimeoutMs,
+  checkIsSttConfigOnContainerDisk,
   getNoEngineNoticeCode,
   getSttConfigPath,
   getSttConfigWriteBlock,
@@ -541,4 +542,23 @@ test('the notice a voice gets when no engine can take it names the real cause', 
     'voice.config_invalid',
     'a broken file outranks everything',
   );
+});
+
+test('container disk: only inside a container, and only when the settings directory shares the device of / (no mount of its own)', () => {
+  const insideContainer = (candidate: string): boolean => candidate === '/.dockerenv';
+  const onHost = (): boolean => false;
+  const deviceOf = (devices: Record<string, number>) => (directory: string): number => {
+    const match = Object.keys(devices).filter((mounted) => directory === mounted || directory.startsWith(`${mounted}/`) || mounted === '/').sort((a, b) => b.length - a.length)[0];
+    return devices[match];
+  };
+  const unmounted = deviceOf({ '/': 10 });
+  const mounted = deviceOf({ '/': 10, [configDir]: 20 });
+
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, unmounted), true, 'the old single-file mount: the directory is the container\'s own disk');
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, mounted), false, 'a mounted config directory is fine');
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, onHost, unmounted), false, 'a host is never reported');
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, (candidate) => candidate === '/run/.containerenv', unmounted), true, 'Podman marks its containers too');
+  assert.equal(checkIsSttConfigOnContainerDisk(path.join(configDir, 'not', 'yet', 'there', 'stt.json'), insideContainer, mounted), false, 'a directory the save will create sits on the nearest existing one\'s mount');
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, insideContainer, () => { throw new Error('EIO'); }), false, 'what cannot be read is not guessed');
+  assert.equal(checkIsSttConfigOnContainerDisk(configPath, onHost), false, 'the real device check is not reached without a container marker');
 });

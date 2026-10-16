@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+**Voice recognition: one settings file, `/stt`, and a recogniser that runs on your machine.** The speech engines
+(Groq, OpenAI, any OpenAI-compatible server, and the local GigaAM v3) are an ordered list in `stt.json`, edited from
+`/stt` or by hand. Details: [SETUP.md § Voice input](SETUP.md#voice-input).
+
+### Upgrading
+- **`GROQ_API_KEY` / `OPENAI_API_KEY` move out of the env file.** At the first start without a `stt.json` the bot
+  copies them into it (Groq first) and logs a `[deprecated]` line; from then on the env keys are ignored. Use `/stt`
+  or edit `stt.json`, and delete the keys from the env file when convenient.
+- **`stt.json` lives beside your real env file** (a symlinked `.env` is resolved: it goes next to the target). That
+  directory must be writable and survive restarts.
+- **Docker: mount the config DIRECTORY, not only the env file.** `examples/docker-compose.yml` now takes
+  `INSTANCE_CONFIG_DIR` (the directory that holds the env file) in place of `INSTANCE_ENV_FILE`: move the env file into
+  a directory of its own, e.g. `/srv/charness/config/instance.env`, mount that directory writable and point `ENV_FILE`
+  at the file inside it (`docker run` form: SETUP.md § Run with Docker). With the old single-file mount `stt.json` lands
+  on the container's own disk: it is lost whenever the container is re-created, and the old keys are copied in again each
+  time. The bot warns at boot when it runs in a container and `stt.json` is not on a mount (`[STT] … is on this
+  container's own disk`), and when the directory cannot be written at all. The local engine itself is not available in
+  the Docker image yet (no `python3-venv`).
+
+### Added
+- **`/stt`**: the engine list (order, use / don't use, timeout, key, remove), adding Groq, OpenAI or a custom server,
+  the language, and the local engine (install with a live progress message, idle exit, workers, try again after failed
+  starts, remove its files). A pasted key or an address with a login is deleted from the topic at once and kept out of
+  the logs and the output trace.
+- **Local recognition (GigaAM v3, Russian):** a recogniser process that starts with the first voice that needs it,
+  survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
+
 ## 3.2.0 — 2026-10-16
 
 **Renamed: what was left under the TelegramCode name is now Charness.** The old names still work and each one

@@ -26,7 +26,10 @@ the keys it holds stay with the other secrets; a dangling link keeps the directo
 keys, mode 0600, written through a temp file and a rename. **No `STT_*` env variables exist.** The directory must be
 writable and persistent (Docker: mount the config DIRECTORY, not only the env file): there is NO fallback to another
 location — `init` probes it (`getSttConfigWriteBlock`) and logs `[STT] … cannot be written` once, and a `/stt` save that
-fails says so naming the path.
+fails says so naming the path. A writable directory can still be the container's OWN disk (only the env file was mounted):
+in a container (`/.dockerenv`, `/run/.containerenv`) with the directory on the device of `/`, `init` logs `[STT] … is on this
+container's own disk` once (`checkIsSttConfigOnContainerDisk`) — also in the fresh container that migrates the old env
+keys again.
 
 - **Validation is strict and all-or-nothing** (zod, like `jira.json`): an unknown key, kind, duplicate id, a
   second local engine, an out-of-range number or a bad language is an error that names the field

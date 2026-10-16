@@ -58,6 +58,8 @@ function createHarness(): Harness {
   harness.deps = {
     getDataDir: () => dataDir,
     getConfigPath: () => configPath,
+    // Hermetic: whether the test box is itself a container must not change what a test sees.
+    checkIsConfigOnContainerDisk: () => false,
     owner: {
       ensure: async (settings): Promise<SttSidecarEndpoint> => {
         harness.ensured.push(settings);
@@ -231,3 +233,29 @@ test('init does not repeat itself when the old-key migration already reported th
     else process.env.GROQ_API_KEY = previousGroq;
   }
 });
+
+test('init warns ONCE when stt.json is on the container\'s own disk — also in the fresh container that migrates the old env keys again', () => withoutLegacyKeys(() => {
+  const harness = createHarness();
+  harness.deps = { ...harness.deps, checkIsConfigOnContainerDisk: (checkedPath) => checkedPath === configPath };
+  const runtime = createSttRuntime(harness.deps);
+  runtime.init();
+  runtime.getResolved();
+  const lines = harness.problems.filter((line) => line.includes("container's own disk"));
+  assert.equal(lines.length, 1, harness.problems.join('\n'));
+  assert.ok(lines[0].includes(configPath) && lines[0].includes('mount its directory'), lines[0]);
+
+  const freshContainer = createHarness();
+  freshContainer.deps = { ...freshContainer.deps, checkIsConfigOnContainerDisk: () => true };
+  process.env.GROQ_API_KEY = 'gsk_fromTheEnvironment1234';
+  try {
+    createSttRuntime(freshContainer.deps).init();
+  } finally {
+    delete process.env.GROQ_API_KEY;
+  }
+  assert.ok(freshContainer.info.some((line) => line.includes('moved groq from the environment')), 'the old key was migrated');
+  assert.ok(freshContainer.problems.some((line) => line.includes("container's own disk")), 'and the operator is told the file will not survive');
+
+  const mountedConfig = createHarness();
+  createSttRuntime(mountedConfig.deps).init();
+  assert.ok(!mountedConfig.problems.some((line) => line.includes("container's own disk")), 'a mounted directory says nothing');
+}));
