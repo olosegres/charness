@@ -123,6 +123,14 @@ function readRememberedInstallMessage(instance: IsolatedInstanceLayout): { threa
   return JSON.parse(fs.readFileSync(path.join(instance.dataDir, 'state.json'), 'utf8')).sttInstallProgress;
 }
 
+/**
+ * The remembered install message is forgotten LAST, after the message itself was turned into its outcome: a read right
+ * behind the edit can still see it. Wait for the exact state — gone — instead of reading once.
+ */
+async function waitUntilInstallMessageForgotten(instance: IsolatedInstanceLayout): Promise<void> {
+  await getCharness().waitFor('the remembered install message to be forgotten', replyTimeoutMs, () => readRememberedInstallMessage(instance) === undefined);
+}
+
 /** What a bot that went down in the middle of an install `/stt` started leaves in `state.json`: the progress message. */
 function seedRememberedInstallMessage(instance: IsolatedInstanceLayout, messageId: number, shouldEnableOnDone: boolean): void {
   const statePath = path.join(instance.dataDir, 'state.json');
@@ -214,7 +222,7 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await topic.waitForMessageText('the message turns into the outcome', installMessage, (text) => text.includes('Local recognition is ready'));
     assert.ok(topic.getKeyboardData(installMessage).flat().some((data) => data.startsWith('stt_bk_')), 'with its Settings button');
     assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['gigaam', 'groq'], 'the process that saw the install end is not the one that started it, and it still enabled the engine');
-    assert.equal(readRememberedInstallMessage(instance), undefined, 'the message is forgotten at the end');
+    await waitUntilInstallMessageForgotten(instance);
   });
 
   it('an install that finished while the bot was down: the frozen message becomes "ready" at boot and the engine joins the list', async () => {
@@ -231,7 +239,7 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await topic.waitForMessageText('the frozen message settled at boot', frozenMessage, (text) => text.includes('Local recognition is ready'));
     assert.ok(topic.getKeyboardData(frozenMessage).flat().some((data) => data.startsWith('stt_bk_')), 'with its Settings button');
     assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['gigaam', 'groq']);
-    assert.equal(readRememberedInstallMessage(instance), undefined);
+    await waitUntilInstallMessageForgotten(instance);
   });
 
   it('an install job that died while the bot was down: the message says it ended without a result, with Retry, and the list is untouched', async () => {
@@ -247,7 +255,7 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await topic.waitForMessageText('the message reports the lost job', lostMessage, (text) => text.includes('the install job ended without a result'));
     assert.ok(topic.getKeyboardData(lostMessage).flat().some((data) => data.startsWith('stt_er_')), 'Retry is offered');
     assert.deepEqual(readSttFile(instance).engines.map((engine) => engine.kind), ['groq']);
-    assert.equal(readRememberedInstallMessage(instance), undefined);
+    await waitUntilInstallMessageForgotten(instance);
   });
 
   it('a settings directory that cannot be written is said at boot once, and /stt names the file when a pasted key cannot be kept', { skip: isRoot }, async () => {

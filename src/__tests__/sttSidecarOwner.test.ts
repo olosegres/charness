@@ -76,6 +76,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** A start that never gets ready fails fast; a start that must succeed gets the time a loaded box needs to spawn a process. */
+const neverReadyTimeoutMs = 300;
+const startedReadyTimeoutMs = 10_000;
+
 function createDeps(overrides: Partial<SttSidecarOwnerDeps> = {}): SttSidecarOwnerDeps {
   const base = createDefaultSttSidecarOwnerDeps(() => dataDir);
   return {
@@ -89,7 +93,7 @@ function createDeps(overrides: Partial<SttSidecarOwnerDeps> = {}): SttSidecarOwn
       return identity;
     },
     nowMs: () => Date.now() + clockOffsetMs,
-    readyTimeoutMs: 10_000,
+    readyTimeoutMs: startedReadyTimeoutMs,
     log: (line) => logLines.push(line),
     ...overrides,
   };
@@ -474,7 +478,8 @@ test('boot cleanup with no owner context stops a live record too, and a garbage 
 
 test('spawn-storm guard: three failed starts mark the engine unhealthy for five minutes; a fourth ensure is refused without a spawn', async () => {
   fakeArgs = ['--never-ready'];
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 300 }));
+  const deps = createDeps({ readyTimeoutMs: neverReadyTimeoutMs });
+  const owner = createSttSidecarOwner(deps);
   for (let attempt = 1; attempt <= 3; attempt++) {
     assert.equal(owner.checkIsUnhealthy(), false, `before failure ${attempt}`);
     await assert.rejects(() => owner.ensure(defaultSettings), /was not ready in/);
@@ -493,6 +498,7 @@ test('spawn-storm guard: three failed starts mark the engine unhealthy for five 
   clockOffsetMs += fiveMinutesMs + 1_000;
   assert.equal(owner.checkIsUnhealthy(), false, 'five minutes later a spawn is allowed again');
   fakeArgs = [];
+  deps.readyTimeoutMs = startedReadyTimeoutMs;
   await owner.ensure(defaultSettings);
   assert.equal(startCalls.length, 4);
   await owner.stop();
@@ -500,7 +506,8 @@ test('spawn-storm guard: three failed starts mark the engine unhealthy for five 
 
 test('spawn-storm guard: "Try again now" lifts it, and a successful start resets the count of consecutive failures', async () => {
   fakeArgs = ['--never-ready'];
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 300 }));
+  const deps = createDeps({ readyTimeoutMs: neverReadyTimeoutMs });
+  const owner = createSttSidecarOwner(deps);
   for (let attempt = 0; attempt < 3; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   assert.equal(owner.checkIsUnhealthy(), true);
   owner.resetSpawnGuard();
@@ -510,9 +517,11 @@ test('spawn-storm guard: "Try again now" lifts it, and a successful start resets
   // two failures, a success, two more failures: never three IN A ROW
   for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   fakeArgs = [];
+  deps.readyTimeoutMs = startedReadyTimeoutMs;
   await owner.ensure(defaultSettings);
   await owner.stop();
   fakeArgs = ['--never-ready'];
+  deps.readyTimeoutMs = neverReadyTimeoutMs;
   for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   assert.equal(owner.checkIsUnhealthy(), false);
   await assert.rejects(() => owner.ensure(defaultSettings));
@@ -521,7 +530,7 @@ test('spawn-storm guard: "Try again now" lifts it, and a successful start resets
 
 test('failures older than ten minutes do not count toward the storm', async () => {
   fakeArgs = ['--never-ready'];
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 300 }));
+  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: neverReadyTimeoutMs }));
   await assert.rejects(() => owner.ensure(defaultSettings));
   await assert.rejects(() => owner.ensure(defaultSettings));
   clockOffsetMs += 11 * 60 * 1000;
