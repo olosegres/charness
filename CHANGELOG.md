@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.0 — 2026-10-16
 
 **Renamed: what was left under the TelegramCode name is now Charness.** The old names still work and each one
 in use prints a `[deprecated]` line at start — rename them when you see it. Steps for an npm install, a source
@@ -35,6 +35,21 @@ checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATIO
   supervisor's start (never on a worker reload), never for an explicit `DATA_DIR` or an `ENV_FILE` instance,
   and is idempotent. Details: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md#automatic-migration).
 - `scripts/self-update.sh` names a newly added `MIGRATION_*.md` in its log.
+- **Jira: an @-mention of the AI account in a comment wakes it to answer**, without the issue being handed over:
+  it reads and checks, changes nothing, and its answer is a comment. On with a `trustedGroup` (only a trusted
+  author and last editor count); `wakeOnMention: false` turns it off. See SETUP.md § Jira.
+- **Jira: an answer notifies the person it is for** — it @-mentions the requester of a mention and the authors
+  of the comments it replies to.
+- **Answers are written briefly, in plain words, for a manager or QA** — on Jira issues and in Telegram topics
+  alike.
+
+### Changed
+- Jira: a hand-over is noticed within 30 s by default (`pollIntervalSeconds` default 30, was 90).
+
+### Fixed
+- Jira: a mention no longer displaces a hand-over without a requester, and a superseded question no longer asks
+  to assign the issue back.
+- A Claude session adopted under the old data-dir path is no longer re-spawned as another account.
 
 ## 3.0.0 — 2026-10-07
 
