@@ -31,7 +31,9 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 
 ### Added
 - **`/effort` in General** sets the instance default; **`/effort` in a topic** shows where its level comes from and
-  offers «As in General». `/status`, the ready notice and the pinned banner show the level a topic really starts with.
+  offers «As in General». `/status`, the ready notice and the pinned banner show the level a topic's session really runs —
+  after a General change a running session keeps its level, shown as «xhigh (medium from the next start)». OpenCode
+  rounds General's value to the model's variants (`ultracode` = its highest, `auto` = no variant).
   The default lives in `settings.json` (beside `stt.json`), hand-editable without a restart.
 - **`/stt`**: the engine list (order, use / don't use, timeout, key, remove), adding Groq, OpenAI or a custom server,
   the language, and the local engine (install with a live progress message, idle exit, workers, try again after failed

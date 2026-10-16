@@ -56,12 +56,15 @@ Claude levels with ✓ on the current one, and a tap (or `/effort <level>`) writ
 (`instanceSettings.ts`, path from the `getInstanceSettingsPath` port) — no adapter involved — then confirms that it applies
 from each topic's next session start or wake-up (running sessions are not restarted); a write that fails is said
 with the file's path and the errno code, on the button and in the topic, with no confirmation. **In a topic** it shows the
-level in force and its source (`getOwnEffort` ≠ null → «set for this topic», else «as in General»), a button per level the
-backend offers (OpenCode: the model's variants; a default the model lacks is shown as the nearest variant) and, when the
+level its RUNNING session uses (`getEffortState().running`; with no live session, the level the next start takes), the next
+start's level beside it when that differs («xhigh (medium from the next start)» — a General change never reaches a running
+session) and the source of the next start's level (`getOwnEffort` ≠ null → «set for this topic», else «as in General»), a
+button per level the backend offers (OpenCode: the model's variants; every level shown, the ✓ and the button's value
+included, is the nearest variant when the model lacks it — `getEffortAmongLevels`) and, when the
 adapter has `clearEffort`, «As in General (<value>)» (`effortsame`, disjoint from the `effort_<level>` pattern). A pick the
 adapter stored but could not apply yet (no agent running → a notice) still re-renders the picker. Both screens re-render in
-place, text and keyboard, after a tap. `/status`, the ready notice and the pinned banner show `getThreadEffortInForce`
-(the pick, else the instance default); other topics' banners are refreshed by their own lifecycle events, not by a
+place, text and keyboard, after a tap. `/status`, the ready notice and the pinned banner show `getThreadEffortView`
+(the running session's level, else the next start's; the banner and `/status` add the next start's level when it differs); other topics' banners are refreshed by their own lifecycle events, not by a
 General change (a burst of edits would queue ahead of agent output).
 
 ## `compaction.ts`

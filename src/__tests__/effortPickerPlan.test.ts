@@ -20,6 +20,7 @@ const topicInput = {
   isGeneral: false as const,
   levels: claudeEffortLevels,
   inForce: 'medium',
+  nextStartLevel: null,
   isOwnPick: false,
   instanceDefault: 'medium',
   canClear: true,
@@ -66,4 +67,17 @@ test('an OpenCode-style short level list is laid out the same way, and no ✓ ap
 test('the «as in General» data is not taken by the level-button pattern, and a level\'s data round-trips through it', () => {
   assert.equal(effortLevelCallbackRe.test(effortSameCallback), false, 'the two handlers must stay disjoint');
   assert.equal(effortLevelCallbackRe.exec(buildEffortLevelCallback('xhigh'))?.[1], 'xhigh');
+});
+
+test('a running session that keeps the old level says what the next start will use; the ✓ stays on the running level', () => {
+  const picker = buildEffortPicker({ ...topicInput, inForce: 'xhigh', nextStartLevel: 'medium', instanceDefault: 'medium' }, translate);
+  assert.equal(picker.text, 'effort.chooseNextStart{current=xhigh,next=medium,source=effort.sourceGeneral}');
+  assert.ok(picker.rows.flat().some((button) => button.text === 'xhigh ✓'));
+  assert.ok(!picker.rows.flat().some((button) => button.text === 'medium ✓'));
+});
+
+test('«As in General» names the level the topic will really get — General\'s value rounded to what the model offers', () => {
+  // The model stops at high: General\'s xhigh is high for this topic, and the button says so.
+  const picker = buildEffortPicker({ ...topicInput, levels: ['low', 'medium', 'high'], inForce: 'high', instanceDefault: 'high' }, translate);
+  assert.deepEqual(picker.rows.at(-1), [{ text: 'effort.sameAsGeneralButton{level=high}', data: effortSameCallback }]);
 });

@@ -487,6 +487,7 @@ test('per-thread /status keys exist in every locale', () => {
     'status.thread_report',
     'status.thread_model',
     'status.thread_effort',
+    'status.thread_effort_next_start',
     'status.thread_started',
     'status.thread_running',
     'status.thread_stopped',

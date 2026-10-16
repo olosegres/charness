@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, EffortState, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -1342,6 +1342,15 @@ export function resetOpenCodeProviderCaches(): void {
   modelsCacheTime = 0;
   cachedProviders = null;
   providersCacheTime = 0;
+}
+
+/**
+ * @description The variants the LAST providers snapshot lists for `model`, however old: a model's variants hardly
+ * change, and the synchronous effort display must not wait for a request. `[]` without a snapshot or a model.
+ */
+function getKnownModelVariants(model: OpenCodeModelOverride | null): string[] {
+  if (!model) return [];
+  return cachedProviders?.providers.get(model.providerID)?.get(model.modelID)?.variants ?? [];
 }
 
 function getFreshProvidersConfig(now = Date.now()): ParsedProvidersConfig | null {
@@ -2742,6 +2751,24 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /** Only the persisted pick: a live session's `effortLevel` may be the clamped default (see {@link getEffort}). */
   getOwnEffort(key: SessionKey): string | null {
     return loadSavedEffort(key);
+  }
+
+  /**
+   * The live session sends its `effortLevel` with every prompt (a model variant, or none for `auto` / a model
+   * without variants). The next session seeds the pick, else the default rounded to the model's variants — read
+   * from the last providers snapshot, so this stays synchronous (the banner needs it); unknown variants leave the
+   * default as it is.
+   */
+  getEffortState(key: SessionKey): EffortState {
+    const session = this.sessions.get(keyToString(key));
+    const liveSession = session?.isActive ? session : null;
+    const pick = loadSavedEffort(key);
+    const defaultLevel = getInstanceDefaultEffort();
+    const variants = liveSession ? getKnownModelVariants(this.getSessionModelRef(liveSession)) : [];
+    return {
+      running: liveSession ? liveSession.effortLevel : null,
+      nextStart: pick ?? clampEffortToAvailable(defaultLevel, variants) ?? defaultLevel,
+    };
   }
 
   /**

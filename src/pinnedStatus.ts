@@ -26,10 +26,16 @@ export interface PinnedStatusInputs {
    */
   model: string | null;
   /**
-   * Currently selected reasoning-effort level (e.g. `"high"`, `"xhigh"`).
+   * The reasoning-effort level the thread runs at (e.g. `"high"`, `"xhigh"`): the live session's own, else the
+   * level its next start will use.
    * Optional — shown right after the model when set, omitted otherwise.
    */
   effort?: string | null;
+  /**
+   * The level the next session start will use when it differs from `effort` (the default changed under a running
+   * session); shown beside it.
+   */
+  effortNextStart?: string | null;
   /** True if the adapter reports an active session right now. */
   isActive: boolean;
 }
@@ -56,7 +62,7 @@ export function formatPinnedStatus(inputs: PinnedStatusInputs): string {
   parts.push(`📁 ${inputs.binding.subdir}`);
   parts.push(inputs.agentLabel ?? 'no agent');
   if (inputs.model) parts.push(inputs.model);
-  if (inputs.effort) parts.push(`⚙️ ${inputs.effort}`);
+  if (inputs.effort) parts.push(`⚙️ ${inputs.effort}${inputs.effortNextStart ? ` (${inputs.effortNextStart} from the next start)` : ''}`);
 
   if (inputs.binding.closed) {
     parts.push('🔒 closed');

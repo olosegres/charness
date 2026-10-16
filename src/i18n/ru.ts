@@ -170,6 +170,7 @@ export const ruDict: Record<string, string> = {
   'status.thread_account_pending': 'Ожидает переключения: {account} — применится, когда закончится ход агента или при следующем запуске',
   'status.thread_model': 'Модель: {model}',
   'status.thread_effort': 'Усилие: {effort}',
+  'status.thread_effort_next_start': 'Усилие: {effort} ({next} со следующего старта)',
   'status.thread_started': 'Запущено: {started}',
   'status.thread_running': 'работает',
   'status.thread_stopped': 'остановлена',
@@ -229,6 +230,7 @@ export const ruDict: Record<string, string> = {
   'terminal.ready': '🖥 Терминал готов в `{subdir}`{argsSuffix}\nЛюбое сообщение выполнится как команда. /c — Ctrl+C, /up /down — история, /tab — автодополнение, /quit — закрыть.',
 
   'effort.choose': '⚙️ Effort в этом топике: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort в этом топике: {current} ({next} со следующего старта) — {source}',
   'effort.sourceGeneral': 'как в General',
   'effort.sourceTopic': 'задано для этого топика',
   'effort.sameAsGeneralButton': 'Как в General ({level})',

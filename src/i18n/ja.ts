@@ -166,6 +166,7 @@ export const jaDict: Record<string, string> = {
   'status.thread_account_pending': '切り替え待ち: {account} — エージェントのターン終了時、または次回の起動時に適用されます',
   'status.thread_model': 'モデル: {model}',
   'status.thread_effort': '推論の強度: {effort}',
+  'status.thread_effort_next_start': '推論の強度: {effort}（次回の起動から {next}）',
   'status.thread_started': '開始: {started}',
   'status.thread_running': '実行中',
   'status.thread_stopped': '停止',
@@ -225,6 +226,7 @@ export const jaDict: Record<string, string> = {
   'terminal.ready': '🖥 `{subdir}`{argsSuffix} でターミナル準備完了\n各メッセージはコマンドとして実行されます。/c — Ctrl+C、/up /down — 履歴、/tab — 補完、/quit — 閉じる。',
 
   'effort.choose': '⚙️ このトピックの effort: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ このトピックの effort: {current}（次回の起動から {next}）— {source}',
   'effort.sourceGeneral': 'General と同じ',
   'effort.sourceTopic': 'このトピックで設定',
   'effort.sameAsGeneralButton': 'General に合わせる（{level}）',

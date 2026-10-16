@@ -141,6 +141,13 @@ async function askAgentAndReadLaunch(threadId: number): Promise<{ pid: number; a
   return { pid: turn.pid, argv: launch.argv };
 }
 
+/** Start charness on the instance and wait for its first poll to reach the fake Bot API. */
+async function startCharness(): Promise<void> {
+  charness = new IsolatedCharness(getLayout());
+  const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
+  await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+}
+
 /** A topic's session is stopped (`/quit`) and started again (`/claude`), so the NEXT start reads the settings. */
 async function restartSession(driver: TopicDriver): Promise<void> {
   await driver.sendAndAwaitReply('/quit', 'stopped');
@@ -188,9 +195,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
   });
 
   it('boots Telegram-only against the fake Bot API and binds both topics to a folder', async () => {
-    charness = new IsolatedCharness(getLayout());
-    const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
-    await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+    await startCharness();
     await follower.sendAndAwaitReply(`/bind ${followerFolder}`, `Bound to \`${followerFolder}\``);
     await picker.sendAndAwaitReply(`/bind ${pickerFolder}`, `Bound to \`${pickerFolder}\``);
   });
@@ -253,7 +258,10 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     assert.deepEqual(readSettingsFile(), { defaultEffort: 'low' });
     await general.waitForMessageText('the picker follows', generalPicker, (text) => text.startsWith('⚙️ Default effort for all topics: low'));
     await picker.sendAndAwaitReply('/effort', 'Effort in this topic: max — set for this topic');
-    await follower.sendAndAwaitReply('/effort', 'Effort in this topic: low — as in General');
+    // The follower's process was started on high: that is what it runs, and the screens say so — with the level the
+    // next start will take. (Showing «low — as in General» here would name a level nothing runs at.)
+    await follower.sendAndAwaitReply('/effort', 'Effort in this topic: high (low from the next start) — as in General');
+    await follower.sendAndAwaitReply('/status', 'Effort: high (low from the next start)');
     assert.equal(getSessionLaunches().length, launchesBefore, 'a change of the default restarts no running session');
   });
 
@@ -264,6 +272,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     // The banner is refreshed by the session's lifecycle events; the restart is one, and the agent is known by now.
     const banner = await follower.waitForMessage('the pinned banner with the resolved effort', (message) => message.text.startsWith(`📁 ${followerFolder} · Claude Code`) && message.text.includes('⚙️ low'));
     assert.match(banner.text, /^📁 follower · Claude Code \(stream\) · ⚙️ low · /);
+    await follower.sendAndAwaitReply('/effort', 'Effort in this topic: low — as in General');
   });
 
   it('«As in General» drops the topic\'s pick, and its live session is re-spawned at the default — the same conversation', async () => {
@@ -306,5 +315,19 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     await restartSession(follower);
     const fixed = await askAgentAndReadLaunch(followerThreadId);
     assert.deepEqual(getFlagValues(fixed.argv, '--effort'), ['high']);
+  });
+
+  it('a bot restart (every hot reload is one) keeps naming the level the surviving session really runs, with the next start\'s level beside it', async () => {
+    // The follower runs high (started after the last General tap); General moves on to low while it runs.
+    await general.tapAndAwaitAnswer(generalPicker, 'effort_low');
+    assert.deepEqual(readSettingsFile(), { defaultEffort: 'low' });
+
+    await getCharness().stop();
+    await startCharness();
+    await getCharness().waitFor('the surviving sessions to be re-adopted', replyTimeoutMs, () => /\[reattach\] claude-json-stream: adopted [1-9]/.test(getCharness().output));
+
+    // The adopted process knows nothing but its own command line: the level comes from there.
+    await follower.sendAndAwaitReply('/status', 'Effort: high (low from the next start)');
+    await follower.sendAndAwaitReply('/effort', 'Effort in this topic: high (low from the next start) — as in General');
   });
 });

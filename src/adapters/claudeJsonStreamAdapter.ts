@@ -7,6 +7,7 @@ import type {
   AgentRuntimeInfo,
   CompactionResult,
   DisplayPrefsReader,
+  EffortState,
   JsonStreamTailOffset,
   JsonStreamTailWriter,
   OpenCodeQuestion,
@@ -79,6 +80,7 @@ import {
   buildJsonStreamTmuxSessionName,
   buildWrapperScript,
   readWrapperScriptConfigDir,
+  readWrapperScriptEffort,
   checkIsPidAlive,
   createStdoutTailState,
   decodeStdoutTailChunk,
@@ -866,7 +868,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
-      model: null, reportedModel: null, effort: null,
+      // The level the surviving process was spawned with is in its own wrapper too: it keeps it whatever the default is now.
+      model: null, reportedModel: null, effort: readWrapperScriptEffort(paths.wrapperFile),
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
@@ -1921,6 +1924,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** The pref IS the thread's own pick here: a default is never stored as one. */
   getOwnEffort(key: SessionKey): string | null {
     return this.getEffort(key);
+  }
+
+  /** The live process runs the level it was spawned with (`--effort`); the next start resolves the launch chain afresh. */
+  getEffortState(key: SessionKey): EffortState {
+    const session = this.sessions.get(keyToString(key));
+    return { running: session?.isActive ? session.effort : null, nextStart: this.getLaunchOptions(key).effort };
   }
 
   /**

@@ -50,11 +50,13 @@ export type EffortPickerInput =
   | {
       isGeneral: false;
       levels: readonly string[];
-      /** The level the topic runs at: its own pick, else the instance default (OpenCode: clamped). */
+      /** The level the topic's RUNNING session uses, else the level its next start will use (OpenCode: among `levels`). */
       inForce: string;
-      /** The topic picked `inForce` itself (`getOwnEffort`), instead of following General. */
+      /** The level the next start will use when it differs from `inForce` — the default changed under a running session. */
+      nextStartLevel: string | null;
+      /** The topic's next start takes its own pick (`getOwnEffort`), instead of following General. */
       isOwnPick: boolean;
-      /** The instance default now in force — what the «as in General» button promises. */
+      /** What the «as in General» button promises: the instance default as the topic will really get it (among `levels`). */
       instanceDefault: string;
       /** The backend can clear a pick (`clearEffort`): the «as in General» button is offered. */
       canClear: boolean;
@@ -84,5 +86,8 @@ export function buildEffortPicker(input: EffortPickerInput, translate: Translate
   if (input.canClear) {
     rows.push([{ text: translate('effort.sameAsGeneralButton', { level: input.instanceDefault }), data: effortSameCallback }]);
   }
-  return { text: translate('effort.choose', { current: input.inForce, source }), rows };
+  const text = input.nextStartLevel === null
+    ? translate('effort.choose', { current: input.inForce, source })
+    : translate('effort.chooseNextStart', { current: input.inForce, next: input.nextStartLevel, source });
+  return { text, rows };
 }

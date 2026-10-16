@@ -44,7 +44,7 @@ import {
 import type { InboundCommand } from '../../../platform/inbound';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { getModelSetReplyDecision } from '../../../utils/modelSetReplyDecision';
-import { checkIsClaudeEffortLevel, claudeEffortLevels, clampEffortToAvailable, getInstanceDefaultEffort, getThreadEffortInForce, type ClaudeEffortLevel } from '../../../effortLevels';
+import { checkIsClaudeEffortLevel, claudeEffortLevels, getEffortAmongLevels, getInstanceDefaultEffort, getThreadEffortView, type ClaudeEffortLevel } from '../../../effortLevels';
 import { getCaughtErrnoCode } from '../../../configDirFile';
 import { loadInstanceSettingsForUpdate, saveInstanceSettings } from '../../../instanceSettings';
 import { buildEffortPicker, effortLevelCallbackRe, effortSameCallback, type EffortPicker } from '../../../utils/effortPickerPlan';
@@ -416,7 +416,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     // clears it (`effort.cleared_on_model_switch`), so a pre-switch read would
     // report a level the new model no longer runs. Same resolution rule as
     // `/status` — no `getEffort` means the backend has no effort concept at all.
-    const effort = getThreadEffortInForce(adapter, key);
+    const effort = getThreadEffortView(adapter, key)?.level ?? null;
     const decision = getModelSetReplyDecision(
       {
         hasSetModel: Boolean(adapter.setModel),
@@ -790,27 +790,43 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   }
 
   /**
-   * @description The `/effort` picker of a regular topic: the level it runs at, whether that is its own pick or
-   * General's value, and a button per level the backend offers. `null` when the backend offers none.
+   * @description How a regular topic's effort reads against the levels its backend offers: the level its running
+   * session uses (else the one its next start will), the next start's level when that differs, and what General's
+   * value really is for it. OpenCode offers the model's variants only: a level it lacks runs as the nearest it has,
+   * so every level shown is that one.
    */
-  async function buildTopicEffortPicker(key: SessionKey, adapter: AgentAdapter): Promise<EffortPicker | null> {
-    let levels: string[] = [];
+  function getTopicEffortAmongLevels(key: SessionKey, adapter: AgentAdapter, levels: readonly string[]) {
+    const instanceDefault = getEffortAmongLevels(getInstanceDefaultEffort(), levels);
+    const view = getThreadEffortView(adapter, key);
+    const inForce = view ? getEffortAmongLevels(view.level, levels) : instanceDefault;
+    const nextStartLevel = view?.nextStartLevel ? getEffortAmongLevels(view.nextStartLevel, levels) : null;
+    return { instanceDefault, inForce, nextStartLevel: nextStartLevel === inForce ? null : nextStartLevel };
+  }
+
+  /** @description The levels `adapter` offers the thread; `[]` when it offers none (or cannot say). */
+  async function listTopicEffortLevels(key: SessionKey, adapter: AgentAdapter): Promise<string[]> {
     try {
-      levels = (await adapter.getAvailableEffortLevels?.(key)) ?? [];
+      return (await adapter.getAvailableEffortLevels?.(key)) ?? [];
     } catch (e) {
       console.error('[Bot] getAvailableEffortLevels:', e);
+      return [];
     }
+  }
+
+  /**
+   * @description The `/effort` picker of a regular topic: the level its session uses, where the next start's level
+   * comes from (its own pick or General's value), and a button per level the backend offers. `null` when the backend
+   * offers none.
+   */
+  async function buildTopicEffortPicker(key: SessionKey, adapter: AgentAdapter): Promise<EffortPicker | null> {
+    const levels = await listTopicEffortLevels(key, adapter);
     if (levels.length === 0) return null;
-    const instanceDefault = getInstanceDefaultEffort();
-    const inForce = getThreadEffortInForce(adapter, key) ?? instanceDefault;
     return buildEffortPicker(
       {
         isGeneral: false,
         levels,
-        // OpenCode offers the model's variants only: a default it lacks runs as the nearest one it has.
-        inForce: levels.includes(inForce) ? inForce : (clampEffortToAvailable(inForce, levels) ?? inForce),
+        ...getTopicEffortAmongLevels(key, adapter, levels),
         isOwnPick: (adapter.getOwnEffort?.(key) ?? null) !== null,
-        instanceDefault,
         canClear: Boolean(adapter.clearEffort),
       },
       t,
@@ -1216,7 +1232,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       }
       const err = await adapter.clearEffort(key);
       if (err) { await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) })); return; }
-      const level = getThreadEffortInForce(adapter, key) ?? getInstanceDefaultEffort();
+      const { inForce: level } = getTopicEffortAmongLevels(key, adapter, await listTopicEffortLevels(key, adapter));
       await ctx.answerCbQuery(t('cb.effort_same', { level }));
       await replyToThread(key, t('effort.sameAsGeneralConfirmation', { level }));
       await updatePinnedStatus(key).catch(() => {});

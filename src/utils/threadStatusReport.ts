@@ -30,6 +30,8 @@ export interface ThreadStatusReportInput {
   workDir: string | null;
   model: string | null;
   effort: string | null;
+  /** The level the next start will use when it differs from `effort` (the default changed under the running session). */
+  effortNextStart?: string | null;
   startedAt: string | null;
   runtime: AgentRuntimeInfo | null;
   /**
@@ -63,6 +65,7 @@ export function getThreadStatusReport({
   workDir,
   model,
   effort,
+  effortNextStart,
   startedAt,
   runtime,
   account,
@@ -88,7 +91,9 @@ export function getThreadStatusReport({
   if (!isActive) return lines.join('\n');
 
   if (model) lines.push(t('status.thread_model', { model }));
-  if (effort) lines.push(t('status.thread_effort', { effort }));
+  if (effort) {
+    lines.push(effortNextStart ? t('status.thread_effort_next_start', { effort, next: effortNextStart }) : t('status.thread_effort', { effort }));
+  }
   if (startedAt) lines.push(t('status.thread_started', { started: startedAt }));
   const unavailable = t('version.unknown');
   lines.push(t('status.thread_runtime_version', { version: runtime?.version ?? unavailable }));

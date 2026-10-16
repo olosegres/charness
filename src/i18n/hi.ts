@@ -166,6 +166,7 @@ export const hiDict: Record<string, string> = {
   'status.thread_account_pending': 'स्विच लंबित: {account} — एजेंट की बारी खत्म होने पर या अगली शुरुआत पर लागू होगा',
   'status.thread_model': 'मॉडल: {model}',
   'status.thread_effort': 'प्रयास: {effort}',
+  'status.thread_effort_next_start': 'प्रयास: {effort} (अगली शुरुआत से {next})',
   'status.thread_started': 'शुरू हुआ: {started}',
   'status.thread_running': 'चल रहा है',
   'status.thread_stopped': 'रुका हुआ',
@@ -225,6 +226,7 @@ export const hiDict: Record<string, string> = {
   'terminal.ready': '🖥 `{subdir}`{argsSuffix} में टर्मिनल तैयार\nहर संदेश एक कमांड के रूप में चलता है। /c — Ctrl+C, /up /down — इतिहास, /tab — पूर्णता, /quit — बंद।',
 
   'effort.choose': '⚙️ इस टॉपिक का effort: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ इस टॉपिक का effort: {current} (अगली शुरुआत से {next}) — {source}',
   'effort.sourceGeneral': 'General जैसा',
   'effort.sourceTopic': 'इस टॉपिक के लिए सेट',
   'effort.sameAsGeneralButton': 'General जैसा ({level})',

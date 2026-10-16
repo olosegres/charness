@@ -224,5 +224,30 @@ describe('Claude effort re-apply on fresh spawn (S7)', () => {
       assert.deepEqual(typed, []);
       assert.equal(adapter.getOwnEffort(noPrefKey), null);
     });
+
+    it('getEffortState: nothing is running until the bot has typed a level; the next start is the pick, else the instance default', () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: null, nextStart: 'low' }, 'a fresh or adopted pane: its in-TUI level is not known');
+
+      adapter['applyStoredEffortOnSpawn'](noPrefKey);
+      adapter['consumePendingEffortReapply'](session);
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: 'low', nextStart: 'low' }, 'the spawn typed the default');
+
+      setInstanceDefaultEffortReader(() => 'max');
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: 'low', nextStart: 'max' }, 'a default change never reaches the running TUI');
+    });
+
+    it('getEffortState follows every level the bot types: a pick, «as in General», a model switch with no pick', async () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      await adapter.setEffort(noPrefKey, 'max');
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: 'max', nextStart: 'max' });
+      await adapter.clearEffort(noPrefKey);
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: 'low', nextStart: 'low' });
+      setInstanceDefaultEffortReader(() => 'high');
+      await adapter.setModel(noPrefKey, 'sonnet');
+      assert.deepEqual(adapter.getEffortState(noPrefKey), { running: 'high', nextStart: 'high' }, 'a model switch re-applies the default and the display follows');
+    });
   });
 });

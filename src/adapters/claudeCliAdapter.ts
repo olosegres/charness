@@ -12,6 +12,7 @@ import type {
   ClaudeSurveyOption,
   DisplayPrefsReader,
   DisplayVerbosityMode,
+  EffortState,
   ReattachRecap,
   RecentTurn,
   ResolvedThreadDisplayPrefs,
@@ -259,6 +260,11 @@ export interface ClaudeSession {
    * process kept its in-TUI effort and may be mid-turn).
    */
   pendingEffortReapply: string | null;
+  /**
+   * The level the bot last typed into this TUI (`/effort <level>`), `null` before the first one and for an adopted
+   * pane — claude exposes no way to read its in-TUI effort back. What the display calls the level the session uses.
+   */
+  runningEffort: string | null;
   /**
    * Last transcript byte size persisted as the seen-{@link SeenWatermark} for
    * this session (in-memory monotonic high-water mark). The poll loop advances
@@ -3123,6 +3129,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       | 'unchangedPollStreak'
       | 'lastContentChangeAt'
       | 'pendingEffortReapply'
+      | 'runningEffort'
       | 'lastWatermarkOffset'
       | 'recentRelayWindow'
       | 'subagentTail'
@@ -3169,6 +3176,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // S7: armed explicitly by `applyStoredEffortOnSpawn` after a fresh
       // start/resume spawn; adopt/reattach leaves it null (no re-apply).
       pendingEffortReapply: null,
+      runningEffort: null,
       // S3 seen-watermark anchor: no advance yet → the first idle+ready poll
       // writes the current transcript EOF. Fresh per session object; cross-restart
       // correctness is protected by the recap's PRE-adopt snapshot, not by seeding.
@@ -3808,7 +3816,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     // No explicit /effort pref → (re)apply the bot's default for the newly
     // picked model (claude self-clamps unsupported levels). An explicit pick
     // is left alone — claude carries it across the model switch.
-    if (this.getEffort(key) === null) this.sendInput(key, `/effort ${getInstanceDefaultEffort()}`);
+    if (this.getEffort(key) === null) this.typeEffort(session, getInstanceDefaultEffort());
     return null;
   }
 
@@ -3856,8 +3864,17 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // the user knows to start an agent.
       return t('effort.start_agent_first');
     }
-    this.sendInput(key, `/effort ${level}`);
+    this.typeEffort(session, level);
     return null;
+  }
+
+  /**
+   * @description Type `/effort <level>` into the live TUI and remember it as the level the session now uses
+   * ({@link ClaudeSession.runningEffort}) — the one place a level is typed, so the display cannot drift from it.
+   */
+  private typeEffort(session: ClaudeSession, level: string): void {
+    this.sendInput(session.key, `/effort ${level}`);
+    session.runningEffort = level;
   }
 
   /**
@@ -3885,8 +3902,15 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    */
   async clearEffort(key: SessionKey): Promise<string | null> {
     clearEffortPref(key);
-    if (this.sessions.get(keyToString(key))?.isActive) this.sendInput(key, `/effort ${getInstanceDefaultEffort()}`);
+    const session = this.sessions.get(keyToString(key));
+    if (session?.isActive) this.typeEffort(session, getInstanceDefaultEffort());
     return null;
+  }
+
+  /** The live TUI runs the level the bot last typed into it (unknown after an adopt); the next spawn arms the pick, else the default. */
+  getEffortState(key: SessionKey): EffortState {
+    const session = this.sessions.get(keyToString(key));
+    return { running: session?.isActive ? session.runningEffort : null, nextStart: this.getEffort(key) ?? getInstanceDefaultEffort() };
   }
 
   /**
@@ -3938,8 +3962,10 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   private consumePendingEffortReapply(session: ClaudeSession): void {
     const keystroke = getEffortStartupKeystroke(session.pendingEffortReapply);
     if (!keystroke) return;
+    const level = session.pendingEffortReapply;
     session.pendingEffortReapply = null;
     this.sendInput(session.key, keystroke);
+    session.runningEffort = level?.trim() ?? null;
   }
 
   /**

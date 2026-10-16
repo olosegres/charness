@@ -166,6 +166,7 @@ export const kaDict: Record<string, string> = {
   'status.thread_account_pending': 'გადართვა მოლოდინშია: {account} — ამოქმედდება აგენტის სვლის დასრულებისას ან შემდეგ გაშვებაზე',
   'status.thread_model': 'მოდელი: {model}',
   'status.thread_effort': 'ძალისხმევა: {effort}',
+  'status.thread_effort_next_start': 'ძალისხმევა: {effort} (შემდეგი გაშვებიდან {next})',
   'status.thread_started': 'დაიწყო: {started}',
   'status.thread_running': 'მუშაობს',
   'status.thread_stopped': 'გაჩერებული',
@@ -225,6 +226,7 @@ export const kaDict: Record<string, string> = {
   'terminal.ready': '🖥 ტერმინალი მზადაა `{subdir}`{argsSuffix}-ში\nთითოეული შეტყობინება შესრულდება როგორც ბრძანება. /c — Ctrl+C, /up /down — ისტორია, /tab — შევსება, /quit — დახურვა.',
 
   'effort.choose': '⚙️ Effort ამ თემაში: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort ამ თემაში: {current} (შემდეგი გაშვებიდან {next}) — {source}',
   'effort.sourceGeneral': 'როგორც General-ში',
   'effort.sourceTopic': 'ამ თემისთვის დაყენებული',
   'effort.sameAsGeneralButton': 'როგორც General-ში ({level})',

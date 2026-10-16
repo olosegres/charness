@@ -25,7 +25,7 @@ import {
   seededEffortLevel,
   noPrefThreadKeyString,
 } from './openCodeEffortSeed.testSetup';
-import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
+import { buildPromptBody, OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
 import { defaultEffortLevel, setInstanceDefaultEffortReader } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
@@ -37,32 +37,37 @@ const newSessionId = 'ses_effort_seed';
  * `GET /config/providers` reply for the stub: opus-4-8 ships the full
  * low…max variant set, so every default the bot can have lands verbatim.
  */
-const providersConfigStub = {
-  providers: [
-    {
-      id: 'anthropic',
-      models: {
-        'claude-opus-4-8': {
-          variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} },
+function createProvidersConfigStub(variantNames: readonly string[]) {
+  return {
+    providers: [
+      {
+        id: 'anthropic',
+        models: {
+          'claude-opus-4-8': {
+            variants: Object.fromEntries(variantNames.map((variantName) => [variantName, {}])),
+          },
         },
       },
-    },
-  ],
-};
+    ],
+  };
+}
+
+const fullVariantNames = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 /**
  * @description Adapter whose lifecycle deps are stubbed: POST /session resolves
  * to a fixed id; GET /config returns a default model (so fetchModelInfo runs
  * cleanly); connectSse is a no-op (no real socket).
  */
-function createStubbedAdapter(): OpenCodeAdapter {
+function createStubbedAdapter(variantNames: readonly string[] = fullVariantNames): OpenCodeAdapter {
+  resetOpenCodeProviderCaches();
   const adapter = new OpenCodeAdapter();
   openCodeServer.answerApiWith(({ method, urlPath }) => {
     if (method === 'POST' && (urlPath === '/session' || urlPath.startsWith('/session?'))) {
       return { id: newSessionId };
     }
     if (method === 'GET' && (urlPath === '/config/providers' || urlPath.startsWith('/config/providers?'))) {
-      return providersConfigStub;
+      return createProvidersConfigStub(variantNames);
     }
     if (method === 'GET' && (urlPath === '/config' || urlPath.startsWith('/config?'))) {
       return { defaultModel: { providerID: 'anthropic', modelID: 'claude-opus-4-8' } };
@@ -137,7 +142,7 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       assert.equal((session as { effortLevel: string | null }).effortLevel, 'max');
     });
 
-    it('a session whose model lacks the instance default runs the nearest variant it has', async () => {
+    it('General `ultracode` is the model\'s HIGHEST variant — never its lowest', async () => {
       setInstanceDefaultEffortReader(() => 'ultracode');
       const key: SessionKey = keyFromString(noPrefThreadKeyString);
       const adapter = createStubbedAdapter();
@@ -145,8 +150,20 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       void adapter.startSession(key, '/tmp/work');
       const session = await waitForSession(adapter, keyToString(key));
 
-      // `ultracode` is Claude-only and has no rank: the model gets what it can take, never an unknown variant.
-      assert.notEqual((session as { effortLevel: string | null }).effortLevel, 'ultracode');
+      // The stubbed model ships low…max: `ultracode` resolves to the exact top variant.
+      assert.equal((session as { effortLevel: string | null }).effortLevel, 'max');
+    });
+
+    it('General `auto` sends no variant at all: the session carries no effort', async () => {
+      setInstanceDefaultEffortReader(() => 'auto');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter();
+
+      void adapter.startSession(key, '/tmp/work');
+      const session = await waitForSession(adapter, keyToString(key));
+
+      assert.equal((session as { effortLevel: string | null }).effortLevel, null);
+      assert.equal('variant' in buildPromptBody('hi', null, (session as { effortLevel: string | null }).effortLevel), false, 'no body.variant');
     });
 
     it('clearing a pick on a live session drops it and takes the clamped instance default for the next prompt', async () => {
@@ -163,6 +180,36 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       assert.equal(adapter.getOwnEffort(key), null, 'the pick is gone from disk');
       assert.equal(session.effortLevel, 'low', 'the live session follows the instance default');
       assert.equal(adapter.getEffort(key), 'low', 'getEffort answers with the level in force; getOwnEffort says it is no pick');
+    });
+
+    it('getEffortState: a live session keeps the level it started with while the default moves on; the next start resolves afresh', async () => {
+      setInstanceDefaultEffortReader(() => 'xhigh');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter();
+      void adapter.startSession(key, '/tmp/work');
+      await waitForSession(adapter, keyToString(key));
+
+      assert.deepEqual(adapter.getEffortState(key), { running: 'xhigh', nextStart: 'xhigh' });
+      setInstanceDefaultEffortReader(() => 'low');
+      assert.deepEqual(adapter.getEffortState(key), { running: 'xhigh', nextStart: 'low' }, 'a General change never reaches the running session');
+    });
+
+    it('getEffortState: the next start\'s level is already rounded to the model\'s variants, so a model that cannot tell the two apart shows no difference', async () => {
+      setInstanceDefaultEffortReader(() => 'xhigh');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter(['low', 'medium', 'high']);
+      void adapter.startSession(key, '/tmp/work');
+      const session = (await waitForSession(adapter, keyToString(key))) as { effortLevel: string | null };
+
+      assert.equal(session.effortLevel, 'high', 'the session runs the nearest variant of xhigh');
+      assert.deepEqual(adapter.getEffortState(key), { running: 'high', nextStart: 'high' });
+    });
+
+    it('getEffortState: a thread with no live session runs nothing; its pick (or the default) is the next start', () => {
+      setInstanceDefaultEffortReader(() => 'low');
+      const adapter = createStubbedAdapter();
+      assert.deepEqual(adapter.getEffortState(keyFromString(noPrefThreadKeyString)), { running: null, nextStart: 'low' });
+      assert.deepEqual(adapter.getEffortState(keyFromString(seededThreadKeyString)), { running: null, nextStart: seededEffortLevel });
     });
   });
 });

@@ -271,7 +271,7 @@ import {
   getStatusFrameStoreDecision,
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
-import { getThreadEffortInForce, setInstanceDefaultEffortReader } from './effortLevels';
+import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
 import { createInstanceDefaultEffortReader, getInstanceSettingsPath } from './instanceSettings';
 import {
   buildThreadContextPreamble,
@@ -2889,7 +2889,7 @@ function computePinnedStatusText(key: SessionKey): string | null {
 
   let agentLabel: string | null = null;
   let model: string | null = null;
-  let effort: string | null = null;
+  let effortView: ThreadEffortView | null = null;
   let isActive = false;
 
   const agent = state.getAgent(key);
@@ -2899,7 +2899,7 @@ function computePinnedStatusText(key: SessionKey): string | null {
       agentLabel = adapter.label;
       isActive = adapter.checkIsActive(key);
       model = adapter.getCurrentModel?.(key) ?? agent.model ?? null;
-      effort = getThreadEffortInForce(adapter, key);
+      effortView = getThreadEffortView(adapter, key);
     } catch {
       // Unknown adapter name from a stale binding — fall back to raw name
       // so the banner is still informative.
@@ -2908,7 +2908,7 @@ function computePinnedStatusText(key: SessionKey): string | null {
     }
   }
 
-  return formatPinnedStatus({ binding, agentLabel, model, effort, isActive });
+  return formatPinnedStatus({ binding, agentLabel, model, effort: effortView?.level ?? null, effortNextStart: effortView?.nextStartLevel ?? null, isActive });
 }
 
 /**
@@ -4609,7 +4609,7 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
     // async transcript/HTTP read and must not be added to the start path. The
     // agent row was just written by `persistAdapterSessionIds`, so the persisted
     // fallback is populated by now.
-    const effort = getThreadEffortInForce(adapter, key);
+    const effort = getThreadEffortView(adapter, key)?.level ?? null;
     const model = getThreadStatusModel({
       adapterModel: adapter.getCurrentModel?.(key) ?? null,
       runtimeModel: null,
@@ -5447,19 +5447,19 @@ command('status', async (_ctx, key) => {
   }
   // Model / effort / start date are session properties — only meaningful while
   // a session is live. Effort resolves exactly like the pinned banner
-  // (`computePinnedStatusText`) and the ready notice: the topic's pick, else the
-  // instance default (`getThreadEffortInForce`). Model resolution is DELIBERATELY wider
+  // (`computePinnedStatusText`) and the ready notice: the level the running session
+  // uses, with the next start's level when it differs (`getThreadEffortView`). Model resolution is DELIBERATELY wider
   // than the banner's: it adds the runtime's self-reported model, which the
   // banner cannot share because `computePinnedStatusText` is synchronous while
   // reading runtime info is an async transcript/HTTP read. So on the Claude tmux
   // backend `/status` can name a model the banner still leaves blank.
   let model: string | null = null;
-  let effort: string | null = null;
+  let effortView: ThreadEffortView | null = null;
   let startedAt: string | null = null;
   let runtime: AgentRuntimeInfo | null = null;
   if (isActive) {
     const agent = state.getAgent(key);
-    effort = getThreadEffortInForce(adapter, key);
+    effortView = getThreadEffortView(adapter, key);
     startedAt = agent?.startedAt ?? null;
 
     if (adapter.getRuntimeInfo) {
@@ -5487,7 +5487,7 @@ command('status', async (_ctx, key) => {
     account = { current: readStatusAccountSource(live), pending: picked === live ? null : readStatusAccountSource(picked), nowMs };
   }
   await replyToThread(key, getThreadStatusReport({
-    agentLine, subdir, isActive, isSleeping: !isActive && getResumableSessionId(key) !== null, workDir, model, effort, startedAt, runtime, account,
+    agentLine, subdir, isActive, isSleeping: !isActive && getResumableSessionId(key) !== null, workDir, model, effort: effortView?.level ?? null, effortNextStart: effortView?.nextStartLevel ?? null, startedAt, runtime, account,
     view: formatTopicView(state.getDisplayPrefs(key).view),
     timezone,
     timezoneNow: formatZoneNow(timezone, nowMs),

@@ -30,7 +30,9 @@ import {
   buildJsonStreamTmuxSessionName,
   resolveAdoptedTail,
   buildWrapperScript,
+  parseEffortFromWrapperScript,
   readWrapperScriptConfigDir,
+  readWrapperScriptEffort,
   createStdoutTailState,
   decodeStdoutTailChunk,
   getJsonStreamSessionPaths,
@@ -117,6 +119,34 @@ describe('buildWrapperScript with a Claude account profile', () => {
       fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths));
       assert.equal(readWrapperScriptConfigDir(paths.wrapperFile), null);
       assert.equal(readWrapperScriptConfigDir(path.join(dir, 'absent.sh')), null);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the effort a persisted wrapper starts claude with', () => {
+  it('reads the --effort flag back from the script the bot wrote, in either account shape', () => {
+    const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
+    const args = ['-p', '--model', 'sonnet', '--effort', 'xhigh', '--resume', 'abc'];
+    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths)), 'xhigh');
+    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths, null, '/data/dir/claude-profiles/work')), 'xhigh');
+    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths, { HOME: '/home/user' })), 'xhigh');
+  });
+
+  it('is null when the script has no --effort (claude\'s own default), and a flag-looking value elsewhere is not one', () => {
+    const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
+    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', ['-p', '--model', 'sonnet'], '/work', paths)), null);
+    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', ['-p', '--append-system-prompt', 'use --effort max'], '/work', paths)), null);
+  });
+
+  it('readWrapperScriptEffort reads a persisted wrapper and tolerates a missing file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wrapper-effort-'));
+    try {
+      const paths = getJsonStreamSessionPaths(dir);
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p', '--effort', 'max'], '/work', paths));
+      assert.equal(readWrapperScriptEffort(paths.wrapperFile), 'max');
+      assert.equal(readWrapperScriptEffort(path.join(dir, 'absent.sh')), null);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

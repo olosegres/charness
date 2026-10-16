@@ -166,6 +166,7 @@ export const uzDict: Record<string, string> = {
   'status.thread_account_pending': 'O‘tish kutilmoqda: {account} — agent navbati tugaganda yoki keyingi ishga tushirishda qo‘llanadi',
   'status.thread_model': 'Model: {model}',
   'status.thread_effort': 'Kuch: {effort}',
+  'status.thread_effort_next_start': 'Kuch: {effort} (keyingi boshlashdan {next})',
   'status.thread_started': 'Boshlangan: {started}',
   'status.thread_running': 'ishlamoqda',
   'status.thread_stopped': 'to‘xtatilgan',
@@ -225,6 +226,7 @@ export const uzDict: Record<string, string> = {
   'terminal.ready': '🖥 `{subdir}`{argsSuffix} da terminal tayyor\nHar bir xabar buyruq sifatida bajariladi. /c — Ctrl+C, /up /down — tarix, /tab — to‘ldirish, /quit — yopish.',
 
   'effort.choose': '⚙️ Shu mavzudagi effort: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Shu mavzudagi effort: {current} (keyingi boshlashdan {next}) — {source}',
   'effort.sourceGeneral': 'General kabi',
   'effort.sourceTopic': 'shu mavzu uchun belgilangan',
   'effort.sameAsGeneralButton': 'General kabi ({level})',

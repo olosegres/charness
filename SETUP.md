@@ -367,8 +367,9 @@ a hand edit applies to the next session start, no restart.
 What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
 (a Jira conversation: `effort` in `jira.json`, `high` when absent — Jira never reads `defaultEffort`), `defaultEffort`,
 then `medium`. A change applies from each topic's next session start
-or wake-up — running sessions are not restarted. OpenCode takes the same level and runs the nearest variant its model
-offers. In a topic, `/effort` shows the level and whether it is the topic's own or «as in General», and «As in
+or wake-up — running sessions are not restarted, and `/status`, the pinned banner and `/effort` show the level a running
+session really uses, with the next start's beside it («xhigh (medium from the next start)»). OpenCode takes the same
+level and runs the nearest variant its model offers (`ultracode` is the model's highest variant, `auto` sends no variant). In a topic, `/effort` shows the level and whether it is the topic's own or «as in General», and «As in
 General» drops the topic's pick (a live session is brought to the default at once).
 
 The file is checked strictly: an unknown level or a mistyped key is logged once as `[Settings] settings.json

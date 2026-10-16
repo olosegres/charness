@@ -25,6 +25,9 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 import { createInstanceDefaultEffortReader, resetInstanceSettingsCache } from '../instanceSettings';
 import { clearEffortPref } from '../adapters/claudeCliAdapter';
+import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
+import { getThreadAdapter } from '../adapters/createAdapter';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 import { effortSameCallback } from '../utils/effortPickerPlan';
 import type { OpenCodeAuthMethod } from '../utils/openCodeAuthLogin';
 import {
@@ -198,6 +201,38 @@ describe('modelProviders: the model, effort and provider flows over their ports'
 
     await harness.runCommand('effort');
     assert.equal(harness.replies.at(-1)?.text, '⚙️ Effort in this topic: low — as in General', 'the pick is gone from disk, not just from the screen');
+  });
+
+  it('a RUNNING session keeps the level it started with when General moves on: /effort shows it with the next start\'s level, and «As in General» brings the session to the default', async () => {
+    fs.writeFileSync(`${settingsPath}.tmp`, JSON.stringify({ defaultEffort: 'low' }));
+    fs.renameSync(`${settingsPath}.tmp`, settingsPath);
+    const adapter = getThreadAdapter(harness.key);
+    assert.ok(adapter instanceof ClaudeJsonStreamAdapter, 'the harness topic runs the default Claude backend');
+    const session = createStreamSessionFixture({ key: harness.key, effort: 'xhigh', model: null });
+    adapter['sessions'].set(keyString, session);
+    const respawns: Array<string | null> = [];
+    const originalRespawn = adapter['respawnWithChange'];
+    adapter['respawnWithChange'] = async (target, change) => {
+      respawns.push(change.effort);
+      target.effort = change.effort; // what the re-spawn leaves behind: the process runs the new level
+    };
+    try {
+      await harness.runCommand('effort');
+      const picker = harness.replies.at(-1);
+      assert.equal(picker?.text, '⚙️ Effort in this topic: xhigh (low from the next start) — as in General');
+      assert.ok(harness.getKeyboardLabels(picker).flat().includes('xhigh ✓'), 'the ✓ is on what the session runs');
+      assert.ok(!harness.getKeyboardLabels(picker).flat().includes('low ✓'));
+      assert.equal(harness.getKeyboardLabels(picker).flat().at(-1), 'As in General (low)');
+      assert.ok(picker?.messageId);
+
+      await harness.tapButton(picker.messageId, effortSameCallback);
+      assert.deepEqual(respawns, ['low'], 'the live process is re-spawned at General\'s value');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'As in General: low');
+      assert.equal(harness.edits.at(-1)?.text, '⚙️ Effort in this topic: low — as in General', 'nothing left to hint at');
+    } finally {
+      adapter['respawnWithChange'] = originalRespawn;
+      adapter['sessions'].delete(keyString);
+    }
   });
 
   it('/effort in General is the instance default: it says so, ✓ marks the current default, and a tap writes settings.json and confirms what that means', async () => {

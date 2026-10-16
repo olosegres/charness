@@ -166,6 +166,7 @@ export const frDict: Record<string, string> = {
   'status.thread_account_pending': 'Bascule en attente : {account} — appliquée à la fin du tour de l’agent ou au prochain démarrage',
   'status.thread_model': 'Modèle : {model}',
   'status.thread_effort': 'Effort : {effort}',
+  'status.thread_effort_next_start': 'Effort : {effort} ({next} dès le prochain démarrage)',
   'status.thread_started': 'Démarré : {started}',
   'status.thread_running': 'en cours',
   'status.thread_stopped': 'arrêté',
@@ -225,6 +226,7 @@ export const frDict: Record<string, string> = {
   'terminal.ready': '🖥 Terminal prêt dans `{subdir}`{argsSuffix}\nChaque message est exécuté comme une commande. /c — Ctrl+C, /up /down — historique, /tab — complétion, /quit — fermer.',
 
   'effort.choose': '⚙️ Effort dans ce sujet : {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort dans ce sujet : {current} ({next} dès le prochain démarrage) — {source}',
   'effort.sourceGeneral': 'comme dans General',
   'effort.sourceTopic': 'défini pour ce sujet',
   'effort.sameAsGeneralButton': 'Comme dans General ({level})',

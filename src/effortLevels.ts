@@ -82,12 +82,36 @@ export function getInstanceDefaultEffort(): ClaudeEffortLevel {
 }
 
 /**
- * @description The level a thread runs at, for display (`/status`, the banner, the ready notice, `/effort`): the
- * adapter's own answer, else the instance default. `null` for a backend with no effort concept (no `getEffort`) —
- * then there is nothing to show.
+ * @name ThreadEffortView
+ * @description What `/status`, the banner, the ready notice and `/effort` show for a thread.
  */
-export function getThreadEffortInForce(adapter: Pick<AgentAdapter, 'getEffort'>, key: SessionKey): string | null {
-  return adapter.getEffort ? (adapter.getEffort(key) ?? getInstanceDefaultEffort()) : null;
+export interface ThreadEffortView {
+  /** The level the live session really uses; with no live session (or an unknown one), the level the next start will use. */
+  level: string;
+  /** Set only when the next start will use a DIFFERENT level than `level` (the default changed under a running session). */
+  nextStartLevel: string | null;
+}
+
+/**
+ * @description The effort a thread shows: the level its RUNNING session uses (a General change never reaches a
+ * running session — it applies from the next start), else the level the next start will use; plus the next start's
+ * level when it differs, so the screen can say "xhigh (medium from the next start)". `null` for a backend with no
+ * effort concept (no `getEffortState`) — then there is nothing to show.
+ */
+export function getThreadEffortView(adapter: Pick<AgentAdapter, 'getEffortState'>, key: SessionKey): ThreadEffortView | null {
+  const state = adapter.getEffortState?.(key);
+  if (!state) return null;
+  const level = state.running ?? state.nextStart;
+  return { level, nextStartLevel: level === state.nextStart ? null : state.nextStart };
+}
+
+/**
+ * @description The level a backend that offers only `levels` runs for `level`: the level itself when offered, else
+ * the nearest it has ({@link clampEffortToAvailable}); the level itself when the clamp has nothing to say (`auto`,
+ * which sends no variant, or a model with no variants).
+ */
+export function getEffortAmongLevels(level: string, levels: readonly string[]): string {
+  return levels.includes(level) ? level : (clampEffortToAvailable(level, levels) ?? level);
 }
 
 /**
@@ -95,6 +119,10 @@ export function getThreadEffortInForce(adapter: Pick<AgentAdapter, 'getEffort'>,
  * Spans both vocabularies (`none` is OpenCode-only) low→high.
  */
 const effortRankOrder = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** The Claude levels that have no place in {@link effortRankOrder}; see {@link clampEffortToAvailable}. */
+const autoEffortLevel = 'auto';
+const ultracodeEffortLevel = 'ultracode';
 
 /**
  * @description Clamp a desired effort level to what a model actually offers.
@@ -109,12 +137,20 @@ const effortRankOrder = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as con
  * - else return the highest known variant with rank ≤ rank(desired); if none
  *   are below, return the lowest known variant (closest above).
  *
+ * The two Claude-only levels have no rank, and "nothing is below them" must not
+ * mean the lowest variant (a General default of `ultracode` would run every
+ * OpenCode topic at its weakest):
+ *
+ * - `ultracode` (the heaviest profile) → the model's HIGHEST known variant.
+ * - `auto` (claude's own per-model default) → `null`: no variant is sent.
+ *
  * Claude clamps itself, so it never calls this.
  */
 export function clampEffortToAvailable(
   desired: string,
   available: readonly string[],
 ): string | null {
+  if (desired === autoEffortLevel) return null;
   const known = available.filter((level) =>
     (effortRankOrder as readonly string[]).includes(level),
   );
@@ -125,7 +161,8 @@ export function clampEffortToAvailable(
   // typed-array cast) rather than narrowing the argument; -1 for non-members.
   const rankOf = (level: string): number =>
     (effortRankOrder as readonly string[]).indexOf(level);
-  const desiredRank = rankOf(desired);
+  // `ultracode` ranks above every variant, so "the highest one at or below it" is the model's top variant.
+  const desiredRank = desired === ultracodeEffortLevel ? effortRankOrder.length : rankOf(desired);
 
   let bestBelow: string | null = null;
   let lowestKnown: string | null = null;

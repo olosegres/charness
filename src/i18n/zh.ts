@@ -166,6 +166,7 @@ export const zhDict: Record<string, string> = {
   'status.thread_account_pending': '待切换：{account} — 在代理本轮结束或下次启动时生效',
   'status.thread_model': '模型：{model}',
   'status.thread_effort': '推理强度：{effort}',
+  'status.thread_effort_next_start': '推理强度：{effort}（下次启动起为 {next}）',
   'status.thread_started': '启动时间：{started}',
   'status.thread_running': '运行中',
   'status.thread_stopped': '已停止',
@@ -225,6 +226,7 @@ export const zhDict: Record<string, string> = {
   'terminal.ready': '🖥 终端已就绪，在 `{subdir}`{argsSuffix}\n每条消息作为命令执行。/c — Ctrl+C，/up /down — 历史，/tab — 补全，/quit — 关闭。',
 
   'effort.choose': '⚙️ 此话题的 effort：{current} — {source}',
+  'effort.chooseNextStart': '⚙️ 此话题的 effort：{current}（下次启动起为 {next}）— {source}',
   'effort.sourceGeneral': '同 General',
   'effort.sourceTopic': '已为此话题设置',
   'effort.sameAsGeneralButton': '同 General（{level}）',

@@ -166,6 +166,7 @@ export const esDict: Record<string, string> = {
   'status.thread_account_pending': 'Cambio pendiente: {account} — se aplica al terminar el turno del agente o en el próximo inicio',
   'status.thread_model': 'Modelo: {model}',
   'status.thread_effort': 'Esfuerzo: {effort}',
+  'status.thread_effort_next_start': 'Esfuerzo: {effort} ({next} desde el próximo inicio)',
   'status.thread_started': 'Iniciado: {started}',
   'status.thread_running': 'en ejecución',
   'status.thread_stopped': 'detenido',
@@ -225,6 +226,7 @@ export const esDict: Record<string, string> = {
   'terminal.ready': '🖥 Terminal listo en `{subdir}`{argsSuffix}\nCada mensaje se ejecuta como un comando. /c — Ctrl+C, /up /down — historial, /tab — autocompletar, /quit — cerrar.',
 
   'effort.choose': '⚙️ Effort en este tema: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort en este tema: {current} ({next} desde el próximo inicio) — {source}',
   'effort.sourceGeneral': 'como en General',
   'effort.sourceTopic': 'definido para este tema',
   'effort.sameAsGeneralButton': 'Como en General ({level})',

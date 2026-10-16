@@ -166,6 +166,7 @@ export const deDict: Record<string, string> = {
   'status.thread_account_pending': 'Wechsel ausstehend: {account} — gilt, sobald der Zug des Agenten endet oder beim nächsten Start',
   'status.thread_model': 'Modell: {model}',
   'status.thread_effort': 'Aufwand: {effort}',
+  'status.thread_effort_next_start': 'Aufwand: {effort} ({next} ab dem nächsten Start)',
   'status.thread_started': 'Gestartet: {started}',
   'status.thread_running': 'läuft',
   'status.thread_stopped': 'gestoppt',
@@ -225,6 +226,7 @@ export const deDict: Record<string, string> = {
   'terminal.ready': '🖥 Terminal bereit in `{subdir}`{argsSuffix}\nJede Nachricht wird als Befehl ausgeführt. /c — Ctrl+C, /up /down — Verlauf, /tab — Vervollständigung, /quit — schließen.',
 
   'effort.choose': '⚙️ Effort in diesem Thema: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort in diesem Thema: {current} ({next} ab dem nächsten Start) — {source}',
   'effort.sourceGeneral': 'wie in General',
   'effort.sourceTopic': 'für dieses Thema gesetzt',
   'effort.sameAsGeneralButton': 'Wie in General ({level})',

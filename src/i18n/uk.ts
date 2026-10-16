@@ -172,6 +172,7 @@ export const ukDict: Record<string, string> = {
   'status.thread_account_pending': 'Очікує перемикання: {account} — застосується, коли завершиться хід агента або під час наступного запуску',
   'status.thread_model': 'Модель: {model}',
   'status.thread_effort': 'Зусилля: {effort}',
+  'status.thread_effort_next_start': 'Зусилля: {effort} ({next} з наступного старту)',
   'status.thread_started': 'Запущено: {started}',
   'status.thread_running': 'працює',
   'status.thread_stopped': 'зупинено',
@@ -231,6 +232,7 @@ export const ukDict: Record<string, string> = {
   'terminal.ready': '🖥 Термінал готовий у `{subdir}`{argsSuffix}\nКожне повідомлення виконується як команда. /c — Ctrl+C, /up /down — історія, /tab — автодоповнення, /quit — закрити.',
 
   'effort.choose': '⚙️ Effort у цьому топіку: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort у цьому топіку: {current} ({next} з наступного старту) — {source}',
   'effort.sourceGeneral': 'як у General',
   'effort.sourceTopic': 'задано для цього топіка',
   'effort.sameAsGeneralButton': 'Як у General ({level})',

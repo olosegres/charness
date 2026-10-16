@@ -106,4 +106,28 @@ describe('claude-json-stream effort: the launch chain and «as in General»', ()
     assert.deepEqual(respawns, []);
     assert.equal(adapter['getLaunchOptions'](key).effort, 'low');
   });
+
+  it('getEffortState: the live process runs the level it was spawned with while the default moves on; the next start resolves the chain afresh', () => {
+    setInstanceDefaultEffortReader(() => 'medium');
+    const { adapter } = createAdapterWithSession('xhigh');
+    assert.deepEqual(adapter.getEffortState(key), { running: 'xhigh', nextStart: 'medium' }, 'the General change never reaches the running process');
+
+    setInstanceDefaultEffortReader(() => 'xhigh');
+    assert.deepEqual(adapter.getEffortState(key), { running: 'xhigh', nextStart: 'xhigh' });
+  });
+
+  it('getEffortState: the next start follows the platform default and the topic\'s own pick before the instance default', async () => {
+    setInstanceDefaultEffortReader(() => 'low');
+    const { adapter } = createAdapterWithSession('low');
+    adapter.setSessionLaunchDefaultsReader(() => ({ model: null, effort: 'high' }));
+    assert.equal(adapter.getEffortState(key).nextStart, 'high');
+    await adapter.setEffort(key, 'max');
+    assert.equal(adapter.getEffortState(key).nextStart, 'max');
+  });
+
+  it('getEffortState: no live process, or one whose level is unknown (adopted without the flag), has no running level', () => {
+    setInstanceDefaultEffortReader(() => 'low');
+    assert.deepEqual(createAdapterWithSession('high', false).adapter.getEffortState(key), { running: null, nextStart: 'low' });
+    assert.deepEqual(createAdapterWithSession(null).adapter.getEffortState(key), { running: null, nextStart: 'low' });
+  });
 });

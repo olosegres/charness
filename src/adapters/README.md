@@ -328,7 +328,10 @@ resumable in the other.
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
   runs the instance default (`getInstanceDefaultEffort`: `settings.json`, else medium), clamped the same way, and
-  `clearEffort` («as in General») drops the pick and takes that default for the next prompt. Provider auth is NOT
+  `clearEffort` («as in General») drops the pick and takes that default for the next prompt. `ultracode` (Claude-only) resolves
+  to the model's HIGHEST variant and `auto` to no variant at all (`clampEffortToAvailable`) — never to the lowest one.
+  `getEffortState` is `{ running: the live session's level, nextStart }`, the next start's level rounded with the last
+  providers snapshot (synchronous: the banner needs it). Provider auth is NOT
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
 
 ## Claude, every backend
@@ -341,7 +344,9 @@ resumable in the other.
   `defaultEffort`, else `medium`) — the same level the json-stream backends launch with (`--effort`, after the
   platform default). `getOwnEffort` is the thread's own pick only (the instance default is never stored as one);
   `clearEffort` drops it and brings a live session to the default (tmux: the `/effort` keystroke; json-stream: a
-  `--resume` re-spawn, only when it runs another level).
+  `--resume` re-spawn, only when it runs another level). `getEffortState` says what the display shows: `running` — the
+  json-stream session's `--effort` (read back from its `wrapper.sh` at adopt, so a reload keeps it) or the level the bot
+  last typed into a tmux TUI (`runningEffort`; unknown after an adopt) — and `nextStart`.
 - **Survey.** The end-of-turn feedback survey is dismissed (one Escape per appearance) by `extractClaudeSurvey`,
   whose header list (`CLAUDE_SURVEY_HEADER_REGEX`) is CLOSED and anchored on purpose — an open prose pattern
   once fired on a quoted survey. A new wording left unrecognised sits on the pane and swallows the Enter of

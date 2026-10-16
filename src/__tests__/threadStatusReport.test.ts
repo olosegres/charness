@@ -119,6 +119,27 @@ test('active thread status renders the observed runtime details', () => {
   assert.match(report, /Context: 10 \/ 100 tokens/);
 });
 
+test('a running session that keeps the old effort says what the next start will use; the same level says nothing extra', () => {
+  const input = {
+    agentLine: 'Claude (claude)',
+    subdir: 'project',
+    isActive: true,
+    isSleeping: false,
+    workDir: '/work/project',
+    model: 'sonnet',
+    effort: 'xhigh',
+    startedAt: '2026-08-21T10:00:00Z',
+    runtime: null,
+    view: 'default',
+    timezone: 'UTC',
+    timezoneNow: '12:00',
+  };
+  const diverged = runWithLocale('en', () => getThreadStatusReport({ ...input, effortNextStart: 'medium' }));
+  assert.match(diverged, /^Effort: xhigh \(medium from the next start\)$/m);
+  const same = runWithLocale('en', () => getThreadStatusReport({ ...input, effortNextStart: null }));
+  assert.match(same, /^Effort: xhigh$/m);
+});
+
 test('unavailable runtime and workdir details render safely', () => {
   const report = runWithLocale('en', () => getThreadStatusReport({
     agentLine: 'Claude (claude)',

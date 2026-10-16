@@ -193,6 +193,27 @@ export function readWrapperScriptConfigDir(wrapperFile: string): string | null {
 }
 
 /**
+ * @description The `--effort <level>` a wrapper script's command line carries, `null` when it has none. The bot's
+ * own quoting wraps every argument (`'--effort' 'xhigh'`).
+ */
+export function parseEffortFromWrapperScript(script: string): string | null {
+  return script.match(/(?:^|\s)'--effort'\s+'([^']*)'/)?.[1] ?? null;
+}
+
+/**
+ * @description The effort level a persisted wrapper script starts claude with, `null` for an unreadable script or
+ * one without the flag. Read at adopt: the surviving process keeps the level it was spawned with whatever the
+ * default is now, and `/status`, the banner and `/effort` name the level a session really runs.
+ */
+export function readWrapperScriptEffort(wrapperFile: string): string | null {
+  try {
+    return parseEffortFromWrapperScript(fs.readFileSync(wrapperFile, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @description Open the stdin FIFO for writing WITHOUT ever blocking: a plain
  * `open(O_WRONLY)` on a FIFO with no reader hangs forever (the P1 probe's first
  * attempt did exactly that). `O_NONBLOCK` turns "no reader" into `ENXIO`,

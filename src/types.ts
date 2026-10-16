@@ -586,6 +586,12 @@ export type CompactionResult =
   | { ok: true; preTokens: number | null; postTokens: number | null }
   | { ok: false; error: string };
 
+/** @name EffortState @description See {@link AgentAdapter.getEffortState}. */
+export interface EffortState {
+  running: string | null;
+  nextStart: string;
+}
+
 /**
  * @description Unified interface for AI agent backends (Claude CLI, OpenCode, etc.).
  * Each adapter manages sessions keyed by `SessionKey` and communicates via EventEmitter.
@@ -1006,6 +1012,15 @@ export interface AgentAdapter extends EventEmitter {
    * {@link getCurrentModel}'s sync read pattern.
    */
   getEffort?(key: SessionKey): string | null;
+
+  /**
+   * The thread's effort as it stands now, for display: the level the LIVE session uses (`running`: `null` with no
+   * live session, or when it cannot be known — a tmux TUI adopted after a restart), and the level the thread's next
+   * session start will use (`nextStart`: its own pick, else the instance default; OpenCode: rounded to the model's
+   * variants when they are known). The two differ when the default changed under a running session — a change
+   * applies from the next start, never to a running one. A backend without the method has no effort concept.
+   */
+  getEffortState?(key: SessionKey): EffortState;
 
   /**
    * The level this thread picked itself with `/effort`, or `null` when it follows the instance default

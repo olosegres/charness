@@ -166,6 +166,7 @@ export const ptDict: Record<string, string> = {
   'status.thread_account_pending': 'Troca pendente: {account} — aplica-se ao fim do turno do agente ou no próximo início',
   'status.thread_model': 'Modelo: {model}',
   'status.thread_effort': 'Esforço: {effort}',
+  'status.thread_effort_next_start': 'Esforço: {effort} ({next} a partir do próximo início)',
   'status.thread_started': 'Iniciado: {started}',
   'status.thread_running': 'em execução',
   'status.thread_stopped': 'parado',
@@ -225,6 +226,7 @@ export const ptDict: Record<string, string> = {
   'terminal.ready': '🖥 Terminal pronto em `{subdir}`{argsSuffix}\nCada mensagem executa como um comando. /c — Ctrl+C, /up /down — histórico, /tab — autocompletar, /quit — fechar.',
 
   'effort.choose': '⚙️ Effort neste tópico: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort neste tópico: {current} ({next} a partir do próximo início) — {source}',
   'effort.sourceGeneral': 'como em General',
   'effort.sourceTopic': 'definido para este tópico',
   'effort.sameAsGeneralButton': 'Como em General ({level})',

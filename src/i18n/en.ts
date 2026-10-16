@@ -170,6 +170,7 @@ export const enDict: Record<string, string> = {
   'status.thread_account_pending': "Switch pending: {account} — applies when the agent's turn ends or at the next start",
   'status.thread_model': 'Model: {model}',
   'status.thread_effort': 'Effort: {effort}',
+  'status.thread_effort_next_start': 'Effort: {effort} ({next} from the next start)',
   'status.thread_started': 'Started: {started}',
   'status.thread_running': 'running',
   'status.thread_stopped': 'stopped',
@@ -229,6 +230,7 @@ export const enDict: Record<string, string> = {
   'terminal.ready': '🖥 Terminal ready in `{subdir}`{argsSuffix}\nEvery message runs as a command. /c — Ctrl+C, /up /down — history, /tab — completion, /quit — close.',
 
   'effort.choose': '⚙️ Effort in this topic: {current} — {source}',
+  'effort.chooseNextStart': '⚙️ Effort in this topic: {current} ({next} from the next start) — {source}',
   'effort.sourceGeneral': 'as in General',
   'effort.sourceTopic': 'set for this topic',
   'effort.sameAsGeneralButton': 'As in General ({level})',

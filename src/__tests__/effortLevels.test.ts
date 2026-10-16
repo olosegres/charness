@@ -13,8 +13,9 @@ import {
   checkIsClaudeEffortLevel,
   defaultEffortLevel,
   clampEffortToAvailable,
+  getEffortAmongLevels,
   getInstanceDefaultEffort,
-  getThreadEffortInForce,
+  getThreadEffortView,
   setInstanceDefaultEffortReader,
 } from '../effortLevels';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -75,16 +76,24 @@ test('getInstanceDefaultEffort — the registered reader wins, and null falls ba
   }
 });
 
-test('getThreadEffortInForce — the adapter\'s own answer, else the instance default; null for a backend with no effort concept', () => {
+test('getThreadEffortView — the RUNNING session\'s level wins; the next start\'s level rides along only when it differs', () => {
   const key = makeTelegramKey(-1001111111111, 9);
-  try {
-    setInstanceDefaultEffortReader(() => 'low');
-    assert.equal(getThreadEffortInForce({ getEffort: () => 'max' }, key), 'max');
-    assert.equal(getThreadEffortInForce({ getEffort: () => null }, key), 'low');
-    assert.equal(getThreadEffortInForce({}, key), null);
-  } finally {
-    setInstanceDefaultEffortReader(() => null);
-  }
+  const stateOf = (running: string | null, nextStart: string) => ({ getEffortState: () => ({ running, nextStart }) });
+  assert.deepEqual(getThreadEffortView(stateOf('xhigh', 'medium'), key), { level: 'xhigh', nextStartLevel: 'medium' }, 'the default changed under the running session');
+  assert.deepEqual(getThreadEffortView(stateOf('medium', 'medium'), key), { level: 'medium', nextStartLevel: null }, 'nothing to say when they agree');
+  assert.deepEqual(getThreadEffortView(stateOf(null, 'low'), key), { level: 'low', nextStartLevel: null }, 'no running session (or an unknown level): what the next start will use');
+});
+
+test('getThreadEffortView — null for a backend with no effort concept', () => {
+  assert.equal(getThreadEffortView({}, makeTelegramKey(-1001111111111, 9)), null);
+});
+
+test('getEffortAmongLevels — the level itself when offered, else the nearest the model has, else the level as it is', () => {
+  assert.equal(getEffortAmongLevels('xhigh', ['low', 'medium', 'high', 'xhigh', 'max']), 'xhigh');
+  assert.equal(getEffortAmongLevels('xhigh', ['high', 'max']), 'high');
+  assert.equal(getEffortAmongLevels('ultracode', ['low', 'medium', 'high']), 'high');
+  assert.equal(getEffortAmongLevels('auto', ['low', 'medium', 'high']), 'auto', 'auto sends no variant: there is no nearer level to name');
+  assert.equal(getEffortAmongLevels('medium', []), 'medium', 'a model with no variants: the level is left as it is');
 });
 
 test('clampEffortToAvailable — xhigh against full opus-4-8 set is kept', () => {
@@ -120,4 +129,19 @@ test('clampEffortToAvailable — only-max set → max (closest above when none b
 
 test('clampEffortToAvailable — only-unknown variants → null', () => {
   assert.equal(clampEffortToAvailable('xhigh', ['weird']), null);
+});
+
+test('clampEffortToAvailable — ultracode is the model\'s HIGHEST variant, whatever its set (it must never fall to the lowest)', () => {
+  assert.equal(clampEffortToAvailable('ultracode', ['low', 'medium', 'high', 'xhigh', 'max']), 'max');
+  assert.equal(clampEffortToAvailable('ultracode', ['high', 'max']), 'max');
+  assert.equal(clampEffortToAvailable('ultracode', ['low', 'medium', 'high']), 'high');
+  assert.equal(clampEffortToAvailable('ultracode', ['none', 'low']), 'low');
+  assert.equal(clampEffortToAvailable('ultracode', ['max']), 'max');
+  assert.equal(clampEffortToAvailable('ultracode', ['weird']), null, 'no known variant: no effort concept');
+});
+
+test('clampEffortToAvailable — auto sends NO variant, whatever the model offers', () => {
+  assert.equal(clampEffortToAvailable('auto', ['low', 'medium', 'high', 'xhigh', 'max']), null);
+  assert.equal(clampEffortToAvailable('auto', ['high', 'max']), null);
+  assert.equal(clampEffortToAvailable('auto', []), null);
 });

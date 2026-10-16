@@ -58,6 +58,15 @@ test('formatPinnedStatus: opencode running with model', () => {
   );
 });
 
+test('formatPinnedStatus: the effort the session uses — and the next start\'s when it differs', () => {
+  const same = formatPinnedStatus({ binding: baseBinding, agentLabel: 'Claude Code', model: null, effort: 'medium', isActive: true });
+  assert.strictEqual(same, '📁 overview · Claude Code · ⚙️ medium · 🟢 running');
+  const diverged = formatPinnedStatus({ binding: baseBinding, agentLabel: 'Claude Code', model: null, effort: 'xhigh', effortNextStart: 'medium', isActive: true });
+  assert.strictEqual(diverged, '📁 overview · Claude Code · ⚙️ xhigh (medium from the next start) · 🟢 running');
+  const noEffort = formatPinnedStatus({ binding: baseBinding, agentLabel: 'Terminal', model: null, effort: null, effortNextStart: 'medium', isActive: true });
+  assert.strictEqual(noEffort, '📁 overview · Terminal · 🟢 running', 'no effort concept: nothing to say');
+});
+
 test('formatPinnedStatus: closed topic suppresses running indicator', () => {
   // A closed topic can still hold a binding (plan D49), and the banner
   // should make the closure obvious — the user can't drive the agent
