@@ -21,7 +21,7 @@ import {
   topicViewArguments,
 } from '../../../utils/topicView';
 import type { BotCore } from './botCore';
-import { answerCallbackWithWholeText } from './callbackToast';
+import { createWholeTextAnswerer } from './callbackToast';
 
 // ── /thinking — per-topic chain-of-thought verbosity (both backends, S5) ─────
 
@@ -137,6 +137,7 @@ export type DisplayModesPorts = Pick<
 
 export function createDisplayModes(ports: DisplayModesPorts) {
   const { bot, command, getState, replyToThread, authoriseContext, cancelConversationRequest } = ports;
+  const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
    * @description Persist a new thinking mode for `key` and apply it best-effort to
@@ -260,7 +261,7 @@ export function createDisplayModes(ports: DisplayModesPorts) {
     // `toolres_hide`) in their buttons — those must keep working.
     const picked = normalizeDisplayVerbosityMode(ctx.match[1]);
     if (!picked) {
-      await answerCallbackWithWholeText(ctx, t(config.errorCbKey, { error: ctx.match[1] }), (wholeText) => replyToThread(key, wholeText));
+      await answerWithWholeText(ctx, key, t(config.errorCbKey, { error: ctx.match[1] }));
       return;
     }
     await config.apply(key, picked);
@@ -431,7 +432,7 @@ export function createDisplayModes(ports: DisplayModesPorts) {
       if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
       const picked = parseTopicView(ctx.match[1]);
       if (!picked) {
-        await answerCallbackWithWholeText(ctx, t('cb.verbosity_error', { error: ctx.match[1] }), (wholeText) => replyToThread(key, wholeText));
+        await answerWithWholeText(ctx, key, t('cb.verbosity_error', { error: ctx.match[1] }));
         return;
       }
       await applyTopicView(key, picked);

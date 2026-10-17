@@ -195,6 +195,33 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1))[0], ['⬆️ Up']);
   });
 
+  it('a confirmation longer than a toast is cut for the toast and posted in full as a message; one that fits is the toast', async () => {
+    const savedChain = harness.state.getFallbackChain();
+    const longEntry = openCode('p'.repeat(120), 'm'.repeat(120));
+    try {
+      await harness.state.setFallbackChain([claude('default'), longEntry, openCode('openai', 'gpt-5')]);
+      await harness.runCommand('limits');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+
+      let revision = getFallbackChainRevision(harness.state.getFallbackChain());
+      let repliesBefore = harness.replies.length;
+      await harness.tapButton(pickerId, `fbk_rm_1_${revision}`); // the long rung
+      const toast = harness.fakeTelegram.callbackAnswers.at(-1) ?? '';
+      assert.ok(toast.length <= 200 && toast.endsWith('…') && toast.startsWith('🗑 Removed: '), `the toast is the start, cut to fit: ${toast.length} characters`);
+      const whole = harness.replies[repliesBefore]?.text ?? '';
+      assert.ok(whole.startsWith('🗑 Removed: ') && whole.includes('p'.repeat(120)) && whole.includes('m'.repeat(120)), 'the whole confirmation, as a message');
+
+      revision = getFallbackChainRevision(harness.state.getFallbackChain());
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(pickerId, `fbk_rm_1_${revision}`); // the short one now at that place
+      assert.ok(!(harness.fakeTelegram.callbackAnswers.at(-1) ?? '').endsWith('…'));
+      assert.match(harness.fakeTelegram.callbackAnswers.at(-1) ?? '', /^🗑 Removed: /);
+      assert.equal(harness.replies.length, repliesBefore, 'a toast that fits needs no message');
+    } finally {
+      await harness.state.setFallbackChain(savedChain);
+    }
+  });
+
   it('«add» → a Claude account → a model: the entry lands with the model; the topic-model choice stores null', async () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     await harness.tapButton(pickerId, 'fbk_add');

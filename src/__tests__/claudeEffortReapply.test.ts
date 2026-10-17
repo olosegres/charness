@@ -203,14 +203,32 @@ describe('Claude effort re-apply on fresh spawn (S7)', () => {
     it('clearing a pick on a live session removes it and types the instance default into the TUI', async () => {
       setInstanceDefaultEffortReader(() => 'low');
       ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
-      assert.equal(await adapter.setEffort(noPrefKey, 'max'), null);
+      assert.deepEqual(await adapter.setEffort(noPrefKey, 'max'), { status: 'applied' });
       assert.equal(adapter.getOwnEffort(noPrefKey), 'max');
       typed.length = 0;
 
-      assert.equal(await adapter.clearEffort(noPrefKey), null);
+      await adapter.clearEffort(noPrefKey);
       assert.equal(adapter.getOwnEffort(noPrefKey), null, 'the pick is gone from disk');
       assert.equal(adapter.getEffort(noPrefKey), null);
       assert.deepEqual(typed, ['/effort low'], 'the live TUI is brought to the default, like a pick would be');
+    });
+
+    it('setEffort says what it did: applied in a live TUI, stored with a notice when none runs, refused for an unknown level', async () => {
+      ({ adapter, typed, session } = createAdapterWithSession(noPrefKey));
+      assert.deepEqual(await adapter.setEffort(noPrefKey, 'high'), { status: 'applied' });
+      assert.deepEqual(typed, ['/effort high']);
+
+      session.isActive = false;
+      typed.length = 0;
+      const stored = await adapter.setEffort(noPrefKey, 'max');
+      assert.equal(stored.status, 'stored');
+      assert.ok(stored.status === 'stored' && stored.notice.length > 0);
+      assert.equal(adapter.getOwnEffort(noPrefKey), 'max');
+      assert.deepEqual(typed, [], 'nothing is typed where nothing runs');
+
+      const refused = await adapter.setEffort(noPrefKey, 'turbo');
+      assert.equal(refused.status, 'refused');
+      assert.equal(adapter.getOwnEffort(noPrefKey), 'max', 'a refusal leaves the pick as it was');
     });
 
     it('clearing without a running session only removes the pick: the next spawn arms the default', async () => {
@@ -220,7 +238,7 @@ describe('Claude effort re-apply on fresh spawn (S7)', () => {
       typed.length = 0;
       session.isActive = false;
 
-      assert.equal(await adapter.clearEffort(noPrefKey), null);
+      await adapter.clearEffort(noPrefKey);
       assert.deepEqual(typed, []);
       assert.equal(adapter.getOwnEffort(noPrefKey), null);
     });

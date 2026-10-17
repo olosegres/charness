@@ -954,32 +954,51 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.equal(workingSpeechEngine.requests.length, 1, 'no engine was asked for these two');
   });
 
+  /** Put the fake agent's question (`ask` mode) to the topic: resolves the question message once it is up with its buttons. */
+  async function askQuestion(promptLabel: string): Promise<FakeTelegramMessage> {
+    const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
+    const question = await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
+    assert.deepEqual(topic.getKeyboardData(question), [['qa_0_0'], ['qa_0_1']], 'one button per option');
+    return question;
+  }
+
+  /** What the user answered, as the fake agent received it (`undefined` until it did). */
+  function getAskOutcome(promptLabel: string): string | undefined {
+    return readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).find((call) => call.issueKey === promptLabel && call.tool === fakeAskToolName)?.outcome;
+  }
+
   it('a pending question\'s buttons: the tap on a short option is answered with it whole; on one longer than a toast holds, with its start — the question message keeps the whole answer, nothing is posted beside it, and the agent gets the whole label', async () => {
     const shortAskPrompt = 'ASK-1';
     const longAskPrompt = 'ASK-2';
-    const askAndTap = async (promptLabel: string, callbackData: string): Promise<{ toast: string; question: FakeTelegramMessage }> => {
-      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
-      const question = await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
-      assert.deepEqual(topic.getKeyboardData(question), [['qa_0_0'], ['qa_0_1']], 'one button per option');
-      return { toast: await topic.tapAndAwaitAnswer(question, callbackData), question };
-    };
-    const getAskOutcome = (promptLabel: string): string | undefined =>
-      readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).find((call) => call.issueKey === promptLabel && call.tool === fakeAskToolName)?.outcome;
 
-    const short = await askAndTap(shortAskPrompt, 'qa_0_0');
-    assert.equal(short.toast, fakeAskQuestion.shortOptionLabel, 'a label that fits is the toast, whole');
+    const shortQuestion = await askQuestion(shortAskPrompt);
+    assert.equal(await topic.tapAndAwaitAnswer(shortQuestion, 'qa_0_0'), fakeAskQuestion.shortOptionLabel, 'a label that fits is the toast, whole');
     await getCharness().waitFor('the short answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(shortAskPrompt) !== undefined);
     assert.equal(getAskOutcome(shortAskPrompt), fakeAskQuestion.shortOptionLabel);
 
     assert.ok(fakeAskQuestion.longOptionLabel.length > 200, 'precondition: the long label is longer than a toast holds');
-    const long = await askAndTap(longAskPrompt, 'qa_0_1');
-    assert.ok(long.toast.length <= 200 && long.toast.endsWith('…'), `the toast fits: ${long.toast.length} characters`);
-    assert.ok(fakeAskQuestion.longOptionLabel.startsWith(long.toast.slice(0, -1)), 'it is the start of the label');
-    await topic.waitForMessageText('the question message edited to the whole answer', long.question, (text) => text === `✅ ${fakeAskQuestion.header}: ${fakeAskQuestion.longOptionLabel}`);
+    const longQuestion = await askQuestion(longAskPrompt);
+    const toast = await topic.tapAndAwaitAnswer(longQuestion, 'qa_0_1');
+    assert.ok(toast.length <= 200 && toast.endsWith('…'), `the toast fits: ${toast.length} characters`);
+    assert.ok(fakeAskQuestion.longOptionLabel.startsWith(toast.slice(0, -1)), 'it is the start of the label');
+    await topic.waitForMessageText('the question message edited to the whole answer', longQuestion, (text) => text === `✅ ${fakeAskQuestion.header}: ${fakeAskQuestion.longOptionLabel}`);
     await getCharness().waitFor('the long answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(longAskPrompt) !== undefined);
     assert.equal(getAskOutcome(longAskPrompt), fakeAskQuestion.longOptionLabel, 'the agent got the whole label, not the toast');
     // The answer is in the topic once: the edited question message. The tap posted nothing beside it.
     assert.equal(topic.listMessages().filter((message) => message.text.includes(fakeAskQuestion.longOptionLabel)).length, 1, 'the whole label appears once');
+  });
+
+  it('a question whose message can no longer be edited to show the answer (it was deleted): a label longer than a toast is posted in full instead', async () => {
+    const askPrompt = 'ASK-3';
+    const question = await askQuestion(askPrompt);
+    question.isDeleted = true; // gone from the topic; its buttons still reach the bot
+    const toast = await topic.tapAndAwaitAnswer(question, 'qa_0_1');
+    assert.ok(toast.length <= 200 && toast.endsWith('…'), `the toast fits: ${toast.length} characters`);
+    const posted = await topic.waitForMessage('the label posted in full', (message) => message.text === fakeAskQuestion.longOptionLabel);
+    assert.ok(posted.message_id > question.message_id);
+    await getCharness().waitFor('the long answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(askPrompt) !== undefined);
+    assert.equal(getAskOutcome(askPrompt), fakeAskQuestion.longOptionLabel, 'the agent got the whole label');
+    assert.equal(topic.listMessages().filter((message) => message.text === fakeAskQuestion.longOptionLabel).length, 1, 'posted once');
   });
 
   it('/quit tears down a pending /login: its pty ends', async () => {

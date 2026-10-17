@@ -764,15 +764,18 @@ test('an unwritable stt.json answers "could not write", changes nothing and does
   assert.ok(!ownerCalls.includes('applySettingsChange'));
 });
 
-test('a path too long for a toast is told as a message in the topic instead of being cut', async () => {
+test('a path too long for a toast is told whole as a message in the topic; the toast carries its start', async () => {
   configPath = path.join(dataDir, 'a-very-long-directory-name-'.repeat(8), 'stt.json');
   writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
   createFeature();
   fs.mkdirSync(`${configPath}.${process.pid}.tmp`);
   const { answers } = await tap('us', ['q1']);
-  assert.deepEqual(answers, [undefined], 'the toast is only the acknowledgement');
+  assert.equal(answers.length, 1, 'the tap is answered once');
+  const toast = answers[0] ?? '';
+  assert.ok(toast.length <= 200 && toast.endsWith('…'), `the toast is the start of the notice, cut to fit: ${toast.length} characters`);
   assert.equal(sent.length, 1);
   assert.ok(sent[0].text.includes(configPath), 'the whole path is in the message');
+  assert.ok(sent[0].text.startsWith(toast.slice(0, -1)), 'the toast is the start of that message');
 });
 
 test('a key that cannot be saved is still deleted from the topic, and the screen names the file', async () => {

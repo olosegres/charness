@@ -44,7 +44,7 @@ test('AgentAdapter contract — setEffort/getEffort/getAvailableEffortLevels sig
   type GetEffortSig = NonNullable<AgentAdapter['getEffort']>;
   type GetLevelsSig = NonNullable<AgentAdapter['getAvailableEffortLevels']>;
 
-  const setEffort: SetEffortSig = async () => null;
+  const setEffort: SetEffortSig = async () => ({ status: 'applied' });
   const getEffort: GetEffortSig = () => null;
   const getLevels: GetLevelsSig = async () => [];
 

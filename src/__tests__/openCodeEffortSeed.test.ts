@@ -176,7 +176,7 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       assert.equal(session.effortLevel, seededEffortLevel, 'precondition: the live session runs the thread\'s own pick');
       assert.equal(adapter.getOwnEffort(key), seededEffortLevel);
 
-      assert.equal(await adapter.clearEffort(key), null);
+      await adapter.clearEffort(key);
 
       assert.equal(adapter.getOwnEffort(key), null, 'the pick is gone from disk');
       assert.equal(session.effortLevel, 'low', 'the live session follows the instance default');

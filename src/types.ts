@@ -586,6 +586,19 @@ export type CompactionResult =
   | { ok: true; preTokens: number | null; postTokens: number | null }
   | { ok: false; error: string };
 
+/**
+ * @name EffortSetOutcome
+ * @description What {@link AgentAdapter.setEffort} did with a pick, so a caller never guesses it from state:
+ * - `applied` — the thread has the pick and nothing is left to do (a live session runs it; OpenCode applies it per
+ *   prompt and a session started later seeds it);
+ * - `stored` — the pick is saved but cannot apply yet (no agent is running); `notice` says when it will;
+ * - `refused` — nothing was changed; `reason` says why (an unknown level, a model without levels).
+ */
+export type EffortSetOutcome =
+  | { status: 'applied' }
+  | { status: 'stored'; notice: string }
+  | { status: 'refused'; reason: string };
+
 /** @name EffortState @description See {@link AgentAdapter.getEffortState}. */
 export interface EffortState {
   running: string | null;
@@ -992,8 +1005,8 @@ export interface AgentAdapter extends EventEmitter {
 
   /**
    * Set the reasoning-effort level for this thread. Same convention as
-   * {@link setModel}: returns `null` on success, a short user-facing
-   * message on failure / notice (e.g. "level X is not valid for model Y").
+   * {@link setModel}, but its result is typed ({@link EffortSetOutcome}): applied, stored for the next start, or
+   * refused with a short user-facing reason (e.g. "level X is not valid for model Y").
    *
    * Per-backend semantics:
    *
@@ -1004,7 +1017,7 @@ export interface AgentAdapter extends EventEmitter {
    *   adapter's prompt-send path, sent as `body.variant` alongside the model
    *   override (no separate request, no env configuration).
    */
-  setEffort?(key: SessionKey, level: string): Promise<string | null>;
+  setEffort?(key: SessionKey, level: string): Promise<EffortSetOutcome>;
 
   /**
    * Currently selected reasoning-effort level for this thread, or `null`
@@ -1041,9 +1054,9 @@ export interface AgentAdapter extends EventEmitter {
    * Drop the thread's own `/effort` pick so it follows the instance default again. A live session is brought to
    * that default the way a pick would be (Claude json-stream: a `--resume` re-spawn when the level differs;
    * tmux Claude: the `/effort` keystroke; OpenCode: the per-prompt variant); a stopped one reads it at its next
-   * start. Same return convention as {@link setEffort}: `null` on success, a short notice otherwise.
+   * start. It cannot be refused: whatever the thread had, it follows the default after it.
    */
-  clearEffort?(key: SessionKey): Promise<string | null>;
+  clearEffort?(key: SessionKey): Promise<void>;
 
   /**
    * Levels valid for the thread's current backend + model. Returns an

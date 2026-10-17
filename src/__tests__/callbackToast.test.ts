@@ -40,15 +40,22 @@ test('a text of exactly the limit still fits; one more character is cut for the 
   assert.equal(post, `post:${tooLong}`, 'the whole text, as a message');
 });
 
-test('the cut never splits an emoji (a lone surrogate would make Telegram refuse the toast)', async () => {
-  const { ctx, postWhole, log } = createRecorder();
-  const text = '⛔'.repeat(150) + '😀'.repeat(150); // 😀 is two UTF-16 units: a cut at 199 units lands inside one
-  await answerCallbackWithWholeText(ctx, text, postWhole);
-  const toast = log[0].slice('toast:'.length);
-  assert.ok(toast.length <= callbackToastMaxLength, `${toast.length} UTF-16 units`);
-  assert.ok(toast.endsWith('…'));
-  assert.doesNotMatch(toast, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/, 'no lone surrogate');
-  assert.equal(log[1], `post:${text}`);
+test('the cut never splits a character: not an emoji, and not a COMBINED one (a family, a flag, a skin tone)', async () => {
+  const family = '👨‍👩‍👧‍👦'; // seven code points joined, 11 UTF-16 units
+  const flag = '🇩🇪'; // two regional indicators, 4 units
+  const waving = '👋🏽'; // an emoji and its skin tone, 4 units
+  const accented = 'e\u0301'; // a letter and a combining accent, 2 units
+  for (const unit of ['😀', family, flag, waving, accented]) {
+    const { ctx, postWhole, log } = createRecorder();
+    const text = unit.repeat(Math.ceil(400 / unit.length));
+    await answerCallbackWithWholeText(ctx, text, postWhole);
+    const toast = log[0].slice('toast:'.length);
+    assert.ok(toast.length <= callbackToastMaxLength, `${JSON.stringify(unit)}: ${toast.length} UTF-16 units`);
+    assert.ok(toast.endsWith('…'));
+    const body = toast.slice(0, -1);
+    assert.ok(body.length > 0 && body === unit.repeat(body.length / unit.length), `${JSON.stringify(unit)}: only whole characters before the ellipsis`);
+    assert.equal(log[1], `post:${text}`);
+  }
 });
 
 test('the toast is answered before the full text is posted, so the tap is never left spinning behind a slow send', async () => {
@@ -74,10 +81,12 @@ test('fitted: a text over the limit is answered cut, and "cut" is reported — n
   assert.ok(toast.length <= callbackToastMaxLength && toast.endsWith('…') && label.startsWith(toast.slice(0, -1)));
 });
 
-test('fitted: the cut never splits an emoji here either', async () => {
+test('fitted: the cut never splits a combined emoji here either', async () => {
   const { ctx, log } = createRecorder();
-  await answerCallbackWithFittedText(ctx, '😀'.repeat(150));
+  const family = '👨‍👩‍👧‍👦';
+  await answerCallbackWithFittedText(ctx, family.repeat(40));
   const toast = log[0].slice('toast:'.length);
   assert.ok(toast.length <= callbackToastMaxLength);
-  assert.doesNotMatch(toast, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+  const body = toast.slice(0, -1);
+  assert.equal(body, family.repeat(body.length / family.length));
 });

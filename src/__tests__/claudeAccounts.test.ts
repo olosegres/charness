@@ -30,6 +30,8 @@ import { signOutDefaultClaudeLogin, type ClaudeAuthStatus } from '../utils/claud
 import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
+/** A test sets it to make the stand-in `applyAutoSwitch` word its answer differently (a long one). */
+let autoSwitchWordingOverride: string | null = null;
 let harness: CommandHarness;
 let accounts: ReturnType<typeof createClaudeAccounts>;
 let dataDir: string;
@@ -91,7 +93,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       applyAutoSwitch: async (key, isGeneral, enabled) => {
         if (isGeneral) await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(enabled);
         else await harness.state.setClaudeAutoSwitchOnLimitOverride(key, enabled);
-        return `auto switch ${enabled ? 'ON' : 'OFF'} for ${isGeneral ? 'ALL topics' : 'this topic'}`;
+        return autoSwitchWordingOverride ?? `auto switch ${enabled ? 'ON' : 'OFF'} for ${isGeneral ? 'ALL topics' : 'this topic'}`;
       },
       // The default login lives in the fixture's `.claude`, never in the real one.
       getHomeClaudeDir: () => homeClaudeDir,
@@ -353,6 +355,29 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(harness.replies.at(-1)?.text ?? '', /auto switch OFF for this topic/, 'the verb goes through the /limits port');
     await harness.runCommand('account', 'autoswitch maybe');
     assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: /);
+  });
+
+  it('a tap\'s confirmation reaches the user whole: as the toast when it fits, else cut for the toast and posted in full as a message', async () => {
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1)?.messageId;
+    assert.ok(picker);
+    try {
+      autoSwitchWordingOverride = 'The short confirmation.';
+      let repliesBefore = harness.replies.length;
+      await harness.tapButton(picker, 'acct_autosw_on');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The short confirmation.');
+      assert.equal(harness.replies.length, repliesBefore, 'a toast that fits needs no message');
+
+      autoSwitchWordingOverride = `Switching on limit is on. ${'Every account that has room is tried before the wait. '.repeat(8)}`.trimEnd();
+      assert.ok(autoSwitchWordingOverride.length > 200, 'precondition: longer than a toast holds');
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(picker, 'acct_autosw_on');
+      const toast = harness.fakeTelegram.callbackAnswers.at(-1) ?? '';
+      assert.ok(toast.length <= 200 && toast.endsWith('…') && autoSwitchWordingOverride.startsWith(toast.slice(0, -1)), 'the toast is the start of the text, cut to fit');
+      assert.equal(harness.replies[repliesBefore]?.text, autoSwitchWordingOverride, 'the whole text, as a message');
+    } finally {
+      autoSwitchWordingOverride = null;
+    }
   });
 
   it('the OpenCode part: connected providers are listed with a 🔌 row each; the tap asks first and only the confirmation disconnects', async () => {

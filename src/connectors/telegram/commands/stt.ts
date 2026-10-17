@@ -51,12 +51,10 @@ import { saveSttConfig, sttEngineLimit, type ResolvedSttSettings, type SttConfig
 import type { SttOwnerContext, SttSidecarOwner } from '../../../stt/sttSidecarOwner';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
+import { createWholeTextAnswerer } from './callbackToast';
 
 /** How long a typed-input step (the address, the key) waits before it is given up and its prompt retired. */
 export const sttInputTimeoutMs = 10 * 60 * 1000;
-
-/** Telegram caps a callback toast at 200 characters; stay under it. */
-const sttToastMaxLength = 180;
 
 /** The first line of the install progress before the job reports anything. */
 const initialInstallProgress: SttInstallProgress = { phase: 'creatingEnvironment', detail: '', bytesDownloaded: 0 };
@@ -101,6 +99,7 @@ export function createStt(ports: SttPorts) {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale,
     getConfigPath, getDataDir, getResolvedSettings, getOwnerContext, owner, installJobs, getGeneralKey,
   } = ports;
+  const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   const pendingInputs = new Map<string, PendingSttInput>();
   const installMessagePorts = createSttInstallMessagePorts({ getState, replyToThread, editThreadMessage, withThreadLocale }, t);
@@ -420,15 +419,11 @@ export function createStt(ports: SttPorts) {
     return { code: 'stt.saveFailed', vars: { path: getConfigPath() } };
   }
 
-  /** `answerCbQuery` is capped at 200 characters: a longer notice (a long path) goes to the topic as a message instead. */
+  /** A tap's answer: the notice as the toast (whole, or cut with the full text posted), or a bare answer when there is none. */
   async function answerWith(ctx: Context, key: SessionKey, notice: SttNotice | undefined): Promise<void> {
     const text = formatNotice(notice);
-    if (text !== undefined && text.length > sttToastMaxLength) {
-      await ctx.answerCbQuery();
-      await replyToThread(key, text);
-      return;
-    }
-    await ctx.answerCbQuery(text);
+    if (text === undefined) await ctx.answerCbQuery();
+    else await answerWithWholeText(ctx, key, text);
   }
 
   function registerSttCallbacks(): void {

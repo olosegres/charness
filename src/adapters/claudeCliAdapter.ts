@@ -12,6 +12,7 @@ import type {
   ClaudeSurveyOption,
   DisplayPrefsReader,
   DisplayVerbosityMode,
+  EffortSetOutcome,
   EffortState,
   ReattachRecap,
   RecentTurn,
@@ -3842,16 +3843,19 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * - **Persist** to the per-thread prefs file so the banner / `/effort`
    *   picker survives a bot restart (claude's own settings.json is global).
    *
-   * Returns a short notice instead of `null` when the session isn't running
+   * Answers `stored` (with a notice) instead of `applied` when the session isn't running
    * (we still persist the choice so the next /claude picks it up in the
    * banner; live apply happens once the agent actually exists).
    */
-  async setEffort(key: SessionKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<EffortSetOutcome> {
     if (!checkIsClaudeEffortLevel(level)) {
-      return t('effort.invalid_level', {
-        level,
-        valid: getClaudeAvailableLevels().join(', '),
-      });
+      return {
+        status: 'refused',
+        reason: t('effort.invalid_level', {
+          level,
+          valid: getClaudeAvailableLevels().join(', '),
+        }),
+      };
     }
     // Persist first — the menu/banner must reflect the user's choice even
     // when there is no running session yet (D6).
@@ -3859,13 +3863,13 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
 
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
-      // Soft notice: choice is recorded, but live apply is deferred until a
-      // session exists. Bot surfaces this distinctly from a hard error so
-      // the user knows to start an agent.
-      return t('effort.start_agent_first');
+      // Stored, not applied: the choice is recorded, but live apply is deferred until a
+      // session exists. The bot surfaces this distinctly from a refusal so the user
+      // knows to start an agent.
+      return { status: 'stored', notice: t('effort.start_agent_first') };
     }
     this.typeEffort(session, level);
-    return null;
+    return { status: 'applied' };
   }
 
   /**
@@ -3900,11 +3904,10 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    * pick would be applied. No session → nothing to type: the next spawn arms the default
    * ({@link applyStoredEffortOnSpawn}).
    */
-  async clearEffort(key: SessionKey): Promise<string | null> {
+  async clearEffort(key: SessionKey): Promise<void> {
     clearEffortPref(key);
     const session = this.sessions.get(keyToString(key));
     if (session?.isActive) this.typeEffort(session, getInstanceDefaultEffort());
-    return null;
   }
 
   /** The live TUI runs the level the bot last typed into it (unknown after an adopt); the next spawn arms the pick, else the default. */

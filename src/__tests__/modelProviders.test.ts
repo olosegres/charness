@@ -24,7 +24,7 @@ import { createModelProviders, type PendingProviderConnect } from '../connectors
 import { keyToString, type SessionKey } from '../sessionKey';
 import { getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 import { createInstanceDefaultEffortReader, resetInstanceSettingsCache } from '../instanceSettings';
-import { clearEffortPref } from '../adapters/claudeCliAdapter';
+import { clearEffortPref, saveEffortPref } from '../adapters/claudeCliAdapter';
 import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { getThreadAdapter } from '../adapters/createAdapter';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
@@ -227,6 +227,23 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     clearEffortPref(harness.key);
   });
 
+  it('a typed `/effort <level>` the backend refuses is a refusal even when the topic already holds that pick: no banner refresh', async () => {
+    const adapter = getThreadAdapter(harness.key);
+    const originalSetEffort = adapter.setEffort?.bind(adapter);
+    assert.ok(originalSetEffort);
+    saveEffortPref(harness.key, 'high');
+    try {
+      adapter.setEffort = async () => ({ status: 'refused', reason: 'This model offers no effort levels.' });
+      const bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
+      await harness.runCommand('effort', 'high');
+      assert.equal(harness.replies.at(-1)?.text, 'This model offers no effort levels.');
+      assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore);
+    } finally {
+      adapter.setEffort = originalSetEffort;
+      clearEffortPref(harness.key);
+    }
+  });
+
   it('a notice that does not fit a toast is cut for the toast and posted whole as a message; the banner still follows a stored pick, and not a refusal', async () => {
     clearEffortPref(harness.key);
     await harness.runCommand('effort');
@@ -241,7 +258,7 @@ describe('modelProviders: the model, effort and provider flows over their ports'
       // A stored pick with a long notice:
       adapter.setEffort = async (key, level) => {
         await originalSetEffort(key, level);
-        return longNotice;
+        return { status: 'stored', notice: longNotice };
       };
       let repliesBefore = harness.replies.length;
       let bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
@@ -255,7 +272,7 @@ describe('modelProviders: the model, effort and provider flows over their ports'
       // A refusal with a long text: whole as a message too, nothing stored, the banner untouched:
       clearEffortPref(harness.key);
       const longRefusal = `Level \`low\` cannot be used here. ${'The model offers other levels only. '.repeat(8)}`.trimEnd();
-      adapter.setEffort = async () => longRefusal;
+      adapter.setEffort = async () => ({ status: 'refused', reason: longRefusal });
       repliesBefore = harness.replies.length;
       bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
       await harness.tapButton(picker.messageId, 'effort_low');
@@ -263,11 +280,21 @@ describe('modelProviders: the model, effort and provider flows over their ports'
       assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore, 'nothing was stored: the banner is as it was');
 
       // A short refusal fits the toast: shown whole, no message beside it.
-      adapter.setEffort = async () => 'x'.repeat(120);
+      adapter.setEffort = async () => ({ status: 'refused', reason: 'x'.repeat(120) });
       repliesBefore = harness.replies.length;
       await harness.tapButton(picker.messageId, 'effort_low');
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), `Error: ${'x'.repeat(120)}`, 'not cut at 50 characters');
       assert.equal(harness.replies.length, repliesBefore, 'a toast that fits needs no message');
+
+      // A refusal is a refusal even when the thread HAS that very pick from before (a model switched to one without
+      // levels, an old picker message): the outcome says so, the stored pick does not make it a pick.
+      saveEffortPref(harness.key, 'low');
+      assert.equal(adapter.getOwnEffort?.(harness.key), 'low', 'precondition: the topic already holds this pick');
+      adapter.setEffort = async () => ({ status: 'refused', reason: 'This model offers no effort levels.' });
+      bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
+      await harness.tapButton(picker.messageId, 'effort_low');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Error: This model offers no effort levels.', 'shown as the refusal it is');
+      assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore, 'no banner refresh for a refusal');
     } finally {
       adapter.setEffort = originalSetEffort;
       clearEffortPref(harness.key);

@@ -80,6 +80,7 @@ import {
 } from '../../../utils/fallbackChain';
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
+import { createWholeTextAnswerer } from './callbackToast';
 
 /** Models per page in the «add an OpenCode model» step (the `/model` picker's density). */
 const addModelPageSize = 8;
@@ -169,6 +170,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getInstanceTimezone, refreshClaudeUsage, detectFallbackOptions, getTopicPosition, takeSwitchOffer, applyAutoContinue, getArmedLimitRetryFireAt,
   } = ports;
+  const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   // Both per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat.
   const addSnapshots = new Map<string, AddSnapshot>();
@@ -463,7 +465,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       await askAboutNewBackend(key, messageId, 'limits.addConfirm', entry, buildFallbackAddConfirmCallback(getFallbackChainRevision(chain)), fallbackBackCallback);
       return;
     }
-    await answerTap(ctx, key, await applyAdd(entry));
+    await answerWithWholeText(ctx, key, await applyAdd(entry));
     await rerenderPicker(key, messageId, isGeneral);
   }
 
@@ -589,13 +591,6 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     await withThreadLocale(key, () => run(key, checkIsGeneral(key), getCallbackMessageId(ctx)));
   }
 
-  /** `answerCbQuery` is capped at 200 characters: a long confirmation goes to the topic instead. */
-  async function answerTap(ctx: Context, key: SessionKey, text: string): Promise<void> {
-    if (text.length <= 180) { await ctx.answerCbQuery(text); return; }
-    await ctx.answerCbQuery();
-    await replyToThread(key, text);
-  }
-
   /** An edit tap: a stale revision only re-renders. */
   function registerEdit(
     re: RegExp,
@@ -625,7 +620,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const result = edit(chain, parsed.index);
       if (!result.ok) { await ctx.answerCbQuery(t('fallback.stale')); await rerenderPicker(key, messageId, isGeneral); return; }
       await getState().setFallbackChain(result.chain);
-      await answerTap(ctx, key, confirm(chain, parsed.index));
+      await answerWithWholeText(ctx, key, confirm(chain, parsed.index));
       const next = nextIndex(parsed.index);
       if (next === null) await rerenderPicker(key, messageId, isGeneral);
       else await renderRungDetail(key, messageId, next, isGeneral);
@@ -725,13 +720,13 @@ export function createFallbackChain(ports: FallbackChainPorts) {
         return;
       }
       if (messageId !== null) pendingAdds.delete(buildMessageSnapshotKey(key, messageId));
-      await answerTap(ctx, key, await applyAdd(entry));
+      await answerWithWholeText(ctx, key, await applyAdd(entry));
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(fallbackProposeCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       if (getState().getFallbackChain().length === 0) {
-        await answerTap(ctx, key, await applyPropose());
+        await answerWithWholeText(ctx, key, await applyPropose());
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
@@ -748,12 +743,12 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackProposeConfirmCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      await answerTap(ctx, key, await applyPropose());
+      await answerWithWholeText(ctx, key, await applyPropose());
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(fallbackClearCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      await answerTap(ctx, key, await applyClear());
+      await answerWithWholeText(ctx, key, await applyClear());
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
@@ -779,7 +774,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     for (const [callback, apply, enabled] of settingTaps) {
       bot.action(callback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
         if (enabled === null && isGeneral) { await ctx.answerCbQuery(); return; }
-        await answerTap(ctx, key, await apply(key, isGeneral, enabled));
+        await answerWithWholeText(ctx, key, await apply(key, isGeneral, enabled));
         await rerenderPicker(key, messageId, isGeneral);
       }));
     }

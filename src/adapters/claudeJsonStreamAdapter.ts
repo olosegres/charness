@@ -7,6 +7,7 @@ import type {
   AgentRuntimeInfo,
   CompactionResult,
   DisplayPrefsReader,
+  EffortSetOutcome,
   EffortState,
   JsonStreamTailOffset,
   JsonStreamTailWriter,
@@ -1910,15 +1911,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return ['fable', 'opus', 'sonnet', 'haiku'];
   }
 
-  async setEffort(key: SessionKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<EffortSetOutcome> {
     if (!checkIsClaudeEffortLevel(level)) {
-      return t('effort.invalid_level', { level, valid: getClaudeAvailableLevels().join(', ') });
+      return { status: 'refused', reason: t('effort.invalid_level', { level, valid: getClaudeAvailableLevels().join(', ') }) };
     }
     saveEffortPref(key, level);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return t('effort.start_agent_first');
+    if (!session?.isActive) return { status: 'stored', notice: t('effort.start_agent_first') };
     await this.respawnWithChange(session, { model: session.model, effort: level });
-    return null;
+    return { status: 'applied' };
   }
 
   getEffort(key: SessionKey): string | null {
@@ -1941,13 +1942,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * resolves to (the platform's default, the instance default) is re-spawned with it, like a pick; one that
    * already runs it is left alone, and a stopped conversation reads the default at its next start.
    */
-  async clearEffort(key: SessionKey): Promise<string | null> {
+  async clearEffort(key: SessionKey): Promise<void> {
     clearEffortPref(key);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return null;
+    if (!session?.isActive) return;
     const { effort } = this.getLaunchOptions(key);
     if (session.effort !== effort) await this.respawnWithChange(session, { model: session.model, effort });
-    return null;
   }
 
   async getAvailableEffortLevels(_key: SessionKey): Promise<string[]> {

@@ -328,7 +328,7 @@ resumable in the other.
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
   runs the instance default (`getInstanceDefaultEffort`: `settings.json`, else medium), clamped the same way, and
-  `clearEffort` («as in General») drops the pick and takes that default for the next prompt. `ultracode` (Claude-only) resolves
+  `clearEffort` («as in General») drops the pick and takes that default for the next prompt. `setEffort` answers a typed `EffortSetOutcome` — `applied` / `stored` (saved, no agent runs yet; carries the notice) / `refused` (carries the reason) — so a caller never guesses from state whether a pick was made. `ultracode` (Claude-only) resolves
   to the model's HIGHEST variant and `auto` to no variant at all (`clampEffortToAvailable`) — never to the lowest one.
   `getEffortState` is `{ running: the live session's level, nextStart }`, the next start's level rounded with the last
   providers snapshot (synchronous: the banner needs it); `null` for a model the snapshot lists with NO variants (it

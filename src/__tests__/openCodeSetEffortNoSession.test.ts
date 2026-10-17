@@ -91,7 +91,7 @@ describe('OpenCode setEffort with NO active session (symmetry with setModel)', (
     const adapter = createAdapterNoSession();
     const result = await adapter.setEffort(key, 'high');
     // Load-bearing: pre-fix this returned the raw 'No active session'.
-    assert.equal(result, null, 'a valid effort with no session must succeed');
+    assert.deepEqual(result, { status: 'applied' }, 'a valid effort with no session must succeed');
     assert.equal(
       readEffortPref(keyToString(key)),
       'high',
@@ -111,7 +111,7 @@ describe('OpenCode setEffort with NO active session (symmetry with setModel)', (
 
     const adapter = createAdapterNoSession();
     const result = await adapter.setEffort(key, 'nonsense');
-    assert.ok(result && result.includes('nonsense'), `expected an invalid-level notice, got: ${result}`);
+    assert.ok(result.status === 'refused' && result.reason.includes('nonsense'), `expected an invalid-level refusal, got: ${JSON.stringify(result)}`);
     assert.equal(
       readEffortPref(keyToString(key)),
       undefined,
@@ -132,8 +132,8 @@ describe('OpenCode setEffort with NO active session (symmetry with setModel)', (
     const result = await adapter.setEffort(key, 'high');
     // Must name the PROSPECTIVE model (live currentModelLabel is null pre-session).
     assert.ok(
-      result && result.includes(sonnetLabel),
-      `not-supported notice must name the prospective model, got: ${result}`,
+      result.status === 'refused' && result.reason.includes(sonnetLabel),
+      `not-supported refusal must name the prospective model, got: ${JSON.stringify(result)}`,
     );
     assert.equal(readEffortPref(keyToString(key)), undefined, 'nothing persisted when the model has no variants');
   });

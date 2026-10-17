@@ -9503,10 +9503,16 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
     return;
   }
   const selectedLabel = question.options[optIdx].label;
-  await applyQuestionAnswer(key, [selectedLabel]);
-  // The question message was just edited to "✅ <header>: <answer>", which carries the whole answer: the toast only
-  // confirms the tap, so a label too long for it is cut there and not posted a second time.
-  await answerCallbackWithFittedText(ctx, selectedLabel);
+  const isAnswerShown = await applyQuestionAnswer(key, [selectedLabel]);
+  if (isAnswerShown) {
+    // The question message was just edited to "✅ <header>: <answer>", which carries the whole answer: the toast only
+    // confirms the tap, so a label too long for it is cut there and not posted a second time.
+    await answerCallbackWithFittedText(ctx, selectedLabel);
+  } else {
+    // The message could not be edited (it is gone, or the edit failed): nothing in the topic shows the answer, so a
+    // label too long for the toast is posted in full.
+    await answerCallbackWithWholeText(ctx, selectedLabel, (wholeLabel) => replyToThread(key, wholeLabel));
+  }
 });
 
 /**
@@ -9670,30 +9676,29 @@ async function cancelPendingQuestionAndForward(
  * inline-button (`qa_`) and custom-text answer paths so both collect answers
  * locally instead of closing the request on the first answer with empties.
  */
-async function applyQuestionAnswer(key: SessionKey, answerForCurrent: string[]): Promise<void> {
+async function applyQuestionAnswer(key: SessionKey, answerForCurrent: string[]): Promise<boolean> {
   // Serialized: an in-flight re-post (delete+re-send) must fully finish before
   // the answer reads `messageId` for its ✅-edit — otherwise the edit targets
   // a message the re-post just deleted (live 2026-06-10: "message to edit not
   // found" + the next question never reached the topic).
-  await runQuestionLifecycleOp(key, () => applyQuestionAnswerInner(key, answerForCurrent));
+  return runQuestionLifecycleOp(key, () => applyQuestionAnswerInner(key, answerForCurrent));
 }
 
-async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: string[]): Promise<void> {
+/** Resolves to whether the topic now shows the whole answer: the answered question's message was edited to carry it. */
+async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: string[]): Promise<boolean> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
-  if (!pending) return;
+  if (!pending) return false;
 
   const answeredQuestion = pending.data.questions[pending.currentIndex];
   const { nextState, action } = recordAnswerAndAdvance(pending, answerForCurrent);
 
   // Mark the answered question's message as done (the chosen answer in place).
-  if (pending.messageId !== null && answeredQuestion) {
-    await editThreadMessage(
-      key,
-      pending.messageId,
-      `✅ ${answeredQuestion.header || answeredQuestion.question}: ${answerForCurrent.join(', ')}`,
-    );
-  }
+  const isAnswerShown = pending.messageId !== null && answeredQuestion !== undefined && await editThreadMessage(
+    key,
+    pending.messageId,
+    `✅ ${answeredQuestion.header || answeredQuestion.question}: ${answerForCurrent.join(', ')}`,
+  );
 
   if (action.kind === 'submit') {
     const adapter = getThreadAdapter(key);
@@ -9704,13 +9709,14 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
       adapter.answerQuestion(key, action.matrix);
       markNeedsNewMessage(key);
     }
-    return;
+    return isAnswerShown;
   }
 
   // More questions remain: persist the advanced state, then post the next one
   // (which re-owns `messageId`). DO NOT reply to the agent yet.
   setPendingQuestion(key, nextState);
   await postPendingQuestionAt(key);
+  return isAnswerShown;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

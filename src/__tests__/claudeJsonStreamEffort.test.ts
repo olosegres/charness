@@ -80,7 +80,7 @@ describe('claude-json-stream effort: the launch chain and «as in General»', ()
     await adapter.setEffort(key, 'max'); // the pick the process runs (the respawn is stubbed)
     respawns.length = 0;
 
-    assert.equal(await adapter.clearEffort(key), null);
+    await adapter.clearEffort(key);
 
     assert.equal(adapter.getOwnEffort(key), null, 'the pick is gone from disk');
     assert.deepEqual(respawns, [{ model: 'sonnet', effort: 'low' }], 'same conversation and model, the default level');
@@ -92,7 +92,7 @@ describe('claude-json-stream effort: the launch chain and «as in General»', ()
     await adapter.setEffort(key, 'low');
     respawns.length = 0;
 
-    assert.equal(await adapter.clearEffort(key), null);
+    await adapter.clearEffort(key);
     assert.deepEqual(respawns, []);
     assert.equal(adapter.getOwnEffort(key), null);
   });
@@ -102,7 +102,7 @@ describe('claude-json-stream effort: the launch chain and «as in General»', ()
     const { adapter, respawns } = createAdapterWithSession('max', false);
     await adapter.setEffort(key, 'max');
 
-    assert.equal(await adapter.clearEffort(key), null);
+    await adapter.clearEffort(key);
     assert.deepEqual(respawns, []);
     assert.equal(adapter['getLaunchOptions'](key).effort, 'low');
   });
@@ -129,5 +129,23 @@ describe('claude-json-stream effort: the launch chain and «as in General»', ()
     setInstanceDefaultEffortReader(() => 'low');
     assert.deepEqual(createAdapterWithSession('high', false).adapter.getEffortState(key), { running: null, nextStart: 'low' });
     assert.deepEqual(createAdapterWithSession(null).adapter.getEffortState(key), { running: null, nextStart: 'low' });
+  });
+  it('setEffort says what it did: applied on a live process, stored with a notice when none runs, refused for a level it does not know — and a refusal stores nothing', async () => {
+    const live = createAdapterWithSession('low');
+    assert.deepEqual(await live.adapter.setEffort(key, 'max'), { status: 'applied' });
+    assert.deepEqual(live.respawns, [{ model: 'sonnet', effort: 'max' }]);
+
+    clearEffortPref(key);
+    const stopped = createAdapterWithSession('low', false);
+    const stoppedOutcome = await stopped.adapter.setEffort(key, 'high');
+    assert.equal(stoppedOutcome.status, 'stored');
+    assert.ok(stoppedOutcome.status === 'stored' && stoppedOutcome.notice.length > 0);
+    assert.equal(stopped.adapter.getOwnEffort(key), 'high', 'stored means saved');
+
+    clearEffortPref(key);
+    const refused = await live.adapter.setEffort(key, 'turbo');
+    assert.equal(refused.status, 'refused');
+    assert.ok(refused.status === 'refused' && refused.reason.includes('turbo'));
+    assert.equal(live.adapter.getOwnEffort(key), null, 'a refusal stores nothing');
   });
 });

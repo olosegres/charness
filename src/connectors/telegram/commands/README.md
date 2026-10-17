@@ -15,12 +15,15 @@ functions where the handlers used to be registered. A module never imports `bot.
   factory.
 - A port-free helper is a plain export of its file (its test imports it without booting `bot.ts`).
 - **A button's error or notice reaches the user whole.** A toast holds 200 characters, so an error/notice text goes through
-  `callbackToast.ts`'s `answerCallbackWithWholeText(ctx, text, postWhole)`: a text that fits IS the toast, a longer one is cut
-  for the toast (ellipsis, on a character boundary) and posted in full as a message. Never `.slice(0, n)` a text into
-  `answerCbQuery` (`cb.model_error`, `cb.effort_error`, the display-mode errors all use the helper). A text the thread already
+  `callbackToast.ts`: `answerCallbackWithWholeText(ctx, text, postWhole)` (a text that fits IS the toast, a longer one is cut
+  for the toast — ellipsis, on a grapheme boundary, so a family or flag emoji is never split — and posted in full as a message)
+  or, built once per module from its `replyToThread` port, `createWholeTextAnswerer(replyToThread)` → `(ctx, key, text)`.
+  Never `.slice(0, n)` a text into `answerCbQuery`, and no module keeps its own copy of the cut (`cb.model_error`,
+  `cb.effort_error`, the display-mode errors, `/limits`, `/accounts`, `/stt` all use the helper). A text the thread already
   carries in full (a pending question's answer: the question message is edited to "✅ …: <answer>") uses
-  `answerCallbackWithFittedText` — the toast only, cut when long, no second copy; a re-asked question's label (`reask_<i>`,
-  nothing else shows it whole) uses the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
+  `answerCallbackWithFittedText` — the toast only, cut when long, no second copy — but only while that edit succeeded
+  (`applyQuestionAnswer` says so); a message that could not be edited, and a re-asked question's label (`reask_<i>`, nothing
+  else shows it whole), use the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
   `answerCbQuery(text)` of a user-visible label is a bug.
 - **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 

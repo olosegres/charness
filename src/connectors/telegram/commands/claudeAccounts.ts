@@ -56,6 +56,7 @@ import {
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
+import { createWholeTextAnswerer } from './callbackToast';
 
 /**
  * How a profile change reached the topic's live session: the adapter's own answer, plus `restartRequired`
@@ -120,6 +121,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, takeClaudeAccountPickOnOpenCodeTopic, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
   } = ports;
+  const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
    * Topics whose next plain message is an answer to «➕»: the name of a new Claude profile, or the id of the
@@ -549,26 +551,19 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await withThreadLocale(key, () => run(key, checkIsGeneral(key), getCallbackMessageId(ctx)));
   }
 
-  /** `answerCbQuery` is capped at 200 characters: a long confirmation goes to the topic instead. */
-  async function answerTap(ctx: Context, key: SessionKey, text: string): Promise<void> {
-    if (text.length <= 180) { await ctx.answerCbQuery(text); return; }
-    await ctx.answerCbQuery();
-    await replyToThread(key, text);
-  }
-
   function registerClaudeAccountCallbacks(): void {
     bot.action(accountUseCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountUseCallbackRe, { allowDefault: true });
       if (name === null) { await ctx.answerCbQuery(); return; }
       const confirmation = await applyPick(key, isGeneral, name);
       if (confirmation === null) await ctx.answerCbQuery();
-      else await answerTap(ctx, key, confirmation);
+      else await answerWithWholeText(ctx, key, confirmation);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(accountFollowDefaultCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       if (isGeneral) { await ctx.answerCbQuery(); return; }
-      await answerTap(ctx, key, await applyFollowDefault(key));
+      await answerWithWholeText(ctx, key, await applyFollowDefault(key));
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
@@ -664,13 +659,13 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const name = parseAccountCallbackName(ctx.match[0], accountRemoveConfirmCallbackRe, { allowDefault: true });
       if (name === null) { await ctx.answerCbQuery(); return; }
       const result = await removeProfile(name);
-      await answerTap(ctx, key, result);
+      await answerWithWholeText(ctx, key, result);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     for (const [callback, enabled] of [[accountAutoSwitchOnCallback, true], [accountAutoSwitchOffCallback, false]] as const) {
       bot.action(callback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-        await answerTap(ctx, key, await applyAutoSwitch(key, isGeneral, enabled));
+        await answerWithWholeText(ctx, key, await applyAutoSwitch(key, isGeneral, enabled));
         await rerenderPicker(key, messageId, isGeneral);
       }));
     }

@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, EffortState, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, EffortSetOutcome, EffortState, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -2785,10 +2785,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Forget the thread's own pick; a live session takes the clamped instance default for its next
    * prompt ({@link applyDefaultEffortIfUnset}), a later one seeds it at creation.
    */
-  async clearEffort(key: SessionKey): Promise<string | null> {
+  async clearEffort(key: SessionKey): Promise<void> {
     clearEffortPref(key);
     await this.applyDefaultEffortIfUnset(key);
-    return null;
   }
 
   /**
@@ -2796,14 +2795,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * thread's available variants — live model when a session is running, the
    * PROSPECTIVE model (saved `/model` pref → server default) when not — then
    * persists on success (applied per-prompt by `sendPromptAsync`, plan D3; a
-   * later session seeds `effortLevel` from this pref at creation). Returns a
-   * user-facing notice string on any non-success, `null` on success.
+   * later session seeds `effortLevel` from this pref at creation). `refused` with a
+   * user-facing reason on any non-success, `applied` on success — also with no
+   * session: there is nothing left to do, a later session seeds the pick.
    *
    * Mirrors `setModel`'s persist-first symmetry (no `'No active session'`
    * hard-fail): a level picked BEFORE `/opencode` is saved and replayed by the
    * next session, instead of being lost — same intent as the model pref.
    */
-  async setEffort(key: SessionKey, level: string): Promise<string | null> {
+  async setEffort(key: SessionKey, level: string): Promise<EffortSetOutcome> {
     // Session-free capable: resolves variants from the live model if active,
     // else the prospective model the next session will use.
     const available = await this.getAvailableEffortLevels(key);
@@ -2812,10 +2812,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       // session is up, else the prospective model — so the notice is correct
       // pre-session (the live `currentModelLabel` is null then).
       const modelLabel = await this.getEffortModelLabel(key);
-      return t('effort.not_supported', { model: modelLabel });
+      return { status: 'refused', reason: t('effort.not_supported', { model: modelLabel }) };
     }
     if (!available.includes(level)) {
-      return t('effort.invalid_level', { level, valid: available.join(', ') });
+      return { status: 'refused', reason: t('effort.invalid_level', { level, valid: available.join(', ') }) };
     }
 
     // Persist unconditionally (like `setModel`'s `saveModelPref`): a session
@@ -2827,7 +2827,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const session = this.sessions.get(keyToString(key));
     if (session?.isActive) session.effortLevel = level;
     console.log(`[OpenCode] Effort set to: ${level}`);
-    return null;
+    return { status: 'applied' };
   }
 
   /**
