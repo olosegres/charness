@@ -16,12 +16,14 @@ import { checkIsClaudeBackend, openCodeAdapterName } from '../adapters/adapterNa
 export type BackendFamily = 'claude' | 'opencode';
 
 /**
- * Where a manual switch goes. A Claude target is an account; an OpenCode target carries the model the topic will
- * run, for the question only (`null` when the server's default cannot be read) — the switch itself leaves the
- * model alone, so a topic that follows the server's default keeps following it.
+ * Where a manual switch goes. A Claude target names an account: `isProfilePicked` is whether the operator PICKED it
+ * (an account tap, `/accounts use`) — the switch then records it as the topic's own pick — or it is only the account
+ * the topic already follows (`/claude`), which the switch leaves to General. An OpenCode target carries the model the
+ * topic will run, for the question only (`null` when the server's default cannot be read) — the switch itself leaves
+ * the model alone, so a topic that follows the server's default keeps following it.
  */
 export type BackendSwitchTarget =
-  | { backend: 'claude'; profile: string }
+  | { backend: 'claude'; profile: string; isProfilePicked: boolean }
   | { backend: 'opencode'; modelLabel: string | null };
 
 /** The family an adapter name belongs to; `null` for a shell or an unknown name (nothing to hand over from or to). */

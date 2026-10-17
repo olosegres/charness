@@ -105,8 +105,10 @@ questions). `utils/backendSwitchPlan.ts` decides WHEN it is asked (`checkNeedsBa
 the other backend AND holds a conversation) and words it; `bot.ts` is the single gate (`askBeforeCrossBackendSwitch`
 for `/claude`, `/opencode`, the agent buttons and the natural-language «start …» phrases, `takeClaudeAccountPickOnOpenCodeTopic`
 for a Claude account picked on an OpenCode topic through `claudeAccounts.ts`) and owns the switch itself
-(`executeBackendSwitch`: the usage-limit switch's cross-backend move — bridge built from the conversation being left,
-`switchThreadAdapter`, ensure, bridge as the first prompt — with the account applied for a Claude target). A conversation
+(`executeBackendSwitch`: the usage-limit switch's cross-backend move — the bridge is built from the conversation being left, then the two
+helpers the limit switch uses too: `moveTopicToOtherBackend` (account pick + `switchThreadAdapter`) and `resumeTopicOnNewSession` (ensure, model pin,
+first prompt)). A Claude target carries `isProfilePicked`: an account tap / `/accounts use` records the account as the topic's own pick,
+`/claude` only names the account the topic follows and leaves it following General. A conversation
 to hand over means an agent with at least one readable turn (`readConversationTurns`; an unreadable transcript counts),
 so a just-started agent switches at once. The module keeps one snapshot per question MESSAGE (newest 20, one open
 question per topic): a tap with no snapshot, on another topic, or after the topic changed backend only answers «out of

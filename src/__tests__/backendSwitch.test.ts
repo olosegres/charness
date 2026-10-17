@@ -26,7 +26,10 @@ let switchError: Error | null = null;
 const switches: Array<{ target: BackendSwitchTarget; userMessage: string | undefined }> = [];
 let feature: ReturnType<typeof createBackendSwitch>;
 
-const toClaude: BackendSwitchTarget = { backend: 'claude', profile: 'default' };
+/** What `/claude` asks for: the account the topic follows, not a pick. */
+const toClaude: BackendSwitchTarget = { backend: 'claude', profile: 'default', isProfilePicked: false };
+/** What an account tap asks for: a pick the switch records. */
+const toPickedClaude: BackendSwitchTarget = { backend: 'claude', profile: 'work', isProfilePicked: true };
 const toOpenCode: BackendSwitchTarget = { backend: 'opencode', modelLabel: 'openai/gpt-5' };
 
 async function ask(request: { from: BackendFamily; target: BackendSwitchTarget; userMessage?: string }): Promise<number> {
@@ -103,11 +106,11 @@ describe('backendSwitch: the question over its ports', () => {
     currentFamily = 'opencode';
     switches.length = 0;
     const older = await ask({ from: 'opencode', target: toClaude });
-    const newer = await ask({ from: 'opencode', target: { backend: 'claude', profile: 'work' } });
+    const newer = await ask({ from: 'opencode', target: toPickedClaude });
     await harness.tapButton(older, 'bsw_ok');
     assert.equal(switches.length, 0, 'the older keyboard is out of date');
     await harness.tapButton(newer, 'bsw_ok');
-    assert.deepEqual(switches.map((entry) => entry.target), [{ backend: 'claude', profile: 'work' }]);
+    assert.deepEqual(switches.map((entry) => entry.target), [toPickedClaude], 'the picked account reaches the switch as a pick');
   });
 
   it('a question left in the history after the topic changed backend by other means is out of date', async () => {

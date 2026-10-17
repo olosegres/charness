@@ -301,6 +301,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     await claudeTopic.waitForMessageText('the question to turn into the outcome line', secondQuestion, (text) => text === '🔁 Switched this topic to Claude «default».');
     assert.deepEqual(claudeTopic.getKeyboardData(secondQuestion), [], 'the keyboard is consumed');
     assert.equal(readAgent(claudeToOpenCode.threadId)?.claudeSessionId, claudeSessionId, 'the SAME conversation');
+    assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[getTopicKey(claudeToOpenCode.threadId)], undefined, 'a confirmed `/claude` names the account the topic follows but saves no pick of its own: the topic keeps following General');
     assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.opencodeSessionId, getOpenCodeSessionOf(claudeToOpenCode.folder).id, 'the OpenCode session is parked in its turn');
 
     await getCharness().waitFor('the bridge to reach the resumed Claude conversation', agentStartTimeoutMs, () => listBridgePrompts(getLayout()).length > bridgesBefore);

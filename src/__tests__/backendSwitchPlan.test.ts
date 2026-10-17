@@ -56,7 +56,7 @@ describe('checkNeedsBackendSwitchConfirmation', () => {
 describe('the question (English)', () => {
   it('OpenCode → Claude names the account; Claude → OpenCode names the model; an unknown model is just OpenCode', () => {
     assert.equal(
-      buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default' } }),
+      buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false } }),
       `🔁 Switch this topic from OpenCode to Claude «default»?\n${handoverLine}`,
     );
     assert.equal(
@@ -80,7 +80,7 @@ describe('the question (English)', () => {
 for (const locale of localeCodes) {
   describe(`the question in ${locale}`, () => {
     it('names both sides once, carries the shared hand-over line and has no placeholder left', () => {
-      const text = runWithLocale(locale as Locale, () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default' } }));
+      const text = runWithLocale(locale as Locale, () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false } }));
       assert.equal(text.split('«default»').length - 1, 1, text);
       assert.ok(text.includes('OpenCode') && text.includes('Claude'), text);
       assert.ok(!/\{\w+\}/.test(text), text);
@@ -92,7 +92,7 @@ for (const locale of localeCodes) {
 
 describe('the hand-over line is one shared text', () => {
   it('Russian reads «Контекст разговора будет передан в сжатом виде.»', () => {
-    const text = runWithLocale('ru', () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default' } }));
+    const text = runWithLocale('ru', () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false } }));
     assert.ok(text.endsWith('\nКонтекст разговора будет передан в сжатом виде.'), text);
   });
 });

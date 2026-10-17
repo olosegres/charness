@@ -7117,7 +7117,7 @@ async function switchTopicToFallbackEntry(
     await say(notice);
     return { isSwitched: false, notice };
   };
-  let firstPrompt: { text: string; isRequestPrompt: boolean } | null = null;
+  let firstPrompt: FirstPromptAfterMove | null = null;
   let isStoppingBackground = false;
   if (from?.backend === 'claude' && to.backend === 'claude') {
     await state.setClaudeProfileOverride(key, to.profile);
@@ -7141,9 +7141,7 @@ async function switchTopicToFallbackEntry(
       reason: 'limit',
       resetsAtText: getFallbackResetTime(from),
     });
-    const targetName = to.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName;
-    if (to.backend === 'claude') await state.setClaudeProfileOverride(key, to.profile);
-    await switchThreadAdapter(key, targetName);
+    await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null);
     if (to.backend === 'opencode') {
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
@@ -7154,24 +7152,57 @@ async function switchTopicToFallbackEntry(
   const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
   console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
   await say(notice);
-  const ensured = await ensureAgentSession(key);
-  if (!ensured.ok) {
-    await replyToThread(key, ensured.message);
-    return { isSwitched: true, notice };
-  }
-  if (ensured.message) await replyToThread(key, ensured.message);
-  const modelToPin = getFallbackModelToPin(to, runningModel);
-  if (modelToPin !== null) {
-    const error = await getThreadAdapter(key).setModel?.(key, modelToPin);
-    if (error) console.warn(`[fallback] ${k}: pinning the model ${modelToPin} failed: ${error}`);
-  }
-  const prompt = firstPrompt ?? getLimitResumeMessage({
-    continueNudge: t('apiRetry.continueNudge'),
-    untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+  await resumeTopicOnNewSession(key, {
+    modelToPin: getFallbackModelToPin(to, runningModel),
+    // Read after the session is up: the open requests may have changed while it started.
+    getFirstPrompt: () => firstPrompt ?? getLimitResumeMessage({
+      continueNudge: t('apiRetry.continueNudge'),
+      untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+    }),
   });
+  return { isSwitched: true, notice };
+}
+
+/** The message that starts the work on a topic's new session, and whether it is the request's own prompt. */
+interface FirstPromptAfterMove {
+  text: string;
+  isRequestPrompt: boolean;
+}
+
+/**
+ * @description The move ACROSS backends both the usage-limit switch and the operator's manual switch make, first
+ * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
+ * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
+ * session, parks its id and brings back the target family's parked one. The context bridge is built BEFORE this, while
+ * the adapter being left still runs.
+ */
+async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<void> {
+  if (account !== null) await state.setClaudeProfileOverride(key, account);
+  await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
+}
+
+/**
+ * @description The second half, after a move (across backends or between accounts): start or resume the topic's
+ * session, pin the model the move asks for, and send it the first prompt (`getFirstPrompt`, read once the session is up;
+ * `null` sends nothing — a topic with nothing to hand over just starts, `args` being the text typed with the command).
+ * A session that cannot start posts why and sends nothing.
+ */
+async function resumeTopicOnNewSession(
+  key: SessionKey,
+  options: { modelToPin: string | null; getFirstPrompt: () => FirstPromptAfterMove | null; args?: string },
+): Promise<void> {
+  const k = keyToString(key);
+  const ensured = await ensureAgentSession(key, { args: options.args });
+  if (ensured.message) await replyToThread(key, ensured.message);
+  if (!ensured.ok) return;
+  if (options.modelToPin !== null) {
+    const error = await getThreadAdapter(key).setModel?.(key, options.modelToPin);
+    if (error) console.warn(`[fallback] ${k}: pinning the model ${options.modelToPin} failed: ${error}`);
+  }
+  const prompt = options.getFirstPrompt();
+  if (prompt === null) return;
   await deliverPromptOrBuffer(key, prompt.text, startupPromptBuffer.checkIsStarting(k));
   await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
-  return { isSwitched: true, notice };
 }
 
 // ── a MANUAL switch between the two backends (`utils/backendSwitchPlan.ts`, `commands/backendSwitch.ts`) ──
@@ -7199,7 +7230,7 @@ async function checkHasConversationToHandOver(key: SessionKey): Promise<boolean>
  * server cannot say). The OpenCode model is for the question only — the switch leaves it alone.
  */
 async function resolveBackendSwitchTarget(key: SessionKey, backend: BackendFamily): Promise<BackendSwitchTarget> {
-  if (backend === 'claude') return { backend: 'claude', profile: state.resolveClaudeProfileName(key) };
+  if (backend === 'claude') return { backend: 'claude', profile: state.resolveClaudeProfileName(key), isProfilePicked: false };
   const modelLabel = await getAdapter(openCodeAdapterName).getProspectiveModelLabel?.(key).catch(() => null);
   return { backend: 'opencode', modelLabel: modelLabel ?? null };
 }
@@ -7224,13 +7255,13 @@ async function askBeforeCrossBackendSwitch(key: SessionKey, backend: BackendFami
 
 /**
  * @description Move the topic onto the other backend by the operator's own choice — the cross-backend move of the
- * usage-limit switch: the context bridge is built from the conversation being left (while its adapter still runs),
- * `switchThreadAdapter` stops it, parks its session and brings back the target family's parked one, a Claude target
- * runs on the chosen account, and the bridge is the new session's first prompt. A topic with nothing to hand over
- * (`isBridged: false`) just starts the target the way `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
+ * usage-limit switch (`moveTopicToOtherBackend` + `resumeTopicOnNewSession`): the context bridge is built from the
+ * conversation being left, the target family's parked conversation comes back, and the bridge is the new session's
+ * first prompt. A Claude account the operator PICKED (`isProfilePicked`) becomes the topic's own pick; `/claude` leaves
+ * the topic following General. A topic with nothing to hand over (`isBridged: false`) just starts the target the way
+ * `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
  */
 async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string }): Promise<void> {
-  const k = keyToString(key);
   const bridge = options.isBridged
     ? await buildFallbackBridge(key, {
       fromLabel: formatThreadBackend(key),
@@ -7240,14 +7271,13 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
       userMessage: options.userMessage,
     })
     : null;
-  if (target.backend === 'claude') await state.setClaudeProfileOverride(key, target.profile);
-  await switchThreadAdapter(key, target.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
+  await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
   cancelApiRetry(key); // a wait armed for the backend just left is over
-  const ensured = await ensureAgentSession(key, { args: bridge === null ? options.userMessage : undefined });
-  if (ensured.message) await replyToThread(key, ensured.message);
-  if (!ensured.ok || bridge === null) return;
-  await deliverPromptOrBuffer(key, bridge, startupPromptBuffer.checkIsStarting(k));
-  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: false });
+  await resumeTopicOnNewSession(key, {
+    modelToPin: null,
+    getFirstPrompt: () => (bridge === null ? null : { text: bridge, isRequestPrompt: false }),
+    args: bridge === null ? options.userMessage : undefined,
+  });
 }
 
 /**
@@ -7258,7 +7288,7 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
  */
 async function takeClaudeAccountPickOnOpenCodeTopic(key: SessionKey, profile: string): Promise<{ kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' }> {
   if (getTopicBackendFamily(key) !== 'opencode') return { kind: 'notApplicable' };
-  const target: BackendSwitchTarget = { backend: 'claude', profile };
+  const target: BackendSwitchTarget = { backend: 'claude', profile, isProfilePicked: true };
   if (await checkHasConversationToHandOver(key)) {
     await askBackendSwitch(key, { from: 'opencode', target });
     return { kind: 'asked' };
