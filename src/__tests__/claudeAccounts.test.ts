@@ -92,10 +92,10 @@ describe('claudeAccounts: /accounts over its ports', () => {
       switchTopicByOperator: async (key, to) => {
         operatorSwitches.push({ key, to });
         if (operatorSwitchOutcome) return operatorSwitchOutcome;
-        if (to.backend !== 'claude') return { kind: 'switched', text: `Model: ${to.providerId}/${to.modelId}` };
+        if (to.backend !== 'claude') return { kind: 'switched', text: `Model: ${to.providerId}/${to.modelId} (the /model reply)`, label: `OpenCode ${to.providerId}/${to.modelId}` };
         await harness.state.setClaudeProfileOverride(key, to.profile);
         appliedKeys.push(key);
-        return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${applyOutcome}`) }) };
+        return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${applyOutcome}`) }), label: `Claude «${to.profile}»` };
       },
       detectOpenCodeProviders: async () => openCodeProviders,
       listOpenCodeModels: async () => openCodeModels,
@@ -293,7 +293,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   it('a topic on OpenCode with nothing to hand over switches at once: the port\'s line is the confirmation, typed and tapped', async () => {
     operatorSwitches.length = 0;
-    operatorSwitchOutcome = { kind: 'switched', text: '🔁 Switched this topic to Claude «work».' };
+    operatorSwitchOutcome = { kind: 'switched', text: '🔁 Switched this topic to Claude «work».', label: 'Claude «work»' };
     try {
       await harness.runCommand('account', 'use work');
       assert.equal(harness.replies.at(-1)?.text, '🔁 Switched this topic to Claude «work».');
@@ -514,7 +514,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
       await harness.tapButton(screen.messageId!, 'acct_ocm_1');
       assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5-mini' } }]);
-      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: openai/gpt-5-mini');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ This topic runs on OpenCode openai/gpt-5-mini.');
       assert.match(harness.edits.at(-1)?.text ?? '', /^👤 This topic runs on:/, 'back on the screen');
 
       // «Back» returns to the screen too; a model button of a screen that shows no page is out of date.
@@ -544,7 +544,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       const screen = harness.replies.at(-1)!;
       await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
       assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'solo', modelId: 'only' } }]);
-      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: solo/only');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ This topic runs on OpenCode solo/only.');
 
       operatorSwitchOutcome = { kind: 'asked' };
       await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
@@ -570,6 +570,30 @@ describe('claudeAccounts: /accounts over its ports', () => {
     }
   });
 
+  it('the open model pages are remembered for the newest 50 screens only: a page left far back in the history is out of date and switches nothing', async () => {
+    openCodeProviders = ['openai'];
+    openCodeModels = ['openai/gpt-5', 'openai/gpt-5-mini'];
+    topicRun = { family: 'claude', rung: { backend: 'claude', profile: 'default', model: null } };
+    await harness.state.setBinding(harness.key, 'folder');
+    operatorSwitches.length = 0;
+    try {
+      await harness.runCommand('accounts');
+      const oldest = harness.replies.at(-1)!.messageId!;
+      await harness.tapButton(oldest, 'acct_ocuse_0');
+      assert.match(harness.edits.at(-1)?.text ?? '', /pick the model for this topic/, 'the page of the first screen is open');
+      for (let newer = 0; newer < 50; newer += 1) {
+        await harness.runCommand('accounts');
+        await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ocuse_0');
+      }
+      await harness.tapButton(oldest, 'acct_ocm_0');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This screen is out of date — it is re-rendered.');
+      assert.deepEqual(operatorSwitches, [], 'the forgotten page switched nothing');
+    } finally {
+      await harness.state.removeBinding(harness.key);
+      topicRun = { family: null, rung: null };
+    }
+  });
+
   it('an unbound topic is told to bind a folder before it picks a provider', async () => {
     openCodeProviders = ['openai'];
     openCodeModels = ['openai/gpt-5', 'openai/gpt-5-mini'];
@@ -588,7 +612,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     try {
       await harness.runCommand('accounts', 'use openrouter/anthropic/claude-sonnet-4.5');
       assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'openrouter', modelId: 'anthropic/claude-sonnet-4.5' } }]);
-      assert.equal(harness.replies.at(-1)?.text, 'Model: openrouter/anthropic/claude-sonnet-4.5');
+      assert.equal(harness.replies.at(-1)?.text, 'Model: openrouter/anthropic/claude-sonnet-4.5 (the /model reply)', 'a typed command is answered with the route\'s own line');
 
       const repliesBefore = harness.replies.length;
       operatorSwitchOutcome = { kind: 'asked' };

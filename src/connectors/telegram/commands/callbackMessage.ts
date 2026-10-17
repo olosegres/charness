@@ -22,3 +22,17 @@ export function getCallbackMessageId(ctx: Context): number | null {
 export function buildMessageSnapshotKey(key: SessionKey, messageId: number): string {
   return `${key.platform}:${key.space}:${messageId}`;
 }
+
+/**
+ * @description Store a per-MESSAGE snapshot, keeping only the newest `limit`: the oldest is dropped, so a map keyed by
+ * message never grows without bound and an older keyboard resolves to «out of date». Storing again refreshes the entry's age.
+ */
+export function rememberBoundedSnapshot<TSnapshot>(snapshots: Map<string, TSnapshot>, snapshotKey: string, snapshot: TSnapshot, limit: number): void {
+  snapshots.delete(snapshotKey);
+  snapshots.set(snapshotKey, snapshot);
+  while (snapshots.size > limit) {
+    const oldest = snapshots.keys().next().value;
+    if (oldest === undefined) break;
+    snapshots.delete(oldest);
+  }
+}

@@ -21,11 +21,12 @@ import type { BackendFamily } from './backendSwitchPlan';
 export type OperatorSwitchRoute = 'limitMove' | 'sameFamily' | 'askFirst' | 'switchNow';
 
 /**
- * What a screen is told about a pick. `switched` carries the line to show (a toast, whole-text safe); `asked` means
+ * What a screen is told about a pick. `switched` carries the bot's own confirmation line (`text`) and where the topic runs now
+ * in words (`label`: `Claude «work» (sonnet)`, `OpenCode openai/gpt-5`), from which a screen words its short toast; `asked` means
  * the hand-over question is already in the topic and nothing more is to be said; `refused` carries why nothing moved.
  */
 export type OperatorSwitchOutcome =
-  | { kind: 'switched'; text: string }
+  | { kind: 'switched'; text: string; label: string }
   | { kind: 'asked' }
   | { kind: 'refused'; text: string };
 

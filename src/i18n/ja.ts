@@ -858,6 +858,7 @@ export const jaDict: Record<string, string> = {
   'limits.usage': '使い方: /limits — 切り替えボード（アカウントまたはプロバイダーをタップすると、このトピックを切り替えます）。予備リストと設定は /limits_autoswitch。',
   'limits.autoswitchUsage': '使い方: /limits_autoswitch — 画面; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same（トピックでは «same» = General に従う）。',
   'limits.pickModel': '{label} — このトピックのモデルを選択:',
+  'limits.switched': '✅ このトピックは {label} で実行されます。',
   'limits.openCodeInTopicOnly': 'OpenCode のモデルはトピック内で選びます。',
   'limits.rowLimited': '⛔ {time} まで',
   'limits.boardStaleHint': '⚠️ = 古い情報: /accounts でそのアカウントに再ログインしてください。',

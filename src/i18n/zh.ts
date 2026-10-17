@@ -858,6 +858,7 @@ export const zhDict: Record<string, string> = {
   'limits.usage': '用法：/limits — 切换面板（点按账号或提供方即可切换此话题）。备用列表及其设置在 /limits_autoswitch。',
   'limits.autoswitchUsage': '用法：/limits_autoswitch — 主界面；/limits_autoswitch rebuild；/limits_autoswitch clear；/limits_autoswitch switch on|off|same；/limits_autoswitch wait on|off|same（在话题中，«same» = 跟随 General）。',
   'limits.pickModel': '{label} — 为此话题选择模型：',
+  'limits.switched': '✅ 此话题现在运行于 {label}。',
   'limits.openCodeInTopicOnly': 'OpenCode 模型需要在话题内选择。',
   'limits.rowLimited': '⛔ 至 {time}',
   'limits.boardStaleHint': '⚠️ = 已过期：请在 /accounts 中重新登录该账号。',

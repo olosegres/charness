@@ -868,6 +868,7 @@ export const ruDict: Record<string, string> = {
   'limits.usage': 'Использование: /limits — табло переключения (нажми на аккаунт или провайдера, чтобы переключить этот топик). Запасные модели и настройки — в /limits_autoswitch.',
   'limits.autoswitchUsage': 'Использование: /limits_autoswitch — экран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — следовать General, в топике).',
   'limits.pickModel': '{label} — выбери модель для этого топика:',
+  'limits.switched': '✅ Этот топик теперь работает на {label}.',
   'limits.openCodeInTopicOnly': 'Модель OpenCode выбирается внутри топика.',
   'limits.rowLimited': '⛔ до {time}',
   'limits.boardStaleHint': '⚠️ = данные устарели: войди в этот аккаунт заново в /accounts.',

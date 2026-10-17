@@ -88,6 +88,15 @@ export function checkIsSameFallbackAccount(a: FallbackChainEntry, b: FallbackCha
   return false;
 }
 
+/**
+ * @description The model the topic runs on `providerId`: the rung's model id when the rung is that OpenCode provider,
+ * `null` otherwise. The one rule behind «is this provider the active row, and with which model» on every screen that lists
+ * OpenCode providers (the `/limits` board, `/accounts`, a provider's model page).
+ */
+export function getRunningModelOfProvider(rung: FallbackChainEntry | null, providerId: string): string | null {
+  return rung?.backend === 'opencode' && rung.providerId === providerId ? rung.modelId : null;
+}
+
 /** `claude:work:fable` / `opencode:openai/gpt-5` — the entry as one token (logs, tests, the revision hash). */
 export function formatFallbackEntryKey(entry: FallbackChainEntry): string {
   return entry.backend === 'claude'

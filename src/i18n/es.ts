@@ -864,6 +864,7 @@ export const esDict: Record<string, string> = {
   'limits.usage': 'Uso: /limits — el panel de cambio (toca una cuenta o un proveedor para cambiar este tema). La lista de reserva y sus ajustes: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Uso: /limits_autoswitch — la pantalla; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir a General, en un tema).',
   'limits.pickModel': '{label} — elige el modelo de este tema:',
+  'limits.switched': '✅ Este tema ahora funciona en {label}.',
   'limits.openCodeInTopicOnly': 'Un modelo de OpenCode se elige dentro de un tema.',
   'limits.rowLimited': '⛔ hasta {time}',
   'limits.boardStaleHint': '⚠️ = desactualizado: vuelve a iniciar sesión en esa cuenta en /accounts.',

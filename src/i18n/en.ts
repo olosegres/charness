@@ -908,6 +908,7 @@ export const enDict: Record<string, string> = {
   'limits.usage': 'Usage: /limits — the switch board (tap an account or a provider to switch this topic). The fallback setup and its settings are in /limits_autoswitch.',
   'limits.autoswitchUsage': 'Usage: /limits_autoswitch — the screen; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = follow General, in a topic).',
   'limits.pickModel': '{label} — pick the model for this topic:',
+  'limits.switched': '✅ This topic runs on {label}.',
   'limits.openCodeInTopicOnly': 'An OpenCode model is picked inside a topic.',
   'limits.rowLimited': '⛔ until {time}',
   'limits.boardStaleHint': '⚠️ = out of date: sign that account in again in /accounts.',

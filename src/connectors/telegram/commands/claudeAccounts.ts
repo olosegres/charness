@@ -14,7 +14,7 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import type { ClaudeConfigDirApplyResult } from '../../../adapters/claudeConfigDir';
 import type { ClaudeLoginProfile } from '../../../agentLogin/agentLogin';
-import { formatOpenCodeModelLimitSuffix, listOpenCodeModelsOfProvider, parseOpenCodeModelLabel, type FallbackChainEntry } from '../../../utils/fallbackChain';
+import { getRunningModelOfProvider, listOpenCodeModelsOfProvider, parseOpenCodeModelLabel, type FallbackChainEntry } from '../../../utils/fallbackChain';
 import type { BackendFamily } from '../../../utils/backendSwitchPlan';
 import { chatGptProviderId } from '../../../utils/openCodeUsage';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
@@ -67,10 +67,10 @@ import {
   type AccountPickerRow,
 } from '../../../utils/claudeAccountPickerPlan';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
-import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
+import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
 import type { BotCore } from './botCore';
 import { createWholeTextAnswerer } from './callbackToast';
-import { buildModelPageButtons } from './modelPage';
+import { buildOpenCodeProviderPage, handleModelPick, handleProviderTap } from './modelPage';
 
 /**
  * How a profile change reached the topic's live session: the adapter's own answer, plus `restartRequired`
@@ -157,13 +157,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   function rememberProviders(key: SessionKey, messageId: number, providers: string[]): void {
     const snapshotKey = buildMessageSnapshotKey(key, messageId);
     pageSnapshots.delete(snapshotKey);
-    providerSnapshots.delete(snapshotKey);
-    providerSnapshots.set(snapshotKey, providers);
-    while (providerSnapshots.size > providerSnapshotLimit) {
-      const oldest = providerSnapshots.keys().next().value;
-      if (oldest === undefined) break;
-      providerSnapshots.delete(oldest);
-    }
+    rememberBoundedSnapshot(providerSnapshots, snapshotKey, providers, providerSnapshotLimit);
   }
 
   async function readOpenCodeProviders(): Promise<string[]> {
@@ -306,19 +300,19 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   }
 
   /** The connected providers as text: `✓ openai — ChatGPT subscription`, its usage windows hanging under it like an account's. */
-  function formatProviderList(providers: string[], activeProvider: string | null): string {
+  function formatProviderList(providers: string[], rung: FallbackChainEntry | null): string {
     const nowMs = Date.now();
     return providers.map((provider) => {
       const kind = formatProviderAuthKind(provider);
       const usageLines = formatClaudeProfileUsageLines(getState().getOpenCodeProviderUsage(provider), getInstanceTimezone(), nowMs);
-      return `${provider === activeProvider ? '✓' : '•'} ${provider}${kind === '' ? '' : ` — ${kind}`}${usageLines.map((line) => `\n${line}`).join('')}`;
+      return `${getRunningModelOfProvider(rung, provider) === null ? '•' : '✓'} ${provider}${kind === '' ? '' : ` — ${kind}`}${usageLines.map((line) => `\n${line}`).join('')}`;
     }).join('\n');
   }
 
   /** A provider's pick button in a topic: `✓ openai · gpt-5` where the topic runs, the bare provider elsewhere. */
-  function formatProviderRowButton(provider: string, run: ReturnType<typeof getTopicRun>): string {
-    const isActive = run.rung?.backend === 'opencode' && run.rung.providerId === provider;
-    return isActive && run.rung?.backend === 'opencode' ? `✓ ${provider} · ${run.rung.modelId}` : provider;
+  function formatProviderRowButton(provider: string, rung: FallbackChainEntry | null): string {
+    const runningModel = getRunningModelOfProvider(rung, provider);
+    return runningModel === null ? provider : `✓ ${provider} · ${runningModel}`;
   }
 
   /** The main screen: text + keyboard, for the topic (or General), and the provider list the keyboard indexes. */
@@ -326,13 +320,12 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const [rows, providers] = await Promise.all([buildPickerRows(key, isGeneral), readOpenCodeProviders()]);
     const list = rows.map(formatRow).join('\n');
     const run = getTopicRun(key);
-    const activeProvider = !isGeneral && run.rung?.backend === 'opencode' ? run.rung.providerId : null;
     const title = isGeneral
       ? t('account.titleGeneral', { name: resolveClaudeAccountName(key, true), list })
       : t('account.title', { current: formatRunLabel(key), list });
     const openCodeSection = providers.length === 0
       ? t('accounts.openCodeNone')
-      : t('accounts.openCodeSection', { list: formatProviderList(providers, activeProvider) });
+      : t('accounts.openCodeSection', { list: formatProviderList(providers, isGeneral ? null : run.rung) });
     const isDefaultRemoved = getState().getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true;
     const removedNote = isDefaultRemoved ? `\n\n${t('accounts.defaultRemovedNote')}` : '';
     // The usage hint (which says the percentages are USED) follows the account list it explains.
@@ -353,7 +346,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
           Markup.button.callback('🔑', buildAccountReconnectCallback(index)),
         ]
         : [
-          Markup.button.callback(formatProviderRowButton(provider, run), buildAccountOpenCodeUseCallback(index)),
+          Markup.button.callback(formatProviderRowButton(provider, run.rung), buildAccountOpenCodeUseCallback(index)),
           Markup.button.callback('🔑', buildAccountReconnectCallback(index)),
           Markup.button.callback('🔌', buildAccountDisconnectCallback(index)),
         ]);
@@ -565,34 +558,30 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
   // ── a provider as a pick: its model page ──
 
-  /** The provider's model page in the screen's message (the shared renderer): ✓ on the model the topic runs, ⛔ on a limited one. */
+  /** The provider's model page in the screen's message (the shared page builder), and the snapshot its buttons index. */
   async function showProviderModelPage(key: SessionKey, messageId: number, providerId: string, models: string[], page: number): Promise<void> {
-    const rung = getTopicRun(key).rung;
-    const current = rung?.backend === 'opencode' && rung.providerId === providerId ? rung.modelId : null;
-    const limits = getState().getOpenCodeModelLimits();
-    const nowMs = Date.now();
-    const { rows } = buildModelPageButtons({
-      provider: providerId,
+    const shown = buildOpenCodeProviderPage({
+      providerId,
       models,
       page,
-      current,
+      rung: getTopicRun(key).rung,
+      limits: getState().getOpenCodeModelLimits(),
+      timezone: getInstanceTimezone(),
+      nowMs: Date.now(),
       callbacks: {
         buildPage: buildAccountOpenCodePageCallback,
         buildPick: buildAccountOpenCodeModelCallback,
         noop: modelPickerNoopCallback,
         back: { label: t('fallback.backButton'), data: accountBackCallback },
       },
-      getSuffix: (modelId) => formatOpenCodeModelLimitSuffix(`${providerId}/${modelId}`, limits, getInstanceTimezone(), nowMs),
     });
-    pageSnapshots.set(buildMessageSnapshotKey(key, messageId), { providerId, models });
-    await editThreadMessage(key, messageId, t('limits.pickModel', { label: `${t('fallback.backendOpenCode')} · ${providerId}` }), Markup.inlineKeyboard(rows));
+    rememberBoundedSnapshot(pageSnapshots, buildMessageSnapshotKey(key, messageId), { providerId, models }, providerSnapshotLimit);
+    await editThreadMessage(key, messageId, shown.text, shown.keyboard);
   }
 
-  /** A pick of an OpenCode model through the one switch path; the line to show, or `null` when the hand-over question is the answer. */
-  async function switchToOpenCodeModel(key: SessionKey, providerId: string, modelId: string): Promise<{ line: string | null; isRefused: boolean }> {
-    const outcome = await switchTopicByOperator(key, { backend: 'opencode', providerId, modelId });
-    if (outcome.kind === 'asked') return { line: null, isRefused: false };
-    return { line: outcome.text, isRefused: outcome.kind === 'refused' };
+  /** What the shared provider-pick handlers need from this screen: the switch path, the toast and the way back to the screen. */
+  function buildPickDeps(ctx: Context, key: SessionKey, messageId: number, isGeneral: boolean) {
+    return { ctx, key, switchTopicByOperator, answerWholeText: answerWithWholeText, rerender: () => rerenderPicker(key, messageId, isGeneral) };
   }
 
   /** `/accounts use <provider>/<model>`: the model a topic runs, through the same path as a tap; never in General. */
@@ -601,8 +590,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     if (parsed === null) { await replyToThread(key, t('account.usage')); return; }
     if (isGeneral) { await replyToThread(key, t('limits.openCodeInTopicOnly')); return; }
     if (getState().getBinding(key) === null) { await replyToThread(key, t('thread.bind_required')); return; }
-    const { line } = await switchToOpenCodeModel(key, parsed.providerId, parsed.modelId);
-    if (line !== null) await replyToThread(key, line);
+    const outcome = await switchTopicByOperator(key, { backend: 'opencode', providerId: parsed.providerId, modelId: parsed.modelId });
+    if (outcome.kind !== 'asked') await replyToThread(key, outcome.text);
   }
 
   // ── the command ──
@@ -738,30 +727,22 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // resolved against the snapshot of the message the button sits on, like the disconnect buttons.
     bot.action(accountOpenCodeUseCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
-      if (messageId === null || provider === undefined) {
+      const answerStale = async (): Promise<void> => {
         await ctx.answerCbQuery(t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
-        return;
-      }
+      };
+      if (messageId === null || provider === undefined) { await answerStale(); return; }
       if (isGeneral) { await ctx.answerCbQuery(t('limits.openCodeInTopicOnly')); return; }
       if (getState().getBinding(key) === null) { await answerWithWholeText(ctx, key, t('thread.bind_required')); return; }
       const models = listOpenCodeModelsOfProvider(await listOpenCodeModels(), provider);
-      if (models.length === 0) {
-        await ctx.answerCbQuery(t('accounts.stale'));
-        await rerenderPicker(key, messageId, isGeneral);
-        return;
-      }
-      const rung = getTopicRun(key).rung;
-      const isHere = rung?.backend === 'opencode' && rung.providerId === provider;
-      if (models.length === 1 && !isHere) {
-        const { line, isRefused } = await switchToOpenCodeModel(key, provider, models[0]);
-        if (line === null) await ctx.answerCbQuery();
-        else await answerWithWholeText(ctx, key, line);
-        if (!isRefused) await rerenderPicker(key, messageId, isGeneral);
-        return;
-      }
-      await ctx.answerCbQuery();
-      await showProviderModelPage(key, messageId, provider, models, 0);
+      await handleProviderTap({
+        ...buildPickDeps(ctx, key, messageId, isGeneral),
+        providerId: provider,
+        models,
+        rung: getTopicRun(key).rung,
+        showPage: () => showProviderModelPage(key, messageId, provider, models, 0),
+        answerStale,
+      });
     }));
 
     bot.action(accountOpenCodePageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
@@ -784,10 +765,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      const { line, isRefused } = await switchToOpenCodeModel(key, page.providerId, modelId);
-      if (line === null) await ctx.answerCbQuery();
-      else await answerWithWholeText(ctx, key, line);
-      if (!isRefused) await rerenderPicker(key, messageId, isGeneral);
+      await handleModelPick(buildPickDeps(ctx, key, messageId, isGeneral), { backend: 'opencode', providerId: page.providerId, modelId });
     }));
 
     bot.action(accountLoginMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {

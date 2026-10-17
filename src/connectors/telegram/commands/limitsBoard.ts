@@ -15,7 +15,6 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import {
-  formatOpenCodeModelLimitSuffix,
   listOpenCodeModelsOfProvider,
   type FallbackChainEntry,
   type FallbackDetection,
@@ -25,9 +24,9 @@ import { buildLimitsBoardRows, type LimitsBoardRow } from '../../../utils/limits
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
-import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
+import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
 import { createWholeTextAnswerer } from './callbackToast';
-import { buildModelPageButtons } from './modelPage';
+import { buildOpenCodeProviderPage, buildProviderModelPage, handleModelPick, handleProviderTap, type ProviderModelPage } from './modelPage';
 import type { BotCore } from './botCore';
 
 /** Claude account row / OpenCode provider row / model on the open page / page arrow / back to the board: each carries an INDEX into the message's snapshot. */
@@ -110,14 +109,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
   const snapshots = new Map<string, BoardSnapshot>();
 
   function rememberSnapshot(key: SessionKey, messageId: number, snapshot: BoardSnapshot): void {
-    const snapshotKey = buildMessageSnapshotKey(key, messageId);
-    snapshots.delete(snapshotKey);
-    snapshots.set(snapshotKey, snapshot);
-    while (snapshots.size > snapshotLimit) {
-      const oldest = snapshots.keys().next().value;
-      if (oldest === undefined) break;
-      snapshots.delete(oldest);
-    }
+    rememberBoundedSnapshot(snapshots, buildMessageSnapshotKey(key, messageId), snapshot, snapshotLimit);
   }
 
   function getSnapshot(key: SessionKey, messageId: number | null): BoardSnapshot | undefined {
@@ -194,36 +186,43 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     await editThreadMessage(key, messageId, board.text, board.keyboard);
   }
 
-  /** The model page of a row, in the message the board sits in: the models the shared renderer lists, ✓ on the topic's own. */
+  /** The Claude alias the running session's full model name stands for (`claude-opus-4-1` → `opus`); `null` when unknown. */
+  function findRunningClaudeAlias(rung: FallbackChainEntry | null, profile: string, aliases: readonly string[]): string | null {
+    if (rung?.backend !== 'claude' || rung.profile !== profile || rung.model === null) return null;
+    const running = rung.model.toLowerCase();
+    return aliases.find((alias) => running.includes(alias.toLowerCase())) ?? null;
+  }
+
+  /** The model page of a row, in the message the board sits in: the shared page builder, the snapshot its buttons index. */
   async function showModelPage(key: SessionKey, messageId: number, row: BoardRowRef, models: string[], page: number): Promise<void> {
-    const current = getTopicPosition(key);
-    const detection = await detectFallbackOptions();
-    const nowMs = Date.now();
-    let currentModel: string | null = null;
-    if (row.kind === 'opencode' && current?.backend === 'opencode' && current.providerId === row.id) currentModel = current.modelId;
-    // A running Claude session reports its full model name (`claude-opus-4-1`); the page lists the CLI aliases.
-    if (row.kind === 'claude' && current?.backend === 'claude' && current.profile === row.id && current.model !== null) {
-      const running = current.model.toLowerCase();
-      currentModel = models.find((alias) => running.includes(alias.toLowerCase())) ?? null;
-    }
-    const { rows } = buildModelPageButtons({
-      provider: row.id,
-      models,
-      page,
-      current: currentModel,
-      callbacks: {
-        buildPage: buildPageCallback,
-        buildPick: buildModelPickCallback,
-        noop: modelPickerNoopCallback,
-        back: { label: t('fallback.backButton'), data: boardBackCallback },
-      },
-      getSuffix: row.kind === 'opencode'
-        ? (modelId) => formatOpenCodeModelLimitSuffix(`${row.id}/${modelId}`, detection.openCodeLimits, getInstanceTimezone(), nowMs)
-        : undefined,
-    });
+    const rung = getTopicPosition(key);
+    const callbacks = {
+      buildPage: buildPageCallback,
+      buildPick: buildModelPickCallback,
+      noop: modelPickerNoopCallback,
+      back: { label: t('fallback.backButton'), data: boardBackCallback },
+    };
+    const shown: ProviderModelPage = row.kind === 'opencode'
+      ? buildOpenCodeProviderPage({
+        providerId: row.id,
+        models,
+        page,
+        rung,
+        limits: (await detectFallbackOptions()).openCodeLimits,
+        timezone: getInstanceTimezone(),
+        nowMs: Date.now(),
+        callbacks,
+      })
+      : buildProviderModelPage({
+        program: t('fallback.backendClaude'),
+        providerId: row.id,
+        models,
+        page,
+        current: findRunningClaudeAlias(rung, row.id, models),
+        callbacks,
+      });
     rememberSnapshot(key, messageId, { kind: 'page', row, models });
-    const program = row.kind === 'claude' ? t('fallback.backendClaude') : t('fallback.backendOpenCode');
-    await editThreadMessage(key, messageId, t('limits.pickModel', { label: `${program} · ${row.id}` }), Markup.inlineKeyboard(rows));
+    await editThreadMessage(key, messageId, shown.text, shown.keyboard);
   }
 
   /** The tap prologue: authorise, resolve the topic, run under its locale. */
@@ -239,10 +238,9 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     await rerenderBoard(key, messageId, isGeneral);
   }
 
-  /** The line of an outcome on the tap: the toast (whole), or no toast when the hand-over question is the answer. */
-  async function answerOutcome(ctx: Context, key: SessionKey, outcome: OperatorSwitchOutcome): Promise<void> {
-    if (outcome.kind === 'asked') await ctx.answerCbQuery();
-    else await answerWithWholeText(ctx, key, outcome.text);
+  /** What the shared provider-pick handlers need from the board: the switch path, the toast and the way back to the board. */
+  function buildPickDeps(ctx: Context, key: SessionKey, messageId: number, isGeneral: boolean) {
+    return { ctx, key, switchTopicByOperator, answerWholeText: answerWithWholeText, rerender: () => rerenderBoard(key, messageId, isGeneral) };
   }
 
   function checkIsBound(key: SessionKey): boolean {
@@ -287,17 +285,14 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       if (isGeneral) { await ctx.answerCbQuery(t('limits.openCodeInTopicOnly')); return; }
       if (!checkIsBound(key)) { await answerWithWholeText(ctx, key, t('thread.bind_required')); return; }
       const models = listOpenCodeModelsOfProvider((await detectFallbackOptions()).openCodeModels, row.id);
-      if (models.length === 0) { await answerStale(ctx, key, messageId, isGeneral); return; }
-      const current = getTopicPosition(key);
-      const isHere = current?.backend === 'opencode' && current.providerId === row.id;
-      if (models.length === 1 && !isHere) {
-        const outcome = await switchTopicByOperator(key, { backend: 'opencode', providerId: row.id, modelId: models[0] });
-        await answerOutcome(ctx, key, outcome);
-        if (outcome.kind !== 'refused') await rerenderBoard(key, messageId, isGeneral);
-        return;
-      }
-      await ctx.answerCbQuery();
-      await showModelPage(key, messageId, row, models, 0);
+      await handleProviderTap({
+        ...buildPickDeps(ctx, key, messageId, isGeneral),
+        providerId: row.id,
+        models,
+        rung: getTopicPosition(key),
+        showPage: () => showModelPage(key, messageId, row, models, 0),
+        answerStale: () => answerStale(ctx, key, messageId, isGeneral),
+      });
     }));
 
     bot.action(boardPageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
@@ -315,9 +310,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       const to: FallbackChainEntry = snapshot.row.kind === 'claude'
         ? { backend: 'claude', profile: snapshot.row.id, model }
         : { backend: 'opencode', providerId: snapshot.row.id, modelId: model };
-      const outcome = await switchTopicByOperator(key, to);
-      await answerOutcome(ctx, key, outcome);
-      if (outcome.kind !== 'refused') await rerenderBoard(key, messageId, isGeneral);
+      await handleModelPick(buildPickDeps(ctx, key, messageId, isGeneral), to);
     }));
 
     bot.action(boardBackCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {

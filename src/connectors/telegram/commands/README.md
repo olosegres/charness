@@ -241,8 +241,7 @@ The usage is refreshed through the `refreshUsage` port when the board OPENS (bou
 
 A tap in a topic: an unbound topic is told to bind a folder first; a Claude row goes through the `pickClaudeAccount` port (the `/accounts` pick: login check, then the
 switch path), except the ✓ row, which opens the shared model page of the topic's account (the adapter's aliases, from `listClaudeModels`); an OpenCode row opens
-its provider's page (a provider with one model is switched at once unless the topic runs on it); a page pick is `switchTopicByOperator` (`refused` keeps the page and
-shows the error as the toast, `asked` has no toast, anything else returns to the board with the ✓ moved). In General a Claude row sets the default account (the same pick
+its provider's page (`handleProviderTap`: a provider with one model is switched at once unless the topic runs on it); a page pick is `handleModelPick` (see `modelPage.ts`: the short toast, `refused` keeps the page, `asked` has no toast, anything else returns to the board with the ✓ moved). In General a Claude row sets the default account (the same pick
 with `isGeneral`), an OpenCode row only toasts `limits.openCodeInTopicOnly`. Every button indexes a per-MESSAGE snapshot (`buildMessageSnapshotKey`, the newest 50): a tap on a message
 the board knows nothing about — a restart, another chat — answers `accounts.stale`, re-renders and never acts, and a row button on a page (or a page button on the board) is stale too.
 `/limits rebuild|clear|switch|wait …` (the old text forms) go to the `runAutoSwitchCommand` port with the board's own usage text.
@@ -253,6 +252,14 @@ The model page — one provider's models as full-width buttons, `modelPageSize` 
 of `/limits` and `/accounts`. `buildModelPageButtons` draws only buttons: the screen hands in the `callback_data` of its own pick (an absolute index into the provider's
 list), page-arrow and back buttons (`ModelPageCallbacks`) and an optional per-model suffix (`formatOpenCodeModelLimitSuffix`: ` ⛔ 14:00`); the ✓ and the arrows and the
 page pill (only with more than one page) are the page's. What a tap DOES stays the screen's, so one page cannot act on another screen's snapshot.
+
+The module also owns what the two screens that PICK A PROVIDER (`limitsBoard.ts`, `claudeAccounts.ts`) must decide identically, so a rule changes in one place:
+`decideProviderTap` (no model → out of date; exactly one model and the topic is not on that provider → switch at once; else the page), `buildOpenCodeProviderPage` /
+`buildProviderModelPage` (the title «<program> · <provider> — pick the model for this topic:», ✓ on the model the topic runs — `getRunningModelOfProvider`, the one «is this
+provider active, with which model» rule — and the ⛔ marks), `handleProviderTap` and `handleModelPick`. A model pick goes through the `switchTopicByOperator` port and is
+answered with the SHORT toast `limits.switched` («✅ This topic runs on <where>») built from the outcome's `label` — never the route's own long line, a refusal with its reason (and the
+page stays), an asked hand-over question with no toast; anything but a refusal returns to the screen. Each screen keeps only its snapshot maps (bounded: `rememberBoundedSnapshot`
+in `callbackMessage.ts`, the newest 50) and its callback data.
 
 ## `stt.ts`
 

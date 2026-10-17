@@ -863,6 +863,7 @@ export const hiDict: Record<string, string> = {
   'limits.usage': 'उपयोग: /limits — स्विच बोर्ड (इस टॉपिक को बदलने के लिए किसी खाते या प्रदाता पर टैप करें)। वैकल्पिक सूची और उसकी सेटिंग /limits_autoswitch में हैं।',
   'limits.autoswitchUsage': 'उपयोग: /limits_autoswitch — स्क्रीन; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
   'limits.pickModel': '{label} — इस टॉपिक के लिए मॉडल चुनें:',
+  'limits.switched': '✅ यह टॉपिक अब {label} पर चल रहा है।',
   'limits.openCodeInTopicOnly': 'OpenCode मॉडल टॉपिक के भीतर चुना जाता है।',
   'limits.rowLimited': '⛔ {time} तक',
   'limits.boardStaleHint': '⚠️ = पुराना: /accounts में उस खाते में फिर से साइन इन करें।',

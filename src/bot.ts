@@ -6830,17 +6830,18 @@ async function applyClaudeProfileEverywhere(): Promise<void> {
   }
 }
 
-/**
- * The per-profile usage cache (`utils/claudeUsageRefresher.ts`): every signed-in profile's windows off the
- * OAuth usage endpoint on a 10-minute timer, on `/account` open and on a `claude_profiles` call, plus the
- * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
- */
+/** The OpenCode providers' usage (`utils/openCodeUsage.ts`): polled with the Claude profiles below, cached in `state.json`. */
 const openCodeUsagePoller = createOpenCodeUsagePoller({
   readCredentials: () => readOpenCodeCredentials(getOpenCodeAuthFilePath({ XDG_DATA_HOME: process.env.XDG_DATA_HOME, HOME: os.homedir() })),
   getRecord: (providerId) => state.getOpenCodeProviderUsage(providerId),
   saveRecord: (providerId, record) => state.setOpenCodeProviderUsage(providerId, record),
 });
 
+/**
+ * The per-profile usage cache (`utils/claudeUsageRefresher.ts`): every signed-in profile's windows off the
+ * OAuth usage endpoint on a 10-minute timer, on `/account` open and on a `claude_profiles` call, plus the
+ * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
+ */
 const claudeUsageRefresher = createClaudeUsageRefresher({
   listProfiles: () => [
     { name: defaultClaudeProfileName, configDir: null, loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.loggedIn },
@@ -7322,18 +7323,19 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     hasConversation: currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
   });
   const target = buildBackendSwitchTargetOfRung(to);
+  const label = formatBackendSwitchTarget(target);
   switch (route) {
     case 'limitMove': {
       const moved = await switchTopicToFallbackEntry(key, from, to, { isAnnounced: true });
       if (moved.isFailed) return { kind: 'refused', text: moved.notice };
-      if (to.backend === 'opencode') return { kind: 'switched', text: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
-      return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${moved.isSwitched ? 'respawned' : 'deferred'}`) }) };
+      if (to.backend === 'opencode') return { kind: 'switched', text: t('backendSwitch.switched', { to: label }), label };
+      return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${moved.isSwitched ? 'respawned' : 'deferred'}`) }), label };
     }
     case 'sameFamily': {
       if (to.backend === 'opencode') {
         const adapter = getThreadAdapter(key);
         const { isOk, message, setModelError } = await applyModelSelection(adapter, key, buildOpenCodeModelLabel(to));
-        return isOk ? { kind: 'switched', text: message } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
+        return isOk ? { kind: 'switched', text: message, label } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       }
       const runningModel = readRunningModelBeforeMove(key, from, to);
       // A model named for the account the topic already runs is a model change: it must not turn the topic's
@@ -7346,10 +7348,10 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
         switchedText = t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${outcome}`) });
       }
       const modelToPin = getFallbackModelToPin(to, runningModel);
-      if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText };
+      if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText, label };
       const { isOk, message, setModelError } = await applyModelSelection(getThreadAdapter(key), key, modelToPin);
       if (!isOk) return { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
-      return { kind: 'switched', text: switchedText === '' ? message : `${switchedText}\n${message}` };
+      return { kind: 'switched', text: switchedText === '' ? message : `${switchedText}\n${message}`, label };
     }
     case 'askFirst': {
       // The route asks only when the topic runs a backend to hand over from.
@@ -7359,7 +7361,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     }
     case 'switchNow': {
       await executeBackendSwitch(key, target, { isBridged: false });
-      return { kind: 'switched', text: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
+      return { kind: 'switched', text: t('backendSwitch.switched', { to: label }), label };
     }
   }
 }

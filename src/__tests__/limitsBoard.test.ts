@@ -34,7 +34,9 @@ const usageRefreshes: Array<{ maxAgeMs?: number }> = [];
 const claudePicks: Array<{ key: SessionKey; isGeneral: boolean; name: string }> = [];
 let claudePickLine: string | null = '✅ Claude account for this topic: work.';
 const operatorSwitches: Array<{ key: SessionKey; to: FallbackChainEntry }> = [];
-let operatorOutcome: OperatorSwitchOutcome = { kind: 'switched', text: 'Model: stub' };
+/** The stand-in bot's confirmation line of a switch is long on purpose: the board must answer with its OWN short toast, not with this. */
+const longSwitchLine = `Model: stub ${'(the /model reply with the effort note) '.repeat(4)}`;
+let operatorOutcome: OperatorSwitchOutcome = { kind: 'switched', text: longSwitchLine, label: 'stub label' };
 const autoSwitchRuns: Array<{ verb: string; value: string; usageKey: string }> = [];
 /** What the stand-in bot does after a successful pick: the topic is now where it was sent. */
 let followPicks = true;
@@ -211,7 +213,7 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.deepEqual(page.data, [['lim_m_0'], ['lim_m_1'], ['lim_m_2'], ['lim_m_3'], ['lim_back']]);
     await harness.tapButton(board.messageId, 'lim_m_2');
     assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'claude', profile: 'perf', model: 'sonnet' } }]);
-    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: stub');
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ This topic runs on stub label.', 'the short locked toast, not the route\'s long line');
     assert.match(lastEdit().text, /^🔁 Auto switch:/, 'back on the board');
   });
 
@@ -262,7 +264,7 @@ describe('limitsBoard: /limits over its ports', () => {
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '');
       assert.match(lastEdit().text, /^🔁 Auto switch:/);
     } finally {
-      operatorOutcome = { kind: 'switched', text: 'Model: stub' };
+      operatorOutcome = { kind: 'switched', text: longSwitchLine, label: 'stub label' };
     }
   });
 
@@ -278,7 +280,7 @@ describe('limitsBoard: /limits over its ports', () => {
     const again = await openBoard();
     await harness.tapButton(again.messageId, 'lim_o_4'); // solo: one model
     assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'solo', modelId: 'only-model' } }]);
-    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: stub');
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ This topic runs on stub label.', 'the short locked toast, not the route\'s long line');
 
     position = { backend: 'opencode', providerId: 'solo', modelId: 'only-model' };
     operatorSwitches.length = 0;

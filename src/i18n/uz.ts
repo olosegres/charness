@@ -864,6 +864,7 @@ export const uzDict: Record<string, string> = {
   'limits.usage': 'Foydalanish: /limits — almashtirish paneli (bu mavzuni almashtirish uchun hisob yoki provayderni bosing). Zaxira ro‘yxat va sozlamalar — /limits_autoswitch da.',
   'limits.autoswitchUsage': 'Foydalanish: /limits_autoswitch — ekran; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (mavzuda «same» = General ga ergashish).',
   'limits.pickModel': '{label} — bu mavzu uchun modelni tanlang:',
+  'limits.switched': '✅ Bu mavzu endi {label} da ishlayapti.',
   'limits.openCodeInTopicOnly': 'OpenCode modeli mavzu ichida tanlanadi.',
   'limits.rowLimited': '⛔ {time} gacha',
   'limits.boardStaleHint': '⚠️ = eskirgan: /accounts da bu hisobga qayta kiring.',

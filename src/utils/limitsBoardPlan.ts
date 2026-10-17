@@ -21,6 +21,7 @@ import {
 } from './claudeUsage';
 import {
   getFallbackEntryAvailability,
+  getRunningModelOfProvider,
   listOpenCodeProviders,
   parseOpenCodeModelLabel,
   type FallbackChainEntry,
@@ -126,13 +127,13 @@ export function buildLimitsBoardRows(input: LimitsBoardInput): LimitsBoardRow[] 
     }, input));
   }
   for (const providerId of listOpenCodeProviders(input.detection.openCodeModels)) {
-    const isActive = current?.backend === 'opencode' && current.providerId === providerId;
+    const runningModel = getRunningModelOfProvider(current, providerId);
     rows.push(buildRow({
       kind: 'opencode',
       id: providerId,
       program: input.words.openCode,
-      isActive,
-      model: current?.backend === 'opencode' ? current.modelId : null,
+      isActive: runningModel !== null,
+      model: runningModel,
       limitedUntil: findProviderLimitedUntil(providerId, input),
       usage: input.openCodeProviderUsage[providerId]?.usage,
     }, input));

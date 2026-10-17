@@ -864,6 +864,7 @@ export const kaDict: Record<string, string> = {
   'limits.usage': 'გამოყენება: /limits — გადართვის დაფა (ამ თემის გადასართავად დააჭირეთ ანგარიშს ან პროვაიდერს). სარეზერვო სია და პარამეტრები — /limits_autoswitch-ში.',
   'limits.autoswitchUsage': 'გამოყენება: /limits_autoswitch — ეკრანი; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
   'limits.pickModel': '{label} — აირჩიეთ მოდელი ამ თემისთვის:',
+  'limits.switched': '✅ ეს თემა ახლა მუშაობს: {label}.',
   'limits.openCodeInTopicOnly': 'OpenCode-ის მოდელი თემის შიგნით აირჩევა.',
   'limits.rowLimited': '⛔ {time}-მდე',
   'limits.boardStaleHint': '⚠️ = მოძველებულია: /accounts-ში ეს ანგარიში თავიდან შეიყვანეთ.',

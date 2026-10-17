@@ -28,6 +28,7 @@ import {
   buildFallbackSwitchCallbackData,
   checkIsSameFallbackAccount,
   checkIsSameFallbackEntry,
+  getRunningModelOfProvider,
   decideFallbackSwitch,
   fallbackAddClaudeModelCallbackRe,
   fallbackChainMaxLength,
@@ -508,4 +509,11 @@ test('the confirmation buttons of the new-backend question bake the list revisio
   assert.ok(checkIsCallbackDataWithinLimit(toggle) && checkIsCallbackDataWithinLimit(add), 'within the 64-byte cap');
   assert.equal(fallbackToggleConfirmCallbackRe.test('fbk_tg_3_' + revision), false, 'the ask-first toggle is another pattern');
   assert.equal(fallbackAddConfirmCallbackRe.test('fbk_addok_xyz'), false);
+});
+
+test('getRunningModelOfProvider: the model of the OpenCode rung when it is on that provider, null for another provider, a Claude rung or none', () => {
+  assert.equal(getRunningModelOfProvider({ backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' }, 'openai'), 'gpt-5');
+  assert.equal(getRunningModelOfProvider({ backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' }, 'google'), null);
+  assert.equal(getRunningModelOfProvider({ backend: 'claude', profile: 'openai', model: 'opus' }, 'openai'), null, 'a Claude account that happens to share the name is no provider');
+  assert.equal(getRunningModelOfProvider(null, 'openai'), null);
 });

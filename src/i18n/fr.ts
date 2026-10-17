@@ -864,6 +864,7 @@ export const frDict: Record<string, string> = {
   'limits.usage': 'Utilisation : /limits — le tableau de bascule (touchez un compte ou un fournisseur pour y basculer ce sujet). La liste de secours et ses réglages : /limits_autoswitch.',
   'limits.autoswitchUsage': 'Utilisation : /limits_autoswitch — l’écran ; /limits_autoswitch rebuild ; /limits_autoswitch clear ; /limits_autoswitch switch on|off|same ; /limits_autoswitch wait on|off|same («same» = suivre General, dans un sujet).',
   'limits.pickModel': '{label} — choisissez le modèle de ce sujet :',
+  'limits.switched': '✅ Ce sujet tourne maintenant sur {label}.',
   'limits.openCodeInTopicOnly': 'Un modèle OpenCode se choisit dans un sujet.',
   'limits.rowLimited': '⛔ jusqu’à {time}',
   'limits.boardStaleHint': '⚠️ = périmé : reconnectez ce compte dans /accounts.',

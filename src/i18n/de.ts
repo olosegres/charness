@@ -864,6 +864,7 @@ export const deDict: Record<string, string> = {
   'limits.usage': 'Verwendung: /limits — die Wechsel-Übersicht (tippe auf ein Konto oder einen Provider, um dieses Thema umzustellen). Ersatzliste und Einstellungen: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Verwendung: /limits_autoswitch — der Bildschirm; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = General folgen, in einem Thema).',
   'limits.pickModel': '{label} — wähle das Modell für dieses Thema:',
+  'limits.switched': '✅ Dieses Thema läuft jetzt auf {label}.',
   'limits.openCodeInTopicOnly': 'Ein OpenCode-Modell wird innerhalb eines Themas gewählt.',
   'limits.rowLimited': '⛔ bis {time}',
   'limits.boardStaleHint': '⚠️ = veraltet: melde dieses Konto in /accounts neu an.',

@@ -865,6 +865,7 @@ export const ptDict: Record<string, string> = {
   'limits.usage': 'Uso: /limits — o painel de troca (toca numa conta ou num fornecedor para trocar este tópico). A lista de reserva e as definições: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Uso: /limits_autoswitch — o ecrã; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir o General, num tópico).',
   'limits.pickModel': '{label} — escolhe o modelo deste tópico:',
+  'limits.switched': '✅ Este tópico corre agora em {label}.',
   'limits.openCodeInTopicOnly': 'Um modelo do OpenCode escolhe-se dentro de um tópico.',
   'limits.rowLimited': '⛔ até {time}',
   'limits.boardStaleHint': '⚠️ = desatualizado: inicia sessão de novo nessa conta em /accounts.',

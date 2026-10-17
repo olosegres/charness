@@ -870,6 +870,7 @@ export const ukDict: Record<string, string> = {
   'limits.usage': 'Використання: /limits — табло перемикання (натисни на обліковий запис або провайдера, щоб перемкнути цей топік). Запасні моделі та налаштування — у /limits_autoswitch.',
   'limits.autoswitchUsage': 'Використання: /limits_autoswitch — екран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — слідувати General, у топіку).',
   'limits.pickModel': '{label} — обери модель для цього топіка:',
+  'limits.switched': '✅ Цей топік тепер працює на {label}.',
   'limits.openCodeInTopicOnly': 'Модель OpenCode вибирається всередині топіка.',
   'limits.rowLimited': '⛔ до {time}',
   'limits.boardStaleHint': '⚠️ = застаріло: увійди в цей обліковий запис заново в /accounts.',
