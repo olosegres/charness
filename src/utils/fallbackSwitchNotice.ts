@@ -7,8 +7,9 @@
  * `fallback.switchedBack` texts).
  *
  * A Claude rung is named by its account alone (`«work»`), with the model added only when the switch changes it
- * (`«work» (sonnet)`); an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`), and a Claude rung
- * reached from another backend says `Claude «work»`, since there is no account on the left to compare against.
+ * (`«work» (sonnet)`); an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`) and, as the side that
+ * hit the limit, by its model (`Model openai/gpt-5`) — a model name is never quoted. A Claude rung reached from
+ * another backend says `Claude «work»`, since there is no account on the left to compare against.
  *
  * Pure: the clock, the running model and the topic's state are decided by the caller, so every wording rule is
  * unit-tested; the texts come from the active locale (`fallback.*`).
@@ -59,7 +60,7 @@ export function buildFallbackSwitchedNotice(input: {
   const tail = buildSwitchBackTail(resetTime);
   if (from === null) return t('fallback.switchedUnknownSource', { to: target, tail });
   if (from.backend === 'claude') return t('fallback.switched', { from: quoteName(from.profile), to: target, tail });
-  return t('fallback.switchedModel', { from: quoteName(buildOpenCodeModelLabel(from)), to: target, tail });
+  return t('fallback.switchedModel', { from: buildOpenCodeModelLabel(from), to: target, tail });
 }
 
 /**

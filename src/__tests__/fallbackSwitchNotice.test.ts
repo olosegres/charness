@@ -10,7 +10,8 @@
  *   • the switch-back command is `/accounts` in every case — never `/model`, `/claude` or `/opencode`, which move
  *     the topic somewhere else;
  *   • an unknown reset drops the reset clause and keeps the command;
- *   • the deferred notice names the move that waits for the end of the answer.
+ *   • the deferred notice names the move that waits for the end of the answer;
+ *   • a model name is written the same way on both sides of the notice: `Model openai/gpt-5 hit … OpenCode google/…`.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -74,14 +75,14 @@ describe('buildFallbackSwitchedNotice (English)', () => {
   it('OpenCode → OpenCode: the model that hit the limit, the model the topic continues on', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }),
-      '🔁 Model «openai/gpt-5» hit its usage limit — this topic continues on OpenCode google/gemini-2.5-pro. Switch back: /accounts',
+      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on OpenCode google/gemini-2.5-pro. Switch back: /accounts',
     );
   });
 
   it('OpenCode → Claude: with no account on the left the target says Claude, and a pinned model is named', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }),
-      '🔁 Model «openai/gpt-5» hit its usage limit — this topic continues on Claude «work» (opus). The limit resets 2026-10-18 01:00; switch back: /accounts',
+      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on Claude «work» (opus). The limit resets 2026-10-18 01:00; switch back: /accounts',
     );
   });
 
@@ -126,8 +127,8 @@ const noticeCases: Array<{ name: string; input: SwitchedNoticeInput; names: stri
   { name: 'claude → claude, reset', input: { from: claude('default'), to: claude('work', 'sonnet'), resetTime, runningModel: runningOpus }, names: ['«default»', '«work»', 'sonnet'] },
   { name: 'claude → claude, no reset', input: { from: claude('default'), to: claude('work', 'sonnet'), resetTime: null, runningModel: runningOpus }, names: ['«default»', '«work»', 'sonnet'] },
   { name: 'claude → opencode', input: { from: claude('default'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }, names: ['«default»', 'OpenCode openai/gpt-5'] },
-  { name: 'opencode → opencode', input: { from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }, names: ['«openai/gpt-5»', 'OpenCode google/gemini-2.5-pro'] },
-  { name: 'opencode → claude', input: { from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }, names: ['«openai/gpt-5»', 'Claude «work»', 'opus'] },
+  { name: 'opencode → opencode', input: { from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }, names: ['openai/gpt-5', 'OpenCode google/gemini-2.5-pro'] },
+  { name: 'opencode → claude', input: { from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }, names: ['openai/gpt-5', 'Claude «work»', 'opus'] },
   { name: 'unknown source', input: { from: null, to: claude('work'), resetTime: null, runningModel: null }, names: ['Claude «work»'] },
 ];
 
@@ -146,6 +147,7 @@ for (const locale of localeCodes) {
         assert.equal(text.includes(resetTime), input.resetTime !== null, `${name}: the reset time appears exactly when it is known: ${text}`);
         assert.ok(!/\{\w+\}/.test(text), `${name}: no unresolved placeholder in ${text}`);
         assert.ok(!text.includes('?'), `${name}: no unknown-label question mark in ${text}`);
+        assert.ok(!/«[^»]*\//.test(text), `${name}: a model name (provider/model) is never quoted, on either side: ${text}`);
       }
     });
 

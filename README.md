@@ -269,7 +269,9 @@ so one account's usage limit does not stop every topic.
   «a» hit its usage limit — this topic continues on «b». The limit resets
   <time>; switch back: /accounts». The target is named by its account alone
   and gets its model only when the switch changes it («b» (sonnet)); an
-  OpenCode target reads «OpenCode provider/model». It is OFF by default: moving
+  OpenCode rung is written without quotes on either side — the target as
+  «OpenCode provider/model», the side that hit its limit as «Model
+  provider/model». It is OFF by default: moving
   work between subscriptions is your call. The exhausted profile is marked
   limited until its window resets, so it is not picked again before then. The
   reset itself does not move the topic back: switch it back by hand (the notice
