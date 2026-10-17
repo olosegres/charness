@@ -77,6 +77,7 @@ export const ptDict: Record<string, string> = {
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
     '/limits — o que acontece num limite de uso (modelos de reserva, mudança, espera)\n' +
+    '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
     '/accounts — contas Claude e providers OpenCode (escolher, adicionar, entrar de novo, remover, ligar, desligar)\n' +
     '/clear — apagar mensagens do tópico\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
@@ -367,10 +368,10 @@ export const ptDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Esta retomada foi pulada.',
   'autoContinueLimits.skipExpired': 'Nada para pular — esta espera já terminou.',
   'autoContinueLimits.skippedNotice': '⏭ Pulado: não vou retomar esta por conta própria. Escreve-me quando continuar — a retomada automática continua ligada para este tópico.',
-  'autoContinueLimits.noticeHint': 'Executa /limits para saltar esta retoma ou desativar a espera neste tópico.',
+  'autoContinueLimits.noticeHint': 'Saltar esta retoma: /limits · desativar a espera: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Retomada automática após um limite de uso: {state} para este tópico.',
   'autoContinueLimits.setGlobal': '✅ Retomada automática após um limite de uso: {state} para TODOS os tópicos (substituições por tópico ainda se aplicam).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Limite de uso atingido. A espera do reinício está desativada neste tópico, por isso fico a aguardar — escreve-me quando continuar (/limits para ativar a espera).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Limite de uso atingido. A espera do reinício está desativada neste tópico, por isso fico a aguardar — escreve-me quando continuar (/limits_autoswitch para ativar a espera).',
 
   'connect.prompt_key': '🔑 Envia a API key para `{provider}` como próxima mensagem. Vou apagar a mensagem com a chave do histórico.',
   'connect.empty_key': '❌ A API key está vazia. Envia a chave como próxima mensagem.',
@@ -842,7 +843,6 @@ export const ptDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ A troca para {to} falhou: {error}',
   'limits.addConfirm': '➕ Adicionar {label} à lista de reserva?',
   'limits.enableConfirm': '➕ Incluir {label} na troca automática?',
-  'limits.usageHeading': 'Uso (% consumido)',
   'limits.topicRuns': 'Corre em: {current}',
   'limits.settingsGeneral': 'Predefinições para todos os tópicos.',
   'limits.sourceGeneral': 'como em General',
@@ -863,6 +863,8 @@ export const ptDict: Record<string, string> = {
   'limits.whatSwitch': 'Mudança automática para um modelo de reserva',
   'limits.whatWait': 'Esperar o reinício e continuar',
   'limits.usage': 'Uso: /limits — o ecrã; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = seguir o General, num tópico).',
+  'limits.autoswitchUsage': 'Uso: /limits_autoswitch — o ecrã; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir o General, num tópico).',
+  'limits.autoswitchTitle': '🔁 Troca automática ao atingir um limite de uso',
   'accounts.openCodeSection': '🔌 Providers OpenCode (ligados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode: ainda nenhum ligado. «➕ Provider OpenCode» liga um.',
   'accounts.buttonsHint': 'Toque numa conta para passar este tópico para ela (em General: predefinição para todos). 🔑 volta a iniciar sessão numa conta ou fornecedor, 🗑 remove uma conta (a default é desligada), 🔌 desliga um fornecedor.',

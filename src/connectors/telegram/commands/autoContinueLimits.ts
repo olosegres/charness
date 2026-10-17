@@ -1,7 +1,7 @@
 /**
  * The «wait for the reset and continue» setting — whether the bot resumes an agent by itself when a usage-limit
- * window resets, per topic or (in General) for the instance. Its screen is `/limits` (`fallbackChain.ts`);
- * `/auto_continue_limits` stays as a hidden alias (`on|off` apply, bare opens `/limits`) and the old
+ * window resets, per topic or (in General) for the instance. Its screen is `/limits_autoswitch` (`fallbackChain.ts`);
+ * `/auto_continue_limits` stays as a hidden alias (`on|off` apply, bare opens `/limits_autoswitch`) and the old
  * `acl_on` / `acl_off` buttons keep working. See README.md in this folder.
  */
 import type { Context } from 'telegraf';
@@ -34,8 +34,8 @@ export interface AutoContinueLimitsPorts
     BotCore,
     'bot' | 'command' | 'getState' | 'replyToThread' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
-  /** Open the `/limits` screen in the topic (the bare alias lands there). */
-  openLimitsView: (key: SessionKey) => Promise<void>;
+  /** Open the `/limits_autoswitch` screen in the topic (the bare alias lands there). */
+  openAutoSwitchView: (key: SessionKey) => Promise<void>;
   getArmedLimitRetryFireAt: (key: SessionKey) => number | null;
   cancelApiRetry: (key: SessionKey) => void;
   getRequestWakeUpEngine: () => Pick<RequestWakeUpEngine, 'stopWakingForLimitWait'> | null;
@@ -46,7 +46,7 @@ export interface AutoContinueLimitsPorts
  * notice's own buttons call, and the `register…()` calls.
  */
 export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
-  const { openLimitsView, getArmedLimitRetryFireAt, cancelApiRetry, getRequestWakeUpEngine, bot, command, getState, replyToThread, authoriseContext, withThreadLocale, checkIsGeneral } = ports;
+  const { openAutoSwitchView, getArmedLimitRetryFireAt, cancelApiRetry, getRequestWakeUpEngine, bot, command, getState, replyToThread, authoriseContext, withThreadLocale, checkIsGeneral } = ports;
 
   /**
    * @description Apply the `/auto_continue_limits` setting and RETURN the
@@ -107,8 +107,8 @@ export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
   }
 
   function registerAutoContinueLimitsCommands(): void {
-    // `/auto_continue_limits` — hidden alias of `/limits`. `on` / `off` set the setting (regular topic →
-    // per-thread override; General → the instance-wide default); bare opens the `/limits` screen. Deliberately
+    // `/auto_continue_limits` — hidden alias of `/limits_autoswitch`. `on` / `off` set the setting (regular topic →
+    // per-thread override; General → the instance-wide default); bare opens the `/limits_autoswitch` screen. Deliberately
     // NOT gated on an adapter/session: a limit can hit any topic at any time, and the operator must be able to
     // set the preference before that.
     command('auto_continue_limits', async (ctx, key) => {
@@ -117,7 +117,7 @@ export function createAutoContinueLimits(ports: AutoContinueLimitsPorts) {
         await replyToThread(key, await applyAutoContinueLimits(key, checkIsGeneral(key), arg === 'on'));
         return;
       }
-      await openLimitsView(key);
+      await openAutoSwitchView(key);
     });
   }
 

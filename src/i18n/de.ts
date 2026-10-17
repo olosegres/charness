@@ -77,6 +77,7 @@ export const deDict: Record<string, string> = {
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
     '/limits — was bei einem Nutzungslimit geschieht (Ersatzmodelle, Wechsel, Warten)\n' +
+    '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wählen, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
@@ -367,10 +368,10 @@ export const deDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Diese Fortsetzung wurde übersprungen.',
   'autoContinueLimits.skipExpired': 'Nichts zu überspringen — dieses Warten ist bereits vorbei.',
   'autoContinueLimits.skippedNotice': '⏭ Übersprungen: Ich setze diese eine nicht selbst fort. Schreib mir, wann es weitergehen soll — das automatische Fortsetzen bleibt für dieses Thema an.',
-  'autoContinueLimits.noticeHint': 'Mit /limits kannst du diese eine Fortsetzung überspringen oder das Warten für dieses Thema ausschalten.',
+  'autoContinueLimits.noticeHint': 'Diese Fortsetzung überspringen: /limits · Warten ausschalten: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Automatisches Fortsetzen nach einem Nutzungslimit: {state} für dieses Thema.',
   'autoContinueLimits.setGlobal': '✅ Automatisches Fortsetzen nach einem Nutzungslimit: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiterhin).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Nutzungslimit erreicht. Das Warten auf das Zurücksetzen ist für dieses Thema aus, ich warte also — schreib mir, wann es weitergehen soll (/limits schaltet das Warten ein).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Nutzungslimit erreicht. Das Warten auf das Zurücksetzen ist für dieses Thema aus, ich warte also — schreib mir, wann es weitergehen soll (/limits_autoswitch schaltet das Warten ein).',
 
   'connect.prompt_key': '🔑 Sende den API-Key für `{provider}` als nächste Nachricht. Ich lösche die Key-Nachricht aus dem Verlauf.',
   'connect.empty_key': '❌ API-Key ist leer. Sende den Key als nächste Nachricht.',
@@ -841,7 +842,6 @@ export const deDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ Umstellen auf {to} fehlgeschlagen: {error}',
   'limits.addConfirm': '➕ {label} zur Ersatzliste hinzufügen?',
   'limits.enableConfirm': '➕ {label} in den automatischen Wechsel einbeziehen?',
-  'limits.usageHeading': 'Nutzung (% verbraucht)',
   'limits.topicRuns': 'Läuft auf: {current}',
   'limits.settingsGeneral': 'Standard für alle Themen.',
   'limits.sourceGeneral': 'wie in General',
@@ -862,6 +862,8 @@ export const deDict: Record<string, string> = {
   'limits.whatSwitch': 'Automatisch auf ein Ersatzmodell wechseln',
   'limits.whatWait': 'Auf das Zurücksetzen warten und fortsetzen',
   'limits.usage': 'Verwendung: /limits — der Bildschirm; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = General folgen, in einem Thema).',
+  'limits.autoswitchUsage': 'Verwendung: /limits_autoswitch — der Bildschirm; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = General folgen, in einem Thema).',
+  'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode-Provider: noch keiner verbunden. «➕ OpenCode-Provider» verbindet einen.',
   'accounts.buttonsHint': 'Tippe auf ein Konto, um dieses Thema darauf umzustellen (in General: Standard für alle). 🔑 meldet ein Konto oder einen Anbieter neu an, 🗑 entfernt ein Konto (das Standardkonto wird abgemeldet), 🔌 trennt einen Anbieter.',

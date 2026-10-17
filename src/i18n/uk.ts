@@ -83,6 +83,7 @@ export const ukDict: Record<string, string> = {
     '/compact — стиснути контекст агента\n' +
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
     '/limits — що робити при ліміті використання (запасні моделі, перемикання, очікування)\n' +
+    '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
     '/accounts — облікові записи Claude і провайдери OpenCode (вибір, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/clear — видалити повідомлення треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
@@ -373,10 +374,10 @@ export const ukDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Це продовження пропущено.',
   'autoContinueLimits.skipExpired': 'Нічого пропускати — це очікування вже завершилося.',
   'autoContinueLimits.skippedNotice': '⏭ Пропущено: цього разу я сам продовжувати не буду. Напиши, коли продовжувати — авто-продовження для цієї теми лишається увімкненим.',
-  'autoContinueLimits.noticeHint': 'Відкрий /limits, щоб пропустити це продовження або вимкнути очікування для цього топіка.',
+  'autoContinueLimits.noticeHint': 'Пропустити це продовження: /limits · вимкнути очікування: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Авто-продовження після ліміту використання: {state} для цієї теми.',
   'autoContinueLimits.setGlobal': '✅ Авто-продовження після ліміту використання: {state} для ВСІХ тем (перевизначення по темах діють далі).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Досягнуто ліміту використання. Очікування скидання для цього топіка вимкнено, тож я чекаю — напиши, коли продовжувати (/limits, щоб увімкнути очікування).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Досягнуто ліміту використання. Очікування скидання для цього топіка вимкнено, тож я чекаю — напиши, коли продовжувати (/limits_autoswitch, щоб увімкнути очікування).',
 
   'connect.prompt_key': '🔑 Надішли API key для `{provider}` наступним повідомленням. Я видалю повідомлення з ключем з історії.',
   'connect.empty_key': '❌ API key порожній. Надішли ключ наступним повідомленням.',
@@ -847,7 +848,6 @@ export const ukDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ Перемикання на {to} не вдалося: {error}',
   'limits.addConfirm': '➕ Додати {label} до списку запасних моделей?',
   'limits.enableConfirm': '➕ Увімкнути {label} в автоматичне перемикання?',
-  'limits.usageHeading': 'Ліміти (% витрачено)',
   'limits.topicRuns': 'Працює на: {current}',
   'limits.settingsGeneral': 'Типово для всіх топіків.',
   'limits.sourceGeneral': 'як у General',
@@ -868,6 +868,8 @@ export const ukDict: Record<string, string> = {
   'limits.whatSwitch': 'Автоперемикання на запасну модель',
   'limits.whatWait': 'Дочекатися скидання й продовжити',
   'limits.usage': 'Використання: /limits — екран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — слідувати General, у топіку).',
+  'limits.autoswitchUsage': 'Використання: /limits_autoswitch — екран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — слідувати General, у топіку).',
+  'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдери OpenCode: поки жоден не підключено. Кнопка «➕ Провайдер OpenCode» підключає.',
   'accounts.buttonsHint': 'Натисніть на акаунт, щоб перемкнути на нього цей топік (у General — значення за замовчуванням для всіх). 🔑 — увійти в акаунт чи провайдера знову, 🗑 — видалити акаунт (default розлогінюється), 🔌 — відключити провайдера.',

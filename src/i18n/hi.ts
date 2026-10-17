@@ -77,6 +77,7 @@ export const hiDict: Record<string, string> = {
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
     '/limits — उपयोग-सीमा पर क्या हो (बैकअप मॉडल, स्विच, प्रतीक्षा)\n' +
+    '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
     '/accounts — Claude खाते और OpenCode प्रदाता (चुनें, जोड़ें, फिर से लॉगिन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
@@ -367,10 +368,10 @@ export const hiDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'यह पुनःआरंभ छोड़ दिया गया।',
   'autoContinueLimits.skipExpired': 'छोड़ने को कुछ नहीं — यह प्रतीक्षा पहले ही समाप्त हो चुकी है।',
   'autoContinueLimits.skippedNotice': '⏭ छोड़ दिया: मैं इसे स्वयं पुनः शुरू नहीं करूँगा। कब जारी रखना है, मुझे लिखें — इस विषय के लिए स्वतः पुनःआरंभ चालू रहेगा।',
-  'autoContinueLimits.noticeHint': 'इस एक बार की पुनःआरंभ को छोड़ने या इस टॉपिक के लिए प्रतीक्षा बंद करने के लिए /limits चलाएँ।',
+  'autoContinueLimits.noticeHint': 'यह पुनःआरंभ छोड़ें: /limits · प्रतीक्षा बंद करें: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ उपयोग-सीमा के बाद स्वतः पुनःआरंभ: इस विषय के लिए {state}।',
   'autoContinueLimits.setGlobal': '✅ उपयोग-सीमा के बाद स्वतः पुनःआरंभ: सभी विषयों के लिए {state} (प्रति-विषय ओवरराइड अब भी लागू रहते हैं)।',
-  'autoContinueLimits.limitReachedDisabled': '🚧 उपयोग-सीमा पूरी हो गई। इस टॉपिक के लिए रीसेट की प्रतीक्षा बंद है, इसलिए मैं रुका रहूँगा — कब जारी रखना है, मुझे लिखें (प्रतीक्षा चालू करने के लिए /limits)।',
+  'autoContinueLimits.limitReachedDisabled': '🚧 उपयोग-सीमा पूरी हो गई। इस टॉपिक के लिए रीसेट की प्रतीक्षा बंद है, इसलिए मैं रुका रहूँगा — कब जारी रखना है, मुझे लिखें (प्रतीक्षा चालू करने के लिए /limits_autoswitch)।',
 
   'connect.prompt_key': '🔑 अगले संदेश में `{provider}` के लिए API key भेजें। मैं key संदेश को इतिहास से हटा दूँगा।',
   'connect.empty_key': '❌ API key खाली है। अगले संदेश में key भेजें।',
@@ -840,7 +841,6 @@ export const hiDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ {to} पर स्विच विफल: {error}',
   'limits.addConfirm': '➕ {label} को बैकअप सूची में जोड़ें?',
   'limits.enableConfirm': '➕ {label} को स्वचालित स्विच में शामिल करें?',
-  'limits.usageHeading': 'उपयोग (% खर्च)',
   'limits.topicRuns': 'इस पर चल रहा है: {current}',
   'limits.settingsGeneral': 'सभी टॉपिक के लिए डिफ़ॉल्ट।',
   'limits.sourceGeneral': 'General जैसा',
@@ -861,6 +861,8 @@ export const hiDict: Record<string, string> = {
   'limits.whatSwitch': 'बैकअप मॉडल पर अपने-आप स्विच',
   'limits.whatWait': 'रीसेट का इंतज़ार करके जारी रखें',
   'limits.usage': 'उपयोग: /limits — स्क्रीन; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
+  'limits.autoswitchUsage': 'उपयोग: /limits_autoswitch — स्क्रीन; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
+  'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode प्रदाता: अभी कोई कनेक्ट नहीं है। «➕ OpenCode प्रदाता» से एक कनेक्ट करें।',
   'accounts.buttonsHint': 'इस टॉपिक को किसी खाते पर ले जाने के लिए उसे दबाएँ (General में: सभी का डिफ़ॉल्ट)। 🔑 खाते या प्रदाता में फिर साइन इन करता है, 🗑 खाता हटाता है (default साइन-आउट होता है), 🔌 प्रदाता को डिस्कनेक्ट करता है।',

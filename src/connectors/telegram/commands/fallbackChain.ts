@@ -1,13 +1,13 @@
 /**
- * `/limits` — everything about a usage limit on one screen: the instance-wide priority chain of backend +
- * account / provider + model a topic continues on (reorder, include / exclude, remove, add through a two-step
- * sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide what a
- * limit does (auto switch to a fallback model, wait for the reset and continue — instance defaults in General,
+ * `/limits_autoswitch` — the setup of automatic switching on a usage limit, on one screen: the instance-wide priority
+ * chain of backend + account / provider + model a topic continues on (reorder, include / exclude, remove, add through
+ * a two-step sub-picker, rebuild a draft, clear — from EVERY topic, one instance-wide list), the two settings that decide
+ * what a limit does (auto switch to a fallback model, wait for the reset and continue — instance defaults in General,
  * on / off / same-as-General overrides in a topic, chosen in a per-setting sub-menu) — and the «🔁 Switch to …»
- * buttons a usage-limit notice carries. The message text is deliberately short: the Claude accounts' usage block
- * on top (the `/accounts` renderer), then the topic's position and where its settings come from — the list and
- * the settings' values are on the buttons. `/fallback` and `/auto_continue_limits` are hidden aliases of this
- * screen. See README.md in this folder and `utils/fallbackChain.ts`.
+ * buttons a usage-limit notice carries. The message text is deliberately short: a title, the topic's position and
+ * where its settings come from — the list and the settings' values are on the buttons. `/fallback` and
+ * `/auto_continue_limits` are hidden aliases of this screen. `/limits` itself is the switch board
+ * (`limitsBoard.ts`). See README.md in this folder and `utils/fallbackChain.ts`.
  */
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
@@ -15,7 +15,6 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
-import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import {
@@ -134,7 +133,8 @@ export interface FallbackChainPorts
   getInstanceTimezone: () => string;
   /**
    * Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`) for the usage block; never
-   * throws. Called when the screen is OPENED (bounded by {@link limitsUsageRefreshBudgetMs}), never on a tap.
+   * throws. Called when the screen is OPENED (bounded by {@link limitsUsageRefreshBudgetMs}), never on a tap: the
+   * rows' availability reads the windows (an account at 100 % is not a candidate).
    */
   refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
   /** What is connected now: Claude profiles with usage, the OpenCode catalog, the recent picks, the limit marks. */
@@ -163,7 +163,7 @@ interface AddSnapshot {
   models: string[];
 }
 
-/** @description Build the `/limits` feature over its ports: the command (+ the hidden aliases), its buttons, the limit-notice switch button. */
+/** @description Build the `/limits_autoswitch` feature over its ports: the command (+ the hidden aliases), its buttons, the limit-notice switch button. */
 export function createFallbackChain(ports: FallbackChainPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
@@ -186,23 +186,25 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * A rung on its label button: `3. Claude · work ⛔ 14:00` / `1. openai / gpt-6.1 🚫` — the FULL name (Telegram
-   * sizes and truncates the button as it sees fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not
-   * signed in, ❓ not offered any more, 🚫 left out of switching, ✓ where the topic runs now). The one place the
-   * label is built: a two-row layout (label on its own row) only changes how `buildPicker` assembles the row.
+   * A rung on its label button: `✓ 1. Claude · work · opus` / `3. OpenCode · openai · gpt-6.1 🚫` — the program, then
+   * the account or provider and the model when the rung names one (Telegram sizes and truncates the button as it sees
+   * fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not signed in, ❓ not offered any more, 🚫 left out
+   * of switching) and ✓ at the start marks where the topic runs now. The one place the label is built: a two-row
+   * layout (label on its own row) only changes how `buildPicker` assembles the row.
    */
   function formatRowButtonLabel(index: number, entry: FallbackChainEntry, detection: FallbackDetection, current: FallbackChainEntry | null, nowMs: number): string {
+    const words = getLabelWords();
     const base = entry.backend === 'claude'
-      ? formatEntry(entry)
-      : `${entry.providerId} / ${entry.modelId}`;
+      ? `${words.claude} · ${entry.profile}${entry.model === null ? '' : ` · ${entry.model}`}`
+      : `${words.openCode} · ${entry.providerId} · ${entry.modelId}`;
     const availability = getFallbackEntryAvailability(entry, detection, nowMs);
     let suffix = '';
     if (availability.status === 'limited') suffix += ` ⛔ ${formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs)}`;
     else if (availability.status === 'signedOut') suffix += ' 🔒';
     else if (availability.status === 'missing') suffix += ' ❓';
     if (checkIsFallbackEntryDisabled(entry)) suffix += ' 🚫';
-    if (current && checkIsSameFallbackAccount(entry, current)) suffix += ' ✓';
-    return `${index + 1}. ${base}${suffix}`;
+    const here = current && checkIsSameFallbackAccount(entry, current) ? '✓ ' : '';
+    return `${here}${index + 1}. ${base}${suffix}`;
   }
 
   /**
@@ -303,33 +305,9 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * The usage block at the top of the screen: a heading that says the percentages are USED, then each Claude
-   * profile's windows as `/accounts` shows them under its row (`formatClaudeProfileUsageLines`), one row per
-   * profile — the name, then its windows (a limit mark on the next row). A signed-out profile is named as such;
-   * one never polled has nothing to show and is left out (no rows → no heading either). OpenCode's limit marks
-   * are not repeated here: they are on the rung buttons (`⛔ until`).
-   */
-  function formatUsageBlock(detection: FallbackDetection, nowMs: number): string {
-    const timezone = getInstanceTimezone();
-    const rows: string[] = [];
-    for (const profile of detection.claudeProfiles) {
-      if (profile.loggedIn === false) {
-        rows.push(`• ${profile.name} — ${t('account.row.loggedOut')}`);
-        continue;
-      }
-      // The first line hangs under a row in `/accounts` (the locale indents it); here it sits after the name.
-      const [first, ...rest] = formatClaudeProfileUsageLines(profile, timezone, nowMs);
-      if (first === undefined) continue;
-      rows.push([`• ${profile.name} — ${first.trimStart()}`, ...rest].join('\n'));
-    }
-    return rows.length === 0 ? '' : [t('limits.usageHeading'), ...rows].join('\n');
-  }
-
-  /**
-   * The `/limits` screen. Text: the Claude accounts' usage, then what the topic runs on and where its two
-   * settings come from (General: just that these are defaults) and the list's heading — the list itself, its
-   * marks and the two settings' values are on the buttons. A topic also gets «skip once» while a limit wait is
-   * armed for it.
+   * The `/limits_autoswitch` screen. Text: its title, what the topic runs on and where its two settings come from
+   * (General: just that these are defaults), then the list's heading — the list itself, its marks and the two
+   * settings' values are on the buttons. A topic also gets «skip once» while a limit wait is armed for it.
    */
   async function buildPicker(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
     const chain = getState().getFallbackChain();
@@ -339,16 +317,13 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const switchSetting = readSetting('switch', key, isGeneral);
     const waitSetting = readSetting('wait', key, isGeneral);
     const parts: string[] = [];
-    const usageBlock = formatUsageBlock(detection, nowMs);
-    if (usageBlock !== '') parts.push(usageBlock);
-    if (isGeneral) {
-      parts.push(t('limits.settingsGeneral'));
-    } else {
-      parts.push([
+    parts.push(isGeneral
+      ? [t('limits.autoswitchTitle'), t('limits.settingsGeneral')].join('\n')
+      : [
+        t('limits.autoswitchTitle'),
         t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }),
         t('limits.sourceLine', { switch: formatSettingSource(switchSetting), wait: formatSettingSource(waitSetting) }),
       ].join('\n'));
-    }
     parts.push(chain.length === 0 ? t('limits.listNoteEmpty') : t('limits.listNote'));
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
     const revision = getFallbackChainRevision(chain);
@@ -516,13 +491,14 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   // ── the command ──
 
   function registerFallbackChainCommands(): void {
-    // `/limits` — bare: the screen (the chain is edited from every topic). `propose` / `rebuild`
+    // `/limits_autoswitch` — bare: the screen (the chain is edited from every topic). `propose` / `rebuild`
     // drafts the chain, `clear` empties it, `switch|autoswitch on|off|same` and `wait on|off|same` flip the two
-    // settings. `/fallback` is the same command under its old name (hidden alias). Not gated on a session:
-    // the chain must be settable before any limit hits.
-    command(['limits', 'fallback'], async (_ctx, key, parsed: InboundCommand) => {
+    // settings; `/limits` takes the same verbs (`limitsBoard.ts` hands them to {@link runAutoSwitchCommand}).
+    // `/fallback` is the same command under its old name (hidden alias). Not gated on a session: the chain must
+    // be settable before any limit hits.
+    command(['limits_autoswitch', 'fallback', 'limits'], async (_ctx, key, parsed: InboundCommand) => {
       const [verb = '', value = ''] = parsed.args;
-      await runLimitsCommand(key, verb, value);
+      await runAutoSwitchCommand(key, verb, value);
     });
   }
 
@@ -541,13 +517,13 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /** Open the screen as a fresh message (the `/auto_continue_limits` alias lands here); the usage is refreshed first. */
-  async function openLimitsView(key: SessionKey): Promise<void> {
+  async function openAutoSwitchView(key: SessionKey): Promise<void> {
     await refreshUsageWithinBudget();
     const picker = await buildPicker(key, checkIsGeneral(key));
     await replyToThread(key, picker.text, picker.keyboard);
   }
 
-  async function runLimitsCommand(key: SessionKey, verb: string, value: string): Promise<void> {
+  async function runAutoSwitchCommand(key: SessionKey, verb: string, value: string): Promise<void> {
     const isGeneral = checkIsGeneral(key);
     const word = value.toLowerCase();
     const parseState = (): boolean | null | undefined => {
@@ -558,12 +534,12 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     };
     switch (verb.toLowerCase()) {
       case '':
-        await openLimitsView(key);
+        await openAutoSwitchView(key);
         return;
       case 'propose':
       case 'rebuild': {
         await replyToThread(key, await applyPropose());
-        await openLimitsView(key);
+        await openAutoSwitchView(key);
         return;
       }
       case 'clear': {
@@ -573,18 +549,18 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       case 'switch':
       case 'autoswitch': {
         const enabled = parseState();
-        if (enabled === undefined) { await replyToThread(key, t('limits.usage')); return; }
+        if (enabled === undefined) { await replyToThread(key, t('limits.autoswitchUsage')); return; }
         await replyToThread(key, await applyAutoSwitch(key, isGeneral, enabled));
         return;
       }
       case 'wait': {
         const enabled = parseState();
-        if (enabled === undefined) { await replyToThread(key, t('limits.usage')); return; }
+        if (enabled === undefined) { await replyToThread(key, t('limits.autoswitchUsage')); return; }
         await replyToThread(key, await applyWait(key, isGeneral, enabled));
         return;
       }
       default:
-        await replyToThread(key, t('limits.usage'));
+        await replyToThread(key, t('limits.autoswitchUsage'));
     }
   }
 
@@ -795,5 +771,5 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
   }
 
-  return { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, applyAutoSwitch, formatFallbackEntry: formatEntry };
+  return { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, runAutoSwitchCommand, applyAutoSwitch, formatFallbackEntry: formatEntry };
 }

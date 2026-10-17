@@ -77,6 +77,7 @@ export const zhDict: Record<string, string> = {
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
     '/limits — 遇到用量上限时的处理（备用模型、切换、等待）\n' +
+    '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode provider（选择、添加、重新登录、删除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
@@ -367,10 +368,10 @@ export const zhDict: Record<string, string> = {
   'autoContinueLimits.skipDone': '已跳过本次继续。',
   'autoContinueLimits.skipExpired': '没有可跳过的内容——本次等待已结束。',
   'autoContinueLimits.skippedNotice': '⏭ 已跳过：本次我不会自行继续。请告诉我何时继续——本话题的自动继续仍然开启。',
-  'autoContinueLimits.noticeHint': '运行 /limits 可跳过这一次继续，或为此话题关闭等待。',
+  'autoContinueLimits.noticeHint': '跳过这一次继续：/limits · 关闭等待：/limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ 达到用量上限后自动继续：本话题 {state}。',
   'autoContinueLimits.setGlobal': '✅ 达到用量上限后自动继续：所有话题 {state}（各话题的覆盖设置仍然有效）。',
-  'autoContinueLimits.limitReachedDisabled': '🚧 已达到用量上限。此话题已关闭等待重置，所以我会停下等待——请告诉我何时继续（/limits 可开启等待）。',
+  'autoContinueLimits.limitReachedDisabled': '🚧 已达到用量上限。此话题已关闭等待重置，所以我会停下等待——请告诉我何时继续（/limits_autoswitch 可开启等待）。',
 
   'connect.prompt_key': '🔑 在下一条消息中发送 `{provider}` 的 API key。我会从历史中删除包含 key 的消息。',
   'connect.empty_key': '❌ API key 为空。请在下一条消息中发送 key。',
@@ -835,7 +836,6 @@ export const zhDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ 切换到 {to} 失败：{error}',
   'limits.addConfirm': '➕ 将 {label} 加入备用列表？',
   'limits.enableConfirm': '➕ 将 {label} 纳入自动切换？',
-  'limits.usageHeading': '用量（已用 %）',
   'limits.topicRuns': '运行在：{current}',
   'limits.settingsGeneral': '所有话题的默认值。',
   'limits.sourceGeneral': '同 General',
@@ -856,6 +856,8 @@ export const zhDict: Record<string, string> = {
   'limits.whatSwitch': '自动切换到备用模型',
   'limits.whatWait': '等待重置后继续',
   'limits.usage': '用法：/limits — 主界面；/limits rebuild；/limits clear；/limits switch on|off|same；/limits wait on|off|same（在话题中，«same» = 跟随 General）。',
+  'limits.autoswitchUsage': '用法：/limits_autoswitch — 主界面；/limits_autoswitch rebuild；/limits_autoswitch clear；/limits_autoswitch switch on|off|same；/limits_autoswitch wait on|off|same（在话题中，«same» = 跟随 General）。',
+  'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provider：尚未连接任何一个。点「➕ OpenCode provider」来连接。',
   'accounts.buttonsHint': '点按账号可把此话题切换到它（在 General 中：所有话题的默认）。🔑 重新登录账号或提供商，🗑 移除账号（default 会登出），🔌 断开提供商。',

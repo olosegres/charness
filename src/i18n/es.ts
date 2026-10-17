@@ -77,6 +77,7 @@ export const esDict: Record<string, string> = {
     '/compact — compactar el contexto del agente\n' +
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
     '/limits — qué ocurre ante un límite de uso (modelos de respaldo, cambio, espera)\n' +
+    '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
     '/accounts — cuentas de Claude y providers de OpenCode (elegir, añadir, volver a entrar, eliminar, conectar, desconectar)\n' +
     '/clear — eliminar mensajes del hilo\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
@@ -367,10 +368,10 @@ export const esDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Se omitió esta reanudación.',
   'autoContinueLimits.skipExpired': 'Nada que omitir: esta espera ya terminó.',
   'autoContinueLimits.skippedNotice': '⏭ Omitido: no reanudaré esta por mi cuenta. Escríbeme cuándo continuar; la reanudación automática sigue activada para este tema.',
-  'autoContinueLimits.noticeHint': 'Ejecuta /limits para omitir esta reanudación o desactivar la espera en este tema.',
+  'autoContinueLimits.noticeHint': 'Omitir esta reanudación: /limits · desactivar la espera: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Reanudación automática tras un límite de uso: {state} para este tema.',
   'autoContinueLimits.setGlobal': '✅ Reanudación automática tras un límite de uso: {state} para TODOS los temas (las anulaciones por tema siguen aplicándose).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Límite de uso alcanzado. La espera del reinicio está desactivada en este tema, así que esperaré: escríbeme cuándo continuar (/limits para activar la espera).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Límite de uso alcanzado. La espera del reinicio está desactivada en este tema, así que esperaré: escríbeme cuándo continuar (/limits_autoswitch para activar la espera).',
 
   'connect.prompt_key': '🔑 Envía la API key para `{provider}` como próximo mensaje. Eliminaré el mensaje con la clave del historial.',
   'connect.empty_key': '❌ La API key está vacía. Envía la clave como próximo mensaje.',
@@ -841,7 +842,6 @@ export const esDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ El cambio a {to} falló: {error}',
   'limits.addConfirm': '➕ ¿Añadir {label} a la lista de respaldo?',
   'limits.enableConfirm': '➕ ¿Incluir {label} en el cambio automático?',
-  'limits.usageHeading': 'Uso (% consumido)',
   'limits.topicRuns': 'Se ejecuta en: {current}',
   'limits.settingsGeneral': 'Valores por defecto para todos los temas.',
   'limits.sourceGeneral': 'como en General',
@@ -862,6 +862,8 @@ export const esDict: Record<string, string> = {
   'limits.whatSwitch': 'Cambio automático a un modelo de respaldo',
   'limits.whatWait': 'Esperar al reinicio y continuar',
   'limits.usage': 'Uso: /limits — la pantalla; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = seguir a General, en un tema).',
+  'limits.autoswitchUsage': 'Uso: /limits_autoswitch — la pantalla; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir a General, en un tema).',
+  'limits.autoswitchTitle': '🔁 Cambio automático al alcanzar un límite de uso',
   'accounts.openCodeSection': '🔌 Providers de OpenCode (conectados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers de OpenCode: aún no hay ninguno conectado. «➕ Provider OpenCode» conecta uno.',
   'accounts.buttonsHint': 'Pulsa una cuenta para pasar este tema a ella (en General: valor por defecto para todos). 🔑 vuelve a iniciar sesión en una cuenta o proveedor, 🗑 quita una cuenta (la default se desconecta), 🔌 desconecta un proveedor.',

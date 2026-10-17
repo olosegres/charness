@@ -77,6 +77,7 @@ export const uzDict: Record<string, string> = {
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
     '/limits — foydalanish limitida nima bo‘ladi (zaxira modellar, o‘tish, kutish)\n' +
+    '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (tanlash, qo‘shish, qayta kirish, o‘chirish, ulash, uzish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
@@ -367,10 +368,10 @@ export const uzDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Bu davom etish o‘tkazib yuborildi.',
   'autoContinueLimits.skipExpired': 'O‘tkazadigan narsa yo‘q — bu kutish allaqachon tugagan.',
   'autoContinueLimits.skippedNotice': '⏭ O‘tkazib yuborildi: bu safar o‘zim davom ettirmayman. Qachon davom etishni yozing — bu mavzu uchun avtodavom yoniq qoladi.',
-  'autoContinueLimits.noticeHint': 'Shu bitta davomni o‘tkazib yuborish yoki bu mavzu uchun kutishni o‘chirish uchun /limits ni ishga tushiring.',
+  'autoContinueLimits.noticeHint': 'Shu davomni o‘tkazib yuborish: /limits · kutishni o‘chirish: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Foydalanish limitidan keyin avtodavom: bu mavzu uchun {state}.',
   'autoContinueLimits.setGlobal': '✅ Foydalanish limitidan keyin avtodavom: BARCHA mavzular uchun {state} (mavzu bo‘yicha bekor qilishlar amal qiladi).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Foydalanish limitiga yetildi. Bu mavzu uchun tiklanishni kutish o‘chiq, shuning uchun kutaman — qachon davom etishni yozing (kutishni yoqish uchun /limits).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Foydalanish limitiga yetildi. Bu mavzu uchun tiklanishni kutish o‘chiq, shuning uchun kutaman — qachon davom etishni yozing (kutishni yoqish uchun /limits_autoswitch).',
 
   'connect.prompt_key': '🔑 Keyingi xabar sifatida `{provider}` uchun API kalitni yuboring. Kalit xabarini tarixdan o‘chiraman.',
   'connect.empty_key': '❌ API kalit bo‘sh. Keyingi xabar sifatida kalitni yuboring.',
@@ -841,7 +842,6 @@ export const uzDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}',
   'limits.addConfirm': '➕ {label} ni zaxira ro\'yxatiga qo\'shamizmi?',
   'limits.enableConfirm': '➕ {label} ni avtomatik almashtirishga kiritamizmi?',
-  'limits.usageHeading': 'Foydalanish (% ishlatilgan)',
   'limits.topicRuns': 'Ishlayapti: {current}',
   'limits.settingsGeneral': 'Barcha mavzular uchun standart.',
   'limits.sourceGeneral': 'General kabi',
@@ -862,6 +862,8 @@ export const uzDict: Record<string, string> = {
   'limits.whatSwitch': 'Zaxira modelga avtomatik o‘tish',
   'limits.whatWait': 'Tiklanishni kutib davom etish',
   'limits.usage': 'Foydalanish: /limits — ekran; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (mavzuda «same» = General ga ergashish).',
+  'limits.autoswitchUsage': 'Foydalanish: /limits_autoswitch — ekran; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (mavzuda «same» = General ga ergashish).',
+  'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provayderlari: hozircha hech biri ulanmagan. «➕ OpenCode provayderi» bittasini ulaydi.',
   'accounts.buttonsHint': 'Bu mavzuni hisobga o‘tkazish uchun hisobni bosing (General da: hammaga odatiy). 🔑 hisob yoki provayderga qayta kiradi, 🗑 hisobni olib tashlaydi (default chiqariladi), 🔌 provayderni uzadi.',

@@ -77,6 +77,7 @@ export const kaDict: Record<string, string> = {
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
     '/limits — რა ხდება გამოყენების ლიმიტზე (სარეზერვო მოდელები, გადართვა, ლოდინი)\n' +
+    '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
     '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (არჩევა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
@@ -367,10 +368,10 @@ export const kaDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'ეს გაგრძელება გამოტოვებულია.',
   'autoContinueLimits.skipExpired': 'გამოსატოვებელი არაფერია — ეს ლოდინი უკვე დასრულდა.',
   'autoContinueLimits.skippedNotice': '⏭ გამოტოვებულია: ამას თვითონ არ გავაგრძელებ. მომწერე, როდის გავაგრძელო — ამ თემისთვის ავტო-გაგრძელება ჩართული რჩება.',
-  'autoContinueLimits.noticeHint': 'ამ ერთი გაგრძელების გამოსატოვებლად ან ამ თემისთვის ლოდინის გამოსართავად გაუშვით /limits.',
+  'autoContinueLimits.noticeHint': 'ამ გაგრძელების გამოტოვება: /limits · ლოდინის გამორთვა: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ ავტო-გაგრჯელება გამოყენების ლიმიტის შემდეგ: {state} ამ თემისთვის.',
   'autoContinueLimits.setGlobal': '✅ ავტო-გაგრჯელება გამოყენების ლიმიტის შემდეგ: {state} ყველა თემისთვის (თემების მიხედვით გადაფარვები კვლავ მოცემებს).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 გამოყენების ლიმიტს მიაღწია. ამ თემისთვის განულების ლოდინი გამორთულია, ამიტომ დაველოდები — მომწერეთ, როდის გავაგრძელო (ლოდინის ჩასართავად /limits).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 გამოყენების ლიმიტს მიაღწია. ამ თემისთვის განულების ლოდინი გამორთულია, ამიტომ დაველოდები — მომწერეთ, როდის გავაგრძელო (ლოდინის ჩასართავად /limits_autoswitch).',
 
   'connect.prompt_key': '🔑 შემდეგ შეტყობინებად გამოგვიგზავნეთ `{provider}`-ის API გასაღები. გასაღების შეტყობინებას ისტორიიდან წავშლი.',
   'connect.empty_key': '❌ API გასაღები ცარიელია. შემდეგ შეტყობინებად გამოგვიგზავნეთ გასაღები.',
@@ -841,7 +842,6 @@ export const kaDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}',
   'limits.addConfirm': '➕ დაემატოს {label} სარეზერვო სიას?',
   'limits.enableConfirm': '➕ ჩაირთოს {label} ავტომატურ გადართვაში?',
-  'limits.usageHeading': 'გამოყენება (% გამოყენებულია)',
   'limits.topicRuns': 'მუშაობს: {current}',
   'limits.settingsGeneral': 'ყველა თემის ნაგულისხმევი.',
   'limits.sourceGeneral': 'როგორც General-ში',
@@ -862,6 +862,8 @@ export const kaDict: Record<string, string> = {
   'limits.whatSwitch': 'სარეზერვო მოდელზე ავტომატური გადართვა',
   'limits.whatWait': 'განულების დალოდება და გაგრძელება',
   'limits.usage': 'გამოყენება: /limits — ეკრანი; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
+  'limits.autoswitchUsage': 'გამოყენება: /limits_autoswitch — ეკრანი; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
+  'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode პროვაიდერები: ჯერ არცერთია დაკავშირებული. «➕ OpenCode პროვაიდერი» აკავშირებს ერთს.',
   'accounts.buttonsHint': 'ანგარიშზე დაჭერით ეს თემა მასზე გადაერთვება (General-ში — ყველას ნაგულისხმევი). 🔑 ანგარიშში ან პროვაიდერში ხელახლა შესვლა, 🗑 ანგარიშის წაშლა (default გამოდის), 🔌 პროვაიდერის გათიშვა.',

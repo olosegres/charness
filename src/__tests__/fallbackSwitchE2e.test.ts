@@ -194,8 +194,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
       };
       persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
     });
-    const screen = await general.sendAndAwaitReply('/limits', 'Fallback models, top first');
-    assert.deepEqual(general.getKeyboardLabels(screen)[0], [`1. Claude · ${takeoverAccount} · topic's model`], 'the chain names the seeded account, available (no sign-out or missing mark)');
+    const screen = await general.sendAndAwaitReply('/limits_autoswitch', 'Fallback models, top first');
+    assert.deepEqual(general.getKeyboardLabels(screen)[0], [`1. Claude · ${takeoverAccount}`], 'the chain names the seeded account, available (no sign-out or missing mark)');
   });
 
   it('a limit on the topic\'s account posts ONE short notice — who hit it, where the topic continues, the reset, /accounts — and the conversation goes on', async () => {

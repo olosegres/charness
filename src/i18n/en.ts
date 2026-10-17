@@ -81,6 +81,7 @@ export const enDict: Record<string, string> = {
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
     '/limits — what happens when an agent hits a usage limit (fallback models, switch, wait)\n' +
+    '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
@@ -379,10 +380,10 @@ export const enDict: Record<string, string> = {
   'autoContinueLimits.skipExpired': 'Nothing to skip — this wait is already over.',
   'autoContinueLimits.skippedNotice':
     '⏭ Skipped: I will not resume this one by myself. Write to me when to continue — auto-resume stays on for this topic.',
-  'autoContinueLimits.noticeHint': 'Run /limits to skip this one resume or to turn waiting off for this topic.',
+  'autoContinueLimits.noticeHint': 'Skip this resume: /limits · turn waiting off: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Auto-resume after a usage limit: {state} for this topic.',
   'autoContinueLimits.setGlobal': '✅ Auto-resume after a usage limit: {state} for ALL topics (per-topic overrides still apply).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Usage limit reached. Waiting for the reset is off for this topic, so I will wait — write to me when to continue (/limits to turn waiting on).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Usage limit reached. Waiting for the reset is off for this topic, so I will wait — write to me when to continue (/limits_autoswitch to turn waiting on).',
 
   'connect.prompt_key': '🔑 Send the API key for `{provider}` as the next message. I will delete the key message from history.',
   'connect.empty_key': '❌ API key is empty. Send the key as the next message.',
@@ -885,7 +886,6 @@ export const enDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ Switching to {to} failed: {error}',
   'limits.addConfirm': '➕ Add {label} to the fallback list?',
   'limits.enableConfirm': '➕ Include {label} in automatic switching?',
-  'limits.usageHeading': 'Usage (% used)',
   'limits.topicRuns': 'Runs on: {current}',
   'limits.settingsGeneral': 'Defaults for all topics.',
   'limits.sourceGeneral': 'as in General',
@@ -906,6 +906,8 @@ export const enDict: Record<string, string> = {
   'limits.whatSwitch': 'Auto switch to a fallback model',
   'limits.whatWait': 'Wait for the reset and continue',
   'limits.usage': 'Usage: /limits — the screen; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = follow General, in a topic).',
+  'limits.autoswitchUsage': 'Usage: /limits_autoswitch — the screen; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = follow General, in a topic).',
+  'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode providers: none connected yet. «➕ OpenCode provider» connects one.',
   'accounts.buttonsHint': 'Tap an account to switch this topic to it (in General: the default for all topics). 🔑 signs an account or provider in again, 🗑 removes an account (the default one is signed out), 🔌 disconnects a provider.',

@@ -17,7 +17,7 @@
  *   → `/model` `/effort`: the pickers, a tap and a typed pick answered while no
  *     agent runs (the default effort and «as in General»: `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
- *   → `/limits` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
+ *   → `/limits_autoswitch` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
  *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
  *     such a rung again, while a rung of a backend already in the list goes in at once
@@ -89,7 +89,7 @@ const projectFolder = 'proj';
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
 const threadKeyString = `${group.id}:${topicThreadId}`;
-/** The second Claude account of the `/limits` step, and the OpenCode model its list starts with. */
+/** The second Claude account of the `/limits_autoswitch` step, and the OpenCode model its list starts with. */
 const limitsAccount = 'work';
 const limitsOpenCodeRung: FallbackChainEntry = { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' };
 const handoverNote = 'The conversation context will be handed over in compacted form.';
@@ -519,10 +519,10 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
 
   // ── compaction and the limit-resume switch ───────────────────────────
 
-  it('/limits shows the short screen (the old /auto_continue_limits and /fallback open it too); a setting button opens its sub-menu and «OFF» there turns waiting off for the topic', async () => {
+  it('/limits_autoswitch shows the short screen (the old /auto_continue_limits and /fallback open it too); a setting button opens its sub-menu and «OFF» there turns waiting off for the topic', async () => {
     const sources = '🔁 as in General · ⏳ as in General';
-    const screen = await topic.sendAndAwaitReply('/limits', sources);
-    assert.match(screen.text, /Runs on: .*\n🔁 as in General · ⏳ as in General\n\n🪜 No fallback models yet/);
+    const screen = await topic.sendAndAwaitReply('/limits_autoswitch', sources);
+    assert.match(screen.text, /^🔁 Automatic switching on a usage limit\nRuns on: .*\n🔁 as in General · ⏳ as in General\n\n🪜 No fallback models yet/);
     assert.doesNotMatch(screen.text, /How it works|Fallback models —|Wait for the reset and continue/, 'the long prose is gone: the settings are on the buttons');
     assert.ok(screen.text.length < 300, `the screen stays a few lines (${screen.text.length} characters)`);
     assert.deepEqual(topic.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
@@ -538,7 +538,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
   });
 
-  it('/limits asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it; a rung of a backend already there goes in at once; including a left-out rung of a new backend asks again', async () => {
+  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it; a rung of a backend already there goes in at once; including a left-out rung of a new backend asks again', async () => {
     // No OpenCode catalog here to add from, so the list starts with the OpenCode rung the state holds and the other
     // backend is a second Claude account, signed in.
     createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: limitsAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
@@ -546,7 +546,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       persisted.claudeProfiles = { ...persisted.claudeProfiles, [limitsAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'work@example.com', subscriptionType: 'max' } };
       persisted.fallbackChain = [limitsOpenCodeRung];
     });
-    const screen = await topic.sendAndAwaitReply('/limits', 'Runs on:');
+    const screen = await topic.sendAndAwaitReply('/limits_autoswitch', 'Runs on:');
     const waitForButton = async (description: string, pattern: RegExp): Promise<string> => {
       let found = '';
       await getCharness().waitFor(description, replyTimeoutMs, () => {

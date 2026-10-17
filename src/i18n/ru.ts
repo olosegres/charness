@@ -81,6 +81,7 @@ export const ruDict: Record<string, string> = {
     '/compact — сжать контекст агента\n' +
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
     '/limits — что делать при лимите использования (запасные модели, переключение, ожидание)\n' +
+    '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
     '/accounts — аккаунты Claude и провайдеры OpenCode (выбор, добавить, войти заново, удалить, подключить, отключить)\n' +
     '/clear — удалить сообщения треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
@@ -371,10 +372,10 @@ export const ruDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Это продолжение пропущено.',
   'autoContinueLimits.skipExpired': 'Пропускать нечего — это ожидание уже завершилось.',
   'autoContinueLimits.skippedNotice': '⏭ Пропущено: этот раз я сам продолжать не буду. Напиши, когда продолжать — авто-продолжение для этого топика остаётся включённым.',
-  'autoContinueLimits.noticeHint': 'Открой /limits, чтобы пропустить это продолжение или выключить ожидание для этого топика.',
+  'autoContinueLimits.noticeHint': 'Пропустить это продолжение: /limits · выключить ожидание: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Авто-продолжение после лимита использования: {state} для этого топика.',
   'autoContinueLimits.setGlobal': '✅ Авто-продолжение после лимита использования: {state} для ВСЕХ топиков (переопределения по топикам продолжают действовать).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Достигнут лимит использования. Ожидание сброса для этого топика выключено, поэтому я жду — напиши, когда продолжать (/limits, чтобы включить ожидание).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Достигнут лимит использования. Ожидание сброса для этого топика выключено, поэтому я жду — напиши, когда продолжать (/limits_autoswitch, чтобы включить ожидание).',
 
   'connect.prompt_key': '🔑 Пришли API key для `{provider}` следующим сообщением. Я удалю сообщение с ключом из истории.',
   'connect.empty_key': '❌ API key пустой. Пришли ключ следующим сообщением.',
@@ -845,7 +846,6 @@ export const ruDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ Переключение на {to} не удалось: {error}',
   'limits.addConfirm': '➕ Добавить {label} в список запасных моделей?',
   'limits.enableConfirm': '➕ Включить {label} в автоматическое переключение?',
-  'limits.usageHeading': 'Лимиты (% израсходовано)',
   'limits.topicRuns': 'Работает на: {current}',
   'limits.settingsGeneral': 'По умолчанию для всех топиков.',
   'limits.sourceGeneral': 'как в General',
@@ -866,6 +866,8 @@ export const ruDict: Record<string, string> = {
   'limits.whatSwitch': 'Автопереключение на запасную модель',
   'limits.whatWait': 'Дождаться сброса и продолжить',
   'limits.usage': 'Использование: /limits — экран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — следовать General, в топике).',
+  'limits.autoswitchUsage': 'Использование: /limits_autoswitch — экран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — следовать General, в топике).',
+  'limits.autoswitchTitle': '🔁 Автоматическое переключение при лимите использования',
   'accounts.openCodeSection': '🔌 Провайдеры OpenCode (подключены):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдеры OpenCode: пока ни один не подключён. Кнопка «➕ Провайдер OpenCode» подключает.',
   'accounts.buttonsHint': 'Нажмите на аккаунт, чтобы переключить на него этот топик (в General — значение по умолчанию для всех). 🔑 — войти в аккаунт или провайдера заново, 🗑 — удалить аккаунт (default разлогинивается), 🔌 — отключить провайдера.',

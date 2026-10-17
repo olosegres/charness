@@ -77,6 +77,7 @@ export const frDict: Record<string, string> = {
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
     '/limits — que faire à une limite d’usage (modèles de secours, bascule, attente)\n' +
+    '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/accounts — comptes Claude et providers OpenCode (choisir, ajouter, se reconnecter, supprimer, connecter, déconnecter)\n' +
     '/clear — supprimer les messages du fil\n' +
     '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
@@ -367,10 +368,10 @@ export const frDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'Cette reprise a été passée.',
   'autoContinueLimits.skipExpired': 'Rien à passer — cette attente est déjà terminée.',
   'autoContinueLimits.skippedNotice': '⏭ Passé : je ne reprendrai pas celle-ci tout seul. Écris-moi quand continuer — la reprise automatique reste activée pour ce sujet.',
-  'autoContinueLimits.noticeHint': 'Lancez /limits pour sauter cette reprise ou désactiver l’attente pour ce sujet.',
+  'autoContinueLimits.noticeHint': 'Sauter cette reprise : /limits · désactiver l’attente : /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ Reprise automatique après une limite d’usage : {state} pour ce sujet.',
   'autoContinueLimits.setGlobal': '✅ Reprise automatique après une limite d’usage : {state} pour TOUS les sujets (les remplacements par sujet s’appliquent toujours).',
-  'autoContinueLimits.limitReachedDisabled': '🚧 Limite d’usage atteinte. L’attente de la réinitialisation est désactivée pour ce sujet, je patiente donc — écrivez-moi quand continuer (/limits pour activer l’attente).',
+  'autoContinueLimits.limitReachedDisabled': '🚧 Limite d’usage atteinte. L’attente de la réinitialisation est désactivée pour ce sujet, je patiente donc — écrivez-moi quand continuer (/limits_autoswitch pour activer l’attente).',
 
   'connect.prompt_key': '🔑 Envoyez la clé API pour `{provider}` comme prochain message. Je supprimerai le message contenant la clé de l\'historique.',
   'connect.empty_key': '❌ La clé API est vide. Envoyez la clé comme prochain message.',
@@ -841,7 +842,6 @@ export const frDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ La bascule vers {to} a échoué : {error}',
   'limits.addConfirm': '➕ Ajouter {label} à la liste de secours ?',
   'limits.enableConfirm': '➕ Inclure {label} dans la bascule automatique ?',
-  'limits.usageHeading': 'Usage (% consommé)',
   'limits.topicRuns': 'Tourne sur : {current}',
   'limits.settingsGeneral': 'Valeurs par défaut pour tous les sujets.',
   'limits.sourceGeneral': 'comme dans General',
@@ -862,6 +862,8 @@ export const frDict: Record<string, string> = {
   'limits.whatSwitch': 'Bascule automatique vers un modèle de secours',
   'limits.whatWait': 'Attendre la réinitialisation et continuer',
   'limits.usage': 'Utilisation : /limits — l’écran ; /limits rebuild ; /limits clear ; /limits switch on|off|same ; /limits wait on|off|same («same» = suivre General, dans un sujet).',
+  'limits.autoswitchUsage': 'Utilisation : /limits_autoswitch — l’écran ; /limits_autoswitch rebuild ; /limits_autoswitch clear ; /limits_autoswitch switch on|off|same ; /limits_autoswitch wait on|off|same («same» = suivre General, dans un sujet).',
+  'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode : aucun connecté pour l’instant. «➕ Provider OpenCode» en connecte un.',
   'accounts.buttonsHint': 'Touchez un compte pour y passer ce sujet (dans General : défaut pour tous). 🔑 reconnecte un compte ou un fournisseur, 🗑 retire un compte (le compte default est déconnecté), 🔌 déconnecte un fournisseur.',

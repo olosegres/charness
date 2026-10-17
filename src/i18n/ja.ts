@@ -77,6 +77,7 @@ export const jaDict: Record<string, string> = {
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
     '/limits — 使用量上限に達したときの動作（予備モデル・切り替え・待機）\n' +
+    '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（選択・追加・再ログイン・削除・接続・切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
@@ -367,10 +368,10 @@ export const jaDict: Record<string, string> = {
   'autoContinueLimits.skipDone': 'この再開をスキップしました。',
   'autoContinueLimits.skipExpired': 'スキップするものがありません — この待機はすでに終了しています。',
   'autoContinueLimits.skippedNotice': '⏭ スキップしました：今回は自動で再開しません。続けるタイミングを書いてください — このトピックの自動再開はオンのままです。',
-  'autoContinueLimits.noticeHint': '/limits で、今回の再開をスキップするか、このトピックの待機をオフにできます。',
+  'autoContinueLimits.noticeHint': '今回の再開をスキップ: /limits ・ 待機をオフ: /limits_autoswitch',
   'autoContinueLimits.setThisTopic': '✅ 使用量上限後の自動再開：このトピックで {state}。',
   'autoContinueLimits.setGlobal': '✅ 使用量上限後の自動再開：すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
-  'autoContinueLimits.limitReachedDisabled': '🚧 使用量上限に達しました。このトピックではリセット待ちがオフなので、このまま待機します。続行するタイミングを教えてください（/limits で待機をオンに）。',
+  'autoContinueLimits.limitReachedDisabled': '🚧 使用量上限に達しました。このトピックではリセット待ちがオフなので、このまま待機します。続行するタイミングを教えてください（/limits_autoswitch で待機をオンに）。',
 
   'connect.prompt_key': '🔑 次のメッセージで `{provider}` の API key を送信してください。キーを含むメッセージを履歴から削除します。',
   'connect.empty_key': '❌ API key が空です。次のメッセージでキーを送信してください。',
@@ -835,7 +836,6 @@ export const jaDict: Record<string, string> = {
   'backendSwitch.failed': '⚠️ {to} への切替に失敗しました: {error}',
   'limits.addConfirm': '➕ {label} を予備リストに追加しますか？',
   'limits.enableConfirm': '➕ {label} を自動切替に含めますか？',
-  'limits.usageHeading': '使用状況（% 使用済み）',
   'limits.topicRuns': '実行先: {current}',
   'limits.settingsGeneral': '全トピックの既定値。',
   'limits.sourceGeneral': 'General と同じ',
@@ -856,6 +856,8 @@ export const jaDict: Record<string, string> = {
   'limits.whatSwitch': '予備モデルへ自動切り替え',
   'limits.whatWait': 'リセットを待って続行',
   'limits.usage': '使い方: /limits — 画面; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same（トピックでは «same» = General に従う）。',
+  'limits.autoswitchUsage': '使い方: /limits_autoswitch — 画面; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same（トピックでは «same» = General に従う）。',
+  'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode プロバイダー: まだ接続されていません。「➕ OpenCode プロバイダー」で接続できます。',
   'accounts.buttonsHint': 'アカウントをタップするとこのトピックをそれに切り替えます（General ではすべての既定）。🔑 はアカウント/プロバイダーの再ログイン、🗑 はアカウントの削除（default はサインアウト）、🔌 はプロバイダーの切断です。',

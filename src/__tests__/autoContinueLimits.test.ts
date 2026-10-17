@@ -4,7 +4,7 @@
  * recording topic sends) and recording stand-ins for the armed usage-limit wait. Pinned:
  *
  *   • WIRING — the hidden alias command and the two old buttons it registers, in order;
- *   • the bare alias opens the `/limits` screen (its port), it no longer owns a picker;
+ *   • the bare alias opens the `/limits_autoswitch` screen (its port), it no longer owns a picker;
  *   • the switch for a regular topic (its own override) and for General (the instance-wide default);
  *   • turning it off drops the topic's armed resume — and stops waking its request only when one WAS armed;
  *   • a tap consumes the picker: it becomes a keyboard-less confirmation.
@@ -44,7 +44,7 @@ describe('autoContinueLimits: the auto-resume switch over its ports', () => {
     autoContinueLimits = createAutoContinueLimits({
       ...harness.core,
       checkIsGeneral: () => isGeneralTopic,
-      openLimitsView: async (key) => { openedLimitsViews.push(key); },
+      openAutoSwitchView: async (key) => { openedLimitsViews.push(key); },
       getArmedLimitRetryFireAt: () => armedFireAtForTopic,
       cancelApiRetry: (key) => {
         cancelledRetryKeys.push(key);
@@ -69,7 +69,7 @@ describe('autoContinueLimits: the auto-resume switch over its ports', () => {
     assert.deepEqual(harness.registeredActionPatterns, ['acl_on', 'acl_off']);
   });
 
-  it('the bare alias opens the /limits screen instead of its own picker', async () => {
+  it('the bare alias opens the /limits_autoswitch screen instead of its own picker', async () => {
     const repliesBefore = harness.replies.length;
     await harness.runCommand('auto_continue_limits');
     assert.deepEqual(openedLimitsViews, [harness.key]);

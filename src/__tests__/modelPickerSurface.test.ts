@@ -437,9 +437,10 @@ describe('Telegram command menu', () => {
     }
   });
 
-  it('lists /limits and hides /fallback and /auto_continue_limits', () => {
+  it('lists /limits and /limits_autoswitch and hides /fallback and /auto_continue_limits', () => {
     const commands = COMMANDS_MENU.map((entry) => entry.command);
     assert.ok(commands.includes('limits'));
+    assert.ok(commands.includes('limits_autoswitch'));
     assert.equal(commands.includes('fallback'), false);
     assert.equal(commands.includes('auto_continue_limits'), false);
   });

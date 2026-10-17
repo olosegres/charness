@@ -6752,7 +6752,7 @@ const {
   registerAutoContinueLimitsCallbacks,
 } = createAutoContinueLimits({
   ...botCore,
-  openLimitsView: (key) => openLimitsView(key),
+  openAutoSwitchView: (key) => openAutoSwitchView(key),
   getArmedLimitRetryFireAt,
   cancelApiRetry,
   getRequestWakeUpEngine: () => requestWakeUpEngine,
@@ -7384,7 +7384,7 @@ async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeP
   );
 }
 
-const { registerFallbackChainCommands, registerFallbackChainCallbacks, openLimitsView, applyAutoSwitch } = createFallbackChain({
+const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, applyAutoSwitch } = createFallbackChain({
   ...botCore,
   applyAutoContinue: applyAutoContinueLimits,
   getArmedLimitRetryFireAt,
@@ -8082,7 +8082,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',
 ]);
 
@@ -11150,6 +11150,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 What happens when an agent hits a usage limit' },
+  { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },
   { command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
