@@ -26,6 +26,8 @@
  *     model: ✖️ Cancel changes nothing, ✅ Continue resumes the PARKED OpenCode session on that model with the bridge;
  *   · the ✓ OpenCode row opens the model page of where the topic runs: a pick changes the model, same session, no question;
  *   · `/accounts` → another provider on an OpenCode topic switches the model at once, same session, no question;
+ *   · the General board: a Claude row sets the instance default (the ✓ follows), an OpenCode row only says a model is picked
+ *     inside a topic and changes nothing;
  *   · a ChatGPT subscription's usage (a snapshot seeded into `state.json`; the instance's `auth.json` holds no `oauth`
  *     record, so nothing ever reaches chatgpt.com) shows on both screens.
  *
@@ -574,5 +576,27 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.match(picker.text, /✓ google — API key\n/);
     const usage = readPersistedState(getLayout()).openCodeProviderUsage as Record<string, { usage?: { buckets: unknown[] } }> | undefined;
     assert.equal(usage?.openai?.usage?.buckets.length, 2, 'the poller left the seeded snapshot alone (auth.json lists no such provider)');
+  });
+  it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
+    const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
+    assert.match(board.message.text, /^Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\nTap a Claude account to make it the default\. 5h \/ week = % of the window used\./);
+    assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the default account carries the ✓ in General');
+    assert.equal(readPersistedState(getLayout()).claudeProfileDefault, undefined, 'no default of its own yet');
+
+    const setToast = await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${takeoverAccount}`));
+    assert.match(setToast, new RegExp(`Default Claude account for ALL topics: ${takeoverAccount}`));
+    await getCharness().waitFor('the default account in state.json', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === takeoverAccount);
+    await getCharness().waitFor('the ✓ to follow the tap', replyTimeoutMs, () => general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${takeoverAccount}`)));
+    assert.ok(!general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${exhaustedAccount}`)), 'the old default lost its ✓');
+
+    const agentsBefore = JSON.stringify(readPersistedState(getLayout()).agents);
+    const openCodeToast = await general.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
+    assert.equal(openCodeToast, 'An OpenCode model is picked inside a topic.');
+    assert.equal(readPersistedState(getLayout()).claudeProfileDefault, takeoverAccount, 'the OpenCode row changed nothing');
+    assert.equal(JSON.stringify(readPersistedState(getLayout()).agents), agentsBefore, 'no topic was touched');
+
+    // Put the default back so the flow ends where it started.
+    await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${exhaustedAccount}`));
+    await getCharness().waitFor('the default account back to the built-in one in state.json (stored as no value)', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === undefined);
   });
 });

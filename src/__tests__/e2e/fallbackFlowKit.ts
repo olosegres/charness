@@ -146,13 +146,12 @@ export interface OpenedLimitsBoard {
 }
 
 /**
- * @description The operator types `/limits` in a topic; resolves the board the bot answers with (the newest message
- * after the command that starts with the settings line and carries `lim_*` rows — not a wait notice that names the
- * command in passing).
+ * @description The operator types `/limits` in a topic (General included); resolves the board the bot answers with: the
+ * newest message after the command that carries `lim_*` rows — not a wait notice that only names the command in passing.
  */
 export async function openLimitsBoard(fakeTelegram: FakeTelegram, driver: TopicDriver, threadId: number): Promise<OpenedLimitsBoard> {
   const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/limits');
-  const message = await driver.waitForMessage('the /limits board', (candidate) => candidate.message_id > sentMessageId && candidate.text.startsWith('🔁 Auto switch') && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('lim_')));
+  const message = await driver.waitForMessage('the /limits board', (candidate) => candidate.message_id > sentMessageId && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('lim_')));
   const labels = driver.getKeyboardLabels(message).flat();
   const data = driver.getKeyboardData(message).flat();
   const indexOf = (rowName: string): number => {
