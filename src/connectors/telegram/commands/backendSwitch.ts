@@ -21,7 +21,7 @@ import {
   type BackendFamily,
   type BackendSwitchTarget,
 } from '../../../utils/backendSwitchPlan';
-import { getCallbackMessageId } from './callbackMessage';
+import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 
 /** Questions whose snapshot is kept (the newest); an older keyboard is refused as out of date. */
@@ -51,14 +51,15 @@ interface PendingSwitch {
 export function createBackendSwitch(ports: BackendSwitchPorts) {
   const { bot, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, getCurrentFamily, performBackendSwitch } = ports;
 
-  const pendingByMessage = new Map<number, PendingSwitch>();
-  /** The one open question per topic: a newer question retires the older one's snapshot. */
-  const messageIdByTopic = new Map<string, number>();
+  /** Per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat. */
+  const pendingByMessage = new Map<string, PendingSwitch>();
+  /** The one open question per topic (its snapshot key): a newer question retires the older one's snapshot. */
+  const snapshotKeyByTopic = new Map<string, string>();
 
-  function forget(messageId: number): void {
-    const pending = pendingByMessage.get(messageId);
-    pendingByMessage.delete(messageId);
-    if (pending && messageIdByTopic.get(pending.topicKey) === messageId) messageIdByTopic.delete(pending.topicKey);
+  function forget(snapshotKey: string): void {
+    const pending = pendingByMessage.get(snapshotKey);
+    pendingByMessage.delete(snapshotKey);
+    if (pending && snapshotKeyByTopic.get(pending.topicKey) === snapshotKey) snapshotKeyByTopic.delete(pending.topicKey);
   }
 
   /**
@@ -73,10 +74,11 @@ export function createBackendSwitch(ports: BackendSwitchPorts) {
     const messageId = await replyToThread(key, buildBackendSwitchQuestion(request), keyboard);
     if (messageId === null) return;
     const topicKey = keyToString(key);
-    const older = messageIdByTopic.get(topicKey);
+    const snapshotKey = buildMessageSnapshotKey(key, messageId);
+    const older = snapshotKeyByTopic.get(topicKey);
     if (older !== undefined) pendingByMessage.delete(older);
-    pendingByMessage.set(messageId, { topicKey, from: request.from, target: request.target, userMessage: request.userMessage });
-    messageIdByTopic.set(topicKey, messageId);
+    pendingByMessage.set(snapshotKey, { topicKey, from: request.from, target: request.target, userMessage: request.userMessage });
+    snapshotKeyByTopic.set(topicKey, snapshotKey);
     while (pendingByMessage.size > pendingQuestionLimit) {
       const oldest = pendingByMessage.keys().next().value;
       if (oldest === undefined) break;
@@ -92,18 +94,19 @@ export function createBackendSwitch(ports: BackendSwitchPorts) {
 
   function registerBackendSwitchCallbacks(): void {
     bot.action(backendSwitchCallbackRe, (ctx) => handleTap(ctx, async (key, messageId) => {
-      const pending = messageId === null ? undefined : pendingByMessage.get(messageId);
+      // A button with no message to resolve a snapshot against (a very old message) is out of date by definition.
+      if (messageId === null) { await ctx.answerCbQuery(t('backendSwitch.stale')); return; }
+      const snapshotKey = buildMessageSnapshotKey(key, messageId);
+      const pending = pendingByMessage.get(snapshotKey);
       // Out of date: nothing remembered (an older question, a restart), another topic's, or the topic is no longer on
       // the backend it was asked from. The keyboard is consumed all the same.
-      if (messageId === null || !pending || pending.topicKey !== keyToString(key) || getCurrentFamily(key) !== pending.from) {
+      if (!pending || pending.topicKey !== keyToString(key) || getCurrentFamily(key) !== pending.from) {
         await ctx.answerCbQuery(t('backendSwitch.stale'));
-        if (messageId !== null) {
-          forget(messageId);
-          await editThreadMessage(key, messageId, t('backendSwitch.stale'));
-        }
+        forget(snapshotKey);
+        await editThreadMessage(key, messageId, t('backendSwitch.stale'));
         return;
       }
-      forget(messageId);
+      forget(snapshotKey);
       await ctx.answerCbQuery();
       const to = formatBackendSwitchTarget(pending.target);
       if (ctx.match[0] === backendSwitchCancelCallback) {

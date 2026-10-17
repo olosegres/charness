@@ -236,6 +236,19 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(harness.state.getFallbackChain().length, lengthBefore);
   });
 
+  it('the add snapshot belongs to its CHAT: a tap from another chat on the same message id resolves nothing, this chat\'s snapshot survives', async () => {
+    const pickerId = harness.replies.at(-1)!.messageId!;
+    await harness.tapButton(pickerId, 'fbk_add');
+    const lengthBefore = harness.state.getFallbackChain().length;
+    await harness.asForeignChat(() => harness.tapButton(pickerId, 'fbk_addp_0'));
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed since this keyboard was posted — it is re-rendered.');
+    assert.equal(harness.state.getFallbackChain().length, lengthBefore);
+    await harness.tapButton(pickerId, 'fbk_add');
+    await harness.tapButton(pickerId, 'fbk_addp_0');
+    assert.equal(harness.edits.at(-1)?.text, '➕ OpenCode · openai — pick a model:', 'this chat\'s own taps resolve against its snapshot as before');
+    await harness.tapButton(pickerId, 'fbk_back');
+  });
+
   it('«propose» over an existing chain asks first; «clear» empties it; the text verbs mirror the buttons', async () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     await harness.tapButton(pickerId, 'fbk_prop');

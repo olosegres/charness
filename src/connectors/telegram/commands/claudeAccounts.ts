@@ -54,7 +54,7 @@ import {
   type AccountPickerRow,
 } from '../../../utils/claudeAccountPickerPlan';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
-import { getCallbackMessageId } from './callbackMessage';
+import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 
 /**
@@ -128,11 +128,13 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    */
   const awaitingProfileName = new Map<string, 'claudeName' | 'providerId'>();
   /** The OpenCode providers each screen MESSAGE listed — its disconnect buttons carry an index into this. */
-  const providerSnapshots = new Map<number, string[]>();
+  /** Per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat. */
+  const providerSnapshots = new Map<string, string[]>();
 
-  function rememberProviders(messageId: number, providers: string[]): void {
-    providerSnapshots.delete(messageId);
-    providerSnapshots.set(messageId, providers);
+  function rememberProviders(key: SessionKey, messageId: number, providers: string[]): void {
+    const snapshotKey = buildMessageSnapshotKey(key, messageId);
+    providerSnapshots.delete(snapshotKey);
+    providerSnapshots.set(snapshotKey, providers);
     while (providerSnapshots.size > providerSnapshotLimit) {
       const oldest = providerSnapshots.keys().next().value;
       if (oldest === undefined) break;
@@ -294,7 +296,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   async function postPicker(key: SessionKey, isGeneral: boolean): Promise<void> {
     const picker = await buildPicker(key, isGeneral);
     const messageId = await replyToThread(key, picker.text, picker.keyboard);
-    if (messageId !== null) rememberProviders(messageId, picker.providers);
+    if (messageId !== null) rememberProviders(key, messageId, picker.providers);
   }
 
   /** A sub-picker: one button per profile (`default` included only when `includeDefault`), plus «Back». */
@@ -309,7 +311,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   async function rerenderPicker(key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
     if (messageId === null) return;
     const picker = await buildPicker(key, isGeneral);
-    rememberProviders(messageId, picker.providers);
+    rememberProviders(key, messageId, picker.providers);
     await editThreadMessage(key, messageId, picker.text, picker.keyboard);
   }
 
@@ -585,7 +587,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // A provider's «🔌» row → ask first (a disconnect drops stored credentials), against the snapshot of the
     // message the button sits on: an older screen can never map its index onto a newer list.
     bot.action(accountDisconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
         await ctx.answerCbQuery(t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
@@ -599,7 +601,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountDisconnectConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
         await ctx.answerCbQuery(t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
@@ -612,7 +614,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
     // A provider's «🔑» → connect it again (the method picker); the screen is re-rendered first.
     bot.action(accountReconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const provider = messageId === null ? undefined : providerSnapshots.get(messageId)?.[Number(ctx.match[1])];
+      const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
         await ctx.answerCbQuery(t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);

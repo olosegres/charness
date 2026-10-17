@@ -14,6 +14,7 @@ functions where the handlers used to be registered. A module never imports `bot.
 - **State `bot.ts` also touches is passed in** (a map or set it owns); state private to a feature lives in its
   factory.
 - A port-free helper is a plain export of its file (its test imports it without booting `bot.ts`).
+- **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 
 ## `displayModes.ts`
 

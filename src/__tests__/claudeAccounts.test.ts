@@ -373,6 +373,18 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.getKeyboardData(harness.edits.at(-1)).some((row) => row[0] === 'acct_dc_0'), true, 'the screen is re-rendered in place');
   });
 
+  it('the provider snapshot belongs to its CHAT: a disconnect tap from another chat on the same message id resolves no provider', async () => {
+    openCodeProviders = ['openai', 'openrouter'];
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    const editsBefore = harness.edits.length;
+    await harness.asForeignChat(() => harness.tapButton(screen.messageId!, 'acct_dc_1'));
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This screen is out of date — it is re-rendered.');
+    assert.ok(!harness.edits.slice(editsBefore).some((edit) => /Disconnect openrouter\?/.test(edit.text)), 'no confirmation for a provider of another chat\'s screen');
+    await harness.tapButton(screen.messageId!, 'acct_dc_1');
+    assert.match(harness.edits.at(-1)?.text ?? '', /Disconnect openrouter\?/, 'this chat\'s own tap still resolves against its snapshot');
+  });
+
   it('a disconnect tap on a message with no provider snapshot (or an index past it) only re-renders', async () => {
     const stray = (await harness.core.replyToThread(harness.key, 'an old screen'))!;
     const editsBefore = harness.edits.length;

@@ -78,7 +78,7 @@ import {
   type FallbackChainEntry,
   type FallbackDetection,
 } from '../../../utils/fallbackChain';
-import { getCallbackMessageId } from './callbackMessage';
+import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 
 /** Models per page in the «add an OpenCode model» step (the `/model` picker's density). */
@@ -170,9 +170,10 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     getInstanceTimezone, refreshClaudeUsage, detectFallbackOptions, getTopicPosition, takeSwitchOffer, applyAutoContinue, getArmedLimitRetryFireAt,
   } = ports;
 
-  const addSnapshots = new Map<number, AddSnapshot>();
-  /** The rung each «add it?» question (per MESSAGE) waits to add; the revision of the list it was asked about rides in its button. */
-  const pendingAdds = new Map<number, FallbackChainEntry>();
+  // Both per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat.
+  const addSnapshots = new Map<string, AddSnapshot>();
+  /** The rung each «add it?» question waits to add; the revision of the list it was asked about rides in its button. */
+  const pendingAdds = new Map<string, FallbackChainEntry>();
 
   function getLabelWords(): { claude: string; openCode: string; topicModel: string } {
     return { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel') };
@@ -370,8 +371,9 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   /** Re-render the picker IN PLACE (it is meant for repeated use, like `/account`) off the cached usage; best-effort. */
   async function rerenderPicker(key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
     if (messageId === null) return;
-    addSnapshots.delete(messageId);
-    pendingAdds.delete(messageId);
+    const snapshotKey = buildMessageSnapshotKey(key, messageId);
+    addSnapshots.delete(snapshotKey);
+    pendingAdds.delete(snapshotKey);
     const picker = await buildPicker(key, isGeneral);
     await editThreadMessage(key, messageId, picker.text, picker.keyboard);
   }
@@ -397,7 +399,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       await replyToThread(key, t('fallback.nothingDetected'));
       return;
     }
-    addSnapshots.set(messageId, { providers, providerId: null, models: [] });
+    addSnapshots.set(buildMessageSnapshotKey(key, messageId), { providers, providerId: null, models: [] });
     rows.push(buildBackRow());
     await editThreadMessage(key, messageId, t('fallback.pickAccount'), Markup.inlineKeyboard(rows));
   }
@@ -457,7 +459,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const chain = getState().getFallbackChain();
     if (messageId !== null && addFallbackEntry(chain, entry).ok && checkIsNewBackendForChain(chain, entry)) {
       await ctx.answerCbQuery();
-      pendingAdds.set(messageId, entry);
+      pendingAdds.set(buildMessageSnapshotKey(key, messageId), entry);
       await askAboutNewBackend(key, messageId, 'limits.addConfirm', entry, buildFallbackAddConfirmCallback(getFallbackChainRevision(chain)), fallbackBackCallback);
       return;
     }
@@ -676,7 +678,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackAddProviderCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const snapshot = messageId === null ? undefined : addSnapshots.get(messageId);
+      const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       const providerId = snapshot?.providers[Number(ctx.match[1])];
       if (messageId === null || !snapshot || providerId === undefined) {
         await ctx.answerCbQuery(t('fallback.stale'));
@@ -687,12 +689,12 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const detection = await detectFallbackOptions();
       const models = listOpenCodeModelsOfProvider(detection.openCodeModels, providerId);
       const next: AddSnapshot = { ...snapshot, providerId, models };
-      addSnapshots.set(messageId, next);
+      addSnapshots.set(buildMessageSnapshotKey(key, messageId), next);
       await renderAddModelPage(key, messageId, next, 0);
     }));
 
     bot.action(fallbackAddModelPageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const snapshot = messageId === null ? undefined : addSnapshots.get(messageId);
+      const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       if (messageId === null || !snapshot || snapshot.providerId === null) {
         await ctx.answerCbQuery(t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
@@ -703,7 +705,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackAddModelCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const snapshot = messageId === null ? undefined : addSnapshots.get(messageId);
+      const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       const modelId = snapshot?.models[Number(ctx.match[1])];
       if (!snapshot || snapshot.providerId === null || modelId === undefined) {
         await ctx.answerCbQuery(t('fallback.stale'));
@@ -716,13 +718,13 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     // «✅ Continue» of the question before a rung of a new backend is added: only while the list is the one the
     // question was asked about; a stale tap re-renders the list and adds nothing.
     bot.action(fallbackAddConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      const entry = messageId === null ? undefined : pendingAdds.get(messageId);
+      const entry = messageId === null ? undefined : pendingAdds.get(buildMessageSnapshotKey(key, messageId));
       if (!entry || ctx.match[1] !== getFallbackChainRevision(getState().getFallbackChain())) {
         await ctx.answerCbQuery(t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      if (messageId !== null) pendingAdds.delete(messageId);
+      if (messageId !== null) pendingAdds.delete(buildMessageSnapshotKey(key, messageId));
       await answerTap(ctx, key, await applyAdd(entry));
       await rerenderPicker(key, messageId, isGeneral);
     }));

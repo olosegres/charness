@@ -37,6 +37,9 @@ function createCommandContext(messageId: number, text: string): CommandContext {
   return { message: { message_id: messageId, text } } as CommandContext;
 }
 
+/** A second chat's id (placeholder) for the taps that must not meet the harness chat's snapshots. */
+const foreignChatSpace = '-1002222222222';
+
 /** The id of the operator's command message when a test does not name one. */
 const defaultCommandMessageId = 1;
 
@@ -52,6 +55,8 @@ export class CommandHarness {
   readonly registeredActionPatterns: string[] = [];
   /** Does the module see the General topic? Flip it to drive a command as the operator in General. */
   isGeneral = false;
+  /** When set, a callback is authorised as coming from THIS key (another chat) instead of the harness's own. */
+  foreignChatKey: SessionKey | null = null;
   readonly core: BotCore;
   private readonly commandHandlers = new Map<string, CommandHandler>();
   private nextSentMessageId = firstRecordedMessageId;
@@ -90,7 +95,7 @@ export class CommandHarness {
       deleteThreadMessage: async (_key, messageId) => {
         this.deletedMessageIds.push(messageId);
       },
-      authoriseContext: async () => this.key,
+      authoriseContext: async () => this.foreignChatKey ?? this.key,
       withThreadLocale: (_key, run) => run(),
       checkIsGeneral: () => this.isGeneral,
       updatePinnedStatus: async (key) => {
@@ -102,6 +107,19 @@ export class CommandHarness {
       // The harness has no sleeping session to wake; a command's wake is a no-op here.
       wakeSleepingSession: async () => null,
     };
+  }
+
+  /**
+   * @description Run `tap` as if its callbacks came from ANOTHER chat (same message ids are reused there): `key`'s
+   * chat is replaced, topic and platform kept. A module's per-message snapshots must not answer across chats.
+   */
+  async asForeignChat<T>(tap: () => Promise<T>): Promise<T> {
+    this.foreignChatKey = { ...this.key, space: foreignChatSpace };
+    try {
+      return await tap();
+    } finally {
+      this.foreignChatKey = null;
+    }
   }
 
   /** @description Run the registered handler of `/name args` as the operator typing it in message `messageId`. */

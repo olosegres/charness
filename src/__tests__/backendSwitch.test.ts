@@ -113,6 +113,17 @@ describe('backendSwitch: the question over its ports', () => {
     assert.deepEqual(switches.map((entry) => entry.target), [toPickedClaude], 'the picked account reaches the switch as a pick');
   });
 
+  it('a tap from ANOTHER chat on the same message id neither acts on nor deletes this chat\'s question', async () => {
+    currentFamily = 'opencode';
+    switches.length = 0;
+    const messageId = await ask({ from: 'opencode', target: toPickedClaude });
+    await harness.asForeignChat(() => harness.tapButton(messageId, 'bsw_ok'));
+    assert.equal(switches.length, 0, 'the other chat has no such question');
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This question is out of date — nothing was switched.');
+    await harness.tapButton(messageId, 'bsw_ok');
+    assert.deepEqual(switches.map((entry) => entry.target), [toPickedClaude], 'this chat\'s question is still there');
+  });
+
   it('a question left in the history after the topic changed backend by other means is out of date', async () => {
     currentFamily = 'opencode';
     switches.length = 0;
