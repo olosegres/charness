@@ -49,6 +49,9 @@ the bot remembers the rung per topic until the topic goes back or is changed by 
   survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
 
 ### Fixed
+- Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch and its «back» button) resumes
+  the Claude conversation the topic left; it used to come back to a fresh one, because leaving OpenCode overwrote the
+  parked Claude conversation id with the OpenCode session's. The same holds the other way round.
 - A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
   one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
 - An OpenCode model that has no effort levels shows none: `/status`, the pinned banner and the ready notice no longer

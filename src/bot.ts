@@ -385,6 +385,7 @@ import {
   buildFallbackReturnLabel,
   buildFallbackSwitchedNotice,
 } from './utils/fallbackSwitchNotice';
+import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
 import { buildFallbackReturnCallback, checkIsFallbackReturnCurrent, checkIsFallbackReturnForgotten } from './utils/fallbackReturn';
 import {
   buildFallbackSwitchCallbackData,
@@ -4380,28 +4381,15 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // `ensureAgentSession` → switch → `startAgentSession` path) overwrites it
   // with "now" afterwards, so carrying it here can't wrongly age a new session.
   if (agent.startedAt !== undefined) next.startedAt = agent.startedAt;
-  // Both Claude backends share the on-disk transcript, so keep the session id
-  // when switching between tmux-scrape and json-stream — the new backend resumes
-  // the SAME conversation (`/claude_mode` live switch).
-  if (checkIsClaudeBackend(newName) && agent.claudeSessionId) next.claudeSessionId = agent.claudeSessionId;
-  if (newName === openCodeAdapterName && agent.opencodeSessionId) next.opencodeSessionId = agent.opencodeSessionId;
-  // The id of the family the thread LEAVES is parked, and the parked id of the family it RETURNS to is
-  // restored (`state.parkedSessions`): a cross-backend fallback switch — or a plain /claude ↔ /opencode — can
-  // come back to the conversation it left (L-D4: a sleeping conversation is woken, `/new` is the fresh start).
-  // The reattach loop never reads the parked slot, so the audit S12 bug (both ids on the live row) stays fixed.
-  const parked = state.getParkedSession(key);
-  const parkedAt = new Date().toISOString();
-  if (prevName && checkIsClaudeBackend(prevName) && !checkIsClaudeBackend(newName) && agent.claudeSessionId) {
-    await state.setParkedSession(key, { adapterName: prevName, claudeSessionId: agent.claudeSessionId, parkedAt });
-  } else if (prevName === openCodeAdapterName && newName !== openCodeAdapterName && agent.opencodeSessionId) {
-    await state.setParkedSession(key, { adapterName: prevName, opencodeSessionId: agent.opencodeSessionId, parkedAt });
-  } else if (parked && checkIsClaudeBackend(newName) && !next.claudeSessionId && parked.claudeSessionId) {
-    next.claudeSessionId = parked.claudeSessionId;
-    await state.setParkedSession(key, null);
-  } else if (parked && newName === openCodeAdapterName && !next.opencodeSessionId && parked.opencodeSessionId) {
-    next.opencodeSessionId = parked.opencodeSessionId;
-    await state.setParkedSession(key, null);
-  }
+  // The ids the new family keeps, and the parked slot: the family the thread LEAVES is parked and the parked id of the
+  // family it RETURNS to is restored, in the same step (`utils/adapterSwitchSessionIds.ts`) — a cross-backend
+  // fallback switch, its «back» button or a plain /claude ↔ /opencode comes back to the conversation it left
+  // (L-D4: a sleeping conversation is woken, `/new` is the fresh start). The reattach loop never reads the parked
+  // slot, so the audit S12 bug (both ids on the live row) stays fixed.
+  const switched = getAdapterSwitchSessionIds({ previousName: prevName, nextName: newName, agent, parked: state.getParkedSession(key), parkedAt: new Date().toISOString() });
+  if (switched.ids.claudeSessionId) next.claudeSessionId = switched.ids.claudeSessionId;
+  if (switched.ids.opencodeSessionId) next.opencodeSessionId = switched.ids.opencodeSessionId;
+  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked);
   // Overwrite by removing the row first; setAgent then writes only the
   // fields we kept.
   await state.removeAgent(key);

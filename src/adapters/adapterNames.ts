@@ -22,3 +22,19 @@ export const claudePerTurnAdapterName = 'claude-per-turn';
 export function checkIsJsonStreamBackend(name: string): boolean {
   return name === claudeJsonStreamAdapterName || name === claudePerTurnAdapterName;
 }
+
+/**
+ * @description The three Claude Code backends. All drive the SAME `claude` CLI
+ * against the SAME on-disk transcript, so a thread is cross-resumable between
+ * them live:
+ *  - `'claude'` — the tmux TUI, scraped screen (classic);
+ *  - {@link claudeJsonStreamAdapterName} — an EXTERNAL tmux-hosted process
+ *    streaming structured stream-json events over a FIFO + stdout file, so it
+ *    survives bot restarts; stopped at the idle mark (the DEFAULT, see
+ *    `getDefaultClaudeBackendName` (`createAdapter.ts`));
+ *  - {@link claudePerTurnAdapterName} — the same host, stopped after each turn (L5).
+ * `/claude_mode` flips a thread between them.
+ */
+export function checkIsClaudeBackend(name: string): boolean {
+  return name === 'claude' || checkIsJsonStreamBackend(name);
+}

@@ -7,9 +7,12 @@ import { OpenCodeAdapter } from './openCodeAdapter';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from './adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsClaudeBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 import type { ClaudeConfigDirReader, ClaudeRateLimitSink } from './claudeConfigDir';
+
+// The predicate lives with the names (a reader of a name should not load a backend); callers keep importing it here.
+export { checkIsClaudeBackend };
 
 type AdapterFactory = () => AgentAdapter;
 
@@ -362,22 +365,6 @@ export function getAvailableAdapters(): Array<{ name: string; label: string }> {
  */
 export function getDefaultClaudeBackendName(): string {
   return claudeJsonStreamAdapterName;
-}
-
-/**
- * @description The three Claude Code backends. All drive the SAME `claude` CLI
- * against the SAME on-disk transcript, so a thread is cross-resumable between
- * them live:
- *  - `'claude'` — the tmux TUI, scraped screen (classic);
- *  - {@link claudeJsonStreamAdapterName} — an EXTERNAL tmux-hosted process
- *    streaming structured stream-json events over a FIFO + stdout file, so it
- *    survives bot restarts; stopped at the idle mark (the DEFAULT, see
- *    {@link getDefaultClaudeBackendName});
- *  - {@link claudePerTurnAdapterName} — the same host, stopped after each turn (L5).
- * `/claude_mode` flips a thread between them.
- */
-export function checkIsClaudeBackend(name: string): boolean {
-  return name === 'claude' || checkIsJsonStreamBackend(name);
 }
 
 /**
