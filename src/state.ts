@@ -20,6 +20,7 @@ import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './uti
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
+import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { ScheduleRecord } from './scheduler/types';
@@ -463,6 +464,12 @@ export interface StateV1 {
    */
   sttInstallProgress?: SttInstallProgressMessage;
   openCodeModelLimits?: Record<string, string>;
+  /**
+   * How each OpenCode provider is signed in and, for a ChatGPT subscription, its usage windows
+   * (`utils/openCodeUsage.ts`), keyed by provider id — the twin of `ClaudeProfileRecord.usage` for `/limits` and
+   * `/accounts`. A provider absent here shows nothing beyond its name.
+   */
+  openCodeProviderUsage?: Record<string, OpenCodeProviderUsageRecord>;
   parkedSessions?: Record<string, ParkedSession>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
@@ -2009,6 +2016,21 @@ export class StateStore {
     } else {
       (this.state.openCodeModelLimits ??= {})[label] = limitedUntil;
     }
+    this.scheduleSave();
+  }
+
+  /** The recorded sign-in kind and usage of every OpenCode provider the poller has seen (`utils/openCodeUsage.ts`). */
+  getOpenCodeProviderUsages(): Readonly<Record<string, OpenCodeProviderUsageRecord>> {
+    return this.state.openCodeProviderUsage ?? {};
+  }
+
+  getOpenCodeProviderUsage(providerId: string): OpenCodeProviderUsageRecord | undefined {
+    return this.state.openCodeProviderUsage?.[providerId];
+  }
+
+  /** Store a provider's record (debounced: the poller writes on a timer and on every screen open). */
+  setOpenCodeProviderUsage(providerId: string, record: OpenCodeProviderUsageRecord): void {
+    (this.state.openCodeProviderUsage ??= {})[providerId] = record;
     this.scheduleSave();
   }
 

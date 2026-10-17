@@ -362,6 +362,7 @@ import {
 } from './utils/autoContinueOnLimit';
 import {
   type OpenCodeAuthMethod,
+  getOpenCodeAuthFilePath,
   parseOAuthCallbackFromReply,
 } from './utils/openCodeAuthLogin';
 import { createAgentLogin, type ClaudeLoginProfile } from './agentLogin/agentLogin';
@@ -377,6 +378,7 @@ import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connecto
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
+import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
@@ -6832,6 +6834,12 @@ async function applyClaudeProfileEverywhere(): Promise<void> {
  * OAuth usage endpoint on a 10-minute timer, on `/account` open and on a `claude_profiles` call, plus the
  * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
  */
+const openCodeUsagePoller = createOpenCodeUsagePoller({
+  readCredentials: () => readOpenCodeCredentials(getOpenCodeAuthFilePath({ XDG_DATA_HOME: process.env.XDG_DATA_HOME, HOME: os.homedir() })),
+  getRecord: (providerId) => state.getOpenCodeProviderUsage(providerId),
+  saveRecord: (providerId, record) => state.setOpenCodeProviderUsage(providerId, record),
+});
+
 const claudeUsageRefresher = createClaudeUsageRefresher({
   listProfiles: () => [
     { name: defaultClaudeProfileName, configDir: null, loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.loggedIn },
@@ -6843,6 +6851,7 @@ const claudeUsageRefresher = createClaudeUsageRefresher({
   saveSnapshot: (name, snapshot) => state.setClaudeProfileUsage(name, snapshot),
   readToken: (configDir) => readClaudeOAuthToken(configDir),
   fetchUsage: (accessToken) => fetchClaudeUsage(accessToken),
+  refreshOpenCode: (options) => openCodeUsagePoller.refreshAll(options),
 });
 
 /** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */

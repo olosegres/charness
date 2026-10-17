@@ -1,7 +1,7 @@
 /**
  * @description The usage poller behind `/account`, the `claude_profiles` MCP tool and the stream frames: keeps
  * one `ClaudeUsageSnapshot` per account profile current (`utils/claudeUsage.ts`), reading every signed-in
- * profile's own token. Runs on a modest timer (`claudeUsageRefreshIntervalMs`), on `/account` open and on
+ * profile's own token — and, beside them, the usage of the OpenCode subscriptions (`utils/openCodeUsage.ts`). Runs on a modest timer (`claudeUsageRefreshIntervalMs`), on `/account` open and on
  * demand (`refreshAll({ maxAgeMs })` skips a snapshot fresher than that), and folds in the `rate_limit_event`
  * windows a json-stream session reports (`noteStreamWindows`), persisting only when a bucket actually moved.
  *
@@ -40,6 +40,11 @@ export interface ClaudeUsageRefresherDeps {
   saveSnapshot: (name: string, snapshot: ClaudeUsageSnapshot) => void;
   readToken: (configDir: string | null) => ClaudeOAuthToken | null;
   fetchUsage: (accessToken: string) => Promise<ClaudeUsageFetchResult>;
+  /**
+   * The OpenCode providers' usage (`openCodeUsage.ts`) is polled on the same timer and by the same on-demand call; a
+   * failure there never reaches the Claude profiles' polls.
+   */
+  refreshOpenCode?: (options: { maxAgeMs?: number }) => Promise<void>;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -96,9 +101,14 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
     if (inFlight) return inFlight;
     inFlight = (async () => {
       const due = deps.listProfiles().filter((profile) => checkNeedsPoll(profile, options.maxAgeMs));
-      await Promise.all(due.map((profile) => pollProfile(profile).catch((e) => {
-        log(`[usage] ${profile.name}: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
-      })));
+      await Promise.all([
+        ...due.map((profile) => pollProfile(profile).catch((e) => {
+          log(`[usage] ${profile.name}: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
+        })),
+        deps.refreshOpenCode?.(options).catch((e) => {
+          log(`[usage] OpenCode providers: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
+        }),
+      ]);
     })().finally(() => { inFlight = null; });
     return inFlight;
   }

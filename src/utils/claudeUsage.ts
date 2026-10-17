@@ -97,28 +97,32 @@ export type ClaudeUsageFetchResult =
   | { ok: true; buckets: ClaudeUsageBucket[] }
   | { ok: false; error: string; isAuthError: boolean };
 
-type FetchLike = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ status: number; json(): Promise<unknown> }>;
+export type UsageFetchLike = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<{ status: number; json(): Promise<unknown> }>;
+
+/** What one GET of a usage endpoint needs: where, with which headers, and how its body becomes buckets. */
+export interface UsageEndpointRequest {
+  url: string;
+  headers: Record<string, string>;
+  parse: (body: unknown) => ClaudeUsageBucket[];
+  fetchImpl?: UsageFetchLike;
+  timeoutMs?: number;
+}
 
 /**
- * @description One GET of the usage endpoint with the profile's token. A 401/403 is an auth error (the
- * token is no longer accepted — the CLI's next run renews it); anything else is a plain failure. Never
- * throws; never includes the token in the result.
+ * @description One GET of a usage endpoint, the shared mechanics of every subscription usage reader (Claude's own, the
+ * ChatGPT one of `openCodeUsage.ts`): a 401/403 is an auth error (the token is no longer accepted — the CLI's next run
+ * renews it), anything else non-200 a plain failure, an empty parse a failure too. Never throws; the headers (the token)
+ * never appear in the result.
  */
-export async function fetchClaudeUsage(
-  token: string,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {},
-): Promise<ClaudeUsageFetchResult> {
-  const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+export async function fetchUsageBuckets(request: UsageEndpointRequest): Promise<ClaudeUsageFetchResult> {
+  const fetchImpl: UsageFetchLike = request.fetchImpl ?? (globalThis.fetch as unknown as UsageFetchLike);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? claudeUsageFetchTimeoutMs);
+  const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? claudeUsageFetchTimeoutMs);
   try {
-    const response = await fetchImpl(claudeUsageEndpoint, {
-      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': claudeOAuthBetaHeader, Accept: 'application/json' },
-      signal: controller.signal,
-    });
+    const response = await fetchImpl(request.url, { headers: request.headers, signal: controller.signal });
     if (response.status === 401 || response.status === 403) return { ok: false, error: `http ${response.status}`, isAuthError: true };
     if (response.status !== 200) return { ok: false, error: `http ${response.status}`, isAuthError: false };
-    const buckets = parseClaudeUsageResponse(await response.json());
+    const buckets = request.parse(await response.json());
     if (buckets.length === 0) return { ok: false, error: 'no limits in the response', isAuthError: false };
     return { ok: true, buckets };
   } catch (e) {
@@ -127,6 +131,21 @@ export async function fetchClaudeUsage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * @description One GET of the Claude usage endpoint with the profile's token (see {@link fetchUsageBuckets}).
+ */
+export async function fetchClaudeUsage(
+  token: string,
+  options: { fetchImpl?: UsageFetchLike; timeoutMs?: number } = {},
+): Promise<ClaudeUsageFetchResult> {
+  return fetchUsageBuckets({
+    url: claudeUsageEndpoint,
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': claudeOAuthBetaHeader, Accept: 'application/json' },
+    parse: parseClaudeUsageResponse,
+    ...options,
+  });
 }
 
 /**

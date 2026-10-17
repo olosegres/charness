@@ -82,3 +82,24 @@ describe('StateStore: Claude profile usage and the hidden default record', () =>
     assert.deepEqual(store.getClaudeProfileInfo('default')?.usage, snapshot);
   });
 });
+
+describe('StateStore: OpenCode provider usage', () => {
+  it('a provider\'s auth kind and usage are stored per provider id and survive a reload; an unseen provider reads as nothing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-usage-state-'));
+    try {
+      const opened = new StateStore(dir, { saveDebounceMs: 5 });
+      await opened.init();
+      assert.deepEqual(opened.getOpenCodeProviderUsages(), {});
+      assert.equal(opened.getOpenCodeProviderUsage('openai'), undefined);
+      opened.setOpenCodeProviderUsage('openai', { authKind: 'subscription', usage: snapshot });
+      opened.setOpenCodeProviderUsage('openrouter', { authKind: 'apiKey' });
+      await opened.flush();
+      const reloaded = new StateStore(dir);
+      await reloaded.init();
+      assert.deepEqual(reloaded.getOpenCodeProviderUsage('openai'), { authKind: 'subscription', usage: snapshot });
+      assert.deepEqual(Object.keys(reloaded.getOpenCodeProviderUsages()).sort(), ['openai', 'openrouter']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

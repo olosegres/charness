@@ -12,6 +12,7 @@ const session = (percent: number): ClaudeUsageBucket => ({ kind: 'session', perc
 
 function createHarness(options: {
   profiles: ClaudeUsageRefresherProfile[];
+  refreshOpenCode?: ClaudeUsageRefresherDeps['refreshOpenCode'];
   tokens?: Record<string, { accessToken: string; expiresAtMs: number | null } | null>;
   fetch?: (token: string) => Promise<ClaudeUsageFetchResult>;
   snapshots?: Record<string, ClaudeUsageSnapshot>;
@@ -33,6 +34,7 @@ function createHarness(options: {
       fetched.push(token);
       return options.fetch ? options.fetch(token) : { ok: true, buckets: [session(42)] };
     },
+    refreshOpenCode: options.refreshOpenCode,
     now: () => nowMs,
     log: (line) => logs.push(line),
   };
@@ -106,6 +108,24 @@ describe('refreshAll', () => {
     await h.refresher.refreshOne('work');
     await h.refresher.refreshOne('nobody');
     assert.deepEqual(h.fetched, ['tok-/p/work']);
+  });
+});
+
+describe('refreshAll and the OpenCode providers', () => {
+  it('polls the OpenCode providers beside the profiles, passing the max age on', async () => {
+    const asked: Array<{ maxAgeMs?: number }> = [];
+    const h = createHarness({ profiles: [defaultProfile], refreshOpenCode: async (options) => { asked.push(options); } });
+    await h.refresher.refreshAll();
+    await h.refresher.refreshAll({ maxAgeMs: 60_000 });
+    assert.deepEqual(asked, [{}, { maxAgeMs: 60_000 }]);
+    assert.equal(h.fetched.length, 1, 'the Claude profile\'s own gate is untouched: polled on the first call, its fresh snapshot skipped on the second');
+  });
+
+  it('a failing OpenCode poll is logged and never keeps the Claude profiles from their snapshots', async () => {
+    const h = createHarness({ profiles: [defaultProfile], refreshOpenCode: async () => { throw new Error('auth.json vanished'); } });
+    await h.refresher.refreshAll();
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
+    assert.match(h.logs.join('\n'), /OpenCode providers: usage poll threw: auth\.json vanished/);
   });
 });
 
