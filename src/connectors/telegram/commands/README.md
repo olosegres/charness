@@ -62,6 +62,9 @@ it. A pasted provider key is deleted from the topic as a secret only when it can
 one stays visible and the connect stays armed. The OAuth buttons reach the sign-in driver
 (`../../../agentLogin/`) through the `startOpenCodeOAuthLogin` port.
 
+The model level of the picker is drawn by the SHARED model page (`modelPage.ts`, below): `buildModelPageRender` hands it the
+`/model` callbacks (`mdlp_` arrows, `mdl_` picks, `mdlback`) and keeps the numbered list and the header for itself.
+
 `/effort` has two faces (`utils/effortPickerPlan.ts` builds the text and rows, the module renders them). **In General** it
 is the INSTANCE default effort: the picker says it is the default of every topic without an effort of its own, offers the
 Claude levels with ✓ on the current one, and a tap (or `/effort <level>`) writes `defaultEffort` into `settings.json`
@@ -102,9 +105,9 @@ its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted li
 
 The «wait for the reset and continue» setting (the `/auto_continue_limits` alias and the old buttons `acl_on` /
 `acl_off`): whether the bot waits out a usage-limit window and resumes the agent by itself. Its screen is
-`/limits` (`fallbackChain.ts`); here live the write path (`applyAutoContinueLimits`, exported to that module
-through a port) and the alias: `on|off` apply, a bare `/auto_continue_limits` opens the `/limits` view
-(`openLimitsView` port). A regular topic sets its own override (`null` drops it, back to the instance
+`/limits_autoswitch` (`fallbackChain.ts`); here live the write path (`applyAutoContinueLimits`, exported to that module
+through a port) and the alias: `on|off` apply, a bare `/auto_continue_limits` opens the `/limits_autoswitch` view
+(`openAutoSwitchView` port). A regular topic sets its own override (`null` drops it, back to the instance
 default), General the instance-wide default. Turning the EFFECTIVE value off drops the topic's armed resume and
 stops waking its request, but only when a wait WAS armed. A tap on an old `acl_*` button consumes its picker into
 a keyboard-less confirmation. The usage-limit notice appends the shared pointer through
@@ -118,12 +121,13 @@ topic from OpenCode to Claude «work»?» + the shared line `handover.note` («T
 over in compacted form.»), buttons `handover.continueButton` / `handover.cancelButton` (the same two for the `/limits`
 questions). `utils/backendSwitchPlan.ts` decides WHEN it is asked (`checkNeedsBackendSwitchConfirmation`: the topic runs
 the other backend AND holds a conversation) and words it; `bot.ts` is the single gate (`askBeforeCrossBackendSwitch`
-for `/claude`, `/opencode`, the agent buttons and the natural-language «start …» phrases, `takeClaudeAccountPickOnOpenCodeTopic`
-for a Claude account picked on an OpenCode topic through `claudeAccounts.ts`) and owns the switch itself
+for `/claude`, `/opencode`, the agent buttons and the natural-language «start …» phrases, `switchTopicByOperator`
+for every operator PICK of an account or model — the `/limits` and `/accounts` rows, the model pages, `/accounts use`) and owns the switch itself
 (`executeBackendSwitch`: the usage-limit switch's cross-backend move — the bridge is built from the conversation being left, then the two
 helpers the limit switch uses too: `moveTopicToOtherBackend` (account pick + `switchThreadAdapter`) and `resumeTopicOnNewSession` (ensure, model pin,
 first prompt)). A Claude target carries `isProfilePicked`: an account tap / `/accounts use` records the account as the topic's own pick,
-`/claude` only names the account the topic follows and leaves it following General. A conversation
+`/claude` only names the account the topic follows and leaves it following General. Both targets carry the `model` a pick names (a Claude alias, an
+OpenCode `provider/model`): the question names it and `executeBackendSwitch` pins it after the move (`getBackendSwitchModelToPin`). A conversation
 to hand over means an agent with at least one readable turn (`readConversationTurns`; an unreadable transcript counts),
 so a just-started agent switches at once. The module keeps one snapshot per question MESSAGE (newest 20, one open
 question per topic): a tap with no snapshot, on another topic, or after the topic changed backend only answers «out of
@@ -154,27 +158,39 @@ list shows the CLI's truth), to start the sign-in relay for a profile (`startCla
 `agentLogin/`), and to move live sessions onto a changed pick (`applyClaudeProfile` for one topic,
 `applyClaudeProfileEverywhere` after a General pick, a removal or a finished sign-in). «Add» without a name arms a
 per-topic name capture the text handler consults (`checkIsAwaitingProfileName` / `submitProfileName`; a slash
-command or `/esc` disarms it through `cancelProfileNameCapture`). A pick on a topic that runs OpenCode goes through the `takeClaudeAccountPickOnOpenCodeTopic` port first (`backendSwitch.ts`: the topic switches to Claude — after a question when a conversation is to be handed over — and the pick is recorded only then; `asked` posts nothing more, `switched` returns the line to say). A profile that is not signed in cannot be picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
+command or `/esc` disarms it through `cancelProfileNameCapture`). A pick on a topic goes through the `switchTopicByOperator` port (`bot.ts`, `utils/operatorSwitchPlan.ts` decides the move): the account changes on a Claude topic, a topic that runs OpenCode switches to Claude — after a question (`backendSwitch.ts`) when a conversation is to be handed over, the pick being recorded only then — and while a usage-limit wait is armed it is the limit move; `asked` posts nothing more, `switched` carries the line to say, `refused` why nothing moved. A profile that is not signed in cannot be picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
-Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable
+Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with the `/limits` board: session, weekly, Fable
 weekly — percent USED, a space, a relative reset `5h 5% 🔄 in 4h` (`formatClaudeUsageBucket`; no arrow; an unknown 5h reset shows the weekly one, no
 reset at all the bare percent; the Fable part is written only when the snapshot has that window — `account.row.usageFable`)). The usage hint
-(`account.usageHint`, which says the percentages are used) is the paragraph right after the list; `/limits` puts the same
-fact in a heading (`limits.usageHeading`) over its block. The lines are read off the record's snapshot
+(`account.usageHint`, which says the percentages are used) is the paragraph right after the list; the `/limits` board carries the same figures on its buttons and says what they mean in its legend. The lines are read off the record's snapshot
 after `refreshClaudeUsage({ maxAgeMs })` ran beside the status probes; the default profile's probe result
-goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits` (a pointer line stays); `/account autoswitch
+goes to its hidden record too, so the usage ranking and the CLI twin know whether it is signed in. The auto-switch-on-limit toggle left the picker for `/limits_autoswitch` (a pointer line stays); `/account autoswitch
 on|off` and the old `acct_autosw_on` / `acct_autosw_off` buttons still work and write the same setting through the
-`applyAutoSwitch` port (`fallbackChain.ts` owns the write and the confirmation). A provider row mirrors an account row: «🔌 Disconnect <provider>» (`acct_dc_<i>`, asks first) and 🔑
-(`acct_dcre_<i>`, the `/connect` method picker); both index the provider list snapshotted per screen message.
+`applyAutoSwitch` port (`fallbackChain.ts` owns the write and the confirmation). **Where the topic really runs.** The title (`account.title`: «This topic runs on: Claude «work»» / «OpenCode openai/gpt-5» / «OpenCode» while its
+model is unknown) and the ✓ come from the `getTopicRun` port — the backend family of the topic's agent and its rung — not from the pick:
+the ✓ sits on the account the Claude session RUNS on (which is not the pick while a switch is deferred), on no account while OpenCode runs, and with
+no agent on the pick the next start takes. General keeps its own title and the ✓ on the instance default.
+
+**A provider row** (the `detectOpenCodeProviders` port lists them, `listOpenCodeModels` is the catalog behind a provider's page). In a topic it is
+`[provider or ✓ provider · model] [🔑] [🔌]`: the first button (`acct_ocuse_<i>`) switches the topic to the provider — it opens the shared model page (`modelPage.ts`;
+`acct_ocpg_<p>` arrows, `acct_ocm_<i>` picks, ⬅️ Back is `acct_back`; a provider with ONE model is picked at once unless the topic runs on it), a pick
+goes through `switchTopicByOperator` (`refused` keeps the page, `asked` has no toast, anything else re-renders the screen so the ✓ follows); 🔑 is
+`acct_dcre_<i>` (the `/connect` method picker) and 🔌 `acct_dc_<i>` (asks first); all index the provider list snapshotted per screen message, the page's
+models are a second per-message snapshot dropped when the screen re-renders. An unbound topic is told to bind a folder first. In General a provider row stays
+«🔌 Disconnect <provider>» (`acct_dc_<i>`) and 🔑, and an `acct_ocuse_` tap from an old keyboard only says an OpenCode model is picked inside a topic. The list in
+the text says how each provider is signed in (`accounts.providerSubscription` for the `openai` provider's ChatGPT subscription, `accounts.providerApiKey`) and hangs a
+subscription's usage windows under it like an account's (`state.openCodeProviderUsage`, `utils/openCodeUsage.ts`). Typed form: `/accounts use <provider>/<model>`
+(a value with a `/`; never in General). The factory returns `pickClaudeAccount` (the `/accounts` pick, login check included) for the `/limits` board.
 
 ## `fallbackChain.ts`
 
-`/limits` (hidden alias `/fallback`; `/auto_continue_limits` opens the same screen) and the buttons
+`/limits_autoswitch` (hidden alias `/fallback`; `/auto_continue_limits` opens the same screen; `/limits` hands it the old text verbs through `runAutoSwitchCommand`) and the buttons
 `fbk_op_<i>_<rev>` (open a rung's detail view in the same message), and in that view `fbk_up_<i>_<rev>`, `fbk_dn_<i>_<rev>`, `fbk_tg_<i>_<rev>` (include / leave out of automatic switching), `fbk_rm_<i>_<rev>`,
 `fbk_add`, `fbk_addc_<profile>`, `fbk_addcm_<profile>_<model|->`, `fbk_addp_<i>`, `fbk_addpg_<page>`, `fbk_addm_<i>`,
 `fbk_prop`, `fbk_propok`, `fbk_clear`, `fbk_back`, the two settings `fbk_asw_on|off|same` (auto switch to a fallback
 model) and `fbk_wait_on|off|same` (wait for the reset; written through the `applyAutoContinue` port) with `fbk_set_asw` /
-`fbk_set_wait` (a topic's button that opens the setting's sub-menu), plus `fbsw_<episode>_<i>` on a
+`fbk_set_wait` (a topic's button that opens the setting's sub-menu; the two settings are read through `utils/limitSettings.ts`, which the board shares), plus `fbsw_<episode>_<i>` on a
 usage-limit notice: the instance-wide priority chain of backend + account / provider + model a topic continues
 on when its agent hits a usage limit (`utils/fallbackChain.ts`). The list is edited from EVERY topic (one instance-wide list; a topic also gets ✓ on its own position, a
 sub-menu per setting — on / off / as General — for the two settings' overrides, and «skip once» while a limit wait is
@@ -185,20 +201,18 @@ which a phone would cut again): in General a tap flips the value, in a topic it 
 message — the setting's name (`limits.switchMenuTitle` / `limits.waitMenuTitle`), then ON / OFF / «As in General (<General value>)» as
 full-width buttons (the topic's own choice marked ✓) and Back. The three options are the setting's own `fbk_asw_*` / `fbk_wait_*` callbacks, which
 apply the choice and re-render the main screen; three buttons on one row would split the width evenly and cut every label.
-The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built); its message
-text is deliberately SHORT — the usage block (`formatUsageBlock`: a «Usage (% used)» heading, then each profile's windows through the renderer `/accounts` uses,
-`utils/claudeProfileUsageLines.ts`; refreshed through the `refreshClaudeUsage` port when the screen OPENS — a minute's cache, waited
-for at most `limitsUsageRefreshBudgetMs`, a slower poll lands at the next render — while a tap re-renders off the cache; OpenCode's
-limit marks are on the rung buttons already), what the topic runs on + where its settings come from (General: a one-line
-note that they are the defaults), and the list's heading — no numbered list, no legend, no how-it-works prose (the rung view
-and this README carry those). A tap opens `renderRungDetail` in the same message (⬆️ hidden on
+The main screen is one full-width button per rung (`formatRowButtonLabel`, the one place the label is built: `[✓ ]<n>. <program> · <account or provider>[ · <model>]` + the state suffix, the ✓ at the start); its message
+text is deliberately SHORT — a title (`limits.autoswitchTitle`), what the topic runs on + where its settings come from (General: a one-line
+note that they are the defaults), and the list's heading — no usage block (the `/limits` board shows usage), no numbered list, no legend, no how-it-works prose (the rung view
+and this README carry those). The usage snapshots are still refreshed through the `refreshClaudeUsage` port when the screen OPENS (`refreshUsageWithinBudget`: a minute's cache, waited
+for at most `limitsUsageRefreshBudgetMs` — a slower poll lands at the next render) because a rung's availability reads the windows; a tap re-renders off the cache. A tap opens `renderRungDetail` in the same message (⬆️ hidden on
 the first rung, ⬇️ on the last; up / down / toggle re-render the view at the rung's new place, remove returns to the list); a rung with `disabled: true` is skipped by
 `pickFallbackCandidates` and kept disabled by a rebuild (`proposeFallbackChain(detection, previous)`); the screen is meant
 for repeated use and re-renders in place. Every edit button BAKES the chain's content revision (8 hex digits of
 an FNV-1a over the entries): a keyboard posted before a later edit is refused as stale and only re-rendered, so
 an old index can never act on another rung. The two-step «add» keeps a snapshot per picker MESSAGE
 (`addSnapshots`: the providers listed, then the chosen provider's models) that the index buttons resolve
-against; a Claude account bakes its name and model in the data. The module owns no detection or switch: it
+against (the models are listed by the shared model page, `modelPage.ts`, with a ⛔ mark on a limited one); a Claude account bakes its name and model in the data. The module owns no detection or switch: it
 asks the bot through ports for what is connected (`detectFallbackOptions` — the profile views, the OpenCode
 catalog, the recent `/model` picks, the limit marks), the topic's current rung (`getTopicPosition`) and the
 switch a notice button triggers (`takeSwitchOffer`: the bot checks the episode is still the topic's open one and
@@ -213,6 +227,32 @@ matches, or on a message with no snapshot, re-renders and adds nothing) and `fbk
 revision), Cancel being `fbk_back` / `fbk_op_<i>_<rev>`. A rung of a backend already in the list is added / enabled at
 once. «🔄 Fill from connected» keeps its own confirmation; when the draft holds both backends (`checkIsMixedFallbackChain`)
 its text gains the same `handover.note` line.
+
+## `limitsBoard.ts`
+
+`/limits` — the SWITCH BOARD — and its five buttons `lim_c_<i>` (a Claude account row), `lim_o_<i>` (an OpenCode provider row), `lim_pg_<p>` /
+`lim_m_<i>` (the open model page's arrow / model) and `lim_back`. Every signed-in Claude account (in `/accounts` order) and every connected OpenCode
+provider (catalog order) is one full-width button whose label `utils/limitsBoardPlan.ts` builds (`[✓ ]<program> · <account or provider>[ · <model>][ — <status>]`:
+`⛔ until <time>` while limited — a provider until the earliest limit mark of its models — else `5h x% · week y%`, `⚠️` after out-of-date figures; the model only on
+the ✓ row; a signed-out account is not listed). The text is the two automatic-switching settings (read through `utils/limitSettings.ts`, with a link to
+`/limits_autoswitch`), the legend `limits.boardPercentHint` and — only while a row is out of date — `limits.boardStaleHint`; General prefixes
+«Defaults for all topics:» and says a tap makes a Claude account the default. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
+The usage is refreshed through the `refreshUsage` port when the board OPENS (bounded, `refreshUsageWithinBudget`); a tap re-renders off the cache.
+
+A tap in a topic: an unbound topic is told to bind a folder first; a Claude row goes through the `pickClaudeAccount` port (the `/accounts` pick: login check, then the
+switch path), except the ✓ row, which opens the shared model page of the topic's account (the adapter's aliases, from `listClaudeModels`); an OpenCode row opens
+its provider's page (a provider with one model is switched at once unless the topic runs on it); a page pick is `switchTopicByOperator` (`refused` keeps the page and
+shows the error as the toast, `asked` has no toast, anything else returns to the board with the ✓ moved). In General a Claude row sets the default account (the same pick
+with `isGeneral`), an OpenCode row only toasts `limits.openCodeInTopicOnly`. Every button indexes a per-MESSAGE snapshot (`buildMessageSnapshotKey`, the newest 50): a tap on a message
+the board knows nothing about — a restart, another chat — answers `accounts.stale`, re-renders and never acts, and a row button on a page (or a page button on the board) is stale too.
+`/limits rebuild|clear|switch|wait …` (the old text forms) go to the `runAutoSwitchCommand` port with the board's own usage text.
+
+## `modelPage.ts`
+
+The model page — one provider's models as full-width buttons, `modelPageSize` (10) to a page — shared by `/model`, the «add a fallback model» step, and the provider pages
+of `/limits` and `/accounts`. `buildModelPageButtons` draws only buttons: the screen hands in the `callback_data` of its own pick (an absolute index into the provider's
+list), page-arrow and back buttons (`ModelPageCallbacks`) and an optional per-model suffix (`formatOpenCodeModelLimitSuffix`: ` ⛔ 14:00`); the ✓ and the arrows and the
+page pill (only with more than one page) are the page's. What a tap DOES stays the screen's, so one page cannot act on another screen's snapshot.
 
 ## `stt.ts`
 

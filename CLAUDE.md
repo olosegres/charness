@@ -95,7 +95,7 @@ per-backend controls are optional methods the bot checks before calling.
   preamble (only when it changed), the reply-quote block, the optional `/timestamps` line. Files sent to a
   topic land in `DATA_DIR/files/…` (never inside the project folder); albums are batched into one prompt.
 - **Auto-retry on provider errors** (`apiErrorRetry.ts`, `apiRetryKick.ts`): transient → backoff retry;
-  usage limit → wait for the reset and resume by itself (`/limits`, the wait setting); auth → never retried,
+  usage limit → wait for the reset and resume by itself (`/limits_autoswitch`, the wait setting); auth → never retried,
   surfaced as a pinned logged-out notice. A saved retry record means ARMED; the "continue" nudge goes through
   `deliverPromptOrBuffer`, never a wait-for-idle path; nothing is posted INTO an armed limit wait (scheduled
   runs are held and ride the resume). Detector guards: see `getClaudeAgentErrorLine` /
@@ -120,7 +120,7 @@ per-backend controls are optional methods the bot checks before calling.
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
   scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
-- **Claude account profiles** (`/accounts` — also the OpenCode providers' connect / disconnect entry; hidden aliases `/account`, `/connect`, `/disconnect`; `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
+- **Claude account profiles** (`/accounts` — also the OpenCode providers' switch / connect / disconnect entry; hidden aliases `/account`, `/connect`, `/disconnect`; `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
   subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`
   handed to the CLI through `CLAUDE_CONFIG_DIR` at EVERY spawn (the `ClaudeConfigDirReader` seam in
   `createAdapter.ts`), with `projects/`, settings, skills, plugins and the user memory symlinked back into
@@ -130,16 +130,16 @@ per-backend controls are optional methods the bot checks before calling.
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
   endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot) plus the
   json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
-  `/accounts` row, served to agents by the `claude_profiles` MCP tool and `charness claude-profiles`. A usage
+  `/accounts` row and on the `/limits` board, served to agents by the `claude_profiles` MCP tool and `charness claude-profiles`. A usage
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
   `announceUsageLimitOrSwitch`): the limited profile gets `limitedUntil`, the ranking names the other
-  signed-in profiles with fresh usage and room — the implicit chain when the `/limits` chain is empty.
-- **Usage limits / fallback chain** (`/limits`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
+  signed-in profiles with fresh usage and room — the implicit chain when the `/limits_autoswitch` chain is empty.
+- **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog
   + the recent `/model` picks) and edited from any topic with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
   (from `handleApiError` → `announceUsageLimitOrSwitch`) marks the limited rung (`limitedUntil` /
-  `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; a rung with `disabled: true` is never a candidate (a rebuild keeps it so); auto-switch ON (a `/limits`
+  `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; a rung with `disabled: true` is never a candidate (a rebuild keeps it so); auto-switch ON (a `/limits_autoswitch`
   setting, OFF by default; the wait setting beside it is the old `/auto_continue_limits` pair, a topic's three states are on / off / as General) switches by itself, OFF puts
   `fbsw_<episode>_<index>` buttons on the notice (indexes into that episode's remembered candidates); no
   candidate ⇒ the wait — aimed, when every enabled rung incl. the current one is limited, at the rung whose limit resets
@@ -151,6 +151,16 @@ per-backend controls are optional methods the bot checks before calling.
   of the continue nudge; both end in `cancelApiRetry` → `deliverPromptOrBuffer`. Never switched back by itself.
   OpenCode quota codes (`insufficient_quota`, `RESOURCE_EXHAUSTED`, …) classify as `usageLimit` ahead of the 429
   transient branch (`apiErrorRetry.ts`).
+- **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one button per signed-in
+  Claude account and connected OpenCode provider with its usage or `⛔ until`; the limit notice ends `Switch: /limits`. EVERY operator pick —
+  a board or `/accounts` row, a model page, `/accounts use` — takes ONE path, `switchTopicByOperator` (`bot.ts`, the move decided by
+  `utils/operatorSwitchPlan.ts`): a wait armed ⇒ the limit move (`switchTopicToFallbackEntry`); the backend the topic runs ⇒ an account change
+  or the `/model` apply (a model named for the account it already runs does NOT pin an account pick); the other backend ⇒ the hand-over question
+  (`backendSwitch.ts`, naming the model, which `executeBackendSwitch` pins) or the switch at once. The model list is the shared
+  `commands/modelPage.ts` (`/model`, the add step, the board and `/accounts` provider pages feed it their own callbacks). OpenCode usage:
+  `utils/openCodeUsage.ts` reads the ChatGPT subscription's windows (an `oauth` record for `openai` in OpenCode's `auth.json`; the token is
+  never refreshed or logged) into `state.openCodeProviderUsage`, polled with the Claude profiles; a failed read is a row without figures,
+  never an error report.
 - **Display prefs.** `/thinking`, `/tool_results`, `/subagent` (+ `/verbosity`) are per-topic rendering prefs
   (`minimal|short|full`), never sent to the agent; only the sub-agent mode is read BY the adapters.
 - **Jira connector** (`src/connectors/jira/`). One issue = one conversation (`jira:<PROJECT>:<ISSUE-KEY>`);

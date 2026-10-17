@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+**`/limits` is a switch board: every account and provider with its usage, one tap to move the topic.** It lists each
+signed-in Claude account and each connected OpenCode provider as one button — `✓ Claude · work · opus — 5h 5% · week 78%`,
+`Claude · default — ⛔ until Sun 01:00`, `OpenCode · openai — 5h 12% · week 40%` — and a tap switches this topic: another
+account (model and conversation kept), an OpenCode provider (its model page opens; the same OpenCode session just changes the
+model), the ✓ row (change the model of where the topic runs). Across backends with a conversation to hand over it asks first;
+while a usage-limit wait is armed the tap is the limit move. The usage-limit notice now ends «The limit resets <time>.
+Switch: /limits». In General a Claude row sets the default account.
+
+**The fallback setup is its own screen, `/limits_autoswitch`.** The ordered fallback list, «🔁 Auto switch» and «⏳ Wait for
+reset» moved there from the old `/limits` (minus the usage block); its rows now read `✓ 1. Claude · work · opus` /
+`3. OpenCode · openai · gpt-5`. `/limits rebuild|clear|switch|wait …`, `/fallback` and `/auto_continue_limits` keep working.
+
+**`/accounts` tells the truth about OpenCode.** Its title and ✓ say where the topic really runs (`OpenCode openai/gpt-5`),
+an OpenCode provider row switches the topic to that provider through the model page (`/accounts use <provider>/<model>` is
+the typed form), and a provider signed in with a ChatGPT subscription shows its ~5 h / ~7 d usage windows like a Claude account.
+
 **A default reasoning effort for the whole instance: `/effort` in General.** New sessions no longer start on `xhigh`
 in every topic that never picked a level: the default is `medium`, and the General topic's `/effort` sets it for all
 topics at once (saved in `settings.json`, see [SETUP.md § Instance settings](SETUP.md#instance-settings-settingsjson)).
@@ -13,7 +29,7 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 
 **A shorter notice when a usage limit moves a topic to another account or model.** One line now says which account
 (or OpenCode model) hit its limit, where the topic continues — its model only when the switch changes it — when the
-limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands.
+limit resets, and `/limits` to switch, instead of repeating every label and listing four commands.
 
 **Switching a topic between Claude and OpenCode by hand now asks first, and a Claude account tapped in `/accounts` on an
 OpenCode topic really switches.** `/claude`, `/opencode` (and the agent buttons / «start …» phrases) on a topic that
@@ -21,10 +37,17 @@ runs the other backend, and a Claude account picked in `/accounts` (`/accounts u
 which only recorded the pick before — ask «Switch this topic from OpenCode to Claude «work»? The conversation context
 will be handed over in compacted form.» with ✅ Continue / ✖️ Cancel when there is a conversation to hand over; Continue
 moves the topic the way a usage limit does (the other backend's parked conversation is resumed, the context bridge is the
-first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once. `/limits` asks the same
-way before a rung of a backend the list does not use yet is added or included again.
+first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once. `/limits_autoswitch` asks
+the same way before a rung of a backend the list does not use yet is added or included again.
 
 ### Upgrading
+- **`/limits` is a different screen now.** The fallback list and the two settings are in `/limits_autoswitch`; `/limits`
+  is the switch board. Old buttons on an old `/limits` message keep working and re-render that message as
+  `/limits_autoswitch`; the text forms (`/limits rebuild`, `/limits switch on`, …) keep working too. A bot menu entry for
+  `/limits_autoswitch` is added at the next start.
+- **A new outgoing request.** When OpenCode holds a ChatGPT subscription login for the `openai` provider, the bot reads
+  its usage windows with the stored token from `https://chatgpt.com/backend-api/wham/usage` (every 10 minutes and when
+  `/limits` or `/accounts` opens). The token is never refreshed or logged; an API-key provider triggers no request.
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next
   session on `medium`; running sessions keep their level. To get the old behaviour back, pick `xhigh` in General's
   `/effort` (or write `{ "defaultEffort": "xhigh" }` into `settings.json` beside your env file).

@@ -1639,7 +1639,7 @@ const wedgeRecoveriesInFlight = new Set<string>();
  * Dedup is delegated to `decideRetryAction` (a `pending` retry → `ignore`), so a
  * repeated Claude scrape frame or a duplicate `session.error` never double-arms.
  *
- * `/auto_continue_limits` gates the `usageLimit` class ONLY: with it OFF the bot says so
+ * The «wait for the reset» setting (`/limits_autoswitch`, formerly `/auto_continue_limits`) gates the `usageLimit` class ONLY: with it OFF the bot says so
  * once per topic (and once per open request, which also stops being woken) and
  * stops, arming nothing and persisting nothing. `transient` (the short
  * 5/10/20-min retries) and `auth` (surfaced, never retried) are untouched by the
@@ -1687,7 +1687,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
   }
 
   // action === 'arm'. A LIMIT notice ends with the shared pointer at
-  // `/auto_continue_limits` (the escape hatch: skip this one resume, or turn the
+  // `/limits` and `/limits_autoswitch` (the escape hatches: skip this one resume, or turn the
   // mode off). The transient notice gets none — it is not governed by the toggle
   // and resumes within minutes anyway.
   let limitWait: UsageLimitWait | undefined;
@@ -1949,7 +1949,7 @@ interface LimitWaitTexts {
 /**
  * @description Both texts of a limit wait, from ONE branch on how it ends, in the
  * thread's locale. A wait ending on another day names the date. The
- * `/auto_continue_limits` pointer names a Telegram command — elsewhere it would
+ * `/limits` + `/limits_autoswitch` pointer names Telegram commands — elsewhere it would
  * be noise; the "auto-resume is off" text carries its own.
  */
 function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number, resumeOn?: FallbackChainEntry): LimitWaitTexts {
@@ -9407,7 +9407,7 @@ registerFallbackChainCallbacks();
 registerLimitsBoardCallbacks();
 registerSttCallbacks();
 
-// «⏭ Skip once» in the `/auto_continue_limits` picker: drop THIS armed resume and
+// «⏭ Skip once» on the `/limits` board and the `/limits_autoswitch` screen: drop THIS armed resume and
 // leave the on/off setting alone. The episode is identified by the `fireAt` baked
 // into the callback data, so an untouched older picker can never cancel a LATER
 // episode (pure `getArmedRetrySkipDecision`); a stale tap changes nothing and says
@@ -11747,7 +11747,7 @@ function restoreApiRetries(): void {
  * end of the session's append-only `stdout.jsonl`. Only the TAIL is read
  * ({@link limitEpisodeTailMaxBytes}), never the whole log. A recovered episode goes
  * through {@link handleApiError}, so the notice, the timer, the persistence and the
- * `/auto_continue_limits` gate behave exactly as for a live error — there is no second
+ * «wait for the reset» gate (`/limits_autoswitch`) behave exactly as for a live error — there is no second
  * arming path to keep in sync.
  *
  * MUST run AFTER {@link restoreApiRetries} so an already-armed thread is visible

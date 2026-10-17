@@ -403,8 +403,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * conversation; working: at turn end; sleeping: at the next resume). General sets the instance default and
    * every topic that follows the default is moved the same way. A profile that is not signed in is refused:
    * a session started under it would only fail with a logged-out error. On a topic that runs OpenCode the pick is
-   * a switch to Claude (`takeClaudeAccountPickOnOpenCodeTopic`): the answer is then the question already posted
-   * (`null`: nothing to say) or the line that the topic switched.
+   * a switch to Claude (`switchTopicByOperator`, which also makes the limit move while a usage-limit wait is armed): the answer
+   * is then the question already posted (`null`: nothing to say) or the line that the topic switched.
    */
   async function applyPick(key: SessionKey, isGeneral: boolean, name: string): Promise<string | null> {
     if (!checkIsKnownProfile(name)) return t('account.unknown', { name });

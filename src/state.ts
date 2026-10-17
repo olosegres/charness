@@ -414,14 +414,14 @@ export interface StateV1 {
    */
   compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
   /**
-   * Limit auto-continue toggle (`/auto_continue_limits`). `autoContinueOnLimitEnabled` is
+   * Limit auto-continue toggle («wait for the reset», `/limits_autoswitch`; the old `/auto_continue_limits` is its alias). `autoContinueOnLimitEnabled` is
    * the INSTANCE-WIDE default, driven from the General topic; absent ⇒ ON (the
    * behaviour was unconditional before the toggle existed), stored EXPLICITLY
    * (incl. `false`) so a General «Disable» is durable and not re-enabled by the
    * default on the next boot. `autoContinueOnLimitOverrides` holds per-thread
    * explicit overrides keyed by {@link SessionKey} string — a present entry (true
    * OR false) wins over the global default. Both optional so older state files
-   * stay valid; lifecycle-independent (only `/auto_continue_limits` mutates them, never
+   * stay valid; lifecycle-independent (only `/limits_autoswitch` and its alias mutate them, never
    * session teardown). Same shape discipline as the `compactOnIdle*` pair.
    */
   autoContinueOnLimitEnabled?: boolean;
@@ -1855,7 +1855,7 @@ export class StateStore {
     return agent?.claudeSessionId ?? agent?.opencodeSessionId;
   }
 
-  // ── limit auto-continue toggle (`/auto_continue_limits`) ──
+  // ── limit auto-continue toggle (`/limits_autoswitch`, alias `/auto_continue_limits`) ──
 
   /**
    * @description The instance-wide limit-auto-continue default (driven from the
