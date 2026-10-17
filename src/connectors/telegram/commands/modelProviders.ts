@@ -44,6 +44,7 @@ import {
 import type { InboundCommand } from '../../../platform/inbound';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { getModelSetReplyDecision } from '../../../utils/modelSetReplyDecision';
+import { checkIsFallbackReturnForgotten } from '../../../utils/fallbackReturn';
 import { checkIsClaudeEffortLevel, claudeEffortLevels, getEffortAmongLevels, getInstanceDefaultEffort, getThreadEffortView, type ClaudeEffortLevel } from '../../../effortLevels';
 import { getCaughtErrnoCode } from '../../../configDirFile';
 import { loadInstanceSettingsForUpdate, saveInstanceSettings } from '../../../instanceSettings';
@@ -429,6 +430,8 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       t,
     );
     if (decision.isOk) {
+      // A model picked by hand makes the rung a limit switch moved the topic from stale (the «back» button of `/accounts`).
+      if (checkIsFallbackReturnForgotten({ kind: 'modelPick' })) await getState().setFallbackReturn(key, null);
       await updatePinnedStatus(key).catch(() => {});
       // The "Recently used" list is an OpenCode concept (providers to hop
       // between); a Claude alias has none. `displayLabel` is the adapter's

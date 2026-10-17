@@ -22,6 +22,7 @@ import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProf
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
+import { normaliseFallbackReturn } from './utils/fallbackReturn';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
@@ -465,6 +466,12 @@ export interface StateV1 {
   openCodeModelLimits?: Record<string, string>;
   parkedSessions?: Record<string, ParkedSession>;
   /**
+   * The rung a topic was moved FROM by a usage-limit switch (`utils/fallbackReturn.ts`), keyed by the serialised
+   * {@link SessionKey}: what the «back» button of `/accounts` moves the topic to. Written by the switch, dropped when
+   * the topic goes back or is changed by hand (account, model, backend), validated on read.
+   */
+  fallbackReturns?: Record<string, FallbackChainEntry>;
+  /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
    * `loadStateFile`'s shape check doesn't require it and a missing value is an
@@ -611,7 +618,7 @@ const schedulerMcpSecretByteLength = 32;
  * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
  * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
  */
-type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'openRequests';
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'openRequests' | 'fallbackReturns';
 
 /**
  * @description Promise-chain per-key lock. The map holds the tail of each
@@ -1087,6 +1094,7 @@ export class StateStore {
       // recovery could resume for it, and the record of its pinned answer.
       this.dropLimitEpisodeRecovered(k);
       this.dropOptionalMapEntry('answerPins', k);
+      this.dropOptionalMapEntry('fallbackReturns', k);
       this.scheduleSave();
     });
   }
@@ -1974,6 +1982,26 @@ export class StateStore {
     if (message === null) delete this.state.sttInstallProgress;
     else this.state.sttInstallProgress = message;
     await this.flush();
+  }
+
+  // ── the rung a usage-limit switch moved a topic from (`utils/fallbackReturn.ts`) ──
+
+  /** The rung the topic was moved from, `null` when none is remembered (or the stored one is malformed). */
+  getFallbackReturn(key: SessionKey): FallbackChainEntry | null {
+    return normaliseFallbackReturn(this.state.fallbackReturns?.[keyToString(key)]);
+  }
+
+  /** Remember the rung the topic was moved from (`null` forgets it). Debounced, like the other per-topic marks. */
+  async setFallbackReturn(key: SessionKey, origin: FallbackChainEntry | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (origin === null) {
+        if (!this.dropOptionalMapEntry('fallbackReturns', k)) return;
+      } else {
+        (this.state.fallbackReturns ??= {})[k] = origin;
+      }
+      this.scheduleSave();
+    });
   }
 
   // ── the fallback chain (`/fallback`) ──

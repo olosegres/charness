@@ -13,7 +13,9 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 
 **A shorter notice when a usage limit moves a topic to another account or model.** One line now says which account
 (or OpenCode model) hit its limit, where the topic continues — its model only when the switch changes it — when the
-limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands.
+limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands. `/accounts`
+in a topic the bot moved shows a «↩️ Back to …» button on top that moves the topic back (also to or from OpenCode);
+the bot remembers the rung per topic until the topic goes back or is changed by hand.
 
 ### Upgrading
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next

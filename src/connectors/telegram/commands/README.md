@@ -101,7 +101,7 @@ a keyboard-less confirmation. The usage-limit notice appends the shared pointer 
 `/accounts` (hidden alias `/account`; `/connect` and `/disconnect` are hidden aliases of its OpenCode half, still
 registered by `modelProviders.ts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_ocadd`,
 `acct_dc_<i>`, `acct_dcok_<i>`, `acct_dcre_<i>`, `acct_login_menu`, `acct_rm_menu`, `acct_back`, `acct_login_<name>`,
-`acct_rm_<name>`, `acct_rmok_<name>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
+`acct_rm_<name>`, `acct_rmok_<name>`, `acct_ret_<revision>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
 sessions run on, and the OpenCode providers the server is authenticated for. One screen: a row per Claude account
 (pick, 🔑 re-login, 🗑 remove — for `default` a sign-out), a 🔌 row per connected provider, «➕ Claude account» and
 «➕ OpenCode provider». The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
@@ -123,6 +123,16 @@ per-topic name capture the text handler consults (`checkIsAwaitingProfileName` /
 command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
 picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
+
+**The «back» button** (`acct_ret_<revision>`, `utils/fallbackReturn.ts`): a limit switch remembers the rung it moved a
+topic from (`state.fallbackReturns`, per topic, persisted), and `/accounts` in that topic puts one button on top —
+`getFallbackReturnButton` port: «↩️ Back to «a»», with «(limit resets …)» while that rung is still limited. A tap goes
+to the `returnToFallbackOrigin` port (`returnTopicToFallbackOrigin` in `bot.ts`: the limit switch's `moveTopicOntoRung`
+without the «continue» nudge or the bridge), answers with the notice and re-renders in place. The data bakes the
+rung's revision, so an old keyboard's tap — the rung is forgotten, or another one is remembered — only answers «out of
+date». The rung is forgotten when the topic goes back and on a manual change (`checkIsFallbackReturnForgotten`: an
+account pick that moves the session, any `/model` pick — `modelProviders.ts` writes it through `getState()` — or
+another agent). General never shows it.
 Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable
 weekly — percent USED, a space, a relative reset `5h 5% 🔄 in 4h` (`formatClaudeUsageBucket`; no arrow; an unknown 5h reset shows the weekly one, no
 reset at all the bare percent; the Fable part is written only when the snapshot has that window — `account.row.usageFable`)). The usage hint
