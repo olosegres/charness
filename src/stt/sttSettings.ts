@@ -489,11 +489,12 @@ export function getSttReportLines(resolved: ResolvedSttSettings): string[] {
 
 /**
  * @description The request budget for one voice: `baseSeconds` plus
- * `percentOfDuration` % of the voice's length (Telegram's `voice.duration`;
- * {@link unknownVoiceDurationSeconds} when it is missing). Long voices stay on
- * their engine, they just get more time.
+ * `percentOfDuration` % of the voice's length (Telegram's `voice.duration`). A missing length — or a `0`, which
+ * Telegram reports for a note whose length it could not read — is "unknown", not a 0-second voice: it is
+ * budgeted as {@link unknownVoiceDurationSeconds}, so a long voice without a length is not cut at the bare base.
+ * Long voices stay on their engine, they just get more time.
  */
 export function getEngineTimeoutMs(timeout: SttTimeout, durationSeconds: number | undefined): number {
-  const voiceSeconds = durationSeconds ?? unknownVoiceDurationSeconds;
+  const voiceSeconds = durationSeconds !== undefined && durationSeconds > 0 ? durationSeconds : unknownVoiceDurationSeconds;
   return (timeout.baseSeconds + (timeout.percentOfDuration / percentDivisor) * voiceSeconds) * millisecondsPerSecond;
 }

@@ -56,6 +56,9 @@ way before a rung of a backend the list does not use yet is added or included ag
   survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
 
 ### Fixed
+- A voice note whose Telegram `duration` is 0 (a sender that gave no length) is treated as of unknown length, not as a
+  0-second voice: it gets the same time budget as a voice without a length, so a long one no longer falls back to the
+  next engine at the bare base timeout.
 - Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch to an OpenCode model and back) resumes
   the Claude conversation the topic left; it used to come back to a fresh one, because leaving OpenCode overwrote the
   parked Claude conversation id with the OpenCode session's. The same holds the other way round.

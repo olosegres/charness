@@ -391,12 +391,15 @@ test('resolve: the source tells a valid file, no file, a kept last-good and an u
   assert.deepEqual(unusable.settings, createEmptySttConfig());
 });
 
-test('timeout math: 10 s plus 25 % of the voice by default — 0 s → 10 s, 30 s → 17.5 s, 300 s → 85 s, unknown → 25 s', () => {
-  assert.equal(getEngineTimeoutMs(defaultSttTimeout, 0), 10_000);
+test('timeout math: 10 s plus 25 % of the voice by default — 30 s → 17.5 s, 300 s → 85 s; no length, or a 0 Telegram could not read, is unknown → 25 s', () => {
   assert.equal(getEngineTimeoutMs(defaultSttTimeout, 30), 17_500);
   assert.equal(getEngineTimeoutMs(defaultSttTimeout, 300), 85_000);
   assert.equal(getEngineTimeoutMs(defaultSttTimeout, undefined), 25_000);
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, 0), 25_000, 'a voice whose duration is 0 is of unknown length, not a 0-second voice');
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, -3), 25_000);
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, Number.NaN), 25_000);
   assert.equal(getEngineTimeoutMs({ baseSeconds: 5, percentOfDuration: 100 }, 20), 25_000);
+  assert.equal(getEngineTimeoutMs({ baseSeconds: 30, percentOfDuration: 25 }, 0), 45_000, 'the unknown-length budget follows the engine\'s own numbers');
 });
 
 test('the report: file errors say what the bot does instead, skipped engines say why, a disabled one is silent', () => {

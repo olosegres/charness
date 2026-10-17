@@ -75,6 +75,9 @@ after(async () => {
   await fsp.rm(path.dirname(audioPath), { recursive: true, force: true });
 });
 
+/** A voice shorter than the engine's 0.1 s base budget is still a real length (unlike a 0, which means unknown). */
+const shortVoiceSeconds = 0.1;
+
 function reset(firstHandlers: Handler[], secondHandlers: Handler[] = []): void {
   first.handlers = firstHandlers;
   first.bodies = [];
@@ -151,26 +154,40 @@ test('a timeout falls through, and the budget is derived from the voice length',
   reset([hang], [transcribed('after timeout')]);
   const { result, fallbacks, elapsedMs } = await runChain(
     [createEngine('slow', first, fastTimeout), createEngine('second', second)],
-    { durationSeconds: 0 },
+    { durationSeconds: shortVoiceSeconds },
   );
   assert.deepEqual(result, { ok: true, text: 'after timeout', engine: 'second' });
   assert.deepEqual(fallbacks.map((fallback) => fallback.error), ['transcription timed out']);
-  assert.ok(elapsedMs < 2_000, `0.1 s base on a 0 s voice must not wait long (took ${elapsedMs} ms)`);
+  assert.ok(elapsedMs < 2_000, `0.1 s base on a ${shortVoiceSeconds} s voice must not wait long (took ${elapsedMs} ms)`);
 });
 
 test('the timeout grows with the voice: a longer voice outlasts a delay that kills a short one', { timeout: noHangTestTimeoutMs }, async () => {
   const answerAfter = (delayMs: number, text: string): Handler => (_req, res) => {
     setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text })); }, delayMs);
   };
-  // 0.1 s + 100 % of the voice: 0 s → 100 ms (the 500 ms answer is too late), 5 s → 5.1 s (it is in time).
+  // 0.1 s + 100 % of the voice: 0.1 s → 200 ms (the 500 ms answer is too late), 5 s → 5.1 s (it is in time).
   reset([answerAfter(500, 'too late')], [transcribed('rescued')]);
-  const shortVoice = await runChain([createEngine('slow', first, fastTimeout), createEngine('second', second)], { durationSeconds: 0 });
+  const shortVoice = await runChain([createEngine('slow', first, fastTimeout), createEngine('second', second)], { durationSeconds: shortVoiceSeconds });
   assert.equal(shortVoice.result.engine, 'second');
 
   reset([answerAfter(500, 'in time')], [transcribed('never used')]);
   const longVoice = await runChain([createEngine('slow', first, fastTimeout), createEngine('second', second)], { durationSeconds: 5 });
   assert.deepEqual(longVoice.result, { ok: true, text: 'in time', engine: 'slow' });
   assert.deepEqual(longVoice.fallbacks, []);
+});
+
+test('a voice whose Telegram duration is 0 (or missing) is of unknown length, not a 0-second voice: it gets the unknown-length budget', { timeout: noHangTestTimeoutMs }, async () => {
+  const answerAfter = (delayMs: number, text: string): Handler => (_req, res) => {
+    setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text })); }, delayMs);
+  };
+  // 0.1 s + 100 % of the voice: a real 0.1 s voice has 200 ms (the 500 ms answer is too late); an unknown length is
+  // budgeted as a minute, so the same answer is in time — the long voice a sender gave no duration for is not cut.
+  for (const unknownLength of [0, undefined]) {
+    reset([answerAfter(500, 'in time')], [transcribed('never used')]);
+    const unknown = await runChain([createEngine('slow', first, fastTimeout), createEngine('second', second)], { durationSeconds: unknownLength });
+    assert.deepEqual(unknown.result, { ok: true, text: 'in time', engine: 'slow' }, `duration ${unknownLength}`);
+    assert.deepEqual(unknown.fallbacks, []);
+  }
 });
 
 test('an HTTP 500 or a 4xx from a non-last engine falls through; so does an endpoint that rejects', async () => {
