@@ -82,7 +82,7 @@ export const enDict: Record<string, string> = {
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
-    '/accounts — Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)\n' +
+    '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
     '/bind — manage binding',
@@ -800,7 +800,7 @@ export const enDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Usage limit reached — next attempt at {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Usage limit reached. Automatic resume is off, so the work waits until the operator resumes it.',
 
-  'account.title': '👤 Claude account for this topic: {name}\n\n{list}\n\nTap a profile to switch this topic to it. In the General topic the pick becomes the default for all topics.',
+  'account.title': '👤 This topic runs on: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude account — default for ALL topics: {name}\n\n{list}\n\nTap a profile to make it the default. Topics with their own pick keep it.',
   'account.row.loggedOut': 'not signed in',
   'account.row.topics': ' · {count} topic(s)',
@@ -830,7 +830,7 @@ export const enDict: Record<string, string> = {
   'account.setThisTopic': '✅ Claude account for this topic: {name}.{apply}',
   'account.setGlobal': '✅ Default Claude account for ALL topics: {name}. Topics with their own pick keep it; the others switch now or at their next start.',
   'account.followSet': '✅ This topic follows the default Claude account ({name}).{apply}',
-  'account.usage': 'Usage: /accounts — the picker; /accounts add <name>; /accounts use <name>; /accounts login <name>; /accounts remove <name>; /accounts autoswitch on|off.',
+  'account.usage': 'Usage: /accounts — the picker; /accounts add <name>; /accounts use <name>; /accounts use <provider>/<model>; /accounts login <name>; /accounts remove <name>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' It applies when the session next starts or resumes.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' The running session was restarted under it — same conversation.',
@@ -842,7 +842,7 @@ export const enDict: Record<string, string> = {
   'account.row.usageStale': ' (stale)',
   'account.row.limited': '    ⛔ at its limit until {until}',
   'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours).',
-  'account.autoSwitchHint': 'What happens on a usage limit — switch to a fallback model, or wait for the reset — is set in /limits.',
+  'account.autoSwitchHint': 'What happens on a usage limit is set in /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'topic\'s model',
@@ -919,7 +919,10 @@ export const enDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode providers: none connected yet. «➕ OpenCode provider» connects one.',
-  'accounts.buttonsHint': 'Tap an account to switch this topic to it (in General: the default for all topics). 🔑 signs an account or provider in again, 🗑 removes an account (the default one is signed out), 🔌 disconnects a provider.',
+  'accounts.providerApiKey': 'API key',
+  'accounts.providerSubscription': 'ChatGPT subscription',
+  'accounts.buttonsHintGeneral': 'Tap an account to make it the default for all topics. 🔑 signs an account or provider in again, 🗑 removes an account, 🔌 disconnects a provider.',
+  'accounts.buttonsHint': 'Tap an account or a provider to switch this topic to it (a provider then asks for the model). 🔑 signs in again, 🗑 removes an account, 🔌 disconnects a provider.',
   'accounts.addClaudeButton': '➕ Claude account',
   'accounts.addProviderButton': '➕ OpenCode provider',
   'accounts.askProvider': '➕ Which OpenCode provider? Send its id as the next message (for example openai or openrouter).',

@@ -78,7 +78,7 @@ export const esDict: Record<string, string> = {
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
     '/limits — uso de cada cuenta y proveedor; toca uno para cambiar este tema\n' +
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
-    '/accounts — cuentas de Claude y providers de OpenCode (elegir, añadir, volver a entrar, eliminar, conectar, desconectar)\n' +
+    '/accounts — cuentas de Claude y proveedores de OpenCode (cambiar, añadir, reiniciar sesión, quitar, conectar, desconectar)\n' +
     '/clear — eliminar mensajes del hilo\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gestionar vínculo',
@@ -756,7 +756,7 @@ export const esDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Se alcanzó el límite de uso — próximo intento a las {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Se alcanzó el límite de uso. La reanudación automática está desactivada, así que el trabajo espera hasta que el operador lo reanude.',
 
-  'account.title': '👤 Cuenta de Claude para este tema: {name}\n\n{list}\n\nToca un perfil para cambiar este tema a él. En el tema General la elección pasa a ser la predeterminada para todos los temas.',
+  'account.title': '👤 Este tema funciona en: {current}\n\n{list}',
   'account.titleGeneral': '👤 Cuenta de Claude — predeterminada para TODOS los temas: {name}\n\n{list}\n\nToca un perfil para hacerlo predeterminado. Los temas con elección propia la conservan.',
   'account.row.loggedOut': 'sin iniciar sesión',
   'account.row.topics': ' · {count} tema(s)',
@@ -786,7 +786,7 @@ export const esDict: Record<string, string> = {
   'account.setThisTopic': '✅ Cuenta de Claude para este tema: {name}.{apply}',
   'account.setGlobal': '✅ Cuenta de Claude predeterminada para TODOS los temas: {name}. Los temas con elección propia la conservan; los demás cambian ahora o en su próximo inicio.',
   'account.followSet': '✅ Este tema sigue la cuenta de Claude predeterminada ({name}).{apply}',
-  'account.usage': 'Uso: /accounts — el selector; /accounts add <nombre>; /accounts use <nombre>; /accounts login <nombre>; /accounts remove <nombre>; /accounts autoswitch on|off.',
+  'account.usage': 'Uso: /accounts — el selector; /accounts add <nombre>; /accounts use <nombre>; /accounts use <provider>/<model>; /accounts login <nombre>; /accounts remove <nombre>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Se aplica cuando la sesión arranque o se reanude.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' La sesión en curso se reinició con ella — misma conversación.',
@@ -798,7 +798,7 @@ export const esDict: Record<string, string> = {
   'account.row.usageStale': ' (desactualizado)',
   'account.row.limited': '    ⛔ en el límite hasta {until}',
   'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas).',
-  'account.autoSwitchHint': 'Qué ocurre ante un límite de uso — cambiar a un modelo de respaldo o esperar al reinicio — se configura en /limits.',
+  'account.autoSwitchHint': 'Qué ocurre ante un límite de uso se configura en /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'modelo del tema',
@@ -875,7 +875,10 @@ export const esDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Cambio automático al alcanzar un límite de uso',
   'accounts.openCodeSection': '🔌 Providers de OpenCode (conectados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers de OpenCode: aún no hay ninguno conectado. «➕ Provider OpenCode» conecta uno.',
-  'accounts.buttonsHint': 'Pulsa una cuenta para pasar este tema a ella (en General: valor por defecto para todos). 🔑 vuelve a iniciar sesión en una cuenta o proveedor, 🗑 quita una cuenta (la default se desconecta), 🔌 desconecta un proveedor.',
+  'accounts.providerApiKey': 'clave de API',
+  'accounts.providerSubscription': 'suscripción de ChatGPT',
+  'accounts.buttonsHintGeneral': 'Pulsa una cuenta para hacerla la predeterminada de todos los temas. 🔑 vuelve a iniciar sesión en una cuenta o proveedor, 🗑 quita una cuenta, 🔌 desconecta un proveedor.',
+  'accounts.buttonsHint': 'Pulsa una cuenta o un proveedor para pasar este tema a ellos (con un proveedor se pregunta después el modelo). 🔑 vuelve a iniciar sesión, 🗑 quita una cuenta, 🔌 desconecta un proveedor.',
   'accounts.addClaudeButton': '➕ Cuenta de Claude',
   'accounts.addProviderButton': '➕ Provider OpenCode',
   'accounts.askProvider': '➕ ¿Qué provider de OpenCode? Envía su id en el siguiente mensaje (por ejemplo openai u openrouter).',

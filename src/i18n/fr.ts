@@ -78,7 +78,7 @@ export const frDict: Record<string, string> = {
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
-    '/accounts — comptes Claude et providers OpenCode (choisir, ajouter, se reconnecter, supprimer, connecter, déconnecter)\n' +
+    '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +
     '/clear — supprimer les messages du fil\n' +
     '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
     '/bind — gérer la liaison',
@@ -756,7 +756,7 @@ export const frDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Limite d’utilisation atteinte — prochaine tentative à {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite d’utilisation atteinte. La reprise automatique est désactivée : le travail attend que l’opérateur le reprenne.',
 
-  'account.title': '👤 Compte Claude de ce sujet : {name}\n\n{list}\n\nTouchez un profil pour y basculer ce sujet. Dans le sujet General, le choix devient la valeur par défaut de tous les sujets.',
+  'account.title': '👤 Ce sujet tourne sur : {current}\n\n{list}',
   'account.titleGeneral': '👤 Compte Claude — par défaut pour TOUS les sujets : {name}\n\n{list}\n\nTouchez un profil pour en faire la valeur par défaut. Les sujets ayant leur propre choix le gardent.',
   'account.row.loggedOut': 'non connecté',
   'account.row.topics': ' · {count} sujet(s)',
@@ -786,7 +786,7 @@ export const frDict: Record<string, string> = {
   'account.setThisTopic': '✅ Compte Claude de ce sujet : {name}.{apply}',
   'account.setGlobal': '✅ Compte Claude par défaut pour TOUS les sujets : {name}. Les sujets ayant leur propre choix le gardent ; les autres basculent maintenant ou à leur prochain démarrage.',
   'account.followSet': '✅ Ce sujet suit le compte Claude par défaut ({name}).{apply}',
-  'account.usage': 'Usage : /accounts — le sélecteur ; /accounts add <nom> ; /accounts use <nom> ; /accounts login <nom> ; /accounts remove <nom> ; /accounts autoswitch on|off.',
+  'account.usage': 'Usage : /accounts — le sélecteur ; /accounts add <nom> ; /accounts use <nom> ; /accounts use <provider>/<model> ; /accounts login <nom> ; /accounts remove <nom> ; /accounts autoswitch on|off.',
   'account.applied.inactive': ' S’applique au prochain démarrage ou à la prochaine reprise de la session.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' La session en cours a été relancée dessous — même conversation.',
@@ -798,7 +798,7 @@ export const frDict: Record<string, string> = {
   'account.row.usageStale': ' (périmé)',
   'account.row.limited': '    ⛔ à la limite jusqu’à {until}',
   'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures).',
-  'account.autoSwitchHint': 'Que faire à une limite d’usage — basculer vers un modèle de secours ou attendre la réinitialisation — se règle dans /limits.',
+  'account.autoSwitchHint': 'Que faire à une limite d’usage se règle dans /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'modèle du sujet',
@@ -875,7 +875,10 @@ export const frDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode : aucun connecté pour l’instant. «➕ Provider OpenCode» en connecte un.',
-  'accounts.buttonsHint': 'Touchez un compte pour y passer ce sujet (dans General : défaut pour tous). 🔑 reconnecte un compte ou un fournisseur, 🗑 retire un compte (le compte default est déconnecté), 🔌 déconnecte un fournisseur.',
+  'accounts.providerApiKey': 'clé API',
+  'accounts.providerSubscription': 'abonnement ChatGPT',
+  'accounts.buttonsHintGeneral': 'Touchez un compte pour en faire le compte par défaut de tous les sujets. 🔑 reconnecte un compte ou un fournisseur, 🗑 retire un compte, 🔌 déconnecte un fournisseur.',
+  'accounts.buttonsHint': 'Touchez un compte ou un fournisseur pour y passer ce sujet (pour un fournisseur, le modèle est demandé ensuite). 🔑 reconnecte, 🗑 retire un compte, 🔌 déconnecte un fournisseur.',
   'accounts.addClaudeButton': '➕ Compte Claude',
   'accounts.addProviderButton': '➕ Provider OpenCode',
   'accounts.askProvider': '➕ Quel provider OpenCode ? Envoyez son identifiant dans le message suivant (par exemple openai ou openrouter).',

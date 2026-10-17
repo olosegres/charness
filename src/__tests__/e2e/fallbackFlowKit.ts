@@ -135,3 +135,30 @@ export async function waitForSessionRespawn(
     return launches.length > launchesBefore && latest !== undefined && latest.claudeConfigDir === configDir && getLaunchSessionId(latest.argv) === sessionId;
   });
 }
+
+/** The `/limits` board a topic shows, found by the callback data of its rows (`lim_*`). */
+export interface OpenedLimitsBoard {
+  message: FakeTelegramMessage;
+  /** The callback data of the row whose label (without its ✓) starts with `rowName` (`Claude · default`, `OpenCode · openai`). */
+  rowData: (rowName: string) => string;
+  /** The label of that row. */
+  rowLabel: (rowName: string) => string;
+}
+
+/**
+ * @description The operator types `/limits` in a topic; resolves the board the bot answers with (the newest message
+ * after the command that starts with the settings line and carries `lim_*` rows — not a wait notice that names the
+ * command in passing).
+ */
+export async function openLimitsBoard(fakeTelegram: FakeTelegram, driver: TopicDriver, threadId: number): Promise<OpenedLimitsBoard> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/limits');
+  const message = await driver.waitForMessage('the /limits board', (candidate) => candidate.message_id > sentMessageId && candidate.text.startsWith('🔁 Auto switch') && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('lim_')));
+  const labels = driver.getKeyboardLabels(message).flat();
+  const data = driver.getKeyboardData(message).flat();
+  const indexOf = (rowName: string): number => {
+    const index = labels.findIndex((label) => label.replace('✓ ', '').startsWith(rowName));
+    if (index < 0) throw new Error(`no board row «${rowName}» in ${labels.join(' | ')}`);
+    return index;
+  };
+  return { message, rowData: (rowName) => data[indexOf(rowName)], rowLabel: (rowName) => labels[indexOf(rowName)] };
+}

@@ -65,6 +65,7 @@ import {
   getResetClock,
   getSessionLaunches,
   listSwitchNotices,
+  openLimitsBoard,
   readPersistedState,
   restartCharnessWithState,
   startCharnessOnInstance,
@@ -137,18 +138,10 @@ function askAgentToHitTheLimit(threadId: number, label: string): void {
   fakeTelegram.pushOperatorMessage(threadId, `${label} [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
 }
 
-/** The `/limits` board a topic shows now: the newest board message after the command, and the callback data of its rows by account. */
+/** The `/limits` board of a topic, with the callback data and labels of its rows by account. */
 async function openBoard(driver: TopicDriver, threadId: number): Promise<{ message: FakeTelegramMessage; rowData: (account: string) => string; rowLabel: (account: string) => string }> {
-  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/limits');
-  const message = await driver.waitForMessage('the /limits board', (candidate) => candidate.message_id > sentMessageId && candidate.text.startsWith('🔁 Auto switch') && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('lim_')));
-  const labels = driver.getKeyboardLabels(message).flat();
-  const data = driver.getKeyboardData(message).flat();
-  const indexOf = (account: string): number => {
-    const index = labels.findIndex((label) => label.replace('✓ ', '').startsWith(`Claude · ${account}`));
-    assert.ok(index >= 0, `a board row for ${account} in ${labels.join(' | ')}`);
-    return index;
-  };
-  return { message, rowData: (account) => data[indexOf(account)], rowLabel: (account) => labels[indexOf(account)] };
+  const board = await openLimitsBoard(fakeTelegram, driver, threadId);
+  return { message: board.message, rowData: (account) => board.rowData(`Claude · ${account}`), rowLabel: (account) => board.rowLabel(`Claude · ${account}`) };
 }
 
 describe('The usage-limit switch notice end to end: built charness, fake Bot API, fake claude', () => {

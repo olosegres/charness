@@ -40,6 +40,13 @@ export const accountDisconnectCallbackRe = /^acct_dc_(\d{1,2})$/;
 export const accountDisconnectConfirmCallbackRe = /^acct_dcok_(\d{1,2})$/;
 /** Connect an OpenCode provider again (the `/connect <provider>` method picker); same snapshot index. */
 export const accountReconnectCallbackRe = /^acct_dcre_(\d{1,2})$/;
+/**
+ * A provider row in a topic: switch the topic to the provider (its model page opens), by the INDEX of the screen's
+ * provider list; then a model on the open page (the index into that provider's models) and a page arrow.
+ */
+export const accountOpenCodeUseCallbackRe = /^acct_ocuse_(\d{1,2})$/;
+export const accountOpenCodeModelCallbackRe = /^acct_ocm_(\d{1,3})$/;
+export const accountOpenCodePageCallbackRe = /^acct_ocpg_(\d{1,3})$/;
 /** Back to the main picker from a sub-picker. */
 export const accountBackCallback = 'acct_back';
 /** Flip the auto-switch-on-limit setting (`utils/claudeLimitSwitch.ts`): the topic's override, in General the instance default. */
@@ -56,6 +63,18 @@ export function buildAccountLoginCallback(name: string): string {
 
 export function buildAccountDisconnectCallback(index: number): string {
   return `acct_dc_${index}`;
+}
+
+export function buildAccountOpenCodeUseCallback(index: number): string {
+  return `acct_ocuse_${index}`;
+}
+
+export function buildAccountOpenCodeModelCallback(index: number): string {
+  return `acct_ocm_${index}`;
+}
+
+export function buildAccountOpenCodePageCallback(page: number): string {
+  return `acct_ocpg_${page}`;
 }
 
 export function buildAccountReconnectCallback(index: number): string {
@@ -108,7 +127,8 @@ export interface AccountPickerRow {
 export function buildAccountPickerRows(input: {
   records: Readonly<Record<string, ClaudeProfileRecord>>;
   defaultStatus: { loggedIn: boolean | undefined; email: string | null; subscriptionType: string | null };
-  activeName: string;
+  /** The account the ✓ sits on; `null` for none (the topic runs OpenCode). */
+  activeName: string | null;
   topicCounts: ReadonlyMap<string, number>;
   /** The operator removed (signed out) `default`: it has no row until it is signed in again. */
   isDefaultRemoved?: boolean;

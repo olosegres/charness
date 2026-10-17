@@ -78,7 +78,7 @@ export const kaDict: Record<string, string> = {
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
-    '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (არჩევა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
+    '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (გადართვა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
     '/bind — კავშირის მართვა',
@@ -756,7 +756,7 @@ export const kaDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — შემდეგი მცდელობა {time}-ზე.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 გამოყენების ლიმიტი ამოიწურა. ავტომატური გაგრძელება გამორთულია, ამიტომ სამუშაო დაელოდება, სანამ ოპერატორი არ განაახლებს მას.',
 
-  'account.title': '👤 ამ თემის Claude ანგარიში: {name}\n\n{list}\n\nშეეხეთ პროფილს, რომ ეს თემა მასზე გადაიყვანოთ. General თემაში არჩევანი ყველა თემის ნაგულისხმევი ხდება.',
+  'account.title': '👤 ეს თემა მუშაობს: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude ანგარიში — ნაგულისხმევი ყველა თემისთვის: {name}\n\n{list}\n\nშეეხეთ პროფილს, რომ ის ნაგულისხმევი გახდეს. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ.',
   'account.row.loggedOut': 'არ არის შესული',
   'account.row.topics': ' · {count} თემა',
@@ -786,7 +786,7 @@ export const kaDict: Record<string, string> = {
   'account.setThisTopic': '✅ ამ თემის Claude ანგარიში: {name}.{apply}',
   'account.setGlobal': '✅ ნაგულისხმევი Claude ანგარიში ყველა თემისთვის: {name}. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ; დანარჩენები ახლავე ან შემდეგ გაშვებისას გადადიან.',
   'account.followSet': '✅ ეს თემა ნაგულისხმევ Claude ანგარიშს ({name}) მიჰყვება.{apply}',
-  'account.usage': 'გამოყენება: /accounts — არჩევა; /accounts add <სახელი>; /accounts use <სახელი>; /accounts login <სახელი>; /accounts remove <სახელი>; /accounts autoswitch on|off.',
+  'account.usage': 'გამოყენება: /accounts — არჩევა; /accounts add <სახელი>; /accounts use <სახელი>; /accounts use <provider>/<model>; /accounts login <სახელი>; /accounts remove <სახელი>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' ამოქმედდება სესიის შემდეგ გაშვებისას ან განახლებისას.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' მიმდინარე სესია მის ქვეშ გადაიტვირთა — იგივე საუბარი.',
@@ -798,7 +798,7 @@ export const kaDict: Record<string, string> = {
   'account.row.usageStale': ' (მოძველებული)',
   'account.row.limited': '    ⛔ ლიმიტზეა {until}-მდე',
   'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში).',
-  'account.autoSwitchHint': 'რა ხდება გამოყენების ლიმიტზე — სარეზერვო მოდელზე გადართვა თუ განულების დალოდება — /limits-ში მიეთითება.',
+  'account.autoSwitchHint': 'რა ხდება გამოყენების ლიმიტზე — /limits-ში მიეთითება.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'თემის მოდელი',
@@ -875,7 +875,10 @@ export const kaDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode პროვაიდერები: ჯერ არცერთია დაკავშირებული. «➕ OpenCode პროვაიდერი» აკავშირებს ერთს.',
-  'accounts.buttonsHint': 'ანგარიშზე დაჭერით ეს თემა მასზე გადაერთვება (General-ში — ყველას ნაგულისხმევი). 🔑 ანგარიშში ან პროვაიდერში ხელახლა შესვლა, 🗑 ანგარიშის წაშლა (default გამოდის), 🔌 პროვაიდერის გათიშვა.',
+  'accounts.providerApiKey': 'API გასაღები',
+  'accounts.providerSubscription': 'ChatGPT გამოწერა',
+  'accounts.buttonsHintGeneral': 'ანგარიშზე დაჭერით ის ყველა თემის ნაგულისხმევი გახდება. 🔑 ანგარიშში ან პროვაიდერში ხელახლა შესვლა, 🗑 ანგარიშის წაშლა, 🔌 პროვაიდერის გათიშვა.',
+  'accounts.buttonsHint': 'ანგარიშზე ან პროვაიდერზე დაჭერით ეს თემა მასზე გადაერთვება (პროვაიდერზე შემდეგ მოდელს გკითხავთ). 🔑 ხელახლა შესვლა, 🗑 ანგარიშის წაშლა, 🔌 პროვაიდერის გათიშვა.',
   'accounts.addClaudeButton': '➕ Claude ანგარიში',
   'accounts.addProviderButton': '➕ OpenCode პროვაიდერი',
   'accounts.askProvider': '➕ რომელი OpenCode პროვაიდერი? შემდეგ შეტყობინებაში გამოაგზავნეთ მისი id (მაგალითად, openai ან openrouter).',

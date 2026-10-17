@@ -28,6 +28,7 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { signOutDefaultClaudeLogin, type ClaudeAuthStatus } from '../utils/claudeProfiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
+import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
 import { t } from '../i18n';
 import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
@@ -50,6 +51,10 @@ let applyEverywhereCalls = 0;
 let operatorSwitchOutcome: OperatorSwitchOutcome | null = null;
 const operatorSwitches: Array<{ key: SessionKey; to: FallbackChainEntry }> = [];
 let openCodeProviders: string[] = [];
+/** The catalog behind a provider's model page (`provider/model` labels). */
+let openCodeModels: string[] = [];
+/** Where the stand-in bot says the topic runs: `family` null = no agent. */
+let topicRun: { family: BackendFamily | null; rung: FallbackChainEntry | null } = { family: null, rung: null };
 const disconnected: Array<{ key: SessionKey; providerId: string }> = [];
 const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
@@ -87,12 +92,14 @@ describe('claudeAccounts: /accounts over its ports', () => {
       switchTopicByOperator: async (key, to) => {
         operatorSwitches.push({ key, to });
         if (operatorSwitchOutcome) return operatorSwitchOutcome;
-        if (to.backend !== 'claude') throw new Error('this stand-in only knows Claude picks');
+        if (to.backend !== 'claude') return { kind: 'switched', text: `Model: ${to.providerId}/${to.modelId}` };
         await harness.state.setClaudeProfileOverride(key, to.profile);
         appliedKeys.push(key);
         return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${applyOutcome}`) }) };
       },
       detectOpenCodeProviders: async () => openCodeProviders,
+      listOpenCodeModels: async () => openCodeModels,
+      getTopicRun: () => topicRun,
       disconnectOpenCodeProvider: async (key, providerId) => {
         disconnected.push({ key, providerId });
       },
@@ -129,6 +136,9 @@ describe('claudeAccounts: /accounts over its ports', () => {
       String(/^acct_dc_(\d{1,2})$/),
       String(/^acct_dcok_(\d{1,2})$/),
       String(/^acct_dcre_(\d{1,2})$/),
+      String(/^acct_ocuse_(\d{1,2})$/),
+      String(/^acct_ocpg_(\d{1,3})$/),
+      String(/^acct_ocm_(\d{1,3})$/),
       'acct_login_menu',
       'acct_rm_menu',
       'acct_back',
@@ -154,7 +164,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.state.getClaudeProfileRecord('default'), undefined);
     assert.deepEqual(Object.keys(harness.state.getClaudeProfileRecords()), []);
     assert.match(picker?.text ?? '', /Usage: % of each window used/);
-    assert.match(picker?.text ?? '', /Tap an account to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
+    assert.match(picker?.text ?? '', /Tap an account or a provider to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
   });
 
   it('a polled profile\'s windows hang under its row (the renderer `/limits` shares): 5h / week with relative resets and no arrow, Fable left out when the account has no such window, the stale mark and the limit mark', async () => {
@@ -390,14 +400,14 @@ describe('claudeAccounts: /accounts over its ports', () => {
     }
   });
 
-  it('the OpenCode part: connected providers are listed with a 🔌 row each; the tap asks first and only the confirmation disconnects', async () => {
+  it('the OpenCode part: a topic\'s provider row is [pick] [🔑] [🔌]; the 🔌 asks first and only the confirmation disconnects', async () => {
     openCodeProviders = ['openai', 'openrouter'];
     await harness.runCommand('accounts');
     const screen = harness.replies.at(-1)!;
     assert.match(screen.text ?? '', /OpenCode providers \(connected\):\n• openai\n• openrouter/);
     const rows = harness.getKeyboardData(screen);
-    assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0', 'acct_dcre_0'], ['acct_dc_1', 'acct_dcre_1']], 'a provider row mirrors an account row: disconnect + 🔑 connect again');
-    assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['🔌 Disconnect openrouter', '🔑'], 'the button says what it does');
+    assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_ocuse_')), [['acct_ocuse_0', 'acct_dcre_0', 'acct_dc_0'], ['acct_ocuse_1', 'acct_dcre_1', 'acct_dc_1']], 'a provider row mirrors an account row: pick, 🔑 connect again, 🔌 disconnect');
+    assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['openrouter', '🔑', '🔌'], 'the pick names the provider; the two icons are the same as an account row\'s');
     assert.deepEqual(rows.at(-1)?.slice(-2), ['acct_add', 'acct_ocadd']);
     await harness.tapButton(screen.messageId!, 'acct_dc_1');
     assert.match(harness.edits.at(-1)?.text ?? '', /Disconnect openrouter\?/);
@@ -405,7 +415,200 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['acct_dcok_1'], ['acct_back']]);
     await harness.tapButton(screen.messageId!, 'acct_dcok_1');
     assert.deepEqual(disconnected, [{ key: harness.key, providerId: 'openrouter' }]);
-    assert.equal(harness.getKeyboardData(harness.edits.at(-1)).some((row) => row[0] === 'acct_dc_0'), true, 'the screen is re-rendered in place');
+    assert.equal(harness.getKeyboardData(harness.edits.at(-1)).some((row) => row[0] === 'acct_ocuse_0'), true, 'the screen is re-rendered in place');
+  });
+
+  it('in General a provider row stays connect / disconnect only: [🔌 Disconnect X] [🔑], no pick', async () => {
+    openCodeProviders = ['openai', 'openrouter'];
+    isGeneralTopic = true;
+    try {
+      await harness.runCommand('accounts');
+      const screen = harness.replies.at(-1)!;
+      const rows = harness.getKeyboardData(screen);
+      assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0', 'acct_dcre_0'], ['acct_dc_1', 'acct_dcre_1']]);
+      assert.equal(rows.flat().some((data) => data.startsWith('acct_ocuse_')), false);
+      assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['🔌 Disconnect openrouter', '🔑']);
+      assert.match(screen.text ?? '', /Tap an account to make it the default for all topics\. 🔑 signs an account or provider in again, 🗑 removes an account, 🔌 disconnects a provider\./);
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_0'); // an old keyboard from a topic
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'An OpenCode model is picked inside a topic.');
+    } finally {
+      isGeneralTopic = false;
+    }
+  });
+
+  it('the title and the ✓ say where the topic REALLY runs: the account its session runs on (not the pick), OpenCode with its model, none while OpenCode\'s model is unknown', async () => {
+    openCodeProviders = [];
+    const savedOverride = harness.state.getClaudeProfileOverride(harness.key);
+    await harness.state.setClaudeProfileOverride(harness.key, 'default');
+    try {
+      topicRun = { family: 'claude', rung: { backend: 'claude', profile: 'work', model: null } };
+      await harness.runCommand('accounts');
+      let screen = harness.replies.at(-1)!;
+      assert.match(screen.text ?? '', /^👤 This topic runs on: Claude «work»\n\n• default — .*\n✓ work — /, 'the session runs on «work» although the pick is «default» (a switch is deferred)');
+      assert.deepEqual(harness.getKeyboardLabels(screen).slice(0, 2).map((row) => row[0].startsWith('✓')), [false, true]);
+
+      topicRun = { family: 'opencode', rung: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' } };
+      await harness.runCommand('accounts');
+      screen = harness.replies.at(-1)!;
+      assert.match(screen.text ?? '', /^👤 This topic runs on: OpenCode openai\/gpt-5\n\n• default — /);
+      assert.equal(harness.getKeyboardLabels(screen).flat().some((label) => label.startsWith('✓')), false, 'no Claude account carries the ✓ while OpenCode runs');
+
+      topicRun = { family: 'opencode', rung: null };
+      await harness.runCommand('accounts');
+      assert.match(harness.replies.at(-1)?.text ?? '', /^👤 This topic runs on: OpenCode\n\n/, 'an unknown OpenCode model is just OpenCode');
+
+      topicRun = { family: null, rung: null };
+      await harness.runCommand('accounts');
+      assert.match(harness.replies.at(-1)?.text ?? '', /^👤 This topic runs on: Claude «default»\n\n✓ default — /, 'with no agent the next start\'s account (the pick) is where it will run');
+    } finally {
+      await harness.state.setClaudeProfileOverride(harness.key, savedOverride ?? null);
+      topicRun = { family: null, rung: null };
+    }
+  });
+
+  it('a provider signed in through a ChatGPT subscription shows its usage like an account; an API-key provider says so; the provider the topic runs on carries the ✓ and its model', async () => {
+    openCodeProviders = ['openai', 'openrouter', 'google'];
+    const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
+    harness.state.setOpenCodeProviderUsage('openai', {
+      authKind: 'subscription',
+      usage: { fetchedAt: new Date().toISOString(), source: 'api', buckets: [{ kind: 'session', percent: 12, resetsAt: inHours(3), scopeModel: null }, { kind: 'weekly_all', percent: 40, resetsAt: inHours(100), scopeModel: null }] },
+    });
+    harness.state.setOpenCodeProviderUsage('openrouter', { authKind: 'apiKey' });
+    harness.state.setOpenCodeProviderUsage('google', { authKind: 'subscription' });
+    topicRun = { family: 'opencode', rung: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' } };
+    try {
+      await harness.runCommand('accounts');
+      const screen = harness.replies.at(-1)!;
+      assert.match(screen.text ?? '', /🔌 OpenCode providers \(connected\):\n✓ openai — ChatGPT subscription\n {4}⏱ 5h 12% 🔄 in 3h · week 40% 🔄 in 4d \d+h\n• openrouter — API key\n• google\n/);
+      assert.deepEqual(harness.getKeyboardLabels(screen).filter((row) => row.length === 3 && row[1] === '🔑' && row[2] === '🔌').map((row) => row[0]), ['✓ openai · gpt-5', 'openrouter', 'google']);
+      isGeneralTopic = true;
+      await harness.runCommand('accounts');
+      assert.match(harness.replies.at(-1)?.text ?? '', /\n• openai — ChatGPT subscription\n {4}⏱ 5h 12%/, 'General shows the usage too, with no ✓ on a provider');
+    } finally {
+      isGeneralTopic = false;
+      topicRun = { family: null, rung: null };
+      harness.state.setOpenCodeProviderUsage('openai', { authKind: 'unknown' });
+      harness.state.setOpenCodeProviderUsage('openrouter', { authKind: 'unknown' });
+      harness.state.setOpenCodeProviderUsage('google', { authKind: 'unknown' });
+    }
+  });
+
+  it('a provider row opens its model page (the shared one: ✓ on the running model, ⛔ on a limited one, Back to /accounts); a pick goes through the switch path and the screen returns', async () => {
+    openCodeProviders = ['openai', 'openrouter'];
+    openCodeModels = ['openai/gpt-5', 'openai/gpt-5-mini', 'openrouter/deepseek-chat'];
+    topicRun = { family: 'opencode', rung: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' } };
+    await harness.state.setOpenCodeModelLimitedUntil('openai/gpt-5-mini', new Date(Date.now() + 3_600_000 * 2).toISOString());
+    await harness.state.setBinding(harness.key, 'folder');
+    operatorSwitches.length = 0;
+    try {
+      await harness.runCommand('accounts');
+      const screen = harness.replies.at(-1)!;
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
+      const page = harness.edits.at(-1)!;
+      assert.equal(page.text, 'OpenCode · openai — pick the model for this topic:');
+      const labels = harness.getKeyboardLabels(page);
+      assert.equal(labels[0][0], 'gpt-5 ✓');
+      assert.match(labels[1][0], /^gpt-5-mini ⛔ /);
+      assert.deepEqual(harness.getKeyboardData(page), [['acct_ocm_0'], ['acct_ocm_1'], ['acct_back']]);
+      assert.equal(labels.at(-1)?.[0], '⬅️ Back');
+
+      await harness.tapButton(screen.messageId!, 'acct_ocm_1');
+      assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5-mini' } }]);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: openai/gpt-5-mini');
+      assert.match(harness.edits.at(-1)?.text ?? '', /^👤 This topic runs on:/, 'back on the screen');
+
+      // «Back» returns to the screen too; a model button of a screen that shows no page is out of date.
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
+      await harness.tapButton(screen.messageId!, 'acct_back');
+      assert.match(harness.edits.at(-1)?.text ?? '', /^👤 This topic runs on:/);
+      const editsBefore = harness.edits.length;
+      await harness.tapButton(screen.messageId!, 'acct_ocm_0');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This screen is out of date — it is re-rendered.');
+      assert.equal(operatorSwitches.length, 1, 'the stale model button switched nothing');
+      assert.equal(harness.edits.length, editsBefore + 1);
+    } finally {
+      await harness.state.setOpenCodeModelLimitedUntil('openai/gpt-5-mini', null);
+      await harness.state.removeBinding(harness.key);
+      topicRun = { family: null, rung: null };
+    }
+  });
+
+  it('a provider with ONE model is picked at once (unless the topic runs on it); a refusal keeps the page, an asked question has no toast', async () => {
+    openCodeProviders = ['solo', 'openrouter'];
+    openCodeModels = ['solo/only', 'openrouter/a', 'openrouter/b'];
+    topicRun = { family: 'claude', rung: { backend: 'claude', profile: 'default', model: null } };
+    await harness.state.setBinding(harness.key, 'folder');
+    operatorSwitches.length = 0;
+    try {
+      await harness.runCommand('accounts');
+      const screen = harness.replies.at(-1)!;
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
+      assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'solo', modelId: 'only' } }]);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Model: solo/only');
+
+      operatorSwitchOutcome = { kind: 'asked' };
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_0');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the hand-over question is the answer');
+
+      operatorSwitchOutcome = { kind: 'refused', text: '⚠️ no luck' };
+      await harness.tapButton(screen.messageId!, 'acct_ocuse_1');
+      await harness.tapButton(screen.messageId!, 'acct_ocm_0');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '⚠️ no luck');
+      assert.match(harness.edits.at(-1)?.text ?? '', /pick the model for this topic/, 'a refusal leaves the page');
+
+      topicRun = { family: 'opencode', rung: { backend: 'opencode', providerId: 'solo', modelId: 'only' } };
+      operatorSwitchOutcome = null;
+      operatorSwitches.length = 0;
+      await harness.runCommand('accounts');
+      await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ocuse_0');
+      assert.deepEqual(operatorSwitches, [], 'the topic runs on the provider already: its page opens instead');
+      assert.equal(harness.getKeyboardLabels(harness.edits.at(-1))[0][0], 'only ✓');
+    } finally {
+      operatorSwitchOutcome = null;
+      await harness.state.removeBinding(harness.key);
+      topicRun = { family: null, rung: null };
+    }
+  });
+
+  it('an unbound topic is told to bind a folder before it picks a provider', async () => {
+    openCodeProviders = ['openai'];
+    openCodeModels = ['openai/gpt-5', 'openai/gpt-5-mini'];
+    operatorSwitches.length = 0;
+    await harness.runCommand('accounts');
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ocuse_0');
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '📁 Bind a folder first: /bind <subdir>. The agent only ever runs inside the bound folder.');
+    await harness.runCommand('accounts', 'use openai/gpt-5');
+    assert.equal(harness.replies.at(-1)?.text, '📁 Bind a folder first: /bind <subdir>. The agent only ever runs inside the bound folder.');
+    assert.deepEqual(operatorSwitches, []);
+  });
+
+  it('`/accounts use <provider>/<model>` is the typed form of a provider pick: the same switch path; never in General; a value that is no provider/model gets the usage', async () => {
+    await harness.state.setBinding(harness.key, 'folder');
+    operatorSwitches.length = 0;
+    try {
+      await harness.runCommand('accounts', 'use openrouter/anthropic/claude-sonnet-4.5');
+      assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'openrouter', modelId: 'anthropic/claude-sonnet-4.5' } }]);
+      assert.equal(harness.replies.at(-1)?.text, 'Model: openrouter/anthropic/claude-sonnet-4.5');
+
+      const repliesBefore = harness.replies.length;
+      operatorSwitchOutcome = { kind: 'asked' };
+      await harness.runCommand('accounts', 'use openai/gpt-5');
+      assert.equal(harness.replies.length, repliesBefore, 'the question is the answer: nothing more is posted');
+      operatorSwitchOutcome = null;
+
+      await harness.runCommand('accounts', 'use /gpt-5');
+      assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: \/accounts/);
+
+      isGeneralTopic = true;
+      operatorSwitches.length = 0;
+      await harness.runCommand('accounts', 'use openai/gpt-5');
+      assert.equal(harness.replies.at(-1)?.text, 'An OpenCode model is picked inside a topic.');
+      assert.deepEqual(operatorSwitches, []);
+    } finally {
+      isGeneralTopic = false;
+      operatorSwitchOutcome = null;
+      await harness.state.removeBinding(harness.key);
+    }
   });
 
   it('the provider snapshot belongs to its CHAT: a disconnect tap from another chat on the same message id resolves no provider', async () => {

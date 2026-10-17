@@ -29,6 +29,9 @@ import {
 
 export const chatGptUsageEndpoint = 'https://chatgpt.com/backend-api/wham/usage';
 
+/** The OpenCode provider a ChatGPT subscription signs in to. */
+export const chatGptProviderId = 'openai';
+
 /** How a provider is signed in: through a subscription (`oauth`), an API key (`api`), or any other record. */
 export type OpenCodeAuthKind = 'subscription' | 'apiKey' | 'unknown';
 
@@ -170,7 +173,7 @@ export type OpenCodeUsageReader = (credential: OpenCodeProviderCredential) => Pr
 
 /** The subscription usage readers by provider id; a provider not here shows only its auth kind. */
 export const openCodeUsageReaders: Readonly<Record<string, OpenCodeUsageReader>> = {
-  openai: (credential) => fetchChatGptUsage(credential),
+  [chatGptProviderId]: (credential) => fetchChatGptUsage(credential),
 };
 
 // ── the poller ──

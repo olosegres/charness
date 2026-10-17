@@ -78,7 +78,7 @@ export const ptDict: Record<string, string> = {
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
-    '/accounts — contas Claude e providers OpenCode (escolher, adicionar, entrar de novo, remover, ligar, desligar)\n' +
+    '/accounts — contas Claude e fornecedores OpenCode (trocar, adicionar, reiniciar sessão, remover, ligar, desligar)\n' +
     '/clear — apagar mensagens do tópico\n' +
     '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
     '/bind — gerir vínculo',
@@ -757,7 +757,7 @@ export const ptDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Limite de uso atingido — próxima tentativa às {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite de uso atingido. A retomada automática está desligada, então o trabalho espera até o operador retomá-lo.',
 
-  'account.title': '👤 Conta Claude deste tópico: {name}\n\n{list}\n\nToque num perfil para mudar este tópico para ele. No tópico General a escolha passa a ser a padrão de todos os tópicos.',
+  'account.title': '👤 Este tópico corre em: {current}\n\n{list}',
   'account.titleGeneral': '👤 Conta Claude — padrão para TODOS os tópicos: {name}\n\n{list}\n\nToque num perfil para torná-lo o padrão. Tópicos com escolha própria mantêm-na.',
   'account.row.loggedOut': 'sem sessão iniciada',
   'account.row.topics': ' · {count} tópico(s)',
@@ -787,7 +787,7 @@ export const ptDict: Record<string, string> = {
   'account.setThisTopic': '✅ Conta Claude deste tópico: {name}.{apply}',
   'account.setGlobal': '✅ Conta Claude padrão para TODOS os tópicos: {name}. Tópicos com escolha própria mantêm-na; os outros mudam agora ou no próximo início.',
   'account.followSet': '✅ Este tópico segue a conta Claude padrão ({name}).{apply}',
-  'account.usage': 'Uso: /accounts — o seletor; /accounts add <nome>; /accounts use <nome>; /accounts login <nome>; /accounts remove <nome>; /accounts autoswitch on|off.',
+  'account.usage': 'Uso: /accounts — o seletor; /accounts add <nome>; /accounts use <nome>; /accounts use <provider>/<model>; /accounts login <nome>; /accounts remove <nome>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Aplica-se quando a sessão iniciar ou for retomada.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' A sessão em curso foi reiniciada com ela — mesma conversa.',
@@ -799,7 +799,7 @@ export const ptDict: Record<string, string> = {
   'account.row.usageStale': ' (desatualizado)',
   'account.row.limited': '    ⛔ no limite até {until}',
   'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas).',
-  'account.autoSwitchHint': 'O que acontece num limite de uso — mudar para um modelo de reserva ou esperar o reinício — define-se em /limits.',
+  'account.autoSwitchHint': 'O que acontece num limite de uso define-se em /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'modelo do tópico',
@@ -876,7 +876,10 @@ export const ptDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Troca automática ao atingir um limite de uso',
   'accounts.openCodeSection': '🔌 Providers OpenCode (ligados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode: ainda nenhum ligado. «➕ Provider OpenCode» liga um.',
-  'accounts.buttonsHint': 'Toque numa conta para passar este tópico para ela (em General: predefinição para todos). 🔑 volta a iniciar sessão numa conta ou fornecedor, 🗑 remove uma conta (a default é desligada), 🔌 desliga um fornecedor.',
+  'accounts.providerApiKey': 'chave de API',
+  'accounts.providerSubscription': 'subscrição do ChatGPT',
+  'accounts.buttonsHintGeneral': 'Toque numa conta para a tornar a predefinida de todos os tópicos. 🔑 volta a iniciar sessão numa conta ou fornecedor, 🗑 remove uma conta, 🔌 desliga um fornecedor.',
+  'accounts.buttonsHint': 'Toque numa conta ou num fornecedor para passar este tópico para ele (com um fornecedor pergunta-se depois o modelo). 🔑 volta a iniciar sessão, 🗑 remove uma conta, 🔌 desliga um fornecedor.',
   'accounts.addClaudeButton': '➕ Conta Claude',
   'accounts.addProviderButton': '➕ Provider OpenCode',
   'accounts.askProvider': '➕ Que provider OpenCode? Envia o seu id na mensagem seguinte (por exemplo openai ou openrouter).',

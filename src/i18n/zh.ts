@@ -78,7 +78,7 @@ export const zhDict: Record<string, string> = {
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
-    '/accounts — Claude 账号与 OpenCode provider（选择、添加、重新登录、删除、连接、断开）\n' +
+    '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
     '/bind — 管理绑定',
@@ -750,7 +750,7 @@ export const zhDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 已达到使用限额 — 下次尝试时间为 {time}。',
   'requests.limit.answerAutoResumeOffNotice': '🚧 已达到使用限额。自动恢复已关闭，工作将等待操作员恢复。',
 
-  'account.title': '👤 此话题的 Claude 账号：{name}\n\n{list}\n\n点按一个配置以将此话题切换过去。在 General 话题中，所选将成为所有话题的默认值。',
+  'account.title': '👤 此话题运行于：{current}\n\n{list}',
   'account.titleGeneral': '👤 Claude 账号 — 所有话题的默认值：{name}\n\n{list}\n\n点按一个配置将其设为默认。自行选择过的话题保持不变。',
   'account.row.loggedOut': '未登录',
   'account.row.topics': ' · {count} 个话题',
@@ -780,7 +780,7 @@ export const zhDict: Record<string, string> = {
   'account.setThisTopic': '✅ 此话题的 Claude 账号：{name}。{apply}',
   'account.setGlobal': '✅ 所有话题的默认 Claude 账号：{name}。自行选择过的话题保持不变；其余话题现在或在下次启动时切换。',
   'account.followSet': '✅ 此话题跟随默认 Claude 账号（{name}）。{apply}',
-  'account.usage': '用法：/accounts — 选择器；/accounts add <名称>；/accounts use <名称>；/accounts login <名称>；/accounts remove <名称>；/accounts autoswitch on|off。',
+  'account.usage': '用法：/accounts — 选择器；/accounts add <名称>；/accounts use <名称>；/accounts use <provider>/<model>；/accounts login <名称>；/accounts remove <名称>；/accounts autoswitch on|off。',
   'account.applied.inactive': ' 将在会话下次启动或恢复时生效。',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' 运行中的会话已在其下重启——同一段对话。',
@@ -792,7 +792,7 @@ export const zhDict: Record<string, string> = {
   'account.row.usageStale': '（已过时）',
   'account.row.limited': '    ⛔ 已达上限，直到 {until}',
   'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。',
-  'account.autoSwitchHint': '遇到用量上限时怎么办（切换到备用模型，或等待重置）在 /limits 中设置。',
+  'account.autoSwitchHint': '遇到用量上限时怎么办，请在 /limits 中设置。',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': '话题当前模型',
@@ -869,7 +869,10 @@ export const zhDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provider：尚未连接任何一个。点「➕ OpenCode provider」来连接。',
-  'accounts.buttonsHint': '点按账号可把此话题切换到它（在 General 中：所有话题的默认）。🔑 重新登录账号或提供商，🗑 移除账号（default 会登出），🔌 断开提供商。',
+  'accounts.providerApiKey': 'API 密钥',
+  'accounts.providerSubscription': 'ChatGPT 订阅',
+  'accounts.buttonsHintGeneral': '点按账号可将其设为所有话题的默认账号。🔑 重新登录账号或提供商，🗑 移除账号，🔌 断开提供商。',
+  'accounts.buttonsHint': '点按账号或提供商可把此话题切换过去（提供商之后会让你选模型）。🔑 重新登录，🗑 移除账号，🔌 断开提供商。',
   'accounts.addClaudeButton': '➕ Claude 账号',
   'accounts.addProviderButton': '➕ OpenCode provider',
   'accounts.askProvider': '➕ 连接哪个 OpenCode provider？请在下一条消息中发送它的 id（例如 openai 或 openrouter）。',

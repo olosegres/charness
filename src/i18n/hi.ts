@@ -78,7 +78,7 @@ export const hiDict: Record<string, string> = {
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
-    '/accounts — Claude खाते और OpenCode प्रदाता (चुनें, जोड़ें, फिर से लॉगिन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
+    '/accounts — Claude खाते और OpenCode प्रदाता (स्विच, जोड़ें, फिर साइन इन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
     '/bind — बाइंडिंग प्रबंधित करें',
@@ -755,7 +755,7 @@ export const hiDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 उपयोग सीमा पूरी हो गई — अगला प्रयास {time} पर।',
   'requests.limit.answerAutoResumeOffNotice': '🚧 उपयोग सीमा पूरी हो गई। स्वचालित पुनरारंभ बंद है, इसलिए काम तब तक रुका रहेगा जब तक ऑपरेटर इसे फिर से शुरू नहीं करता।',
 
-  'account.title': '👤 इस टॉपिक का Claude खाता: {name}\n\n{list}\n\nकिसी प्रोफ़ाइल पर टैप करें ताकि यह टॉपिक उस पर चला जाए। General टॉपिक में चुनाव सभी टॉपिक के लिए डिफ़ॉल्ट बन जाता है।',
+  'account.title': '👤 यह टॉपिक इस पर चल रहा है: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude खाता — सभी टॉपिक के लिए डिफ़ॉल्ट: {name}\n\n{list}\n\nकिसी प्रोफ़ाइल पर टैप करके उसे डिफ़ॉल्ट बनाएँ। अपना चुनाव रखने वाले टॉपिक उसे बनाए रखते हैं।',
   'account.row.loggedOut': 'साइन इन नहीं',
   'account.row.topics': ' · {count} टॉपिक',
@@ -785,7 +785,7 @@ export const hiDict: Record<string, string> = {
   'account.setThisTopic': '✅ इस टॉपिक का Claude खाता: {name}।{apply}',
   'account.setGlobal': '✅ सभी टॉपिक के लिए डिफ़ॉल्ट Claude खाता: {name}। अपना चुनाव रखने वाले टॉपिक उसे रखते हैं; बाकी अभी या अगली शुरुआत पर बदलते हैं।',
   'account.followSet': '✅ यह टॉपिक डिफ़ॉल्ट Claude खाते ({name}) का पालन करता है।{apply}',
-  'account.usage': 'उपयोग: /accounts — चयनकर्ता; /accounts add <नाम>; /accounts use <नाम>; /accounts login <नाम>; /accounts remove <नाम>; /accounts autoswitch on|off।',
+  'account.usage': 'उपयोग: /accounts — चयनकर्ता; /accounts add <नाम>; /accounts use <नाम>; /accounts use <provider>/<model>; /accounts login <नाम>; /accounts remove <नाम>; /accounts autoswitch on|off।',
   'account.applied.inactive': ' सत्र के अगली बार शुरू या फिर से चालू होने पर लागू होगा।',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' चल रहा सत्र उसके तहत फिर से शुरू किया गया — वही बातचीत।',
@@ -797,7 +797,7 @@ export const hiDict: Record<string, string> = {
   'account.row.usageStale': ' (पुराना)',
   'account.row.limited': '    ⛔ सीमा पर, {until} तक',
   'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)।',
-  'account.autoSwitchHint': 'उपयोग-सीमा पर क्या हो — बैकअप मॉडल पर स्विच करना या रीसेट का इंतज़ार — यह /limits में तय होता है।',
+  'account.autoSwitchHint': 'उपयोग-सीमा पर क्या हो, यह /limits में तय होता है।',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'टॉपिक का मॉडल',
@@ -874,7 +874,10 @@ export const hiDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode प्रदाता: अभी कोई कनेक्ट नहीं है। «➕ OpenCode प्रदाता» से एक कनेक्ट करें।',
-  'accounts.buttonsHint': 'इस टॉपिक को किसी खाते पर ले जाने के लिए उसे दबाएँ (General में: सभी का डिफ़ॉल्ट)। 🔑 खाते या प्रदाता में फिर साइन इन करता है, 🗑 खाता हटाता है (default साइन-आउट होता है), 🔌 प्रदाता को डिस्कनेक्ट करता है।',
+  'accounts.providerApiKey': 'API कुंजी',
+  'accounts.providerSubscription': 'ChatGPT सब्सक्रिप्शन',
+  'accounts.buttonsHintGeneral': 'किसी खाते को सभी टॉपिक के लिए डिफ़ॉल्ट बनाने के लिए उसे दबाएँ। 🔑 खाते या प्रदाता में फिर साइन इन करता है, 🗑 खाता हटाता है, 🔌 प्रदाता को डिस्कनेक्ट करता है।',
+  'accounts.buttonsHint': 'इस टॉपिक को किसी खाते या प्रदाता पर ले जाने के लिए उसे दबाएँ (प्रदाता के बाद मॉडल पूछा जाएगा)। 🔑 फिर से साइन इन करता है, 🗑 खाता हटाता है, 🔌 प्रदाता को डिस्कनेक्ट करता है।',
   'accounts.addClaudeButton': '➕ Claude खाता',
   'accounts.addProviderButton': '➕ OpenCode प्रदाता',
   'accounts.askProvider': '➕ कौन-सा OpenCode प्रदाता? अगले संदेश में उसकी id भेजें (जैसे openai या openrouter)।',

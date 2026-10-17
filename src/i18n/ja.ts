@@ -78,7 +78,7 @@ export const jaDict: Record<string, string> = {
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
-    '/accounts — Claude アカウントと OpenCode プロバイダー（選択・追加・再ログイン・削除・接続・切断）\n' +
+    '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
     '/bind — バインドを管理',
@@ -750,7 +750,7 @@ export const jaDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 使用量の上限に達しました — 次の試行は {time} です。',
   'requests.limit.answerAutoResumeOffNotice': '🚧 使用量の上限に達しました。自動再開はオフのため、オペレーターが再開するまで作業は待機します。',
 
-  'account.title': '👤 このトピックの Claude アカウント: {name}\n\n{list}\n\nプロファイルをタップすると、このトピックがそれに切り替わります。General トピックでは、選択が全トピックの既定になります。',
+  'account.title': '👤 このトピックの実行先: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude アカウント — 全トピックの既定: {name}\n\n{list}\n\nプロファイルをタップすると既定になります。独自に選択したトピックはそのままです。',
   'account.row.loggedOut': '未ログイン',
   'account.row.topics': ' · {count} トピック',
@@ -780,7 +780,7 @@ export const jaDict: Record<string, string> = {
   'account.setThisTopic': '✅ このトピックの Claude アカウント: {name}。{apply}',
   'account.setGlobal': '✅ 全トピックの既定 Claude アカウント: {name}。独自に選択したトピックはそのまま、他は今すぐか次回の起動時に切り替わります。',
   'account.followSet': '✅ このトピックは既定の Claude アカウント ({name}) に従います。{apply}',
-  'account.usage': '使い方: /accounts — 選択画面; /accounts add <名前>; /accounts use <名前>; /accounts login <名前>; /accounts remove <名前>; /accounts autoswitch on|off。',
+  'account.usage': '使い方: /accounts — 選択画面; /accounts add <名前>; /accounts use <名前>; /accounts use <provider>/<model>; /accounts login <名前>; /accounts remove <名前>; /accounts autoswitch on|off。',
   'account.applied.inactive': ' セッションの次回の起動または再開時に適用されます。',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' 実行中のセッションをそのアカウントで再起動しました — 同じ会話です。',
@@ -792,7 +792,7 @@ export const jaDict: Record<string, string> = {
   'account.row.usageStale': '（古い）',
   'account.row.limited': '    ⛔ 上限中、{until} まで',
   'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。',
-  'account.autoSwitchHint': '使用量制限時の動作（予備モデルへ切り替えるか、リセットを待つか）は /limits で設定します。',
+  'account.autoSwitchHint': '使用量制限時の動作は /limits で設定します。',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'トピックのモデル',
@@ -869,7 +869,10 @@ export const jaDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode プロバイダー: まだ接続されていません。「➕ OpenCode プロバイダー」で接続できます。',
-  'accounts.buttonsHint': 'アカウントをタップするとこのトピックをそれに切り替えます（General ではすべての既定）。🔑 はアカウント/プロバイダーの再ログイン、🗑 はアカウントの削除（default はサインアウト）、🔌 はプロバイダーの切断です。',
+  'accounts.providerApiKey': 'API キー',
+  'accounts.providerSubscription': 'ChatGPT サブスクリプション',
+  'accounts.buttonsHintGeneral': 'アカウントをタップすると、全トピックの既定アカウントになります。🔑 はアカウント/プロバイダーの再ログイン、🗑 はアカウントの削除、🔌 はプロバイダーの切断です。',
+  'accounts.buttonsHint': 'アカウントまたはプロバイダーをタップするとこのトピックを切り替えます（プロバイダーはこのあとモデルを選びます）。🔑 は再ログイン、🗑 はアカウントの削除、🔌 はプロバイダーの切断です。',
   'accounts.addClaudeButton': '➕ Claude アカウント',
   'accounts.addProviderButton': '➕ OpenCode プロバイダー',
   'accounts.askProvider': '➕ どの OpenCode プロバイダーですか？次のメッセージでその id を送ってください（例: openai、openrouter）。',

@@ -21,6 +21,14 @@
  *      OpenCode with no pick recorded.
  *   D  A fresh topic (an agent started and not yet spoken to) switches in both directions without asking.
  *
+ * Then the operator's own picks on topic A, from the screens (`/limits` board, `/accounts`):
+ *   · `/limits` → an OpenCode provider → a model (the shared model page) on a Claude topic with a conversation ASKS naming the
+ *     model: ✖️ Cancel changes nothing, ✅ Continue resumes the PARKED OpenCode session on that model with the bridge;
+ *   · the ✓ OpenCode row opens the model page of where the topic runs: a pick changes the model, same session, no question;
+ *   · `/accounts` → another provider on an OpenCode topic switches the model at once, same session, no question;
+ *   · a ChatGPT subscription's usage (a snapshot seeded into `state.json`; the instance's `auth.json` holds no `oauth`
+ *     record, so nothing ever reaches chatgpt.com) shows on both screens.
+ *
  * Nothing leaves the machine: every server is on loopback and every agent is a fake. Everything the test starts is
  * stopped in `after`.
  */
@@ -56,6 +64,7 @@ import {
   getSessionLaunches,
   listBridgePrompts,
   listSwitchNotices,
+  openLimitsBoard,
   readPersistedState,
   restartCharnessWithState,
   startCharnessOnInstance,
@@ -82,7 +91,8 @@ const fakeOpenCodeVersion = '1.17.11';
 const defaultOpenCodeModel = 'anthropic/claude-sonnet-4-6';
 const chainOpenCodeModel = 'openai/gpt-5';
 const chainOpenCodeModelAlternative = 'google/gemini-2.5-pro';
-const openCodeModels = [defaultOpenCodeModel, chainOpenCodeModel, chainOpenCodeModelAlternative] as const;
+const sameProviderOpenCodeModel = 'openai/gpt-5-mini';
+const openCodeModels = [defaultOpenCodeModel, chainOpenCodeModel, chainOpenCodeModelAlternative, sameProviderOpenCodeModel] as const;
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
 /** The first line of the question before a manual switch, and the line every such confirmation ends with. */
@@ -454,5 +464,115 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
 
     assert.deepEqual(freshTopic.listMessages().filter(checkIsSwitchQuestion), [], 'no question was asked in either direction');
     assert.equal(fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === freshSession.id).length, 0, 'no bridge: there was nothing to hand over');
+  });
+  it('a Claude topic with a conversation: /limits → an OpenCode provider → a model asks first, naming the model; ✖️ Cancel changes nothing, ✅ Continue resumes the PARKED OpenCode session on that model — same id — with the bridge as its prompt', async () => {
+    const parkedOpenCodeSession = readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.opencodeSessionId ?? '';
+    assert.ok(parkedOpenCodeSession, 'the OpenCode session the limit left is parked');
+    const promptsBefore = fakeOpenCode.prompts.length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+
+    const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
+    assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the topic runs Claude');
+    const askToSwitch = async (): Promise<FakeTelegramMessage> => {
+      const askedAfter = getLatestMessageId(claudeTopic);
+      await claudeTopic.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
+      await claudeTopic.waitForMessageText('the openai model page', board.message, (text) => text === 'OpenCode · openai — pick the model for this topic:');
+      const labels = claudeTopic.getKeyboardLabels(board.message).flat();
+      assert.deepEqual(labels, ['gpt-5', 'gpt-5-mini', '⬅️ Back']);
+      const toast = await claudeTopic.tapAndAwaitAnswer(board.message, claudeTopic.getKeyboardData(board.message).flat()[1]);
+      assert.equal(toast, '', 'the question is the answer: no toast');
+      return waitForSwitchQuestion(claudeTopic, askedAfter);
+    };
+
+    const first = await askToSwitch();
+    assertSwitchQuestion(claudeTopic, first, `🔁 Switch this topic from Claude to OpenCode ${sameProviderOpenCodeModel}?`);
+    assert.equal(readAgent(claudeToOpenCode.threadId)?.name, claudeJsonStreamAdapterName, 'nothing moved before the answer');
+    await claudeTopic.tapAndAwaitAnswer(first, cancelCallback);
+    await claudeTopic.waitForMessageText('the question to turn into the cancel line', first, (text) => text === '✖️ Cancelled — this topic stays on Claude.');
+    assert.equal(readAgent(claudeToOpenCode.threadId)?.name, claudeJsonStreamAdapterName, 'still on Claude');
+    assert.equal(fakeOpenCode.prompts.length, promptsBefore, 'nothing reached OpenCode');
+    await getCharness().waitFor('the board to come back after the question', replyTimeoutMs, () => claudeTopic.getKeyboardData(board.message).flat().includes(board.rowData('OpenCode · openai')));
+
+    const second = await askToSwitch();
+    await claudeTopic.tapAndAwaitAnswer(second, continueCallback);
+    await getCharness().waitFor('the backend to be OpenCode in state.json', agentStartTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === openCodeAdapterName);
+    await claudeTopic.waitForMessageText('the question to turn into the outcome line', second, (text) => text === `🔁 Switched this topic to OpenCode ${sameProviderOpenCodeModel}.`);
+    assert.equal(readAgent(claudeToOpenCode.threadId)?.opencodeSessionId, parkedOpenCodeSession, 'the SAME OpenCode session');
+    await getCharness().waitFor('the bridge to reach the resumed OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsBefore);
+    const bridge = fakeOpenCode.prompts.at(-1);
+    assert.equal(bridge?.sessionId, parkedOpenCodeSession);
+    assert.equal(bridge?.model, sameProviderOpenCodeModel, 'the prompt runs the model that was picked');
+    assert.match(bridge?.text ?? '', /\[Backend switch\] You \(OpenCode · openai\/gpt-5-mini\) are taking this conversation over from Claude, because the operator switched this topic's agent\./);
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBefore, 'no Claude process was started');
+  });
+
+  it('the ✓ OpenCode row opens the model page of where the topic runs: a pick changes the model of the SAME session, with no question', async () => {
+    const session = getOpenCodeSessionOf(claudeToOpenCode.folder);
+    const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
+    assert.match(board.rowLabel('OpenCode · openai'), /^✓ OpenCode · openai · gpt-5-mini/);
+    await claudeTopic.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
+    await claudeTopic.waitForMessageText('the openai model page', board.message, (text) => text === 'OpenCode · openai — pick the model for this topic:');
+    assert.deepEqual(claudeTopic.getKeyboardLabels(board.message).flat(), ['gpt-5', 'gpt-5-mini ✓', '⬅️ Back'], 'the topic\'s model carries the ✓');
+    const questionsBefore = claudeTopic.listMessages().filter(checkIsSwitchQuestion).length;
+    const toast = await claudeTopic.tapAndAwaitAnswer(board.message, claudeTopic.getKeyboardData(board.message).flat()[0]);
+    assert.match(toast, /openai\/gpt-5/, 'the pick is confirmed with the model');
+    assert.equal(claudeTopic.listMessages().filter(checkIsSwitchQuestion).length, questionsBefore, 'no question');
+
+    const promptsBefore = fakeOpenCode.prompts.length;
+    ask(claudeToOpenCode.threadId, 'MODEL-1');
+    await getCharness().waitFor('the next prompt to reach OpenCode', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsBefore);
+    assert.equal(fakeOpenCode.prompts.at(-1)?.sessionId, session.id, 'the same session');
+    assert.equal(fakeOpenCode.prompts.at(-1)?.model, chainOpenCodeModel, 'on the picked model');
+    assert.equal(readAgent(claudeToOpenCode.threadId)?.opencodeSessionId, session.id);
+  });
+
+  it('`/accounts` on an OpenCode topic: another provider (one model) switches the model at once — same session, no question; the provider the topic runs on carries the ✓ and its model', async () => {
+    const session = getOpenCodeSessionOf(claudeToOpenCode.folder);
+    const sentMessageId = fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/accounts');
+    const picker = await claudeTopic.waitForMessage('the /accounts picker', (message) => message.message_id > sentMessageId && claudeTopic.getKeyboardData(message).flat().some((data) => data.startsWith('acct_ocuse_')));
+    assert.match(picker.text, /^👤 This topic runs on: OpenCode openai\/gpt-5\n\n/, 'the title says where the topic really runs');
+    const providerRows = claudeTopic.getKeyboardLabels(picker).filter((row) => row.length === 3 && row[2] === '🔌').map((row) => row[0]);
+    assert.deepEqual(providerRows, ['anthropic', '✓ openai · gpt-5', 'google']);
+    assert.equal(claudeTopic.getKeyboardLabels(picker).flat().some((label) => label.startsWith('✓ default') || label.startsWith('✓ work')), false, 'no Claude account carries the ✓ while OpenCode runs');
+
+    const questionsBefore = claudeTopic.listMessages().filter(checkIsSwitchQuestion).length;
+    const googleData = claudeTopic.getKeyboardData(picker).flat()[claudeTopic.getKeyboardLabels(picker).flat().indexOf('google')];
+    const toast = await claudeTopic.tapAndAwaitAnswer(picker, googleData);
+    assert.match(toast, /gemini-2\.5-pro/);
+    assert.equal(claudeTopic.listMessages().filter(checkIsSwitchQuestion).length, questionsBefore, 'no question');
+
+    const promptsBefore = fakeOpenCode.prompts.length;
+    ask(claudeToOpenCode.threadId, 'MODEL-2');
+    await getCharness().waitFor('the next prompt to reach OpenCode', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsBefore);
+    assert.equal(fakeOpenCode.prompts.at(-1)?.sessionId, session.id, 'the same session');
+    assert.equal(fakeOpenCode.prompts.at(-1)?.model, chainOpenCodeModelAlternative);
+    await getCharness().waitFor('the picker to show where the topic runs now', replyTimeoutMs, () => picker.text.startsWith(`👤 This topic runs on: OpenCode ${chainOpenCodeModelAlternative}`));
+  });
+
+  it('a ChatGPT subscription\'s usage (seeded) shows on the /limits board and in /accounts; an API-key provider says so; the figures survive the screens', async () => {
+    const inHours = (hours: number): string => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString();
+    await restartWithState((persisted) => {
+      persisted.openCodeProviderUsage = {
+        openai: {
+          authKind: 'subscription',
+          usage: {
+            fetchedAt: new Date().toISOString(),
+            source: 'api',
+            buckets: [{ kind: 'session', percent: 12, resetsAt: inHours(3), scopeModel: null }, { kind: 'weekly_all', percent: 40, resetsAt: inHours(4 * 24), scopeModel: null }],
+          },
+        },
+        google: { authKind: 'apiKey' },
+      };
+    });
+    const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
+    assert.equal(board.rowLabel('OpenCode · openai'), 'OpenCode · openai — 5h 12% · week 40%');
+    assert.match(board.rowLabel('OpenCode · google'), /^✓ OpenCode · google · gemini-2\.5-pro$/, 'an API-key provider has no usage to show');
+
+    const sentMessageId = fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/accounts');
+    const picker = await claudeTopic.waitForMessage('the /accounts picker', (message) => message.message_id > sentMessageId && message.text.includes('OpenCode providers'));
+    assert.match(picker.text, /• openai — ChatGPT subscription\n {4}⏱ 5h 12% 🔄 in 3h · week 40% 🔄 in 4d/);
+    assert.match(picker.text, /✓ google — API key\n/);
+    const usage = readPersistedState(getLayout()).openCodeProviderUsage as Record<string, { usage?: { buckets: unknown[] } }> | undefined;
+    assert.equal(usage?.openai?.usage?.buckets.length, 2, 'the poller left the seeded snapshot alone (auth.json lists no such provider)');
   });
 });

@@ -78,7 +78,7 @@ export const uzDict: Record<string, string> = {
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
-    '/accounts — Claude hisoblari va OpenCode provayderlari (tanlash, qo‘shish, qayta kirish, o‘chirish, ulash, uzish)\n' +
+    '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
     '/bind — bog‘lanishni boshqarish',
@@ -756,7 +756,7 @@ export const uzDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Foydalanish limitiga yetildi — keyingi urinish {time} da.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Foydalanish limitiga yetildi. Avtomatik davom ettirish o‘chirilgan, shuning uchun ish operator uni davom ettirguncha kutadi.',
 
-  'account.title': '👤 Bu mavzu uchun Claude hisobi: {name}\n\n{list}\n\nMavzuni unga o‘tkazish uchun profilni bosing. General mavzusida tanlov barcha mavzular uchun standart bo‘ladi.',
+  'account.title': '👤 Bu mavzu quyidagida ishlayapti: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude hisobi — BARCHA mavzular uchun standart: {name}\n\n{list}\n\nProfilni standart qilish uchun uni bosing. O‘z tanloviga ega mavzular uni saqlab qoladi.',
   'account.row.loggedOut': 'kirilmagan',
   'account.row.topics': ' · {count} ta mavzu',
@@ -786,7 +786,7 @@ export const uzDict: Record<string, string> = {
   'account.setThisTopic': '✅ Bu mavzu uchun Claude hisobi: {name}.{apply}',
   'account.setGlobal': '✅ BARCHA mavzular uchun standart Claude hisobi: {name}. O‘z tanloviga ega mavzular uni saqlaydi; qolganlari hozir yoki keyingi ishga tushishda o‘tadi.',
   'account.followSet': '✅ Bu mavzu standart Claude hisobiga ({name}) ergashadi.{apply}',
-  'account.usage': 'Foydalanish: /accounts — tanlov; /accounts add <nom>; /accounts use <nom>; /accounts login <nom>; /accounts remove <nom>; /accounts autoswitch on|off.',
+  'account.usage': 'Foydalanish: /accounts — tanlov; /accounts add <nom>; /accounts use <nom>; /accounts use <provider>/<model>; /accounts login <nom>; /accounts remove <nom>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Seans keyingi safar ishga tushganda yoki davom etganda qo‘llanadi.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Ishlayotgan seans u bilan qayta ishga tushirildi — o‘sha suhbat.',
@@ -798,7 +798,7 @@ export const uzDict: Record<string, string> = {
   'account.row.usageStale': ' (eskirgan)',
   'account.row.limited': '    ⛔ limitda, {until} gacha',
   'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin).',
-  'account.autoSwitchHint': 'Foydalanish limitida nima bo‘lishi — zaxira modelga o‘tish yoki tiklanishni kutish — /limits da belgilanadi.',
+  'account.autoSwitchHint': 'Foydalanish limitida nima bo‘lishi /limits da belgilanadi.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'mavzu modeli',
@@ -875,7 +875,10 @@ export const uzDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provayderlari: hozircha hech biri ulanmagan. «➕ OpenCode provayderi» bittasini ulaydi.',
-  'accounts.buttonsHint': 'Bu mavzuni hisobga o‘tkazish uchun hisobni bosing (General da: hammaga odatiy). 🔑 hisob yoki provayderga qayta kiradi, 🗑 hisobni olib tashlaydi (default chiqariladi), 🔌 provayderni uzadi.',
+  'accounts.providerApiKey': 'API kaliti',
+  'accounts.providerSubscription': 'ChatGPT obunasi',
+  'accounts.buttonsHintGeneral': 'Hisobni barcha mavzular uchun standart qilish uchun uni bosing. 🔑 hisob yoki provayderga qayta kiradi, 🗑 hisobni olib tashlaydi, 🔌 provayderni uzadi.',
+  'accounts.buttonsHint': 'Bu mavzuni hisob yoki provayderga o‘tkazish uchun uni bosing (provayderda keyin model so‘raladi). 🔑 qayta kiradi, 🗑 hisobni olib tashlaydi, 🔌 provayderni uzadi.',
   'accounts.addClaudeButton': '➕ Claude hisobi',
   'accounts.addProviderButton': '➕ OpenCode provayderi',
   'accounts.askProvider': '➕ Qaysi OpenCode provayderi? Keyingi xabarda uning id sini yuboring (masalan, openai yoki openrouter).',

@@ -78,7 +78,7 @@ export const deDict: Record<string, string> = {
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
-    '/accounts — Claude-Konten und OpenCode-Provider (wählen, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
+    '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
     '/bind — Verknüpfung verwalten',
@@ -756,7 +756,7 @@ export const deDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Nutzungslimit erreicht — nächster Versuch um {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Nutzungslimit erreicht. Die automatische Fortsetzung ist aus — die Arbeit wartet, bis der Betreiber sie fortsetzt.',
 
-  'account.title': '👤 Claude-Konto für dieses Thema: {name}\n\n{list}\n\nTippe auf ein Profil, um dieses Thema darauf umzustellen. Im Thema General wird die Wahl zum Standard für alle Themen.',
+  'account.title': '👤 Dieses Thema läuft auf: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude-Konto — Standard für ALLE Themen: {name}\n\n{list}\n\nTippe auf ein Profil, um es zum Standard zu machen. Themen mit eigener Wahl behalten sie.',
   'account.row.loggedOut': 'nicht angemeldet',
   'account.row.topics': ' · {count} Thema/Themen',
@@ -786,7 +786,7 @@ export const deDict: Record<string, string> = {
   'account.setThisTopic': '✅ Claude-Konto für dieses Thema: {name}.{apply}',
   'account.setGlobal': '✅ Standard-Claude-Konto für ALLE Themen: {name}. Themen mit eigener Wahl behalten sie; die übrigen wechseln jetzt oder beim nächsten Start.',
   'account.followSet': '✅ Dieses Thema folgt dem Standard-Claude-Konto ({name}).{apply}',
-  'account.usage': 'Verwendung: /accounts — die Auswahl; /accounts add <name>; /accounts use <name>; /accounts login <name>; /accounts remove <name>; /accounts autoswitch on|off.',
+  'account.usage': 'Verwendung: /accounts — die Auswahl; /accounts add <name>; /accounts use <name>; /accounts use <provider>/<model>; /accounts login <name>; /accounts remove <name>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Gilt beim nächsten Start oder Fortsetzen der Sitzung.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Die laufende Sitzung wurde darunter neu gestartet — dieselbe Unterhaltung.',
@@ -798,7 +798,7 @@ export const deDict: Record<string, string> = {
   'account.row.usageStale': ' (veraltet)',
   'account.row.limited': '    ⛔ am Limit bis {until}',
   'account.usageHint': 'Nutzung: % jedes Fensters verbraucht, dann wann es zurückgesetzt wird (🔄 in 2h = in zwei Stunden).',
-  'account.autoSwitchHint': 'Was bei einem Nutzungslimit geschieht — auf ein Ersatzmodell wechseln oder auf den Reset warten — wird in /limits eingestellt.',
+  'account.autoSwitchHint': 'Was bei einem Nutzungslimit geschieht, wird in /limits eingestellt.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'Modell des Topics',
@@ -875,7 +875,10 @@ export const deDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode-Provider: noch keiner verbunden. «➕ OpenCode-Provider» verbindet einen.',
-  'accounts.buttonsHint': 'Tippe auf ein Konto, um dieses Thema darauf umzustellen (in General: Standard für alle). 🔑 meldet ein Konto oder einen Anbieter neu an, 🗑 entfernt ein Konto (das Standardkonto wird abgemeldet), 🔌 trennt einen Anbieter.',
+  'accounts.providerApiKey': 'API-Schlüssel',
+  'accounts.providerSubscription': 'ChatGPT-Abo',
+  'accounts.buttonsHintGeneral': 'Tippe auf ein Konto, um es zum Standard für alle Themen zu machen. 🔑 meldet ein Konto oder einen Anbieter neu an, 🗑 entfernt ein Konto, 🔌 trennt einen Anbieter.',
+  'accounts.buttonsHint': 'Tippe auf ein Konto oder einen Anbieter, um dieses Thema darauf umzustellen (bei einem Anbieter folgt die Modellwahl). 🔑 meldet neu an, 🗑 entfernt ein Konto, 🔌 trennt einen Anbieter.',
   'accounts.addClaudeButton': '➕ Claude-Konto',
   'accounts.addProviderButton': '➕ OpenCode-Provider',
   'accounts.askProvider': '➕ Welcher OpenCode-Provider? Sende seine ID als nächste Nachricht (zum Beispiel openai oder openrouter).',

@@ -84,7 +84,7 @@ export const ukDict: Record<string, string> = {
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
     '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
-    '/accounts — облікові записи Claude і провайдери OpenCode (вибір, додати, увійти знову, видалити, підключити, відключити)\n' +
+    '/accounts — акаунти Claude та провайдери OpenCode (перемкнути, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/clear — видалити повідомлення треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
     '/bind — керування прив\'язкою',
@@ -762,7 +762,7 @@ export const ukDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Досягнуто ліміту використання — наступна спроба о {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Досягнуто ліміту використання. Автопродовження вимкнено — робота чекатиме, доки оператор її не відновить.',
 
-  'account.title': '👤 Обліковий запис Claude для цього топіка: {name}\n\n{list}\n\nНатисніть профіль, щоб перемкнути на нього цей топік. У топіку General вибір стає типовим для всіх топіків.',
+  'account.title': '👤 Цей топік працює на: {current}\n\n{list}',
   'account.titleGeneral': '👤 Обліковий запис Claude — типовий для ВСІХ топіків: {name}\n\n{list}\n\nНатисніть профіль, щоб зробити його типовим. Топіки з власним вибором зберігають його.',
   'account.row.loggedOut': 'не виконано вхід',
   'account.row.topics': ' · топіків: {count}',
@@ -792,7 +792,7 @@ export const ukDict: Record<string, string> = {
   'account.setThisTopic': '✅ Обліковий запис Claude для цього топіка: {name}.{apply}',
   'account.setGlobal': '✅ Типовий обліковий запис Claude для ВСІХ топіків: {name}. Топіки з власним вибором зберігають його; решта перемикаються зараз або під час наступного запуску.',
   'account.followSet': '✅ Цей топік використовує типовий обліковий запис Claude ({name}).{apply}',
-  'account.usage': 'Використання: /accounts — вибір; /accounts add <назва>; /accounts use <назва>; /accounts login <назва>; /accounts remove <назва>; /accounts autoswitch on|off.',
+  'account.usage': 'Використання: /accounts — вибір; /accounts add <назва>; /accounts use <назва>; /accounts use <provider>/<model>; /accounts login <назва>; /accounts remove <назва>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Застосується під час наступного запуску або відновлення сесії.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Запущену сесію перезапущено під ним — та сама розмова.',
@@ -804,7 +804,7 @@ export const ukDict: Record<string, string> = {
   'account.row.usageStale': ' (застаріло)',
   'account.row.limited': '    ⛔ на ліміті до {until}',
   'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години).',
-  'account.autoSwitchHint': 'Що робити при ліміті використання — перемкнутися на запасну модель чи дочекатися скидання — налаштовується в /limits.',
+  'account.autoSwitchHint': 'Що робити при ліміті використання — налаштовується в /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'модель топіка',
@@ -881,7 +881,10 @@ export const ukDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдери OpenCode: поки жоден не підключено. Кнопка «➕ Провайдер OpenCode» підключає.',
-  'accounts.buttonsHint': 'Натисніть на акаунт, щоб перемкнути на нього цей топік (у General — значення за замовчуванням для всіх). 🔑 — увійти в акаунт чи провайдера знову, 🗑 — видалити акаунт (default розлогінюється), 🔌 — відключити провайдера.',
+  'accounts.providerApiKey': 'ключ API',
+  'accounts.providerSubscription': 'підписка ChatGPT',
+  'accounts.buttonsHintGeneral': 'Натисніть на акаунт, щоб зробити його типовим для всіх топіків. 🔑 — увійти в акаунт чи провайдера знову, 🗑 — видалити акаунт, 🔌 — відключити провайдера.',
+  'accounts.buttonsHint': 'Натисніть на акаунт або провайдера, щоб перемкнути на нього цей топік (для провайдера далі спитаємо модель). 🔑 — увійти знову, 🗑 — видалити акаунт, 🔌 — відключити провайдера.',
   'accounts.addClaudeButton': '➕ Обліковий запис Claude',
   'accounts.addProviderButton': '➕ Провайдер OpenCode',
   'accounts.askProvider': '➕ Який провайдер OpenCode? Надішли його id наступним повідомленням (наприклад, openai або openrouter).',

@@ -82,7 +82,7 @@ export const ruDict: Record<string, string> = {
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
     '/limits — расход по всем аккаунтам и провайдерам; нажми на один, чтобы переключить топик\n' +
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
-    '/accounts — аккаунты Claude и провайдеры OpenCode (выбор, добавить, войти заново, удалить, подключить, отключить)\n' +
+    '/accounts — аккаунты Claude и провайдеры OpenCode (переключить, добавить, войти заново, удалить, подключить, отключить)\n' +
     '/clear — удалить сообщения треда\n' +
     '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
     '/bind — управление binding',
@@ -760,7 +760,7 @@ export const ruDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Достигнут лимит использования — следующая попытка в {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Достигнут лимит использования. Автопродолжение выключено — работа подождёт, пока оператор её не возобновит.',
 
-  'account.title': '👤 Аккаунт Claude для этого топика: {name}\n\n{list}\n\nНажмите профиль, чтобы переключить на него этот топик. В топике General выбор становится значением по умолчанию для всех топиков.',
+  'account.title': '👤 Этот топик работает на: {current}\n\n{list}',
   'account.titleGeneral': '👤 Аккаунт Claude — по умолчанию для ВСЕХ топиков: {name}\n\n{list}\n\nНажмите профиль, чтобы сделать его значением по умолчанию. Топики со своим выбором сохраняют его.',
   'account.row.loggedOut': 'не выполнен вход',
   'account.row.topics': ' · топиков: {count}',
@@ -790,7 +790,7 @@ export const ruDict: Record<string, string> = {
   'account.setThisTopic': '✅ Аккаунт Claude для этого топика: {name}.{apply}',
   'account.setGlobal': '✅ Аккаунт Claude по умолчанию для ВСЕХ топиков: {name}. Топики со своим выбором сохраняют его; остальные переключаются сейчас или при следующем запуске.',
   'account.followSet': '✅ Этот топик использует аккаунт Claude по умолчанию ({name}).{apply}',
-  'account.usage': 'Использование: /accounts — выбор; /accounts add <имя>; /accounts use <имя>; /accounts login <имя>; /accounts remove <имя>; /accounts autoswitch on|off.',
+  'account.usage': 'Использование: /accounts — выбор; /accounts add <имя>; /accounts use <имя>; /accounts use <provider>/<model>; /accounts login <имя>; /accounts remove <имя>; /accounts autoswitch on|off.',
   'account.applied.inactive': ' Применится при следующем запуске или возобновлении сессии.',
   'account.applied.unchanged': '',
   'account.applied.respawned': ' Запущенная сессия перезапущена под ним — тот же разговор.',
@@ -802,7 +802,7 @@ export const ruDict: Record<string, string> = {
   'account.row.usageStale': ' (устарело)',
   'account.row.limited': '    ⛔ на лимите до {until}',
   'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа).',
-  'account.autoSwitchHint': 'Что делать при лимите использования — переключиться на запасную модель или дождаться сброса — настраивается в /limits.',
+  'account.autoSwitchHint': 'Что делать при лимите использования — настраивается в /limits.',
   'fallback.backendClaude': 'Claude',
   'fallback.backendOpenCode': 'OpenCode',
   'fallback.topicModel': 'модель топика',
@@ -879,7 +879,10 @@ export const ruDict: Record<string, string> = {
   'limits.autoswitchTitle': '🔁 Автоматическое переключение при лимите использования',
   'accounts.openCodeSection': '🔌 Провайдеры OpenCode (подключены):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдеры OpenCode: пока ни один не подключён. Кнопка «➕ Провайдер OpenCode» подключает.',
-  'accounts.buttonsHint': 'Нажмите на аккаунт, чтобы переключить на него этот топик (в General — значение по умолчанию для всех). 🔑 — войти в аккаунт или провайдера заново, 🗑 — удалить аккаунт (default разлогинивается), 🔌 — отключить провайдера.',
+  'accounts.providerApiKey': 'ключ API',
+  'accounts.providerSubscription': 'подписка ChatGPT',
+  'accounts.buttonsHintGeneral': 'Нажмите на аккаунт, чтобы сделать его значением по умолчанию для всех топиков. 🔑 — войти в аккаунт или провайдера заново, 🗑 — удалить аккаунт, 🔌 — отключить провайдера.',
+  'accounts.buttonsHint': 'Нажмите на аккаунт или провайдера, чтобы переключить на него этот топик (для провайдера затем спросим модель). 🔑 — войти заново, 🗑 — удалить аккаунт, 🔌 — отключить провайдера.',
   'accounts.addClaudeButton': '➕ Аккаунт Claude',
   'accounts.addProviderButton': '➕ Провайдер OpenCode',
   'accounts.askProvider': '➕ Какой провайдер OpenCode? Отправь его id следующим сообщением (например, openai или openrouter).',
