@@ -30,6 +30,9 @@ import type { AddressInfo, Socket } from 'net';
  */
 export const generalTopicThreadId = 1;
 
+/** The most characters the Bot API accepts in the notification of `answerCallbackQuery`. */
+const callbackToastMaxLength = 200;
+
 /** The Bot API's own shape of a successful answer. */
 interface ApiOk { ok: true; result: unknown }
 interface ApiError { ok: false; error_code: number; description: string }
@@ -376,9 +379,15 @@ export class FakeTelegram {
         this.pinEvents.push({ kind: 'unpin', messageId, isSilent: true });
         return { ok: true, result: true };
       }
-      case 'answerCallbackQuery':
-        this.callbackAnswers.push(String(payload.text ?? ''));
+      case 'answerCallbackQuery': {
+        const toastText = String(payload.text ?? '');
+        // The Bot API documents 0-200 characters for the notification and refuses a longer one: the tap then gets no feedback.
+        if (toastText.length > callbackToastMaxLength) {
+          return { ok: false, error_code: 400, description: `Bad Request: the notification text is too long (${toastText.length} characters, at most ${callbackToastMaxLength})` };
+        }
+        this.callbackAnswers.push(toastText);
         return { ok: true, result: true };
+      }
       default:
         // deleteWebhook, setMyCommands, sendChatAction, … — accepted and recorded.
         return { ok: true, result: true };

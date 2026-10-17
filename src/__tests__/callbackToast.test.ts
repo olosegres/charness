@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answerCallbackWithWholeText, callbackToastMaxLength } from '../connectors/telegram/commands/callbackToast';
+import { answerCallbackWithFittedText, answerCallbackWithWholeText, callbackToastMaxLength } from '../connectors/telegram/commands/callbackToast';
 
 /** A tap context that records the toast and the texts posted beside it, in order. */
 function createRecorder() {
@@ -55,4 +55,29 @@ test('the toast is answered before the full text is posted, so the tap is never 
   const { ctx, postWhole, log } = createRecorder();
   await answerCallbackWithWholeText(ctx, 'q'.repeat(300), postWhole);
   assert.ok(log[0].startsWith('toast:') && log[1].startsWith('post:'));
+});
+
+test('fitted: a text that fits is the toast, whole, and "not cut" is reported', async () => {
+  const { ctx, log } = createRecorder();
+  const text = 'A label the user just picked';
+  assert.equal(await answerCallbackWithFittedText(ctx, text), false);
+  assert.deepEqual(log, [`toast:${text}`]);
+});
+
+test('fitted: a text over the limit is answered cut, and "cut" is reported — nothing else is sent, the caller decides whether the thread already carries it', async () => {
+  const { ctx, log } = createRecorder();
+  const label = `${'Option with a very long label, '.repeat(12)}end`;
+  assert.ok(label.length > callbackToastMaxLength);
+  assert.equal(await answerCallbackWithFittedText(ctx, label), true);
+  assert.equal(log.length, 1, 'the tap is answered, once');
+  const toast = log[0].slice('toast:'.length);
+  assert.ok(toast.length <= callbackToastMaxLength && toast.endsWith('…') && label.startsWith(toast.slice(0, -1)));
+});
+
+test('fitted: the cut never splits an emoji here either', async () => {
+  const { ctx, log } = createRecorder();
+  await answerCallbackWithFittedText(ctx, '😀'.repeat(150));
+  const toast = log[0].slice('toast:'.length);
+  assert.ok(toast.length <= callbackToastMaxLength);
+  assert.doesNotMatch(toast, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
 });

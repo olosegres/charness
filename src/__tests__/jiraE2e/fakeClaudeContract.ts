@@ -43,6 +43,19 @@ export const fakeCompactionModelUsage = { 'fake-model': { inputTokens: 1446, out
  * user message — before it echoes or answers it: a prompt that reached the agent and was never taken in (E3).
  */
 export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
+/**
+ * The question the fake's `ask` mode puts to the user (an `AskUserQuestion`, the real CLI's tool): one short option,
+ * one whose label is longer than a Telegram toast holds (200 characters).
+ */
+export const fakeAskQuestion = {
+  header: 'Plan',
+  question: 'Which way do we go?',
+  shortOptionLabel: 'The short way',
+  longOptionLabel: `The long way: ${'every step spelled out in detail, '.repeat(8)}and nothing left out.`,
+} as const;
+/** The tool name `ask` mode logs its outcome under in `tool-calls.jsonl`; the outcome is the answer the user gave. */
+export const fakeAskToolName = 'AskUserQuestion';
+
 export const fakeClaudeLogFileNames = {
   /** One record per user message the fake READ, the crashing ones too: `{ pid, issueKey, requestId, text }`. */
   prompts: 'prompts.jsonl',

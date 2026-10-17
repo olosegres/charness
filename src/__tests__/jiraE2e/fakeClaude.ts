@@ -13,6 +13,8 @@ import {
   fakeClaudeLogFileNames,
   fakeClaudeCodeVersion,
   fakeClaudeCodeVersionOverrideFileName,
+  fakeAskQuestion,
+  fakeAskToolName,
   fakeClaudeCrashOnPromptFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
@@ -87,6 +89,9 @@ import {
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
  *    turns and the idle stop must keep it (lifecycle plan L-D2);
+ *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
+ *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
+ *    answers `final` (in a turn without a request: ends the turn);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the instant of a `[limit-resets:<ISO instant>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -105,8 +110,8 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
 /** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
@@ -193,6 +198,8 @@ interface StdinFrame {
   request_id?: string;
   request?: { subtype?: string };
   message?: { content?: string };
+  /** A `control_response` the bot wrote: the verdict on a `can_use_tool` request, with the answers an `AskUserQuestion` collected. */
+  response?: { request_id?: string; response?: { behavior?: string; updatedInput?: { answers?: Record<string, string> } } };
 }
 
 function appendJsonLine(fileName: string, record: object): void {
@@ -338,6 +345,39 @@ function endTurnOnUsageLimit(sessionId: string, resetsAt: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: true, result: `You've hit your session limit · resets ${resetsAt}`, session_id: sessionId, usage: fakeTurnUsage });
 }
 
+/** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the answers the bot's `control_response` carries. */
+const controlResponseWaiters = new Map<string, (answers: Record<string, string>) => void>();
+
+/**
+ * The real CLI's `AskUserQuestion`: a `can_use_tool` control request on stdout, then the turn is blocked until the bot
+ * writes the matching `control_response` on stdin. Resolves with what the user answered to the question.
+ */
+async function askUserQuestion(): Promise<string> {
+  const askRequestId = `req_ask_${randomUUID()}`;
+  const answered = new Promise<Record<string, string>>((resolve) => controlResponseWaiters.set(askRequestId, resolve));
+  writeStdout({
+    type: 'control_request',
+    request_id: askRequestId,
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: fakeAskToolName,
+      tool_use_id: `toolu_${randomUUID()}`,
+      input: {
+        questions: [{
+          header: fakeAskQuestion.header,
+          question: fakeAskQuestion.question,
+          multiSelect: false,
+          options: [
+            { label: fakeAskQuestion.shortOptionLabel, description: 'Quick.' },
+            { label: fakeAskQuestion.longOptionLabel, description: 'Thorough.' },
+          ],
+        }],
+      },
+    },
+  });
+  return (await answered)[fakeAskQuestion.question] ?? 'no answer';
+}
+
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
 function runCompactionTurn(sessionId: string): void {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
@@ -362,7 +402,12 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (!requestId) {
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
-    emitTurnActivity(sessionId, issueKeyRe.exec(content)?.[1] ?? 'unknown');
+    const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    emitTurnActivity(sessionId, noRequestIssueKey);
+    // `ask` is the one mode a turn without a request honours: a question needs no request to be put to the user.
+    if (modeRe.exec(content)?.[1] === 'ask') {
+      appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion() });
+    }
     endTurn(sessionId, 'Nothing to do.');
     return;
   }
@@ -443,6 +488,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
     }
   }
+  if (state.mode === 'ask') {
+    logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, await askUserQuestion());
+  }
   if (state.mode === 'run-tool') {
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
@@ -503,6 +551,14 @@ async function main(): Promise<void> {
     }
     if (frame.type === 'control_request') {
       writeStdout({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } });
+      return;
+    }
+    if (frame.type === 'control_response') {
+      const waiter = frame.response?.request_id ? controlResponseWaiters.get(frame.response.request_id) : undefined;
+      if (waiter && frame.response?.request_id) {
+        controlResponseWaiters.delete(frame.response.request_id);
+        waiter(frame.response.response?.updatedInput?.answers ?? {});
+      }
       return;
     }
     if (frame.type !== 'user' || typeof frame.message?.content !== 'string') return;

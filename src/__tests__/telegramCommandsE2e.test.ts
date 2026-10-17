@@ -61,7 +61,7 @@ import { getSttPaths } from '../stt/sttInstall';
 import { appendInstallProgress, holdInstallLock, releaseInstallLock, writeInstalledMarker } from './fixtures/sttInstallFiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
-import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeAskToolName, fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeToolCall, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -952,6 +952,34 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     const emptyMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
     await topic.waitForMessage('the nothing-set-up notice', (message) => message.message_id > emptyMessageId && message.text.includes('Voice needs a speech-recognition engine'));
     assert.equal(workingSpeechEngine.requests.length, 1, 'no engine was asked for these two');
+  });
+
+  it('a pending question\'s buttons: the tap on a short option is answered with it whole; on one longer than a toast holds, with its start — the question message keeps the whole answer, nothing is posted beside it, and the agent gets the whole label', async () => {
+    const shortAskPrompt = 'ASK-1';
+    const longAskPrompt = 'ASK-2';
+    const askAndTap = async (promptLabel: string, callbackData: string): Promise<{ toast: string; question: FakeTelegramMessage }> => {
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
+      const question = await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
+      assert.deepEqual(topic.getKeyboardData(question), [['qa_0_0'], ['qa_0_1']], 'one button per option');
+      return { toast: await topic.tapAndAwaitAnswer(question, callbackData), question };
+    };
+    const getAskOutcome = (promptLabel: string): string | undefined =>
+      readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).find((call) => call.issueKey === promptLabel && call.tool === fakeAskToolName)?.outcome;
+
+    const short = await askAndTap(shortAskPrompt, 'qa_0_0');
+    assert.equal(short.toast, fakeAskQuestion.shortOptionLabel, 'a label that fits is the toast, whole');
+    await getCharness().waitFor('the short answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(shortAskPrompt) !== undefined);
+    assert.equal(getAskOutcome(shortAskPrompt), fakeAskQuestion.shortOptionLabel);
+
+    assert.ok(fakeAskQuestion.longOptionLabel.length > 200, 'precondition: the long label is longer than a toast holds');
+    const long = await askAndTap(longAskPrompt, 'qa_0_1');
+    assert.ok(long.toast.length <= 200 && long.toast.endsWith('…'), `the toast fits: ${long.toast.length} characters`);
+    assert.ok(fakeAskQuestion.longOptionLabel.startsWith(long.toast.slice(0, -1)), 'it is the start of the label');
+    await topic.waitForMessageText('the question message edited to the whole answer', long.question, (text) => text === `✅ ${fakeAskQuestion.header}: ${fakeAskQuestion.longOptionLabel}`);
+    await getCharness().waitFor('the long answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(longAskPrompt) !== undefined);
+    assert.equal(getAskOutcome(longAskPrompt), fakeAskQuestion.longOptionLabel, 'the agent got the whole label, not the toast');
+    // The answer is in the topic once: the edited question message. The tap posted nothing beside it.
+    assert.equal(topic.listMessages().filter((message) => message.text.includes(fakeAskQuestion.longOptionLabel)).length, 1, 'the whole label appears once');
   });
 
   it('/quit tears down a pending /login: its pty ends', async () => {

@@ -17,7 +17,11 @@ functions where the handlers used to be registered. A module never imports `bot.
 - **A button's error or notice reaches the user whole.** A toast holds 200 characters, so an error/notice text goes through
   `callbackToast.ts`'s `answerCallbackWithWholeText(ctx, text, postWhole)`: a text that fits IS the toast, a longer one is cut
   for the toast (ellipsis, on a character boundary) and posted in full as a message. Never `.slice(0, n)` a text into
-  `answerCbQuery` (`cb.model_error`, `cb.effort_error`, the display-mode errors all use the helper).
+  `answerCbQuery` (`cb.model_error`, `cb.effort_error`, the display-mode errors all use the helper). A text the thread already
+  carries in full (a pending question's answer: the question message is edited to "✅ …: <answer>") uses
+  `answerCallbackWithFittedText` — the toast only, cut when long, no second copy; a re-asked question's label (`reask_<i>`,
+  nothing else shows it whole) uses the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
+  `answerCbQuery(text)` of a user-visible label is a bug.
 - **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 
 ## `displayModes.ts`

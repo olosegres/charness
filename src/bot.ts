@@ -370,6 +370,7 @@ import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from './connectors/t
 import { createDisplayModes, formatTopicView } from './connectors/telegram/commands/displayModes';
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
+import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
@@ -9368,7 +9369,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   }
   const adapter = getThreadAdapter(key);
   reAskedQuestionOptions.delete(keyToString(key));
-  await ctx.answerCbQuery(label);
+  // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
+  // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
+  await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
   await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
 });
@@ -9501,7 +9504,9 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
   }
   const selectedLabel = question.options[optIdx].label;
   await applyQuestionAnswer(key, [selectedLabel]);
-  await ctx.answerCbQuery(selectedLabel);
+  // The question message was just edited to "✅ <header>: <answer>", which carries the whole answer: the toast only
+  // confirms the tap, so a label too long for it is cut there and not posted a second time.
+  await answerCallbackWithFittedText(ctx, selectedLabel);
 });
 
 /**
