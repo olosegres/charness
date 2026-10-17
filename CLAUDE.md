@@ -154,7 +154,8 @@ per-backend controls are optional methods the bot checks before calling.
 - **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one button per signed-in
   Claude account and connected OpenCode provider with its usage or `⛔ until`; the limit notice ends `Switch: /limits`. EVERY operator pick —
   a board or `/accounts` row, a model page, `/accounts use` — takes ONE path, `switchTopicByOperator` (`bot.ts`, the move decided by
-  `utils/operatorSwitchPlan.ts`): a wait armed ⇒ the limit move (`switchTopicToFallbackEntry`); the backend the topic runs ⇒ an account change
+  `utils/operatorSwitchPlan.ts`): a wait armed ⇒ the limit move (`switchTopicToFallbackEntry`; also a model of the SAME Claude account that the limit's exhausted
+  window does not cover — `checkHasHeadroomForClaudeModel`; a pick inside the limit only changes the model); the backend the topic runs ⇒ an account change
   or the `/model` apply (a model named for the account it already runs does NOT pin an account pick); the other backend ⇒ the hand-over question
   (`backendSwitch.ts`, naming the model, which `executeBackendSwitch` pins) or the switch at once. The model list is the shared
   `commands/modelPage.ts` (`/model`, the add step, the board and `/accounts` provider pages feed it their own callbacks). OpenCode usage:

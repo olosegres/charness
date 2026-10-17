@@ -67,4 +67,14 @@ describe('decideOperatorSwitch', () => {
   it('a wait armed on a topic with no agent moves nothing: there is no process to continue', () => {
     assert.equal(decide({ isUsageLimitWaitArmed: true, from: null, currentFamily: null, to: claude('work') }), 'sameFamily');
   });
+  it('a pick of another model of the SAME limited Claude account is the limit move only when the limit does not cover that model; inside the limit it just changes the model and the wait stays', () => {
+    const armedSameAccount = { isUsageLimitWaitArmed: true, from: claude('perf', 'claude-fable-5-1'), to: claude('perf', 'sonnet') };
+    assert.equal(decide({ ...armedSameAccount, isPickBeyondLimit: true }), 'limitMove', 'a Fable-only limit and the pick is sonnet: the work continues');
+    assert.equal(decide({ ...armedSameAccount, isPickBeyondLimit: false }), 'sameFamily', 'the pick is still inside the limit: only the model changes');
+    assert.equal(decide(armedSameAccount), 'sameFamily', 'unknown scope is inside the limit');
+  });
+
+  it('without a wait armed the scope of a limit decides nothing', () => {
+    assert.equal(decide({ to: claude('perf', 'sonnet'), isPickBeyondLimit: true }), 'sameFamily');
+  });
 });

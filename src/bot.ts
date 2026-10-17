@@ -376,9 +376,10 @@ import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
+import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkHasHeadroomForClaudeModel, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
+import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
@@ -7135,7 +7136,8 @@ async function switchTopicToFallbackEntry(
   let firstPrompt: FirstPromptAfterMove | null = null;
   let isStoppingBackground = false;
   if (from?.backend === 'claude' && to.backend === 'claude') {
-    await state.setClaudeProfileOverride(key, to.profile);
+    // The same account on another model (a pick beyond the limit's scope) is no account pick: the topic keeps following General.
+    if (from.profile !== to.profile) await state.setClaudeProfileOverride(key, to.profile);
     // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
     const adapter = getThreadAdapter(key);
     isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
@@ -7295,6 +7297,18 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
   });
 }
 
+/**
+ * @description Whether a pick, made while a usage-limit wait is armed, names another model of the SAME Claude account that the
+ * limit does not cover — the usage windows that model drains are all known and below 100 % (a Fable-only weekly limit does not
+ * stop `sonnet`; an exhausted session window stops every model). Such a pick lets the work continue, so it is the limit move; the
+ * figures are brought up to date first (bounded: a slow endpoint never holds the tap). Any other pick is not beyond a limit.
+ */
+async function checkIsPickBeyondLimit(from: FallbackChainEntry | null, to: FallbackChainEntry): Promise<boolean> {
+  if (from?.backend !== 'claude' || to.backend !== 'claude' || to.model === null || from.profile !== to.profile) return false;
+  await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
+  return checkHasHeadroomForClaudeModel(state.getClaudeProfileInfo(to.profile)?.usage, to.model);
+}
+
 /** The rung as a manual switch's target: a picked Claude account (+ model alias), or an OpenCode model, both named in the question. */
 function buildBackendSwitchTargetOfRung(to: FallbackChainEntry): BackendSwitchTarget {
   if (to.backend === 'claude') return { backend: 'claude', profile: to.profile, isProfilePicked: true, model: to.model };
@@ -7315,12 +7329,14 @@ function buildBackendSwitchTargetOfRung(to: FallbackChainEntry): BackendSwitchTa
 async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): Promise<OperatorSwitchOutcome> {
   const currentFamily = getTopicBackendFamily(key);
   const from = getTopicFallbackPosition(key);
+  const isUsageLimitWaitArmed = getArmedApiRetry(key)?.kind === 'usageLimit';
   const route = decideOperatorSwitch({
-    isUsageLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
+    isUsageLimitWaitArmed,
     from,
     to,
     currentFamily,
     hasConversation: currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
+    isPickBeyondLimit: isUsageLimitWaitArmed && await checkIsPickBeyondLimit(from, to),
   });
   const target = buildBackendSwitchTargetOfRung(to);
   const label = formatBackendSwitchTarget(target);

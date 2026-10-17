@@ -318,7 +318,12 @@ and the two settings (auto switch, wait for the reset):
   the topic runs, and across backends with a conversation the bot asks first. Every
   entry point — a board row, an `/accounts` row, a model page, `/accounts use` — takes the
   one switch path, so a pick behaves the same wherever it is made. While a limit wait is
-  armed a tap is the limit move. A tap that switched answers with a short «✅ This topic runs on …».
+  armed a tap is the limit move: another account, another provider or model, and — on the
+  limited Claude account itself — a model the limit does not cover (a Fable-only weekly limit
+  does not stop `opus` or `sonnet`; the usage windows say what is exhausted) continue the work
+  at once; a pick still inside the limit's scope (Fable again, or any model while the session or
+  the shared weekly window is exhausted, or when the windows are unknown) only changes the
+  model and the wait stays. A tap that switched answers with a short «✅ This topic runs on …».
 - **OpenCode usage.** A provider signed in through a **ChatGPT subscription** (the `openai`
   provider with an `oauth` record in OpenCode's `auth.json`) shows its ~5 h and ~7 d
   windows on the board and in `/accounts`, read the way a Claude account's are: the stored

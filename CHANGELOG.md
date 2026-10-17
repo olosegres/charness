@@ -7,7 +7,7 @@ signed-in Claude account and each connected OpenCode provider as one button — 
 `Claude · default — ⛔ until Sun 01:00`, `OpenCode · openai — 5h 12% · week 40%` — and a tap switches this topic: another
 account (model and conversation kept), an OpenCode provider (its model page opens; the same OpenCode session just changes the
 model), the ✓ row (change the model of where the topic runs). Across backends with a conversation to hand over it asks first;
-while a usage-limit wait is armed the tap is the limit move. The usage-limit notice now ends «The limit resets <time>.
+while a usage-limit wait is armed the tap is the limit move (on the limited Claude account a model the limit does not cover — `opus` under a Fable-only weekly limit — continues the work too). The usage-limit notice now ends «The limit resets <time>.
 Switch: /limits». In General a Claude row sets the default account.
 
 **The fallback setup is its own screen, `/limits_autoswitch`.** The ordered fallback list, «🔁 Auto switch» and «⏳ Wait for

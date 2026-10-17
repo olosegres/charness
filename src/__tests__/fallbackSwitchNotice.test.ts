@@ -51,6 +51,18 @@ describe('buildFallbackSwitchedNotice (English)', () => {
     );
   });
 
+  it('another model of the SAME account (the limit covered the model it ran, not the one picked): the model hit the limit, the account is named once', () => {
+    assert.equal(
+      buildFallbackSwitchedNotice({ from: claude('default', 'claude-fable-5-1'), to: claude('default', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }),
+      '🔁 Model claude-fable-5-1 hit its usage limit — this topic continues on «default» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
+    );
+    assert.equal(
+      buildFallbackSwitchedNotice({ from: claude('default', null), to: claude('default', 'sonnet'), resetTime: null, runningModel: null }),
+      '🔁 Account «default» hit its usage limit — this topic continues on «default» (sonnet). Switch: /limits',
+      'with no running model to name, the account wording stands',
+    );
+  });
+
   it('a rung that keeps the topic\'s model, or a session whose model is unknown, never invents one', () => {
     const from = claude('default');
     assert.ok(!buildFallbackSwitchedNotice({ from, to: claude('work'), resetTime, runningModel: runningOpus }).includes('('));
@@ -129,6 +141,7 @@ const noticeCases: Array<{ name: string; input: SwitchedNoticeInput; names: stri
   { name: 'claude → opencode', input: { from: claude('default'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }, names: ['«default»', 'OpenCode openai/gpt-5'] },
   { name: 'opencode → opencode', input: { from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }, names: ['openai/gpt-5', 'OpenCode google/gemini-2.5-pro'] },
   { name: 'opencode → claude', input: { from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }, names: ['openai/gpt-5', 'Claude «work»', 'opus'] },
+  { name: 'same account, another model', input: { from: claude('default', 'claude-fable-5-1'), to: claude('default', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }, names: ['claude-fable-5-1', '«default»'] },
   { name: 'unknown source', input: { from: null, to: claude('work'), resetTime: null, runningModel: null }, names: ['Claude «work»'] },
 ];
 

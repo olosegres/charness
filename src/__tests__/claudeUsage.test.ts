@@ -15,6 +15,7 @@ import {
   buildClaudeProfileUsageViews,
   buildClaudeProfilesReport,
   checkClaudeUsageBucketsChanged,
+  checkHasHeadroomForClaudeModel,
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
   formatClaudeUsageBucket,
@@ -307,5 +308,43 @@ describe('the claude-profiles CLI line', () => {
       buckets: [...entry.buckets, { kind: 'weekly_scoped', percent: 3, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: 'Fable' }],
     }, nowMs);
     assert.match(withFable, /week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h$/);
+  });
+});
+
+describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted window', () => {
+  const snapshotOf = (session: number, weekly: number, fable?: number): ClaudeUsageSnapshot => ({
+    fetchedAt: '2026-10-12T09:59:00.000Z',
+    source: 'api',
+    buckets: [
+      { kind: 'session', percent: session, resetsAt: '2026-10-12T13:00:00.000Z', scopeModel: null },
+      { kind: 'weekly_all', percent: weekly, resetsAt: '2026-10-17T21:00:00.000Z', scopeModel: null },
+      ...(fable === undefined ? [] : [{ kind: 'weekly_scoped' as const, percent: fable, resetsAt: '2026-10-17T21:00:00.000Z', scopeModel: 'Fable' }]),
+    ],
+  });
+
+  it('a Fable-only weekly limit stops Fable but not sonnet or opus', () => {
+    const fableLimited = snapshotOf(10, 20, 100);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'fable'), false);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'claude-fable-5-1'), false, 'the running id counts as Fable too');
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'sonnet'), true);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'opus'), true);
+  });
+
+  it('an exhausted session window stops every model; an exhausted shared weekly window stops the models that drain it, not Fable (its own window)', () => {
+    for (const model of ['fable', 'sonnet', 'opus']) assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(100, 20, 10), model), false, `session, ${model}`);
+    const weeklyExhausted = snapshotOf(10, 100, 10);
+    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'sonnet'), false);
+    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'opus'), false);
+    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'fable'), true);
+  });
+
+  it('a window the snapshot lacks, or no snapshot, is unknown — and unknown is taken to be covered by the limit', () => {
+    assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 20), 'fable'), false, 'no Fable window recorded');
+    assert.equal(checkHasHeadroomForClaudeModel(undefined, 'sonnet'), false);
+    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20), buckets: [] }, 'sonnet'), false);
+  });
+
+  it('a stale snapshot still counts: its last figures are the best there are', () => {
+    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20, 100), isStale: true, error: 'token expired' }, 'sonnet'), true);
   });
 });

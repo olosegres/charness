@@ -7,8 +7,10 @@
  * spelled in the `fallback.switchedReset` / `fallback.switchedBack` texts).
  *
  * A Claude rung is named by its account alone (`«work»`), with the model added only when the switch changes it
- * (`«work» (sonnet)`); an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`) and, as the side that
- * hit the limit, by its model (`Model openai/gpt-5`) — a model name is never quoted. A Claude rung reached from
+ * (`«work» (sonnet)`); a switch that stays on the SAME account (the limit covered the model it ran, not the one picked)
+ * says the model hit the limit: `Model claude-fable-5-1 hit its usage limit — this topic continues on «work» (sonnet)`;
+ * an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`) and, as the side that hit the limit, by its model
+ * (`Model openai/gpt-5`) — a model name is never quoted. A Claude rung reached from
  * another backend says `Claude «work»`, since there is no account on the left to compare against.
  *
  * Pure: the clock, the running model and the topic's state are decided by the caller, so every wording rule is
@@ -59,6 +61,10 @@ export function buildFallbackSwitchedNotice(input: {
   const target = formatSwitchTarget(from, to, runningModel);
   const tail = buildSwitchTail(resetTime);
   if (from === null) return t('fallback.switchedUnknownSource', { to: target, tail });
+  // Another model of the SAME account (the limit covered the model it ran, not the one picked): the model hit it, not the account.
+  if (from.backend === 'claude' && to.backend === 'claude' && from.profile === to.profile && from.model !== null) {
+    return t('fallback.switchedModel', { from: from.model, to: target, tail });
+  }
   if (from.backend === 'claude') return t('fallback.switched', { from: quoteName(from.profile), to: target, tail });
   return t('fallback.switchedModel', { from: buildOpenCodeModelLabel(from), to: target, tail });
 }

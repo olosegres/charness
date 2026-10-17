@@ -40,11 +40,18 @@ export interface OperatorSwitchInput {
   currentFamily: BackendFamily | null;
   /** Whether the agent being left holds a conversation to hand over (only read when the families differ). */
   hasConversation: boolean;
+  /**
+   * The pick names another model of the SAME Claude account and that model is clear of the exhausted window (a Fable-only
+   * weekly limit does not stop `sonnet`): the work can continue on it, so with a wait armed the pick is the limit move.
+   */
+  isPickBeyondLimit?: boolean;
 }
 
 /**
  * @description The route of a pick, in this order:
- *   1. a wait is armed and the pick leaves the account (Claude) / model (OpenCode) that hit the limit → `limitMove`;
+ *   1. a wait is armed and the pick leaves the account (Claude) / model (OpenCode) that hit the limit, or names a model of the
+ *      same Claude account that the limit does not cover → `limitMove`; a pick still inside the limit's scope (another model
+ *      under the same exhausted window) only changes the model and the wait stays;
  *   2. the topic runs no agent of a family (nothing, a shell): a Claude pick is recorded for the next start
  *      (`sameFamily`), an OpenCode pick starts OpenCode on it (`switchNow`);
  *   3. the topic runs the picked family → `sameFamily`;
@@ -53,7 +60,7 @@ export interface OperatorSwitchInput {
 export function decideOperatorSwitch(input: OperatorSwitchInput): OperatorSwitchRoute {
   const { from, to, currentFamily } = input;
   const isLeavingLimitedRung = from === null || !checkIsSameFallbackAccount(from, to);
-  if (input.isUsageLimitWaitArmed && currentFamily !== null && isLeavingLimitedRung) return 'limitMove';
+  if (input.isUsageLimitWaitArmed && currentFamily !== null && (isLeavingLimitedRung || input.isPickBeyondLimit === true)) return 'limitMove';
   if (currentFamily === null) return to.backend === 'claude' ? 'sameFamily' : 'switchNow';
   if (currentFamily === to.backend) return 'sameFamily';
   return input.hasConversation ? 'askFirst' : 'switchNow';

@@ -274,6 +274,19 @@ export function getRelevantClaudeUsageKinds(model: string | null): ClaudeUsageBu
   return ['session', checkIsScopedWeeklyModel(model) ? 'weekly_scoped' : 'weekly_all'];
 }
 
+/**
+ * @description Whether every window a launch of `model` drains is KNOWN and below 100 % — the model is clear of an exhausted
+ * window: a Fable-only weekly limit does not stop `sonnet`, while an exhausted session window stops every model. Unknown
+ * figures (no snapshot, a window the snapshot lacks) are `false`: a limit nobody can tell the scope of is taken to cover the model.
+ * A stale snapshot still counts — its last figures are the best there are.
+ */
+export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | undefined, model: string | null): boolean {
+  return getRelevantClaudeUsageKinds(model).every((kind) => {
+    const bucket = getClaudeUsageBucket(usage, kind);
+    return bucket !== null && bucket.percent < 100;
+  });
+}
+
 /** What the ranking needs to know about one profile (the bot reads it off state, the CLI off state.json). */
 export interface ClaudeProfileUsageView {
   name: string;
