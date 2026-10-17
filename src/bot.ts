@@ -377,11 +377,13 @@ import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeP
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
+import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
 import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
   decideFallbackSwitch,
   formatFallbackEntryLabel,
+  getFallbackModelToPin,
   getFallbackSwitchTapDecision,
   parseOpenCodeModelLabel,
   listOpenCodeProviders,
@@ -7036,19 +7038,9 @@ function getFallbackResetTime(from: FallbackChainEntry | null): string | null {
   return formatLocalClockWithDateIfNotToday(untilMs, Date.now());
 }
 
-/** The one-line «switched» notice, with the reset of the exhausted rung when known (the topic is never moved back by itself). */
-function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry): string {
-  const fromLabel = from ? formatFallbackEntry(from) : '?';
-  const toLabel = formatFallbackEntry(to);
-  const time = getFallbackResetTime(from);
-  const reset = time === null ? '' : t('fallback.switchedReset', { from: fromLabel, to: toLabel, time });
-  return t('fallback.switched', { from: fromLabel, to: toLabel, reset });
-}
-
-/** Whether the topic's Claude session already runs the alias (`fable` against a reported `claude-fable-5-1`). */
-function checkThreadClaudeModelMatches(key: SessionKey, alias: string): boolean {
-  const current = getThreadClaudeModel(key);
-  return current !== null && current.toLowerCase().includes(alias.toLowerCase());
+/** The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known (the topic is never moved back by itself). */
+function getFallbackSwitchedNotice(key: SessionKey, from: FallbackChainEntry | null, to: FallbackChainEntry): string {
+  return buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel: getThreadClaudeModel(key) });
 }
 
 /**
@@ -7108,7 +7100,7 @@ async function switchTopicToFallbackEntry(
   };
   let firstPrompt: { text: string; isRequestPrompt: boolean } | null = null;
   let isStoppingBackground = false;
-  if (isSameFamily && to.backend === 'claude') {
+  if (from?.backend === 'claude' && to.backend === 'claude') {
     await state.setClaudeProfileOverride(key, to.profile);
     // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
     const adapter = getThreadAdapter(key);
@@ -7116,7 +7108,7 @@ async function switchTopicToFallbackEntry(
     const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
     if (outcome === 'deferred' || outcome === 'restartRequired') {
       fallbackSwitchOffers.delete(k);
-      const notice = t('fallback.switchedDeferred', { from: fromLabel, to: toLabel });
+      const notice = buildFallbackDeferredNotice(from, to);
       await say(notice);
       return { isSwitched: false, notice };
     }
@@ -7135,7 +7127,7 @@ async function switchTopicToFallbackEntry(
     firstPrompt = { text: bridge, isRequestPrompt: false };
   }
   cancelApiRetry(key); // retires the offer too: the switch consumed it
-  const notice = `${getFallbackSwitchedNotice(from, to)}${isStoppingBackground ? ` ${t('fallback.backgroundStopped')}` : ''}`;
+  const notice = `${getFallbackSwitchedNotice(key, from, to)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
   console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
   await say(notice);
   const ensured = await ensureAgentSession(key);
@@ -7144,9 +7136,10 @@ async function switchTopicToFallbackEntry(
     return { isSwitched: true, notice };
   }
   if (ensured.message) await replyToThread(key, ensured.message);
-  if (to.backend === 'claude' && to.model !== null && !checkThreadClaudeModelMatches(key, to.model)) {
-    const error = await getThreadAdapter(key).setModel?.(key, to.model);
-    if (error) console.warn(`[fallback] ${k}: pinning the model ${to.model} failed: ${error}`);
+  const modelToPin = getFallbackModelToPin(to, getThreadClaudeModel(key));
+  if (modelToPin !== null) {
+    const error = await getThreadAdapter(key).setModel?.(key, modelToPin);
+    if (error) console.warn(`[fallback] ${k}: pinning the model ${modelToPin} failed: ${error}`);
   }
   const prompt = firstPrompt ?? getLimitResumeMessage({
     continueNudge: t('apiRetry.continueNudge'),

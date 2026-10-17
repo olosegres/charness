@@ -108,6 +108,17 @@ export function formatFallbackEntryLabel(
 }
 
 /**
+ * @description The model a switch onto `to` pins on the topic's Claude session: the rung's alias, unless the
+ * session already runs it (`fable` against a reported `claude-fable-5-1`). `null` for a rung that names no model
+ * (the topic keeps its own) and for an OpenCode rung (its model is part of the rung, not a pin).
+ */
+export function getFallbackModelToPin(to: FallbackChainEntry, runningModel: string | null): string | null {
+  if (to.backend !== 'claude' || to.model === null) return null;
+  const isRunning = runningModel !== null && runningModel.toLowerCase().includes(to.model.toLowerCase());
+  return isRunning ? null : to.model;
+}
+
+/**
  * @description The chain as `state.json` may hold it, validated entry by entry: a malformed rung (a hand edit,
  * an older shape) is dropped, never thrown on — the chain is advisory and the bot must boot. Duplicates are
  * folded (first wins) and the cap applied.

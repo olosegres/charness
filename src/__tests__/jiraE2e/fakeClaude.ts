@@ -86,7 +86,11 @@ import {
  *    `replyToCommentIds` (what the bot then mentions; the answer's outcome is in `answers.jsonl`);
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
- *    turns and the idle stop must keep it (lifecycle plan L-D2).
+ *    turns and the idle stop must keep it (lifecycle plan L-D2);
+ *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
+ *    session limit is hit and when it resets (the instant of a `[limit-resets:<ISO instant>]` token in the
+ *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
+ *    answers `final`.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
@@ -101,8 +105,8 @@ import {
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
 /** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
@@ -122,6 +126,7 @@ const attachmentToolName = 'jira_get_attachment';
 const probeToolName = 'e2e-tool';
 const fetchIdsRe = /\[fetch:([0-9,]+)\]/;
 const replyToIdsRe = /\[reply-to:([0-9,]+)\]/;
+const limitResetsRe = /\[limit-resets:([^\]]+)\]/;
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
 const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
 /** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
@@ -328,6 +333,11 @@ function endTurn(sessionId: string, resultText: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage });
 }
 
+/** A turn the provider refused for a usage limit: an error `result` whose text names the window and its reset. */
+function endTurnOnUsageLimit(sessionId: string, resetsAt: string): void {
+  writeStdout({ type: 'result', subtype: 'success', is_error: true, result: `You've hit your session limit · resets ${resetsAt}`, session_id: sessionId, usage: fakeTurnUsage });
+}
+
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
 function runCompactionTurn(sessionId: string): void {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
@@ -366,6 +376,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isFirstTurn = state.turnCount === 1;
   if (state.mode === 'silent' || (state.mode === 'silent-once' && isFirstTurn)) {
     endTurn(sessionId, 'Thinking about it.');
+    return;
+  }
+  if (state.mode === 'usage-limit-once' && isFirstTurn) {
+    endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
     return;
   }
   if (state.mode === 'hang-once' && isFirstTurn) {
@@ -440,7 +454,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const isSessionLaunch = checkHasFlag(argv, ['--input-format', 'stream-json']);
   // Variable NAMES only — the test checks what reached the agent, never a value.
-  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH });
+  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null });
   if (!isSessionLaunch) {
     process.stdout.write(`${fakeClaudeVersion}\n`);
     return;

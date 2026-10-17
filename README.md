@@ -265,12 +265,16 @@ so one account's usage limit does not stop every topic.
   same conversation), drops the wait for the reset and tells the agent to
   continue right away. With **switching** on («🔁 Auto switch to a
   fallback model» in `/limits`, or `/limits switch on`; in General the default for all
-  topics) the bot does the same by itself and posts one line — «Usage
-  limit on a — this topic switched to b and continues», naming when the
-  exhausted account resets. It is OFF by default: moving work between
-  subscriptions is your call. The exhausted profile is marked limited until its
-  window resets, so it is not picked again before then; the topic is never
-  moved back by itself — switch it back by hand when the window resets. When
+  topics) the bot does the same by itself and posts one short line — «Account
+  «a» hit its usage limit — this topic continues on «b». The limit resets
+  <time>; switch back: /accounts». The target is named by its account alone
+  and gets its model only when the switch changes it («b» (sonnet)); an
+  OpenCode target reads «OpenCode provider/model». It is OFF by default: moving
+  work between subscriptions is your call. The exhausted profile is marked
+  limited until its window resets, so it is not picked again before then; the
+  topic is never moved back by itself — switch it back by hand when the window
+  resets (the notice names `/accounts`, which re-points a Claude topic; a topic
+  that moved to OpenCode comes back with `/claude`). When
   nothing can take over the bot waits for the reset as before. An agent that is
   still working switches at the end of its turn (the wait stays armed).
 - **Which account for a child process.** An agent that launches a detached

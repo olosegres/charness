@@ -11,6 +11,10 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 (Groq, OpenAI, any OpenAI-compatible server, and the local GigaAM v3) are an ordered list in `stt.json`, edited from
 `/stt` or by hand. Details: [SETUP.md § Voice input](SETUP.md#voice-input).
 
+**A shorter notice when a usage limit moves a topic to another account or model.** One line now says which account
+(or OpenCode model) hit its limit, where the topic continues — its model only when the switch changes it — when the
+limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands.
+
 ### Upgrading
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next
   session on `medium`; running sessions keep their level. To get the old behaviour back, pick `xhigh` in General's
