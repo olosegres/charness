@@ -96,6 +96,20 @@ describe('displayModes: the display-mode commands over their ports', () => {
     assert.equal(harness.state.getDisplayPrefs(harness.key).thinking, 'short');
   });
 
+  it('an unknown mode in the button data is named WHOLE in the error toast — the longest value a button can carry, on every family and on the view row', async () => {
+    // callback_data is capped at 64 bytes: 58 characters of value after the 6-character prefix. The toast used to cut at 50.
+    const longValue = 'z'.repeat(58);
+    for (const prefix of ['think_', 'toolres_', 'subag_', 'verb_', 'view_']) {
+      const value = longValue.slice(0, 64 - prefix.length);
+      const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(harness.fakeTelegram.pushOperatorMessage(harnessThreadId, `picker ${prefix}`), `${prefix}${value}`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1, `${prefix}: the tap was answered`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), `Error: ${value}`, `${prefix}: the value whole in the toast`);
+      assert.equal(harness.replies.length, repliesBefore, `${prefix}: it fits a toast, so no message beside it`);
+    }
+  });
+
   it('switching the view to the full stream closes the topic\'s open request; a view with requests on does not', async () => {
     const message = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'picker 3');
 

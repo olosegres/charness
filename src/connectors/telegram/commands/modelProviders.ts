@@ -55,6 +55,7 @@ import {
   checkIsOAuthMethod,
 } from '../../../utils/openCodeAuthLogin';
 import { getCallbackMessageId } from './callbackMessage';
+import { answerCallbackWithWholeText } from './callbackToast';
 import type { BotCore } from './botCore';
 
 export interface PendingProviderConnect {
@@ -62,9 +63,6 @@ export interface PendingProviderConnect {
 }
 
 const defaultConnectProviderId = 'openai';
-
-/** The most characters Telegram shows in the toast a button tap is answered with (`answerCallbackQuery`'s `text`). */
-const callbackToastMaxLength = 200;
 
 interface ConnectCommandArgs {
   providerId: string;
@@ -844,18 +842,9 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     return buildTopicEffortPicker(key, getThreadAdapter(key));
   }
 
-  /**
-   * @description Answer a button tap with `text` whole. A toast holds {@link callbackToastMaxLength} characters: a
-   * longer text is cut for the toast (with an ellipsis, on a character boundary) and posted in full as a message —
-   * a notice that says what to do must never reach the user half-sentence.
-   */
-  async function answerCallbackWithWholeText(ctx: Context, key: SessionKey, text: string): Promise<void> {
-    if (text.length <= callbackToastMaxLength) {
-      await ctx.answerCbQuery(text);
-      return;
-    }
-    await ctx.answerCbQuery(`${Array.from(text).slice(0, callbackToastMaxLength - 1).join('')}…`);
-    await replyToThread(key, text);
+  /** @description {@link answerCallbackWithWholeText}, with the topic as the place a text too long for a toast is posted in full. */
+  function answerWithWholeText(ctx: Context, key: SessionKey, text: string): Promise<void> {
+    return answerCallbackWithWholeText(ctx, text, (wholeText) => replyToThread(key, wholeText));
   }
 
   /**
@@ -1043,7 +1032,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
 
       const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
       if (!isOk) {
-        await ctx.answerCbQuery(t('cb.model_error', { error: (setModelError ?? message).slice(0, 50) }));
+        await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
       await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
@@ -1097,7 +1086,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
 
       const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
       if (!isOk) {
-        await ctx.answerCbQuery(t('cb.model_error', { error: (setModelError ?? message).slice(0, 50) }));
+        await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
       await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
@@ -1176,7 +1165,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       }
       const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
       if (!isOk) {
-        await ctx.answerCbQuery(t('cb.model_error', { error: (setModelError ?? message).slice(0, 50) }));
+        await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
       await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
@@ -1228,9 +1217,9 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       } else if (adapter.getOwnEffort?.(key) === level) {
         // A pick the adapter STORED but could not apply yet (no agent running) comes back as a notice: the pick is
         // made, so what follows a pick follows this one too — only the toast carries the notice instead of "set".
-        await answerCallbackWithWholeText(ctx, key, notice);
+        await answerWithWholeText(ctx, key, notice);
       } else {
-        await answerCallbackWithWholeText(ctx, key, t('cb.effort_error', { error: notice }));
+        await answerWithWholeText(ctx, key, t('cb.effort_error', { error: notice }));
         return;
       }
       await updatePinnedStatus(key).catch(() => {});
@@ -1248,7 +1237,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         return;
       }
       const err = await adapter.clearEffort(key);
-      if (err) { await answerCallbackWithWholeText(ctx, key, t('cb.effort_error', { error: err })); return; }
+      if (err) { await answerWithWholeText(ctx, key, t('cb.effort_error', { error: err })); return; }
       const { inForce: level } = getTopicEffortAmongLevels(key, adapter, await listTopicEffortLevels(key, adapter));
       await ctx.answerCbQuery(t('cb.effort_same', { level }));
       await replyToThread(key, t('effort.sameAsGeneralConfirmation', { level }));

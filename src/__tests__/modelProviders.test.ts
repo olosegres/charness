@@ -149,6 +149,35 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     assert.match(harness.fakeTelegram.callbackAnswers.at(-1) ?? '', /No active session/);
   });
 
+  it('a model pick the backend refuses is answered with the refusal WHOLE: a short one as the toast, a long one cut for the toast and posted in full — on the picker button and on the legacy button alike', async () => {
+    const adapter = getThreadAdapter(harness.key);
+    const originalSetModel = adapter.setModel?.bind(adapter);
+    assert.ok(originalSetModel);
+    const shortRefusal = `Model ${'m'.repeat(80)} is not available to this account.`;
+    const longRefusal = `Model sonnet cannot be used: ${'the account has no access to it. '.repeat(10)}`.trimEnd();
+    assert.ok(shortRefusal.length > 50 && shortRefusal.length < 190, 'precondition: beyond the old cut, within a toast');
+    assert.ok(longRefusal.length > 200, 'precondition: longer than a toast holds');
+    const picker = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'model picker');
+    try {
+      for (const callbackData of ['mdl_0_1', 'model_sonnet']) {
+        adapter.setModel = async () => shortRefusal;
+        let repliesBefore = harness.replies.length;
+        await harness.tapButton(picker, callbackData);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), `Error: ${shortRefusal}`, `${callbackData}: not cut at 50 characters`);
+        assert.equal(harness.replies.length, repliesBefore, `${callbackData}: a toast that fits needs no message`);
+
+        adapter.setModel = async () => longRefusal;
+        repliesBefore = harness.replies.length;
+        await harness.tapButton(picker, callbackData);
+        const toast = harness.fakeTelegram.callbackAnswers.at(-1) ?? '';
+        assert.ok(toast.length <= 200 && toast.endsWith('…') && `Error: ${longRefusal}`.startsWith(toast.slice(0, -1)), `${callbackData}: the start of the refusal fits the toast`);
+        assert.equal(harness.replies[repliesBefore]?.text, `Error: ${longRefusal}`, `${callbackData}: the refusal whole, as a message`);
+      }
+    } finally {
+      adapter.setModel = originalSetModel;
+    }
+  });
+
   it('a typed number resolves against the page on screen and always consumes the bare-digit affordance', async () => {
     awaitingModelSelection.add(keyString);
     threadModelLists.set(keyString, ['sonnet', 'opus', 'haiku']);

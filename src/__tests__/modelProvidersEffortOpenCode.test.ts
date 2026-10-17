@@ -22,7 +22,9 @@ import { resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
 import { setInstanceDefaultEffortReader } from '../effortLevels';
 import { createInstanceDefaultEffortReader, resetInstanceSettingsCache } from '../instanceSettings';
 import { effortSameCallback } from '../utils/effortPickerPlan';
-import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
+import { buildRecentModelPickCallback } from '../utils/modelRecentPlan';
+import { getThreadAdapter } from '../adapters/createAdapter';
+import { createCommandHarness, harnessThreadId, type CommandHarness } from './commandModuleHarness';
 import { useStubbedOpenCodeServer } from './openCodeServerStub';
 
 const openCodeServer = useStubbedOpenCodeServer();
@@ -136,5 +138,35 @@ describe('/effort on an OpenCode topic: General\'s value as the model will reall
     setGeneralDefault('ultracode');
     await harness.runCommand('effort');
     assert.equal(harness.replies.at(-1)?.text, 'ℹ️ No reasoning-effort levels are available for the current model.', 'no picker, no level');
+  });
+  it('a pick on the "Recently used" row that the backend refuses is answered with the refusal whole too', async () => {
+    answerWithModelThatStopsAtHigh();
+    const recentModelId = 'anthropic/claude-opus-4-5';
+    await harness.state.addRecentModel(recentModelId);
+    const adapter = getThreadAdapter(harness.key);
+    const originalSetModel = adapter.setModel?.bind(adapter);
+    const originalGetAvailableModels = adapter.getAvailableModels?.bind(adapter);
+    assert.ok(originalSetModel && originalGetAvailableModels);
+    adapter.getAvailableModels = async () => [recentModelId]; // `opencode models` is a CLI call: the catalog the row is checked against
+    const longRefusal = `Model ${recentModelId} cannot be used: ${'the provider rejected the credentials. '.repeat(8)}`.trimEnd();
+    const shortRefusal = `Model ${'m'.repeat(80)} is not available to this account.`;
+    const picker = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'recent row');
+    try {
+      adapter.setModel = async () => shortRefusal;
+      let repliesBefore = harness.replies.length;
+      await harness.tapButton(picker, buildRecentModelPickCallback(0, recentModelId));
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), `Error: ${shortRefusal}`, 'not cut at 50 characters');
+      assert.equal(harness.replies.length, repliesBefore);
+
+      adapter.setModel = async () => longRefusal;
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(picker, buildRecentModelPickCallback(0, recentModelId));
+      const toast = harness.fakeTelegram.callbackAnswers.at(-1) ?? '';
+      assert.ok(toast.length <= 200 && toast.endsWith('…'));
+      assert.equal(harness.replies[repliesBefore]?.text, `Error: ${longRefusal}`);
+    } finally {
+      adapter.setModel = originalSetModel;
+      adapter.getAvailableModels = originalGetAvailableModels;
+    }
   });
 });

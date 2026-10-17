@@ -14,6 +14,10 @@ functions where the handlers used to be registered. A module never imports `bot.
 - **State `bot.ts` also touches is passed in** (a map or set it owns); state private to a feature lives in its
   factory.
 - A port-free helper is a plain export of its file (its test imports it without booting `bot.ts`).
+- **A button's error or notice reaches the user whole.** A toast holds 200 characters, so an error/notice text goes through
+  `callbackToast.ts`'s `answerCallbackWithWholeText(ctx, text, postWhole)`: a text that fits IS the toast, a longer one is cut
+  for the toast (ellipsis, on a character boundary) and posted in full as a message. Never `.slice(0, n)` a text into
+  `answerCbQuery` (`cb.model_error`, `cb.effort_error`, the display-mode errors all use the helper).
 - **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 
 ## `displayModes.ts`
@@ -65,7 +69,7 @@ included, is the nearest variant when the model lacks it — `getEffortAmongLeve
 adapter has `clearEffort`, «As in General (<value>)» (`effortsame`, disjoint from the `effort_<level>` pattern). A pick the
 adapter stored but could not apply yet (no agent running → a notice) is a pick all the same: the tap or the typed `/effort <level>`
 refreshes the banner and re-renders the picker, and the notice reaches the user whole — as the toast when it fits
-(200 characters), else cut for the toast and posted in full as a message (`answerCallbackWithWholeText`). A refusal changes nothing
+(200 characters), else cut for the toast and posted in full as a message (`answerCallbackWithWholeText` in `callbackToast.ts`). A refusal changes nothing
 and touches neither. Both screens re-render in
 place, text and keyboard, after a tap. `/status`, the ready notice and the pinned banner show `getThreadEffortView`
 (the running session's level, else the next start's; the banner and `/status` add the next start's level when it differs); other topics' banners are refreshed by their own lifecycle events, not by a

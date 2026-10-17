@@ -21,6 +21,7 @@ import {
   topicViewArguments,
 } from '../../../utils/topicView';
 import type { BotCore } from './botCore';
+import { answerCallbackWithWholeText } from './callbackToast';
 
 // ── /thinking — per-topic chain-of-thought verbosity (both backends, S5) ─────
 
@@ -259,7 +260,7 @@ export function createDisplayModes(ports: DisplayModesPorts) {
     // `toolres_hide`) in their buttons — those must keep working.
     const picked = normalizeDisplayVerbosityMode(ctx.match[1]);
     if (!picked) {
-      await ctx.answerCbQuery(t(config.errorCbKey, { error: ctx.match[1].slice(0, 50) }));
+      await answerCallbackWithWholeText(ctx, t(config.errorCbKey, { error: ctx.match[1] }), (wholeText) => replyToThread(key, wholeText));
       return;
     }
     await config.apply(key, picked);
@@ -430,7 +431,7 @@ export function createDisplayModes(ports: DisplayModesPorts) {
       if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
       const picked = parseTopicView(ctx.match[1]);
       if (!picked) {
-        await ctx.answerCbQuery(t('cb.verbosity_error', { error: ctx.match[1].slice(0, 50) }));
+        await answerCallbackWithWholeText(ctx, t('cb.verbosity_error', { error: ctx.match[1] }), (wholeText) => replyToThread(key, wholeText));
         return;
       }
       await applyTopicView(key, picked);
