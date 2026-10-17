@@ -577,6 +577,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const usage = readPersistedState(getLayout()).openCodeProviderUsage as Record<string, { usage?: { buckets: unknown[] } }> | undefined;
     assert.equal(usage?.openai?.usage?.buckets.length, 2, 'the poller left the seeded snapshot alone (auth.json lists no such provider)');
   });
+
   it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
     assert.match(board.message.text, /^Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\nTap a Claude account to make it the default\. 5h \/ week = % of the window used\./);

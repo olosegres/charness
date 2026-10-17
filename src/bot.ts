@@ -376,7 +376,7 @@ import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkHasHeadroomForClaudeModel, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
+import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
@@ -7300,13 +7300,14 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
 /**
  * @description Whether a pick, made while a usage-limit wait is armed, names another model of the SAME Claude account that the
  * limit does not cover — the usage windows that model drains are all known and below 100 % (a Fable-only weekly limit does not
- * stop `sonnet`; an exhausted session window stops every model). Such a pick lets the work continue, so it is the limit move; the
+ * stop `sonnet`; an exhausted session window stops every model; a model draining the same windows as the one that hit the limit
+ * is covered whatever the figures say). Such a pick lets the work continue, so it is the limit move; the
  * figures are brought up to date first (bounded: a slow endpoint never holds the tap). Any other pick is not beyond a limit.
  */
 async function checkIsPickBeyondLimit(from: FallbackChainEntry | null, to: FallbackChainEntry): Promise<boolean> {
   if (from?.backend !== 'claude' || to.backend !== 'claude' || to.model === null || from.profile !== to.profile) return false;
   await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
-  return checkHasHeadroomForClaudeModel(state.getClaudeProfileInfo(to.profile)?.usage, to.model);
+  return checkIsClaudeModelClearOfLimit(state.getClaudeProfileInfo(to.profile)?.usage, from.model, to.model);
 }
 
 /** The rung as a manual switch's target: a picked Claude account (+ model alias), or an OpenCode model, both named in the question. */

@@ -16,6 +16,7 @@ import {
   buildClaudeProfilesReport,
   checkClaudeUsageBucketsChanged,
   checkHasHeadroomForClaudeModel,
+  checkIsClaudeModelClearOfLimit,
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
   formatClaudeUsageBucket,
@@ -346,5 +347,15 @@ describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted wi
 
   it('a stale snapshot still counts: its last figures are the best there are', () => {
     assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20, 100), isStale: true, error: 'token expired' }, 'sonnet'), true);
+  });
+
+  it('a model draining the same windows as the one that hit the limit is covered, however far the figures lag behind the limit', () => {
+    const lagging = snapshotOf(10, 20, 40);
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'fable'), false, 'the very model that hit the limit');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'opus'), false, 'sonnet and opus drain the same windows');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'sonnet'), true, 'another weekly window: the figures decide');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 100), 'claude-fable-5-1', 'opus'), true);
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(100, 20, 100), 'claude-fable-5-1', 'opus'), false, 'the session window stops every model');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, null, 'fable'), true, 'the limited model unknown: the figures decide');
   });
 });

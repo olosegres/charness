@@ -33,7 +33,7 @@ const callbacks: ModelPageCallbacks = {
 
 const buildModels = (count: number): string[] => Array.from({ length: count }, (_, index) => `openrouter/model-${index + 1}`);
 
-function readLabels(rows: ReturnType<typeof buildModelPageButtons>['rows']): string[][] {
+function readLabels(rows: ReadonlyArray<ReadonlyArray<{ text: string }>>): string[][] {
   return rows.map((row) => row.map((button) => button.text));
 }
 
@@ -131,13 +131,13 @@ describe('buildOpenCodeProviderPage', () => {
       callbacks,
     });
     assert.equal(page.text, 'OpenCode · openai — pick the model for this topic:');
-    assert.deepEqual(readLabels(page.keyboard.reply_markup.inline_keyboard as never), [['gpt-5 ✓'], ['gpt-5-mini ⛔ 14:00'], ['⬅️ Back']]);
+    assert.deepEqual(readLabels(page.keyboard.reply_markup.inline_keyboard), [['gpt-5 ✓'], ['gpt-5-mini ⛔ 14:00'], ['⬅️ Back']]);
   });
 
   it('no ✓ when the topic runs on another provider or on Claude, and a mark in the past is not shown', () => {
     for (const elsewhere of [null, { backend: 'claude', profile: 'perf', model: 'opus' } as const, { backend: 'opencode', providerId: 'google', modelId: 'gemini' } as const]) {
       const page = buildOpenCodeProviderPage({ providerId: 'openai', models: ['gpt-5'], page: 0, rung: elsewhere, limits: { 'openai/gpt-5': '2026-10-17T09:00:00.000Z' }, timezone: 'UTC', nowMs, callbacks });
-      assert.deepEqual(readLabels(page.keyboard.reply_markup.inline_keyboard as never)[0], ['gpt-5']);
+      assert.deepEqual(readLabels(page.keyboard.reply_markup.inline_keyboard)[0], ['gpt-5']);
     }
   });
 });

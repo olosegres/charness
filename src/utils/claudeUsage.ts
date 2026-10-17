@@ -287,6 +287,17 @@ export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | unde
   });
 }
 
+/**
+ * @description Whether a pick of `pickedModel`, on the account a usage limit stopped while it ran `limitedModel`, is clear of that
+ * limit: the picked model drains another weekly window than the limited one — a model draining the very windows that just ran out
+ * is covered by the limit, however far the figures lag behind it — and {@link checkHasHeadroomForClaudeModel} holds. An unknown
+ * `limitedModel` leaves it to the figures.
+ */
+export function checkIsClaudeModelClearOfLimit(usage: ClaudeUsageSnapshot | undefined, limitedModel: string | null, pickedModel: string): boolean {
+  if (limitedModel !== null && checkIsScopedWeeklyModel(limitedModel) === checkIsScopedWeeklyModel(pickedModel)) return false;
+  return checkHasHeadroomForClaudeModel(usage, pickedModel);
+}
+
 /** What the ranking needs to know about one profile (the bot reads it off state, the CLI off state.json). */
 export interface ClaudeProfileUsageView {
   name: string;
