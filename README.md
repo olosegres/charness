@@ -278,8 +278,9 @@ so one account's usage limit does not stop every topic.
   limited until its window resets, so it is not picked again before then. The
   reset itself does not move the topic back: switch it back by hand (the notice
   names `/accounts`: on a Claude topic it re-points the account, on one the chain
-  moved to OpenCode it asks, then brings the topic back to Claude on the account
-  you tapped). Only a wait that ends on another entry
+  moved from Claude to OpenCode it asks, then brings the topic back to Claude on the
+  account you tapped; a topic that STARTED on OpenCode is the exception, see
+  «Switching back by hand» below). Only a wait that ends on another entry
   moves a topic by itself (see below). When nothing can take over the bot waits
   for the reset as before. A Claude session that works when a limit hits is
   moved at once (the turn is dead; background tasks it started are stopped and
@@ -364,9 +365,16 @@ instance-wide, ordered list of **fallback models** (where to go), top = preferre
   question only says it is out of date. A topic with nothing to hand over (no agent, or one just started and not yet
   spoken to) switches at once, and a Claude account tapped on a Claude topic applies at once, as before. `/model`
   lists only the current backend's models, so it never switches backend.
-- The topic is **never moved back by itself** when the exhausted entry resets
-  — the switch notice names the reset time; switch back by hand (`/accounts`,
-  `/model`, `/claude`, `/opencode`).
+- The reset of the exhausted entry does **not** move the topic back by itself —
+  the switch notice names the reset time. The one thing that can is the wait: when
+  every enabled entry is limited, the wait is re-aimed at the entry that resets
+  first, and that may be the one the topic left (see above).
+- **Switching back by hand.** The notice says `/accounts`, and it holds for a topic
+  that started on Claude: Claude → Claude re-points the account, Claude → OpenCode
+  asks and returns to Claude on the account you tap. It does NOT hold for a topic that
+  started on OpenCode: after OpenCode → OpenCode, `/accounts` has no OpenCode model to
+  pick (use `/model` to choose the model again), and after OpenCode → Claude it offers
+  only Claude accounts (use `/opencode`, which asks like any manual switch).
 
 ### Scheduler (`/schedule`) (Telegram)
 
