@@ -398,6 +398,8 @@ import {
 } from './utils/fallbackChain';
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
+import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
+import { checkNeedsBackendSwitchConfirmation, getBackendFamily, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
@@ -6553,6 +6555,9 @@ async function handleAgentStart(
   // "Claude Code" is one user-facing choice with two backends (tmux-scrape vs
   // json-stream); open the thread's picked backend, default tmux-scrape (for now).
   if (adapterName === 'claude') adapterName = resolveClaudeBackendName(key);
+  // The other backend, with a conversation to hand over: ask first; the answer makes the switch.
+  const targetFamily = getBackendFamily(adapterName);
+  if (targetFamily !== null && await askBeforeCrossBackendSwitch(key, targetFamily, args)) return;
   await switchThreadAdapter(key, adapterName);
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
@@ -7043,28 +7048,41 @@ function readRunningModelBeforeMove(key: SessionKey, from: FallbackChainEntry | 
 }
 
 /**
- * @description The context bridge for a cross-backend switch (`utils/fallbackBridge.ts`), built BEFORE the old
- * adapter is stopped: its last turns off its own transcript (an unreadable one yields a bridge without turns).
+ * @description The last `limit` turns (oldest first) of the conversation the topic's agent holds, off its own
+ * transcript. `[]` when it has none yet (no session id persisted); `null` when they cannot be read (no bound
+ * folder, an adapter without a transcript reader, a read that failed).
  */
-async function buildFallbackBridge(key: SessionKey, from: FallbackChainEntry | null, to: FallbackChainEntry): Promise<string> {
+async function readConversationTurns(key: SessionKey, limit: number): Promise<RecentTurn[] | null> {
   const adapter = getThreadAdapter(key);
   const decision = getWorkDirStartDecision(key);
   const sessionId = getPersistedSessionIdForAdapter(state.getAgent(key) ?? null, adapter.name, checkIsClaudeBackend(adapter.name));
-  let turns: RecentTurn[] = [];
-  if (decision.ok && sessionId && adapter.getRecentTurns) {
-    try {
-      turns = await adapter.getRecentTurns(key, decision.workDir, sessionId, fallbackBridgeTurnLimit);
-    } catch (e) {
-      console.warn(`[fallback] ${keyToString(key)}: the previous agent's turns are unreadable:`, e instanceof Error ? e.message : e);
-    }
+  if (!sessionId) return [];
+  if (!decision.ok || !adapter.getRecentTurns) return null;
+  try {
+    return await adapter.getRecentTurns(key, decision.workDir, sessionId, limit);
+  } catch (e) {
+    console.warn(`[fallback] ${keyToString(key)}: the previous agent's turns are unreadable:`, e instanceof Error ? e.message : e);
+    return null;
   }
-  return buildFallbackBridgePrompt({
-    fromLabel: from ? formatFallbackEntry(from) : t('fallback.backendClaude'),
-    toLabel: formatFallbackEntry(to),
-    turns,
-    resetsAtText: getFallbackResetTime(from),
-    replyLanguage: getLocaleEndonym(getActiveLang()),
-  });
+}
+
+/**
+ * @description The context bridge for a cross-backend switch (`utils/fallbackBridge.ts`), built BEFORE the old
+ * adapter is stopped: its last turns off its own transcript (an unreadable one yields a bridge without turns).
+ * `reason` is why the agent changes — a usage limit or the operator's own switch.
+ */
+async function buildFallbackBridge(
+  key: SessionKey,
+  input: { fromLabel: string; toLabel: string; reason: 'limit' | 'manual'; resetsAtText: string | null; userMessage?: string },
+): Promise<string> {
+  const turns = await readConversationTurns(key, fallbackBridgeTurnLimit) ?? [];
+  return buildFallbackBridgePrompt({ ...input, turns, replyLanguage: getLocaleEndonym(getActiveLang()) });
+}
+
+/** The backend the topic's agent runs on, by name (`Claude` / `OpenCode`), for a label whose rung is unknown. */
+function formatThreadBackend(key: SessionKey): string {
+  const family = getBackendFamily(getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name);
+  return family === null ? t('fallback.backendClaude') : formatBackendFamily(family);
 }
 
 /**
@@ -7117,7 +7135,12 @@ async function switchTopicToFallbackEntry(
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
   } else {
-    const bridge = await buildFallbackBridge(key, from, to);
+    const bridge = await buildFallbackBridge(key, {
+      fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
+      toLabel: toLabel,
+      reason: 'limit',
+      resetsAtText: getFallbackResetTime(from),
+    });
     const targetName = to.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName;
     if (to.backend === 'claude') await state.setClaudeProfileOverride(key, to.profile);
     await switchThreadAdapter(key, targetName);
@@ -7151,6 +7174,104 @@ async function switchTopicToFallbackEntry(
   return { isSwitched: true, notice };
 }
 
+// ── a MANUAL switch between the two backends (`utils/backendSwitchPlan.ts`, `commands/backendSwitch.ts`) ──
+
+/** The backend family the topic's agent runs on now (its in-memory pick, else the persisted one); `null` for none or a shell. */
+function getTopicBackendFamily(key: SessionKey): BackendFamily | null {
+  return getBackendFamily(getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name);
+}
+
+/**
+ * Whether the topic's agent holds a conversation — running, or asleep with its session kept — with at least one turn
+ * to hand over. An agent just started and not yet spoken to has none; a transcript that cannot be read counts as
+ * one, since a needless question costs a tap and a silent switch costs the context.
+ */
+async function checkHasConversationToHandOver(key: SessionKey): Promise<boolean> {
+  if (getTopicBackendFamily(key) === null) return false;
+  if (!getThreadAdapter(key).checkIsActive(key) && getResumableSessionId(key) === null) return false;
+  const turns = await readConversationTurns(key, 1);
+  return turns === null || turns.length > 0;
+}
+
+/**
+ * @description Where a manual switch to `backend` takes the topic: Claude → its account (the pick, else the
+ * default); OpenCode → the model it will run (a saved `/model` pick, else the server's default; `null` when the
+ * server cannot say). The OpenCode model is for the question only — the switch leaves it alone.
+ */
+async function resolveBackendSwitchTarget(key: SessionKey, backend: BackendFamily): Promise<BackendSwitchTarget> {
+  if (backend === 'claude') return { backend: 'claude', profile: state.resolveClaudeProfileName(key) };
+  const modelLabel = await getAdapter(openCodeAdapterName).getProspectiveModelLabel?.(key).catch(() => null);
+  return { backend: 'opencode', modelLabel: modelLabel ?? null };
+}
+
+/**
+ * @description The gate every MANUAL start of the other backend goes through (`/claude`, `/opencode`, the agent
+ * buttons, the natural-language "start …" phrases): when the topic runs the other backend and holds a conversation,
+ * ask first and let the answer make the switch. Returns whether it asked — the caller then stops; `false` means
+ * nothing to hand over (a fresh topic, the same backend, a shell) and the caller goes ahead as it always did.
+ * `userMessage` is the text typed with the command; the switch passes it on inside the context bridge.
+ */
+async function askBeforeCrossBackendSwitch(key: SessionKey, backend: BackendFamily, userMessage?: string): Promise<boolean> {
+  const currentFamily = getTopicBackendFamily(key);
+  if (currentFamily === null || !checkNeedsBackendSwitchConfirmation({
+    currentAdapterName: getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name,
+    targetBackend: backend,
+    hasConversation: await checkHasConversationToHandOver(key),
+  })) return false;
+  await askBackendSwitch(key, { from: currentFamily, target: await resolveBackendSwitchTarget(key, backend), userMessage });
+  return true;
+}
+
+/**
+ * @description Move the topic onto the other backend by the operator's own choice — the cross-backend move of the
+ * usage-limit switch: the context bridge is built from the conversation being left (while its adapter still runs),
+ * `switchThreadAdapter` stops it, parks its session and brings back the target family's parked one, a Claude target
+ * runs on the chosen account, and the bridge is the new session's first prompt. A topic with nothing to hand over
+ * (`isBridged: false`) just starts the target the way `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
+ */
+async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string }): Promise<void> {
+  const k = keyToString(key);
+  const bridge = options.isBridged
+    ? await buildFallbackBridge(key, {
+      fromLabel: formatThreadBackend(key),
+      toLabel: formatBackendSwitchBridgeLabel(target),
+      reason: 'manual',
+      resetsAtText: null,
+      userMessage: options.userMessage,
+    })
+    : null;
+  if (target.backend === 'claude') await state.setClaudeProfileOverride(key, target.profile);
+  await switchThreadAdapter(key, target.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
+  cancelApiRetry(key); // a wait armed for the backend just left is over
+  const ensured = await ensureAgentSession(key, { args: bridge === null ? options.userMessage : undefined });
+  if (ensured.message) await replyToThread(key, ensured.message);
+  if (!ensured.ok || bridge === null) return;
+  await deliverPromptOrBuffer(key, bridge, startupPromptBuffer.checkIsStarting(k));
+  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: false });
+}
+
+/**
+ * @description A Claude account picked (a tap in `/accounts`, `/accounts use`) on a topic that runs OpenCode: that
+ * is a switch to Claude on that account. With a conversation to hand over the operator is asked first; without
+ * one the topic switches at once. `notApplicable` when the topic does not run OpenCode — the pick then applies to
+ * its Claude session as it always did.
+ */
+async function takeClaudeAccountPickOnOpenCodeTopic(key: SessionKey, profile: string): Promise<{ kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' }> {
+  if (getTopicBackendFamily(key) !== 'opencode') return { kind: 'notApplicable' };
+  const target: BackendSwitchTarget = { backend: 'claude', profile };
+  if (await checkHasConversationToHandOver(key)) {
+    await askBackendSwitch(key, { from: 'opencode', target });
+    return { kind: 'asked' };
+  }
+  await executeBackendSwitch(key, target, { isBridged: false });
+  return { kind: 'switched', notice: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
+}
+
+const { askBackendSwitch, registerBackendSwitchCallbacks } = createBackendSwitch({
+  ...botCore,
+  getCurrentFamily: getTopicBackendFamily,
+  performBackendSwitch: (key, target, options) => executeBackendSwitch(key, target, { isBridged: true, userMessage: options.userMessage }),
+});
 /**
  * @description A tap on a «switch to …» button of a limit notice: honoured only while the thread's open offer
  * is the button's episode and the index is inside that offer (a stale notice changes nothing). The
@@ -7201,6 +7322,7 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
+  takeClaudeAccountPickOnOpenCodeTopic,
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   disconnectOpenCodeProvider: applyProviderDisconnect,
   startOpenCodeConnect: showConnectMethodPicker,
@@ -8122,6 +8244,9 @@ bot.on(message('text'), async (ctx) => {
         await replyToThread(key, t('error.start_in_general'));
         return;
       }
+      // The other backend, with a conversation to hand over: ask first (a shell is no backend to hand over to).
+      const requestedFamily = getBackendFamily(startMatch.adapterName);
+      if (requestedFamily !== null && state.getBinding(key) && await askBeforeCrossBackendSwitch(key, requestedFamily, startMatch.args)) return;
       // The shared `ensureAgentSession` does the bind-check + switch + start.
       // The explicit matched adapter wins (`preferredAdapterName`); the phrase's
       // trailing args ride along. On `unbound` we keep this path's own reply:
@@ -8354,6 +8479,8 @@ async function processVoiceJob(
           await replyToThread(key, t('error.start_in_general'));
           return;
         }
+        const requestedFamily = getBackendFamily(startMatch.adapterName);
+        if (requestedFamily !== null && state.getBinding(key) && await askBeforeCrossBackendSwitch(key, requestedFamily, startMatch.args)) return;
         // Same choke point as the text trigger (L-D4): a sleeping conversation is
         // woken, never replaced by a fresh start; `unbound` keeps the folder picker.
         const result = await ensureAgentSession(key, {
@@ -9159,6 +9286,7 @@ registerModelCallbacks();
 registerCompactionCallbacks();
 
 registerAutoContinueLimitsCallbacks();
+registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
 registerSttCallbacks();

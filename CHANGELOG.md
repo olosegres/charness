@@ -15,6 +15,14 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 (or OpenCode model) hit its limit, where the topic continues — its model only when the switch changes it — when the
 limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands.
 
+**Switching a topic between Claude and OpenCode by hand now asks first, and a Claude account tapped in `/accounts` on an
+OpenCode topic really switches.** `/claude`, `/opencode` (and the agent buttons / «start …» phrases) on a topic that
+runs the other backend, and a Claude account picked in `/accounts` (`/accounts use <name>`) on an OpenCode topic —
+which only recorded the pick before — ask «Switch this topic from OpenCode to Claude «work»? The conversation context
+will be handed over in compacted form.» with ✅ Continue / ✖️ Cancel when there is a conversation to hand over; Continue
+moves the topic the way a usage limit does (the other backend's parked conversation is resumed, the context bridge is the
+first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once.
+
 ### Upgrading
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next
   session on `medium`; running sessions keep their level. To get the old behaviour back, pick `xhigh` in General's

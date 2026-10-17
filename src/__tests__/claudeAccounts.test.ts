@@ -38,6 +38,9 @@ let isGeneralTopic = false;
 let applyOutcome: ClaudeProfileApplyOutcome = 'inactive';
 const appliedKeys: SessionKey[] = [];
 let applyEverywhereCalls = 0;
+/** What the stand-in bot answers when a Claude account is picked: the topic runs OpenCode (`asked` / `switched`) or not. */
+let openCodePickOutcome: { kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' } = { kind: 'notApplicable' };
+const openCodePicks: Array<{ key: SessionKey; profile: string }> = [];
 let openCodeProviders: string[] = [];
 const disconnected: Array<{ key: SessionKey; providerId: string }> = [];
 const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
@@ -72,6 +75,10 @@ describe('claudeAccounts: /accounts over its ports', () => {
       },
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
+      },
+      takeClaudeAccountPickOnOpenCodeTopic: async (key, profile) => {
+        openCodePicks.push({ key, profile });
+        return openCodePickOutcome;
       },
       detectOpenCodeProviders: async () => openCodeProviders,
       disconnectOpenCodeProvider: async (key, providerId) => {
@@ -238,6 +245,61 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(rerender?.text ?? '', /✓ default/);
     await harness.tapButton(picker!.messageId!, 'acct_follow');
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
+  });
+
+  it('on a topic that runs OpenCode a pick is a switch to Claude: the port decides, an «asked» pick records nothing and posts no confirmation line', async () => {
+    await harness.state.setClaudeProfileOverride(harness.key, null);
+    openCodePicks.length = 0;
+    openCodePickOutcome = { kind: 'asked' };
+    try {
+      const repliesBefore = harness.replies.length;
+      await harness.runCommand('account', 'use work');
+      assert.deepEqual(openCodePicks, [{ key: harness.key, profile: 'work' }]);
+      assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined, 'the pick waits for the operator\'s answer');
+      assert.equal(harness.replies.length, repliesBefore, 'the question is the port\'s own message — nothing else is posted');
+
+      await harness.runCommand('account');
+      const picker = harness.replies.at(-1);
+      await harness.tapButton(picker!.messageId!, 'acct_use_work');
+      assert.deepEqual(openCodePicks.at(-1), { key: harness.key, profile: 'work' });
+      assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined, 'a tap is the same switch');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the tap is answered with no toast');
+    } finally {
+      openCodePickOutcome = { kind: 'notApplicable' };
+    }
+  });
+
+  it('a topic on OpenCode with nothing to hand over switches at once: the port\'s line is the confirmation, typed and tapped', async () => {
+    openCodePicks.length = 0;
+    openCodePickOutcome = { kind: 'switched', notice: '🔁 Switched this topic to Claude «work».' };
+    try {
+      await harness.runCommand('account', 'use work');
+      assert.equal(harness.replies.at(-1)?.text, '🔁 Switched this topic to Claude «work».');
+
+      await harness.runCommand('account');
+      const picker = harness.replies.at(-1);
+      await harness.tapButton(picker!.messageId!, 'acct_use_work');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '🔁 Switched this topic to Claude «work».');
+      assert.equal(openCodePicks.length, 2);
+    } finally {
+      openCodePickOutcome = { kind: 'notApplicable' };
+    }
+  });
+
+  it('a profile that is not signed in is refused before the OpenCode port is asked, and General never asks it', async () => {
+    openCodePicks.length = 0;
+    openCodePickOutcome = { kind: 'asked' };
+    try {
+      await harness.runCommand('account', 'use team');
+      assert.match(harness.replies.at(-1)?.text ?? '', /not signed in/);
+      isGeneralTopic = true;
+      await harness.runCommand('account', 'use work');
+      isGeneralTopic = false;
+      assert.deepEqual(openCodePicks, []);
+    } finally {
+      isGeneralTopic = false;
+      openCodePickOutcome = { kind: 'notApplicable' };
+    }
   });
 
   it('in General, `use` sets the instance default and moves every session', async () => {

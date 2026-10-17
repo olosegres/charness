@@ -11,7 +11,7 @@ import { buildFallbackBridgePrompt, checkIsFallbackBridgePrompt, fallbackBridgeT
 import { buildThreadContextPreamble } from '../threadContextPreamble';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
-const base = { fromLabel: 'Claude · work · fable', toLabel: 'OpenCode · openai/gpt-5', replyLanguage: 'Deutsch' };
+const base = { fromLabel: 'Claude · work · fable', toLabel: 'OpenCode · openai/gpt-5', reason: 'limit' as const, replyLanguage: 'Deutsch' };
 
 test('bridge: names both agents, the reset, the reply language and the recent turns in order, user glue stripped', () => {
   const preamble = buildThreadContextPreamble({ key: makeTelegramKey(-1001111111111, 111), subdir: 'example', groupTitle: 'ExampleGroup' });
@@ -56,4 +56,20 @@ test('bridge: an over-long turn keeps its head and tail with a cut marker', () =
 
 test('bridge marker: only a bridge starts with it', () => {
   assert.ok(!checkIsFallbackBridgePrompt('Continue from where you left off.'));
+});
+
+test('bridge: a switch by hand says the operator switched the agent, not that a limit was hit, and carries the typed message', () => {
+  const prompt = buildFallbackBridgePrompt({
+    ...base,
+    reason: 'manual',
+    resetsAtText: null,
+    userMessage: 'start with the failing test',
+    turns: [{ role: 'user', text: 'Add the retry test' }],
+  });
+  assert.ok(checkIsFallbackBridgePrompt(prompt));
+  assert.match(prompt, /You \(OpenCode · openai\/gpt-5\) are taking this conversation over from Claude · work · fable, because the operator switched this topic's agent\./);
+  assert.ok(!prompt.includes('usage limit'), 'no limit is claimed');
+  assert.match(prompt, /The operator also wrote, together with the switch:\nstart with the failing test/);
+  assert.match(prompt, /User:\nAdd the retry test/, 'the previous agent\'s turns still follow');
+  assert.ok(!buildFallbackBridgePrompt({ ...base, reason: 'manual', resetsAtText: null, turns: [] }).includes('also wrote'), 'no message, no line');
 });

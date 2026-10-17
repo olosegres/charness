@@ -22,18 +22,25 @@ export const fallbackBridgeTurnMaxChars = 2500;
 const bridgeMarker = '[Backend switch]';
 
 /**
- * @description The bridge prompt. `turns` are chronological (oldest first), already capped by the caller;
- * `resetsAtText` names when the exhausted account comes back (omitted when unknown).
+ * @description The bridge prompt. `turns` are chronological (oldest first), already capped by the caller.
+ * `reason` is why the agent changes: `limit` (the previous one hit a usage limit; `resetsAtText` names when it
+ * comes back, omitted when unknown) or `manual` (the operator switched the topic's backend by hand).
+ * `userMessage` is text the operator sent together with a manual switch (`/opencode do X`), passed on as it is.
  */
 export function buildFallbackBridgePrompt(input: {
   fromLabel: string;
   toLabel: string;
   turns: readonly RecentTurn[];
+  reason: 'limit' | 'manual';
   resetsAtText: string | null;
+  userMessage?: string;
   replyLanguage: string;
 }): string {
+  const why = input.reason === 'limit'
+    ? `which hit a usage limit${input.resetsAtText ? ` (it resets at ${input.resetsAtText})` : ''}`
+    : "because the operator switched this topic's agent";
   const lines: string[] = [
-    `${bridgeMarker} You (${input.toLabel}) are taking this conversation over from ${input.fromLabel}, which hit a usage limit${input.resetsAtText ? ` (it resets at ${input.resetsAtText})` : ''}. You work in the same project folder, but you cannot see its transcript.`,
+    `${bridgeMarker} You (${input.toLabel}) are taking this conversation over from ${input.fromLabel}, ${why}. You work in the same project folder, but you cannot see its transcript.`,
     '',
     'Do this now:',
     '1. Read the recent turns below to understand the task and where it stopped.',
@@ -41,6 +48,7 @@ export function buildFallbackBridgePrompt(input: {
     `3. Reply IN ${input.replyLanguage} with ONE short message: the task as you understand it, what is already done, what remains.`,
     '4. Then continue the work from where it stopped, without redoing what is done.',
   ];
+  if (input.userMessage) lines.push('', 'The operator also wrote, together with the switch:', input.userMessage);
   if (input.turns.length === 0) {
     lines.push('', 'No turns of the previous agent are available: start from the project state and ask the user what the task is if it is not evident.');
     return lines.join('\n');

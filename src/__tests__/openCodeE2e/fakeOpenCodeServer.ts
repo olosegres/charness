@@ -8,7 +8,7 @@
  *   • `GET /config` (also `?directory=`) — the default model and the plugin list (with the bot's compaction plugin,
  *     so the bot does not recreate the folder's instance); `GET /config/providers` — the models and their variants;
  *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `telegramBot` server there);
- *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message`,
+ *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
  *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
  *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`;
  *   • `POST /instance/dispose`.
@@ -157,7 +157,7 @@ export class FakeOpenCodeServer {
       const session = this.sessions.get(sessionMatch[1]);
       const action = sessionMatch[2] ?? '';
       if (session && method === 'GET' && action === '') return reply(toApiSession(session));
-      if (session && method === 'GET' && action === '/message') return reply([]);
+      if (session && method === 'GET' && action === '/message') return reply(this.buildStoredMessages(session));
       if (session && method === 'PATCH' && action === '') {
         const title = (record.body as { title?: string } | null)?.title;
         if (typeof title === 'string') session.title = title;
@@ -218,6 +218,13 @@ export class FakeOpenCodeServer {
     const session: FakeOpenCodeSession = { id: `ses_fake${this.sessionCounter}`, directory: record.directory, title: typeof title === 'string' ? title : null };
     this.sessions.set(session.id, session);
     return session;
+  }
+
+  /** What `GET /session/:id/message` returns: the prompts the bot sent into the session, as stored user messages. */
+  private buildStoredMessages(session: FakeOpenCodeSession): Array<{ info: { id: string; role: 'user' }; parts: Array<{ type: 'text'; text: string }> }> {
+    return this.prompts
+      .filter((prompt) => prompt.sessionId === session.id)
+      .map((prompt, index) => ({ info: { id: `msg_${session.id}_${index}`, role: 'user' as const }, parts: [{ type: 'text' as const, text: prompt.text }] }));
   }
 
   private recordPrompt(session: FakeOpenCodeSession, body: PromptBody | null): void {

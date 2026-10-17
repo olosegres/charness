@@ -85,6 +85,12 @@ export interface ClaudeAccountsPorts
   applyClaudeProfile: (key: SessionKey) => Promise<ClaudeProfileApplyOutcome>;
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
+  /**
+   * A Claude account picked on a topic that runs OpenCode is a switch to Claude: with a conversation to hand over
+   * the operator is asked first (`asked`, the question is already in the topic), a topic with nothing to carry
+   * switches at once (`switched`, with the line to say so); `notApplicable` when the topic does not run OpenCode.
+   */
+  takeClaudeAccountPickOnOpenCodeTopic: (key: SessionKey, profile: string) => Promise<{ kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' }>;
   /** The OpenCode providers the server is authenticated for (its live catalog); `[]` when it cannot be read. */
   detectOpenCodeProviders: () => Promise<string[]>;
   /** Drop a provider's stored credentials and post the outcome — the `/disconnect <provider>` flow, unchanged. */
@@ -112,7 +118,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
+    applyClaudeProfileEverywhere, takeClaudeAccountPickOnOpenCodeTopic, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
   } = ports;
 
   /**
@@ -316,9 +322,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * button. A regular topic sets its own pick and its live session follows at once (idle: re-spawned, same
    * conversation; working: at turn end; sleeping: at the next resume). General sets the instance default and
    * every topic that follows the default is moved the same way. A profile that is not signed in is refused:
-   * a session started under it would only fail with a logged-out error.
+   * a session started under it would only fail with a logged-out error. On a topic that runs OpenCode the pick is
+   * a switch to Claude (`takeClaudeAccountPickOnOpenCodeTopic`): the answer is then the question already posted
+   * (`null`: nothing to say) or the line that the topic switched.
    */
-  async function applyPick(key: SessionKey, isGeneral: boolean, name: string): Promise<string> {
+  async function applyPick(key: SessionKey, isGeneral: boolean, name: string): Promise<string | null> {
     if (!checkIsKnownProfile(name)) return t('account.unknown', { name });
     if (name !== defaultClaudeProfileName) {
       const status = await readClaudeAuthStatus(resolveDir(name));
@@ -330,6 +338,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       await applyClaudeProfileEverywhere();
       return t('account.setGlobal', { name });
     }
+    const onOpenCode = await takeClaudeAccountPickOnOpenCodeTopic(key, name);
+    if (onOpenCode.kind === 'asked') return null;
+    if (onOpenCode.kind === 'switched') return onOpenCode.notice;
     await getState().setClaudeProfileOverride(key, name);
     const outcome = await applyClaudeProfile(key);
     return t('account.setThisTopic', { name, apply: describeApplyOutcome(outcome) });
@@ -503,7 +514,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
         }
         case 'use': {
           if (!name) { await replyToThread(key, t('account.usage')); return; }
-          await replyToThread(key, await applyPick(key, isGeneral, name));
+          const confirmation = await applyPick(key, isGeneral, name);
+          if (confirmation !== null) await replyToThread(key, confirmation);
           return;
         }
         case 'login': {
@@ -547,7 +559,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const name = parseAccountCallbackName(ctx.match[0], accountUseCallbackRe, { allowDefault: true });
       if (name === null) { await ctx.answerCbQuery(); return; }
       const confirmation = await applyPick(key, isGeneral, name);
-      await answerTap(ctx, key, confirmation);
+      if (confirmation === null) await ctx.answerCbQuery();
+      else await answerTap(ctx, key, confirmation);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 

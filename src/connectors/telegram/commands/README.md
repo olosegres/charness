@@ -96,6 +96,23 @@ a keyboard-less confirmation. The usage-limit notice appends the shared pointer 
 `appendAutoContinueLimitsHint` and its own «skip once» button consumes the picker through the returned
 `consumeAutoContinueLimitsPicker`.
 
+## `backendSwitch.ts`
+
+The question before a MANUAL switch of a topic between the two agent backends (`bsw_ok` / `bsw_no`): «🔁 Switch this
+topic from OpenCode to Claude «work»?» + the shared line `handover.note` («The conversation context will be handed
+over in compacted form.»), buttons `handover.continueButton` / `handover.cancelButton` (the same two for the `/limits`
+questions). `utils/backendSwitchPlan.ts` decides WHEN it is asked (`checkNeedsBackendSwitchConfirmation`: the topic runs
+the other backend AND holds a conversation) and words it; `bot.ts` is the single gate (`askBeforeCrossBackendSwitch`
+for `/claude`, `/opencode`, the agent buttons and the natural-language «start …» phrases, `takeClaudeAccountPickOnOpenCodeTopic`
+for a Claude account picked on an OpenCode topic through `claudeAccounts.ts`) and owns the switch itself
+(`executeBackendSwitch`: the usage-limit switch's cross-backend move — bridge built from the conversation being left,
+`switchThreadAdapter`, ensure, bridge as the first prompt — with the account applied for a Claude target). A conversation
+to hand over means an agent with at least one readable turn (`readConversationTurns`; an unreadable transcript counts),
+so a just-started agent switches at once. The module keeps one snapshot per question MESSAGE (newest 20, one open
+question per topic): a tap with no snapshot, on another topic, or after the topic changed backend only answers «out of
+date»; Continue edits the question into «Switching…» then the outcome (or the failure), Cancel into a line naming where
+the topic stays; both drop the keyboard. Ports: `getCurrentFamily`, `performBackendSwitch`.
+
 ## `claudeAccounts.ts`
 
 `/accounts` (hidden alias `/account`; `/connect` and `/disconnect` are hidden aliases of its OpenCode half, still
@@ -120,8 +137,7 @@ list shows the CLI's truth), to start the sign-in relay for a profile (`startCla
 `agentLogin/`), and to move live sessions onto a changed pick (`applyClaudeProfile` for one topic,
 `applyClaudeProfileEverywhere` after a General pick, a removal or a finished sign-in). «Add» without a name arms a
 per-topic name capture the text handler consults (`checkIsAwaitingProfileName` / `submitProfileName`; a slash
-command or `/esc` disarms it through `cancelProfileNameCapture`). A profile that is not signed in cannot be
-picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
+command or `/esc` disarms it through `cancelProfileNameCapture`). A pick on a topic that runs OpenCode goes through the `takeClaudeAccountPickOnOpenCodeTopic` port first (`backendSwitch.ts`: the topic switches to Claude — after a question when a conversation is to be handed over — and the pick is recorded only then; `asked` posts nothing more, `switched` returns the line to say). A profile that is not signed in cannot be picked; the instance default is refused until General picks another; «remove» of `default` signs `~/.claude` out (`signOutDefaultClaudeLogin`: only the stored `claudeAiOauth` login, never `projects/` / settings / skills / memory) and marks its hidden record `isRemoved`, which hides it from the rows and from `buildClaudeProfileUsageViews` (so the rankings) until a probe finds it signed in again (the `getHomeClaudeDir` port lets a test sign out a decoy); removing a
 profile drops the topic picks that named it (the state returns them, so their sessions are moved at once).
 Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable
 weekly — percent USED, a space, a relative reset `5h 5% 🔄 in 4h` (`formatClaudeUsageBucket`; no arrow; an unknown 5h reset shows the weekly one, no

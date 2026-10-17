@@ -1025,6 +1025,12 @@ export interface AgentAdapter extends EventEmitter {
   getEffortState?(key: SessionKey): EffortState | null;
 
   /**
+   * The `provider/model` the thread's NEXT session will run on this backend — its saved `/model` pick, else the
+   * server's default — or `null` when neither is known (OpenCode only; the question before a switch to it names it).
+   */
+  getProspectiveModelLabel?(key: SessionKey): Promise<string | null>;
+
+  /**
    * The level this thread picked itself with `/effort`, or `null` when it follows the instance default
    * (`settings.json`). Unlike {@link getEffort} it is never a derived default — OpenCode's `getEffort` answers
    * with the clamped default of a live session — so `/effort` can tell "set for this topic" from "as in General".

@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { fakeClaudeLogFileNames, getLaunchSessionId, type FakeClaudeTurn } from '../jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from '../jiraE2e/fakeClaudeContract';
 import { IsolatedCharness, readJsonLines, type IsolatedInstanceLayout } from './isolatedCharness';
 import type { FakeTelegram, FakeTelegramMessage } from '../telegramE2e/fakeTelegram';
 import type { TopicDriver } from '../telegramE2e/topicDriver';
@@ -25,6 +25,8 @@ const resetHourUtc = 1;
 /** The slice of `state.json` the flows read and edit. */
 export interface PersistedState {
   claudeProfiles?: Record<string, ClaudeProfileRecord>;
+  /** The per-topic account picks, keyed by the topic. */
+  claudeProfileOverrides?: Record<string, string>;
   fallbackChain?: FallbackChainEntry[];
   agents?: Record<string, AgentData>;
   parkedSessions?: Record<string, ParkedSession>;
@@ -83,9 +85,17 @@ export function getResetClock(resetsAtIso: string): string {
   return `${resetsAtIso.slice(0, 10)} ${resetsAtIso.slice(11, 16)}`;
 }
 
-/** The bot's «switched» notices in a topic (the only messages that start with the switch mark). */
+/**
+ * The bot's usage-limit «switched» notices in a topic. They start with the switch mark like the question and the
+ * outcome lines of a MANUAL switch between backends, so the limit wording tells them apart.
+ */
 export function listSwitchNotices(driver: TopicDriver): FakeTelegramMessage[] {
-  return driver.listMessages().filter((message) => message.text.startsWith('🔁'));
+  return driver.listMessages().filter((message) => message.text.startsWith('🔁') && message.text.includes('usage limit'));
+}
+
+/** The context bridges (`[Backend switch] …`) the fake `claude` was sent, oldest first. */
+export function listBridgePrompts(layout: IsolatedInstanceLayout): FakeClaudePrompt[] {
+  return readJsonLines<FakeClaudePrompt>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes('[Backend switch]'));
 }
 
 /** Start charness on the instance and wait for its first poll to reach the fake Bot API. */

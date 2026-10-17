@@ -2744,6 +2744,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return this.getModelVariants(await this.getProspectiveModelRef(key));
   }
 
+  async getProspectiveModelLabel(key: SessionKey): Promise<string | null> {
+    const ref = await this.getProspectiveModelRef(key);
+    return ref ? `${ref.providerID}/${ref.modelID}` : null;
+  }
+
   getEffort(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     if (session) return session.effortLevel;

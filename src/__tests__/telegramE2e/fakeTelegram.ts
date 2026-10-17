@@ -345,7 +345,9 @@ export class FakeTelegram {
         const message = this.getMessageOrError(payload);
         if ('ok' in message) return message;
         message.text = String(payload.text);
-        if (payload.reply_markup !== undefined) message.reply_markup = payload.reply_markup as FakeTelegramMessage['reply_markup'];
+        // The real Bot API drops the inline keyboard of a message edited without one: that is how a one-shot picker is consumed.
+        if (payload.reply_markup === undefined) delete message.reply_markup;
+        else message.reply_markup = payload.reply_markup as FakeTelegramMessage['reply_markup'];
         return { ok: true, result: message };
       }
       case 'editMessageReplyMarkup': {
