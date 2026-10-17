@@ -2,12 +2,8 @@
 
 > **Keep this file a short map. Module behaviour goes to the module's `README.md`; do not add per-change notes here.**
 
-> Shared rules live in the `.claude` rules directory (loaded automatically). User-facing behaviour (commands,
-> env vars, features) is in the public `README.md`, the architecture diagram in `DEVELOPMENT.md`,
-> per-function detail in the code's own comments and tests.
-
-> **Terminology:** when the user says "чат"/"chat" they mean a **topic** (forum thread), NOT the whole
-> supergroup. Read every such request as per-topic.
+> User-facing behaviour (commands, env vars, features) is in the public `README.md`, the architecture diagram in
+> `DEVELOPMENT.md`, per-function detail in the code's own comments and tests.
 
 > **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is
 > `olosegres/charness`; the npm package is **`charness`** since 3.0.0, up to 2.0.3 it was `telegramcode`). The CLI
@@ -232,22 +228,9 @@ History was scrubbed of real operator identifiers — keep it that way:
 - Never commit real instance identifiers (chat/topic/user ids, group names, `t.me/c/…` links, home paths
   with a real username, private project names/remotes, tokens) — in code, tests, docs, plans, or commit
   messages. Quoting live-debug output is the usual leak path: replace ids first.
-- Examples use the repo's placeholders (`-1001111111111`, `ExampleGroup`, `/home/user/…`); real values live
-  only in untracked `CLAUDE.local.md` / `agent/tmp/`.
-- Pre-commit review sweeps the diff for real-looking identifiers — any hit is a FAIL.
-
-## Deployment — only committed `main` ships
-
-After resuming an interrupted session, inspect recent commits and the worktree first; another agent may have
-advanced the task. This checkout is the SOURCE other agent accounts on this host mirror: each has its `origin`
-pointing here and pulls on a timer via `scripts/self-update.sh`.
-
-- **Only committed `main` propagates.** Anything uncommitted never reaches the mirrors — landing it on `main`
-  IS the deploy step.
-- The pull is **fast-forward only** and skips a dirty or diverged tree, so a rewritten or force-moved `main`
-  silently stalls every mirror until each one is re-pointed by hand.
-- Touching a hot-supervisor file (`src/cli.ts`, `src/cli/hot.ts`, `nodemon.json`) makes the mirrors restart
-  the whole service (nodemon never reloads the process that spawned it); any other change rides the hot reload.
+- Examples use the repo's placeholders (`-1001111111111`, `ExampleGroup`, `/home/user/…`); real values never
+  enter the repo.
+- A real-looking identifier anywhere in a diff is a defect.
 
 ## Tests & build
 
@@ -261,7 +244,9 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow, whose own budget is that limit less its
   teardown (`getFlowDeadlineMs`) — so a hung or process-leaking file fails by name instead of hanging the run) ·
   `yarn dev` (`tsx watch`; a TS error crashes it) · `yarn hot` / `charness hot` (`tsc -w` + nodemon on
-  `dist/`: a broken edit cannot take the bot down, agents survive reloads; Linux/macOS only).
+  `dist/`: a broken edit cannot take the bot down, agents survive reloads; Linux/macOS only). Hot mode reloads
+  only the worker: a change to a supervisor file (`src/cli.ts`, `src/cli/hot.ts`, `nodemon.json`) needs a full
+  service restart, because nodemon never reloads the process that spawned it.
 - **tmux safety in tests and by hand.** Run anything that touches tmux as `env -u TMUX -u TMUX_PANE …`. Never
   touch the DEFAULT tmux server: a bare `kill-server` run from inside tmux goes to the server `$TMUX` names,
   whatever `TMUX_TMPDIR` says. A test's own servers are private (`TMUX_SOCKET_NAME` + a `TMUX_TMPDIR` inside
@@ -277,15 +262,6 @@ pointing here and pulls on a timer via `scripts/self-update.sh`.
   Cloud site and a real Claude agent and is SKIPPED unless `JIRA_LIVE_ENV_FILE`, `JIRA_LIVE_SITE` and
   `JIRA_LIVE_REQUESTER_STORAGE_STATE` are set — don't set them unless asked; run it directly
   (`node --import tsx --test src/__tests__/live/jiraLive.test.ts`) with `TMUX` / `TMUX_PANE` unset.
-- **Verifying code you wrote is YOUR job** — run it, drive the real surface; never hand the check to the user.
-  If the usual tool is missing, find another path (live OpenCode over HTTP, a real tmux pane, the code path).
-- **Output / rendering / relay changes must be verified LIVE** on the dedicated test topic ("Telegram code
-  testing", root `111` in group `-1001111111111` — placeholders; real values in untracked `CLAUDE.local.md`)
-  through `telegram-mcp` `get_history`, BEFORE the commit — unit tests and review are not enough (these bugs
-  show only under real scrape/diff timing). `telegram-mcp` not connected = BLOCKER: say so, don't commit as
-  "verified". Touch ONLY that topic. A Bash result still showing `⎿` in the raw text was NOT fenced.
-  A pasted `t.me/c/<id>/…` link decodes directly: `chat_id` = `-100<id>`; the last segment is the
-  `message_id`, a middle one (three segments) the topic root id.
 - **"A message never reached the user":** the hourly `DATA_DIR/output-trace-*.jsonl` buckets (ON by default;
   stdout is also tee'd to `bot-console-*.log`) are the source of truth. Follow `recv` → `emit` → `sendTry` →
   `sendOk` / `sendErr`: no `emit` = lost in the adapter; `emit` without `sendTry` = lost in the send path;
