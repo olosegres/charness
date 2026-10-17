@@ -55,6 +55,20 @@ function setGeneralDefault(level: string): void {
   fs.renameSync(`${settingsPath}.by-hand`, settingsPath);
 }
 
+/** The server's default model offers no variants at all (a model the provider lists without any). */
+function answerWithModelWithoutVariants(): void {
+  resetOpenCodeProviderCaches();
+  openCodeServer.answerApiWith(({ method, urlPath }) => {
+    if (method === 'GET' && (urlPath === '/config/providers' || urlPath.startsWith('/config/providers?'))) {
+      return { providers: [{ id: 'anthropic', models: { 'claude-sonnet-4-6': {} } }] };
+    }
+    if (method === 'GET' && (urlPath === '/config' || urlPath.startsWith('/config?'))) {
+      return { defaultModel: { providerID: 'anthropic', modelID: 'claude-sonnet-4-6' } };
+    }
+    return undefined;
+  });
+}
+
 describe('/effort on an OpenCode topic: General\'s value as the model will really take it', () => {
   before(async () => {
     harness = await createCommandHarness();
@@ -115,5 +129,12 @@ describe('/effort on an OpenCode topic: General\'s value as the model will reall
     const picker = harness.replies.at(-1);
     assert.equal(picker?.text, '⚙️ Effort in this topic: auto — as in General');
     assert.deepEqual(harness.getKeyboardLabels(picker).flat(), ['low', 'medium', 'high', 'As in General (auto)']);
+  });
+
+  it('a model with no variants: /effort answers «not available» — the answer the other screens now agree with', async () => {
+    answerWithModelWithoutVariants();
+    setGeneralDefault('ultracode');
+    await harness.runCommand('effort');
+    assert.equal(harness.replies.at(-1)?.text, 'ℹ️ No reasoning-effort levels are available for the current model.', 'no picker, no level');
   });
 });

@@ -49,6 +49,8 @@ limit resets, and `/accounts` to switch back, instead of repeating every label a
 ### Fixed
 - A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
   one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
+- An OpenCode model that has no effort levels shows none: `/status`, the pinned banner and the ready notice no longer
+  name General's default for a session that runs without any level (`/effort` already said «not available»).
 
 ## 3.2.0 — 2026-10-16
 

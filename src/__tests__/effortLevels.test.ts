@@ -84,8 +84,9 @@ test('getThreadEffortView — the RUNNING session\'s level wins; the next start\
   assert.deepEqual(getThreadEffortView(stateOf(null, 'low'), key), { level: 'low', nextStartLevel: null }, 'no running session (or an unknown level): what the next start will use');
 });
 
-test('getThreadEffortView — null for a backend with no effort concept', () => {
+test('getThreadEffortView — null for a backend with no effort concept, and for a thread whose model offers no levels', () => {
   assert.equal(getThreadEffortView({}, makeTelegramKey(-1001111111111, 9)), null);
+  assert.equal(getThreadEffortView({ getEffortState: () => null }, makeTelegramKey(-1001111111111, 9)), null);
 });
 
 test('getEffortAmongLevels — the level itself when offered, else the nearest the model has, else the level as it is', () => {

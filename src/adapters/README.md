@@ -331,7 +331,8 @@ resumable in the other.
   `clearEffort` («as in General») drops the pick and takes that default for the next prompt. `ultracode` (Claude-only) resolves
   to the model's HIGHEST variant and `auto` to no variant at all (`clampEffortToAvailable`) — never to the lowest one.
   `getEffortState` is `{ running: the live session's level, nextStart }`, the next start's level rounded with the last
-  providers snapshot (synchronous: the banner needs it). Provider auth is NOT
+  providers snapshot (synchronous: the banner needs it); `null` for a model the snapshot lists with NO variants (it
+  runs without a level, the screens show none), while a model the snapshot does not know yet keeps the default. Provider auth is NOT
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
 
 ## Claude, every backend

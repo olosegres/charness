@@ -1018,9 +1018,11 @@ export interface AgentAdapter extends EventEmitter {
    * live session, or when it cannot be known — a tmux TUI adopted after a restart), and the level the thread's next
    * session start will use (`nextStart`: its own pick, else the instance default; OpenCode: rounded to the model's
    * variants when they are known). The two differ when the default changed under a running session — a change
-   * applies from the next start, never to a running one. A backend without the method has no effort concept.
+   * applies from the next start, never to a running one. A backend without the method has no effort concept, and
+   * `null` says the same of one thread: its model is KNOWN to offer no levels (OpenCode: no variants), so a start
+   * sends none and there is nothing to show — a model not known yet keeps answering with the default.
    */
-  getEffortState?(key: SessionKey): EffortState;
+  getEffortState?(key: SessionKey): EffortState | null;
 
   /**
    * The level this thread picked itself with `/effort`, or `null` when it follows the instance default

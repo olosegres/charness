@@ -96,7 +96,8 @@ export interface ThreadEffortView {
  * @description The effort a thread shows: the level its RUNNING session uses (a General change never reaches a
  * running session — it applies from the next start), else the level the next start will use; plus the next start's
  * level when it differs, so the screen can say "xhigh (medium from the next start)". `null` for a backend with no
- * effort concept (no `getEffortState`) — then there is nothing to show.
+ * effort concept (no `getEffortState`) and for a thread whose model is known to offer no levels — then there is
+ * nothing to show.
  */
 export function getThreadEffortView(adapter: Pick<AgentAdapter, 'getEffortState'>, key: SessionKey): ThreadEffortView | null {
   const state = adapter.getEffortState?.(key);

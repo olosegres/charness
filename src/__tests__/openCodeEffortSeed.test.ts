@@ -27,7 +27,7 @@ import {
   noPrefThreadKeyString,
 } from './openCodeEffortSeed.testSetup';
 import { buildPromptBody, OpenCodeAdapter, resetOpenCodeProviderCaches } from '../adapters/openCodeAdapter';
-import { defaultEffortLevel, setInstanceDefaultEffortReader } from '../effortLevels';
+import { defaultEffortLevel, getThreadEffortView, setInstanceDefaultEffortReader } from '../effortLevels';
 import { keyToString, keyFromString, type SessionKey } from '../sessionKey';
 
 const openCodeServer = useStubbedOpenCodeServer();
@@ -211,6 +211,35 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       const adapter = createStubbedAdapter();
       assert.deepEqual(adapter.getEffortState(keyFromString(noPrefThreadKeyString)), { running: null, nextStart: 'low' });
       assert.deepEqual(adapter.getEffortState(keyFromString(seededThreadKeyString)), { running: null, nextStart: seededEffortLevel });
+    });
+
+    it('getEffortState: a live session on a model KNOWN to have no variants has no effort at all — nothing is sent, so nothing is shown', async () => {
+      setInstanceDefaultEffortReader(() => 'ultracode');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter([]);
+      void adapter.startSession(key, '/tmp/work');
+      const session = (await waitForSession(adapter, keyToString(key))) as { effortLevel: string | null };
+
+      assert.equal(session.effortLevel, null, 'the session sends no variant');
+      assert.equal(adapter.getEffortState(key), null, 'the screens show no effort');
+      assert.equal(getThreadEffortView(adapter, key), null, 'and the shared view reads that as «no effort concept»');
+    });
+
+    it('getEffortState with no live session: a saved model known to have no variants shows no effort; one the snapshot does not know keeps showing the default', async () => {
+      setInstanceDefaultEffortReader(() => 'ultracode');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter([]);
+      try {
+        fs.writeFileSync(modelPrefsFile, JSON.stringify({ [noPrefThreadKeyString]: 'anthropic/claude-opus-4-8' }));
+        assert.deepEqual(adapter.getEffortState(key), { running: null, nextStart: 'ultracode' }, 'no providers snapshot yet: the model is UNKNOWN, today\'s behaviour');
+        await adapter.getAvailableEffortLevels(key); // the /effort screen's read takes the snapshot
+        assert.equal(adapter.getEffortState(key), null, 'the snapshot lists the model without variants: KNOWN to have none');
+
+        fs.writeFileSync(modelPrefsFile, JSON.stringify({ [noPrefThreadKeyString]: 'anthropic/some-model-the-snapshot-lacks' }));
+        assert.deepEqual(adapter.getEffortState(key), { running: null, nextStart: 'ultracode' }, 'a model missing from the snapshot is UNKNOWN, not «no variants»');
+      } finally {
+        fs.rmSync(modelPrefsFile, { force: true });
+      }
     });
 
     it('getEffortState with no live session rounds the default to the variants of the topic\'s saved model — ultracode is not shown as is', async () => {

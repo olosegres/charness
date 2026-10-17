@@ -1346,11 +1346,13 @@ export function resetOpenCodeProviderCaches(): void {
 
 /**
  * @description The variants the LAST providers snapshot lists for `model`, however old: a model's variants hardly
- * change, and the synchronous effort display must not wait for a request. `[]` without a snapshot or a model.
+ * change, and the synchronous effort display must not wait for a request. `[]` is a model the snapshot lists with
+ * no variants (KNOWN to have none); `null` is a model the display cannot judge — no model, no snapshot yet, or a
+ * model the snapshot does not list.
  */
-function getKnownModelVariants(model: OpenCodeModelOverride | null): string[] {
-  if (!model) return [];
-  return cachedProviders?.providers.get(model.providerID)?.get(model.modelID)?.variants ?? [];
+function getKnownModelVariants(model: OpenCodeModelOverride | null): string[] | null {
+  if (!model) return null;
+  return cachedProviders?.providers.get(model.providerID)?.get(model.modelID)?.variants ?? null;
 }
 
 function getFreshProvidersConfig(now = Date.now()): ParsedProvidersConfig | null {
@@ -2758,17 +2760,19 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * without variants). The next session seeds the pick, else the default rounded to the variants of the model it
    * will run (the live one, else the topic's saved `/model`) — read from the last providers snapshot, so this stays
    * synchronous (the banner needs it); unknown variants (the server's default model, no snapshot yet) leave the
-   * default as it is.
+   * default as it is. A model KNOWN to have no variants runs without any level, so there is no state to show
+   * (`null`, as `/effort` answers «not available» for it).
    */
-  getEffortState(key: SessionKey): EffortState {
+  getEffortState(key: SessionKey): EffortState | null {
     const session = this.sessions.get(keyToString(key));
     const liveSession = session?.isActive ? session : null;
     const pick = loadSavedEffort(key);
     const defaultLevel = getInstanceDefaultEffort();
     const variants = getKnownModelVariants(liveSession ? this.getSessionModelRef(liveSession) : loadSavedModel(key));
+    if (variants !== null && variants.length === 0) return null;
     return {
       running: liveSession ? liveSession.effortLevel : null,
-      nextStart: pick ?? clampEffortToAvailable(defaultLevel, variants) ?? defaultLevel,
+      nextStart: pick ?? clampEffortToAvailable(defaultLevel, variants ?? []) ?? defaultLevel,
     };
   }
 
