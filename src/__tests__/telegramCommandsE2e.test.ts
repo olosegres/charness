@@ -58,7 +58,7 @@ import { TopicDriver } from './telegramE2e/topicDriver';
 import { restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { getSttPaths } from '../stt/sttInstall';
-import { writeInstalledMarker } from './fixtures/sttInstallFiles';
+import { appendInstallProgress, holdInstallLock, releaseInstallLock, writeInstalledMarker } from './fixtures/sttInstallFiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
 import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
@@ -229,6 +229,8 @@ interface PersistedStateSlice {
   displayPrefs?: Record<string, Record<string, string>>;
   agents?: Record<string, { name?: string; claudeSessionId?: string; jsonStreamTail?: { claudeCodeVersion?: string } }>;
   fallbackChain?: FallbackChainEntry[];
+  /** The topic message a running local-engine install reports into; present from the moment a `/stt` tap starts one. */
+  sttInstallProgress?: { threadKey: string; messageId: number };
 }
 
 function readPersistedState(): PersistedStateSlice {
@@ -283,6 +285,17 @@ function writeSttFileByHand(file: SttFileSlice): void {
   const tempPath = `${getSttConfigFilePath()}.by-hand`;
   fs.writeFileSync(tempPath, `${JSON.stringify(file, null, 2)}\n`);
   fs.renameSync(tempPath, getSttConfigFilePath());
+}
+
+/**
+ * Nothing started a local-engine install: no job holds the lock or wrote progress, and no message is remembered as its
+ * report. All three change the moment an install starts (the log only says so when it ENDS, minutes later).
+ */
+function assertNoInstallStarted(): void {
+  const paths = getSttPaths(getLayout().dataDir);
+  assert.equal(fs.existsSync(paths.lockDir), false, 'no install job holds the lock');
+  assert.equal(fs.existsSync(paths.progressFile), false, 'no install job wrote progress');
+  assert.equal(readPersistedState().sttInstallProgress, undefined, 'no install message is remembered');
 }
 
 /** Everything the output trace has recorded so far (the hourly buckets and their rollovers). */
@@ -644,7 +657,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the main screen again', screen, (text) => text.includes('Engines, tried in this order') || text.includes('No engines yet'));
     assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['➕ Add engine', '🌐 Language: auto', '✖️ Close']);
     assert.equal(readFileOrNull(), fileBefore, 'cancelling writes nothing');
-    assert.ok(!getCharness().output.includes('[STT] install'), 'and no install was started');
+    assertNoInstallStarted();
     assert.equal(fs.existsSync(getSttPaths(dataDir).markerFile), false);
   });
 
@@ -723,6 +736,58 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.equal(fs.existsSync(getSttPaths(getLayout().dataDir).markerFile), false, 'the model files are gone');
     assert.deepEqual(readSttFile().engines, []);
     assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['➕ Add engine', '🌐 Language: auto', '✖️ Close']);
+  });
+
+  it('the card of a listed GigaAM whose files are missing: Install asks, Cancel returns to the card, nothing is written and no install starts', async () => {
+    const dataDir = getLayout().dataDir;
+    assert.equal(fs.existsSync(getSttPaths(dataDir).markerFile), false, 'the model is not installed');
+    const fileBefore = readSttFile();
+    assertNoInstallStarted();
+
+    // A list that names GigaAM without its files makes the bot fetch the model by itself, the moment it reads the file.
+    // A job that is already running (the lock, as the boot flows hold it) keeps the bot from launching the real one.
+    holdInstallLock(dataDir);
+    try {
+      appendInstallProgress(dataDir, { phase: 'downloadingModel', detail: '12/216 MB', bytesDownloaded: 12 * 1024 * 1024 });
+      writeSttFileByHand({ ...fileBefore, engines: [{ id: 'g', kind: 'gigaam' }] });
+      const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+      await tapButton(screen, 'stt_oe_g_');
+      await topic.waitForMessageText('the card of the engine being installed', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+      assert.match(screen.text, /Status: installing/);
+      const installingLabels = topic.getKeyboardLabels(screen).flat();
+      assert.ok(installingLabels.includes('📊 Show install progress'), installingLabels.join(' | '));
+      assert.ok(!installingLabels.includes('⬇️ Install'), 'nothing to start while a job runs');
+      assert.ok(!installingLabels.includes('🗑 Remove model files'), 'and nothing to remove');
+
+      // The job ends without leaving the model behind: the files are still missing and the bot starts nothing of its own.
+      fs.rmSync(getSttPaths(dataDir).progressFile, { force: true });
+      releaseInstallLock(dataDir);
+      await tapButton(screen, 'stt_bk_');
+      await topic.waitForMessageText('the main screen', screen, (text) => text.includes('Engines, tried in this order'));
+      await tapButton(screen, 'stt_oe_g_');
+      await topic.waitForMessageText('the card of the engine that is not installed', screen, (text) => text.includes('Status: not installed'));
+      const cardLabels = topic.getKeyboardLabels(screen).flat();
+      assert.ok(cardLabels.includes('⬇️ Install'), cardLabels.join(' | '));
+      assert.ok(!cardLabels.includes('🗑 Remove model files'), 'no files to remove');
+      assert.deepEqual(readSttFile().engines, [{ id: 'g', kind: 'gigaam' }]);
+      const fileWithEngine = fs.readFileSync(getSttConfigFilePath(), 'utf8');
+
+      await tapButton(screen, 'stt_ec_g_'); // Install
+      await topic.waitForMessageText('the install confirmation', screen, (text) => text.startsWith('Enable local recognition?'));
+      assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['⬇️ Install', 'Cancel']);
+      assert.equal(fs.readFileSync(getSttConfigFilePath(), 'utf8'), fileWithEngine, 'asking writes nothing');
+
+      await tapButton(screen, 'stt_oe_g_'); // Cancel: back to the card the confirmation was opened from
+      await topic.waitForMessageText('the card again', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+      assert.match(screen.text, /Status: not installed/);
+      assert.ok(topic.getKeyboardLabels(screen).flat().includes('⬇️ Install'));
+      assert.equal(fs.readFileSync(getSttConfigFilePath(), 'utf8'), fileWithEngine, 'cancelling writes nothing');
+      assertNoInstallStarted();
+    } finally {
+      releaseInstallLock(dataDir);
+      fs.rmSync(getSttPaths(dataDir).progressFile, { force: true });
+      writeSttFileByHand(fileBefore);
+    }
   });
 
   it('a custom server through the typed steps: the address with a login and the pasted key are deleted and never reach a bot message or the output trace', async () => {
