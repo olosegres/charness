@@ -192,24 +192,36 @@ export function readWrapperScriptConfigDir(wrapperFile: string): string | null {
   }
 }
 
+/** The claude flags a session's model and effort ride on — written by the spawn, read back from the wrapper at adopt. */
+export const claudeModelFlag = '--model';
+export const claudeEffortFlag = '--effort';
+
 /**
- * @description The `--effort <level>` a wrapper script's command line carries, `null` when it has none. The bot's
- * own quoting wraps every argument (`'--effort' 'xhigh'`).
+ * @description The value of `flag` on a wrapper script's command line, `null` when it has none. The bot's own
+ * quoting wraps every argument (`'--effort' 'xhigh'`), so a flag-looking text inside another argument never matches.
  */
-export function parseEffortFromWrapperScript(script: string): string | null {
-  return script.match(/(?:^|\s)'--effort'\s+'([^']*)'/)?.[1] ?? null;
+export function parseWrapperScriptFlag(script: string, flag: string): string | null {
+  return script.match(new RegExp(`(?:^|\\s)'${flag}'\\s+'([^']*)'`))?.[1] ?? null;
+}
+
+/** @name WrapperScriptLaunchFlags @description The model and effort a wrapper starts claude with; `null` = not passed. */
+export interface WrapperScriptLaunchFlags {
+  model: string | null;
+  effort: string | null;
 }
 
 /**
- * @description The effort level a persisted wrapper script starts claude with, `null` for an unreadable script or
- * one without the flag. Read at adopt: the surviving process keeps the level it was spawned with whatever the
- * default is now, and `/status`, the banner and `/effort` name the level a session really runs.
+ * @description The `--model` and `--effort` a persisted wrapper script starts claude with, both `null` for an
+ * unreadable script. Read at adopt: the surviving process keeps what it was spawned with, so a later re-spawn
+ * (effort, model, account) passes on what it does not change instead of dropping it, and `/status`, the banner and
+ * `/effort` name the level a session really runs.
  */
-export function readWrapperScriptEffort(wrapperFile: string): string | null {
+export function readWrapperScriptLaunchFlags(wrapperFile: string): WrapperScriptLaunchFlags {
   try {
-    return parseEffortFromWrapperScript(fs.readFileSync(wrapperFile, 'utf8'));
+    const script = fs.readFileSync(wrapperFile, 'utf8');
+    return { model: parseWrapperScriptFlag(script, claudeModelFlag), effort: parseWrapperScriptFlag(script, claudeEffortFlag) };
   } catch {
-    return null;
+    return { model: null, effort: null };
   }
 }
 

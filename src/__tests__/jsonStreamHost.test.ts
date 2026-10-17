@@ -30,9 +30,11 @@ import {
   buildJsonStreamTmuxSessionName,
   resolveAdoptedTail,
   buildWrapperScript,
-  parseEffortFromWrapperScript,
+  parseWrapperScriptFlag,
+  claudeEffortFlag,
+  claudeModelFlag,
   readWrapperScriptConfigDir,
-  readWrapperScriptEffort,
+  readWrapperScriptLaunchFlags,
   createStdoutTailState,
   decodeStdoutTailChunk,
   getJsonStreamSessionPaths,
@@ -125,28 +127,38 @@ describe('buildWrapperScript with a Claude account profile', () => {
   });
 });
 
-describe('the effort a persisted wrapper starts claude with', () => {
-  it('reads the --effort flag back from the script the bot wrote, in either account shape', () => {
+describe('the model and effort a persisted wrapper starts claude with', () => {
+  it('reads --model and --effort back from the script the bot wrote, in either account shape', () => {
     const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
     const args = ['-p', '--model', 'sonnet', '--effort', 'xhigh', '--resume', 'abc'];
-    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths)), 'xhigh');
-    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths, null, '/data/dir/claude-profiles/work')), 'xhigh');
-    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', args, '/work', paths, { HOME: '/home/user' })), 'xhigh');
+    const scripts = [
+      buildWrapperScript('/opt/bin/claude', args, '/work', paths),
+      buildWrapperScript('/opt/bin/claude', args, '/work', paths, null, '/data/dir/claude-profiles/work'),
+      buildWrapperScript('/opt/bin/claude', args, '/work', paths, { HOME: '/home/user' }),
+    ];
+    for (const script of scripts) {
+      assert.equal(parseWrapperScriptFlag(script, claudeEffortFlag), 'xhigh');
+      assert.equal(parseWrapperScriptFlag(script, claudeModelFlag), 'sonnet');
+    }
   });
 
-  it('is null when the script has no --effort (claude\'s own default), and a flag-looking value elsewhere is not one', () => {
+  it('is null when the script lacks the flag (claude\'s own default), and a flag-looking value elsewhere is not one', () => {
     const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
-    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', ['-p', '--model', 'sonnet'], '/work', paths)), null);
-    assert.equal(parseEffortFromWrapperScript(buildWrapperScript('/opt/bin/claude', ['-p', '--append-system-prompt', 'use --effort max'], '/work', paths)), null);
+    const bare = buildWrapperScript('/opt/bin/claude', ['-p', '--resume', 'abc'], '/work', paths);
+    assert.equal(parseWrapperScriptFlag(bare, claudeEffortFlag), null);
+    assert.equal(parseWrapperScriptFlag(bare, claudeModelFlag), null);
+    const quoted = buildWrapperScript('/opt/bin/claude', ['-p', '--append-system-prompt', "use '--effort' 'max' --model opus"], '/work', paths);
+    assert.equal(parseWrapperScriptFlag(quoted, claudeEffortFlag), null);
+    assert.equal(parseWrapperScriptFlag(quoted, claudeModelFlag), null);
   });
 
-  it('readWrapperScriptEffort reads a persisted wrapper and tolerates a missing file', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wrapper-effort-'));
+  it('readWrapperScriptLaunchFlags reads a persisted wrapper and tolerates a missing file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-wrapper-flags-'));
     try {
       const paths = getJsonStreamSessionPaths(dir);
-      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p', '--effort', 'max'], '/work', paths));
-      assert.equal(readWrapperScriptEffort(paths.wrapperFile), 'max');
-      assert.equal(readWrapperScriptEffort(path.join(dir, 'absent.sh')), null);
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/opt/bin/claude', ['-p', '--model', 'opus', '--effort', 'max'], '/work', paths));
+      assert.deepEqual(readWrapperScriptLaunchFlags(paths.wrapperFile), { model: 'opus', effort: 'max' });
+      assert.deepEqual(readWrapperScriptLaunchFlags(path.join(dir, 'absent.sh')), { model: null, effort: null });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

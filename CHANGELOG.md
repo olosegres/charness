@@ -92,6 +92,8 @@ checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATIO
 - Jira: a mention no longer displaces a hand-over without a requester, and a superseded question no longer asks
   to assign the issue back.
 - A Claude session adopted under the old data-dir path is no longer re-spawned as another account.
+- A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
+  one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
 
 ## 3.0.0 — 2026-10-07
 

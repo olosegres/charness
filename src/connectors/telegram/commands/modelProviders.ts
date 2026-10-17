@@ -415,7 +415,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     // Read AFTER the switch: a model that does not offer the level in force
     // clears it (`effort.cleared_on_model_switch`), so a pre-switch read would
     // report a level the new model no longer runs. Same resolution rule as
-    // `/status` — no `getEffort` means the backend has no effort concept at all.
+    // `/status` — no `getEffortState` means the backend has no effort concept at all.
     const effort = getThreadEffortView(adapter, key)?.level ?? null;
     const decision = getModelSetReplyDecision(
       {

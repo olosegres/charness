@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import {
   effortPrefsFile,
+  modelPrefsFile,
   seededThreadKeyString,
   seededEffortLevel,
   noPrefThreadKeyString,
@@ -210,6 +211,20 @@ describe('OpenCode new session seeds effort from the saved pref (S7 lock)', () =
       const adapter = createStubbedAdapter();
       assert.deepEqual(adapter.getEffortState(keyFromString(noPrefThreadKeyString)), { running: null, nextStart: 'low' });
       assert.deepEqual(adapter.getEffortState(keyFromString(seededThreadKeyString)), { running: null, nextStart: seededEffortLevel });
+    });
+
+    it('getEffortState with no live session rounds the default to the variants of the topic\'s saved model — ultracode is not shown as is', async () => {
+      setInstanceDefaultEffortReader(() => 'ultracode');
+      const key: SessionKey = keyFromString(noPrefThreadKeyString);
+      const adapter = createStubbedAdapter(['low', 'medium', 'high']);
+      try {
+        fs.writeFileSync(modelPrefsFile, JSON.stringify({ [noPrefThreadKeyString]: 'anthropic/claude-opus-4-8' }));
+        assert.deepEqual(adapter.getEffortState(key), { running: null, nextStart: 'ultracode' }, 'no providers snapshot yet: nothing to round with');
+        await adapter.getAvailableEffortLevels(key); // the /effort screen's read takes the snapshot
+        assert.deepEqual(adapter.getEffortState(key), { running: null, nextStart: 'high' }, 'the saved model stops at high');
+      } finally {
+        fs.rmSync(modelPrefsFile, { force: true });
+      }
     });
   });
 });

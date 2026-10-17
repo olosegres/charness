@@ -345,8 +345,10 @@ resumable in the other.
   platform default). `getOwnEffort` is the thread's own pick only (the instance default is never stored as one);
   `clearEffort` drops it and brings a live session to the default (tmux: the `/effort` keystroke; json-stream: a
   `--resume` re-spawn, only when it runs another level). `getEffortState` says what the display shows: `running` — the
-  json-stream session's `--effort` (read back from its `wrapper.sh` at adopt, so a reload keeps it) or the level the bot
-  last typed into a tmux TUI (`runningEffort`; unknown after an adopt) — and `nextStart`.
+  json-stream session's `--effort` or the level the bot last typed into a tmux TUI (`runningEffort`; unknown after an
+  adopt) — and `nextStart`. A json-stream adopt reads the surviving process's `--model` and `--effort` back from its
+  `wrapper.sh` (`readWrapperScriptLaunchFlags`): the display survives a reload, and a later re-spawn (effort, model,
+  account) passes on whichever of the two it does not change instead of dropping it.
 - **Survey.** The end-of-turn feedback survey is dismissed (one Escape per appearance) by `extractClaudeSurvey`,
   whose header list (`CLAUDE_SURVEY_HEADER_REGEX`) is CLOSED and anchored on purpose — an open prose pattern
   once fired on a quoted survey. A new wording left unrecognised sits on the pane and swallows the Enter of

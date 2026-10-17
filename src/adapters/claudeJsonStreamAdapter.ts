@@ -80,7 +80,9 @@ import {
   buildJsonStreamTmuxSessionName,
   buildWrapperScript,
   readWrapperScriptConfigDir,
-  readWrapperScriptEffort,
+  readWrapperScriptLaunchFlags,
+  claudeModelFlag,
+  claudeEffortFlag,
   checkIsPidAlive,
   createStdoutTailState,
   decodeStdoutTailChunk,
@@ -512,8 +514,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     ];
     if (isResumable) args.push('--resume', sessionId);
     else args.push('--session-id', sessionId);
-    if (opts.model) args.push('--model', opts.model);
-    if (opts.effort) args.push('--effort', opts.effort);
+    if (opts.model) args.push(claudeModelFlag, opts.model);
+    if (opts.effort) args.push(claudeEffortFlag, opts.effort);
     args.push(...mcpFlags);
     // Overflow-triggered compaction gets the bot's summary guidance (see the module).
     args.push(...prepareClaudeCompactHookFlags(resolveDataDir()));
@@ -852,6 +854,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const { startOffset, backgroundTaskIds, isTurnInFlight, outstandingToolUseIds, claudeCodeVersion } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
+    const launchFlags = readWrapperScriptLaunchFlags(paths.wrapperFile);
     const session: StreamSession = {
       key, workDir, sessionId: claudeSessionId,
       pid, paths, fifoFd,
@@ -868,8 +871,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
-      // The level the surviving process was spawned with is in its own wrapper too: it keeps it whatever the default is now.
-      model: null, reportedModel: null, effort: readWrapperScriptEffort(paths.wrapperFile),
+      // The model and level the surviving process was spawned with are in its own wrapper too: it keeps them whatever
+      // the topic resolves to now, and a later re-spawn passes them on.
+      model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false,
       currentResponseText: '', emittedLength: 0, outputTimer: null,

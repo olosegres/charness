@@ -2755,8 +2755,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * The live session sends its `effortLevel` with every prompt (a model variant, or none for `auto` / a model
-   * without variants). The next session seeds the pick, else the default rounded to the model's variants — read
-   * from the last providers snapshot, so this stays synchronous (the banner needs it); unknown variants leave the
+   * without variants). The next session seeds the pick, else the default rounded to the variants of the model it
+   * will run (the live one, else the topic's saved `/model`) — read from the last providers snapshot, so this stays
+   * synchronous (the banner needs it); unknown variants (the server's default model, no snapshot yet) leave the
    * default as it is.
    */
   getEffortState(key: SessionKey): EffortState {
@@ -2764,7 +2765,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const liveSession = session?.isActive ? session : null;
     const pick = loadSavedEffort(key);
     const defaultLevel = getInstanceDefaultEffort();
-    const variants = liveSession ? getKnownModelVariants(this.getSessionModelRef(liveSession)) : [];
+    const variants = getKnownModelVariants(liveSession ? this.getSessionModelRef(liveSession) : loadSavedModel(key));
     return {
       running: liveSession ? liveSession.effortLevel : null,
       nextStart: pick ?? clampEffortToAvailable(defaultLevel, variants) ?? defaultLevel,

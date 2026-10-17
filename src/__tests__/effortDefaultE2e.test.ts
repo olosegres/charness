@@ -15,6 +15,7 @@
  *   → «As in General» drops a topic's pick and re-spawns its live session at the default (same conversation)
  *   → a hand edit of `settings.json` applies to the next start with no restart; an invalid one is one named log
  *     error and the code fallback applies; a General tap over it replaces it
+ *   → after a bot restart an adopted session still names the level it runs, and a re-spawn of it keeps its model
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -329,5 +330,22 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     // The adopted process knows nothing but its own command line: the level comes from there.
     await follower.sendAndAwaitReply('/status', 'Effort: high (low from the next start)');
     await follower.sendAndAwaitReply('/effort', 'Effort in this topic: high (low from the next start) — as in General');
+  });
+
+  it('an effort pick on a session adopted after a bot restart re-spawns it with the model it ran, not without one', async () => {
+    await picker.sendAndAwaitReply('/model sonnet', 'Model set to');
+    const picked = await askAgentAndReadLaunch(pickerThreadId);
+    assert.deepEqual(getFlagValues(picked.argv, '--model'), ['sonnet']);
+
+    await getCharness().stop();
+    await startCharness();
+    await getCharness().waitFor('the surviving sessions to be re-adopted', replyTimeoutMs, () => /\[reattach\] claude-json-stream: adopted [1-9]/.test(getCharness().output));
+
+    const screen = await picker.sendAndAwaitReply('/effort', 'Effort in this topic:');
+    await picker.tapAndAwaitAnswer(screen, 'effort_max');
+    const respawned = await askAgentAndReadLaunch(pickerThreadId);
+    assert.notEqual(respawned.pid, picked.pid, 'the adopted process was replaced');
+    assert.deepEqual(getFlagValues(respawned.argv, '--effort'), ['max']);
+    assert.deepEqual(getFlagValues(respawned.argv, '--model'), ['sonnet'], 'the model the adopted process ran rides the re-spawn');
   });
 });

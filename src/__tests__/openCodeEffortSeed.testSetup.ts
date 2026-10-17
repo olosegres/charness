@@ -18,6 +18,8 @@ export const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-effort-seed
 process.env.DATA_DIR = tempDataDir;
 
 export const effortPrefsFile = path.join(tempDataDir, '.opencode-effort-prefs.json');
+/** The per-thread `/model` picks; absent unless a test writes it. */
+export const modelPrefsFile = path.join(tempDataDir, '.opencode-model-prefs.json');
 
 /** Thread with a stored effort pref → a NEW session must seed effortLevel from it. */
 export const seededThreadKeyString = '-100666222:9';
