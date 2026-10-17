@@ -12,6 +12,8 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import type { ClaudeConfigDirApplyResult } from '../../../adapters/claudeConfigDir';
 import type { ClaudeLoginProfile } from '../../../agentLogin/agentLogin';
+import type { FallbackChainEntry } from '../../../utils/fallbackChain';
+import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import {
   checkIsValidClaudeProfileName,
   claudeProfileNameMaxLength,
@@ -87,11 +89,12 @@ export interface ClaudeAccountsPorts
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
   /**
-   * A Claude account picked on a topic that runs OpenCode is a switch to Claude: with a conversation to hand over
-   * the operator is asked first (`asked`, the question is already in the topic), a topic with nothing to carry
-   * switches at once (`switched`, with the line to say so); `notApplicable` when the topic does not run OpenCode.
+   * The operator's own pick of a rung on a topic (`bot.ts`, `utils/operatorSwitchPlan.ts`): an account of the backend
+   * the topic runs changes the account, an account picked on the other backend asks first when a conversation is to
+   * be handed over (`asked`: the question is already in the topic, nothing more to say), a pick while a limit wait is
+   * armed is the limit move. The outcome carries the line to show.
    */
-  takeClaudeAccountPickOnOpenCodeTopic: (key: SessionKey, profile: string) => Promise<{ kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' }>;
+  switchTopicByOperator: (key: SessionKey, to: FallbackChainEntry) => Promise<OperatorSwitchOutcome>;
   /** The OpenCode providers the server is authenticated for (its live catalog); `[]` when it cannot be read. */
   detectOpenCodeProviders: () => Promise<string[]>;
   /** Drop a provider's stored credentials and post the outcome — the `/disconnect <provider>` flow, unchanged. */
@@ -119,7 +122,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere, takeClaudeAccountPickOnOpenCodeTopic, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
+    applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
@@ -342,12 +345,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       await applyClaudeProfileEverywhere();
       return t('account.setGlobal', { name });
     }
-    const onOpenCode = await takeClaudeAccountPickOnOpenCodeTopic(key, name);
-    if (onOpenCode.kind === 'asked') return null;
-    if (onOpenCode.kind === 'switched') return onOpenCode.notice;
-    await getState().setClaudeProfileOverride(key, name);
-    const outcome = await applyClaudeProfile(key);
-    return t('account.setThisTopic', { name, apply: describeApplyOutcome(outcome) });
+    const outcome = await switchTopicByOperator(key, { backend: 'claude', profile: name, model: null });
+    return outcome.kind === 'asked' ? null : outcome.text;
   }
 
   /** A topic drops its own pick; its session follows the instance default from now on. */

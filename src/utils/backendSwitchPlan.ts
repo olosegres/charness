@@ -18,13 +18,14 @@ export type BackendFamily = 'claude' | 'opencode';
 /**
  * Where a manual switch goes. A Claude target names an account: `isProfilePicked` is whether the operator PICKED it
  * (an account tap, `/accounts use`) — the switch then records it as the topic's own pick — or it is only the account
- * the topic already follows (`/claude`), which the switch leaves to General. An OpenCode target carries the model the
- * topic will run, for the question only (`null` when the server's default cannot be read) — the switch itself leaves
- * the model alone, so a topic that follows the server's default keeps following it.
+ * the topic already follows (`/claude`), which the switch leaves to General; `model` is the CLI alias the switch pins
+ * (`null`: the session's own model). An OpenCode target carries `modelLabel`, the model the question names (`null` when
+ * the server's default cannot be read), and `model`, the model the operator PICKED — the switch pins it after the move;
+ * `null` leaves the model alone, so a topic that follows the server's default keeps following it.
  */
 export type BackendSwitchTarget =
-  | { backend: 'claude'; profile: string; isProfilePicked: boolean }
-  | { backend: 'opencode'; modelLabel: string | null };
+  | { backend: 'claude'; profile: string; isProfilePicked: boolean; model: string | null }
+  | { backend: 'opencode'; modelLabel: string | null; model: { providerId: string; modelId: string } | null };
 
 /** The family an adapter name belongs to; `null` for a shell or an unknown name (nothing to hand over from or to). */
 export function getBackendFamily(adapterName: string | undefined): BackendFamily | null {
@@ -47,6 +48,12 @@ export function checkNeedsBackendSwitchConfirmation(input: {
   return currentFamily !== null && currentFamily !== input.targetBackend && input.hasConversation;
 }
 
+/** The model a switch to `target` pins once the target runs: a Claude alias, an OpenCode `provider/model` label; `null` pins nothing. */
+export function getBackendSwitchModelToPin(target: BackendSwitchTarget): string | null {
+  if (target.model === null) return null;
+  return target.backend === 'claude' ? target.model : `${target.model.providerId}/${target.model.modelId}`;
+}
+
 /** The one-shot keyboard of the question: continue / cancel. Constant data — the question is identified by its message. */
 export const backendSwitchContinueCallback = 'bsw_ok';
 export const backendSwitchCancelCallback = 'bsw_no';
@@ -57,15 +64,18 @@ export function formatBackendFamily(family: BackendFamily): string {
   return family === 'claude' ? t('fallback.backendClaude') : t('fallback.backendOpenCode');
 }
 
-/** The target as the question names it: `Claude «work»`, `OpenCode openai/gpt-5`, or `OpenCode` when its model is unknown. */
+/** The target as the question names it: `Claude «work»`, `Claude «work» (sonnet)`, `OpenCode openai/gpt-5`, or `OpenCode` when its model is unknown. */
 export function formatBackendSwitchTarget(target: BackendSwitchTarget): string {
-  if (target.backend === 'claude') return `${t('fallback.backendClaude')} «${target.profile}»`;
+  if (target.backend === 'claude') {
+    const account = `${t('fallback.backendClaude')} «${target.profile}»`;
+    return target.model === null ? account : `${account} (${target.model})`;
+  }
   return target.modelLabel === null ? t('fallback.backendOpenCode') : `${t('fallback.backendOpenCode')} ${target.modelLabel}`;
 }
 
 /** The target as the context bridge names it, the way a chain rung is labelled: `Claude · work`, `OpenCode · openai/gpt-5`. */
 export function formatBackendSwitchBridgeLabel(target: BackendSwitchTarget): string {
-  if (target.backend === 'claude') return `${t('fallback.backendClaude')} · ${target.profile}`;
+  if (target.backend === 'claude') return `${t('fallback.backendClaude')} · ${target.profile}${target.model === null ? '' : ` · ${target.model}`}`;
   return target.modelLabel === null ? t('fallback.backendOpenCode') : `${t('fallback.backendOpenCode')} · ${target.modelLabel}`;
 }
 

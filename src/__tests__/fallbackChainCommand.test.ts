@@ -263,6 +263,29 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(harness.state.getFallbackChain().length, lengthBefore);
   });
 
+  it('the add step\'s model list is the shared model page: ten to a page with the page pill, a limited model carries its ⛔ mark', async () => {
+    const savedDetection = detection;
+    const manyModels = Array.from({ length: 12 }, (_, index) => `openai/model-${index + 1}`);
+    detection = { ...savedDetection, openCodeModels: manyModels, openCodeLimits: { 'openai/model-2': '2999-01-01T00:00:00.000Z' } };
+    try {
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      await harness.tapButton(pickerId, 'fbk_add');
+      await harness.tapButton(pickerId, 'fbk_addp_0');
+      const firstPage = harness.edits.at(-1);
+      const labels = harness.getKeyboardLabels(firstPage);
+      assert.equal(labels.length, 10 + 2, 'ten models, the pager, the back row');
+      assert.match(labels[1][0], /^model-2 ⛔ /, 'the limited model carries the limit mark and its reset');
+      assert.deepEqual(labels[10], ['1/2', 'Next ➡️'], 'the page pill and «next» (no «previous» on page one)');
+      assert.deepEqual(harness.getKeyboardData(firstPage)[10], ['mdlnoop', 'fbk_addpg_1']);
+      await harness.tapButton(pickerId, 'fbk_addpg_1');
+      const secondPage = harness.edits.at(-1);
+      assert.deepEqual(harness.getKeyboardData(secondPage), [['fbk_addm_10'], ['fbk_addm_11'], ['fbk_addpg_0', 'mdlnoop'], ['fbk_back']], 'the pick index is the place in the whole list');
+      await harness.tapButton(pickerId, 'fbk_back');
+    } finally {
+      detection = savedDetection;
+    }
+  });
+
   it('the add snapshot belongs to its CHAT: a tap from another chat on the same message id resolves nothing, this chat\'s snapshot survives', async () => {
     const pickerId = harness.replies.at(-1)!.messageId!;
     await harness.tapButton(pickerId, 'fbk_add');

@@ -10,7 +10,6 @@ import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
 import { t } from '../../../i18n';
-import { paginateList } from '../../../utils/paginateList';
 import {
   type ModelCatalog,
   modelPickerNoopCallback,
@@ -55,6 +54,7 @@ import {
   checkIsOAuthMethod,
 } from '../../../utils/openCodeAuthLogin';
 import { getCallbackMessageId } from './callbackMessage';
+import { buildModelPageButtons, modelPageSize } from './modelPage';
 import { createWholeTextAnswerer } from './callbackToast';
 import type { BotCore } from './botCore';
 
@@ -105,16 +105,6 @@ export function getProviderAuthAdapter(): AgentAdapter {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  /model — two-level provider → models picker
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * @description Models per page in the `/model` model level. Model names are
- * long, so each gets a full-width row; 10 rows keep the keyboard scroll-free
- * and the numbered text list ~10 short lines — far from Telegram's 4096-char
- * message cap, which the old render-everything list blew past (12 990 chars on
- * a 367-model `openrouter` catalog → every `/model` died with "message is too
- * long" and the topic went silent).
- */
-const MODEL_PAGE_SIZE = 10;
 
 /** Model label the thread currently runs, or the localized "default" stand-in. */
 function getCurrentModelLabel(adapter: AgentAdapter, key: SessionKey): string {
@@ -279,43 +269,21 @@ export function buildModelPageRender(
   const provider = catalog.providers[providerIndex];
   if (provider === undefined || catalog.hiddenProviders.includes(provider)) return null;
   const providerModels = catalog.byProvider.get(provider) ?? [];
-  const { slice, currentPage, totalPages } = paginateList(providerModels, page, MODEL_PAGE_SIZE);
-  const firstIndexOnPage = currentPage * MODEL_PAGE_SIZE;
-
-  const rows = slice.map((modelId, offset) => {
-    const shortLabel = getModelShortLabel(modelId, provider);
-    return [
-      Markup.button.callback(
-        modelId === current ? `${shortLabel} ✓` : shortLabel,
-        buildModelPickCallback(providerIndex, firstIndexOnPage + offset),
-      ),
-    ];
+  const { rows, pageModels, currentPage, totalPages } = buildModelPageButtons({
+    provider,
+    models: providerModels,
+    page,
+    current,
+    callbacks: {
+      buildPage: (targetPage) => buildProviderPageCallback(providerIndex, targetPage),
+      buildPick: (modelIndex) => buildModelPickCallback(providerIndex, modelIndex),
+      noop: modelPickerNoopCallback,
+      // No back row when the provider level was skipped — it would lead nowhere.
+      back: checkHasProviderLevel(catalog.visibleProviders.length, catalog.hiddenProviders.length)
+        ? { label: t('model.back_button'), data: modelPickerBackCallback }
+        : null,
+    },
   });
-
-  if (totalPages > 1) {
-    const nav = [];
-    if (currentPage > 0) {
-      nav.push(Markup.button.callback(
-        t('model.prev_button'),
-        buildProviderPageCallback(providerIndex, currentPage - 1),
-      ));
-    }
-    nav.push(Markup.button.callback(
-      t('model.page_button', { page: currentPage + 1, totalPages }),
-      modelPickerNoopCallback,
-    ));
-    if (currentPage < totalPages - 1) {
-      nav.push(Markup.button.callback(
-        t('model.next_button'),
-        buildProviderPageCallback(providerIndex, currentPage + 1),
-      ));
-    }
-    rows.push(nav);
-  }
-  // No back row when the provider level was skipped — it would lead nowhere.
-  if (checkHasProviderLevel(catalog.visibleProviders.length, catalog.hiddenProviders.length)) {
-    rows.push([Markup.button.callback(t('model.back_button'), modelPickerBackCallback)]);
-  }
 
   const header = t('model.page_header', {
     provider,
@@ -325,7 +293,7 @@ export function buildModelPageRender(
     current,
   });
   const numberedList = options.isWithNumberedList
-    ? slice.map((modelId, offset) => `${offset + 1}. ${getModelShortLabel(modelId, provider)}`).join('\n')
+    ? pageModels.map((modelId, offset) => `${offset + 1}. ${getModelShortLabel(modelId, provider)}`).join('\n')
     : '';
   const hint = options.isWithNumberedList ? t('model.page_hint') : t('model.page_hint_buttons_only');
   const text = [header, numberedList, hint].filter((part) => part.length > 0).join('\n\n');
@@ -333,7 +301,7 @@ export function buildModelPageRender(
   return {
     text,
     keyboard: Markup.inlineKeyboard(rows),
-    pageModels: slice,
+    pageModels,
     isNumberedPickArmed: options.isWithNumberedList,
   };
 }
@@ -1040,7 +1008,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       const refreshed = buildModelPageRender(
         catalog,
         providerIndex,
-        Math.floor(modelIndex / MODEL_PAGE_SIZE),
+        Math.floor(modelIndex / modelPageSize),
         getCurrentModelLabel(adapter, key),
         { isWithNumberedList: false },
       );
@@ -1248,6 +1216,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     applyProviderDisconnect,
     handleProviderConnectKey,
     applyNumberedModelPick,
+    applyModelSelection,
     applyModelPagePickArming,
     checkIsNumberedModelPickArmed,
     getNumberedModelPick,

@@ -13,7 +13,7 @@ import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
 import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
-import { paginateList } from '../../../utils/paginateList';
+import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
@@ -65,6 +65,7 @@ import {
   fallbackWaitOpenCallback,
   fallbackWaitSameCallback,
   formatFallbackEntryLabel,
+  formatOpenCodeModelLimitSuffix,
   getFallbackChainRevision,
   getFallbackEntryAvailability,
   listOpenCodeModelsOfProvider,
@@ -81,9 +82,7 @@ import {
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 import { createWholeTextAnswerer } from './callbackToast';
-
-/** Models per page in the «add an OpenCode model» step (the `/model` picker's density). */
-const addModelPageSize = 8;
+import { buildModelPageButtons } from './modelPage';
 
 /**
  * How long opening the screen waits for the usage refresh (one poll is ~0.5 s). A slower one — a hung endpoint
@@ -414,20 +413,25 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     await editThreadMessage(key, messageId, t('fallback.pickModel', { account: `${getLabelWords().claude} · ${profile}` }), Markup.inlineKeyboard(rows));
   }
 
-  /** Step 2 for an OpenCode provider: one page of its models (absolute indexes into the snapshot). */
-  async function renderAddModelPage(key: SessionKey, messageId: number, snapshot: AddSnapshot, page: number): Promise<void> {
-    const { slice, currentPage, totalPages } = paginateList(snapshot.models, page, addModelPageSize);
-    const offset = currentPage * addModelPageSize;
-    const rows = slice.map((modelId, index) => [Markup.button.callback(modelId, buildFallbackAddModelCallback(offset + index))]);
-    if (totalPages > 1) {
-      const nav: ReturnType<typeof Markup.button.callback>[] = [];
-      if (currentPage > 0) nav.push(Markup.button.callback('◀️', buildFallbackAddModelPageCallback(currentPage - 1)));
-      nav.push(Markup.button.callback(`${currentPage + 1}/${totalPages}`, buildFallbackAddModelPageCallback(currentPage)));
-      if (currentPage < totalPages - 1) nav.push(Markup.button.callback('▶️', buildFallbackAddModelPageCallback(currentPage + 1)));
-      rows.push(nav);
-    }
-    rows.push(buildBackRow());
-    await editThreadMessage(key, messageId, t('fallback.pickModel', { account: `${getLabelWords().openCode} · ${snapshot.providerId}` }), Markup.inlineKeyboard(rows));
+  /** Step 2 for an OpenCode provider: one page of its models (absolute indexes into the snapshot), limit marks on the limited ones. */
+  async function showAddModelPage(key: SessionKey, messageId: number, snapshot: AddSnapshot, page: number): Promise<void> {
+    const providerId = snapshot.providerId ?? '';
+    const { openCodeLimits } = await detectFallbackOptions();
+    const nowMs = Date.now();
+    const { rows } = buildModelPageButtons({
+      provider: providerId,
+      models: snapshot.models,
+      page,
+      current: null,
+      callbacks: {
+        buildPage: buildFallbackAddModelPageCallback,
+        buildPick: buildFallbackAddModelCallback,
+        noop: modelPickerNoopCallback,
+        back: { label: t('fallback.backButton'), data: fallbackBackCallback },
+      },
+      getSuffix: (modelId) => formatOpenCodeModelLimitSuffix(`${providerId}/${modelId}`, openCodeLimits, getInstanceTimezone(), nowMs),
+    });
+    await editThreadMessage(key, messageId, t('fallback.pickModel', { account: `${getLabelWords().openCode} · ${providerId}` }), Markup.inlineKeyboard(rows));
   }
 
   /** Append an entry to the chain and RETURN the confirmation (the one write path behind both add steps). */
@@ -685,7 +689,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const models = listOpenCodeModelsOfProvider(detection.openCodeModels, providerId);
       const next: AddSnapshot = { ...snapshot, providerId, models };
       addSnapshots.set(buildMessageSnapshotKey(key, messageId), next);
-      await renderAddModelPage(key, messageId, next, 0);
+      await showAddModelPage(key, messageId, next, 0);
     }));
 
     bot.action(fallbackAddModelPageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
@@ -696,7 +700,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
         return;
       }
       await ctx.answerCbQuery();
-      await renderAddModelPage(key, messageId, snapshot, Number(ctx.match[1]));
+      await showAddModelPage(key, messageId, snapshot, Number(ctx.match[1]));
     }));
 
     bot.action(fallbackAddModelCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {

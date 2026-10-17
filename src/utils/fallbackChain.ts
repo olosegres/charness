@@ -18,7 +18,7 @@
  */
 
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { buildClaudeProfilesReport, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeProfileUsageView } from './claudeUsage';
 
 /**
  * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
@@ -358,6 +358,16 @@ export function getFallbackEntryAvailability(entry: FallbackChainEntry, detectio
   const limitedUntil = detection.openCodeLimits[label];
   if (limitedUntil !== undefined && Date.parse(limitedUntil) > nowMs) return { status: 'limited', until: limitedUntil };
   return { status: 'available' };
+}
+
+/**
+ * @description ` ⛔ 14:00` for an OpenCode model whose limit mark still lies ahead (the reset in `timezone`, the date
+ * added when it is not today), `''` for one that is free. Appended to a model's caption wherever models are listed.
+ */
+export function formatOpenCodeModelLimitSuffix(label: string, limits: Readonly<Record<string, string>>, timezone: string, nowMs: number): string {
+  const limitedUntil = limits[label];
+  if (limitedUntil === undefined || !(Date.parse(limitedUntil) > nowMs)) return '';
+  return ` ⛔ ${formatClaudeUsageResetAt(limitedUntil, timezone, nowMs)}`;
 }
 
 /** The latest reset among the windows a model drains that are at 100 % and still ahead; `null` when none names one. */

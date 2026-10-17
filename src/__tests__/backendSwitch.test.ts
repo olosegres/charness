@@ -27,10 +27,10 @@ const switches: Array<{ target: BackendSwitchTarget; userMessage: string | undef
 let feature: ReturnType<typeof createBackendSwitch>;
 
 /** What `/claude` asks for: the account the topic follows, not a pick. */
-const toClaude: BackendSwitchTarget = { backend: 'claude', profile: 'default', isProfilePicked: false };
+const toClaude: BackendSwitchTarget = { backend: 'claude', profile: 'default', isProfilePicked: false, model: null };
 /** What an account tap asks for: a pick the switch records. */
-const toPickedClaude: BackendSwitchTarget = { backend: 'claude', profile: 'work', isProfilePicked: true };
-const toOpenCode: BackendSwitchTarget = { backend: 'opencode', modelLabel: 'openai/gpt-5' };
+const toPickedClaude: BackendSwitchTarget = { backend: 'claude', profile: 'work', isProfilePicked: true, model: null };
+const toOpenCode: BackendSwitchTarget = { backend: 'opencode', modelLabel: 'openai/gpt-5', model: null };
 
 async function ask(request: { from: BackendFamily; target: BackendSwitchTarget; userMessage?: string }): Promise<number> {
   await feature.askBackendSwitch(harness.key, request);

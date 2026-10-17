@@ -400,7 +400,8 @@ import {
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
-import { checkNeedsBackendSwitchConfirmation, getBackendFamily, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
+import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operatorSwitchPlan';
+import { checkNeedsBackendSwitchConfirmation, getBackendFamily, getBackendSwitchModelToPin, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
@@ -6590,6 +6591,7 @@ const {
   applyProviderDisconnect,
   handleProviderConnectKey,
   applyNumberedModelPick,
+  applyModelSelection,
   registerProviderCommands,
   registerModelCommands,
   registerModelCallbacks,
@@ -6931,17 +6933,17 @@ function resolveLiveClaudeProfileName(key: SessionKey): string {
 }
 
 /**
- * @description An `/account` pick on a topic: the plain apply, except while a usage-limit wait is armed and the
- * pick moves the topic off the profile its process runs on. The process cannot work on the limited account, so
- * the pick is applied NOW and the topic resumes like after a limit switch (wait cancelled, continue nudge).
+ * @description Apply the account a Claude topic now resolves to (the follow-the-default tap): the plain apply, except
+ * while a usage-limit wait is armed and the account differs from the one the process runs — then it is the same limit
+ * move an operator's pick makes ({@link switchTopicByOperator}): applied NOW, the topic resumes like after a limit switch.
  */
 async function applyClaudePickToThread(key: SessionKey): Promise<ClaudeProfileApplyOutcome> {
-  const armed = getArmedApiRetry(key);
-  if (armed?.kind === 'usageLimit' && checkIsClaudeProfileBackend(key)) {
+  if (checkIsClaudeProfileBackend(key)) {
     const from = getTopicFallbackPosition(key);
-    const to = state.resolveClaudeProfileName(key);
-    if (from !== null && from.backend === 'claude' && from.profile !== to) {
-      const { isSwitched } = await switchTopicToFallbackEntry(key, from, { backend: 'claude', profile: to, model: null }, { isAnnounced: true });
+    const to: FallbackChainEntry = { backend: 'claude', profile: state.resolveClaudeProfileName(key), model: null };
+    const route = decideOperatorSwitch({ isUsageLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit', from, to, currentFamily: 'claude', hasConversation: false });
+    if (route === 'limitMove') {
+      const { isSwitched } = await switchTopicToFallbackEntry(key, from, to, { isAnnounced: true });
       return isSwitched ? 'respawned' : 'deferred';
     }
   }
@@ -7104,19 +7106,20 @@ async function switchTopicToFallbackEntry(
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
   options: { isAnnounced: boolean },
-): Promise<{ isSwitched: boolean; notice: string }> {
+): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
-  const isSameFamily = from !== null && from.backend === to.backend;
+  // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
+  const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
   const runningModel = readRunningModelBeforeMove(key, from, to);
   const say = async (notice: string): Promise<void> => {
     if (options.isAnnounced) await replyToThread(key, notice);
   };
-  const fail = async (error: string): Promise<{ isSwitched: boolean; notice: string }> => {
+  const fail = async (error: string): Promise<{ isSwitched: boolean; notice: string; isFailed: boolean }> => {
     const notice = t('fallback.switchFailed', { to: toLabel, error });
     await say(notice);
-    return { isSwitched: false, notice };
+    return { isSwitched: false, notice, isFailed: true };
   };
   let firstPrompt: FirstPromptAfterMove | null = null;
   let isStoppingBackground = false;
@@ -7231,9 +7234,9 @@ async function checkHasConversationToHandOver(key: SessionKey): Promise<boolean>
  * server cannot say). The OpenCode model is for the question only — the switch leaves it alone.
  */
 async function resolveBackendSwitchTarget(key: SessionKey, backend: BackendFamily): Promise<BackendSwitchTarget> {
-  if (backend === 'claude') return { backend: 'claude', profile: state.resolveClaudeProfileName(key), isProfilePicked: false };
+  if (backend === 'claude') return { backend: 'claude', profile: state.resolveClaudeProfileName(key), isProfilePicked: false, model: null };
   const modelLabel = await getAdapter(openCodeAdapterName).getProspectiveModelLabel?.(key).catch(() => null);
-  return { backend: 'opencode', modelLabel: modelLabel ?? null };
+  return { backend: 'opencode', modelLabel: modelLabel ?? null, model: null };
 }
 
 /**
@@ -7275,27 +7278,73 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
   await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
   cancelApiRetry(key); // a wait armed for the backend just left is over
   await resumeTopicOnNewSession(key, {
-    modelToPin: null,
+    modelToPin: getBackendSwitchModelToPin(target),
     getFirstPrompt: () => (bridge === null ? null : { text: bridge, isRequestPrompt: false }),
     args: bridge === null ? options.userMessage : undefined,
   });
 }
 
+/** The rung as a manual switch's target: a picked Claude account (+ model alias), or an OpenCode model, both named in the question. */
+function buildBackendSwitchTargetOfRung(to: FallbackChainEntry): BackendSwitchTarget {
+  if (to.backend === 'claude') return { backend: 'claude', profile: to.profile, isProfilePicked: true, model: to.model };
+  return { backend: 'opencode', modelLabel: buildOpenCodeModelLabel(to), model: { providerId: to.providerId, modelId: to.modelId } };
+}
+
 /**
- * @description A Claude account picked (a tap in `/accounts`, `/accounts use`) on a topic that runs OpenCode: that
- * is a switch to Claude on that account. With a conversation to hand over the operator is asked first; without
- * one the topic switches at once. `notApplicable` when the topic does not run OpenCode — the pick then applies to
- * its Claude session as it always did.
+ * @description The ONE path an operator's own pick takes — a row of `/limits` or `/accounts`, a model page,
+ * `/accounts use` (`utils/operatorSwitchPlan.ts` decides which move it is):
+ *   - a usage-limit wait is armed → the limit move (the wait is dropped and the work continues, a conversation is
+ *     handed over without the question);
+ *   - the backend the topic runs → a Claude pick changes the account (the live session is re-spawned, same
+ *     conversation) and pins the rung's model when it names one; an OpenCode pick is the `/model` apply (its reply);
+ *     a topic with no agent only records a Claude pick for its next start;
+ *   - the other backend → the hand-over question when there is a conversation, else the switch at once.
+ * The outcome tells the screen what to say; the question and the limit move's notice are already posted.
  */
-async function takeClaudeAccountPickOnOpenCodeTopic(key: SessionKey, profile: string): Promise<{ kind: 'asked' } | { kind: 'switched'; notice: string } | { kind: 'notApplicable' }> {
-  if (getTopicBackendFamily(key) !== 'opencode') return { kind: 'notApplicable' };
-  const target: BackendSwitchTarget = { backend: 'claude', profile, isProfilePicked: true };
-  if (await checkHasConversationToHandOver(key)) {
-    await askBackendSwitch(key, { from: 'opencode', target });
-    return { kind: 'asked' };
+async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): Promise<OperatorSwitchOutcome> {
+  const currentFamily = getTopicBackendFamily(key);
+  const from = getTopicFallbackPosition(key);
+  const route = decideOperatorSwitch({
+    isUsageLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
+    from,
+    to,
+    currentFamily,
+    hasConversation: currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
+  });
+  const target = buildBackendSwitchTargetOfRung(to);
+  switch (route) {
+    case 'limitMove': {
+      const moved = await switchTopicToFallbackEntry(key, from, to, { isAnnounced: true });
+      if (moved.isFailed) return { kind: 'refused', text: moved.notice };
+      if (to.backend === 'opencode') return { kind: 'switched', text: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
+      return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${moved.isSwitched ? 'respawned' : 'deferred'}`) }) };
+    }
+    case 'sameFamily': {
+      if (to.backend === 'opencode') {
+        const adapter = getThreadAdapter(key);
+        const { isOk, message, setModelError } = await applyModelSelection(adapter, key, buildOpenCodeModelLabel(to));
+        return isOk ? { kind: 'switched', text: message } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
+      }
+      const runningModel = readRunningModelBeforeMove(key, from, to);
+      await state.setClaudeProfileOverride(key, to.profile);
+      const outcome = await applyClaudeProfileToThread(key);
+      const switchedText = t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${outcome}`) });
+      const modelToPin = getFallbackModelToPin(to, runningModel);
+      if (modelToPin === null) return { kind: 'switched', text: switchedText };
+      const { isOk, message, setModelError } = await applyModelSelection(getThreadAdapter(key), key, modelToPin);
+      return isOk ? { kind: 'switched', text: `${switchedText}\n${message}` } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
+    }
+    case 'askFirst': {
+      // The route asks only when the topic runs a backend to hand over from.
+      if (currentFamily === null) throw new Error(`${keyToString(key)}: the hand-over question was asked for a topic that runs no agent`);
+      await askBackendSwitch(key, { from: currentFamily, target });
+      return { kind: 'asked' };
+    }
+    case 'switchNow': {
+      await executeBackendSwitch(key, target, { isBridged: false });
+      return { kind: 'switched', text: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
+    }
   }
-  await executeBackendSwitch(key, target, { isBridged: false });
-  return { kind: 'switched', notice: t('backendSwitch.switched', { to: formatBackendSwitchTarget(target) }) };
 }
 
 const { askBackendSwitch, registerBackendSwitchCallbacks } = createBackendSwitch({
@@ -7353,7 +7402,7 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
-  takeClaudeAccountPickOnOpenCodeTopic,
+  switchTopicByOperator,
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   disconnectOpenCodeProvider: applyProviderDisconnect,
   startOpenCodeConnect: showConnectMethodPicker,
