@@ -8,7 +8,7 @@
  *   --best         print ONLY the recommended profile's config directory — an EMPTY line for the default
  *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`
  *                  works as is; exit 1 when no profile is eligible
- *   --model <name> the model the child will run (`fable` → the Fable weekly window counts)
+ *   --model <name> the model the child will run (`fable` → the Fable weekly window counts besides the shared ones)
  *   --json         the full report as JSON (the MCP tool's shape)
  *
  * Without a flag: one human line per profile. `DATA_DIR` comes from the environment the bot itself reads

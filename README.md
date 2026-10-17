@@ -291,8 +291,8 @@ so one account's usage limit does not stop every topic.
   `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
   `claude_profiles` — optionally with the model it will run — and gets every
   profile with its windows plus `recommended`: the signed-in, unlimited profile
-  with the most headroom (Fable → Fable's weekly window and the session window;
-  any other model → the shared weekly window and the session window). It then
+  with the most headroom (the session window and the shared weekly window bound
+  every model; Fable additionally drains its own weekly window). It then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
   profile: set nothing). The same answer from a shell, for a worker without
   MCP: `charness claude-profiles [--best] [--model <name>] [--json]` —
@@ -322,8 +322,8 @@ and the two settings (auto switch, wait for the reset):
   limited Claude account itself — a model the limit does not cover (a Fable-only weekly limit
   does not stop `opus` or `sonnet`; the usage windows say what is exhausted) continue the work
   at once; a pick still inside the limit's scope (Fable again, or any model while the session or
-  the shared weekly window is exhausted, or when the windows are unknown) only changes the
-  model and the wait stays. A tap that switched answers with a short «✅ This topic runs on …».
+  the shared weekly window is exhausted — Fable drains both too — or when the windows are unknown)
+  only changes the model and the wait stays. A tap that switched answers with a short «✅ This topic runs on …».
 - **OpenCode usage.** A provider signed in through a **ChatGPT subscription** (the `openai`
   provider with an `oauth` record in OpenCode's `auth.json`) shows its ~5 h and ~7 d
   windows on the board and in `/accounts`, read the way a Claude account's are: the stored

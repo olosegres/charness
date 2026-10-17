@@ -69,18 +69,17 @@ test('candidates: the limited profile is never one, the rest are ordered by head
   assert.deepEqual(candidates, ['work', 'spare']);
 });
 
-test('candidates: the model picks the weekly window — Fable ranks on its own window', () => {
-  const candidates = pickClaudeLimitSwitchCandidates({
-    profiles: [
-      buildProfile('default', { usage: buildUsage({ session: 100, weekly: 50, fable: 10 }) }),
-      buildProfile('work', { usage: buildUsage({ session: 20, weekly: 10, fable: 90 }) }),
-      buildProfile('spare', { usage: buildUsage({ session: 30, weekly: 90, fable: 15 }) }),
-    ],
-    currentName: 'default',
-    model: 'fable',
-    nowMs,
-  });
-  assert.deepEqual(candidates, ['spare', 'work']);
+test('candidates: Fable ranks on the shared windows AND its own, another model on the shared ones only', () => {
+  const profiles = [
+    buildProfile('default', { usage: buildUsage({ session: 100, weekly: 50, fable: 10 }) }),
+    buildProfile('work', { usage: buildUsage({ session: 20, weekly: 10, fable: 90 }) }),
+    buildProfile('spare', { usage: buildUsage({ session: 30, weekly: 60, fable: 15 }) }),
+    buildProfile('sharedFull', { usage: buildUsage({ session: 5, weekly: 100, fable: 5 }) }),
+  ];
+  const forFable = pickClaudeLimitSwitchCandidates({ profiles, currentName: 'default', model: 'fable', nowMs });
+  assert.deepEqual(forFable, ['spare', 'work'], 'work is at 90 % on Fable\'s window, spare at 60 % on the shared weekly; sharedFull has no room on the shared weekly window Fable drains too');
+  const forOpus = pickClaudeLimitSwitchCandidates({ profiles, currentName: 'default', model: 'opus', nowMs });
+  assert.deepEqual(forOpus, ['work', 'spare'], 'opus never touches Fable\'s window; sharedFull is out for it as well');
 });
 
 test('candidates: signed out, marked limited, stale, unknown usage and no headroom are all out', () => {

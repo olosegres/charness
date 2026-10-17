@@ -264,21 +264,25 @@ export function getClaudeUsageBucket(snapshot: ClaudeUsageSnapshot | undefined, 
 
 // ── which profile for a model ──
 
-/** Whether a model name (`fable`, `claude-fable-5-1`, …) runs on the scoped weekly window. */
+/** Whether a model name (`fable`, `claude-fable-5-1`, …) also drains Fable's own weekly window. */
 export function checkIsScopedWeeklyModel(model: string | null): boolean {
   return model !== null && /fable/i.test(model);
 }
 
-/** The windows that bound a launch of `model`: the session window plus the weekly one the model drains. */
+/**
+ * The windows that bound a launch of `model`. The session window and the weekly «all models» window are shared by EVERY model,
+ * Fable included; Fable additionally drains its own weekly window (`weekly_scoped`). So an exhausted shared window stops Fable
+ * too, while an exhausted Fable window stops Fable alone.
+ */
 export function getRelevantClaudeUsageKinds(model: string | null): ClaudeUsageBucketKind[] {
-  return ['session', checkIsScopedWeeklyModel(model) ? 'weekly_scoped' : 'weekly_all'];
+  return checkIsScopedWeeklyModel(model) ? ['session', 'weekly_all', 'weekly_scoped'] : ['session', 'weekly_all'];
 }
 
 /**
  * @description Whether every window a launch of `model` drains is KNOWN and below 100 % — the model is clear of an exhausted
- * window: a Fable-only weekly limit does not stop `sonnet`, while an exhausted session window stops every model. Unknown
- * figures (no snapshot, a window the snapshot lacks) are `false`: a limit nobody can tell the scope of is taken to cover the model.
- * A stale snapshot still counts — its last figures are the best there are.
+ * window: a Fable-only weekly limit does not stop `sonnet`, while an exhausted session or shared weekly window stops every
+ * model, Fable included. Unknown figures (no snapshot, a window the snapshot lacks) are `false`: a limit nobody can tell the
+ * scope of is taken to cover the model. A stale snapshot still counts — its last figures are the best there are.
  */
 export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | undefined, model: string | null): boolean {
   return getRelevantClaudeUsageKinds(model).every((kind) => {
@@ -289,12 +293,17 @@ export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | unde
 
 /**
  * @description Whether a pick of `pickedModel`, on the account a usage limit stopped while it ran `limitedModel`, is clear of that
- * limit: the picked model drains another weekly window than the limited one — a model draining the very windows that just ran out
- * is covered by the limit, however far the figures lag behind it — and {@link checkHasHeadroomForClaudeModel} holds. An unknown
+ * limit. The window that stopped the limited model is one of the windows IT drains, so a picked model that drains all of them
+ * (the same model, a model on the same windows, or Fable after any other model — Fable drains the shared windows too) is covered
+ * by the limit however far the figures lag behind it. Only a model draining FEWER windows — a non-Fable model after Fable, which
+ * may have stopped on its own weekly window alone — is judged by {@link checkHasHeadroomForClaudeModel}. An unknown
  * `limitedModel` leaves it to the figures.
  */
 export function checkIsClaudeModelClearOfLimit(usage: ClaudeUsageSnapshot | undefined, limitedModel: string | null, pickedModel: string): boolean {
-  if (limitedModel !== null && checkIsScopedWeeklyModel(limitedModel) === checkIsScopedWeeklyModel(pickedModel)) return false;
+  if (limitedModel !== null) {
+    const pickedKinds = getRelevantClaudeUsageKinds(pickedModel);
+    if (getRelevantClaudeUsageKinds(limitedModel).every((kind) => pickedKinds.includes(kind))) return false;
+  }
   return checkHasHeadroomForClaudeModel(usage, pickedModel);
 }
 

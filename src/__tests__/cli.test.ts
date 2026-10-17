@@ -106,9 +106,9 @@ test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints
   fs.writeFileSync(path.join(tmpRoot, 'state.json'), JSON.stringify({
     claudeProfiles: {
       default: { createdAt: '2026-10-01T00:00:00.000Z', loggedIn: true, email: 'me@example.com', subscriptionType: 'max',
-        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 81), bucket('weekly_all', 76), bucket('weekly_scoped', 33, 'Fable')] } },
+        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 20), bucket('weekly_all', 30), bucket('weekly_scoped', 95, 'Fable')] } },
       work: { createdAt: '2026-10-02T00:00:00.000Z', loggedIn: true, email: 'w@example.com', subscriptionType: 'pro',
-        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 10), bucket('weekly_all', 90), bucket('weekly_scoped', 5, 'Fable')] } },
+        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 30), bucket('weekly_all', 40), bucket('weekly_scoped', 10, 'Fable')] } },
     },
   }));
   const fable = runCli(['claude-profiles', '--best', '--model', 'fable']);
@@ -121,11 +121,11 @@ test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints
   assert.equal(json.status, 0, json.stderr);
   const report = JSON.parse(json.stdout) as { recommended: string; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
   assert.equal(report.recommended, 'work');
-  assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 19], ['work', false, 90]]);
+  assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 5], ['work', false, 60]], 'Fable: default is at 95 % on Fable\'s own window, work at 40 % on the shared weekly one');
   const human = runCli(['claude-profiles']);
   assert.equal(human.status, 0, human.stderr);
-  assert.match(human.stdout, /✓ default .*5h 81% 🔄 /);
-  assert.match(human.stdout, /• work .*Fable 5% 🔄 /);
+  assert.match(human.stdout, /✓ default .*5h 20% 🔄 /);
+  assert.match(human.stdout, /• work .*Fable 10% 🔄 /);
   assert.match(human.stdout, /recommended for any model: default/);
   const bad = runCli(['claude-profiles', '--frob']);
   assert.equal(bad.status, 2);

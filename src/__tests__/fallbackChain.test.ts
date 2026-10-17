@@ -235,6 +235,7 @@ test('availability: a Claude rung needs a known, signed-in, unlimited profile wi
       buildProfile('expired', { limitedUntil: '2026-10-12T09:00:00.000Z' }),
       buildProfile('full', { usage: buildUsage({ session: 100, weekly: 5 }) }),
       buildProfile('fableFull', { usage: buildUsage({ session: 5, weekly: 5, fable: 100 }) }),
+      buildProfile('weeklyFull', { usage: buildUsage({ session: 5, weekly: 100, fable: 5 }) }),
       buildProfile('stale', { usage: buildUsage({ session: 5, weekly: 5, isStale: true }) }),
       buildProfile('unknown', { usage: undefined, loggedIn: undefined }),
     ],
@@ -248,6 +249,13 @@ test('availability: a Claude rung needs a known, signed-in, unlimited profile wi
   assert.equal(status(claude('full')), 'limited');
   assert.equal(status(claude('fableFull', 'fable')), 'limited', 'Fable drains its own window');
   assert.equal(status(claude('fableFull', 'sonnet')), 'available', 'sonnet does not');
+  assert.equal(status(claude('weeklyFull', 'fable')), 'limited', 'the shared weekly window stops Fable too: it drains it as well');
+  assert.equal(status(claude('weeklyFull', 'sonnet')), 'limited');
+  assert.deepEqual(
+    getFallbackEntryAvailability(claude('weeklyFull', 'fable'), detection, nowMs),
+    { status: 'limited', until: '2026-10-15T00:00:00.000Z' },
+    'and it is limited until THAT window resets',
+  );
   assert.equal(status(claude('stale')), 'available');
   assert.equal(status(claude('unknown')), 'available');
 });

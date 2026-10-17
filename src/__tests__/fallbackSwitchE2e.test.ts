@@ -24,6 +24,8 @@
  *     that model and leaves the topic following General's account
  *   → with a wait armed by a Fable-only limit (the usage snapshot says so) a pick of a model the limit does not cover (opus)
  *     continues the work at once, while a pick still inside the limit (fable) only changes the model and keeps the wait
+ *   → with a wait armed by an exhausted SHARED weekly window Fable is stopped too (it drains that window as well): a Fable pick
+ *     only changes the model and the wait stays
  *   → topic C moves to «work», which hits its limit too while «default» is still limited: nothing can take over, a
  *     wait is armed. A tap on the first account on the `/limits` board then resumes the interrupted turn: the limit switch, its notice and the
  *     "continue" message
@@ -411,6 +413,54 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.ok(getFlagValues(resumed.argv, '--model').includes('opus'), 'on the model that was picked');
     await getCharness().waitFor('the wait to be over', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
     assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[`${group.id}:${fourthTopicThreadId}`], undefined, 'the topic still follows General\'s account');
+    // The resumed turn must have ANSWERED before the next step restarts the bot: a restart in the middle of a turn is another scenario.
+    await getCharness().waitFor('the resumed turn to answer', agentStartTimeoutMs, () => fourthTopic.listMessages().filter((message) => message.text.includes('Working on LIM-7')).length >= 2);
+  });
+
+  it('with a wait armed by an exhausted SHARED weekly window, Fable is stopped too (it drains that window as well): the pick only changes the model and the wait stays', async () => {
+    await restartWithState((persisted) => {
+      const existing = persisted.claudeProfiles?.[exhaustedAccount];
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        [exhaustedAccount]: {
+          createdAt: existing?.createdAt ?? new Date().toISOString(),
+          ...existing,
+          usage: {
+            fetchedAt: new Date().toISOString(),
+            source: 'api',
+            buckets: [
+              { kind: 'session', percent: 10, resetsAt: resetsAtIso, scopeModel: null },
+              { kind: 'weekly_all', percent: 100, resetsAt: resetsAtIso, scopeModel: null },
+              { kind: 'weekly_scoped', percent: 5, resetsAt: resetsAtIso, scopeModel: 'Fable' },
+            ],
+          },
+        },
+      };
+    });
+    askAgentToHitTheLimit(fourthTopicThreadId, 'LIM-8');
+    await getCharness().waitFor('the wait to be armed', agentStartTimeoutMs, () => Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length === 1 && getAgentTurns(getLayout(), 'LIM-8').length === 1);
+    const noticesBefore = listSwitchNotices(fourthTopic).length;
+
+    const board = await openBoard(fourthTopic, fourthTopicThreadId);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    const labels = fourthTopic.getKeyboardLabels(board.message).flat();
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const toast = await fourthTopic.tapAndAwaitAnswer(board.message, fourthTopic.getKeyboardData(board.message).flat()[labels.findIndex((label) => label.startsWith('fable'))]);
+    assert.equal(toast, `✅ This topic runs on Claude «${exhaustedAccount}» (fable).`);
+    await getCharness().waitFor('the session to restart on fable', agentStartTimeoutMs, () => {
+      const latest = getSessionLaunches(getLayout()).at(-1);
+      return getSessionLaunches(getLayout()).length > launchesBefore && latest !== undefined && getFlagValues(latest.argv, '--model').includes('fable');
+    });
+    assert.equal(Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length, 1, 'the wait stays armed: Fable would only run into the same window');
+    assert.equal(getAgentTurns(getLayout(), 'LIM-8').length, 1, 'the interrupted turn was not resumed');
+    assert.equal(listSwitchNotices(fourthTopic).length, noticesBefore, 'no limit notice');
+
+    // End the wait the way the operator does («skip once» on the board), so the next step starts clean.
+    const again = await openBoard(fourthTopic, fourthTopicThreadId);
+    const skipData = fourthTopic.getKeyboardData(again.message).flat().at(-1) ?? '';
+    await fourthTopic.tapAndAwaitAnswer(again.message, skipData);
+    await getCharness().waitFor('the wait to be skipped', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
   });
 
   it('with a limit wait armed — both accounts limited — a tap on the first account on the /limits board resumes the interrupted turn', async () => {

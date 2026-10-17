@@ -1460,8 +1460,8 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
       description:
         'The Claude account profiles signed in on this host, each with its usage windows — session (5 h), weekly ' +
         '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the profile with the most ' +
-        'headroom for the model you pass (Fable → its own weekly window + the session window; any other model → the ' +
-        'shared weekly window + the session window; signed-out and limited profiles are skipped). Call it BEFORE ' +
+        'headroom for the model you pass (the session window and the shared weekly window bound every model, Fable ' +
+        'included; Fable also drains its own weekly window; signed-out and limited profiles are skipped). Call it BEFORE ' +
         'launching a child `claude` and start the child with CLAUDE_CONFIG_DIR=<configDir> in its environment — ' +
         'configDir null means the default profile: set nothing. Without the variable the child inherits the account ' +
         'of this very session.',
@@ -1470,7 +1470,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
           .string()
           .max(64)
           .optional()
-          .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides which weekly window counts. Omit for the shared windows.'),
+          .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides whether the Fable weekly window counts besides the shared ones. Omit for the shared windows.'),
       },
     },
     async (args) => {

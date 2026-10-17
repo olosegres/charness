@@ -10,6 +10,11 @@ model), the ✓ row (change the model of where the topic runs). Across backends 
 while a usage-limit wait is armed the tap is the limit move (on the limited Claude account a model the limit does not cover — `opus` under a Fable-only weekly limit — continues the work too). The usage-limit notice now ends «The limit resets <time>.
 Switch: /limits». In General a Claude row sets the default account.
 
+**Fable is judged on all three of its windows.** The session window and the shared weekly «all models» window bound every
+model, Fable included; Fable additionally drains its own weekly window. The `claude_profiles` recommendation (MCP tool and
+`charness claude-profiles`), the fallback chain's availability and the account ranking on a limit used to look at Fable's own
+window and the session window only, so an account with its shared weekly window exhausted could still be recommended for Fable.
+
 **The fallback setup is its own screen, `/limits_autoswitch`.** The ordered fallback list, «🔁 Auto switch» and «⏳ Wait for
 reset» moved there from the old `/limits` (minus the usage block); its rows now read `✓ 1. Claude · work · opus` /
 `3. OpenCode · openai · gpt-5`. `/limits rebuild|clear|switch|wait …`, `/fallback` and `/auto_continue_limits` keep working.

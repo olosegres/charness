@@ -126,23 +126,34 @@ describe('the ranking (claude_profiles)', () => {
     name, configDir: name === 'default' ? null : `/data/profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage, limitedUntil: null, ...extra,
   });
 
-  it('Fable looks at the Fable window + the session window; another model at the shared weekly + the session window', () => {
-    assert.deepEqual(getRelevantClaudeUsageKinds('fable'), ['session', 'weekly_scoped']);
-    assert.deepEqual(getRelevantClaudeUsageKinds('claude-fable-5-1'), ['session', 'weekly_scoped']);
+  it('the session and shared weekly windows bound EVERY model; Fable additionally drains its own weekly window', () => {
+    assert.deepEqual(getRelevantClaudeUsageKinds('fable'), ['session', 'weekly_all', 'weekly_scoped']);
+    assert.deepEqual(getRelevantClaudeUsageKinds('claude-fable-5-1'), ['session', 'weekly_all', 'weekly_scoped']);
     assert.deepEqual(getRelevantClaudeUsageKinds('opus'), ['session', 'weekly_all']);
     assert.deepEqual(getRelevantClaudeUsageKinds(null), ['session', 'weekly_all']);
   });
 
   it('recommends the most headroom on the relevant windows, so the same two profiles rank differently per model', () => {
-    const profiles = [view('default', snapshot(81, 76, 33)), view('work', snapshot(10, 90, 5))];
+    const profiles = [view('default', snapshot(10, 20, 95)), view('work', snapshot(30, 40, 10))];
     const forFable = buildClaudeProfilesReport(profiles, 'fable', nowMs);
-    assert.equal(forFable.recommended, 'work', 'Fable: work has 90 % headroom on its session window and 95 % on Fable → min 90; default min 19');
-    assert.deepEqual(forFable.profiles.map((entry) => [entry.name, entry.headroomPercent, entry.isRecommended]), [['default', 19, false], ['work', 90, true]]);
+    assert.equal(forFable.recommended, 'work', 'Fable: default is at 95 % on Fable\'s own window (headroom 5), work at 40 % on the shared weekly (headroom 60)');
+    assert.deepEqual(forFable.profiles.map((entry) => [entry.name, entry.headroomPercent, entry.isRecommended]), [['default', 5, false], ['work', 60, true]]);
+    assert.deepEqual(forFable.relevantBuckets, ['session', 'weekly_all', 'weekly_scoped']);
     const forOpus = buildClaudeProfilesReport(profiles, 'opus', nowMs);
-    assert.equal(forOpus.recommended, 'default', 'Opus: work is at 90 % on the shared weekly window (headroom 10), default at 81 % session (headroom 19)');
+    assert.equal(forOpus.recommended, 'default', 'Opus never touches Fable\'s window: default has 80 % headroom (shared weekly 20 %), work 60');
+    assert.deepEqual(forOpus.profiles.map((entry) => entry.headroomPercent), [80, 60]);
     assert.deepEqual(forOpus.relevantBuckets, ['session', 'weekly_all']);
     assert.equal(forOpus.profiles[0].configDir, null, 'the default profile launches with no CLAUDE_CONFIG_DIR');
     assert.equal(forOpus.profiles[1].configDir, '/data/profiles/work');
+  });
+
+  it('an exhausted SHARED weekly window stops a Fable launch too (Fable drains it as well); only an exhausted Fable window is Fable\'s alone', () => {
+    const sharedExhausted = view('sharedFull', snapshot(10, 100, 5));
+    const fableExhausted = view('fableFull', snapshot(10, 20, 100));
+    const forFable = buildClaudeProfilesReport([sharedExhausted, fableExhausted], 'fable', nowMs);
+    assert.deepEqual(forFable.profiles.map((entry) => [entry.name, entry.isEligible]), [['sharedFull', false], ['fableFull', false]], 'both stop Fable');
+    const forSonnet = buildClaudeProfilesReport([sharedExhausted, fableExhausted], 'sonnet', nowMs);
+    assert.deepEqual(forSonnet.profiles.map((entry) => [entry.name, entry.isEligible]), [['sharedFull', false], ['fableFull', true]], 'sonnet is stopped by the shared window only');
   });
 
   it('skips signed-out, limited and exhausted profiles; unknown usage ranks after any known one; none eligible → null', () => {
@@ -161,7 +172,7 @@ describe('the ranking (claude_profiles)', () => {
     assert.equal(buildClaudeProfilesReport(profiles.slice(0, 3), 'sonnet', nowMs).recommended, null);
   });
 
-  it('a corporate seat without a Fable window is ranked on its session window alone for Fable', () => {
+  it('a corporate seat without a Fable window is ranked on its session and shared weekly windows for Fable', () => {
     const corporate = view('corp', snapshot(5, 5, null), { subscriptionType: 'team' });
     const report = buildClaudeProfilesReport([view('default', snapshot(81, 76, 33)), corporate], 'fable', nowMs);
     assert.equal(report.recommended, 'corp');
@@ -331,12 +342,11 @@ describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted wi
     assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'opus'), true);
   });
 
-  it('an exhausted session window stops every model; an exhausted shared weekly window stops the models that drain it, not Fable (its own window)', () => {
-    for (const model of ['fable', 'sonnet', 'opus']) assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(100, 20, 10), model), false, `session, ${model}`);
-    const weeklyExhausted = snapshotOf(10, 100, 10);
-    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'sonnet'), false);
-    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'opus'), false);
-    assert.equal(checkHasHeadroomForClaudeModel(weeklyExhausted, 'fable'), true);
+  it('an exhausted session or shared weekly window stops EVERY model, Fable included (Fable drains both)', () => {
+    for (const model of ['fable', 'sonnet', 'opus']) {
+      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(100, 20, 10), model), false, `session, ${model}`);
+      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 100, 10), model), false, `shared weekly, ${model}`);
+    }
   });
 
   it('a window the snapshot lacks, or no snapshot, is unknown — and unknown is taken to be covered by the limit', () => {
@@ -349,13 +359,19 @@ describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted wi
     assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20, 100), isStale: true, error: 'token expired' }, 'sonnet'), true);
   });
 
-  it('a model draining the same windows as the one that hit the limit is covered, however far the figures lag behind the limit', () => {
+  it('a model draining the windows the limited one drains is covered by the limit, however far the figures lag behind it', () => {
     const lagging = snapshotOf(10, 20, 40);
     assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'fable'), false, 'the very model that hit the limit');
     assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'opus'), false, 'sonnet and opus drain the same windows');
-    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'sonnet'), true, 'another weekly window: the figures decide');
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 100), 'claude-fable-5-1', 'opus'), true);
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(100, 20, 100), 'claude-fable-5-1', 'opus'), false, 'the session window stops every model');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'fable'), false, 'Fable drains the windows sonnet ran out of too');
     assert.equal(checkIsClaudeModelClearOfLimit(lagging, null, 'fable'), true, 'the limited model unknown: the figures decide');
+  });
+
+  it('a model draining FEWER windows than the limited one (a non-Fable model after Fable) is judged by the figures', () => {
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 100), 'claude-fable-5-1', 'sonnet'), true, 'only Fable\'s own window ran out');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 40), 'claude-fable-5-1', 'sonnet'), true, 'figures lagging, but nothing says otherwise');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(100, 20, 100), 'claude-fable-5-1', 'opus'), false, 'the session window stops every model');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 100, 40), 'claude-fable-5-1', 'opus'), false, 'so does the shared weekly window');
+    assert.equal(checkIsClaudeModelClearOfLimit(undefined, 'claude-fable-5-1', 'opus'), false, 'no figures: the limit is taken to cover it');
   });
 });
