@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { fakeClaudeLogFileNames, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from '../jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from '../jiraE2e/fakeClaudeContract';
 import { IsolatedCharness, readJsonLines, type IsolatedInstanceLayout } from './isolatedCharness';
 import type { FakeTelegram, FakeTelegramMessage } from '../telegramE2e/fakeTelegram';
 import type { TopicDriver } from '../telegramE2e/topicDriver';
@@ -56,8 +56,33 @@ export function getSessionLaunches(layout: IsolatedInstanceLayout): FakeLaunch[]
   return readJsonLines<FakeLaunch>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch);
 }
 
+/** Every turn the fake agents ran, whatever it was labelled (a «continue» nudge carries no request, so no label). */
+export function getAllAgentTurns(layout: IsolatedInstanceLayout): FakeClaudeTurn[] {
+  return readJsonLines<FakeClaudeTurn>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.turns));
+}
+
 export function getAgentTurns(layout: IsolatedInstanceLayout, label: string): FakeClaudeTurn[] {
-  return readJsonLines<FakeClaudeTurn>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.issueKey === label);
+  return getAllAgentTurns(layout).filter((turn) => turn.issueKey === label);
+}
+
+export interface TurnLaunchMatch {
+  sessionId: string;
+  /** The account's config directory the process runs under; `null` for the default account. */
+  configDir: string | null;
+  /** A `--model` the process was launched with. */
+  model: string;
+}
+
+/** @description Whether some turn — labelled or not — ran in a process launched for `match.sessionId` under `match.configDir` with `--model <match.model>`. */
+export function checkHasTurnOnLaunch(layout: IsolatedInstanceLayout, match: TurnLaunchMatch): boolean {
+  const launches = getSessionLaunches(layout);
+  return getAllAgentTurns(layout).some((turn) => {
+    const launch = launches.find((candidate) => candidate.pid === turn.pid);
+    return launch !== undefined
+      && getLaunchSessionId(launch.argv) === match.sessionId
+      && launch.claudeConfigDir === match.configDir
+      && getFlagValues(launch.argv, '--model').includes(match.model);
+  });
 }
 
 /** The launch of the process that ran turn `turnIndex` of `label` (the fake records launches by pid). */

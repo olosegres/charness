@@ -64,6 +64,7 @@ import {
 import {
   computeResetsAtIso,
   getAccountConfigDir,
+  checkHasTurnOnLaunch,
   getAgentTurns,
   getLaunchOfTurn,
   getResetClock,
@@ -255,7 +256,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
   it('`/limits` — the command the notice names — lists both accounts and a tap on the first one moves the topic back, same conversation', async () => {
     const board = await openBoard(firstTopic, firstTopicThreadId);
-    assert.equal(board.rowLabel(takeoverAccount), `✓ Claude · ${takeoverAccount}`, 'the topic runs on the account it continued on');
+    // The model after the account is the one the live process reports on its init frame, which may or may not have been read yet.
+    assert.match(board.rowLabel(takeoverAccount), new RegExp(`^✓ Claude · ${takeoverAccount}(?: · \\S+)?$`), 'the topic runs on the account it continued on');
     assert.match(board.rowLabel(exhaustedAccount), /^Claude · default — ⛔ until [A-Z][a-z]{2} 01:00$/, 'the exhausted account carries its reset');
     assert.match(board.message.text, /^🔁 Auto switch: ON \(as in General\) · ⏳ Wait for reset: ON \(as in General\) — \/limits_autoswitch\n5h \/ week = % of the window used\.$/);
     const launchesBefore = getSessionLaunches(getLayout()).length;
@@ -304,12 +306,12 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     );
 
     // The wake-up engine may remind the silent turn in the process the account switch started, before the model pin
-    // re-spawns it; the continued turn is the one that runs under the pinned model.
-    await getCharness().waitFor('a turn of the request to run under the second account on the pinned model', agentStartTimeoutMs, () =>
-      getAgentTurns(getLayout(), 'LIM-2').some((turn) => {
-        const launch = getSessionLaunches(getLayout()).find((candidate) => candidate.pid === turn.pid);
-        return launch !== undefined && launch.claudeConfigDir === getAccountConfigDir(getLayout(), takeoverAccount) && getFlagValues(launch.argv, '--model').includes('sonnet');
-      }));
+    // re-spawns it; the process the pin starts then gets the «continue» nudge, which carries no request and so no label.
+    // Either way the conversation's next turn runs under the second account on the pinned model.
+    const sessionId = getLaunchSessionId(getLaunchOfTurn(getLayout(), 'LIM-2', 0).argv) ?? '';
+    assert.ok(sessionId, 'the first launch carries a conversation id');
+    await getCharness().waitFor('a turn of the conversation to run under the second account on the pinned model', agentStartTimeoutMs, () =>
+      checkHasTurnOnLaunch(getLayout(), { sessionId, configDir: getAccountConfigDir(getLayout(), takeoverAccount), model: 'sonnet' }));
     assert.equal(listSwitchNotices(secondTopic).length, 1);
   });
 

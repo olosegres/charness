@@ -84,11 +84,20 @@ function getAgentPrompts(label: string): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes(label));
 }
 
+/** The line the bot logs once the idle fire has stopped the agent's process (the conversation then sleeps). */
+const idleStopLine = 'process stopped; the session sleeps';
+
+function countIdleStops(): number {
+  return getCharness().output.split(idleStopLine).length - 1;
+}
+
 /**
  * Put the question (`ask` mode) and leave it unanswered until the idle fire rejects it, compacts and re-asks it: resolves
- * the re-asked message, whose buttons are `reask_<i>`.
+ * the re-asked message, whose buttons are `reask_<i>`, once the fire has also stopped the process — the question is posted
+ * just BEFORE the stop, and a tap inside that window reaches a dying process instead of waking a sleeping conversation.
  */
 async function waitForReaskedQuestion(promptLabel: string): Promise<FakeTelegramMessage> {
+  const idleStopsBefore = countIdleStops();
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
   await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
   const reasked = await waitingTopic.waitForMessage(`the re-asked question of ${promptLabel}`, (message) =>
@@ -97,6 +106,7 @@ async function waitForReaskedQuestion(promptLabel: string): Promise<FakeTelegram
   assert.match(reasked.text, /You still have a pending question/);
   assert.match(reasked.text, new RegExp(fakeAskQuestion.question.replace('?', '\\?')));
   assert.deepEqual(topic.getKeyboardData(reasked), [['reask_0'], ['reask_1']], 'one button per option');
+  await getCharness().waitFor(`the idle stop that follows the re-ask of ${promptLabel}`, agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
   return reasked;
 }
 
