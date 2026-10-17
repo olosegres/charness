@@ -80,7 +80,7 @@ export const ruDict: Record<string, string> = {
     '/quit /status /output — контроль\n' +
     '/compact — сжать контекст агента\n' +
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
-    '/limits — что делать при лимите использования (запасные модели, переключение, ожидание)\n' +
+    '/limits — расход по всем аккаунтам и провайдерам; нажми на один, чтобы переключить топик\n' +
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
     '/accounts — аккаунты Claude и провайдеры OpenCode (выбор, добавить, войти заново, удалить, подключить, отключить)\n' +
     '/clear — удалить сообщения треда\n' +
@@ -831,8 +831,8 @@ export const ruDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 Модель {from} достигла лимита — топик продолжает работу на {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Достигнут лимит — топик продолжает работу на {to}.{tail}',
   'fallback.backgroundStopped': 'Фоновые задачи, которые ещё работали, остановлены переключением.',
-  'fallback.switchedReset': ' Лимит сбросится {time}; переключить обратно: /accounts',
-  'fallback.switchedBack': ' Переключить обратно: /accounts',
+  'fallback.switchedReset': ' Лимит сбросится {time}. Переключить: /limits',
+  'fallback.switchedBack': ' Переключить: /limits',
   'fallback.switchedDeferred': '🔁 Аккаунт {from} достиг лимита — топик перейдёт на {to}, когда закончится текущий ответ.',
   'fallback.switchFailed': '⚠️ Переключение на {to} не удалось: {error}. Ожидание сброса остаётся.',
   'handover.note': 'Контекст разговора будет передан в сжатом виде.',
@@ -865,8 +865,17 @@ export const ruDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: этот топик следует General ({state}).',
   'limits.whatSwitch': 'Автопереключение на запасную модель',
   'limits.whatWait': 'Дождаться сброса и продолжить',
-  'limits.usage': 'Использование: /limits — экран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — следовать General, в топике).',
+  'limits.usage': 'Использование: /limits — табло переключения (нажми на аккаунт или провайдера, чтобы переключить этот топик). Запасные модели и настройки — в /limits_autoswitch.',
   'limits.autoswitchUsage': 'Использование: /limits_autoswitch — экран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — следовать General, в топике).',
+  'limits.pickModel': '{label} — выбери модель для этого топика:',
+  'limits.openCodeInTopicOnly': 'Модель OpenCode выбирается внутри топика.',
+  'limits.rowLimited': '⛔ до {time}',
+  'limits.boardStaleHint': '⚠️ = данные устарели: войди в этот аккаунт заново в /accounts.',
+  'limits.boardPercentHint': '5ч / неделя = % использованной части окна.',
+  'limits.boardGeneralHint': 'Нажми на аккаунт Claude, чтобы сделать его аккаунтом по умолчанию.',
+  'limits.boardGeneral': 'По умолчанию для всех топиков: ',
+  'limits.rowUsage': '5ч {session} · неделя {weekly}',
+  'limits.boardSettings': '🔁 Автопереключение: {switch}{switchSource} · ⏳ Ждать сброса: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Автоматическое переключение при лимите использования',
   'accounts.openCodeSection': '🔌 Провайдеры OpenCode (подключены):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдеры OpenCode: пока ни один не подключён. Кнопка «➕ Провайдер OpenCode» подключает.',

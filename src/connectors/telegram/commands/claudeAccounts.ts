@@ -676,6 +676,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     checkIsAwaitingProfileName,
     cancelProfileNameCapture,
     submitProfileName,
+    pickClaudeAccount: applyPick,
     onClaudeProfileAuthStatus,
   };
 }

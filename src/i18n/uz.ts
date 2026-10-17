@@ -76,7 +76,7 @@ export const uzDict: Record<string, string> = {
     '/quit /status /output — boshqaruv\n' +
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
-    '/limits — foydalanish limitida nima bo‘ladi (zaxira modellar, o‘tish, kutish)\n' +
+    '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (tanlash, qo‘shish, qayta kirish, o‘chirish, ulash, uzish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
@@ -827,8 +827,8 @@ export const uzDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 {from} modeli foydalanish limitiga yetdi — bu mavzu {to} da davom etmoqda.{tail}',
   'fallback.switchedUnknownSource': '🔁 Foydalanish limitiga yetildi — bu mavzu {to} da davom etmoqda.{tail}',
   'fallback.backgroundStopped': 'Hali ishlayotgan fon vazifalari almashtirish tufayli to‘xtatildi.',
-  'fallback.switchedReset': ' Limit {time} da tiklanadi; qaytarish: /accounts',
-  'fallback.switchedBack': ' Qaytarish: /accounts',
+  'fallback.switchedReset': ' Limit {time} da tiklanadi. Almashtirish: /limits',
+  'fallback.switchedBack': ' Almashtirish: /limits',
   'fallback.switchedDeferred': '🔁 {from} hisobi foydalanish limitiga yetdi — joriy javob tugagach, bu mavzu {to} ga o\'tadi.',
   'fallback.switchFailed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}. Tiklanishni kutish saqlanadi.',
   'handover.note': 'Suhbat konteksti siqilgan shaklda uzatiladi.',
@@ -861,8 +861,17 @@ export const uzDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: bu mavzu General ga ergashadi ({state}).',
   'limits.whatSwitch': 'Zaxira modelga avtomatik o‘tish',
   'limits.whatWait': 'Tiklanishni kutib davom etish',
-  'limits.usage': 'Foydalanish: /limits — ekran; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (mavzuda «same» = General ga ergashish).',
+  'limits.usage': 'Foydalanish: /limits — almashtirish paneli (bu mavzuni almashtirish uchun hisob yoki provayderni bosing). Zaxira ro‘yxat va sozlamalar — /limits_autoswitch da.',
   'limits.autoswitchUsage': 'Foydalanish: /limits_autoswitch — ekran; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (mavzuda «same» = General ga ergashish).',
+  'limits.pickModel': '{label} — bu mavzu uchun modelni tanlang:',
+  'limits.openCodeInTopicOnly': 'OpenCode modeli mavzu ichida tanlanadi.',
+  'limits.rowLimited': '⛔ {time} gacha',
+  'limits.boardStaleHint': '⚠️ = eskirgan: /accounts da bu hisobga qayta kiring.',
+  'limits.boardPercentHint': '5s / hafta = oynaning ishlatilgan foizi.',
+  'limits.boardGeneralHint': 'Claude hisobini standart qilish uchun uni bosing.',
+  'limits.boardGeneral': 'Barcha mavzular uchun standart: ',
+  'limits.rowUsage': '5s {session} · hafta {weekly}',
+  'limits.boardSettings': '🔁 Avto o‘tish: {switch}{switchSource} · ⏳ Tiklanishni kutish: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provayderlari: hozircha hech biri ulanmagan. «➕ OpenCode provayderi» bittasini ulaydi.',

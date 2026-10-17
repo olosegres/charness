@@ -80,7 +80,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
-    '/limits — what happens when an agent hits a usage limit (fallback models, switch, wait)\n' +
+    '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
@@ -871,8 +871,8 @@ export const enDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 Model {from} hit its usage limit — this topic continues on {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 A usage limit was reached — this topic continues on {to}.{tail}',
   'fallback.backgroundStopped': 'Background tasks that were still running were stopped by the switch.',
-  'fallback.switchedReset': ' The limit resets {time}; switch back: /accounts',
-  'fallback.switchedBack': ' Switch back: /accounts',
+  'fallback.switchedReset': ' The limit resets {time}. Switch: /limits',
+  'fallback.switchedBack': ' Switch: /limits',
   'fallback.switchedDeferred': '🔁 Account {from} hit its usage limit — this topic moves to {to} when the current answer ends.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',
   'handover.note': 'The conversation context will be handed over in compacted form.',
@@ -905,8 +905,17 @@ export const enDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: this topic follows General ({state}).',
   'limits.whatSwitch': 'Auto switch to a fallback model',
   'limits.whatWait': 'Wait for the reset and continue',
-  'limits.usage': 'Usage: /limits — the screen; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = follow General, in a topic).',
+  'limits.usage': 'Usage: /limits — the switch board (tap an account or a provider to switch this topic). The fallback setup and its settings are in /limits_autoswitch.',
   'limits.autoswitchUsage': 'Usage: /limits_autoswitch — the screen; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = follow General, in a topic).',
+  'limits.pickModel': '{label} — pick the model for this topic:',
+  'limits.openCodeInTopicOnly': 'An OpenCode model is picked inside a topic.',
+  'limits.rowLimited': '⛔ until {time}',
+  'limits.boardStaleHint': '⚠️ = out of date: sign that account in again in /accounts.',
+  'limits.boardPercentHint': '5h / week = % of the window used.',
+  'limits.boardGeneralHint': 'Tap a Claude account to make it the default.',
+  'limits.boardGeneral': 'Defaults for all topics: ',
+  'limits.rowUsage': '5h {session} · week {weekly}',
+  'limits.boardSettings': '🔁 Auto switch: {switch}{switchSource} · ⏳ Wait for reset: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode providers: none connected yet. «➕ OpenCode provider» connects one.',

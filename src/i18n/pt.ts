@@ -76,7 +76,7 @@ export const ptDict: Record<string, string> = {
     '/quit /status /output — controlo\n' +
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
-    '/limits — o que acontece num limite de uso (modelos de reserva, mudança, espera)\n' +
+    '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
     '/accounts — contas Claude e providers OpenCode (escolher, adicionar, entrar de novo, remover, ligar, desligar)\n' +
     '/clear — apagar mensagens do tópico\n' +
@@ -828,8 +828,8 @@ export const ptDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 O modelo {from} atingiu o limite de uso — este tópico continua em {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Um limite de uso foi atingido — este tópico continua em {to}.{tail}',
   'fallback.backgroundStopped': 'As tarefas em segundo plano que ainda estavam a correr foram paradas pela troca.',
-  'fallback.switchedReset': ' O limite é reiniciado {time}; para voltar: /accounts',
-  'fallback.switchedBack': ' Para voltar: /accounts',
+  'fallback.switchedReset': ' O limite é reiniciado {time}. Para trocar: /limits',
+  'fallback.switchedBack': ' Para trocar: /limits',
   'fallback.switchedDeferred': '🔁 A conta {from} atingiu o limite de uso — este tópico passará para {to} quando a resposta atual terminar.',
   'fallback.switchFailed': '⚠️ A troca para {to} falhou: {error}. A espera pelo reinício continua armada.',
   'handover.note': 'O contexto da conversa será passado de forma compactada.',
@@ -862,8 +862,17 @@ export const ptDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: este tópico segue o General ({state}).',
   'limits.whatSwitch': 'Mudança automática para um modelo de reserva',
   'limits.whatWait': 'Esperar o reinício e continuar',
-  'limits.usage': 'Uso: /limits — o ecrã; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = seguir o General, num tópico).',
+  'limits.usage': 'Uso: /limits — o painel de troca (toca numa conta ou num fornecedor para trocar este tópico). A lista de reserva e as definições: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Uso: /limits_autoswitch — o ecrã; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir o General, num tópico).',
+  'limits.pickModel': '{label} — escolhe o modelo deste tópico:',
+  'limits.openCodeInTopicOnly': 'Um modelo do OpenCode escolhe-se dentro de um tópico.',
+  'limits.rowLimited': '⛔ até {time}',
+  'limits.boardStaleHint': '⚠️ = desatualizado: inicia sessão de novo nessa conta em /accounts.',
+  'limits.boardPercentHint': '5h / semana = % da janela consumida.',
+  'limits.boardGeneralHint': 'Toca numa conta Claude para a tornar a predefinida.',
+  'limits.boardGeneral': 'Predefinições para todos os tópicos: ',
+  'limits.rowUsage': '5h {session} · semana {weekly}',
+  'limits.boardSettings': '🔁 Mudança auto: {switch}{switchSource} · ⏳ Esperar reinício: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Troca automática ao atingir um limite de uso',
   'accounts.openCodeSection': '🔌 Providers OpenCode (ligados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode: ainda nenhum ligado. «➕ Provider OpenCode» liga um.',

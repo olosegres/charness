@@ -2,13 +2,13 @@
  * @description The notices a usage-limit switch posts (`utils/fallbackSwitchNotice.ts`), pinned in English and in every
  * other locale. The wording rules:
  *
- *   • one short sentence: WHAT hit its limit, WHERE the topic continues, when the limit resets, the switch-back
+ *   • one short sentence: WHAT hit its limit, WHERE the topic continues, when the limit resets, the switch
  *     command — and every name once (a label never appears twice);
  *   • a Claude account is «name»; the model appears only when the switch CHANGES it (an alias against the running
  *     id is the same model: `opus` against `claude-opus-5-5[1m]`);
  *   • an OpenCode rung says `OpenCode provider/model`, a Claude rung reached from another backend `Claude «name»`;
- *   • the switch-back command is `/accounts` in every case — never `/model`, `/claude` or `/opencode`, which move
- *     the topic somewhere else;
+ *   • the switch command is `/limits` in every case — never `/accounts`, `/model`, `/claude` or `/opencode`: it is the
+ *     one board that lists every account and provider with its usage;
  *   • an unknown reset drops the reset clause and keeps the command;
  *   • the deferred notice names the move that waits for the end of the answer;
  *   • a model name is written the same way on both sides of the notice: `Model openai/gpt-5 hit … OpenCode google/…`.
@@ -33,10 +33,10 @@ const resetTime = '2026-10-18 01:00';
 const runningOpus = 'claude-opus-5-5[1m]';
 
 describe('buildFallbackSwitchedNotice (English)', () => {
-  it('Claude → Claude: the account that hit the limit, the account the topic continues on, the reset and /accounts', () => {
+  it('Claude → Claude: the account that hit the limit, the account the topic continues on, the reset and /limits', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: claude('default', runningOpus), to: claude('work', 'opus'), resetTime, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on «work». The limit resets 2026-10-18 01:00; switch back: /accounts',
+      '🔁 Account «default» hit its usage limit — this topic continues on «work». The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
@@ -47,7 +47,7 @@ describe('buildFallbackSwitchedNotice (English)', () => {
     const otherModel = buildFallbackSwitchedNotice({ from, to: claude('work', 'sonnet'), resetTime, runningModel: runningOpus });
     assert.equal(
       otherModel,
-      '🔁 Account «default» hit its usage limit — this topic continues on «work» (sonnet). The limit resets 2026-10-18 01:00; switch back: /accounts',
+      '🔁 Account «default» hit its usage limit — this topic continues on «work» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
@@ -61,35 +61,35 @@ describe('buildFallbackSwitchedNotice (English)', () => {
   it('reset unknown: the reset clause is dropped, the switch-back command stays', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on «work». Switch back: /accounts',
+      '🔁 Account «default» hit its usage limit — this topic continues on «work». Switch: /limits',
     );
   });
 
   it('Claude → OpenCode: the target says OpenCode and its model', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: claude('default'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on OpenCode openai/gpt-5. The limit resets 2026-10-18 01:00; switch back: /accounts',
+      '🔁 Account «default» hit its usage limit — this topic continues on OpenCode openai/gpt-5. The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
   it('OpenCode → OpenCode: the model that hit the limit, the model the topic continues on', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }),
-      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on OpenCode google/gemini-2.5-pro. Switch back: /accounts',
+      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on OpenCode google/gemini-2.5-pro. Switch: /limits',
     );
   });
 
   it('OpenCode → Claude: with no account on the left the target says Claude, and a pinned model is named', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }),
-      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on Claude «work» (opus). The limit resets 2026-10-18 01:00; switch back: /accounts',
+      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on Claude «work» (opus). The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
   it('the rung that hit the limit is unknown: a plain limit sentence, still the target and the command', () => {
     assert.equal(
       buildFallbackSwitchedNotice({ from: null, to: claude('work'), resetTime: null, runningModel: null }),
-      '🔁 A usage limit was reached — this topic continues on Claude «work». Switch back: /accounts',
+      '🔁 A usage limit was reached — this topic continues on Claude «work». Switch: /limits',
     );
   });
 });
@@ -138,12 +138,13 @@ for (const locale of localeCodes) {
   describe(`every notice in ${locale}`, () => {
     const run = <T>(fn: () => T): T => runWithLocale(locale as Locale, fn);
 
-    it('writes every name once, the switch-back command /accounts and no other command, and no placeholder is left', () => {
+    it('writes every name once, the switch command /limits and no other command, and no placeholder is left', () => {
       for (const { name, input, names } of noticeCases) {
         const text = run(() => buildFallbackSwitchedNotice(input));
         for (const part of names) assert.equal(countOccurrences(text, part), 1, `${name}: «${part}» once in ${text}`);
-        assert.ok(text.includes('/accounts'), `${name}: names /accounts in ${text}`);
-        for (const other of ['/model', '/claude', '/opencode']) assert.ok(!text.includes(other), `${name}: no ${other} in ${text}`);
+        assert.ok(text.includes('/limits'), `${name}: names /limits in ${text}`);
+        assert.ok(!text.includes('/limits_autoswitch'), `${name}: the board, not its setup screen: ${text}`);
+        for (const other of ['/accounts', '/model', '/claude', '/opencode']) assert.ok(!text.includes(other), `${name}: no ${other} in ${text}`);
         assert.equal(text.includes(resetTime), input.resetTime !== null, `${name}: the reset time appears exactly when it is known: ${text}`);
         assert.ok(!/\{\w+\}/.test(text), `${name}: no unresolved placeholder in ${text}`);
         assert.ok(!text.includes('?'), `${name}: no unknown-label question mark in ${text}`);
@@ -155,7 +156,7 @@ for (const locale of localeCodes) {
       const text = run(() => buildFallbackDeferredNotice(claude('default'), claude('work', 'sonnet')));
       assert.equal(countOccurrences(text, '«default»'), 1, text);
       assert.equal(countOccurrences(text, '«work»'), 1, text);
-      assert.ok(!text.includes('sonnet') && !text.includes('/accounts') && !/\{\w+\}/.test(text), text);
+      assert.ok(!text.includes('sonnet') && !text.includes('/limits') && !/\{\w+\}/.test(text), text);
     });
   });
 }

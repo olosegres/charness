@@ -76,7 +76,7 @@ export const hiDict: Record<string, string> = {
     '/quit /status /output — नियंत्रण\n' +
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
-    '/limits — उपयोग-सीमा पर क्या हो (बैकअप मॉडल, स्विच, प्रतीक्षा)\n' +
+    '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
     '/accounts — Claude खाते और OpenCode प्रदाता (चुनें, जोड़ें, फिर से लॉगिन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
@@ -826,8 +826,8 @@ export const hiDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 मॉडल {from} की उपयोग सीमा पूरी हो गई — यह टॉपिक {to} पर जारी है।{tail}',
   'fallback.switchedUnknownSource': '🔁 उपयोग सीमा पूरी हो गई — यह टॉपिक {to} पर जारी है।{tail}',
   'fallback.backgroundStopped': 'जो बैकग्राउंड कार्य चल रहे थे, वे स्विच से रुक गए।',
-  'fallback.switchedReset': ' सीमा {time} पर रीसेट होगी; वापस स्विच करें: /accounts',
-  'fallback.switchedBack': ' वापस स्विच करें: /accounts',
+  'fallback.switchedReset': ' सीमा {time} पर रीसेट होगी। स्विच करें: /limits',
+  'fallback.switchedBack': ' स्विच करें: /limits',
   'fallback.switchedDeferred': '🔁 खाता {from} की उपयोग सीमा पूरी हो गई — मौजूदा उत्तर खत्म होने पर यह टॉपिक {to} पर चला जाएगा।',
   'fallback.switchFailed': '⚠️ {to} पर स्विच विफल: {error}। रीसेट की प्रतीक्षा सक्रिय रहती है।',
   'handover.note': 'बातचीत का संदर्भ संक्षिप्त रूप में सौंपा जाएगा।',
@@ -860,8 +860,17 @@ export const hiDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: यह टॉपिक General का अनुसरण करता है ({state})।',
   'limits.whatSwitch': 'बैकअप मॉडल पर अपने-आप स्विच',
   'limits.whatWait': 'रीसेट का इंतज़ार करके जारी रखें',
-  'limits.usage': 'उपयोग: /limits — स्क्रीन; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
+  'limits.usage': 'उपयोग: /limits — स्विच बोर्ड (इस टॉपिक को बदलने के लिए किसी खाते या प्रदाता पर टैप करें)। वैकल्पिक सूची और उसकी सेटिंग /limits_autoswitch में हैं।',
   'limits.autoswitchUsage': 'उपयोग: /limits_autoswitch — स्क्रीन; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (टॉपिक में «same» = General का अनुसरण)।',
+  'limits.pickModel': '{label} — इस टॉपिक के लिए मॉडल चुनें:',
+  'limits.openCodeInTopicOnly': 'OpenCode मॉडल टॉपिक के भीतर चुना जाता है।',
+  'limits.rowLimited': '⛔ {time} तक',
+  'limits.boardStaleHint': '⚠️ = पुराना: /accounts में उस खाते में फिर से साइन इन करें।',
+  'limits.boardPercentHint': '5घं / सप्ताह = विंडो का उपयोग किया गया %।',
+  'limits.boardGeneralHint': 'किसी Claude खाते पर टैप करके उसे डिफ़ॉल्ट बनाएँ।',
+  'limits.boardGeneral': 'सभी टॉपिक के लिए डिफ़ॉल्ट: ',
+  'limits.rowUsage': '5घं {session} · सप्ताह {weekly}',
+  'limits.boardSettings': '🔁 ऑटो स्विच: {switch}{switchSource} · ⏳ रीसेट का इंतज़ार: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode प्रदाता: अभी कोई कनेक्ट नहीं है। «➕ OpenCode प्रदाता» से एक कनेक्ट करें।',

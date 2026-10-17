@@ -3,26 +3,30 @@
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API of `telegramE2e/fakeTelegram.ts`, with
  * the fake `claude` (`jiraE2e/fakeClaude.ts`) refusing a turn for a subscription limit (`usage-limit-once`) and
  * recording how every session is launched (the config directory = the account). The test plays the operator in
- * the General topic and in three bound topics. One flow, in order:
+ * the General topic and in four bound topics. One flow, in order:
  *
- *   boot → the instance zone is set to UTC, auto switch is turned on in General, three topics are bound (each
- *     message opens a request, as in the operator's own topics)
+ *   boot → the instance zone is set to UTC, auto switch is turned on in General by the button of `/limits_autoswitch`,
+ *     four topics are bound (each message opens a request, as in the operator's own topics)
  *   → a second account («work») and a one-rung chain are seeded while the bot is down (a sign-in cannot be driven
  *     without the real CLI), the bot starts again
  *   → topic A's agent hits its limit: ONE short notice names the account that hit it, the account the topic
- *     continues on, when the limit resets (in the instance zone) and `/accounts` — and no wait notice; the same
+ *     continues on, when the limit resets (in the instance zone) and `/limits` — and no wait notice; the same
  *     conversation continues under the second account and answers
- *   → `/accounts use default` — the command the notice names — moves the topic back: the session is re-spawned
- *     under the first account, same conversation
+ *   → `/limits` — the command the notice names — lists both accounts (the one the topic runs on carries the ✓, the
+ *     exhausted one its ⛔ reset); a tap on the first account moves the topic back: the session is re-spawned under
+ *     it, same conversation
  *   → a second limit with a rung whose model the session already runs: the notice names no model and the move
  *     re-spawns the session once
  *   → the chain's rung pins another model («work» · sonnet): topic B's notice names the model, and the session really
  *     runs on it
+ *   → with an EMPTY fallback list topic D's notice still names `/limits`, and the board lists both accounts
+ *   → the ✓ row of that board opens the model page of the account the topic runs on; a pick restarts the session on
+ *     that model and leaves the topic following General's account
  *   → topic C moves to «work», which hits its limit too while «default» is still limited: nothing can take over, a
- *     wait is armed. `/accounts use default` then resumes the interrupted turn: the limit switch, its notice and the
+ *     wait is armed. A tap on the first account on the `/limits` board then resumes the interrupted turn: the limit switch, its notice and the
  *     "continue" message
  *
- * What the unit tests cover instead: an unknown reset, the deferred notice (a tmux Claude without a resumable
+ * What the unit tests cover instead: the board's rows, its model pages and its General face (`limitsBoard.test.ts`), an unknown reset, the deferred notice (a tmux Claude without a resumable
  * session) and every locale (`fallbackSwitchNotice.test.ts`); the switches to and from OpenCode are the other flow,
  * `fallbackSwitchOpenCodeE2e.test.ts`.
  *
@@ -36,7 +40,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
@@ -73,6 +77,7 @@ const group = { id: -1001111111111, title: 'ExampleGroup' };
 const firstTopicThreadId = 111;
 const secondTopicThreadId = 112;
 const thirdTopicThreadId = 113;
+const fourthTopicThreadId = 114;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
@@ -80,6 +85,7 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const firstFolder = 'switch-first';
 const secondFolder = 'switch-second';
 const thirdFolder = 'switch-third';
+const fourthFolder = 'switch-fourth';
 /** The account the second one takes over from, and the one the chain names. */
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
@@ -95,6 +101,7 @@ let general: TopicDriver;
 let firstTopic: TopicDriver;
 let secondTopic: TopicDriver;
 let thirdTopic: TopicDriver;
+let fourthTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 /** When the fake says the limit resets (an ISO instant, a few days ahead so the notice carries the date). */
 let resetsAtIso = '';
@@ -130,10 +137,24 @@ function askAgentToHitTheLimit(threadId: number, label: string): void {
   fakeTelegram.pushOperatorMessage(threadId, `${label} [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
 }
 
+/** The `/limits` board a topic shows now: the newest board message after the command, and the callback data of its rows by account. */
+async function openBoard(driver: TopicDriver, threadId: number): Promise<{ message: FakeTelegramMessage; rowData: (account: string) => string; rowLabel: (account: string) => string }> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/limits');
+  const message = await driver.waitForMessage('the /limits board', (candidate) => candidate.message_id > sentMessageId && candidate.text.startsWith('🔁 Auto switch') && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('lim_')));
+  const labels = driver.getKeyboardLabels(message).flat();
+  const data = driver.getKeyboardData(message).flat();
+  const indexOf = (account: string): number => {
+    const index = labels.findIndex((label) => label.replace('✓ ', '').startsWith(`Claude · ${account}`));
+    assert.ok(index >= 0, `a board row for ${account} in ${labels.join(' | ')}`);
+    return index;
+  };
+  return { message, rowData: (account) => data[indexOf(account)], rowLabel: (account) => labels[indexOf(account)] };
+}
+
 describe('The usage-limit switch notice end to end: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder, thirdFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder, thirdFolder, fourthFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
 
@@ -146,6 +167,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     firstTopic = new TopicDriver(fakeTelegram, getCharness, firstTopicThreadId, replyTimeoutMs);
     secondTopic = new TopicDriver(fakeTelegram, getCharness, secondTopicThreadId, replyTimeoutMs);
     thirdTopic = new TopicDriver(fakeTelegram, getCharness, thirdTopicThreadId, replyTimeoutMs);
+    fourthTopic = new TopicDriver(fakeTelegram, getCharness, fourthTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -172,10 +194,14 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
   });
 
-  it('boots, sets the instance zone to UTC, turns auto switch on in General, binds the three topics and gives them the request view', async () => {
+  it('boots, sets the instance zone to UTC, turns auto switch on in General with the button of /limits_autoswitch, binds the four topics and gives them the request view', async () => {
     await startCharness();
     await general.sendAndAwaitReply('/timezone UTC', 'Timezone: UTC');
-    await general.sendAndAwaitReply('/limits switch on', 'Auto switch to a fallback model: ON for ALL topics');
+    const setup = await general.sendAndAwaitReply('/limits_autoswitch', 'Defaults for all topics.');
+    assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: OFF'], ['⏳ Wait for reset: ON']]);
+    const answer = await general.tapAndAwaitAnswer(setup, 'fbk_asw_on');
+    assert.match(answer, /Auto switch to a fallback model: ON for ALL topics/);
+    await getCharness().waitFor('the button to show the new value', replyTimeoutMs, () => general.getKeyboardLabels(setup).at(-2)?.[0] === '🔁 Auto switch: ON');
     // «Stream + answers»: each message opens a request, whose prompt is what the bot hands the agent again after the switch.
     await firstTopic.sendAndAwaitReply(`/bind ${firstFolder}`, `Bound to \`${firstFolder}\``);
     await firstTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
@@ -183,6 +209,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await secondTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
     await thirdTopic.sendAndAwaitReply(`/bind ${thirdFolder}`, `Bound to \`${thirdFolder}\``);
     await thirdTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    await fourthTopic.sendAndAwaitReply(`/bind ${fourthFolder}`, `Bound to \`${fourthFolder}\``);
+    await fourthTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
   });
 
   it('seeds a second signed-in account and a one-rung chain onto it while the bot is down', async () => {
@@ -205,7 +233,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await firstTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
 
     await getCharness().waitFor('the conversation to continue under the second account and answer', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-1').length === 2);
@@ -228,11 +256,22 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     );
   });
 
-  it('`/accounts use default` — the command the notice names — moves the topic back, same conversation', async () => {
+  it('`/limits` — the command the notice names — lists both accounts and a tap on the first one moves the topic back, same conversation', async () => {
+    const board = await openBoard(firstTopic, firstTopicThreadId);
+    assert.equal(board.rowLabel(takeoverAccount), `✓ Claude · ${takeoverAccount}`, 'the topic runs on the account it continued on');
+    assert.match(board.rowLabel(exhaustedAccount), /^Claude · default — ⛔ until [A-Z][a-z]{2} 01:00$/, 'the exhausted account carries its reset');
+    assert.match(board.message.text, /^🔁 Auto switch: ON \(as in General\) · ⏳ Wait for reset: ON \(as in General\) — \/limits_autoswitch\n5h \/ week = % of the window used\.$/);
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    await firstTopic.sendAndAwaitReply(`/accounts use ${exhaustedAccount}`, exhaustedAccount);
+    const toast = await firstTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
+    assert.match(toast, new RegExp(`Claude account for this topic: ${exhaustedAccount}`));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
     assert.equal(listSwitchNotices(firstTopic).length, 1, 'switching back by hand posts no limit notice');
+    // The agent was still answering when the pick came in: the switch applies when its turn ends, and the board
+    // shows where the topic REALLY runs — so the ✓ is checked on a board opened after the session restarted.
+    const after = await openBoard(firstTopic, firstTopicThreadId);
+    assert.match(after.rowLabel(exhaustedAccount), /^✓ Claude · default/, 'the topic runs on the first account again');
+    assert.equal(after.rowLabel(takeoverAccount), `Claude · ${takeoverAccount}`);
+    assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[`${group.id}:${firstTopicThreadId}`], exhaustedAccount, 'the pick is the topic\'s own');
   });
 
   it('a rung that pins a model the session already runs: the notice names no model and the move re-spawns the session once', async () => {
@@ -246,7 +285,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await getCharness().waitFor('the second switch notice', agentStartTimeoutMs, () => listSwitchNotices(firstTopic).length === 2);
     assert.equal(
       listSwitchNotices(firstTopic)[1].text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
     await getCharness().waitFor('the conversation to continue under the second account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-3').length === 2);
     assert.equal(getLaunchOfTurn(getLayout(), 'LIM-3', 1).claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount));
@@ -264,7 +303,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await secondTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
 
     // The wake-up engine may remind the silent turn in the process the account switch started, before the model pin
@@ -277,7 +316,47 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.equal(listSwitchNotices(secondTopic).length, 1);
   });
 
-  it('with a limit wait armed — both accounts limited — `/accounts use default`, the command the notice names, resumes the interrupted turn', async () => {
+  it('with an EMPTY fallback list nothing is known to take over: the wait notice names /limits and /limits_autoswitch, the board lists both accounts, and its «skip once» ends the wait', async () => {
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [];
+      delete persisted.claudeProfiles?.[takeoverAccount]?.limitedUntil;
+    });
+    await fourthTopic.sendAndAwaitReply('/claude', 'ready in');
+    askAgentToHitTheLimit(fourthTopicThreadId, 'LIM-6');
+    const notice = await fourthTopic.waitForMessage('the wait notice', (message) => message.text.includes('Skip this resume'));
+    assert.match(notice.text, /Skip this resume: \/limits · turn waiting off: \/limits_autoswitch$/);
+    assert.deepEqual(readPersistedState(getLayout()).fallbackChain ?? [], [], 'the list stayed empty');
+    assert.equal(listSwitchNotices(fourthTopic).length, 0, 'no account with known room: no switch');
+
+    const board = await openBoard(fourthTopic, fourthTopicThreadId);
+    const rows = fourthTopic.getKeyboardLabels(board.message).flat();
+    assert.equal(rows.length, 3, 'both signed-in accounts, then «skip once» (a limit wait is armed)');
+    assert.match(board.rowLabel(exhaustedAccount), /^✓ Claude · default(?: · \S+)? — ⛔ until [A-Z][a-z]{2} 01:00$/);
+    assert.equal(board.rowLabel(takeoverAccount), `Claude · ${takeoverAccount}`);
+    assert.equal(rows.at(-1), '⏭ Skip once');
+    const skipData = fourthTopic.getKeyboardData(board.message).flat().at(-1) ?? '';
+    await fourthTopic.tapAndAwaitAnswer(board.message, skipData);
+    await getCharness().waitFor('the wait to be skipped', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
+  });
+
+  it('the ✓ row opens the model page of the account the topic runs on: a pick restarts the session on that model and does not turn "follows General" into an account pick of its own', async () => {
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const board = await openBoard(fourthTopic, fourthTopicThreadId);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    const labels = fourthTopic.getKeyboardLabels(board.message).flat();
+    assert.deepEqual(labels.map((label) => label.replace(' ✓', '')), ['fable', 'opus', 'sonnet', 'haiku', '⬅️ Back']);
+    const sonnetData = fourthTopic.getKeyboardData(board.message).flat()[labels.findIndex((label) => label.startsWith('sonnet'))];
+    await fourthTopic.tapAndAwaitAnswer(board.message, sonnetData);
+    await getCharness().waitFor('the session to restart on sonnet', agentStartTimeoutMs, () => {
+      const latest = getSessionLaunches(getLayout()).at(-1);
+      return getSessionLaunches(getLayout()).length > launchesBefore && latest !== undefined && getFlagValues(latest.argv, '--model').includes('sonnet');
+    });
+    assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[`${group.id}:${fourthTopicThreadId}`], undefined, 'the topic still follows General\'s account');
+    await getCharness().waitFor('the board to come back with the model on the ✓ row', replyTimeoutMs, () => fourthTopic.getKeyboardLabels(board.message).flat().some((label) => /^✓ Claude · default · .*sonnet/.test(label)));
+  });
+
+  it('with a limit wait armed — both accounts limited — a tap on the first account on the /limits board resumes the interrupted turn', async () => {
     // Both accounts will be limited: the chain names them both, and «default» is still marked limited by the earlier flows.
     await restartWithState((persisted) => {
       persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }, { backend: 'claude', profile: exhaustedAccount, model: null }];
@@ -292,12 +371,15 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await getCharness().waitFor('the wait to be armed: no account can take over', agentStartTimeoutMs, () => Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length === 1 && getAgentTurns(getLayout(), 'LIM-5').length === 1);
     assert.equal(listSwitchNotices(thirdTopic).length, 1, 'no switch was possible');
 
+    const board = await openBoard(thirdTopic, thirdTopicThreadId);
+    assert.match(board.rowLabel(takeoverAccount), /^✓ Claude · work/, 'the topic runs on the second account');
+    assert.equal(thirdTopic.getKeyboardLabels(board.message).flat().at(-1), '⏭ Skip once', 'the armed wait offers «skip once»');
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    await thirdTopic.sendAndAwaitReply(`/accounts use ${exhaustedAccount}`, exhaustedAccount);
+    await thirdTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
     await getCharness().waitFor('the limit switch\'s notice', agentStartTimeoutMs, () => listSwitchNotices(thirdTopic).length === 2);
     assert.equal(
       listSwitchNotices(thirdTopic)[1].text,
-      `🔁 Account «${takeoverAccount}» hit its usage limit — this topic continues on «${exhaustedAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
+      `🔁 Account «${takeoverAccount}» hit its usage limit — this topic continues on «${exhaustedAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
       'a pick during the wait is the limit switch: the account the topic left did hit its limit',
     );
     await getCharness().waitFor('the interrupted turn to resume on the first account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-5').length === 2);

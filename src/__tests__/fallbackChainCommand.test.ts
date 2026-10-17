@@ -26,7 +26,8 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSkipArmedRetryCallbackData } from '../utils/autoContinueOnLimit';
-import { createFallbackChain, limitsUsageRefreshBudgetMs } from '../connectors/telegram/commands/fallbackChain';
+import { createFallbackChain } from '../connectors/telegram/commands/fallbackChain';
+import { limitsUsageRefreshBudgetMs } from '../utils/usageRefreshBudget';
 import type { SessionKey } from '../sessionKey';
 import { getFallbackChainRevision, type FallbackChainEntry, type FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView } from '../utils/claudeUsage';
@@ -90,8 +91,8 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.stop();
   });
 
-  it('registers /limits (+ the hidden /fallback alias) and its buttons', () => {
-    assert.deepEqual(harness.registeredCommandNames, ['limits_autoswitch', 'fallback', 'limits']);
+  it('registers /limits_autoswitch (+ the hidden /fallback alias) and its buttons', () => {
+    assert.deepEqual(harness.registeredCommandNames, ['limits_autoswitch', 'fallback']);
     assert.deepEqual(harness.registeredActionPatterns, [
       String(/^fbk_up_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_dn_(\d{1,2})_([0-9a-f]{8})$/),
@@ -312,9 +313,9 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.deepEqual(harness.state.getFallbackChain(), []);
   });
 
-  it('the text verbs work under /limits_autoswitch and its aliases alike; a bad verb answers with the /limits_autoswitch usage; a button of an old message re-renders it as this screen', async () => {
+  it('the text verbs work under /limits_autoswitch and its alias alike; a bad verb answers with the /limits_autoswitch usage; a button of an old message re-renders it as this screen', async () => {
     isGeneralTopic = true;
-    for (const name of ['limits_autoswitch', 'fallback', 'limits']) {
+    for (const name of ['limits_autoswitch', 'fallback']) {
       await harness.runCommand(name, 'propose');
       assert.equal(harness.state.getFallbackChain().length, 5, `/${name} propose`);
       assert.match(harness.replies.at(-1)?.text ?? '', /^🔁 Automatic switching on a usage limit\n/, `/${name} propose then opens the screen`);
@@ -344,9 +345,9 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.runCommand('fallback', 'autoswitch off'); // the old alias and verb
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
     isGeneralTopic = false;
-    await harness.runCommand('limits', 'switch on');
+    await harness.runCommand('limits_autoswitch', 'switch on');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
-    await harness.runCommand('limits', 'switch same');
+    await harness.runCommand('limits_autoswitch', 'switch same');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), undefined);
     isGeneralTopic = true;
   });
@@ -359,9 +360,9 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).at(-1), ['fbk_wait_on']);
     await harness.tapButton(pickerId, 'fbk_wait_same'); // meaningless in General: nothing changes
     assert.equal(harness.state.getAutoContinueOnLimitGlobalDefault(), false);
-    await harness.runCommand('limits', 'wait same');
+    await harness.runCommand('limits_autoswitch', 'wait same');
     assert.match(harness.replies.at(-1)?.text ?? '', /^Usage: /);
-    await harness.runCommand('limits', 'wait on');
+    await harness.runCommand('limits_autoswitch', 'wait on');
     assert.equal(harness.state.getAutoContinueOnLimitGlobalDefault(), true);
   });
 
@@ -652,7 +653,7 @@ describe('fallbackChain: /limits over its ports', () => {
 
     it('a rung of a backend already in use, an empty list, and a list with nothing in automatic switching go at once', async () => {
       await harness.state.setFallbackChain([claude('default')]);
-      const pickerId = await harness.runCommand('limits').then(() => harness.replies.at(-1)!.messageId!);
+      const pickerId = await harness.runCommand('limits_autoswitch').then(() => harness.replies.at(-1)!.messageId!);
       await harness.tapButton(pickerId, 'fbk_add');
       await harness.tapButton(pickerId, 'fbk_addc_work');
       await harness.tapButton(pickerId, 'fbk_addcm_work_opus');

@@ -260,7 +260,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const notice = await claudeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}. Switch: /limits`,
     );
     await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > 0);
 
@@ -330,7 +330,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const notice = await toClaudeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Model ${defaultOpenCodeModel} hit its usage limit — this topic continues on Claude «${takeoverAccount}». The limit resets ${resetClock}; switch back: /accounts`,
+      `🔁 Model ${defaultOpenCodeModel} hit its usage limit — this topic continues on Claude «${takeoverAccount}». The limit resets ${resetClock}. Switch: /limits`,
     );
     await getCharness().waitFor('a Claude session to start under the second account', agentStartTimeoutMs, () => {
       const latest = getSessionLaunches(getLayout()).at(-1);
@@ -406,7 +406,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const notice = await openCodeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Model ${defaultOpenCodeModel} hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModelAlternative}. The limit resets ${resetClock}; switch back: /accounts`,
+      `🔁 Model ${defaultOpenCodeModel} hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModelAlternative}. The limit resets ${resetClock}. Switch: /limits`,
     );
     await getCharness().waitFor('the "continue" message to reach OpenCode', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsBefore);
     assert.equal(fakeOpenCode.prompts.at(-1)?.model, chainOpenCodeModelAlternative, 'the interrupted turn continues on the rung\'s model');

@@ -76,7 +76,7 @@ export const zhDict: Record<string, string> = {
     '/quit /status /output — 控制\n' +
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
-    '/limits — 遇到用量上限时的处理（备用模型、切换、等待）\n' +
+    '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode provider（选择、添加、重新登录、删除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
@@ -821,8 +821,8 @@ export const zhDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 模型 {from} 已达用量上限 — 此话题已切换到 {to} 并继续。{tail}',
   'fallback.switchedUnknownSource': '🔁 已达用量上限 — 此话题已切换到 {to} 并继续。{tail}',
   'fallback.backgroundStopped': '仍在运行的后台任务已因切换而停止。',
-  'fallback.switchedReset': ' 上限将于 {time} 重置；切换回去：/accounts',
-  'fallback.switchedBack': ' 切换回去：/accounts',
+  'fallback.switchedReset': ' 上限将于 {time} 重置。切换：/limits',
+  'fallback.switchedBack': ' 切换：/limits',
   'fallback.switchedDeferred': '🔁 账号 {from} 已达用量上限 — 此话题将在当前回答结束后切换到 {to}。',
   'fallback.switchFailed': '⚠️ 切换到 {to} 失败：{error}。重置等待保持生效。',
   'handover.note': '对话上下文将以压缩形式移交。',
@@ -855,8 +855,17 @@ export const zhDict: Record<string, string> = {
   'limits.setSame': '✅ {what}：此话题跟随 General（{state}）。',
   'limits.whatSwitch': '自动切换到备用模型',
   'limits.whatWait': '等待重置后继续',
-  'limits.usage': '用法：/limits — 主界面；/limits rebuild；/limits clear；/limits switch on|off|same；/limits wait on|off|same（在话题中，«same» = 跟随 General）。',
+  'limits.usage': '用法：/limits — 切换面板（点按账号或提供方即可切换此话题）。备用列表及其设置在 /limits_autoswitch。',
   'limits.autoswitchUsage': '用法：/limits_autoswitch — 主界面；/limits_autoswitch rebuild；/limits_autoswitch clear；/limits_autoswitch switch on|off|same；/limits_autoswitch wait on|off|same（在话题中，«same» = 跟随 General）。',
+  'limits.pickModel': '{label} — 为此话题选择模型：',
+  'limits.openCodeInTopicOnly': 'OpenCode 模型需要在话题内选择。',
+  'limits.rowLimited': '⛔ 至 {time}',
+  'limits.boardStaleHint': '⚠️ = 已过期：请在 /accounts 中重新登录该账号。',
+  'limits.boardPercentHint': '5小时 / 每周 = 窗口已用百分比。',
+  'limits.boardGeneralHint': '点按一个 Claude 账号，将其设为默认账号。',
+  'limits.boardGeneral': '所有话题的默认值：',
+  'limits.rowUsage': '5小时 {session} · 每周 {weekly}',
+  'limits.boardSettings': '🔁 自动切换：{switch}{switchSource} · ⏳ 等待重置：{wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provider：尚未连接任何一个。点「➕ OpenCode provider」来连接。',

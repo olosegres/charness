@@ -76,7 +76,7 @@ export const jaDict: Record<string, string> = {
     '/quit /status /output — 制御\n' +
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
-    '/limits — 使用量上限に達したときの動作（予備モデル・切り替え・待機）\n' +
+    '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（選択・追加・再ログイン・削除・接続・切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
@@ -821,8 +821,8 @@ export const jaDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 モデル {from} が利用上限に達しました — このトピックは {to} で続行します。{tail}',
   'fallback.switchedUnknownSource': '🔁 利用上限に達しました — このトピックは {to} で続行します。{tail}',
   'fallback.backgroundStopped': '実行中だったバックグラウンドタスクは切り替えにより停止されました。',
-  'fallback.switchedReset': ' 上限は {time} にリセットされます。戻すには /accounts',
-  'fallback.switchedBack': ' 戻すには /accounts',
+  'fallback.switchedReset': ' 上限は {time} にリセットされます。切り替えは /limits',
+  'fallback.switchedBack': ' 切り替えは /limits',
   'fallback.switchedDeferred': '🔁 アカウント {from} が利用上限に達しました — このトピックは現在の回答が終わると {to} に移ります。',
   'fallback.switchFailed': '⚠️ {to} への切替に失敗しました: {error}。リセット待ちは維持されます。',
   'handover.note': '会話のコンテキストは圧縮された形で引き継がれます。',
@@ -855,8 +855,17 @@ export const jaDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: このトピックは General に従います（{state}）。',
   'limits.whatSwitch': '予備モデルへ自動切り替え',
   'limits.whatWait': 'リセットを待って続行',
-  'limits.usage': '使い方: /limits — 画面; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same（トピックでは «same» = General に従う）。',
+  'limits.usage': '使い方: /limits — 切り替えボード（アカウントまたはプロバイダーをタップすると、このトピックを切り替えます）。予備リストと設定は /limits_autoswitch。',
   'limits.autoswitchUsage': '使い方: /limits_autoswitch — 画面; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same（トピックでは «same» = General に従う）。',
+  'limits.pickModel': '{label} — このトピックのモデルを選択:',
+  'limits.openCodeInTopicOnly': 'OpenCode のモデルはトピック内で選びます。',
+  'limits.rowLimited': '⛔ {time} まで',
+  'limits.boardStaleHint': '⚠️ = 古い情報: /accounts でそのアカウントに再ログインしてください。',
+  'limits.boardPercentHint': '5時間 / 週 = ウィンドウの使用率（%）。',
+  'limits.boardGeneralHint': 'Claude アカウントをタップすると、既定のアカウントになります。',
+  'limits.boardGeneral': '全トピックの既定値: ',
+  'limits.rowUsage': '5時間 {session} · 週 {weekly}',
+  'limits.boardSettings': '🔁 自動切替: {switch}{switchSource} · ⏳ リセット待ち: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode プロバイダー: まだ接続されていません。「➕ OpenCode プロバイダー」で接続できます。',

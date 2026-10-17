@@ -76,7 +76,7 @@ export const kaDict: Record<string, string> = {
     '/quit /status /output — კონტროლი\n' +
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
-    '/limits — რა ხდება გამოყენების ლიმიტზე (სარეზერვო მოდელები, გადართვა, ლოდინი)\n' +
+    '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
     '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (არჩევა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
@@ -827,8 +827,8 @@ export const kaDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 მოდელმა {from} გამოყენების ლიმიტს მიაღწია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
   'fallback.switchedUnknownSource': '🔁 გამოყენების ლიმიტს მიაღწია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
   'fallback.backgroundStopped': 'ჯერ მიმდინარე ფონური ამოცანები გადართვამ შეაჩერა.',
-  'fallback.switchedReset': ' ლიმიტი განულდება {time}-ზე; უკან გადასართავად: /accounts',
-  'fallback.switchedBack': ' უკან გადასართავად: /accounts',
+  'fallback.switchedReset': ' ლიმიტი განულდება {time}-ზე. გადასართავად: /limits',
+  'fallback.switchedBack': ' გადასართავად: /limits',
   'fallback.switchedDeferred': '🔁 ანგარიშმა {from} გამოყენების ლიმიტს მიაღწია — მიმდინარე პასუხის დასრულებისას ეს თემა {to}-ზე გადავა.',
   'fallback.switchFailed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}. განულების ლოდინი რჩება.',
   'handover.note': 'საუბრის კონტექსტი გადაეცემა შეკუმშული სახით.',
@@ -861,8 +861,17 @@ export const kaDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: ეს თემა General-ს მიჰყვება ({state}).',
   'limits.whatSwitch': 'სარეზერვო მოდელზე ავტომატური გადართვა',
   'limits.whatWait': 'განულების დალოდება და გაგრძელება',
-  'limits.usage': 'გამოყენება: /limits — ეკრანი; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
+  'limits.usage': 'გამოყენება: /limits — გადართვის დაფა (ამ თემის გადასართავად დააჭირეთ ანგარიშს ან პროვაიდერს). სარეზერვო სია და პარამეტრები — /limits_autoswitch-ში.',
   'limits.autoswitchUsage': 'გამოყენება: /limits_autoswitch — ეკრანი; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same (თემაში «same» = General-ს მიჰყვება).',
+  'limits.pickModel': '{label} — აირჩიეთ მოდელი ამ თემისთვის:',
+  'limits.openCodeInTopicOnly': 'OpenCode-ის მოდელი თემის შიგნით აირჩევა.',
+  'limits.rowLimited': '⛔ {time}-მდე',
+  'limits.boardStaleHint': '⚠️ = მოძველებულია: /accounts-ში ეს ანგარიში თავიდან შეიყვანეთ.',
+  'limits.boardPercentHint': '5სთ / კვირა = ფანჯრის გამოყენებული %.',
+  'limits.boardGeneralHint': 'Claude ანგარიშზე დაჭერით ის ნაგულისხმევი გახდება.',
+  'limits.boardGeneral': 'ყველა თემის ნაგულისხმევი: ',
+  'limits.rowUsage': '5სთ {session} · კვირა {weekly}',
+  'limits.boardSettings': '🔁 ავტო-გადართვა: {switch}{switchSource} · ⏳ განულების ლოდინი: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode პროვაიდერები: ჯერ არცერთია დაკავშირებული. «➕ OpenCode პროვაიდერი» აკავშირებს ერთს.',

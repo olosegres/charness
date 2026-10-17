@@ -76,7 +76,7 @@ export const deDict: Record<string, string> = {
     '/quit /status /output — Steuerung\n' +
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
-    '/limits — was bei einem Nutzungslimit geschieht (Ersatzmodelle, Wechsel, Warten)\n' +
+    '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wählen, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
@@ -827,8 +827,8 @@ export const deDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 Modell {from} hat sein Nutzungslimit erreicht — dieses Thema macht mit {to} weiter.{tail}',
   'fallback.switchedUnknownSource': '🔁 Ein Nutzungslimit wurde erreicht — dieses Thema macht mit {to} weiter.{tail}',
   'fallback.backgroundStopped': 'Noch laufende Hintergrundaufgaben wurden durch den Wechsel beendet.',
-  'fallback.switchedReset': ' Das Limit wird {time} zurückgesetzt; zurückwechseln: /accounts',
-  'fallback.switchedBack': ' Zurückwechseln: /accounts',
+  'fallback.switchedReset': ' Das Limit wird {time} zurückgesetzt. Wechseln: /limits',
+  'fallback.switchedBack': ' Wechseln: /limits',
   'fallback.switchedDeferred': '🔁 Konto {from} hat sein Nutzungslimit erreicht — dieses Thema wechselt zu {to}, sobald die aktuelle Antwort endet.',
   'fallback.switchFailed': '⚠️ Wechsel zu {to} fehlgeschlagen: {error}. Das Warten auf das Zurücksetzen bleibt aktiv.',
   'handover.note': 'Der Gesprächskontext wird in komprimierter Form übergeben.',
@@ -861,8 +861,17 @@ export const deDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: dieses Thema folgt General ({state}).',
   'limits.whatSwitch': 'Automatisch auf ein Ersatzmodell wechseln',
   'limits.whatWait': 'Auf das Zurücksetzen warten und fortsetzen',
-  'limits.usage': 'Verwendung: /limits — der Bildschirm; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = General folgen, in einem Thema).',
+  'limits.usage': 'Verwendung: /limits — die Wechsel-Übersicht (tippe auf ein Konto oder einen Provider, um dieses Thema umzustellen). Ersatzliste und Einstellungen: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Verwendung: /limits_autoswitch — der Bildschirm; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = General folgen, in einem Thema).',
+  'limits.pickModel': '{label} — wähle das Modell für dieses Thema:',
+  'limits.openCodeInTopicOnly': 'Ein OpenCode-Modell wird innerhalb eines Themas gewählt.',
+  'limits.rowLimited': '⛔ bis {time}',
+  'limits.boardStaleHint': '⚠️ = veraltet: melde dieses Konto in /accounts neu an.',
+  'limits.boardPercentHint': '5h / Woche = % des verbrauchten Fensters.',
+  'limits.boardGeneralHint': 'Tippe auf ein Claude-Konto, um es zum Standard zu machen.',
+  'limits.boardGeneral': 'Standard für alle Themen: ',
+  'limits.rowUsage': '5h {session} · Woche {weekly}',
+  'limits.boardSettings': '🔁 Auto-Wechsel: {switch}{switchSource} · ⏳ Auf Reset warten: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode-Provider: noch keiner verbunden. «➕ OpenCode-Provider» verbindet einen.',

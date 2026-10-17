@@ -2,9 +2,9 @@
  * @description The two notices the bot posts when a usage limit moves a topic onto another rung of the fallback
  * chain (`utils/fallbackChain.ts`): «switched» (the topic already runs on the new rung) and «deferred» (the agent is
  * still answering, so the move waits for the end of the answer). Both read as one short sentence: WHAT hit its
- * limit, WHERE the topic continues, and — in «switched» — when the limit resets and the ONE command that brings
- * the topic back (`/accounts`, whatever the backend: the owner's decision, spelled in the `fallback.switchedReset` /
- * `fallback.switchedBack` texts).
+ * limit, WHERE the topic continues, and — in «switched» — when the limit resets and the ONE command that moves
+ * the topic again (`/limits`, the board of every account and provider, whatever the backend: the owner's decision,
+ * spelled in the `fallback.switchedReset` / `fallback.switchedBack` texts).
  *
  * A Claude rung is named by its account alone (`«work»`), with the model added only when the switch changes it
  * (`«work» (sonnet)`); an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`) and, as the side that
@@ -36,8 +36,8 @@ function formatSwitchTarget(from: FallbackChainEntry | null, to: FallbackChainEn
   return pinnedModel === null ? account : `${account} (${pinnedModel})`;
 }
 
-/** The tail of the «switched» notice: when the exhausted rung resets (when known) and how to switch back. */
-function buildSwitchBackTail(resetTime: string | null): string {
+/** The tail of the «switched» notice: when the exhausted rung resets (when known) and where to switch. */
+function buildSwitchTail(resetTime: string | null): string {
   return resetTime === null
     ? t('fallback.switchedBack')
     : t('fallback.switchedReset', { time: resetTime });
@@ -57,7 +57,7 @@ export function buildFallbackSwitchedNotice(input: {
 }): string {
   const { from, to, resetTime, runningModel } = input;
   const target = formatSwitchTarget(from, to, runningModel);
-  const tail = buildSwitchBackTail(resetTime);
+  const tail = buildSwitchTail(resetTime);
   if (from === null) return t('fallback.switchedUnknownSource', { to: target, tail });
   if (from.backend === 'claude') return t('fallback.switched', { from: quoteName(from.profile), to: target, tail });
   return t('fallback.switchedModel', { from: buildOpenCodeModelLabel(from), to: target, tail });

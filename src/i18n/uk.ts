@@ -82,7 +82,7 @@ export const ukDict: Record<string, string> = {
     '/quit /status /output — контроль\n' +
     '/compact — стиснути контекст агента\n' +
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
-    '/limits — що робити при ліміті використання (запасні моделі, перемикання, очікування)\n' +
+    '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
     '/accounts — облікові записи Claude і провайдери OpenCode (вибір, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/clear — видалити повідомлення треда\n' +
@@ -833,8 +833,8 @@ export const ukDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 Модель {from} досягла ліміту — топік продовжує роботу на {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Досягнуто ліміту — топік продовжує роботу на {to}.{tail}',
   'fallback.backgroundStopped': 'Фонові завдання, що ще працювали, зупинено перемиканням.',
-  'fallback.switchedReset': ' Ліміт скинеться {time}; перемкнути назад: /accounts',
-  'fallback.switchedBack': ' Перемкнути назад: /accounts',
+  'fallback.switchedReset': ' Ліміт скинеться {time}. Перемкнути: /limits',
+  'fallback.switchedBack': ' Перемкнути: /limits',
   'fallback.switchedDeferred': '🔁 Обліковий запис {from} досяг ліміту — топік перейде на {to}, коли завершиться поточна відповідь.',
   'fallback.switchFailed': '⚠️ Перемикання на {to} не вдалося: {error}. Очікування скидання лишається.',
   'handover.note': 'Контекст розмови буде передано у стисненому вигляді.',
@@ -867,8 +867,17 @@ export const ukDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: цей топік слідує General ({state}).',
   'limits.whatSwitch': 'Автоперемикання на запасну модель',
   'limits.whatWait': 'Дочекатися скидання й продовжити',
-  'limits.usage': 'Використання: /limits — екран; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» — слідувати General, у топіку).',
+  'limits.usage': 'Використання: /limits — табло перемикання (натисни на обліковий запис або провайдера, щоб перемкнути цей топік). Запасні моделі та налаштування — у /limits_autoswitch.',
   'limits.autoswitchUsage': 'Використання: /limits_autoswitch — екран; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» — слідувати General, у топіку).',
+  'limits.pickModel': '{label} — обери модель для цього топіка:',
+  'limits.openCodeInTopicOnly': 'Модель OpenCode вибирається всередині топіка.',
+  'limits.rowLimited': '⛔ до {time}',
+  'limits.boardStaleHint': '⚠️ = застаріло: увійди в цей обліковий запис заново в /accounts.',
+  'limits.boardPercentHint': '5год / тиждень = % використаної частини вікна.',
+  'limits.boardGeneralHint': 'Натисни на обліковий запис Claude, щоб зробити його типовим.',
+  'limits.boardGeneral': 'Типово для всіх топіків: ',
+  'limits.rowUsage': '5год {session} · тиждень {weekly}',
+  'limits.boardSettings': '🔁 Автоперемикання: {switch}{switchSource} · ⏳ Чекати скидання: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдери OpenCode: поки жоден не підключено. Кнопка «➕ Провайдер OpenCode» підключає.',

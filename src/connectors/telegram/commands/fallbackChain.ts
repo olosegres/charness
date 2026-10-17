@@ -15,8 +15,8 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
-import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
+import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import {
   addFallbackEntry,
   buildFallbackAddConfirmCallback,
@@ -78,28 +78,11 @@ import {
   type FallbackChainEntry,
   type FallbackDetection,
 } from '../../../utils/fallbackChain';
+import { formatLimitSettingSource, formatLimitSettingState, limitSettingIds, readLimitSetting, type LimitSettingId, type LimitSettingValue } from '../../../utils/limitSettings';
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 import { createWholeTextAnswerer } from './callbackToast';
 import { buildModelPageButtons } from './modelPage';
-
-/**
- * How long opening the screen waits for the usage refresh (one poll is ~0.5 s). A slower one — a hung endpoint
- * runs into the fetch's own 15 s timeout — keeps going in the background and the next render shows its result.
- */
-export const limitsUsageRefreshBudgetMs = 2_000;
-
-/** The two settings of the screen: the ids the setting rows, the sub-menu and its callbacks are keyed by. */
-type SettingId = 'switch' | 'wait';
-
-const settingIds: readonly SettingId[] = ['switch', 'wait'];
-
-/** A setting's value as a screen reads it: what is in force, the topic's own choice (`undefined` = follows General) and the General value. */
-interface SettingValue {
-  effective: boolean;
-  override: boolean | undefined;
-  generalValue: boolean;
-}
 
 /** One setting's callbacks: the topic button that opens its sub-menu, and the sub-menu's on / off / same-as-General options. */
 interface SettingCallbacks {
@@ -109,13 +92,13 @@ interface SettingCallbacks {
   same: string;
 }
 
-const settingCallbacks: Record<SettingId, SettingCallbacks> = {
+const settingCallbacks: Record<LimitSettingId, SettingCallbacks> = {
   switch: { open: fallbackAutoSwitchOpenCallback, on: fallbackAutoSwitchOnCallback, off: fallbackAutoSwitchOffCallback, same: fallbackAutoSwitchSameCallback },
   wait: { open: fallbackWaitOpenCallback, on: fallbackWaitOnCallback, off: fallbackWaitOffCallback, same: fallbackWaitSameCallback },
 };
 
 /** A setting's texts: its main-screen button (the name with the value, `{state}`) and the title of its sub-menu. */
-const settingTextKeys: Record<SettingId, { button: 'limits.switchButton' | 'limits.waitButton'; menuTitle: 'limits.switchMenuTitle' | 'limits.waitMenuTitle' }> = {
+const settingTextKeys: Record<LimitSettingId, { button: 'limits.switchButton' | 'limits.waitButton'; menuTitle: 'limits.switchMenuTitle' | 'limits.waitMenuTitle' }> = {
   switch: { button: 'limits.switchButton', menuTitle: 'limits.switchMenuTitle' },
   wait: { button: 'limits.waitButton', menuTitle: 'limits.waitMenuTitle' },
 };
@@ -133,7 +116,7 @@ export interface FallbackChainPorts
   getInstanceTimezone: () => string;
   /**
    * Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`) for the usage block; never
-   * throws. Called when the screen is OPENED (bounded by {@link limitsUsageRefreshBudgetMs}), never on a tap: the
+   * throws. Called when the screen is OPENED (bounded by `refreshUsageWithinBudget`), never on a tap: the
    * rows' availability reads the windows (an account at 100 % is not a candidate).
    */
   refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
@@ -243,30 +226,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     await editThreadMessage(key, messageId, lines.join('\n'), Markup.inlineKeyboard(rows));
   }
 
-  /** A setting's value for the topic (General: the instance default, where there is no override). */
-  function readSetting(id: SettingId, key: SessionKey, isGeneral: boolean): SettingValue {
-    if (id === 'switch') {
-      return {
-        effective: isGeneral ? getState().getClaudeAutoSwitchOnLimitGlobalDefault() : getState().checkIsClaudeAutoSwitchOnLimitEnabled(key),
-        override: isGeneral ? undefined : getState().getClaudeAutoSwitchOnLimitOverride(key),
-        generalValue: getState().getClaudeAutoSwitchOnLimitGlobalDefault(),
-      };
-    }
-    return {
-      effective: isGeneral ? getState().getAutoContinueOnLimitGlobalDefault() : getState().checkIsAutoContinueOnLimitEnabled(key),
-      override: isGeneral ? undefined : getState().getAutoContinueOnLimitOverride(key),
-      generalValue: getState().getAutoContinueOnLimitGlobalDefault(),
-    };
-  }
-
-  function formatState(enabled: boolean): string {
-    return enabled ? t('autoContinueLimits.on') : t('autoContinueLimits.off');
-  }
-
-  /** Where a topic's setting value comes from: General, or the topic's own override. */
-  function formatSettingSource(setting: SettingValue): string {
-    return setting.override === undefined ? t('limits.sourceGeneral') : t('limits.sourceTopic');
-  }
+  const readSetting = (id: LimitSettingId, key: SessionKey, isGeneral: boolean): LimitSettingValue => readLimitSetting(getState(), id, key, isGeneral);
 
   /**
    * One setting's button on the main screen: one full-width button with the setting's name and its effective value
@@ -275,10 +235,10 @@ export function createFallbackChain(ports: FallbackChainPorts) {
    * flips the value. A topic: a tap opens the setting's sub-menu ({@link renderSettingMenu}) in the same message —
    * three choices on one row would split the width evenly and cut every label.
    */
-  function buildSettingRow(id: SettingId, setting: SettingValue, isGeneral: boolean) {
+  function buildSettingRow(id: LimitSettingId, setting: LimitSettingValue, isGeneral: boolean) {
     const callbacks = settingCallbacks[id];
     const tapData = isGeneral ? (setting.effective ? callbacks.off : callbacks.on) : callbacks.open;
-    return [Markup.button.callback(t(settingTextKeys[id].button, { state: formatState(setting.effective) }), tapData)];
+    return [Markup.button.callback(t(settingTextKeys[id].button, { state: formatLimitSettingState(setting.effective) }), tapData)];
   }
 
   /**
@@ -287,16 +247,16 @@ export function createFallbackChain(ports: FallbackChainPorts) {
    * is also where the value comes from — and Back. The options are the setting's own callbacks, which apply the
    * choice and return to the main screen.
    */
-  async function renderSettingMenu(key: SessionKey, messageId: number | null, id: SettingId): Promise<void> {
+  async function renderSettingMenu(key: SessionKey, messageId: number | null, id: LimitSettingId): Promise<void> {
     if (messageId === null) return;
     const setting = readSetting(id, key, false);
     const callbacks = settingCallbacks[id];
     const mark = (isCurrent: boolean): string => (isCurrent ? ' ✓' : '');
     const rows = [
-      [Markup.button.callback(`${formatState(true)}${mark(setting.override === true)}`, callbacks.on)],
-      [Markup.button.callback(`${formatState(false)}${mark(setting.override === false)}`, callbacks.off)],
+      [Markup.button.callback(`${formatLimitSettingState(true)}${mark(setting.override === true)}`, callbacks.on)],
+      [Markup.button.callback(`${formatLimitSettingState(false)}${mark(setting.override === false)}`, callbacks.off)],
       [Markup.button.callback(
-        `${t('limits.settingSameButton', { state: formatState(setting.generalValue) })}${mark(setting.override === undefined)}`,
+        `${t('limits.settingSameButton', { state: formatLimitSettingState(setting.generalValue) })}${mark(setting.override === undefined)}`,
         callbacks.same,
       )],
       buildBackRow(),
@@ -322,7 +282,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       : [
         t('limits.autoswitchTitle'),
         t('limits.topicRuns', { current: current ? formatEntry(current) : t('fallback.noAgent') }),
-        t('limits.sourceLine', { switch: formatSettingSource(switchSetting), wait: formatSettingSource(waitSetting) }),
+        t('limits.sourceLine', { switch: formatLimitSettingSource(switchSetting), wait: formatLimitSettingSource(waitSetting) }),
       ].join('\n'));
     parts.push(chain.length === 0 ? t('limits.listNoteEmpty') : t('limits.listNote'));
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
@@ -470,22 +430,22 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const what = t('limits.whatSwitch');
     if (isGeneral) {
       await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled ?? false);
-      return t('limits.setGlobal', { what, state: formatState(enabled ?? false) });
+      return t('limits.setGlobal', { what, state: formatLimitSettingState(enabled ?? false) });
     }
     await getState().setClaudeAutoSwitchOnLimitOverride(key, enabled);
     return enabled === null
-      ? t('limits.setSame', { what, state: formatState(getState().getClaudeAutoSwitchOnLimitGlobalDefault()) })
-      : t('limits.setThisTopic', { what, state: formatState(enabled) });
+      ? t('limits.setSame', { what, state: formatLimitSettingState(getState().getClaudeAutoSwitchOnLimitGlobalDefault()) })
+      : t('limits.setThisTopic', { what, state: formatLimitSettingState(enabled) });
   }
 
   /** The «wait for the reset» twin of {@link applyAutoSwitch}; the write (and the armed-wait cleanup) is `autoContinueLimits.ts`'s. */
   async function applyWait(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {
     const what = t('limits.whatWait');
     await applyAutoContinue(key, isGeneral, isGeneral ? (enabled ?? true) : enabled);
-    if (isGeneral) return t('limits.setGlobal', { what, state: formatState(enabled ?? true) });
+    if (isGeneral) return t('limits.setGlobal', { what, state: formatLimitSettingState(enabled ?? true) });
     return enabled === null
-      ? t('limits.setSame', { what, state: formatState(getState().getAutoContinueOnLimitGlobalDefault()) })
-      : t('limits.setThisTopic', { what, state: formatState(enabled) });
+      ? t('limits.setSame', { what, state: formatLimitSettingState(getState().getAutoContinueOnLimitGlobalDefault()) })
+      : t('limits.setThisTopic', { what, state: formatLimitSettingState(enabled) });
   }
 
   // ── the command ──
@@ -496,34 +456,20 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     // settings; `/limits` takes the same verbs (`limitsBoard.ts` hands them to {@link runAutoSwitchCommand}).
     // `/fallback` is the same command under its old name (hidden alias). Not gated on a session: the chain must
     // be settable before any limit hits.
-    command(['limits_autoswitch', 'fallback', 'limits'], async (_ctx, key, parsed: InboundCommand) => {
+    command(['limits_autoswitch', 'fallback'], async (_ctx, key, parsed: InboundCommand) => {
       const [verb = '', value = ''] = parsed.args;
       await runAutoSwitchCommand(key, verb, value);
     });
   }
 
-  /**
-   * Refresh the usage snapshots (a snapshot younger than a minute is kept — the `/accounts` freshness), waiting at
-   * most {@link limitsUsageRefreshBudgetMs}: the screen is never held by a slow usage endpoint.
-   */
-  async function refreshUsageWithinBudget(): Promise<void> {
-    let timer: NodeJS.Timeout | undefined;
-    const budget = new Promise<void>((resolve) => { timer = setTimeout(resolve, limitsUsageRefreshBudgetMs); });
-    try {
-      await Promise.race([refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs }), budget]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   /** Open the screen as a fresh message (the `/auto_continue_limits` alias lands here); the usage is refreshed first. */
   async function openAutoSwitchView(key: SessionKey): Promise<void> {
-    await refreshUsageWithinBudget();
+    await refreshUsageWithinBudget(refreshClaudeUsage);
     const picker = await buildPicker(key, checkIsGeneral(key));
     await replyToThread(key, picker.text, picker.keyboard);
   }
 
-  async function runAutoSwitchCommand(key: SessionKey, verb: string, value: string): Promise<void> {
+  async function runAutoSwitchCommand(key: SessionKey, verb: string, value: string, usageKey: 'limits.usage' | 'limits.autoswitchUsage' = 'limits.autoswitchUsage'): Promise<void> {
     const isGeneral = checkIsGeneral(key);
     const word = value.toLowerCase();
     const parseState = (): boolean | null | undefined => {
@@ -549,18 +495,18 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       case 'switch':
       case 'autoswitch': {
         const enabled = parseState();
-        if (enabled === undefined) { await replyToThread(key, t('limits.autoswitchUsage')); return; }
+        if (enabled === undefined) { await replyToThread(key, t(usageKey)); return; }
         await replyToThread(key, await applyAutoSwitch(key, isGeneral, enabled));
         return;
       }
       case 'wait': {
         const enabled = parseState();
-        if (enabled === undefined) { await replyToThread(key, t('limits.autoswitchUsage')); return; }
+        if (enabled === undefined) { await replyToThread(key, t(usageKey)); return; }
         await replyToThread(key, await applyWait(key, isGeneral, enabled));
         return;
       }
       default:
-        await replyToThread(key, t('limits.autoswitchUsage'));
+        await replyToThread(key, t(usageKey));
     }
   }
 
@@ -739,7 +685,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
 
     // A topic's setting button: open its sub-menu. General has no sub-menu (its button flips the value), so a tap
     // that still arrives there only re-renders the screen.
-    for (const id of settingIds) {
+    for (const id of limitSettingIds) {
       bot.action(settingCallbacks[id].open, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
         await ctx.answerCbQuery();
         if (isGeneral) await rerenderPicker(key, messageId, isGeneral);

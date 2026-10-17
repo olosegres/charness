@@ -401,6 +401,7 @@ import {
 } from './utils/fallbackChain';
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
+import { createLimitsBoard } from './connectors/telegram/commands/limitsBoard';
 import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
 import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operatorSwitchPlan';
 import { checkNeedsBackendSwitchConfirmation, getBackendFamily, getBackendSwitchModelToPin, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
@@ -7335,13 +7336,20 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
         return isOk ? { kind: 'switched', text: message } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       }
       const runningModel = readRunningModelBeforeMove(key, from, to);
-      await state.setClaudeProfileOverride(key, to.profile);
-      const outcome = await applyClaudeProfileToThread(key);
-      const switchedText = t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${outcome}`) });
+      // A model named for the account the topic already runs is a model change: it must not turn the topic's
+      // following of General into a pick of its own.
+      const isModelChangeOnly = to.model !== null && to.profile === resolveLiveClaudeProfileName(key);
+      let switchedText = '';
+      if (!isModelChangeOnly) {
+        await state.setClaudeProfileOverride(key, to.profile);
+        const outcome = await applyClaudeProfileToThread(key);
+        switchedText = t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${outcome}`) });
+      }
       const modelToPin = getFallbackModelToPin(to, runningModel);
-      if (modelToPin === null) return { kind: 'switched', text: switchedText };
+      if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText };
       const { isOk, message, setModelError } = await applyModelSelection(getThreadAdapter(key), key, modelToPin);
-      return isOk ? { kind: 'switched', text: `${switchedText}\n${message}` } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
+      if (!isOk) return { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
+      return { kind: 'switched', text: switchedText === '' ? message : `${switchedText}\n${message}` };
     }
     case 'askFirst': {
       // The route asks only when the topic runs a backend to hand over from.
@@ -7384,7 +7392,7 @@ async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeP
   );
 }
 
-const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, applyAutoSwitch } = createFallbackChain({
+const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, runAutoSwitchCommand, applyAutoSwitch } = createFallbackChain({
   ...botCore,
   applyAutoContinue: applyAutoContinueLimits,
   getArmedLimitRetryFireAt,
@@ -7395,12 +7403,26 @@ const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoS
   takeSwitchOffer: takeFallbackSwitchOffer,
 });
 
+const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimitsBoard({
+  ...botCore,
+  getInstanceTimezone: getCurrentTimezone,
+  refreshUsage: (options) => claudeUsageRefresher.refreshAll(options),
+  detectFallbackOptions,
+  getTopicPosition: getTopicFallbackPosition,
+  pickClaudeAccount: (key, isGeneral, name) => pickClaudeAccount(key, isGeneral, name),
+  switchTopicByOperator,
+  listClaudeModels: async (key) => (await getThreadAdapter(key).getAvailableModels?.()) ?? [],
+  runAutoSwitchCommand,
+  getArmedLimitRetryFireAt,
+});
+
 const {
   registerClaudeAccountCommands,
   registerClaudeAccountCallbacks,
   checkIsAwaitingProfileName,
   cancelProfileNameCapture,
   submitProfileName,
+  pickClaudeAccount,
   onClaudeProfileAuthStatus: recordClaudeProfileAuthStatus,
 } = createClaudeAccounts({
   ...botCore,
@@ -7444,6 +7466,8 @@ const {
 registerClaudeAccountCommands();
 
 registerFallbackChainCommands();
+
+registerLimitsBoardCommands();
 
 registerSttCommands();
 
@@ -9378,6 +9402,7 @@ registerAutoContinueLimitsCallbacks();
 registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
+registerLimitsBoardCallbacks();
 registerSttCallbacks();
 
 // «⏭ Skip once» in the `/auto_continue_limits` picker: drop THIS armed resume and
@@ -11149,7 +11174,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (pick, add, re-login, remove, connect, disconnect)' },
-  { command: 'limits', description: '🚧 What happens when an agent hits a usage limit' },
+  { command: 'limits', description: '🚧 Usage limits — switch this topic' },
   { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },
   { command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },

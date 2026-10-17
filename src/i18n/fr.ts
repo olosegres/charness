@@ -76,7 +76,7 @@ export const frDict: Record<string, string> = {
     '/quit /status /output — contrôle\n' +
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
-    '/limits — que faire à une limite d’usage (modèles de secours, bascule, attente)\n' +
+    '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/accounts — comptes Claude et providers OpenCode (choisir, ajouter, se reconnecter, supprimer, connecter, déconnecter)\n' +
     '/clear — supprimer les messages du fil\n' +
@@ -827,8 +827,8 @@ export const frDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 Le modèle {from} a atteint sa limite d\'usage — ce sujet continue sur {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Une limite d\'usage a été atteinte — ce sujet continue sur {to}.{tail}',
   'fallback.backgroundStopped': 'Les tâches d\'arrière-plan encore en cours ont été arrêtées par le changement.',
-  'fallback.switchedReset': ' La limite se réinitialise {time} ; pour rebasculer : /accounts',
-  'fallback.switchedBack': ' Pour rebasculer : /accounts',
+  'fallback.switchedReset': ' La limite se réinitialise {time}. Pour basculer : /limits',
+  'fallback.switchedBack': ' Pour basculer : /limits',
   'fallback.switchedDeferred': '🔁 Le compte {from} a atteint sa limite d\'usage — ce sujet passera à {to} à la fin de la réponse en cours.',
   'fallback.switchFailed': '⚠️ La bascule vers {to} a échoué : {error}. L\'attente de la réinitialisation reste armée.',
   'handover.note': 'Le contexte de la conversation sera transmis sous forme compactée.',
@@ -861,8 +861,17 @@ export const frDict: Record<string, string> = {
   'limits.setSame': '✅ {what} : ce sujet suit General ({state}).',
   'limits.whatSwitch': 'Bascule automatique vers un modèle de secours',
   'limits.whatWait': 'Attendre la réinitialisation et continuer',
-  'limits.usage': 'Utilisation : /limits — l’écran ; /limits rebuild ; /limits clear ; /limits switch on|off|same ; /limits wait on|off|same («same» = suivre General, dans un sujet).',
+  'limits.usage': 'Utilisation : /limits — le tableau de bascule (touchez un compte ou un fournisseur pour y basculer ce sujet). La liste de secours et ses réglages : /limits_autoswitch.',
   'limits.autoswitchUsage': 'Utilisation : /limits_autoswitch — l’écran ; /limits_autoswitch rebuild ; /limits_autoswitch clear ; /limits_autoswitch switch on|off|same ; /limits_autoswitch wait on|off|same («same» = suivre General, dans un sujet).',
+  'limits.pickModel': '{label} — choisissez le modèle de ce sujet :',
+  'limits.openCodeInTopicOnly': 'Un modèle OpenCode se choisit dans un sujet.',
+  'limits.rowLimited': '⛔ jusqu’à {time}',
+  'limits.boardStaleHint': '⚠️ = périmé : reconnectez ce compte dans /accounts.',
+  'limits.boardPercentHint': '5h / semaine = % de la fenêtre consommée.',
+  'limits.boardGeneralHint': 'Touchez un compte Claude pour en faire le compte par défaut.',
+  'limits.boardGeneral': 'Valeurs par défaut pour tous les sujets : ',
+  'limits.rowUsage': '5h {session} · semaine {weekly}',
+  'limits.boardSettings': '🔁 Bascule auto : {switch}{switchSource} · ⏳ Attendre le reset : {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode : aucun connecté pour l’instant. «➕ Provider OpenCode» en connecte un.',

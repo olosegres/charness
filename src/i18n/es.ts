@@ -76,7 +76,7 @@ export const esDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compactar el contexto del agente\n' +
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
-    '/limits — qué ocurre ante un límite de uso (modelos de respaldo, cambio, espera)\n' +
+    '/limits — uso de cada cuenta y proveedor; toca uno para cambiar este tema\n' +
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
     '/accounts — cuentas de Claude y providers de OpenCode (elegir, añadir, volver a entrar, eliminar, conectar, desconectar)\n' +
     '/clear — eliminar mensajes del hilo\n' +
@@ -827,8 +827,8 @@ export const esDict: Record<string, string> = {
   'fallback.switchedModel': '🔁 El modelo {from} alcanzó su límite de uso — este tema continúa en {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Se alcanzó un límite de uso — este tema continúa en {to}.{tail}',
   'fallback.backgroundStopped': 'Las tareas en segundo plano que seguían en curso se detuvieron con el cambio.',
-  'fallback.switchedReset': ' El límite se restablece {time}; para volver: /accounts',
-  'fallback.switchedBack': ' Para volver: /accounts',
+  'fallback.switchedReset': ' El límite se restablece {time}. Para cambiar: /limits',
+  'fallback.switchedBack': ' Para cambiar: /limits',
   'fallback.switchedDeferred': '🔁 La cuenta {from} alcanzó su límite de uso — este tema pasará a {to} cuando termine la respuesta actual.',
   'fallback.switchFailed': '⚠️ El cambio a {to} falló: {error}. La espera del reinicio sigue armada.',
   'handover.note': 'El contexto de la conversación se transferirá en forma compactada.',
@@ -861,8 +861,17 @@ export const esDict: Record<string, string> = {
   'limits.setSame': '✅ {what}: este tema sigue a General ({state}).',
   'limits.whatSwitch': 'Cambio automático a un modelo de respaldo',
   'limits.whatWait': 'Esperar al reinicio y continuar',
-  'limits.usage': 'Uso: /limits — la pantalla; /limits rebuild; /limits clear; /limits switch on|off|same; /limits wait on|off|same («same» = seguir a General, en un tema).',
+  'limits.usage': 'Uso: /limits — el panel de cambio (toca una cuenta o un proveedor para cambiar este tema). La lista de reserva y sus ajustes: /limits_autoswitch.',
   'limits.autoswitchUsage': 'Uso: /limits_autoswitch — la pantalla; /limits_autoswitch rebuild; /limits_autoswitch clear; /limits_autoswitch switch on|off|same; /limits_autoswitch wait on|off|same («same» = seguir a General, en un tema).',
+  'limits.pickModel': '{label} — elige el modelo de este tema:',
+  'limits.openCodeInTopicOnly': 'Un modelo de OpenCode se elige dentro de un tema.',
+  'limits.rowLimited': '⛔ hasta {time}',
+  'limits.boardStaleHint': '⚠️ = desactualizado: vuelve a iniciar sesión en esa cuenta en /accounts.',
+  'limits.boardPercentHint': '5h / semana = % de la ventana consumido.',
+  'limits.boardGeneralHint': 'Toca una cuenta de Claude para hacerla la predeterminada.',
+  'limits.boardGeneral': 'Valores por defecto para todos los temas: ',
+  'limits.rowUsage': '5h {session} · semana {weekly}',
+  'limits.boardSettings': '🔁 Cambio auto: {switch}{switchSource} · ⏳ Esperar reinicio: {wait}{waitSource} — /limits_autoswitch',
   'limits.autoswitchTitle': '🔁 Cambio automático al alcanzar un límite de uso',
   'accounts.openCodeSection': '🔌 Providers de OpenCode (conectados):\n{list}',
   'accounts.openCodeNone': '🔌 Providers de OpenCode: aún no hay ninguno conectado. «➕ Provider OpenCode» conecta uno.',
