@@ -128,9 +128,10 @@ profile drops the topic picks that named it (the state returns them, so their se
 topic from (`state.fallbackReturns`, per topic, persisted), and `/accounts` in that topic puts one button on top —
 `getFallbackReturnButton` port: «↩️ Back to «a»», with «(limit resets …)» while that rung is still limited. A tap goes
 to the `returnToFallbackOrigin` port (`returnTopicToFallbackOrigin` in `bot.ts`: the limit switch's `moveTopicOntoRung`
-without the «continue» nudge or the bridge), answers with the notice and re-renders in place. The data bakes the
+without the «continue» nudge or the bridge — while a usage-limit wait is armed it IS the limit switch, as an `/accounts use`
+pick is), answers with the notice (`isPosted`: it already went into the topic) and re-renders in place. The data bakes the
 rung's revision, so an old keyboard's tap — the rung is forgotten, or another one is remembered — only answers «out of
-date». The rung is forgotten when the topic goes back and on a manual change (`checkIsFallbackReturnForgotten`: an
+date». The rung is forgotten when the topic goes back, when a limit switch lands on it (`decideFallbackReturnAfterSwitch`) and on a manual change (`checkIsFallbackReturnForgotten`: an
 account pick that moves the session, any `/model` pick — `modelProviders.ts` writes it through `getState()` — or
 another agent). General never shows it.
 Under each row the picker prints the profile's usage windows (`utils/claudeProfileUsageLines.ts`, shared with `/limits`: session, weekly, Fable

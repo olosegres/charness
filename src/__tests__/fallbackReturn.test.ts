@@ -13,6 +13,7 @@ import {
   buildFallbackReturnCallback,
   checkIsFallbackReturnCurrent,
   checkIsFallbackReturnForgotten,
+  decideFallbackReturnAfterSwitch,
   fallbackReturnCallbackRe,
   normaliseFallbackReturn,
 } from '../utils/fallbackReturn';
@@ -84,5 +85,27 @@ describe('checkIsFallbackReturnForgotten: which manual changes make the remember
   it('a switch to another agent forgets it; a flip between the two Claude backends (same conversation) does not', () => {
     assert.equal(checkIsFallbackReturnForgotten({ kind: 'backendSwitch', isSameConversation: false }), true);
     assert.equal(checkIsFallbackReturnForgotten({ kind: 'backendSwitch', isSameConversation: true }), false);
+  });
+});
+
+describe('decideFallbackReturnAfterSwitch: what a limit switch does to the remembered rung', () => {
+  const home: FallbackChainEntry = { backend: 'claude', profile: 'default', model: null };
+  const fallback: FallbackChainEntry = { backend: 'claude', profile: 'work', model: null };
+
+  it('remembers the rung the topic left', () => {
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: null, from: home, to: fallback }), { action: 'remember', rung: home });
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: openCodeRung, from: home, to: fallback }), { action: 'remember', rung: home }, 'the latest rung left replaces an older one');
+  });
+
+  it('forgets it when the switch lands on the remembered rung — the topic is home, the rung it left is a fallback', () => {
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: home, from: fallback, to: home }), { action: 'forget' });
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: home, from: fallback, to: { ...home, model: 'sonnet' } }), { action: 'forget' }, 'the account is what a Claude rung is');
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: openCodeRung, from: home, to: openCodeRung }), { action: 'forget' });
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: home, from: null, to: home }), { action: 'forget' }, 'even when the rung it left is unknown');
+  });
+
+  it('keeps what is remembered when the rung the topic left is unknown', () => {
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: home, from: null, to: fallback }), { action: 'keep' });
+    assert.deepEqual(decideFallbackReturnAfterSwitch({ remembered: null, from: null, to: fallback }), { action: 'keep' });
   });
 });

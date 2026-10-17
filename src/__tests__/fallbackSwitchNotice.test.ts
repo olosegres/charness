@@ -122,11 +122,11 @@ describe('the way back (English)', () => {
     assert.equal(buildFallbackReturnLabel({ current: null, origin: originAccount, resetTime: null }), '↩️ Back to Claude «default»', 'the topic\'s position is unknown');
   });
 
-  it('the notice after the move: the rung, the model only when the move pins another one', () => {
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: originAccount, runningModel: runningOpus }), '↩️ This topic is back on «default».');
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: originAccount, runningModel: 'claude-sonnet-4-6' }), '↩️ This topic is back on «default» (claude-opus-5-5[1m]).');
-    assert.equal(buildFallbackReturnedNotice({ from: openCode('openai', 'gpt-5'), to: claude('default'), runningModel: null }), '↩️ This topic is back on Claude «default».');
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: openCode('openai', 'gpt-5'), runningModel: runningOpus }), '↩️ This topic is back on OpenCode openai/gpt-5.');
+  it('the notice after the move names the rung and never a model — a restored model id is the one the session reported, not a choice', () => {
+    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: originAccount }), '↩️ This topic is back on «default».');
+    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: claude('default', 'sonnet') }), '↩️ This topic is back on «default».', 'not even a chain alias');
+    assert.equal(buildFallbackReturnedNotice({ from: openCode('openai', 'gpt-5'), to: claude('default') }), '↩️ This topic is back on Claude «default».');
+    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: openCode('openai', 'gpt-5') }), '↩️ This topic is back on OpenCode openai/gpt-5.');
   });
 
   it('a working session moves back when the answer ends; a failed move says why', () => {
@@ -187,7 +187,7 @@ for (const locale of localeCodes) {
       const limited = run(() => buildFallbackReturnLabel({ current: claude('work'), origin, resetTime }));
       const over = run(() => buildFallbackReturnLabel({ current: claude('work'), origin, resetTime: null }));
       const fromOpenCode = run(() => buildFallbackReturnLabel({ current: openCode('openai', 'gpt-5'), origin, resetTime: null }));
-      const returned = run(() => buildFallbackReturnedNotice({ from: claude('work'), to: origin, runningModel: runningOpus }));
+      const returned = run(() => buildFallbackReturnedNotice({ from: claude('work'), to: origin }));
       const deferred = run(() => buildFallbackReturnDeferredNotice(claude('work'), origin));
       const failed = run(() => buildFallbackReturnFailedNotice(claude('work'), origin, 'boom'));
       for (const text of [limited, over, fromOpenCode, returned, deferred, failed]) {

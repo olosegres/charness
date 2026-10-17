@@ -93,7 +93,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 `TELEGRAM_API_ROOT` points the telegraf client at another Bot API host. The process-level Telegram test
 (`src/__tests__/telegramViewsE2e.test.ts`; `telegramCommandsE2e.test.ts` for the slash commands, their
 buttons and the voice path through a fake OpenAI-compatible engine `telegramE2e/fakeSpeechEngine.ts`, driven through
-`telegramE2e/topicDriver.ts`; `sttBootE2e.test.ts` for the voice settings at boot and the end of an interrupted install) runs the built bot against
+`telegramE2e/topicDriver.ts`; `sttBootE2e.test.ts` for the voice settings at boot and the end of an interrupted install; `fallbackSwitchE2e.test.ts` and `fallbackSwitchOpenCodeE2e.test.ts` for the usage-limit switch, its notice and the «back» button — the latter against a fake OpenCode server and CLI, `openCodeE2e/fakeOpenCodeServer.ts`, that serves only what the bot calls and lists the rest as `unhandled`) runs the built bot against
 `telegramE2e/fakeTelegram.ts` on loopback with a placeholder token; unset, the client talks to `api.telegram.org`. Telegraf drops its https
 agent by itself for an `http://` root.
 

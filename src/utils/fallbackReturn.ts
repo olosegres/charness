@@ -11,7 +11,7 @@
 
 import type { ClaudeConfigDirApplyResult } from '../adapters/claudeConfigDir';
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { getFallbackChainRevision, normaliseFallbackChain, type FallbackChainEntry } from './fallbackChain';
+import { checkIsSameFallbackAccount, getFallbackChainRevision, normaliseFallbackChain, type FallbackChainEntry } from './fallbackChain';
 
 /** A reported Claude model id is short; anything longer is not one and is dropped (the topic keeps its model). */
 const returnModelMaxLength = 100;
@@ -67,4 +67,19 @@ export function checkIsFallbackReturnForgotten(change: ManualRungChange): boolea
     case 'modelPick': return true;
     case 'backendSwitch': return !change.isSameConversation;
   }
+}
+
+/** What a limit switch does to the remembered rung. */
+export type FallbackReturnUpdate = { action: 'remember'; rung: FallbackChainEntry } | { action: 'forget' } | { action: 'keep' };
+
+/**
+ * @description What the remembered rung becomes after a limit switch moved the topic from `from` onto `to`: a switch
+ * that lands on the rung already remembered (the limit wait brought the topic home, or a pick by hand during the
+ * wait) forgets it — there is nothing to go back to, and the rung the topic just left is a fallback, not a home;
+ * any other switch remembers the rung it left (`keep` when that is unknown).
+ */
+export function decideFallbackReturnAfterSwitch(input: { remembered: FallbackChainEntry | null; from: FallbackChainEntry | null; to: FallbackChainEntry }): FallbackReturnUpdate {
+  const { remembered, from, to } = input;
+  if (remembered !== null && checkIsSameFallbackAccount(remembered, to)) return { action: 'forget' };
+  return from === null ? { action: 'keep' } : { action: 'remember', rung: from };
 }

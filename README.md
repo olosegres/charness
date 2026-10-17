@@ -278,11 +278,15 @@ so one account's usage limit does not stop every topic.
   button on top, «↩️ Back to «a» (limit resets <time>)» — the reset only while
   that account is still limited, a tap always switches. It works in every
   direction, to or from OpenCode too, and moves the topic through the same
-  move the limit switch uses, without a «continue» message (nothing was
-  interrupted). It is forgotten once the topic goes back or you change the
-  topic by hand — an account pick that moves it, a model, another agent
-  (`/claude`, `/opencode`) — and it survives a restart. In General nothing
-  changes. When nothing can take over the bot waits for the reset as before. A
+  move the limit switch uses: a plain move, with no «continue» message because
+  nothing was interrupted (a Claude model the move changed is put back
+  silently; a conversation parked on the other backend is resumed) — except
+  while a limit wait is armed, when the tap is exactly an `/accounts use` pick
+  during the wait: the interrupted turn resumes with its «continue». It is
+  forgotten once the topic goes back, when any switch lands the topic on it
+  (the wait brought it home) or when you change the topic by hand — an account
+  pick that moves it, a model, another agent (`/claude`, `/opencode`) — and it
+  survives a restart. In General nothing changes. When nothing can take over the bot waits for the reset as before. A
   Claude session that works when a limit hits is moved at once (the turn is
   dead; background tasks it started are stopped and the notice says so); only a
   tmux Claude session with nothing to resume yet is left to the end of its turn.

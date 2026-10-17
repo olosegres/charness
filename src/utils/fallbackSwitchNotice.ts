@@ -92,11 +92,12 @@ export function buildFallbackReturnLabel(input: { current: FallbackChainEntry | 
 }
 
 /**
- * @description The notice after the topic moved back to `to`. `from` is the rung it was on (`null` when unknown),
- * `runningModel` the model its Claude session runs now — the model is named only when the move pins another one.
+ * @description The notice after the topic moved back to `to` (`from` is the rung it was on, `null` when unknown).
+ * It never names a model: a move back restores the model id the session REPORTED, which is not something the
+ * operator chose (a chain alias like `sonnet` is named only where the limit switch pins one).
  */
-export function buildFallbackReturnedNotice(input: { from: FallbackChainEntry | null; to: FallbackChainEntry; runningModel: string | null }): string {
-  return t('fallback.returned', { to: formatSwitchTarget(input.from, input.to, input.runningModel) });
+export function buildFallbackReturnedNotice(input: { from: FallbackChainEntry | null; to: FallbackChainEntry }): string {
+  return t('fallback.returned', { to: formatRungName(input.from, input.to) });
 }
 
 /** The notice when the way back waits for the end of the current answer (a Claude session that is working). */

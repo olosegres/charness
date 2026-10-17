@@ -48,7 +48,7 @@ const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
 /** The «back» button the stand-in bot offers (`null`: the topic was not moved off a limited rung), and what a tap on it answers. */
 let returnButton: { label: string; callbackData: string } | null = null;
-let returnResult: { kind: 'expired' } | { kind: 'done'; notice: string } = { kind: 'expired' };
+let returnResult: { kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean } = { kind: 'expired' };
 const returnTaps: Array<{ key: SessionKey; revision: string }> = [];
 
 function setStatus(configDir: string | null, status: ClaudeAuthStatus | null): void {
@@ -273,7 +273,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   it('a tap on the «back» button goes to its port, answers with the notice and re-renders the screen without the button', async () => {
     returnButton = { label: '↩️ Back to «default»', callbackData: 'acct_ret_0a1b2c3d' };
-    returnResult = { kind: 'done', notice: '↩️ This topic is back on «default».' };
+    returnResult = { kind: 'done', notice: '↩️ This topic is back on «default».', isPosted: false };
     await harness.runCommand('account');
     const picker = harness.replies.at(-1);
     returnTaps.length = 0;
@@ -283,6 +283,17 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const rerender = harness.edits.at(-1);
     assert.equal(rerender?.messageId, picker!.messageId, 'in place');
     assert.ok(!harness.getKeyboardData(rerender).flat().includes('acct_ret_0a1b2c3d'), 'the button is gone');
+  });
+
+  it('a tap whose notice the move already posted into the topic (a switch during a limit wait) answers the callback without repeating it', async () => {
+    returnButton = { label: '↩️ Back to «default»', callbackData: 'acct_ret_0a1b2c3d' };
+    returnResult = { kind: 'done', notice: '🔁 Account «work» hit its usage limit — this topic continues on «default».', isPosted: true };
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1);
+    const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+    await harness.tapButton(picker!.messageId!, 'acct_ret_0a1b2c3d');
+    assert.deepEqual(harness.fakeTelegram.callbackAnswers.slice(answersBefore), [''], 'an empty answer: no toast with the notice');
+    assert.ok(!harness.getKeyboardData(harness.edits.at(-1)).flat().includes('acct_ret_0a1b2c3d'));
   });
 
   it('a stale «back» tap (the rung is forgotten or another one is remembered) only says so and re-renders', async () => {

@@ -92,10 +92,10 @@ export interface ClaudeAccountsPorts
    */
   getFallbackReturnButton: (key: SessionKey) => { label: string; callbackData: string } | null;
   /**
-   * Move the topic back onto the rung the button names: the notice to answer the tap with, or `expired` when the
-   * button no longer names the remembered rung (an old keyboard).
+   * Move the topic back onto the rung the button names: the notice to answer the tap with (`isPosted`: it already
+   * went into the topic), or `expired` when the button no longer names the remembered rung (an old keyboard).
    */
-  returnToFallbackOrigin: (key: SessionKey, revision: string) => Promise<{ kind: 'expired' } | { kind: 'done'; notice: string }>;
+  returnToFallbackOrigin: (key: SessionKey, revision: string) => Promise<{ kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean }>;
   /** The OpenCode providers the server is authenticated for (its live catalog); `[]` when it cannot be read. */
   detectOpenCodeProviders: () => Promise<string[]>;
   /** Drop a provider's stored credentials and post the outcome — the `/disconnect <provider>` flow, unchanged. */
@@ -572,6 +572,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const result = await returnToFallbackOrigin(key, ctx.match[1]);
       if (result.kind === 'expired') {
         await ctx.answerCbQuery(t('fallback.returnExpired'));
+      } else if (result.isPosted) {
+        await ctx.answerCbQuery();
       } else {
         await answerTap(ctx, key, result.notice);
       }

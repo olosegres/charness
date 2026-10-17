@@ -349,9 +349,14 @@ function runCompactionTurn(sessionId: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: sessionId, usage: fakeCompactionResultUsage, modelUsage: fakeCompactionModelUsage });
 }
 
+/** The model a turn reports on `system/init`: the one the process was launched with (`--model`), else the fake's own. */
+function getReportedModel(argv: readonly string[]): string {
+  return getFlagValues(argv, '--model')[0] ?? 'fake-model';
+}
+
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   recordTranscriptMessage(sessionId, content);
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const requestId = requestIdRe.exec(content)?.[0];
   if (!requestId) {

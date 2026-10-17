@@ -19,6 +19,10 @@
  *     moves the topic and forgets it
  *   → the chain's rung pins a model («work» · sonnet): topic B's notice names the model, and the session really
  *     runs on it; a `/model` pick by hand forgets the button
+ *   → topic C moves to «work», which hits its limit too while «default» is still limited: nothing can take over, a
+ *     wait is armed. «↩️ Back» then resumes the interrupted turn exactly as `/accounts use default` does (the limit
+ *     switch: its notice, the "continue" message), and since the switch lands on the remembered account the button
+ *     is gone — it does not turn into «Back to «work»»
  *
  * What the unit tests cover instead: the other backends' wording (OpenCode, no OpenCode server here), a rung
  * whose model the session already runs, an unknown reset, the deferred notice (a tmux Claude without a resumable
@@ -36,7 +40,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -46,36 +50,47 @@ import {
   getFreePort,
   IsolatedCharness,
   listTmuxSessions,
-  readJsonLines,
+  readClosedRequests,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import {
+  computeResetsAtIso,
+  getAccountConfigDir,
+  getAgentTurns,
+  getLaunchOfTurn,
+  getResetClock,
+  getSessionLaunches,
+  listReturnButtonData,
+  listSwitchNotices,
+  readPersistedState,
+  restartCharnessWithState,
+  startCharnessOnInstance,
+  waitForSessionRespawn,
+  type PersistedState,
+} from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
-import type { ClaudeProfileRecord } from '../state';
-import type { FallbackChainEntry } from '../utils/fallbackChain';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const firstTopicThreadId = 111;
 const secondTopicThreadId = 112;
+const thirdTopicThreadId = 113;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const firstFolder = 'switch-first';
 const secondFolder = 'switch-second';
-const launchLine = 'Launching Telegraf bot (long polling';
+const thirdFolder = 'switch-third';
 /** The account the second one takes over from, and the one the chain names. */
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
 
-const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const takeoverDaysAhead = 2;
-/** The hour (UTC) the limit resets at, in the fake's error text. */
-const resetHourUtc = 1;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -83,6 +98,7 @@ let fakeTelegram: FakeTelegram;
 let general: TopicDriver;
 let firstTopic: TopicDriver;
 let secondTopic: TopicDriver;
+let thirdTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 /** When the fake says the limit resets (an ISO instant, a few days ahead so the notice carries the date). */
 let resetsAtIso = '';
@@ -105,64 +121,14 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-interface PersistedState {
-  claudeProfiles?: Record<string, ClaudeProfileRecord>;
-  fallbackChain?: FallbackChainEntry[];
-  fallbackReturns?: Record<string, FallbackChainEntry>;
-  [field: string]: unknown;
-}
-
-function getStatePath(): string {
-  return path.join(getLayout().dataDir, 'state.json');
-}
-
-function readPersistedState(): PersistedState {
-  return JSON.parse(fs.readFileSync(getStatePath(), 'utf8'));
-}
-
-interface FakeLaunch {
-  argv: string[];
-  isSessionLaunch: boolean;
-  pid: number;
-  /** The `CLAUDE_CONFIG_DIR` the process was started with: the second account's directory; `null` for the first. */
-  claudeConfigDir: string | null;
-}
-
-function getSessionLaunches(): FakeLaunch[] {
-  return readJsonLines<FakeLaunch>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch);
-}
-
-function getAgentTurns(label: string): FakeClaudeTurn[] {
-  return readJsonLines<FakeClaudeTurn>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.issueKey === label);
-}
-
-/** The launch of the process that ran a turn of `label`, with the turn's index (the fake records launches by pid). */
-function getLaunchOfTurn(label: string, turnIndex: number): FakeLaunch {
-  const turn = getAgentTurns(label)[turnIndex];
-  assert.ok(turn, `turn ${turnIndex + 1} of ${label} recorded`);
-  const launch = getSessionLaunches().filter((candidate) => candidate.pid === turn.pid).at(-1);
-  assert.ok(launch, `a launch recorded for the process ${turn.pid} that ran ${label}`);
-  return launch;
-}
-
-function getTakeoverConfigDir(): string {
-  return path.join(getLayout().dataDir, 'claude-profiles', takeoverAccount);
-}
-
 /** Start charness on the instance and wait for its first poll to reach the fake Bot API. */
 async function startCharness(): Promise<void> {
-  charness = new IsolatedCharness(getLayout());
-  const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
-  await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+  charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
 }
 
 /** The bot is stopped, its state edited the way a persisted instance would hold it, and started again. */
 async function restartWithState(edit: (state: PersistedState) => void): Promise<void> {
-  await getCharness().stop();
-  const persisted = readPersistedState();
-  edit(persisted);
-  fs.writeFileSync(getStatePath(), JSON.stringify(persisted));
-  await startCharness();
+  charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), edit);
 }
 
 /** Send a labelled prompt whose first turn the fake agent ends on a usage limit that resets at {@link resetsAtIso}. */
@@ -170,37 +136,12 @@ function askAgentToHitTheLimit(threadId: number, label: string): void {
   fakeTelegram.pushOperatorMessage(threadId, `${label} [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
 }
 
-/** The reset the fake's error names, as the notice and the button show it (the instance zone is UTC). */
-function getResetClock(): string {
-  return `${resetsAtIso.slice(0, 10)} ${resetsAtIso.slice(11, 16)}`;
-}
-
-/** The callback data of the screen's «back» buttons (`acct_ret_<revision>`), in keyboard order. */
-function listReturnButtonData(driver: TopicDriver, screen: FakeTelegramMessage): string[] {
-  return driver.getKeyboardData(screen).flat().filter((data) => data.startsWith('acct_ret_'));
-}
-
-/** Wait until the fake agent runs in a NEW process started with `configDir` (`null`: the first account) on the conversation `sessionId`. */
-async function waitForSessionRespawn(description: string, configDir: string | null, sessionId: string, launchesBefore: number): Promise<void> {
-  await getCharness().waitFor(description, agentStartTimeoutMs, () => {
-    const launches = getSessionLaunches();
-    const latest = launches.at(-1);
-    return launches.length > launchesBefore && latest !== undefined && latest.claudeConfigDir === configDir && getLaunchSessionId(latest.argv) === sessionId;
-  });
-}
-
-/** The bot's «switched» notices in a topic (the only messages that start with the switch mark). */
-function listSwitchNotices(driver: TopicDriver): FakeTelegramMessage[] {
-  return driver.listMessages().filter((message) => message.text.startsWith('🔁'));
-}
-
 describe('The usage-limit switch notice end to end: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder, thirdFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
-    const now = new Date();
-    resetsAtIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + takeoverDaysAhead, resetHourUtc)).toISOString();
+    resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
 
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);
@@ -210,6 +151,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
     firstTopic = new TopicDriver(fakeTelegram, getCharness, firstTopicThreadId, replyTimeoutMs);
     secondTopic = new TopicDriver(fakeTelegram, getCharness, secondTopicThreadId, replyTimeoutMs);
+    thirdTopic = new TopicDriver(fakeTelegram, getCharness, thirdTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -236,7 +178,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
   });
 
-  it('boots, sets the instance zone to UTC, turns auto switch on in General, binds both topics and gives them the request view', async () => {
+  it('boots, sets the instance zone to UTC, turns auto switch on in General, binds the three topics and gives them the request view', async () => {
     await startCharness();
     await general.sendAndAwaitReply('/timezone UTC', 'Timezone: UTC');
     await general.sendAndAwaitReply('/limits switch on', 'Auto switch to a fallback model: ON for ALL topics');
@@ -245,6 +187,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await firstTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
     await secondTopic.sendAndAwaitReply(`/bind ${secondFolder}`, `Bound to \`${secondFolder}\``);
     await secondTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    await thirdTopic.sendAndAwaitReply(`/bind ${thirdFolder}`, `Bound to \`${thirdFolder}\``);
+    await thirdTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
   });
 
   it('seeds a second signed-in account and a one-rung chain onto it while the bot is down', async () => {
@@ -267,13 +211,13 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await firstTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock()}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
     );
 
-    await getCharness().waitFor('the conversation to continue under the second account and answer', agentStartTimeoutMs, () => getAgentTurns('LIM-1').length === 2);
-    const [firstLaunch, secondLaunch] = [getLaunchOfTurn('LIM-1', 0), getLaunchOfTurn('LIM-1', 1)];
+    await getCharness().waitFor('the conversation to continue under the second account and answer', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-1').length === 2);
+    const [firstLaunch, secondLaunch] = [getLaunchOfTurn(getLayout(), 'LIM-1', 0), getLaunchOfTurn(getLayout(), 'LIM-1', 1)];
     assert.equal(firstLaunch.claudeConfigDir, null, 'the limit was hit on the first account (no config directory of its own)');
-    assert.equal(secondLaunch.claudeConfigDir, getTakeoverConfigDir(), 'the conversation continues under the second account');
+    assert.equal(secondLaunch.claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount), 'the conversation continues under the second account');
     firstSessionId = getLaunchSessionId(firstLaunch.argv) ?? '';
     assert.ok(firstSessionId, 'the first launch carries a conversation id');
     assert.equal(getLaunchSessionId(secondLaunch.argv), firstSessionId, 'the SAME conversation continues (resumed)');
@@ -284,7 +228,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
       'the wait notice is not posted into a switch',
     );
     assert.equal(
-      readPersistedState().claudeProfiles?.[exhaustedAccount]?.limitedUntil,
+      readPersistedState(getLayout()).claudeProfiles?.[exhaustedAccount]?.limitedUntil,
       resetsAtIso,
       'the exhausted account is marked limited until the reset the error named',
     );
@@ -292,7 +236,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
   it('`/accounts` in the moved topic offers ONE button on top that names the account it was moved from and when its limit resets; General has none', async () => {
     const screen = await firstTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
-    assert.deepEqual(firstTopic.getKeyboardLabels(screen)[0], [`↩️ Back to «${exhaustedAccount}» (limit resets ${getResetClock()})`], 'a row of its own, above the accounts');
+    assert.deepEqual(firstTopic.getKeyboardLabels(screen)[0], [`↩️ Back to «${exhaustedAccount}» (limit resets ${getResetClock(resetsAtIso)})`], 'a row of its own, above the accounts');
     assert.equal(listReturnButtonData(firstTopic, screen).length, 1);
     assert.ok(Buffer.byteLength(listReturnButtonData(firstTopic, screen)[0]) <= 64, 'under Telegram\'s callback-data cap');
     backScreen = screen;
@@ -303,18 +247,18 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
   it('a tap on «Back» moves the topic back through the switch path — same conversation — and the button is gone everywhere; an old keyboard\'s tap is stale', async () => {
     const [backData] = listReturnButtonData(firstTopic, backScreen);
-    const launchesBefore = getSessionLaunches().length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
     assert.equal(await firstTopic.tapAndAwaitAnswer(backScreen, backData), `↩️ This topic is back on «${exhaustedAccount}».`);
 
-    await waitForSessionRespawn('the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
     await firstTopic.waitForMessageText('the screen re-rendered without the button', backScreen, () => listReturnButtonData(firstTopic, backScreen).length === 0);
     const freshScreen = await firstTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
     assert.deepEqual(listReturnButtonData(firstTopic, freshScreen), [], 'a new screen has no button either');
-    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState().fallbackReturns === undefined);
+    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
     assert.equal(listSwitchNotices(firstTopic).length, 1, 'going back is not a limit: no limit notice');
 
     assert.equal(await firstTopic.tapAndAwaitAnswer(backScreen, backData), 'This button is out of date — there is nothing to switch back.', 'the old keyboard moves nothing');
-    assert.equal(getSessionLaunches().length, launchesBefore + 1, 'and re-spawns nothing');
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBefore + 1, 'and re-spawns nothing');
   });
 
   it('a second limit brings the button back, it survives a bot restart, and a pick by hand (`/accounts use default`) moves the topic and forgets it', async () => {
@@ -323,28 +267,28 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await restartWithState((persisted) => {
       persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: 'fake' }];
     });
-    const launchesBeforeLimit = getSessionLaunches().length;
+    const launchesBeforeLimit = getSessionLaunches(getLayout()).length;
     askAgentToHitTheLimit(firstTopicThreadId, 'LIM-3');
     const secondNotice = await firstTopic.waitForMessage('the second switch notice', (message) => message.text.startsWith('🔁') && message.message_id > backScreen.message_id);
     assert.equal(
       secondNotice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock()}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
     );
-    await getCharness().waitFor('the conversation to continue under the second account', agentStartTimeoutMs, () => getAgentTurns('LIM-3').length === 2);
-    assert.equal(getLaunchOfTurn('LIM-3', 1).claudeConfigDir, getTakeoverConfigDir());
-    assert.deepEqual(getFlagValues(getLaunchOfTurn('LIM-3', 1).argv, '--model'), [], 'no model is pinned over the one the session runs');
-    assert.equal(getSessionLaunches().length, launchesBeforeLimit + 1, 'one new process for the whole switch');
+    await getCharness().waitFor('the conversation to continue under the second account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-3').length === 2);
+    assert.equal(getLaunchOfTurn(getLayout(), 'LIM-3', 1).claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount));
+    assert.deepEqual(getFlagValues(getLaunchOfTurn(getLayout(), 'LIM-3', 1).argv, '--model'), [], 'no model is pinned over the one the session runs');
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBeforeLimit + 1, 'one new process for the whole switch');
 
     await restartWithState(() => {});
     const screen = await firstTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
     assert.equal(listReturnButtonData(firstTopic, screen).length, 1, 'the remembered rung survived the restart');
 
-    const launchesBefore = getSessionLaunches().length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
     await firstTopic.sendAndAwaitReply(`/accounts use ${exhaustedAccount}`, exhaustedAccount);
-    await waitForSessionRespawn('the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
     const afterPick = await firstTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
     assert.deepEqual(listReturnButtonData(firstTopic, afterPick), [], 'a manual account switch forgets the rung');
-    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState().fallbackReturns === undefined);
+    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
   });
 
   it('a rung that pins a model: the notice names it and the session really runs on it', async () => {
@@ -357,15 +301,15 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await secondTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock()}; switch back: /accounts`,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
     );
 
-    await getCharness().waitFor('the conversation to continue and answer', agentStartTimeoutMs, () => getAgentTurns('LIM-2').length === 2);
+    await getCharness().waitFor('the conversation to continue and answer', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-2').length === 2);
     await getCharness().waitFor('the session to run on the pinned model', agentStartTimeoutMs, () => {
-      const launch = getLaunchOfTurn('LIM-2', 1);
+      const launch = getLaunchOfTurn(getLayout(), 'LIM-2', 1);
       return getFlagValues(launch.argv, '--model').includes('sonnet');
     });
-    assert.equal(getLaunchOfTurn('LIM-2', 1).claudeConfigDir, getTakeoverConfigDir());
+    assert.equal(getLaunchOfTurn(getLayout(), 'LIM-2', 1).claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount));
     assert.equal(listSwitchNotices(secondTopic).length, 1);
   });
 
@@ -375,5 +319,65 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await secondTopic.sendAndAwaitReply('/model opus', 'opus');
     const afterPick = await secondTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
     assert.deepEqual(listReturnButtonData(secondTopic, afterPick), []);
+  });
+
+  it('with a limit wait armed, «Back» resumes the interrupted turn exactly like `/accounts use` does — and a switch that lands home forgets the button', async () => {
+    // Both accounts will be limited: the chain names them both, and «default» is still marked limited by the earlier flows.
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }, { backend: 'claude', profile: exhaustedAccount, model: null }];
+    });
+    await thirdTopic.sendAndAwaitReply('/claude', 'ready in');
+    askAgentToHitTheLimit(thirdTopicThreadId, 'LIM-4');
+    await getCharness().waitFor('topic C to move to the second account and answer', agentStartTimeoutMs, () => listSwitchNotices(thirdTopic).length === 1 && getAgentTurns(getLayout(), 'LIM-4').length === 2);
+
+    askAgentToHitTheLimit(thirdTopicThreadId, 'LIM-5');
+    await getCharness().waitFor('the wait to be armed: no account can take over', agentStartTimeoutMs, () => Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length === 1 && getAgentTurns(getLayout(), 'LIM-5').length === 1);
+    assert.equal(listSwitchNotices(thirdTopic).length, 1, 'no switch was possible');
+
+    const screen = await thirdTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
+    assert.deepEqual(thirdTopic.getKeyboardLabels(screen)[0], [`↩️ Back to «${exhaustedAccount}» (limit resets ${getResetClock(resetsAtIso)})`]);
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    await thirdTopic.tapAndAwaitAnswer(screen, listReturnButtonData(thirdTopic, screen)[0]);
+
+    const resumedNotice = await thirdTopic.waitForMessage('the limit switch\'s notice', (message) => message.text.startsWith('🔁') && message.message_id > screen.message_id);
+    assert.equal(
+      resumedNotice.text,
+      `🔁 Account «${takeoverAccount}» hit its usage limit — this topic continues on «${exhaustedAccount}». The limit resets ${getResetClock(resetsAtIso)}; switch back: /accounts`,
+      'the same notice a pick during the wait posts: the account the topic left did hit its limit',
+    );
+    await getCharness().waitFor('the interrupted turn to resume on the first account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-5').length === 2);
+    assert.equal(getLaunchOfTurn(getLayout(), 'LIM-5', 1).claudeConfigDir, null, 'the continue message ran under the first account');
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBefore + 1);
+    await getCharness().waitFor('the wait to be over', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
+
+    const afterScreen = await thirdTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
+    assert.deepEqual(listReturnButtonData(thirdTopic, afterScreen), [], 'the topic is home: no «Back to «work»» pointing at the fallback');
+    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
+  });
+
+  it('«Back» restores the model the topic had, silently: a move that changed it (the rung pinned another) puts it back, and the notice names no model', async () => {
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: 'sonnet' }];
+      // «work» hit its own limit in the flow above; it is available again.
+      delete persisted.claudeProfiles?.[takeoverAccount]?.limitedUntil;
+    });
+    askAgentToHitTheLimit(thirdTopicThreadId, 'LIM-6');
+    await getCharness().waitFor('topic C to move to the second account on the pinned model and run the continued turn', agentStartTimeoutMs, () => listSwitchNotices(thirdTopic).length === 3 && getAgentTurns(getLayout(), 'LIM-6').length === 2);
+    // The continued turn has ENDED (its request is closed by the final answer): the session is idle, so «Back» moves it at once.
+    const continuedRequestId = getAgentTurns(getLayout(), 'LIM-6')[1].requestId;
+    await getCharness().waitFor('the continued turn\'s request to close', agentStartTimeoutMs, () => readClosedRequests(getLayout()).some((record) => record.id === continuedRequestId));
+    assert.deepEqual(getFlagValues(getLaunchOfTurn(getLayout(), 'LIM-6', 1).argv, '--model'), ['sonnet'], 'precondition: the session runs the rung\'s model');
+    const sessionId = getLaunchSessionId(getLaunchOfTurn(getLayout(), 'LIM-6', 1).argv) ?? '';
+
+    const screen = await thirdTopic.sendAndAwaitReply('/accounts', 'Claude account for this topic');
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    assert.equal(await thirdTopic.tapAndAwaitAnswer(screen, listReturnButtonData(thirdTopic, screen)[0]), `↩️ This topic is back on «${exhaustedAccount}».`);
+
+    // The re-spawn under the first account keeps `sonnet`; the restore then re-spawns once more on the model it had.
+    await getCharness().waitFor('the session to run on the first account and on the model the topic had', agentStartTimeoutMs, () => {
+      const latest = getSessionLaunches(getLayout()).at(-1);
+      return getSessionLaunches(getLayout()).length === launchesBefore + 2 && latest?.claudeConfigDir === null && getLaunchSessionId(latest.argv) === sessionId
+        && getFlagValues(latest.argv, '--model').includes('fake-model');
+    });
   });
 });

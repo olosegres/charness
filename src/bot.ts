@@ -386,7 +386,7 @@ import {
   buildFallbackSwitchedNotice,
 } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
-import { buildFallbackReturnCallback, checkIsFallbackReturnCurrent, checkIsFallbackReturnForgotten } from './utils/fallbackReturn';
+import { buildFallbackReturnCallback, checkIsFallbackReturnCurrent, checkIsFallbackReturnForgotten, decideFallbackReturnAfterSwitch } from './utils/fallbackReturn';
 import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
@@ -7166,7 +7166,9 @@ async function switchTopicToFallbackEntry(
   }
   const { firstPrompt, isStoppingBackground } = move;
   cancelApiRetry(key); // retires the offer too: the switch consumed it
-  if (from !== null) await state.setFallbackReturn(key, from);
+  const returnUpdate = decideFallbackReturnAfterSwitch({ remembered: state.getFallbackReturn(key), from, to });
+  if (returnUpdate.action === 'remember') await state.setFallbackReturn(key, returnUpdate.rung);
+  else if (returnUpdate.action === 'forget') await state.setFallbackReturn(key, null);
   const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
   console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
   await say(notice);
@@ -7213,41 +7215,50 @@ function getFallbackReturnButton(key: SessionKey): { label: string; callbackData
 
 /**
  * @description The way back (the «back» button of `/accounts`): move the topic onto the rung the limit switch took
- * it from, through the same move ({@link moveTopicOntoRung}), but as a plain move — no "continue" nudge or bridge
- * (nothing was interrupted), and a working Claude session is moved at the end of its turn. The remembered rung is
- * forgotten once the topic is there (or its move is queued); a failed move keeps it. `expired` when the button no
- * longer names the remembered rung (an old keyboard) or a tap is already being served. Otherwise the notice to
- * answer the tap with.
+ * it from, through the same move ({@link moveTopicOntoRung}). A plain move — no "continue" nudge or bridge, a working
+ * Claude session is moved at the end of its turn — except while a usage-limit wait is armed: then the topic's turn
+ * was interrupted, and the move is exactly an `/accounts use <x>` pick during the wait (the limit switch, with its
+ * notice and its "continue" nudge). The remembered rung is forgotten once the topic is there (or its move is
+ * queued); a failed move keeps it. `expired` when the button no longer names the remembered rung (an old keyboard)
+ * or a tap is already being served. Otherwise the notice to answer the tap with — `isPosted` when it already went
+ * into the topic.
  */
-async function returnTopicToFallbackOrigin(key: SessionKey, revision: string): Promise<{ kind: 'expired' } | { kind: 'done'; notice: string }> {
+async function returnTopicToFallbackOrigin(key: SessionKey, revision: string): Promise<{ kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean }> {
   const k = keyToString(key);
   const origin = state.getFallbackReturn(key);
   if (origin === null || !checkIsFallbackReturnCurrent(origin, revision) || fallbackReturnsInFlight.has(k)) return { kind: 'expired' };
   fallbackReturnsInFlight.add(k);
   try {
     const from = getTopicFallbackPosition(key);
-    const wasActive = getThreadAdapter(key).checkIsActive(key);
     const isAlreadyThere = from !== null && checkIsSameFallbackAccount(from, origin);
+    if (!isAlreadyThere && getArmedApiRetry(key)?.kind === 'usageLimit') {
+      // Like `/accounts use <x>`: a Claude account is picked without a model (the remembered one is a reported id).
+      const target: FallbackChainEntry = origin.backend === 'claude' ? { ...origin, model: null } : origin;
+      const { notice } = await switchTopicToFallbackEntry(key, from, target, { isAnnounced: true });
+      return { kind: 'done', notice, isPosted: true };
+    }
+    const wasActive = getThreadAdapter(key).checkIsActive(key);
     const runningModel = readRunningModelBeforeMove(key, from, origin);
     const move: RungMove = isAlreadyThere
       ? { kind: 'moved', firstPrompt: null, isStoppingBackground: false }
       : await moveTopicOntoRung(key, from, origin, { isAfterLimit: false, hasBridge: false });
-    if (move.kind === 'failed') return { kind: 'done', notice: buildFallbackReturnFailedNotice(from, origin, move.error) };
+    if (move.kind === 'failed') return { kind: 'done', notice: buildFallbackReturnFailedNotice(from, origin, move.error), isPosted: false };
     await state.setFallbackReturn(key, null);
-    if (move.kind === 'deferred') return { kind: 'done', notice: buildFallbackReturnDeferredNotice(from, origin) };
+    if (move.kind === 'deferred') return { kind: 'done', notice: buildFallbackReturnDeferredNotice(from, origin), isPosted: false };
     cancelApiRetry(key); // a wait armed for the rung the topic just left is over (it retires the switch offer too)
     console.log(`[fallback] ${k}: moved back from ${from ? formatFallbackEntry(from) : '?'} to ${formatFallbackEntry(origin)}`);
     if (wasActive) {
       const ensured = await ensureAgentSession(key);
       if (ensured.message) await replyToThread(key, ensured.message);
     }
-    const modelToPin = getThreadAdapter(key).checkIsActive(key) ? getFallbackModelToPin(origin, runningModel) : null;
-    const notice = buildFallbackReturnedNotice({ from, to: origin, runningModel });
-    if (modelToPin !== null) {
-      const error = await getThreadAdapter(key).setModel?.(key, modelToPin);
-      if (error) console.warn(`[fallback] ${k}: pinning the model ${modelToPin} failed: ${error}`);
+    // The model the topic had is restored silently, and only when the move provably changed it: the model the Claude
+    // session ran before the move is known, differs from the remembered one, and a session is up to take the pick.
+    const modelToRestore = runningModel !== null && getThreadAdapter(key).checkIsActive(key) ? getFallbackModelToPin(origin, runningModel) : null;
+    if (modelToRestore !== null) {
+      const error = await getThreadAdapter(key).setModel?.(key, modelToRestore);
+      if (error) console.warn(`[fallback] ${k}: restoring the model ${modelToRestore} failed: ${error}`);
     }
-    return { kind: 'done', notice };
+    return { kind: 'done', notice: buildFallbackReturnedNotice({ from, to: origin }), isPosted: false };
   } finally {
     fallbackReturnsInFlight.delete(k);
   }
