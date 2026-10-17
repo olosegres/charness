@@ -404,6 +404,42 @@ test('Add engine → GigaAM when it is already installed: it joins first at once
   assert.ok(ownerCalls.includes('applySettingsChange'));
 });
 
+test('GigaAM listed but its files are missing: the card offers Install, the confirmation\'s Cancel returns to that card', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  createFeature();
+  await tap('oe', ['g']);
+  assert.match(lastEdit().text, /Status: not installed/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬇️ Install|stt_ec_g_')), lastEdit().buttons.join(' | '));
+  assert.ok(!lastEdit().buttons.some((button) => button.includes('Remove model files')), 'no files to remove');
+
+  await tap('ec', ['g']);
+  assert.match(lastEdit().text, /400 MB/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('Cancel|stt_oe_g_')), 'Cancel goes back to the card it came from');
+  await tap('oe', ['g']);
+  assert.match(lastEdit().text, /^🖥 GigaAM v3/);
+  assert.equal(installRuns.length, 0, 'cancelling starts nothing');
+});
+
+test('Remove model files refused because an install started in the meantime: nothing is deleted and the local card is shown again', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeInstalledMarker(dataDir);
+  // The install takes its lock while the engine is being stopped — after the tap passed its check, before the files go.
+  createFeature({
+    owner: {
+      getStatus: async () => ({ state: 'notRunning' as const }),
+      stop: async () => { holdInstallLock(dataDir); },
+      applySettingsChange: async () => {},
+      resetSpawnGuard: () => {},
+    },
+  });
+  await tap('oe', ['g']);
+  const { answers } = await tap('fd', ['g']);
+  assert.deepEqual(answers, ['The install is still running.']);
+  assert.ok(fs.existsSync(getSttPaths(dataDir).markerFile), 'the files are still there');
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1'], 'the row stays');
+  assert.match(lastEdit().text, /^🖥 GigaAM v3/, 'the card, not the main screen');
+});
+
 test('Add engine → GigaAM while an install is already running attaches to it instead of starting another', async () => {
   writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
   holdInstallLock(dataDir);

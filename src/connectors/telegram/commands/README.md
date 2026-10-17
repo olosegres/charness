@@ -225,7 +225,7 @@ prompt message) ends the step. While a step is awaited (`getAwaitedSttStep`) the
 `[redacted: speech engine key]` (key) or `[redacted: speech engine address]` (address, which may carry a login).
 
 **Install**: «Add engine → GigaAM (local)» (offered whenever it is not in the list) — installed: it joins first and its card
-opens; an install running: attach to it; not installed: a confirm screen with the cost → `Install` hands the SAME message to the
+opens; an install running: attach to it; not installed: a confirm screen with the cost (Cancel returns to where it was reached from: the main screen from the add menu, the local card from its «⬇️ Install») → `Install` hands the SAME message to the
 install job (`installJobs.start`, the progress is edited into it and remembered in `state.json` with `shouldEnableOnDone`); the
 tap handler never waits for the job. EVERY end — the tap's own continuation, a boot re-attach to a running job, a job that
 finished while the bot was down — goes through `finishInstall`: on success the local engine joins the list first and the message
@@ -233,4 +233,4 @@ becomes its card (a full list or an unwritable file is said in the message, neve
 error, the log tail and `Retry`; the message is forgotten last. `resumeSttInstallAtBoot` / `startSttAutoInstall` are the
 boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). On the local
 card «🗑 Remove model files» asks first (Cancel returns to the card), stops the sidecar, deletes the install and drops the engine
-from the list (refused while an install runs); «Remove from list» keeps the files.
+from the list (refused while an install runs — the card is shown again); «Remove from list» keeps the files.

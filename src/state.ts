@@ -66,7 +66,7 @@ export interface SttInstallProgressMessage {
   threadKey: string;
   messageId: number;
   /**
-   * The install was started from `/stt` ("Enable local recognition"): when it ends, the local engine joins the
+   * The install was started from `/stt` ("Add engine → GigaAM (local)"): when it ends, the local engine joins the
    * chain. Kept with the message so a reload — or a restart the install outlives — still finishes the job; an
    * install that `stt.json` itself asked for needs no such step.
    */

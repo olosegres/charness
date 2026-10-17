@@ -22,7 +22,8 @@
  *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
  *     such a rung again, while a rung of a backend already in the list goes in at once
  *   → `/stt`: the screen next to the instance's env file (also as `/voice`) with only the engine list, Add engine and Language;
- *     the local engine on its own card (added through Add engine, idle and workers there only, remove from list / remove model
+ *     the local engine on its own card (added through Add engine — with the install confirmation, and Cancel writing nothing,
+ *     while the model is missing — idle and workers there only, remove from list / remove model
  *     files); a custom server added through the typed
  *     steps (an address with a login is refused and deleted, the pasted key is deleted, neither reaches a bot
  *     message or the output trace), a tap that saves, a keyboard from before a hand edit that is refused, and a
@@ -621,6 +622,32 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.ok(!menuCommands.includes('voice') && !menuCommands.includes('speech'), 'the aliases stay hidden');
   });
 
+  it('Add engine → GigaAM while the model is not installed: the confirmation says what it costs, nothing is written, Cancel leaves everything as it was', async () => {
+    const dataDir = getLayout().dataDir;
+    assert.equal(fs.existsSync(getSttPaths(dataDir).markerFile), false, 'the model is not installed');
+    const readFileOrNull = (): string | null => (fs.existsSync(getSttConfigFilePath()) ? fs.readFileSync(getSttConfigFilePath(), 'utf8') : null);
+    const fileBefore = readFileOrNull();
+
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await tapButton(screen, 'stt_ad_');
+    await topic.waitForMessageText('the add menu', screen, (text) => text.includes('Which engine do you want to add?'));
+    assert.ok(topic.getKeyboardLabels(screen).flat().includes('GigaAM (local)'), 'offered although it is not installed');
+    await tapButton(screen, 'stt_an_gg_');
+    await topic.waitForMessageText('the install confirmation', screen, (text) => text.startsWith('Enable local recognition?'));
+    assert.match(screen.text, /About 400 MB are downloaded/);
+    assert.match(screen.text, /up to about 0\.9 GB for long ones/);
+    assert.match(screen.text, /Russian only/);
+    assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['⬇️ Install', 'Cancel']);
+    assert.equal(readFileOrNull(), fileBefore, 'asking writes nothing');
+
+    await tapButton(screen, 'stt_bk_'); // Cancel
+    await topic.waitForMessageText('the main screen again', screen, (text) => text.includes('Engines, tried in this order') || text.includes('No engines yet'));
+    assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['➕ Add engine', '🌐 Language: auto', '✖️ Close']);
+    assert.equal(readFileOrNull(), fileBefore, 'cancelling writes nothing');
+    assert.ok(!getCharness().output.includes('[STT] install'), 'and no install was started');
+    assert.equal(fs.existsSync(getSttPaths(dataDir).markerFile), false);
+  });
+
   it('the local engine lives on its own card: Add engine → GigaAM opens it, idle and workers are there and nowhere else, "Remove from list" keeps the files, "Remove model files" asks, deletes them and the row', async () => {
     writeInstalledMarker(getLayout().dataDir); // the model files are in place: adding needs no install
     const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
@@ -648,6 +675,19 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the idle picker', screen, (text) => text.includes('How long may the local engine sit idle'));
     await tapButton(screen, 'stt_is_g_15_');
     await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
+
+    // Workers likewise: the picker, a save, back on the card — and back to 4.
+    await tapButton(screen, 'stt_wm_g_');
+    await topic.waitForMessageText('the workers picker', screen, (text) => text.includes('How many pieces of a long voice note'));
+    await tapButton(screen, 'stt_ws_g_8_');
+    await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
+    assert.equal(readSttFile().gigaam?.workers, 8);
+    assert.ok(topic.getKeyboardLabels(screen).flat().includes('⚙️ Workers: 8'));
+    await tapButton(screen, 'stt_wm_g_');
+    await topic.waitForMessageText('the workers picker', screen, (text) => text.includes('How many pieces of a long voice note'));
+    await tapButton(screen, 'stt_ws_g_4_');
+    await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
+    assert.equal(readSttFile().gigaam?.workers, 4);
 
     // The main screen: the state rides on the row, no local control anywhere.
     await tapButton(screen, 'stt_bk_');

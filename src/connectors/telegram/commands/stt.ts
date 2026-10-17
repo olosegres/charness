@@ -511,8 +511,9 @@ export function createStt(ports: SttPorts) {
       case 'removeFiles': {
         const isRemoved = await removeLocalEngineFiles();
         if (!isRemoved) {
+          // An install started between the tap and the removal: the files stay, the card (with its progress) is shown again.
           await ctx.answerCbQuery(t('stt.notice.busyInstalling'));
-          await render(key, messageId, { id: 'main' });
+          await render(key, messageId, screenAfter);
           return;
         }
         const dropped = dropLocalSttEngine(settings);

@@ -175,7 +175,8 @@ export type SttScreenId =
   | { id: 'language' }
   | { id: 'idle'; engineId: string }
   | { id: 'workers'; engineId: string }
-  | { id: 'enableConfirm' }
+  /** `engineId`: the local engine's card the confirmation was reached from (Cancel returns there); absent: from the add menu. */
+  | { id: 'enableConfirm'; engineId?: string }
   | { id: 'removeEngineConfirm'; engineId: string }
   | { id: 'removeFilesConfirm'; engineId: string }
   | { id: 'keyChoice' };
@@ -432,7 +433,7 @@ export function buildSttScreen(screen: SttScreenId, input: SttScreenInput, trans
         text: withNotice(notice, translate('stt.enable.confirm', { idle: formatIdleMinutes(settings.gigaam.idleMinutes, translate) })),
         rows: [[
           { text: translate('stt.btn.install'), data: buildSttCallback('ei', [], revision) },
-          { text: translate('stt.btn.cancel'), data: buildSttCallback('bk', [], revision) },
+          { text: translate('stt.btn.cancel'), data: screen.engineId ? buildSttCallback('oe', [screen.engineId], revision) : buildSttCallback('bk', [], revision) },
         ]],
       };
     case 'removeEngineConfirm': {
@@ -516,7 +517,10 @@ export type SttActionOutcome =
   | { kind: 'armKey'; target: SttKeyTarget }
   | { kind: 'armUrl' }
   | { kind: 'cancelInput' }
-  /** `screen`: what to show once the effect is done (default: the main screen). */
+  /**
+   * `screen`: where the tap leaves the user when the effect does not take them elsewhere — the card a «try again» stays
+   * on, the card a refused file removal shows again (default: the main screen).
+   */
   | { kind: 'effect'; effect: SttEffect; screen?: SttScreenId };
 
 export interface SttReducerContext {
@@ -615,11 +619,11 @@ export function reduceSttAction(parsed: ParsedSttCallback, context: SttReducerCo
         : { kind: 'stale' };
     }
     case 'rt': return needsLocalEngine((known) => ({ kind: 'effect', effect: 'resetGuard', screen: { id: 'card', engineId: known.id } }));
-    case 'ec': return context.isLocalInstalled || context.isLocalInstalling ? { kind: 'stale' } : { kind: 'show', screen: { id: 'enableConfirm' } };
+    case 'ec': return context.isLocalInstalled || context.isLocalInstalling ? { kind: 'stale' } : { kind: 'show', screen: engine?.kind === 'gigaam' ? { id: 'enableConfirm', engineId: engine.id } : { id: 'enableConfirm' } };
     case 'ei':
     case 'er': return context.isLocalInstalled || context.isLocalInstalling ? { kind: 'stale' } : { kind: 'effect', effect: 'install' };
     case 'ip': return context.isLocalInstalling ? { kind: 'effect', effect: 'attachInstall' } : { kind: 'stale' };
     case 'fa': return needsLocalEngine((known) => (canTouchFiles ? { kind: 'show', screen: { id: 'removeFilesConfirm', engineId: known.id } } : { kind: 'stale' }));
-    case 'fd': return needsLocalEngine(() => (canTouchFiles ? { kind: 'effect', effect: 'removeFiles' } : { kind: 'stale' }));
+    case 'fd': return needsLocalEngine((known) => (canTouchFiles ? { kind: 'effect', effect: 'removeFiles', screen: { id: 'card', engineId: known.id } } : { kind: 'stale' }));
   }
 }

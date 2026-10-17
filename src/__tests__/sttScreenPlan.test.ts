@@ -21,6 +21,7 @@ import {
   type ParsedSttCallback,
   type SttReducerContext,
   type SttScreen,
+  type SttScreenId,
   type SttScreenInput,
   type SttTranslate,
 } from '../stt/sttScreenPlan';
@@ -100,7 +101,8 @@ test('every button of every screen is a valid callback of at most 64 bytes with 
   const revision = computeSttRevision(config);
   const screens = [
     { id: 'main' }, { id: 'card', engineId: 'q1' }, { id: 'card', engineId: 'g' }, { id: 'timeout', engineId: 'u1' }, { id: 'add' }, { id: 'language' },
-    { id: 'idle', engineId: 'g' }, { id: 'workers', engineId: 'g' }, { id: 'enableConfirm' }, { id: 'removeEngineConfirm', engineId: 'q1' },
+    { id: 'idle', engineId: 'g' }, { id: 'workers', engineId: 'g' }, { id: 'enableConfirm' }, { id: 'enableConfirm', engineId: 'g' },
+    { id: 'removeEngineConfirm', engineId: 'q1' },
     { id: 'removeEngineConfirm', engineId: 'g' }, { id: 'removeFilesConfirm', engineId: 'g' }, { id: 'keyChoice' },
   ] as const;
   for (const id of screens) {
@@ -363,6 +365,21 @@ test('the add screen offers the local engine whenever it is not in the list — 
   }
 });
 
+test('install confirmation: Cancel returns to where it was reached from — the local card, or the main screen from the add menu', () => {
+  const input = createInput(configOf(local), { isLocalInstalled: false, facts: { isGigaamInstalled: false } });
+  const cancelOf = (screen: SttScreenId): string => {
+    const confirm = buildSttScreen(screen, input, echo);
+    assert.ok(confirm);
+    assert.match(confirm.text, /stt\.enable\.confirm\(idle=stt\.idle\.minutes\(count=15\)\)/);
+    const cancel = allButtons(confirm).find((button) => button.text === 'stt.btn.cancel');
+    assert.ok(cancel);
+    assert.ok(allButtons(confirm).some((button) => /^stt_ei_[0-9a-f]{6}$/.test(button.data)), 'Install is the same either way');
+    return cancel.data;
+  };
+  assert.match(cancelOf({ id: 'enableConfirm', engineId: 'g' }), /^stt_oe_g_[0-9a-f]{6}$/);
+  assert.match(cancelOf({ id: 'enableConfirm' }), /^stt_bk_[0-9a-f]{6}$/);
+});
+
 test('engine names: the local engine is translated, Groq / OpenAI are brands, a custom server is its host', () => {
   assert.equal(getSttEngineName(local, echo), 'stt.engine.gigaam');
   assert.equal(getSttEngineName(groq, echo), 'Groq');
@@ -522,6 +539,8 @@ test('reducer: install taps run only when the local engine is neither installed 
   const config = configOf(groq);
   const notInstalled = { isLocalInstalled: false, isLocalInstalling: false };
   assert.deepEqual(tap(config, 'ec', [], notInstalled), { kind: 'show', screen: { id: 'enableConfirm' } });
+  assert.deepEqual(tap(configOf(local), 'ec', ['g'], notInstalled), { kind: 'show', screen: { id: 'enableConfirm', engineId: 'g' } }, 'from the local card: Cancel goes back to it');
+  assert.deepEqual(tap(configOf(local, groq), 'ec', ['q1'], notInstalled), { kind: 'show', screen: { id: 'enableConfirm' } }, 'a hosted engine\'s id is not an origin to return to');
   assert.deepEqual(tap(config, 'ei', [], notInstalled), { kind: 'effect', effect: 'install' });
   assert.deepEqual(tap(config, 'er', [], notInstalled), { kind: 'effect', effect: 'install' });
   assert.deepEqual(tap(config, 'ip', [], notInstalled), { kind: 'stale' });
@@ -533,7 +552,7 @@ test('reducer: install taps run only when the local engine is neither installed 
 test('reducer: removing the files is the local engine\'s, for an installed, idle one; "try again" resets the guard and returns to its card', () => {
   const config = configOf(local, groq);
   assert.deepEqual(tap(config, 'fa', ['g']), { kind: 'show', screen: { id: 'removeFilesConfirm', engineId: 'g' } });
-  assert.deepEqual(tap(config, 'fd', ['g']), { kind: 'effect', effect: 'removeFiles' });
+  assert.deepEqual(tap(config, 'fd', ['g']), { kind: 'effect', effect: 'removeFiles', screen: { id: 'card', engineId: 'g' } }, 'the card is where a refused removal leaves the user');
   assert.deepEqual(tap(config, 'fd', ['g'], { isLocalInstalled: false }), { kind: 'stale' });
   assert.deepEqual(tap(config, 'fa', ['g'], { isLocalInstalling: true }), { kind: 'stale' });
   assert.deepEqual(tap(config, 'fa', ['q1']), { kind: 'stale' }, 'a hosted engine has no files');

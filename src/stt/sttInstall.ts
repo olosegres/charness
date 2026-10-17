@@ -12,7 +12,7 @@ import { getErrnoCode } from '../configDirFile';
  * under `<DATA_DIR>/stt` holding the pinned `onnx-asr` + `soundfile`, and the
  * GigaAM model fetched into a private Hugging Face cache — nothing is shared
  * with, or written into, the operator's Python. There is NO user-facing command:
- * the bot runs this from `/stt` ("Enable local recognition") or, when `stt.json`
+ * the bot runs this from `/stt` ("Add engine → GigaAM (local)") or, when `stt.json`
  * names the local engine, at boot; both launch the detached `sttInstallEntry`.
  */
 
