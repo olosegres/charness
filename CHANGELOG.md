@@ -42,6 +42,10 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 - **Local recognition (GigaAM v3, Russian):** a recogniser process that starts with the first voice that needs it,
   survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
 
+### Fixed
+- A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
+  one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
+
 ## 3.2.0 — 2026-10-16
 
 **Renamed: what was left under the TelegramCode name is now Charness.** The old names still work and each one
@@ -92,8 +96,6 @@ checkout with self-update and Docker: [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATIO
 - Jira: a mention no longer displaces a hand-over without a requester, and a superseded question no longer asks
   to assign the issue back.
 - A Claude session adopted under the old data-dir path is no longer re-spawned as another account.
-- A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
-  one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
 
 ## 3.0.0 — 2026-10-07
 
