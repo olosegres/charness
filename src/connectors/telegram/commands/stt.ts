@@ -1,9 +1,9 @@
 /**
- * `/stt` — the voice-recognition settings on one screen, from any topic (General included), instance-wide like
- * `/limits`: the ordered engine chain (reorder, use / don't use, timeout, key, remove), adding Groq / OpenAI / a
- * custom OpenAI-compatible server, the language, the local engine (enable = install with live progress, idle
- * exit, workers, remove its files, "try again" after the spawn-storm guard). Everything is written to
- * `stt.json` and applies to the next voice note. The screens, the callback codec and the decision of what a tap
+ * `/stt` — the voice-recognition settings, from any topic (General included), instance-wide like `/limits`: the
+ * main screen holds the ordered engine chain, Add engine and the language; each engine has a card (reorder, use /
+ * don't use, timeout, key, remove), and the local engine's own settings live only on its card and in its adding
+ * (add = install with live progress when needed; idle exit, workers, "try again" after the spawn-storm guard,
+ * remove its files). Everything is written to `stt.json` and applies to the next voice note. The screens, the callback codec and the decision of what a tap
  * does are pure (`stt/sttScreenPlan.ts`); this file renders them, reads the host's facts and runs the effects.
  * See README.md in this folder.
  */
@@ -41,6 +41,7 @@ import {
   sttCallbackRe,
   type SttKeyTarget,
   type SttButton,
+  type SttEffect,
   type SttNotice,
   type SttScreenId,
   type SttScreenInput,
@@ -289,6 +290,10 @@ export function createStt(ports: SttPorts) {
       if (!enabled.ok) text = t('stt.install.doneNotAdded', { limit: sttEngineLimit });
       else if (enabled.config !== previous && !(await save(previous, enabled.config))) text = t('stt.install.doneNotSaved', { path: getConfigPath() });
     }
+    // Ready and listed: the message becomes the local engine's card (read after the save, so it shows the saved list).
+    const localEngine = getResolvedSettings().settings.engines.find((engine) => engine.kind === 'gigaam');
+    const card = localEngine ? buildSttScreen({ id: 'card', engineId: localEngine.id }, await gatherScreenInput(), t, text) : null;
+    if (card) return card;
     return { text, rows: [[buildButton(openSettingsText, 'bk')]] };
   }
 
@@ -470,7 +475,7 @@ export function createStt(ports: SttPorts) {
           await render(key, messageId, { id: 'main' });
           return;
         case 'effect':
-          await runEffect(ctx, key, messageId, outcome.effect, settings);
+          await runEffect(ctx, key, messageId, outcome.effect, settings, outcome.screen);
           return;
       }
     }));
@@ -480,8 +485,9 @@ export function createStt(ports: SttPorts) {
     ctx: Context,
     key: SessionKey,
     messageId: number | null,
-    effect: 'install' | 'attachInstall' | 'removeFiles' | 'resetGuard' | 'close',
+    effect: SttEffect,
     settings: SttConfigFile,
+    screenAfter: SttScreenId = { id: 'main' },
   ): Promise<void> {
     switch (effect) {
       case 'close':
@@ -491,7 +497,7 @@ export function createStt(ports: SttPorts) {
       case 'resetGuard':
         owner.resetSpawnGuard();
         await ctx.answerCbQuery(t('stt.notice.guardReset'));
-        await render(key, messageId, { id: 'main' });
+        await render(key, messageId, screenAfter);
         return;
       case 'install':
       case 'attachInstall':

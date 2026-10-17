@@ -922,7 +922,8 @@ test('every stt.* key the /stt code asks for exists in English — literals and 
   assert.ok(literals.size > 60);
   for (const code of literals) assert.ok(code in enDict, `${code} is used but not defined`);
   const families: Record<string, readonly string[]> = {
-    'stt.card.problem.': ['disabled', 'notInstalled', 'installing', 'unhealthy', 'languageNotSupported', 'noOwnerContext', 'missingKey', 'missingUrl'],
+    'stt.card.problem.': ['disabled', 'languageNotSupported', 'missingKey', 'missingUrl'],
+    'stt.engineState.': ['running', 'stopped', 'installing', 'paused', 'noOwner', 'notInstalled'],
     'stt.input.': ['invalidUrl', 'invalidKey', 'urlHasCredentials'],
     'stt.install.': ['creatingEnvironment', 'installingPackages', 'downloadingModel', 'checking'],
   };

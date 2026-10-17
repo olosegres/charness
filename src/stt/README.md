@@ -208,12 +208,15 @@ result» with Retry. A full engine list or an unwritable `stt.json` ends in a me
 ## `/stt` — the settings screen
 
 Every tap is one of: show another screen, save a new `stt.json` (then `applySettingsChange`), arm a typed step, or run an
-effect (install, remove files, reset the spawn guard, close). The callbacks bake in `computeSttRevision(settings)` — the
+effect (install, remove files, reset the spawn guard, close). The screens: a MAIN screen with only what is about recognition as a whole
+(the engine list — the local row carries its short state — Add engine, Language, Close), one CARD per engine (the common controls plus
+the kind's own: a key, or for the local engine its status, RAM line, idle exit, workers, try again, install / progress, remove from
+list, remove model files) and the pickers. Idle and workers exist only on the local card. The callbacks bake in `computeSttRevision(settings)` — the
 content hash of the effective settings — so a hand edit makes old keyboards answer «changed — refreshed» instead of
 acting on a list that moved. An edit made from `/stt` while the file is invalid rewrites it from the last good settings.
 
 Typed steps (a custom server's address, an API key) belong to the Telegram module: a plausible key is deleted from the
 topic the moment it is accepted and never echoed or logged; the output trace records `[redacted: speech engine key]` (or, for the address step — it may carry a login —
-`[redacted: speech engine address]`) for the message while that step is awaited. Install: «Enable local recognition» confirms the cost, then the install job edits ONE
-message with its progress (remembered in `state.json` with the enable flag); on success the engine joins the list first. Details and the
+`[redacted: speech engine address]`) for the message while that step is awaited. Install: «Add engine → GigaAM (local)» confirms the cost when the model is not installed, then the install job edits ONE
+message with its progress (remembered in `state.json` with the enable flag); on success the engine joins the list first and the message becomes its card. Details and the
 registration contract: `connectors/telegram/commands/README.md` § `stt.ts`.

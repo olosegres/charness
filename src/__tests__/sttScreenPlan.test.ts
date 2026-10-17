@@ -100,7 +100,8 @@ test('every button of every screen is a valid callback of at most 64 bytes with 
   const revision = computeSttRevision(config);
   const screens = [
     { id: 'main' }, { id: 'card', engineId: 'q1' }, { id: 'card', engineId: 'g' }, { id: 'timeout', engineId: 'u1' }, { id: 'add' }, { id: 'language' },
-    { id: 'idle' }, { id: 'workers' }, { id: 'enableConfirm' }, { id: 'removeEngineConfirm', engineId: 'q1' }, { id: 'removeFilesConfirm' }, { id: 'keyChoice' },
+    { id: 'idle', engineId: 'g' }, { id: 'workers', engineId: 'g' }, { id: 'enableConfirm' }, { id: 'removeEngineConfirm', engineId: 'q1' },
+    { id: 'removeEngineConfirm', engineId: 'g' }, { id: 'removeFilesConfirm', engineId: 'g' }, { id: 'keyChoice' },
   ] as const;
   for (const id of screens) {
     const screen = buildSttScreen(id, input, echo);
@@ -122,40 +123,45 @@ test('the revision follows the file: any change to the settings changes it, the 
   assert.match(computeSttRevision(config), /^[0-9a-f]{6}$/);
 });
 
-test('main screen, migrated Groq only: one row for Groq, the local engine not installed with the enable button', () => {
+test('main screen, Groq only: just the engine list, Add engine, Language and Close — nothing of the local engine', () => {
   const screen = mainScreen(createInput(configOf(groq), { isLocalInstalled: false, facts: { isGigaamInstalled: false }, load: { status: 'ok', config: configOf(groq) } }));
   assert.match(screen.text, /stt\.screen\.sourceFile\(path=\/secrets\/stt\.json\)/);
   assert.match(screen.text, /stt\.screen\.language\(language=stt\.language\.autoName\)/);
-  assert.match(screen.text, /stt\.screen\.local\.notInstalled/);
   assert.match(screen.text, /stt\.screen\.chainHeading/);
-  const labels = allButtons(screen).map((button) => button.text);
-  assert.ok(labels.includes('1. Groq · 10s+25% · ✓'), labels.join(' | '));
-  assert.ok(labels.includes('stt.btn.enableLocal'));
-  assert.ok(!labels.includes('stt.btn.removeLocal'));
-  assert.ok(!labels.some((label) => label.startsWith('stt.btn.idle') || label.startsWith('stt.btn.workers')), 'no local-engine knobs while it is not in the chain');
+  assert.ok(!screen.text.includes('stt.screen.local'), 'the local engine has no line on the main screen');
+  assert.deepEqual(allButtons(screen).map((button) => button.text), [
+    '1. Groq · 10s+25% · ✓', 'stt.btn.addEngine', 'stt.btn.language(language=stt.language.autoShort)', 'stt.btn.close',
+  ]);
+  assert.deepEqual(screen.rows.map((row) => row.length), [1, 1, 1, 1], 'one control per row, as the screen is sketched');
 });
 
-test('main screen, local engine first and installed: rows in order with marks, the knobs and the remove button', () => {
+test('main screen, local engine first: its row carries the short state; idle, workers and its files are NOT on this screen', () => {
   const config = { ...configOf(local, groq), language: 'ru', gigaam: { idleMinutes: 15, workers: 4 } };
   const screen = mainScreen(createInput(config));
   const labels = allButtons(screen).map((button) => button.text);
-  assert.deepEqual(labels.slice(0, 2), ['1. stt.engine.gigaam · 10s+25% · ✓', '2. Groq · 10s+25% · ✓']);
-  assert.ok(labels.includes('stt.btn.idle(value=stt.idle.minutes(count=15))'));
-  assert.ok(labels.includes('stt.btn.workers(count=4)'));
-  assert.ok(labels.includes('stt.btn.language(language=ru)'));
-  assert.ok(labels.includes('stt.btn.removeLocal'));
-  assert.ok(!labels.includes('stt.btn.enableLocal'));
-  assert.match(screen.text, /stt\.screen\.local\.ready/);
-  assert.ok(!screen.text.includes('stt.screen.languageNote'));
+  assert.deepEqual(labels, [
+    '1. stt.engine.gigaam · stt.engineState.stopped · 10s+25% · ✓',
+    '2. Groq · 10s+25% · ✓',
+    'stt.btn.addEngine',
+    'stt.btn.language(language=ru)',
+    'stt.btn.close',
+  ]);
+  assert.ok(!screen.text.includes('stt.screen.local') && !screen.text.includes('stt.screen.languageNote'));
 });
 
-test('main screen: a language other than ru marks the local engine ✗ and says why; a disabled engine is ✗ too; never exits shows "never"', () => {
-  const config = { ...configOf(local, { ...groq, isDisabled: true }), language: 'en', gigaam: { idleMinutes: 0, workers: 8 } };
-  const screen = mainScreen(createInput(config));
-  const labels = allButtons(screen).map((button) => button.text);
-  assert.deepEqual(labels.slice(0, 2), ['1. stt.engine.gigaam · 10s+25% · ✗', '2. Groq · 10s+25% · ✗']);
-  assert.match(screen.text, /stt\.screen\.languageNote/);
-  assert.ok(labels.includes('stt.btn.idle(value=stt.idle.never)'));
+test('main screen: a language other than ru marks the local engine ✗ on its row (the card says why); a disabled engine is ✗ too', () => {
+  const config = { ...configOf(local, { ...groq, isDisabled: true }), language: 'en' };
+  const labels = allButtons(mainScreen(createInput(config))).map((button) => button.text);
+  assert.deepEqual(labels.slice(0, 2), ['1. stt.engine.gigaam · stt.engineState.stopped · 10s+25% · ✗', '2. Groq · 10s+25% · ✗']);
+});
+
+test('main screen, local engine installed but not in the list: nothing local-specific shows; Add engine brings it back', () => {
+  const input = createInput(configOf(groq));
+  assert.ok(input.isLocalInstalled);
+  const labels = allButtons(mainScreen(input)).map((button) => button.text);
+  assert.ok(!labels.some((label) => /gigaam|idle|workers|removeLocal|tryAgain|enableLocal/.test(label)), labels.join(' | '));
+  const add = buildSttScreen({ id: 'add' }, input, echo);
+  assert.ok(add && allButtons(add).some((button) => button.text === 'stt.engine.gigaam'));
 });
 
 test('main screen, invalid file: the last good settings stay in force and the first error is shown; with none, voice is off', () => {
@@ -172,32 +178,90 @@ test('main screen, invalid file: the last good settings stay in force and the fi
   assert.match(missing.text, /stt\.screen\.sourceMissing/);
 });
 
-test('main screen, installing: the status shows the phase and the button attaches to the install instead of starting one', () => {
+test('main screen: the local row names its state — installing, stopped, running, paused, unavailable, not installed', () => {
+  const rowLabel = (input: SttScreenInput): string => allButtons(mainScreen(input))[0].text;
+  const config = configOf(local);
+  assert.equal(rowLabel(createInput(config)), '1. stt.engine.gigaam · stt.engineState.stopped · 10s+25% · ✓');
+  assert.equal(rowLabel(createInput(config, { sidecar: { state: 'running', busyRequests: 0 } })), '1. stt.engine.gigaam · stt.engineState.running · 10s+25% · ✓');
+  assert.equal(rowLabel(createInput(config, { sidecar: { state: 'running' } })), '1. stt.engine.gigaam · stt.engineState.running · 10s+25% · ✓', 'alive but too busy to answer /health is still running');
+  const unhealthy = createInput(config, { sidecar: { state: 'unhealthy', unhealthyUntil: 1 }, facts: { isGigaamUnhealthy: true } });
+  assert.equal(rowLabel(unhealthy), '1. stt.engine.gigaam · stt.engineState.paused · 10s+25% · ✗');
+  assert.equal(rowLabel(createInput(config, { hasOwnerContext: false, facts: { hasOwnerContext: false } })), '1. stt.engine.gigaam · stt.engineState.noOwner · 10s+25% · ✗');
+  assert.equal(rowLabel(createInput(config, { isLocalInstalled: false, facts: { isGigaamInstalled: false } })), '1. stt.engine.gigaam · stt.engineState.notInstalled · 10s+25% · ✗');
   const progress: SttInstallProgress = { phase: 'downloadingModel', detail: '120/216 MB', bytesDownloaded: 1 };
-  const screen = mainScreen(createInput(configOf(groq), { isLocalInstalled: false, installing: progress, facts: { isGigaamInstalled: false, isGigaamInstalling: true } }));
-  assert.match(screen.text, /stt\.screen\.local\.installing\(phase=stt\.install\.downloadingModel\(progress=120\/216 MB\)\)/);
-  const labels = allButtons(screen).map((button) => button.text);
-  assert.ok(labels.includes('stt.btn.showProgress'));
-  assert.ok(!labels.includes('stt.btn.enableLocal'));
-  assert.ok(!labels.includes('stt.btn.removeLocal'));
+  assert.equal(
+    rowLabel(createInput(config, { isLocalInstalled: false, installing: progress, facts: { isGigaamInstalled: false, isGigaamInstalling: true } })),
+    '1. stt.engine.gigaam · stt.engineState.installing · 10s+25% · ✗',
+  );
 });
 
-test('main screen, process states: ready not running, running idle, running busy, unhealthy with the retry button', () => {
+test('local card, status line: ready · running (idle, busy, too busy to answer), stopped, paused until, unavailable, installing, not installed', () => {
+  const statusOf = (input: SttScreenInput): string => {
+    const card = buildSttScreen({ id: 'card', engineId: 'g' }, input, echo);
+    assert.ok(card);
+    return card.text.split('\n')[1];
+  };
   const config = configOf(local);
-  const textFor = (sidecar: SttScreenInput['sidecar'], facts: Partial<SttFacts> = {}): SttScreen => mainScreen(createInput(config, { sidecar, facts }));
-  assert.match(textFor({ state: 'notRunning' }).text, /stt\.screen\.local\.ready/);
-  assert.match(textFor({ state: 'running', busyRequests: 0 }).text, /stt\.screen\.local\.running(?!Busy)/);
-  assert.match(textFor({ state: 'running', busyRequests: 3 }).text, /stt\.screen\.local\.runningBusy\(count=3\)/);
-  assert.match(textFor({ state: 'running' }).text, /stt\.screen\.local\.runningSlow/, 'alive but too busy to answer /health');
-
+  assert.equal(statusOf(createInput(config)), 'stt.card.local.status.stopped');
+  assert.equal(statusOf(createInput(config, { sidecar: { state: 'running', busyRequests: 0 } })), 'stt.card.local.status.running');
+  assert.equal(statusOf(createInput(config, { sidecar: { state: 'running', busyRequests: 3 } })), 'stt.card.local.status.runningBusy(count=3)');
+  assert.equal(statusOf(createInput(config, { sidecar: { state: 'running' } })), 'stt.card.local.status.runningSlow', 'alive but too busy to answer /health');
   const untilMs = new Date(2026, 9, 16, 14, 5, 0).getTime();
-  const unhealthy = textFor({ state: 'unhealthy', unhealthyUntil: untilMs }, { isGigaamUnhealthy: true });
-  assert.match(unhealthy.text, /stt\.screen\.local\.unhealthy\(until=14:05\)/);
-  assert.ok(allButtons(unhealthy).some((button) => button.text === 'stt.btn.tryAgain'));
-  assert.ok(!allButtons(textFor({ state: 'notRunning' })).some((button) => button.text === 'stt.btn.tryAgain'), 'the retry button only shows while unhealthy');
+  assert.equal(statusOf(createInput(config, { sidecar: { state: 'unhealthy', unhealthyUntil: untilMs }, facts: { isGigaamUnhealthy: true } })), 'stt.card.local.status.paused(until=14:05)');
+  assert.equal(statusOf(createInput(config, { hasOwnerContext: false, facts: { hasOwnerContext: false } })), 'stt.card.local.status.noOwner');
+  assert.equal(statusOf(createInput(config, { isLocalInstalled: false, facts: { isGigaamInstalled: false } })), 'stt.card.local.status.notInstalled');
+  const progress: SttInstallProgress = { phase: 'downloadingModel', detail: '120/216 MB', bytesDownloaded: 1 };
+  assert.equal(
+    statusOf(createInput(config, { isLocalInstalled: false, installing: progress, facts: { isGigaamInstalled: false, isGigaamInstalling: true } })),
+    'stt.card.local.status.installing(phase=stt.install.downloadingModel(progress=120/216 MB))',
+  );
+});
 
-  const withoutOwner = mainScreen(createInput(config, { hasOwnerContext: false, facts: { hasOwnerContext: false } }));
-  assert.match(withoutOwner.text, /stt\.screen\.local\.noOwner/);
+test('local card: title, RAM line, the common controls plus idle, workers and the removal row — and only while the state asks for them, try again / install / progress', () => {
+  const config = { ...configOf(local, groq), gigaam: { idleMinutes: 15, workers: 4 } };
+  const labelsOf = (input: SttScreenInput): string[] => {
+    const card = buildSttScreen({ id: 'card', engineId: 'g' }, input, echo);
+    assert.ok(card);
+    return allButtons(card).map((button) => button.text);
+  };
+  const ready = buildSttScreen({ id: 'card', engineId: 'g' }, createInput(config), echo);
+  assert.ok(ready);
+  assert.match(ready.text, /^stt\.card\.local\.title\nstt\.card\.local\.status\.stopped\nstt\.card\.local\.ram\nstt\.card\.timeout\(base=10,percent=25\)$/);
+  assert.deepEqual(ready.rows.map((row) => row.map((button) => button.text)), [
+    ['limits.btnDown', 'limits.btnDontUse'],
+    ['stt.btn.timeoutValue(value=10s+25%)'],
+    ['stt.btn.idle(value=stt.idle.minutes(count=15))'],
+    ['stt.btn.workers(count=4)'],
+    ['stt.btn.removeFromList', 'stt.btn.removeLocal'],
+    ['fallback.backButton'],
+  ]);
+  assert.ok(!labelsOf(createInput(config)).includes('stt.btn.tryAgain'), 'try again only while paused');
+
+  const paused = labelsOf(createInput(config, { sidecar: { state: 'unhealthy', unhealthyUntil: 1 }, facts: { isGigaamUnhealthy: true } }));
+  assert.ok(paused.includes('stt.btn.tryAgain'));
+
+  const missingFiles = labelsOf(createInput(config, { isLocalInstalled: false, facts: { isGigaamInstalled: false } }));
+  assert.ok(missingFiles.includes('stt.btn.install'), 'listed but not installed: install from the card');
+  assert.ok(!missingFiles.includes('stt.btn.removeLocal'), 'nothing to delete');
+  assert.ok(missingFiles.includes('stt.btn.removeFromList'));
+
+  const progress: SttInstallProgress = { phase: 'checking', detail: '', bytesDownloaded: 0 };
+  const installing = labelsOf(createInput(config, { isLocalInstalled: false, installing: progress, facts: { isGigaamInstalled: false, isGigaamInstalling: true } }));
+  assert.ok(installing.includes('stt.btn.showProgress'));
+  assert.ok(!installing.includes('stt.btn.install') && !installing.includes('stt.btn.removeLocal'));
+
+  const idleNever = labelsOf(createInput({ ...config, gigaam: { idleMinutes: 0, workers: 8 } }));
+  assert.ok(idleNever.includes('stt.btn.idle(value=stt.idle.never)') && idleNever.includes('stt.btn.workers(count=8)'));
+});
+
+test('local card: a language other than ru and a disabled engine each say why they are skipped', () => {
+  const english = buildSttScreen({ id: 'card', engineId: 'g' }, createInput({ ...configOf(local), language: 'en' }), echo);
+  assert.ok(english);
+  assert.match(english.text, /stt\.card\.problem\.languageNotSupported/);
+  const off = buildSttScreen({ id: 'card', engineId: 'g' }, createInput(configOf({ ...local, isDisabled: true })), echo);
+  assert.ok(off);
+  assert.match(off.text, /stt\.card\.problem\.disabled/);
+  assert.ok(allButtons(off).some((button) => button.text === 'limits.btnUse'));
 });
 
 test('local status precedence: installing and not installed outrank the process state', () => {
@@ -207,23 +271,21 @@ test('local status precedence: installing and not installed outrank the process 
   assert.equal(getSttLocalStatus({ ...base, hasOwnerContext: false }).state, 'noOwner');
 });
 
-test('engine card: state, timeout, key and the buttons that fit the kind and position', () => {
+test('engine card (cloud): state, timeout, key — and no idle, workers or file controls, which exist only on the local engine\'s card', () => {
   const config = configOf(local, groq, { id: 'u1', kind: 'url', url: 'http://stt.local:8000/v1/audio/transcriptions' });
   const input = createInput(config);
-  const first = buildSttScreen({ id: 'card', engineId: 'g' }, input, echo);
-  assert.ok(first);
-  assert.match(first.text, /stt\.card\.title\(n=1,total=3,name=stt\.engine\.gigaam\)/);
-  assert.match(first.text, /stt\.card\.ready/);
-  assert.ok(!first.text.includes('stt.card.keySet'), 'the local engine has no key');
-  const firstLabels = allButtons(first).map((button) => button.text);
-  assert.ok(!firstLabels.includes('limits.btnUp'), 'nothing above the first');
-  assert.ok(firstLabels.includes('limits.btnDown') && firstLabels.includes('limits.btnDontUse') && firstLabels.includes('stt.btn.timeout'));
-  assert.ok(!firstLabels.includes('stt.btn.changeKey') && !firstLabels.includes('stt.btn.addKey'));
-
   const keyed = buildSttScreen({ id: 'card', engineId: 'q1' }, input, echo);
   assert.ok(keyed);
+  assert.match(keyed.text, /stt\.card\.title\(n=2,total=3,name=Groq\)/);
+  assert.match(keyed.text, /stt\.card\.ready/);
   assert.match(keyed.text, /stt\.card\.keySet/);
-  assert.ok(allButtons(keyed).some((button) => button.text === 'stt.btn.changeKey'));
+  assert.deepEqual(keyed.rows.map((row) => row.map((button) => button.text)), [
+    ['limits.btnUp', 'limits.btnDown', 'limits.btnDontUse'],
+    ['stt.btn.timeoutValue(value=10s+25%)'],
+    ['stt.btn.changeKey'],
+    ['account.removeButton'],
+    ['fallback.backButton'],
+  ]);
 
   const url = buildSttScreen({ id: 'card', engineId: 'u1' }, input, echo);
   assert.ok(url);
@@ -231,6 +293,12 @@ test('engine card: state, timeout, key and the buttons that fit the kind and pos
   assert.match(url.text, /stt\.card\.keyMissing/);
   assert.ok(allButtons(url).some((button) => button.text === 'stt.btn.addKey'));
   assert.ok(!allButtons(url).some((button) => button.text === 'limits.btnDown'), 'nothing below the last');
+
+  for (const card of [keyed, url]) {
+    const labels = allButtons(card).map((button) => button.text);
+    assert.ok(!labels.some((label) => /stt\.btn\.(idle|workers|tryAgain|removeLocal|removeFromList|install|showProgress)/.test(label)), labels.join(' | '));
+    assert.ok(!card.text.includes('stt.card.local'));
+  }
 });
 
 test('engine card: the address is shown without its query string, which may carry a token', () => {
@@ -265,29 +333,34 @@ test('timeout screen: both preset rows with a ✓ on the current values', () => 
   assert.match(percentRow[3].data, /^stt_tp_q1_100_[0-9a-f]{6}$/);
 });
 
-test('language, idle and workers screens mark the current value; the add screen offers the local engine only when installed and not listed', () => {
+test('language, idle and workers screens mark the current value; idle and workers go back to the local card', () => {
   const config = { ...configOf(local), language: 'ru', gigaam: { idleMinutes: 30, workers: 2 } };
   const input = createInput(config);
   const language = buildSttScreen({ id: 'language' }, input, echo);
   assert.ok(language);
   assert.ok(allButtons(language).some((button) => button.text === 'ru ✓'));
   assert.ok(allButtons(language).some((button) => button.text === 'stt.language.auto'));
-  const idle = buildSttScreen({ id: 'idle' }, input, echo);
+  const idle = buildSttScreen({ id: 'idle', engineId: 'g' }, input, echo);
   assert.ok(idle);
   assert.deepEqual(idle.rows[0].map((button) => button.text), ['stt.idle.minutes(count=5)', 'stt.idle.minutes(count=15)', 'stt.idle.minutes(count=30) ✓', 'stt.idle.minutes(count=60)', 'stt.idle.never']);
-  const workers = buildSttScreen({ id: 'workers' }, input, echo);
+  assert.match(idle.rows[0][0].data, /^stt_is_g_5_[0-9a-f]{6}$/);
+  const workers = buildSttScreen({ id: 'workers', engineId: 'g' }, input, echo);
   assert.ok(workers);
   assert.deepEqual(workers.rows[0].map((button) => button.text), ['1', '2 ✓', '4', '8']);
+  assert.match(workers.rows[0][3].data, /^stt_ws_g_8_[0-9a-f]{6}$/);
+  for (const screen of [idle, workers]) assert.match(screen.rows[1][0].data, /^stt_oe_g_[0-9a-f]{6}$/, 'Back returns to the local engine\'s card');
+  assert.equal(buildSttScreen({ id: 'idle', engineId: 'gone' }, input, echo)?.rows.length, 2, 'the screen itself needs no lookup');
+});
 
-  const listed = buildSttScreen({ id: 'add' }, input, echo);
+test('the add screen offers the local engine whenever it is not in the list — installed or not — and never when it is', () => {
+  const listed = buildSttScreen({ id: 'add' }, createInput(configOf(local)), echo);
   assert.ok(listed);
   assert.ok(!allButtons(listed).some((button) => button.text === 'stt.engine.gigaam'), 'already in the chain');
-  const offered = buildSttScreen({ id: 'add' }, createInput(configOf(groq)), echo);
-  assert.ok(offered);
-  assert.ok(allButtons(offered).some((button) => button.text === 'stt.engine.gigaam'));
-  const notInstalled = buildSttScreen({ id: 'add' }, createInput(configOf(groq), { isLocalInstalled: false }), echo);
-  assert.ok(notInstalled);
-  assert.ok(!allButtons(notInstalled).some((button) => button.text === 'stt.engine.gigaam'));
+  for (const installed of [true, false]) {
+    const offered = buildSttScreen({ id: 'add' }, createInput(configOf(groq), { isLocalInstalled: installed }), echo);
+    assert.ok(offered);
+    assert.deepEqual(allButtons(offered).map((button) => button.text), ['Groq', 'OpenAI', 'stt.btn.customUrl', 'stt.engine.gigaam', 'fallback.backButton'], `installed: ${installed}`);
+  }
 });
 
 test('engine names: the local engine is translated, Groq / OpenAI are brands, a custom server is its host', () => {
@@ -344,12 +417,12 @@ test('reducer: navigation shows screens, and a stale revision is refused for eve
   assert.deepEqual(tap(config, 'tm', ['q1']), { kind: 'show', screen: { id: 'timeout', engineId: 'q1' } });
   assert.deepEqual(tap(config, 'ad'), { kind: 'show', screen: { id: 'add' } });
   assert.deepEqual(tap(config, 'lg'), { kind: 'show', screen: { id: 'language' } });
-  assert.deepEqual(tap(config, 'im'), { kind: 'show', screen: { id: 'idle' } });
-  assert.deepEqual(tap(config, 'wm'), { kind: 'show', screen: { id: 'workers' } });
+  assert.deepEqual(tap(config, 'im', ['g']), { kind: 'show', screen: { id: 'idle', engineId: 'g' } });
+  assert.deepEqual(tap(config, 'wm', ['g']), { kind: 'show', screen: { id: 'workers', engineId: 'g' } });
   assert.deepEqual(tap(config, 'ra', ['q1']), { kind: 'show', screen: { id: 'removeEngineConfirm', engineId: 'q1' } });
 
-  for (const action of ['oe', 'up', 'us', 'ad', 'lg', 'ls', 'rt', 'ec', 'ky'] as const) {
-    assert.deepEqual(tap(config, action, action === 'ls' ? ['ru'] : ['q1'], {}, 'ffffff'), { kind: 'stale' }, action);
+  for (const action of ['oe', 'up', 'us', 'ad', 'lg', 'ls', 'rt', 'ec', 'ky', 'im', 'wm', 'is', 'ws', 'fa', 'fd'] as const) {
+    assert.deepEqual(tap(config, action, action === 'ls' ? ['ru'] : ['g', 5], {}, 'ffffff'), { kind: 'stale' }, action);
   }
   assert.deepEqual(tap(config, 'bk', [], {}, 'ffffff'), { kind: 'show', screen: { id: 'main' } });
   assert.deepEqual(tap(config, 'cl', [], {}, 'ffffff'), { kind: 'effect', effect: 'close' });
@@ -390,34 +463,49 @@ test('reducer: edits save the next config and say which screen to show', () => {
   assert.deepEqual(removed.screen, { id: 'main' });
 });
 
-test('reducer: language, idle and workers accept only the offered values', () => {
-  const config = configOf(local);
+test('reducer: language, idle and workers accept only the offered values; idle and workers belong to the local engine and lead back to its card', () => {
+  const config = configOf(local, groq);
   const ru = tap(config, 'ls', ['ru']);
   assert.ok(ru.kind === 'save' && ru.config.language === 'ru');
   const auto = tap({ ...config, language: 'ru' }, 'ls', ['auto']);
   assert.ok(auto.kind === 'save' && auto.config.language === null);
   assert.deepEqual(tap(config, 'ls', ['xx']), { kind: 'stale' });
-  const never = tap(config, 'is', [0]);
+  const never = tap(config, 'is', ['g', 0]);
   assert.ok(never.kind === 'save' && never.config.gigaam.idleMinutes === 0);
-  assert.deepEqual(tap(config, 'is', [7]), { kind: 'stale' });
-  const eight = tap(config, 'ws', [8]);
+  assert.deepEqual(never.screen, { id: 'card', engineId: 'g' });
+  assert.deepEqual(tap(config, 'is', ['g', 7]), { kind: 'stale' });
+  const eight = tap(config, 'ws', ['g', 8]);
   assert.ok(eight.kind === 'save' && eight.config.gigaam.workers === 8);
-  assert.deepEqual(tap(config, 'ws', [3]), { kind: 'stale' });
+  assert.deepEqual(eight.screen, { id: 'card', engineId: 'g' });
+  assert.deepEqual(tap(config, 'ws', ['g', 3]), { kind: 'stale' });
+  for (const action of ['im', 'wm'] as const) assert.deepEqual(tap(config, action, ['q1']), { kind: 'stale' }, `${action}: a hosted engine has no such setting`);
+  assert.deepEqual(tap(config, 'is', ['q1', 15]), { kind: 'stale' });
+  assert.deepEqual(tap(config, 'ws', ['q1', 4]), { kind: 'stale' });
+  assert.deepEqual(tap(config, 'is', ['zz', 15]), { kind: 'stale' });
 });
 
-test('reducer: adding — a hosted engine arms the key paste, a custom one the address, the local one is saved when installed', () => {
+test('reducer: adding — a hosted engine arms the key paste, a custom one the address', () => {
   const config = configOf(groq);
   assert.deepEqual(tap(config, 'an', ['gq']), { kind: 'armKey', target: { kind: 'newKeyed', engineKind: 'groq' } });
   assert.deepEqual(tap(config, 'an', ['oa']), { kind: 'armKey', target: { kind: 'newKeyed', engineKind: 'openai' } });
   assert.deepEqual(tap(config, 'an', ['ur']), { kind: 'armUrl' });
-  const addedLocal = tap(config, 'an', ['gg']);
-  assert.ok(addedLocal.kind === 'save');
-  assert.deepEqual(addedLocal.config.engines.map((engine) => engine.id), ['g', 'q1']);
-  assert.deepEqual(tap(config, 'an', ['gg'], { isLocalInstalled: false }), { kind: 'stale' });
-  assert.deepEqual(tap(configOf(local), 'an', ['gg']), { kind: 'stale' }, 'already listed');
   assert.deepEqual(tap(config, 'an', ['zz']), { kind: 'stale' });
   assert.deepEqual(tap(config, 'ky', ['q1']), { kind: 'armKey', target: { kind: 'engine', engineId: 'q1' } });
   assert.deepEqual(tap(configOf(local), 'ky', ['g']), { kind: 'stale' }, 'the local engine has no key');
+});
+
+test('reducer: adding the local engine — installed: it joins first and its card opens; installing: attach; not installed: the install confirmation', () => {
+  const config = configOf(groq);
+  const installed = tap(config, 'an', ['gg']);
+  assert.ok(installed.kind === 'save');
+  assert.deepEqual(installed.config.engines.map((engine) => engine.id), ['g', 'q1']);
+  assert.deepEqual(installed.screen, { id: 'card', engineId: 'g' }, 'the card of the engine just added');
+  assert.deepEqual(installed.notice, { code: 'stt.notice.localAdded' });
+
+  assert.deepEqual(tap(config, 'an', ['gg'], { isLocalInstalled: false }), { kind: 'show', screen: { id: 'enableConfirm' } });
+  assert.deepEqual(tap(config, 'an', ['gg'], { isLocalInstalled: false, isLocalInstalling: true }), { kind: 'effect', effect: 'attachInstall' });
+  assert.deepEqual(tap(configOf(local), 'an', ['gg']), { kind: 'stale' }, 'already listed');
+  assert.deepEqual(tap(configOf(...['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ id, kind: 'groq' as const, apiKey: sampleKey }))), 'an', ['gg']), { kind: 'stale' }, 'a full list has no room');
 });
 
 test('reducer: after the address, "needs a key?" — yes arms the paste for the new engine, no saves it as it is', () => {
@@ -442,11 +530,13 @@ test('reducer: install taps run only when the local engine is neither installed 
   assert.deepEqual(tap(config, 'ip', [], { isLocalInstalled: false, isLocalInstalling: true }), { kind: 'effect', effect: 'attachInstall' });
 });
 
-test('reducer: removing the files runs only for an installed, idle engine; "try again" resets the guard', () => {
-  const config = configOf(local);
-  assert.deepEqual(tap(config, 'fa'), { kind: 'show', screen: { id: 'removeFilesConfirm' } });
-  assert.deepEqual(tap(config, 'fd'), { kind: 'effect', effect: 'removeFiles' });
-  assert.deepEqual(tap(config, 'fd', [], { isLocalInstalled: false }), { kind: 'stale' });
-  assert.deepEqual(tap(config, 'fa', [], { isLocalInstalling: true }), { kind: 'stale' });
-  assert.deepEqual(tap(config, 'rt'), { kind: 'effect', effect: 'resetGuard' });
+test('reducer: removing the files is the local engine\'s, for an installed, idle one; "try again" resets the guard and returns to its card', () => {
+  const config = configOf(local, groq);
+  assert.deepEqual(tap(config, 'fa', ['g']), { kind: 'show', screen: { id: 'removeFilesConfirm', engineId: 'g' } });
+  assert.deepEqual(tap(config, 'fd', ['g']), { kind: 'effect', effect: 'removeFiles' });
+  assert.deepEqual(tap(config, 'fd', ['g'], { isLocalInstalled: false }), { kind: 'stale' });
+  assert.deepEqual(tap(config, 'fa', ['g'], { isLocalInstalling: true }), { kind: 'stale' });
+  assert.deepEqual(tap(config, 'fa', ['q1']), { kind: 'stale' }, 'a hosted engine has no files');
+  assert.deepEqual(tap(config, 'rt', ['g']), { kind: 'effect', effect: 'resetGuard', screen: { id: 'card', engineId: 'g' } });
+  assert.deepEqual(tap(config, 'rt', ['q1']), { kind: 'stale' });
 });

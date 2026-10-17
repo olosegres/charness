@@ -48,12 +48,15 @@ way before a rung of a backend the list does not use yet is added or included ag
   after a General change a running session keeps its level, shown as «xhigh (medium from the next start)». OpenCode
   rounds General's value to the model's variants (`ultracode` = its highest, `auto` = no variant).
   The default lives in `settings.json` (beside `stt.json`), hand-editable without a restart.
-- **`/stt`**: the engine list (order, use / don't use, timeout, key, remove), adding Groq, OpenAI or a custom server,
-  the language, and the local engine (install with a live progress message, idle exit, workers, try again after failed
-  starts, remove its files). A pasted key or an address with a login is deleted from the topic at once and kept out of
-  the logs and the output trace.
+- **`/stt`**: the main screen is the engine list, «➕ Add engine» and the language; each engine has a card (order, use /
+  don't use, timeout, and a key for the hosted ones); Groq, OpenAI and a custom server are added through «➕ Add engine».
+  A pasted key or an address with a login is deleted from the topic at once and kept out of the logs and the output trace.
 - **Local recognition (GigaAM v3, Russian):** a recogniser process that starts with the first voice that needs it,
   survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
+  It is added through «➕ Add engine» like any other (a confirmation and a live install progress when the model is not
+  installed), and everything local-specific — status, idle exit, workers, try again after failed starts, remove from list,
+  remove the model files — is on its own card, not on the main screen; the cloud engines' cards show only the common
+  controls and their key or address. Memory: about 0.5 GB while it runs, up to about 0.9 GB on a long voice.
 
 ### Fixed
 - A voice note whose Telegram `duration` is 0 (a sender that gave no length) is treated as of unknown length, not as a

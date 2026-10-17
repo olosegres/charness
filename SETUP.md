@@ -330,7 +330,7 @@ on the env keys are ignored — edit `stt.json` instead.
 #### Local speech recognition (GigaAM)
 
 Besides the hosted engines, the bot can recognise Russian voice notes **on your own machine** with GigaAM v3 (an
-`onnx-asr` model, int8). It is a `gigaam` engine in `stt.json`, installed from `/stt` («🖥 Enable local recognition», with a live progress message) or
+`onnx-asr` model, int8). It is a `gigaam` engine in `stt.json`, added from `/stt` («➕ Add engine → GigaAM (local)»; when the model is not installed yet, with a confirmation and a live progress message) or
 by adding `{ "id": "g", "kind": "gigaam" }` to `stt.json` by hand — in that case the bot installs it by itself at the
 next start and shows the progress in General (or in its log).
 
@@ -338,8 +338,9 @@ next start and shows the progress in General (or in its log).
   on Debian/Ubuntu). The install builds a private venv — your Python is left alone.
 - **Disk:** about 400 MB under `<DATA_DIR>/stt` (the model is 216 MB; the rest is the Python packages and their cache).
 - **RAM:** nothing while it is not running. The recogniser process starts with the first voice note that needs it (about
-  +2–3 s once), uses about 0.5 GB for short voices and about 0.8 GB while a 5-minute voice is recognised with the
-  default 4 workers, and exits by itself after 15 idle minutes (`gigaam.idleMinutes`, `0` = never).
+  +2–3 s once), uses about 0.5 GB for short voices and up to about 0.9 GB while a 5-minute voice is recognised with the
+  default 4 workers, and exits by itself after 15 idle minutes (`gigaam.idleMinutes`, `0` = never). Idle time, workers,
+  «Try again now» and removing the model files are on the engine's card in `/stt`, not on the main screen.
 - **Speed** (4 cores, loaded): a short voice in 1–2 s, a 5-minute voice in about 20 s — long voices are cut at pauses and
   recognised in parallel. A hot reload of the bot keeps a running recogniser; stopping or killing the bot takes it down.
 - **Russian only.** English words come out in Cyrillic or garbled; with a `language` other than `ru` set, the engine is

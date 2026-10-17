@@ -20,7 +20,6 @@ import {
 } from './sttConfigEdit';
 import {
   defaultSttTimeout,
-  gigaamLanguage,
   sttGigaamWorkerChoices,
   type ResolvedSttSettings,
   type SttConfigFile,
@@ -174,11 +173,11 @@ export type SttScreenId =
   | { id: 'timeout'; engineId: string }
   | { id: 'add' }
   | { id: 'language' }
-  | { id: 'idle' }
-  | { id: 'workers' }
+  | { id: 'idle'; engineId: string }
+  | { id: 'workers'; engineId: string }
   | { id: 'enableConfirm' }
   | { id: 'removeEngineConfirm'; engineId: string }
-  | { id: 'removeFilesConfirm' }
+  | { id: 'removeFilesConfirm'; engineId: string }
   | { id: 'keyChoice' };
 
 const percentSign = '%';
@@ -225,6 +224,37 @@ function formatIdleMinutes(minutes: number, translate: SttTranslate): string {
   return minutes === 0 ? translate('stt.idle.never') : translate('stt.idle.minutes', { count: minutes });
 }
 
+/** The short word the local engine's state boils down to, as it rides on its row label (`stt.engineState.<word>`). */
+function getLocalStateWord(local: SttLocalStatus): string {
+  switch (local.state) {
+    case 'running': return 'running';
+    case 'ready': return 'stopped';
+    case 'installing': return 'installing';
+    case 'unhealthy': return 'paused';
+    case 'noOwner': return 'noOwner';
+    case 'notInstalled': return 'notInstalled';
+  }
+}
+
+/** The full status line of the local engine's card (`Status: ready · running`). */
+function formatLocalStatusLine(local: SttLocalStatus, translate: SttTranslate): string {
+  switch (local.state) {
+    case 'notInstalled': return translate('stt.card.local.status.notInstalled');
+    case 'installing': return translate('stt.card.local.status.installing', { phase: getSttInstallPhaseLine(local.progress, translate) });
+    case 'noOwner': return translate('stt.card.local.status.noOwner');
+    case 'unhealthy': return translate('stt.card.local.status.paused', { until: formatLocalClock(local.until) });
+    case 'running':
+      if (local.busyRequests === undefined) return translate('stt.card.local.status.runningSlow');
+      return local.busyRequests > 0 ? translate('stt.card.local.status.runningBusy', { count: local.busyRequests }) : translate('stt.card.local.status.running');
+    case 'ready': return translate('stt.card.local.status.stopped');
+  }
+}
+
+/**
+ * The main screen holds only what applies to recognition as a whole: the engine list, Add engine, Language, Close.
+ * What belongs to one engine — the local one's status, idle exit, workers, files — is on that engine's card; the
+ * local engine's short state only rides on its row label.
+ */
 function buildMainScreen(input: SttScreenInput, translate: SttTranslate, notice?: string): SttScreen {
   const { resolved } = input;
   const { settings } = resolved;
@@ -238,44 +268,41 @@ function buildMainScreen(input: SttScreenInput, translate: SttTranslate, notice?
     lines.push(translate(resolved.source === 'lastGood' ? 'stt.screen.sourceLastGood' : 'stt.screen.sourceInvalid', { path: input.configPath, error: firstError }));
   }
   lines.push(translate('stt.screen.language', { language: settings.language ?? translate('stt.language.autoName') }));
-
-  const local = getSttLocalStatus(input);
-  switch (local.state) {
-    case 'notInstalled': lines.push(translate('stt.screen.local.notInstalled')); break;
-    case 'installing': lines.push(translate('stt.screen.local.installing', { phase: getSttInstallPhaseLine(local.progress, translate) })); break;
-    case 'noOwner': lines.push(translate('stt.screen.local.noOwner')); break;
-    case 'unhealthy': lines.push(translate('stt.screen.local.unhealthy', { until: formatLocalClock(local.until) })); break;
-    case 'running':
-      if (local.busyRequests === undefined) lines.push(translate('stt.screen.local.runningSlow'));
-      else lines.push(local.busyRequests > 0 ? translate('stt.screen.local.runningBusy', { count: local.busyRequests }) : translate('stt.screen.local.running'));
-      break;
-    case 'ready': lines.push(translate('stt.screen.local.ready')); break;
-  }
-  const isLocalListed = settings.engines.some((engine) => engine.kind === 'gigaam');
-  if (isLocalListed && settings.language !== null && settings.language !== gigaamLanguage) lines.push(translate('stt.screen.languageNote'));
   lines.push(settings.engines.length === 0 ? translate('stt.screen.chainEmpty') : translate('stt.screen.chainHeading'));
 
+  const localStateWord = getLocalStateWord(getSttLocalStatus(input));
   const rows: SttButton[][] = settings.engines.map((engine, index) => {
     const mark = getEngineProblem(input, engine) === null ? '✓' : '✗';
-    const label = `${index + 1}. ${getSttEngineName(engine, translate)} · ${formatTimeoutSummary(engine.timeout ?? defaultSttTimeout)} · ${mark}`;
-    return [{ text: label, data: buildSttCallback('oe', [engine.id], revision) }];
+    const name = getSttEngineName(engine, translate);
+    const parts = [`${index + 1}. ${name}`];
+    if (engine.kind === 'gigaam') parts.push(translate(`stt.engineState.${localStateWord}`));
+    parts.push(formatTimeoutSummary(engine.timeout ?? defaultSttTimeout), mark);
+    return [{ text: parts.join(' · '), data: buildSttCallback('oe', [engine.id], revision) }];
   });
-  rows.push([
-    { text: translate('stt.btn.addEngine'), data: buildSttCallback('ad', [], revision) },
-    { text: translate('stt.btn.language', { language: settings.language ?? translate('stt.language.autoShort') }), data: buildSttCallback('lg', [], revision) },
-  ]);
-  if (isLocalListed) {
-    rows.push([{ text: translate('stt.btn.idle', { value: formatIdleMinutes(settings.gigaam.idleMinutes, translate) }), data: buildSttCallback('im', [], revision) }]);
-    rows.push([{ text: translate('stt.btn.workers', { count: settings.gigaam.workers }), data: buildSttCallback('wm', [], revision) }]);
-  }
-  if (local.state === 'unhealthy') rows.push([{ text: translate('stt.btn.tryAgain'), data: buildSttCallback('rt', [], revision) }]);
-  if (local.state === 'installing') rows.push([{ text: translate('stt.btn.showProgress'), data: buildSttCallback('ip', [], revision) }]);
-  else if (!input.isLocalInstalled) rows.push([{ text: translate('stt.btn.enableLocal'), data: buildSttCallback('ec', [], revision) }]);
-  else rows.push([{ text: translate('stt.btn.removeLocal'), data: buildSttCallback('fa', [], revision) }]);
+  rows.push([{ text: translate('stt.btn.addEngine'), data: buildSttCallback('ad', [], revision) }]);
+  rows.push([{ text: translate('stt.btn.language', { language: settings.language ?? translate('stt.language.autoShort') }), data: buildSttCallback('lg', [], revision) }]);
   rows.push([{ text: translate('stt.btn.close'), data: buildSttCallback('cl', [], revision) }]);
   return { text: withNotice(notice, lines.join('\n')), rows };
 }
 
+/** The rows only the local engine's card has: idle exit, workers, and whichever of try again / install / progress its state asks for. */
+function buildLocalCardRows(input: SttScreenInput, engine: SttEngineSetting, translate: SttTranslate, revision: string): SttButton[][] {
+  const { gigaam } = input.resolved.settings;
+  const local = getSttLocalStatus(input);
+  const rows: SttButton[][] = [
+    [{ text: translate('stt.btn.idle', { value: formatIdleMinutes(gigaam.idleMinutes, translate) }), data: buildSttCallback('im', [engine.id], revision) }],
+    [{ text: translate('stt.btn.workers', { count: gigaam.workers }), data: buildSttCallback('wm', [engine.id], revision) }],
+  ];
+  if (local.state === 'unhealthy') rows.push([{ text: translate('stt.btn.tryAgain'), data: buildSttCallback('rt', [engine.id], revision) }]);
+  if (local.state === 'installing') rows.push([{ text: translate('stt.btn.showProgress'), data: buildSttCallback('ip', [engine.id], revision) }]);
+  else if (!input.isLocalInstalled) rows.push([{ text: translate('stt.btn.install'), data: buildSttCallback('ec', [engine.id], revision) }]);
+  return rows;
+}
+
+/**
+ * One card for every engine: the common controls (order, use / don't use, timeout, remove) plus what the kind adds —
+ * a key (Groq, OpenAI, a custom server), or the local engine's status, memory, idle exit, workers and files.
+ */
 function buildEngineCard(input: SttScreenInput, engineId: string, translate: SttTranslate, notice?: string): SttScreen | null {
   const { settings } = input.resolved;
   const index = settings.engines.findIndex((engine) => engine.id === engineId);
@@ -284,25 +311,38 @@ function buildEngineCard(input: SttScreenInput, engineId: string, translate: Stt
   const revision = computeSttRevision(settings);
   const timeout = engine.timeout ?? defaultSttTimeout;
   const problem = getEngineProblem(input, engine);
-  const lines = [translate('stt.card.title', { n: index + 1, total: settings.engines.length, name: getSttEngineName(engine, translate) })];
-  lines.push(problem === null ? translate('stt.card.ready') : translate(`stt.card.problem.${problem}`));
+  const isLocal = engine.kind === 'gigaam';
+  const lines: string[] = [];
+  if (isLocal) {
+    lines.push(translate('stt.card.local.title'), formatLocalStatusLine(getSttLocalStatus(input), translate));
+    // The other reasons are the status line's; these two are about the settings.
+    if (problem === 'disabled' || problem === 'languageNotSupported') lines.push(translate(`stt.card.problem.${problem}`));
+    lines.push(translate('stt.card.local.ram'));
+  } else {
+    lines.push(translate('stt.card.title', { n: index + 1, total: settings.engines.length, name: getSttEngineName(engine, translate) }));
+    lines.push(problem === null ? translate('stt.card.ready') : translate(`stt.card.problem.${problem}`));
+  }
   lines.push(translate('stt.card.timeout', { base: timeout.baseSeconds, percent: timeout.percentOfDuration }));
   if (engine.kind === 'url') lines.push(translate('stt.card.url', { url: formatUrlForDisplay(engine.url ?? '') }));
-  if (engine.kind !== 'gigaam') lines.push(translate(engine.apiKey ? 'stt.card.keySet' : 'stt.card.keyMissing'));
+  if (!isLocal) lines.push(translate(engine.apiKey ? 'stt.card.keySet' : 'stt.card.keyMissing'));
 
-  const move: SttButton[] = [];
-  if (index > 0) move.push({ text: translate('limits.btnUp'), data: buildSttCallback('up', [engine.id], revision) });
-  if (index < settings.engines.length - 1) move.push({ text: translate('limits.btnDown'), data: buildSttCallback('dn', [engine.id], revision) });
-  const rows: SttButton[][] = [];
-  if (move.length > 0) rows.push(move);
-  rows.push([
-    { text: translate(engine.isDisabled ? 'limits.btnUse' : 'limits.btnDontUse'), data: buildSttCallback('us', [engine.id], revision) },
-    { text: translate('stt.btn.timeout'), data: buildSttCallback('tm', [engine.id], revision) },
-  ]);
-  const lastRow: SttButton[] = [];
-  if (engine.kind !== 'gigaam') lastRow.push({ text: translate(engine.apiKey ? 'stt.btn.changeKey' : 'stt.btn.addKey'), data: buildSttCallback('ky', [engine.id], revision) });
-  lastRow.push({ text: translate('account.removeButton'), data: buildSttCallback('ra', [engine.id], revision) });
-  rows.push(lastRow);
+  const commonRow: SttButton[] = [];
+  if (index > 0) commonRow.push({ text: translate('limits.btnUp'), data: buildSttCallback('up', [engine.id], revision) });
+  if (index < settings.engines.length - 1) commonRow.push({ text: translate('limits.btnDown'), data: buildSttCallback('dn', [engine.id], revision) });
+  commonRow.push({ text: translate(engine.isDisabled ? 'limits.btnUse' : 'limits.btnDontUse'), data: buildSttCallback('us', [engine.id], revision) });
+  const rows: SttButton[][] = [
+    commonRow,
+    [{ text: translate('stt.btn.timeoutValue', { value: formatTimeoutSummary(timeout) }), data: buildSttCallback('tm', [engine.id], revision) }],
+  ];
+  if (isLocal) {
+    rows.push(...buildLocalCardRows(input, engine, translate, revision));
+    const removal: SttButton[] = [{ text: translate('stt.btn.removeFromList'), data: buildSttCallback('ra', [engine.id], revision) }];
+    if (input.isLocalInstalled && !input.installing) removal.push({ text: translate('stt.btn.removeLocal'), data: buildSttCallback('fa', [engine.id], revision) });
+    rows.push(removal);
+  } else {
+    rows.push([{ text: translate(engine.apiKey ? 'stt.btn.changeKey' : 'stt.btn.addKey'), data: buildSttCallback('ky', [engine.id], revision) }]);
+    rows.push([{ text: translate('account.removeButton'), data: buildSttCallback('ra', [engine.id], revision) }]);
+  }
   rows.push([{ text: translate('fallback.backButton'), data: buildSttCallback('bk', [], revision) }]);
   return { text: withNotice(notice, lines.join('\n')), rows };
 }
@@ -355,7 +395,8 @@ export function buildSttScreen(screen: SttScreenId, input: SttScreenInput, trans
         [{ text: 'Groq', data: buildSttCallback('an', ['gq'], revision) }, { text: 'OpenAI', data: buildSttCallback('an', ['oa'], revision) }],
         [{ text: translate('stt.btn.customUrl'), data: buildSttCallback('an', ['ur'], revision) }],
       ];
-      if (input.isLocalInstalled && !settings.engines.some((engine) => engine.kind === 'gigaam')) {
+      // Always offered while it is not in the list: installed it joins at once, else the install is offered first.
+      if (!settings.engines.some((engine) => engine.kind === 'gigaam')) {
         rows.push([{ text: translate('stt.engine.gigaam'), data: buildSttCallback('an', ['gg'], revision) }]);
       }
       rows.push(buildBackRow(translate, revision));
@@ -374,16 +415,16 @@ export function buildSttScreen(screen: SttScreenId, input: SttScreenInput, trans
       return {
         text: withNotice(notice, translate('stt.idle.title')),
         rows: [
-          buildPresetRow(sttIdleMinutesPresets, settings.gigaam.idleMinutes, 'is', null, revision, (value) => formatIdleMinutes(value, translate)),
-          buildBackRow(translate, revision),
+          buildPresetRow(sttIdleMinutesPresets, settings.gigaam.idleMinutes, 'is', screen.engineId, revision, (value) => formatIdleMinutes(value, translate)),
+          buildBackRow(translate, revision, screen.engineId),
         ],
       };
     case 'workers':
       return {
         text: withNotice(notice, translate('stt.workers.title')),
         rows: [
-          buildPresetRow(sttGigaamWorkerChoices, settings.gigaam.workers, 'ws', null, revision, (value) => value.toString()),
-          buildBackRow(translate, revision),
+          buildPresetRow(sttGigaamWorkerChoices, settings.gigaam.workers, 'ws', screen.engineId, revision, (value) => value.toString()),
+          buildBackRow(translate, revision, screen.engineId),
         ],
       };
     case 'enableConfirm':
@@ -398,7 +439,7 @@ export function buildSttScreen(screen: SttScreenId, input: SttScreenInput, trans
       const engine = settings.engines.find((candidate) => candidate.id === screen.engineId);
       if (!engine) return null;
       return {
-        text: withNotice(notice, translate('stt.removeEngine.confirm', { name: getSttEngineName(engine, translate) })),
+        text: withNotice(notice, engine.kind === 'gigaam' ? translate('stt.removeEngine.confirmLocal') : translate('stt.removeEngine.confirm', { name: getSttEngineName(engine, translate) })),
         rows: [[
           { text: translate('stt.btn.removeConfirm'), data: buildSttCallback('rd', [engine.id], revision) },
           { text: translate('stt.btn.cancel'), data: buildSttCallback('oe', [engine.id], revision) },
@@ -409,8 +450,8 @@ export function buildSttScreen(screen: SttScreenId, input: SttScreenInput, trans
       return {
         text: withNotice(notice, translate('stt.removeFiles.confirm')),
         rows: [[
-          { text: translate('stt.btn.removeConfirm'), data: buildSttCallback('fd', [], revision) },
-          { text: translate('stt.btn.cancel'), data: buildSttCallback('bk', [], revision) },
+          { text: translate('stt.btn.removeConfirm'), data: buildSttCallback('fd', [screen.engineId], revision) },
+          { text: translate('stt.btn.cancel'), data: buildSttCallback('oe', [screen.engineId], revision) },
         ]],
       };
     case 'keyChoice':
@@ -475,7 +516,8 @@ export type SttActionOutcome =
   | { kind: 'armKey'; target: SttKeyTarget }
   | { kind: 'armUrl' }
   | { kind: 'cancelInput' }
-  | { kind: 'effect'; effect: SttEffect };
+  /** `screen`: what to show once the effect is done (default: the main screen). */
+  | { kind: 'effect'; effect: SttEffect; screen?: SttScreenId };
 
 export interface SttReducerContext {
   config: SttConfigFile;
@@ -495,6 +537,20 @@ function parseNumberArg(value: string | undefined): number | null {
 }
 
 /**
+ * @description «GigaAM (local)» in the add menu: already installed → it joins the list first and its card opens;
+ * an install running → attach to its progress; not installed → the install confirmation (the engine joins the list,
+ * and its card opens, when the install ends).
+ */
+function addLocalEngine(config: SttConfigFile, context: SttReducerContext): SttActionOutcome {
+  if (config.engines.some((engine) => engine.kind === 'gigaam')) return { kind: 'stale' };
+  if (context.isLocalInstalling) return { kind: 'effect', effect: 'attachInstall' };
+  if (!context.isLocalInstalled) return { kind: 'show', screen: { id: 'enableConfirm' } };
+  const added = addSttEngine(config, { kind: 'gigaam' });
+  if (!added.ok || added.engineId === undefined) return { kind: 'stale' };
+  return { kind: 'save', config: added.config, screen: { id: 'card', engineId: added.engineId }, notice: { code: 'stt.notice.localAdded' } };
+}
+
+/**
  * @description What a `/stt` tap does, decided from the callback and the current settings alone — no Telegram, no
  * disk: a screen to show, a config to save, an input to arm, or an effect to run. A revision that is not the
  * file's current one is `stale` for every tap that could change something.
@@ -505,6 +561,8 @@ export function reduceSttAction(parsed: ParsedSttCallback, context: SttReducerCo
   const [first, second] = parsed.args;
   const engine = config.engines.find((candidate) => candidate.id === first);
   const needsEngine = (run: (known: SttEngineSetting) => SttActionOutcome): SttActionOutcome => (engine ? run(engine) : { kind: 'stale' });
+  const needsLocalEngine = (run: (known: SttEngineSetting) => SttActionOutcome): SttActionOutcome => (engine?.kind === 'gigaam' ? run(engine) : { kind: 'stale' });
+  const canTouchFiles = context.isLocalInstalled && !context.isLocalInstalling;
 
   switch (parsed.action) {
     case 'bk': return { kind: 'show', screen: { id: 'main' } };
@@ -529,7 +587,7 @@ export function reduceSttAction(parsed: ParsedSttCallback, context: SttReducerCo
     case 'an':
       if (first === 'gq' || first === 'oa') return { kind: 'armKey', target: { kind: 'newKeyed', engineKind: first === 'gq' ? 'groq' : 'openai' } };
       if (first === 'ur') return { kind: 'armUrl' };
-      if (first === 'gg' && context.isLocalInstalled) return fromEdit(addSttEngine(config, { kind: 'gigaam' }), { id: 'main' }, { code: 'stt.notice.localAdded' });
+      if (first === 'gg') return addLocalEngine(config, context);
       return { kind: 'stale' };
     case 'ku':
       if (context.pendingUrl === null) return { kind: 'stale' };
@@ -542,22 +600,26 @@ export function reduceSttAction(parsed: ParsedSttCallback, context: SttReducerCo
       if (first !== undefined && sttLanguagePresets.includes(first)) return fromEdit(setSttLanguage(config, first), { id: 'main' });
       return { kind: 'stale' };
     }
-    case 'im': return { kind: 'show', screen: { id: 'idle' } };
+    case 'im': return needsLocalEngine((known) => ({ kind: 'show', screen: { id: 'idle', engineId: known.id } }));
     case 'is': {
-      const minutes = parseNumberArg(first);
-      return minutes !== null && sttIdleMinutesPresets.includes(minutes) ? fromEdit(setSttIdleMinutes(config, minutes), { id: 'main' }) : { kind: 'stale' };
+      const minutes = parseNumberArg(second);
+      return engine?.kind === 'gigaam' && minutes !== null && sttIdleMinutesPresets.includes(minutes)
+        ? fromEdit(setSttIdleMinutes(config, minutes), { id: 'card', engineId: engine.id })
+        : { kind: 'stale' };
     }
-    case 'wm': return { kind: 'show', screen: { id: 'workers' } };
+    case 'wm': return needsLocalEngine((known) => ({ kind: 'show', screen: { id: 'workers', engineId: known.id } }));
     case 'ws': {
-      const workers = parseNumberArg(first);
-      return workers !== null && sttGigaamWorkerChoices.includes(workers) ? fromEdit(setSttWorkers(config, workers), { id: 'main' }) : { kind: 'stale' };
+      const workers = parseNumberArg(second);
+      return engine?.kind === 'gigaam' && workers !== null && sttGigaamWorkerChoices.includes(workers)
+        ? fromEdit(setSttWorkers(config, workers), { id: 'card', engineId: engine.id })
+        : { kind: 'stale' };
     }
-    case 'rt': return { kind: 'effect', effect: 'resetGuard' };
+    case 'rt': return needsLocalEngine((known) => ({ kind: 'effect', effect: 'resetGuard', screen: { id: 'card', engineId: known.id } }));
     case 'ec': return context.isLocalInstalled || context.isLocalInstalling ? { kind: 'stale' } : { kind: 'show', screen: { id: 'enableConfirm' } };
     case 'ei':
     case 'er': return context.isLocalInstalled || context.isLocalInstalling ? { kind: 'stale' } : { kind: 'effect', effect: 'install' };
     case 'ip': return context.isLocalInstalling ? { kind: 'effect', effect: 'attachInstall' } : { kind: 'stale' };
-    case 'fa': return context.isLocalInstalled && !context.isLocalInstalling ? { kind: 'show', screen: { id: 'removeFilesConfirm' } } : { kind: 'stale' };
-    case 'fd': return context.isLocalInstalled && !context.isLocalInstalling ? { kind: 'effect', effect: 'removeFiles' } : { kind: 'stale' };
+    case 'fa': return needsLocalEngine((known) => (canTouchFiles ? { kind: 'show', screen: { id: 'removeFilesConfirm', engineId: known.id } } : { kind: 'stale' }));
+    case 'fd': return needsLocalEngine(() => (canTouchFiles ? { kind: 'effect', effect: 'removeFiles' } : { kind: 'stale' }));
   }
 }

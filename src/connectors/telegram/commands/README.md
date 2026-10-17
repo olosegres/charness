@@ -203,7 +203,10 @@ its text gains the same `handover.note` line.
 ## `stt.ts`
 
 `/stt` (hidden aliases `/voice`, `/speech`) and its buttons `stt_<action>[_<arg>…]_<revision>` (every button matches
-`sttCallbackRe`, at most 64 bytes): the voice-recognition settings on one screen, instance-wide, from any topic. The
+`sttCallbackRe`, at most 64 bytes): the voice-recognition settings, instance-wide, from any topic. The main screen holds only
+what is about recognition as a whole (the engine list with the local engine's short state on its row, Add engine, Language,
+Close); each engine has a CARD — the common controls plus what its kind adds (a key; or, for the local engine, status, RAM, idle
+exit, workers, try again, remove from list, remove model files). Idle and workers are on the local card and nowhere else. The
 module renders and runs effects; WHAT a tap does is decided by pure code in `src/stt/` — `sttScreenPlan.ts` (the
 screens as data, the callback codec, `reduceSttAction`: a tap → show a screen / save a config / arm an input /
 run an effect) and `sttConfigEdit.ts` (the edits, validated by the same schema as a hand edit). Every callback bakes in
@@ -221,11 +224,13 @@ is deleted and re-asked. A slash command, the cancel button, a topic teardown or
 prompt message) ends the step. While a step is awaited (`getAwaitedSttStep`) the output-trace `recv` preview is
 `[redacted: speech engine key]` (key) or `[redacted: speech engine address]` (address, which may carry a login).
 
-**Install**: «Enable local recognition» → a confirm screen with the cost → `Install` hands the SAME message to the install
-job (`installJobs.start`, the progress is edited into it and remembered in `state.json` with `shouldEnableOnDone`); the
+**Install**: «Add engine → GigaAM (local)» (offered whenever it is not in the list) — installed: it joins first and its card
+opens; an install running: attach to it; not installed: a confirm screen with the cost → `Install` hands the SAME message to the
+install job (`installJobs.start`, the progress is edited into it and remembered in `state.json` with `shouldEnableOnDone`); the
 tap handler never waits for the job. EVERY end — the tap's own continuation, a boot re-attach to a running job, a job that
-finished while the bot was down — goes through `finishInstall`: on success (flag set) the local engine joins the list
-first (a full list or an unwritable file is said in the message, never «ready»), on failure the message shows the error,
-the log tail and `Retry`; the message is forgotten last. `resumeSttInstallAtBoot` / `startSttAutoInstall` are the
-boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). «Remove local engine files» stops the sidecar, deletes the install and drops the
-engine from the list; it is refused while an install runs.
+finished while the bot was down — goes through `finishInstall`: on success the local engine joins the list first and the message
+becomes its card (a full list or an unwritable file is said in the message, never «ready»), on failure the message shows the
+error, the log tail and `Retry`; the message is forgotten last. `resumeSttInstallAtBoot` / `startSttAutoInstall` are the
+boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). On the local
+card «🗑 Remove model files» asks first (Cancel returns to the card), stops the sidecar, deletes the install and drops the engine
+from the list (refused while an install runs); «Remove from list» keeps the files.

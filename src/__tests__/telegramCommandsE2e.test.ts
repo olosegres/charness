@@ -21,7 +21,9 @@
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
  *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
  *     such a rung again, while a rung of a backend already in the list goes in at once
- *   → `/stt`: the screen next to the instance's env file (also as `/voice`), a custom server added through the typed
+ *   → `/stt`: the screen next to the instance's env file (also as `/voice`) with only the engine list, Add engine and Language;
+ *     the local engine on its own card (added through Add engine, idle and workers there only, remove from list / remove model
+ *     files); a custom server added through the typed
  *     steps (an address with a login is refused and deleted, the pasted key is deleted, neither reaches a bot
  *     message or the output trace), a tap that saves, a keyboard from before a hand edit that is refused, and a
  *     slash command that ends an armed step
@@ -54,6 +56,8 @@ import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegr
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { getSttPaths } from '../stt/sttInstall';
+import { writeInstalledMarker } from './fixtures/sttInstallFiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
 import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
@@ -266,6 +270,7 @@ function getSttConfigFilePath(): string {
 interface SttFileSlice {
   language?: string | null;
   engines: Array<{ id: string; kind: string; url?: string; apiKey?: string; isDisabled?: boolean }>;
+  gigaam?: { idleMinutes: number; workers: number };
 }
 
 function readSttFile(): SttFileSlice {
@@ -604,17 +609,80 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
 
   // ── /stt ─────────────────────────────────────────────────────────────
 
-  it('/stt opens the screen, also as /voice: it names the settings file beside the env file and offers Add engine and Enable local recognition', async () => {
+  it('/stt opens the screen, also as /voice: it names the settings file beside the env file and offers only Add engine, Language and Close — nothing of the local engine', async () => {
     const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
     assert.ok(screen.text.includes(`no file yet (${getSttConfigFilePath()})`), screen.text);
     assert.match(screen.text, /No engines yet/);
-    findButtonData(screen, 'stt_ad_');
-    findButtonData(screen, 'stt_ec_');
+    assert.deepEqual(topic.getKeyboardLabels(screen), [['➕ Add engine'], ['🌐 Language: auto'], ['✖️ Close']]);
     assert.ok(findButtonData(screen, 'stt_ad_').length <= 64, 'the callback data fits Telegram\'s 64 bytes');
     await topic.sendAndAwaitReply('/voice', '🎙 Voice recognition');
     const menuCommands = listMenuCommandNames();
     assert.ok(menuCommands.includes('stt'), 'the menu lists /stt');
     assert.ok(!menuCommands.includes('voice') && !menuCommands.includes('speech'), 'the aliases stay hidden');
+  });
+
+  it('the local engine lives on its own card: Add engine → GigaAM opens it, idle and workers are there and nowhere else, "Remove from list" keeps the files, "Remove model files" asks, deletes them and the row', async () => {
+    writeInstalledMarker(getLayout().dataDir); // the model files are in place: adding needs no install
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    await tapButton(screen, 'stt_ad_');
+    await topic.waitForMessageText('the add menu', screen, (text) => text.includes('Which engine do you want to add?'));
+    assert.ok(topic.getKeyboardLabels(screen).flat().includes('GigaAM (local)'), 'offered while it is not in the list');
+    await tapButton(screen, 'stt_an_gg_');
+    await topic.waitForMessageText('GigaAM\'s card', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+    assert.match(screen.text, /Status: ready · stopped/);
+    assert.match(screen.text, /up to ~0\.9 GB on a long voice note/);
+    const cardLabels = topic.getKeyboardLabels(screen).flat();
+    for (const label of ['⏱ Timeout: 10s+25%', '⏱ Exit after idle: 15 min', '⚙️ Workers: 4', 'Remove from list', '🗑 Remove model files', '⬅️ Back']) {
+      assert.ok(cardLabels.includes(label), `${label} in ${cardLabels.join(' | ')}`);
+    }
+    assert.deepEqual(readSttFile().engines.map((engine) => engine.kind), ['gigaam']);
+
+    // Idle exit is set here and nowhere else; the picker returns to the card.
+    await tapButton(screen, 'stt_im_g_');
+    await topic.waitForMessageText('the idle picker', screen, (text) => text.includes('How long may the local engine sit idle'));
+    await tapButton(screen, 'stt_is_g_5_');
+    await topic.waitForMessageText('the card again', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+    assert.equal(readSttFile().gigaam?.idleMinutes, 5);
+    assert.ok(topic.getKeyboardLabels(screen).flat().includes('⏱ Exit after idle: 5 min'));
+    await tapButton(screen, 'stt_im_g_');
+    await topic.waitForMessageText('the idle picker', screen, (text) => text.includes('How long may the local engine sit idle'));
+    await tapButton(screen, 'stt_is_g_15_');
+    await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
+
+    // The main screen: the state rides on the row, no local control anywhere.
+    await tapButton(screen, 'stt_bk_');
+    await topic.waitForMessageText('the main screen', screen, (text) => text.includes('Engines, tried in this order'));
+    assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['1. GigaAM (local) · stopped · 10s+25% · ✓', '➕ Add engine', '🌐 Language: auto', '✖️ Close']);
+
+    // Remove from list: the files stay, the main screen forgets the engine, Add engine brings it back with no install.
+    await tapButton(screen, 'stt_oe_g_');
+    await topic.waitForMessageText('the card', screen, (text) => text.includes('GigaAM v3'));
+    await tapButton(screen, 'stt_ra_g_');
+    await topic.waitForMessageText('the confirmation', screen, (text) => text.includes('Its files stay on disk'));
+    await tapButton(screen, 'stt_rd_g_');
+    await topic.waitForMessageText('the list without it', screen, (text) => text.includes('No engines yet'));
+    assert.deepEqual(readSttFile().engines, []);
+    assert.ok(fs.existsSync(getSttPaths(getLayout().dataDir).markerFile), 'the model files are still there');
+    assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['➕ Add engine', '🌐 Language: auto', '✖️ Close']);
+    await tapButton(screen, 'stt_ad_');
+    await topic.waitForMessageText('the add menu', screen, (text) => text.includes('Which engine do you want to add?'));
+    await tapButton(screen, 'stt_an_gg_');
+    await topic.waitForMessageText('GigaAM\'s card', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+
+    // Remove model files: asks first (Cancel returns to the card), then the files and the row go.
+    await tapButton(screen, 'stt_fa_g_');
+    await topic.waitForMessageText('the confirmation', screen, (text) => text.includes('Remove the model files'));
+    assert.ok(fs.existsSync(getSttPaths(getLayout().dataDir).markerFile), 'asking removes nothing');
+    await tapButton(screen, 'stt_oe_g_');
+    await topic.waitForMessageText('the card after Cancel', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+    await tapButton(screen, 'stt_fa_g_');
+    await topic.waitForMessageText('the confirmation', screen, (text) => text.includes('Remove the model files'));
+    const answer = await tapButton(screen, 'stt_fd_g_');
+    assert.equal(answer, 'Local engine files removed.');
+    await topic.waitForMessageText('the main screen without the engine', screen, (text) => text.includes('No engines yet'));
+    assert.equal(fs.existsSync(getSttPaths(getLayout().dataDir).markerFile), false, 'the model files are gone');
+    assert.deepEqual(readSttFile().engines, []);
+    assert.deepEqual(topic.getKeyboardLabels(screen).flat(), ['➕ Add engine', '🌐 Language: auto', '✖️ Close']);
   });
 
   it('a custom server through the typed steps: the address with a login and the pasted key are deleted and never reach a bot message or the output trace', async () => {
@@ -656,6 +724,9 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
     await tapButton(screen, 'stt_oe_');
     await topic.waitForMessageText('the engine card', screen, (text) => text.includes('Ready.'));
+    const cloudLabels = topic.getKeyboardLabels(screen).flat();
+    assert.ok(cloudLabels.includes('⏱ Timeout: 10s+25%'), cloudLabels.join(' | '));
+    assert.ok(!cloudLabels.some((label) => /Exit after idle|Workers|model files|Remove from list/.test(label)), `a cloud engine\'s card has the common controls and its key only: ${cloudLabels.join(' | ')}`);
     await tapButton(screen, 'stt_us_');
     await topic.waitForMessageText('the card re-rendered as switched off', screen, (text) => text.includes('Not in use'));
     assert.equal(readSttFile().engines[0].isDisabled, true, 'the tap is saved');

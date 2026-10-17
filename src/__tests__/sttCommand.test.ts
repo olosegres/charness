@@ -2,7 +2,7 @@
  * @description The `/stt` command module end to end, with fake Telegram ports and a real `stt.json` on disk:
  * the screen opens, taps edit and save (a stale keyboard is refused), a key is accepted only when plausible,
  * deleted from the topic BEFORE it is used and never appears in any message the bot sends, a custom address is
- * completed and asked for a key, the typed steps end by command, cancel or timeout, "Enable local recognition"
+ * completed and asked for a key, the typed steps end by command, cancel or timeout, "Add engine → GigaAM (local)"
  * hands its message to the install job and puts the engine first, and removing the files drops the engine.
  */
 
@@ -188,8 +188,11 @@ test('/stt opens the main screen as a new message in the topic, whatever the top
   await commandHandler({} as Context, key);
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Voice recognition/);
-  assert.ok(sent[0].buttons.some((button) => button.startsWith('1. Groq · 10s+25% · ✓|stt_oe_q1_')), sent[0].buttons.join('\n'));
-  assert.ok(sent[0].buttons.some((button) => button.startsWith('🖥 Enable local recognition|stt_ec_')));
+  assert.deepEqual(
+    sent[0].buttons.map((button) => button.replace(/_[0-9a-f]{6}$/, '')),
+    ['1. Groq · 10s+25% · ✓|stt_oe_q1', '➕ Add engine|stt_ad', '🌐 Language: auto|stt_lg', '✖️ Close|stt_cl'],
+    'nothing of the local engine on the main screen',
+  );
   assert.ok(!sent.some((message) => message.text.includes(sampleKey)), 'the key is never printed');
 });
 
@@ -353,25 +356,62 @@ test('re-arming (a wrong paste) restarts the ten minutes instead of leaving the 
   assert.equal(feature.getAwaitedSttStep(key), 'key', 'the first timer was replaced');
 });
 
-test('Enable local recognition: confirm screen, then Install hands the SAME message to the job; on success the engine is first', async () => {
+test('Add engine → GigaAM when it is not installed: confirm screen, then Install hands the SAME message to the job; at the end the message is the local card and the engine is first', async () => {
   writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
   createFeature();
-  await tap('ec');
+  await tap('ad');
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('GigaAM (local)|stt_an_gg_')), 'offered although it is not installed');
+  await tap('an', ['gg']);
   assert.match(lastEdit().text, /400 MB/);
+  assert.match(lastEdit().text, /up to about 0\.9 GB for long ones/);
   assert.match(lastEdit().text, /Russian only/);
   assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬇️ Install|stt_ei_')));
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1'], 'asking changes nothing');
 
   await tap('ei');
   await settle();
   assert.equal(installRuns.length, 1);
   const installEdits = edits.filter((edit) => edit.id === messageId);
   assert.ok(installEdits.some((edit) => edit.text.includes('Downloading the model 1/216 MB')), installEdits.map((edit) => edit.text).join(' | '));
-  assert.ok(installEdits.some((edit) => edit.text.includes('Local recognition is ready')));
   assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1'], 'the local engine joins first');
   assert.ok(ownerCalls.includes('applySettingsChange'));
-  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')), 'the finished message offers the settings');
+  assert.equal(lastEdit().id, messageId, 'the same message');
+  assertLocalCardOpened(lastEdit(), 'Local recognition is ready');
   assert.equal(storedInstallMessage, null, 'the install message is forgotten once it ended');
   assert.ok(sent.length === 0, 'no extra message: the install lives in the one the user tapped');
+});
+
+/** The message is GigaAM's card: its title, status, RAM line and its own controls next to the common ones. */
+function assertLocalCardOpened(edit: { text: string; buttons: string[] }, notice: string): void {
+  assert.ok(edit.text.includes(notice), edit.text);
+  assert.match(edit.text, /GigaAM v3 — local, Russian only\nStatus: ready · stopped/);
+  assert.match(edit.text, /up to ~0\.9 GB on a long voice note/);
+  for (const prefix of ['⏱ Timeout: 10s+25%|stt_tm_g_', '⏱ Exit after idle: 15 min|stt_im_g_', '⚙️ Workers: 4|stt_wm_g_', 'Remove from list|stt_ra_g_', '🗑 Remove model files|stt_fa_g_', '⬅️ Back|stt_bk_']) {
+    assert.ok(edit.buttons.some((button) => button.startsWith(prefix)), `${prefix} in ${edit.buttons.join(' / ')}`);
+  }
+}
+
+test('Add engine → GigaAM when it is already installed: it joins first at once and its card opens', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeInstalledMarker(dataDir);
+  createFeature();
+  await tap('ad');
+  const { answers } = await tap('an', ['gg']);
+  assert.deepEqual(answers, ['Local engine added first.']);
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1']);
+  assert.equal(installRuns.length, 0, 'nothing to install');
+  assertLocalCardOpened(lastEdit(), '');
+  assert.ok(ownerCalls.includes('applySettingsChange'));
+});
+
+test('Add engine → GigaAM while an install is already running attaches to it instead of starting another', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  holdInstallLock(dataDir);
+  createFeature();
+  await tap('an', ['gg']);
+  await settle();
+  assert.equal(installRuns.length, 1, 'the job was attached to, through the same message');
+  assert.ok(edits.some((edit) => edit.id === messageId && edit.text.includes('Downloading the model')));
 });
 
 test('a failed install shows the error and the log tail with Retry, and leaves the list alone', async () => {
@@ -450,7 +490,7 @@ test('boot, the install job still runs (a reload mid-install): the remembered me
   assert.ok(ownEdits.some((edit) => edit.text.includes('Downloading the model 1/216 MB')), ownEdits.map((edit) => edit.text).join(' | '));
   assert.equal(lastEdit().id, 321);
   assert.match(lastEdit().text, /Local recognition is ready/);
-  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')), 'the re-attached message keeps its buttons');
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬅️ Back|stt_bk_')), 'the re-attached message keeps its buttons');
   assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1'], 'the local engine joined although this is not the process that started the install');
   assert.equal(storedInstallMessage, null);
   assert.equal(sent.length, 0);
@@ -479,7 +519,7 @@ test('boot, the install FINISHED while the bot was down: the frozen message beco
   assert.equal(installRuns.length, 0, 'no job is started for an install that already ended');
   assert.equal(lastEdit().id, 321);
   assert.match(lastEdit().text, /Local recognition is ready/);
-  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬅️ Back|stt_bk_')));
   assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1']);
   assert.equal(storedInstallMessage, null);
 });
@@ -532,7 +572,7 @@ test('boot, a remembered message that was deleted gets a fresh one with the outc
   await createFeature({ editThreadMessage: async () => false }).resumeSttInstallAtBoot();
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Local recognition is ready/);
-  assert.ok(sent[0].buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.ok(sent[0].buttons.some((button) => button.startsWith('⬅️ Back|stt_bk_')));
   assert.equal(storedInstallMessage, null);
 });
 
@@ -552,7 +592,7 @@ test('boot, stt.json names the local engine before it is installed: the install 
   assert.match(sent[0].text, /Downloading the model 1\/216 MB/);
   assert.match(lastEdit().text, /Local recognition is ready/);
   assert.equal(lastEdit().id, sent[0].id, 'the same message is edited into the outcome');
-  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Settings|stt_bk_')));
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⬅️ Back|stt_bk_')));
   assert.deepEqual(readConfig().engines, [{ id: 'g', kind: 'gigaam' }]);
   assert.equal(storedInstallMessage, null);
 });
@@ -593,39 +633,86 @@ test('the install button is refused once the engine is installed (a stale screen
   assert.equal(installRuns.length, 0);
 });
 
-test('Remove local engine files: asks first, then stops the sidecar, deletes the install and drops the engine from the list', async () => {
+test('Remove model files (on the local card): asks first and Cancel returns to the card; then it stops the sidecar, deletes the files and drops the row', async () => {
   writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }] });
   writeInstalledMarker(dataDir);
   createFeature();
-  await tap('fa');
-  assert.match(lastEdit().text, /Remove the local engine files/);
+  await tap('oe', ['g']);
+  await tap('fa', ['g']);
+  assert.match(lastEdit().text, /Remove the model files/);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('Cancel|stt_oe_g_')), 'Cancel goes back to the card');
   assert.ok(fs.existsSync(getSttPaths(dataDir).markerFile), 'asking removes nothing');
 
-  const { answers } = await tap('fd');
+  await tap('oe', ['g']);
+  assert.match(lastEdit().text, /^🖥 GigaAM v3/);
+  const { answers } = await tap('fd', ['g']);
   assert.deepEqual(answers, ['Local engine files removed.']);
   assert.deepEqual(ownerCalls.slice(0, 1), ['stop']);
   assert.equal(fs.existsSync(getSttPaths(dataDir).markerFile), false);
   assert.equal(fs.existsSync(getSttPaths(dataDir).venvDir), false);
   assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1']);
+  assert.match(lastEdit().text, /Voice recognition/, 'the main screen, without the row');
 });
 
-test('"Try again now" lifts the spawn-storm guard; Close deletes the screen; the language and idle pickers save', async () => {
+test('Remove from list keeps the files; the engine comes back through Add engine without another install', async () => {
+  writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeInstalledMarker(dataDir);
+  createFeature();
+  await tap('ra', ['g']);
+  assert.match(lastEdit().text, /Its files stay on disk/);
+  await tap('rd', ['g']);
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['q1']);
+  assert.ok(fs.existsSync(getSttPaths(dataDir).markerFile), 'the files stay');
+  assert.deepEqual(
+    lastEdit().buttons.map((button) => button.replace(/_[0-9a-f]{6}$/, '')),
+    ['1. Groq · 10s+25% · ✓|stt_oe_q1', '➕ Add engine|stt_ad', '🌐 Language: auto|stt_lg', '✖️ Close|stt_cl'],
+    'installed but not listed: nothing local on the main screen',
+  );
+
+  await tap('ad');
+  await tap('an', ['gg']);
+  assert.deepEqual(readConfig().engines.map((engine) => engine.id), ['g', 'q1']);
+  assert.equal(installRuns.length, 0);
+});
+
+test('"Try again now" (on the local card) lifts the spawn-storm guard and stays on the card; idle and workers pickers save and return to it; Close deletes the screen', async () => {
   writeConfig({ engines: [{ id: 'g', kind: 'gigaam' }] });
   writeInstalledMarker(dataDir);
   createFeature();
 
-  await tap('rt');
+  await tap('rt', ['g']);
   assert.ok(ownerCalls.includes('resetSpawnGuard'));
+  assert.match(lastEdit().text, /^🖥 GigaAM v3/);
 
   await tap('ls', ['ru']);
   assert.equal(readConfig().language, 'ru');
-  await tap('is', [0]);
+  await tap('im', ['g']);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('5 min|stt_is_g_5_')));
+  await tap('is', ['g', 0]);
   assert.equal(readConfig().gigaam.idleMinutes, 0);
-  await tap('ws', [8]);
+  assert.match(lastEdit().text, /^🖥 GigaAM v3/, 'back on the card');
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⏱ Exit after idle: never|stt_im_g_')));
+  await tap('ws', ['g', 8]);
   assert.equal(readConfig().gigaam.workers, 8);
+  assert.ok(lastEdit().buttons.some((button) => button.startsWith('⚙️ Workers: 8|stt_wm_g_')));
 
   await tap('cl');
   assert.deepEqual(deleted, [messageId]);
+});
+
+test('a cloud engine\'s card has no idle, workers or file controls — those exist only on the local card', async () => {
+  writeConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }, { id: 'g', kind: 'gigaam' }] });
+  writeInstalledMarker(dataDir);
+  createFeature();
+  await tap('oe', ['q1']);
+  assert.deepEqual(
+    lastEdit().buttons.map((button) => button.replace(/_[0-9a-f]{6}$/, '')),
+    ['⬇️ Down|stt_dn_q1', '🚫 Don\'t use|stt_us_q1', '⏱ Timeout: 10s+25%|stt_tm_q1', '🔑 Change key|stt_ky_q1', '🗑 Remove|stt_ra_q1', '⬅️ Back|stt_bk'],
+  );
+  for (const action of ['im', 'wm'] as const) {
+    const { answers } = await tap(action, ['q1']);
+    assert.deepEqual(answers, ['The settings changed — refreshed.'], `${action} on a cloud engine is refused`);
+  }
 });
 
 test('an unwritable stt.json answers "could not write", changes nothing and does not touch the process', async () => {
