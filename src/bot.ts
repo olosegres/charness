@@ -9466,8 +9466,11 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const labels = reAskedQuestionOptions.get(keyToString(key));
   const label = labels?.[optIdx];
   if (!label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
+  // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
+  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
-  if (!getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
+  if (!isStarting && !getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
     await ctx.answerCbQuery(t('agent.no_session'));
     return;
   }
@@ -9477,6 +9480,11 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
+  if (isStarting) {
+    noteThreadUserActivity(key);
+    await withThreadLocale(key, () => deliverPromptOrBuffer(key, label, true));
+    return;
+  }
   await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
 });
 

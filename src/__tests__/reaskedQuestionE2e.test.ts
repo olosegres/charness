@@ -11,6 +11,8 @@
  *     nothing is posted beside the toast
  *   → the same with the LONG option (longer than a toast holds): the toast is its start, the label is posted in full
  *     as ONE message, and the whole label reaches the agent
+ *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
+ *     label is held and still reaches the agent
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -86,6 +88,8 @@ function getAgentPrompts(label: string): FakeClaudePrompt[] {
 
 /** The line the bot logs once the idle fire has stopped the agent's process (the conversation then sleeps). */
 const idleStopLine = 'process stopped; the session sleeps';
+/** The text the fake agent streams for a prompt naming no label (`Working on <label>.`): a re-asked question's answer is one. */
+const unlabelledTurnText = 'Working on unknown.';
 
 function countIdleStops(): number {
   return getCharness().output.split(idleStopLine).length - 1;
@@ -93,10 +97,11 @@ function countIdleStops(): number {
 
 /**
  * Put the question (`ask` mode) and leave it unanswered until the idle fire rejects it, compacts and re-asks it: resolves
- * the re-asked message, whose buttons are `reask_<i>`, once the fire has also stopped the process — the question is posted
- * just BEFORE the stop, and a tap inside that window reaches a dying process instead of waking a sleeping conversation.
+ * the re-asked message, whose buttons are `reask_<i>`, by default once the fire has also stopped the process, so the tap
+ * wakes a sleeping conversation. The question is posted just BEFORE the stop: `isIdleStopAwaited: false` resolves at once,
+ * for a tap that may land before, inside or after the stop.
  */
-async function waitForReaskedQuestion(promptLabel: string): Promise<FakeTelegramMessage> {
+async function waitForReaskedQuestion(promptLabel: string, options: { isIdleStopAwaited: boolean } = { isIdleStopAwaited: true }): Promise<FakeTelegramMessage> {
   const idleStopsBefore = countIdleStops();
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
   await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
@@ -106,6 +111,7 @@ async function waitForReaskedQuestion(promptLabel: string): Promise<FakeTelegram
   assert.match(reasked.text, /You still have a pending question/);
   assert.match(reasked.text, new RegExp(fakeAskQuestion.question.replace('?', '\\?')));
   assert.deepEqual(topic.getKeyboardData(reasked), [['reask_0'], ['reask_1']], 'one button per option');
+  if (!options.isIdleStopAwaited) return reasked;
   await getCharness().waitFor(`the idle stop that follows the re-ask of ${promptLabel}`, agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
   return reasked;
 }
@@ -189,5 +195,18 @@ describe('A pending question the idle compaction re-asks, end to end: built char
       1,
       'the record of the answer is one message',
     );
+  });
+
+  it('a tap the moment the re-asked question appears — before, inside or after the stop that follows it — still reaches the agent', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-3 [fake:answer] a third turn to compress');
+    await getCharness().waitFor('the third warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('WARM-3').length > 0);
+    const promptsBefore = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+
+    const reasked = await waitForReaskedQuestion('REASK-3', { isIdleStopAwaited: false });
+    const toast = await topic.tapAndAwaitAnswer(reasked, 'reask_0');
+    assert.equal(toast, fakeAskQuestion.shortOptionLabel);
+    await getCharness().waitFor('the label to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > promptsBefore);
+    // A process being stopped may still read the prompt; only a live one ANSWERS it.
+    await waitingTopic.waitForMessage('the agent to answer the label', (message) => message.message_id > reasked.message_id && message.text.includes(unlabelledTurnText));
   });
 });

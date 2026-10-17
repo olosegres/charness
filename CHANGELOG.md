@@ -45,6 +45,10 @@ moves the topic the way a usage limit does (the other backend's parked conversat
 first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once. `/limits_autoswitch` asks
 the same way before a rung of a backend the list does not use yet is added or included again.
 
+**An answer tapped on a re-asked question no longer gets lost.** The idle compaction posts the re-asked question just
+before it stops the agent's process; a tap while that process was being stopped went to it and vanished. Such a tap is
+now held and reaches the agent once the conversation is resumed, like a message typed at that moment.
+
 ### Upgrading
 - **`/limits` is a different screen now.** The fallback list and the two settings are in `/limits_autoswitch`; `/limits`
   is the switch board. Old buttons on an old `/limits` message keep working and re-render that message as

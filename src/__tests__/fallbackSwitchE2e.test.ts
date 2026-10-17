@@ -460,6 +460,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
     // End the wait the way the operator does («skip once» on the board), so the next step starts clean.
     const again = await openBoard(fourthTopic, fourthTopicThreadId);
+    assert.equal(fourthTopic.getKeyboardLabels(again.message).flat().at(-1), '⏭ Skip once', 'the armed wait offers «skip once»');
     const skipData = fourthTopic.getKeyboardData(again.message).flat().at(-1) ?? '';
     await fourthTopic.tapAndAwaitAnswer(again.message, skipData);
     await getCharness().waitFor('the wait to be skipped', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
