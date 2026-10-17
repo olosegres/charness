@@ -348,4 +348,21 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     assert.deepEqual(getFlagValues(respawned.argv, '--effort'), ['max']);
     assert.deepEqual(getFlagValues(respawned.argv, '--model'), ['sonnet'], 'the model the adopted process ran rides the re-spawn');
   });
+
+  it('a pick while no agent runs is stored and answered with the notice whole, and the pinned banner follows it — tapped or typed', async () => {
+    await picker.sendAndAwaitReply('/quit', 'stopped');
+    // The banner of a stopped topic still names the topic's effort (its own pick, max, from the last step).
+    const banner = await picker.waitForMessage('the banner of the stopped topic', (message) => message.text.startsWith(`📁 ${pickerFolder} · Claude Code`) && message.text.includes('⚙️ max') && message.text.endsWith('⚪ idle'));
+
+    const screen = await picker.sendAndAwaitReply('/effort', 'Effort in this topic: max — set for this topic');
+    const toast = await picker.tapAndAwaitAnswer(screen, 'effort_xhigh');
+    assert.equal(toast, 'ℹ️ Level saved. No agent running — it will apply on next start.', 'the notice reaches the user whole, not cut and not as an error');
+    await picker.waitForMessageText('the picker shows the stored pick', screen, (text) => text === '⚙️ Effort in this topic: xhigh — set for this topic');
+    await picker.waitForMessageText('the banner follows the tapped pick', banner, (text) => text.includes('⚙️ xhigh') && !text.includes('⚙️ max'));
+    assert.equal(readEffortPicks()[pickerKeyString], 'xhigh');
+
+    await picker.sendAndAwaitReply('/effort high', 'No agent running');
+    await picker.waitForMessageText('the banner follows the typed pick', banner, (text) => text.includes('⚙️ high') && !text.includes('⚙️ xhigh'));
+    assert.equal(readEffortPicks()[pickerKeyString], 'high');
+  });
 });

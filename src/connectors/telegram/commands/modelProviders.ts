@@ -63,6 +63,9 @@ export interface PendingProviderConnect {
 
 const defaultConnectProviderId = 'openai';
 
+/** The most characters Telegram shows in the toast a button tap is answered with (`answerCallbackQuery`'s `text`). */
+const callbackToastMaxLength = 200;
+
 interface ConnectCommandArgs {
   providerId: string;
   apiKey: string | null;
@@ -842,6 +845,20 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   }
 
   /**
+   * @description Answer a button tap with `text` whole. A toast holds {@link callbackToastMaxLength} characters: a
+   * longer text is cut for the toast (with an ellipsis, on a character boundary) and posted in full as a message —
+   * a notice that says what to do must never reach the user half-sentence.
+   */
+  async function answerCallbackWithWholeText(ctx: Context, key: SessionKey, text: string): Promise<void> {
+    if (text.length <= callbackToastMaxLength) {
+      await ctx.answerCbQuery(text);
+      return;
+    }
+    await ctx.answerCbQuery(`${Array.from(text).slice(0, callbackToastMaxLength - 1).join('')}…`);
+    await replyToThread(key, text);
+  }
+
+  /**
    * @description Re-render the picker a tap came from, text and buttons: the ✓ AND the level named in the text
    * (and its source) follow the new state instead of staying on the previous one. "Message is not modified" (the
    * same tap twice) is swallowed by the shared edit helper.
@@ -958,13 +975,11 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       if (args) {
         const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
         if (wakeNotice) await replyToThread(key, wakeNotice);
-        const err = await adapter.setEffort(key, args);
-        if (err) {
-          await replyToThread(key, err);
-        } else {
-          await replyToThread(key, t('effort.set_success', { level: args }));
-          await updatePinnedStatus(key).catch(() => {});
-        }
+        const notice = await adapter.setEffort(key, args);
+        await replyToThread(key, notice ?? t('effort.set_success', { level: args }));
+        // A pick the adapter stored but could not apply yet (no agent running) answers with a notice and is a pick all
+        // the same: the banner follows it. Only a refusal leaves the banner as it was.
+        if (notice === null || adapter.getOwnEffort?.(key) === args) await updatePinnedStatus(key).catch(() => {});
         return;
       }
 
@@ -1198,24 +1213,26 @@ export function createModelProviders(ports: ModelProvidersPorts) {
 
       const adapter = getThreadAdapter(key);
       // No `checkIsActive` gate — effort is persisted pre-session (mirrors the
-      // `/effort` command and `/model`). The adapter returns its own notice if the
-      // pick can't apply live; we surface it via `cb.effort_error` below.
+      // `/effort` command and `/model`). The adapter returns its own notice when the
+      // pick can't apply live; it is shown whole (see below).
       if (!adapter.setEffort) {
         await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
         return;
       }
       const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
       if (wakeNotice) await replyToThread(key, wakeNotice);
-      const err = await adapter.setEffort(key, level);
-      if (err) {
-        await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) }));
-        // A pick the adapter stored but could not apply yet (no agent running) comes back as a notice: the
-        // picker still has to show the new level and that it is the topic's own.
-        if (adapter.getOwnEffort?.(key) === level) await rerenderEffortPicker(ctx, key);
+      const notice = await adapter.setEffort(key, level);
+      if (notice === null) {
+        await ctx.answerCbQuery(t('cb.effort_set', { level }));
+        await replyToThread(key, t('effort.set_success', { level }));
+      } else if (adapter.getOwnEffort?.(key) === level) {
+        // A pick the adapter STORED but could not apply yet (no agent running) comes back as a notice: the pick is
+        // made, so what follows a pick follows this one too — only the toast carries the notice instead of "set".
+        await answerCallbackWithWholeText(ctx, key, notice);
+      } else {
+        await answerCallbackWithWholeText(ctx, key, t('cb.effort_error', { error: notice }));
         return;
       }
-      await ctx.answerCbQuery(t('cb.effort_set', { level }));
-      await replyToThread(key, t('effort.set_success', { level }));
       await updatePinnedStatus(key).catch(() => {});
       await rerenderEffortPicker(ctx, key);
     });
@@ -1231,7 +1248,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         return;
       }
       const err = await adapter.clearEffort(key);
-      if (err) { await ctx.answerCbQuery(t('cb.effort_error', { error: err.slice(0, 50) })); return; }
+      if (err) { await answerCallbackWithWholeText(ctx, key, t('cb.effort_error', { error: err })); return; }
       const { inForce: level } = getTopicEffortAmongLevels(key, adapter, await listTopicEffortLevels(key, adapter));
       await ctx.answerCbQuery(t('cb.effort_same', { level }));
       await replyToThread(key, t('effort.sameAsGeneralConfirmation', { level }));

@@ -59,6 +59,8 @@ const expectedActionPatterns = [
   effortSameCallback,
 ];
 const secretMessageId = 77;
+/** What the Claude backend answers to a pick while no agent runs: the pick IS stored, the notice says when it applies. */
+const noAgentNotice = 'ℹ️ Level saved. No agent running — it will apply on next start.';
 
 interface SignInRequest {
   key: SessionKey;
@@ -172,17 +174,80 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     assert.deepEqual(harness.getKeyboardLabels(picker).flat().filter((label) => label.includes('✓') || label.startsWith('As in')), ['medium ✓', 'As in General (medium)']);
     assert.ok(picker?.messageId);
     const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+    const bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
     await harness.tapButton(picker.messageId, 'effort_high');
     assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1);
-    assert.match(harness.fakeTelegram.callbackAnswers.at(-1) ?? '', /Level saved/);
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), noAgentNotice, 'the notice reaches the user whole, not as an "Error:" cut at 50 characters');
+    assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore + 1, 'a pick that is only stored (no agent running) refreshes the banner like any pick');
     const rerendered = harness.edits.at(-1);
     assert.equal(rerendered?.messageId, picker.messageId, 'the picker the tap came from is edited in place');
     assert.equal(rerendered?.text, '⚙️ Effort in this topic: high — set for this topic');
     assert.ok(harness.getKeyboardLabels(rerendered).flat().includes('high ✓'));
   });
 
+  it('a typed `/effort <level>` with no agent running answers with the notice and refreshes the banner; a refused level leaves it alone', async () => {
+    clearEffortPref(harness.key);
+    const bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
+    await harness.runCommand('effort', 'max');
+    assert.equal(harness.replies.at(-1)?.text, noAgentNotice);
+    assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore + 1, 'the pick is stored: the banner follows');
+
+    await harness.runCommand('effort', 'turbo');
+    assert.match(harness.replies.at(-1)?.text ?? '', /`turbo` is not valid/);
+    assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore + 1, 'a refusal changes nothing, so the banner is not touched');
+    clearEffortPref(harness.key);
+  });
+
+  it('a notice that does not fit a toast is cut for the toast and posted whole as a message; the banner still follows a stored pick, and not a refusal', async () => {
+    clearEffortPref(harness.key);
+    await harness.runCommand('effort');
+    const picker = harness.replies.at(-1);
+    assert.ok(picker?.messageId);
+    const adapter = getThreadAdapter(harness.key);
+    const originalSetEffort = adapter.setEffort?.bind(adapter);
+    assert.ok(originalSetEffort);
+    const longNotice = `ℹ️ Level saved. ${'No agent is running, so it will apply on the next start. '.repeat(5)}`.trimEnd();
+    assert.ok(longNotice.length > 200, 'precondition: longer than a toast holds');
+    try {
+      // A stored pick with a long notice:
+      adapter.setEffort = async (key, level) => {
+        await originalSetEffort(key, level);
+        return longNotice;
+      };
+      let repliesBefore = harness.replies.length;
+      let bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
+      await harness.tapButton(picker.messageId, 'effort_low');
+      const storedToast = harness.fakeTelegram.callbackAnswers.at(-1) ?? '';
+      assert.ok(storedToast.length <= 200 && storedToast.endsWith('…'), `a toast that fits: ${storedToast.length} characters`);
+      assert.ok(longNotice.startsWith(storedToast.slice(0, -1)), 'the toast is the start of the notice');
+      assert.equal(harness.replies[repliesBefore]?.text, longNotice, 'the notice whole, as a message');
+      assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore + 1);
+
+      // A refusal with a long text: whole as a message too, nothing stored, the banner untouched:
+      clearEffortPref(harness.key);
+      const longRefusal = `Level \`low\` cannot be used here. ${'The model offers other levels only. '.repeat(8)}`.trimEnd();
+      adapter.setEffort = async () => longRefusal;
+      repliesBefore = harness.replies.length;
+      bannerUpdatesBefore = harness.pinnedStatusUpdateKeys.length;
+      await harness.tapButton(picker.messageId, 'effort_low');
+      assert.equal(harness.replies[repliesBefore]?.text, `Error: ${longRefusal}`, 'the refusal whole too');
+      assert.equal(harness.pinnedStatusUpdateKeys.length, bannerUpdatesBefore, 'nothing was stored: the banner is as it was');
+
+      // A short refusal fits the toast: shown whole, no message beside it.
+      adapter.setEffort = async () => 'x'.repeat(120);
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(picker.messageId, 'effort_low');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), `Error: ${'x'.repeat(120)}`, 'not cut at 50 characters');
+      assert.equal(harness.replies.length, repliesBefore, 'a toast that fits needs no message');
+    } finally {
+      adapter.setEffort = originalSetEffort;
+      clearEffortPref(harness.key);
+    }
+  });
+
   it('«As in General» drops the topic\'s own pick: the topic follows the instance default again, and the button promises General\'s value', async () => {
     writeSettingsByHand(JSON.stringify({ defaultEffort: 'low' }));
+    await getThreadAdapter(harness.key).setEffort?.(harness.key, 'high'); // the topic's own pick
     await harness.runCommand('effort');
     const picker = harness.replies.at(-1);
     assert.equal(picker?.text, '⚙️ Effort in this topic: high — set for this topic', 'the topic\'s own pick wins over the instance default');

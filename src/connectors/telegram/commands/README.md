@@ -63,7 +63,10 @@ session) and the source of the next start's level (`getOwnEffort` ≠ null → �
 button per level the backend offers (OpenCode: the model's variants; every level shown, the ✓ and the button's value
 included, is the nearest variant when the model lacks it — `getEffortAmongLevels`) and, when the
 adapter has `clearEffort`, «As in General (<value>)» (`effortsame`, disjoint from the `effort_<level>` pattern). A pick the
-adapter stored but could not apply yet (no agent running → a notice) still re-renders the picker. Both screens re-render in
+adapter stored but could not apply yet (no agent running → a notice) is a pick all the same: the tap or the typed `/effort <level>`
+refreshes the banner and re-renders the picker, and the notice reaches the user whole — as the toast when it fits
+(200 characters), else cut for the toast and posted in full as a message (`answerCallbackWithWholeText`). A refusal changes nothing
+and touches neither. Both screens re-render in
 place, text and keyboard, after a tap. `/status`, the ready notice and the pinned banner show `getThreadEffortView`
 (the running session's level, else the next start's; the banner and `/status` add the next start's level when it differs); other topics' banners are refreshed by their own lifecycle events, not by a
 General change (a burst of edits would queue ahead of agent output).
