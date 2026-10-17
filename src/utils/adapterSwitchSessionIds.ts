@@ -2,7 +2,7 @@
  * @description Which session ids a thread keeps when its adapter changes (`bot.ts` `switchThreadAdapter`). The live
  * row holds the ids of the backend FAMILY the thread runs on (both Claude backends share one id; OpenCode has its
  * own), and one PARKED slot (`state.parkedSessions`) holds the id of the family the thread last LEFT, so a switch
- * back — a plain `/claude` ↔ `/opencode`, a fallback switch and its «back» button — resumes the conversation it
+ * back — a plain `/claude` ↔ `/opencode`, after a usage-limit fallback switch too — resumes the conversation it
  * left instead of starting a new one.
  *
  * Both halves happen in the same step: the family being left is parked AND the family being entered is restored from

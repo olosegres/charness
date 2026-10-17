@@ -13,9 +13,7 @@ A topic's own `/effort` pick still wins, and «As in General» in a topic gives 
 
 **A shorter notice when a usage limit moves a topic to another account or model.** One line now says which account
 (or OpenCode model) hit its limit, where the topic continues — its model only when the switch changes it — when the
-limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands. `/accounts`
-in a topic the bot moved shows a «↩️ Back to …» button on top that moves the topic back (also to or from OpenCode);
-the bot remembers the rung per topic until the topic goes back or is changed by hand.
+limit resets, and `/accounts` to switch back, instead of repeating every label and listing four commands.
 
 ### Upgrading
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next
@@ -49,7 +47,7 @@ the bot remembers the rung per topic until the topic goes back or is changed by 
   survives hot reloads, stops after idle time and with its owner, and falls back to the next engine on any failure.
 
 ### Fixed
-- Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch and its «back» button) resumes
+- Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch to an OpenCode model and back) resumes
   the Claude conversation the topic left; it used to come back to a fresh one, because leaving OpenCode overwrote the
   parked Claude conversation id with the OpenCode session's. The same holds the other way round.
 - A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured

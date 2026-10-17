@@ -1,8 +1,7 @@
 /**
- * @description The fallback chain, the OpenCode limit marks, the parked session ids and the rung a limit switch
- * moved a topic from in `state.json` (`StateStore`): the chain is validated on read and flushed at once, a limit
- * mark is kept per `provider/model` label, a parked id survives a reload and is dropped with the live ids when the
- * conversation is released, the remembered rung survives a reload and goes with the topic's binding.
+ * @description The fallback chain, the OpenCode limit marks and the parked session ids in `state.json`
+ * (`StateStore`): the chain is validated on read and flushed at once, a limit mark is kept per `provider/model`
+ * label, a parked id survives a reload and is dropped with the live ids when the conversation is released.
  * Reloaded from disk to prove persistence, not just the in-memory view.
  */
 
@@ -14,7 +13,6 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { StateStore } from '../state';
-import { keyToString } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const topic = makeTelegramKey(-1001111111111, 11);
@@ -103,36 +101,5 @@ describe('StateStore: fallback chain, OpenCode limit marks, parked sessions', ()
     await store.clearAgentSessionIds(topic);
     assert.equal(store.getParkedSession(topic), null, 'a released conversation drops its parked id too');
     assert.equal(store.getAgent(topic)?.opencodeSessionId, undefined);
-  });
-
-  it('remembers the rung a topic was moved from per topic, survives a reload, forgets on null and with the binding; a malformed one reads as none', async () => {
-    const other = makeTelegramKey(-1001111111111, 12);
-    assert.equal(store.getFallbackReturn(topic), null);
-    await store.setBinding(topic, 'return-test');
-    await store.setFallbackReturn(topic, { backend: 'claude', profile: 'default', model: 'claude-opus-5-5[1m]' });
-    await store.setFallbackReturn(other, { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' });
-    await store.flush();
-    const reloaded = new StateStore(dataDir);
-    await reloaded.init();
-    assert.deepEqual(reloaded.getFallbackReturn(topic), { backend: 'claude', profile: 'default', model: 'claude-opus-5-5[1m]' }, 'the model id the session reported survives');
-    assert.deepEqual(reloaded.getFallbackReturn(other), { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' });
-
-    await store.setFallbackReturn(other, null);
-    assert.equal(store.getFallbackReturn(other), null);
-    await store.removeBinding(topic);
-    assert.equal(store.getFallbackReturn(topic), null, 'an unbound topic keeps nothing to go back to');
-    await store.flush();
-    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
-    assert.equal('fallbackReturns' in raw, false, 'an emptied map leaves no field behind');
-
-    await store.setFallbackReturn(topic, { backend: 'claude', profile: 'work', model: null });
-    await store.flush();
-    const statePath = path.join(dataDir, 'state.json');
-    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { fallbackReturns: Record<string, { profile: string }> };
-    persisted.fallbackReturns[keyToString(topic)].profile = 'Not A Slug';
-    fs.writeFileSync(statePath, JSON.stringify(persisted));
-    const damaged = new StateStore(dataDir);
-    await damaged.init();
-    assert.equal(damaged.getFallbackReturn(topic), null, 'a hand edit that breaks the shape never reaches a button');
   });
 });

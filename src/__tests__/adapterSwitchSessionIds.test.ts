@@ -1,7 +1,7 @@
 /**
  * @description Which session ids a thread keeps when its adapter changes (`utils/adapterSwitchSessionIds.ts`): the
  * family it leaves is PARKED and the family it enters is RESTORED from the parked slot, in the same step — so a round
- * trip Claude → OpenCode → Claude (a fallback switch and its «back» button, or a plain /opencode and /claude) comes
+ * trip Claude → OpenCode → Claude (a fallback switch followed by a /claude, or a plain /opencode and /claude) comes
  * back to the Claude conversation it left instead of a fresh one.
  */
 

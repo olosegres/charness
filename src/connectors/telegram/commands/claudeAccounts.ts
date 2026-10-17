@@ -53,7 +53,6 @@ import {
   parseAccountCallbackName,
   type AccountPickerRow,
 } from '../../../utils/claudeAccountPickerPlan';
-import { fallbackReturnCallbackRe } from '../../../utils/fallbackReturn';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
 import { getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
@@ -86,16 +85,6 @@ export interface ClaudeAccountsPorts
   applyClaudeProfile: (key: SessionKey) => Promise<ClaudeProfileApplyOutcome>;
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
-  /**
-   * The «back» button for a topic the bot moved off a limited rung (the label and the callback data), `null`
-   * when there is none. The move itself is {@link ClaudeAccountsPorts.returnToFallbackOrigin}.
-   */
-  getFallbackReturnButton: (key: SessionKey) => { label: string; callbackData: string } | null;
-  /**
-   * Move the topic back onto the rung the button names: the notice to answer the tap with (`isPosted`: it already
-   * went into the topic), or `expired` when the button no longer names the remembered rung (an old keyboard).
-   */
-  returnToFallbackOrigin: (key: SessionKey, revision: string) => Promise<{ kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean }>;
   /** The OpenCode providers the server is authenticated for (its live catalog); `[]` when it cannot be read. */
   detectOpenCodeProviders: () => Promise<string[]>;
   /** Drop a provider's stored credentials and post the outcome — the `/disconnect <provider>` flow, unchanged. */
@@ -123,7 +112,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
-    applyClaudeProfileEverywhere, getFallbackReturnButton, returnToFallbackOrigin, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
+    applyClaudeProfileEverywhere, detectOpenCodeProviders, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
   } = ports;
 
   /**
@@ -271,7 +260,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // The usage hint (which says the percentages are USED) follows the account list it explains.
     const text = `${title}${removedNote}\n\n${t('account.usageHint')}\n\n${openCodeSection}\n\n${t('accounts.buttonsHint')}\n\n${t('account.autoSwitchHint')}`;
     // One row per Claude account: pick it (✓ = the current one), sign it in again, remove it (`default` too: signs it out).
-    const keyboardRows: ReturnType<typeof Markup.button.callback>[][] = rows.map((row) => [
+    const keyboardRows = rows.map((row) => [
       Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),
       Markup.button.callback('🔑', buildAccountLoginCallback(row.name)),
       Markup.button.callback('🗑', buildAccountRemoveCallback(row.name)),
@@ -287,9 +276,6 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       Markup.button.callback(t('accounts.addClaudeButton'), accountAddCallback),
       Markup.button.callback(t('accounts.addProviderButton'), accountAddProviderCallback),
     ]);
-    // A topic the bot moved off a limited rung gets one button on top that moves it back there.
-    const returnButton = isGeneral ? null : getFallbackReturnButton(key);
-    if (returnButton) keyboardRows.unshift([Markup.button.callback(returnButton.label, returnButton.callbackData)]);
     if (!isGeneral && getState().getClaudeProfileOverride(key) !== undefined) {
       keyboardRows.push([
         Markup.button.callback(t('account.followButton', { name: getState().getClaudeProfileGlobalDefault() }), accountFollowDefaultCallback),
@@ -562,21 +548,6 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       if (name === null) { await ctx.answerCbQuery(); return; }
       const confirmation = await applyPick(key, isGeneral, name);
       await answerTap(ctx, key, confirmation);
-      await rerenderPicker(key, messageId, isGeneral);
-    }));
-
-    // The «back» button: bakes the revision of the rung it names, so a keyboard left in the history never moves
-    // the topic to another rung — a stale tap only says so and re-renders the screen without the button.
-    bot.action(fallbackReturnCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (isGeneral) { await ctx.answerCbQuery(); return; }
-      const result = await returnToFallbackOrigin(key, ctx.match[1]);
-      if (result.kind === 'expired') {
-        await ctx.answerCbQuery(t('fallback.returnExpired'));
-      } else if (result.isPosted) {
-        await ctx.answerCbQuery();
-      } else {
-        await answerTap(ctx, key, result.notice);
-      }
       await rerenderPicker(key, messageId, isGeneral);
     }));
 

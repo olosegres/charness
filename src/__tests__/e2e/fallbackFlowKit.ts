@@ -1,8 +1,8 @@
 /**
  * @description What the process-level flows of the usage-limit fallback (`fallbackSwitchE2e.test.ts` — Claude ↔
  * Claude, `fallbackSwitchOpenCodeE2e.test.ts` — to and from OpenCode) share: the slice of `state.json` they read and
- * edit, the fake `claude`'s launch and turn logs, the reset instant the fakes name and how the bot words it, the
- * `/accounts` «back» buttons, and starting / restarting the instance. Matches neither runner glob.
+ * edit, the fake `claude`'s launch and turn logs, the reset instant the fakes name and how the bot words it, and
+ * starting / restarting the instance. Matches neither runner glob.
  */
 
 import * as fs from 'fs';
@@ -26,7 +26,6 @@ const resetHourUtc = 1;
 export interface PersistedState {
   claudeProfiles?: Record<string, ClaudeProfileRecord>;
   fallbackChain?: FallbackChainEntry[];
-  fallbackReturns?: Record<string, FallbackChainEntry>;
   agents?: Record<string, AgentData>;
   parkedSessions?: Record<string, ParkedSession>;
   /** The armed API-error retries (a usage-limit wait among them), keyed by the topic. */
@@ -82,11 +81,6 @@ export function computeResetsAtIso(daysAhead: number): string {
 /** The reset as the bot words it in an instance whose zone is UTC. */
 export function getResetClock(resetsAtIso: string): string {
   return `${resetsAtIso.slice(0, 10)} ${resetsAtIso.slice(11, 16)}`;
-}
-
-/** The callback data of a screen's «back» buttons (`acct_ret_<revision>`), in keyboard order. */
-export function listReturnButtonData(driver: TopicDriver, screen: FakeTelegramMessage): string[] {
-  return driver.getKeyboardData(screen).flat().filter((data) => data.startsWith('acct_ret_'));
 }
 
 /** The bot's «switched» notices in a topic (the only messages that start with the switch mark). */

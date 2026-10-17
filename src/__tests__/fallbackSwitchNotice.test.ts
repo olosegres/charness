@@ -10,9 +10,7 @@
  *   • the switch-back command is `/accounts` in every case — never `/model`, `/claude` or `/opencode`, which move
  *     the topic somewhere else;
  *   • an unknown reset drops the reset clause and keeps the command;
- *   • the deferred notice names the move that waits for the end of the answer;
- *   • the «back» button of `/accounts` names the rung the topic was moved from as the notice does (never a model),
- *     adds the reset only while that rung is still limited, and the notices of the move back say what happened.
+ *   • the deferred notice names the move that waits for the end of the answer.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -22,10 +20,6 @@ import assert from 'node:assert/strict';
 import { localeCodes, runWithLocale, type Locale } from '../i18n';
 import {
   buildFallbackDeferredNotice,
-  buildFallbackReturnDeferredNotice,
-  buildFallbackReturnedNotice,
-  buildFallbackReturnFailedNotice,
-  buildFallbackReturnLabel,
   buildFallbackSwitchedNotice,
 } from '../utils/fallbackSwitchNotice';
 import { getFallbackModelToPin, type FallbackChainEntry } from '../utils/fallbackChain';
@@ -108,33 +102,6 @@ describe('buildFallbackDeferredNotice (English)', () => {
   });
 });
 
-describe('the way back (English)', () => {
-  const originAccount = claude('default', runningOpus);
-
-  it('the button names the rung the topic was moved from, with the reset while that rung is still limited', () => {
-    assert.equal(buildFallbackReturnLabel({ current: claude('work'), origin: originAccount, resetTime: '01:00' }), '↩️ Back to «default» (limit resets 01:00)');
-    assert.equal(buildFallbackReturnLabel({ current: claude('work'), origin: originAccount, resetTime: null }), '↩️ Back to «default»');
-  });
-
-  it('names the backend where the topic is on another one — and never the raw model id', () => {
-    assert.equal(buildFallbackReturnLabel({ current: openCode('openai', 'gpt-5'), origin: originAccount, resetTime: null }), '↩️ Back to Claude «default»');
-    assert.equal(buildFallbackReturnLabel({ current: claude('work'), origin: openCode('openai', 'gpt-5'), resetTime: '2026-10-19 01:00' }), '↩️ Back to OpenCode openai/gpt-5 (limit resets 2026-10-19 01:00)');
-    assert.equal(buildFallbackReturnLabel({ current: null, origin: originAccount, resetTime: null }), '↩️ Back to Claude «default»', 'the topic\'s position is unknown');
-  });
-
-  it('the notice after the move names the rung and never a model — a restored model id is the one the session reported, not a choice', () => {
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: originAccount }), '↩️ This topic is back on «default».');
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: claude('default', 'sonnet') }), '↩️ This topic is back on «default».', 'not even a chain alias');
-    assert.equal(buildFallbackReturnedNotice({ from: openCode('openai', 'gpt-5'), to: claude('default') }), '↩️ This topic is back on Claude «default».');
-    assert.equal(buildFallbackReturnedNotice({ from: claude('work'), to: openCode('openai', 'gpt-5') }), '↩️ This topic is back on OpenCode openai/gpt-5.');
-  });
-
-  it('a working session moves back when the answer ends; a failed move says why', () => {
-    assert.equal(buildFallbackReturnDeferredNotice(claude('work'), originAccount), '↩️ This topic moves back to «default» when the current answer ends.');
-    assert.equal(buildFallbackReturnFailedNotice(claude('work'), originAccount, 'no such model'), '⚠️ Moving back to «default» failed: no such model');
-  });
-});
-
 describe('getFallbackModelToPin', () => {
   it('an alias is the running model when the running id contains it (case-insensitive)', () => {
     assert.equal(getFallbackModelToPin(claude('work', 'opus'), runningOpus), null);
@@ -180,23 +147,6 @@ for (const locale of localeCodes) {
         assert.ok(!/\{\w+\}/.test(text), `${name}: no unresolved placeholder in ${text}`);
         assert.ok(!text.includes('?'), `${name}: no unknown-label question mark in ${text}`);
       }
-    });
-
-    it('the «back» button and the notices of the move name the rung once; the reset shows exactly while the rung is limited; the error reaches the failure', () => {
-      const origin = claude('default', runningOpus);
-      const limited = run(() => buildFallbackReturnLabel({ current: claude('work'), origin, resetTime }));
-      const over = run(() => buildFallbackReturnLabel({ current: claude('work'), origin, resetTime: null }));
-      const fromOpenCode = run(() => buildFallbackReturnLabel({ current: openCode('openai', 'gpt-5'), origin, resetTime: null }));
-      const returned = run(() => buildFallbackReturnedNotice({ from: claude('work'), to: origin }));
-      const deferred = run(() => buildFallbackReturnDeferredNotice(claude('work'), origin));
-      const failed = run(() => buildFallbackReturnFailedNotice(claude('work'), origin, 'boom'));
-      for (const text of [limited, over, fromOpenCode, returned, deferred, failed]) {
-        assert.equal(countOccurrences(text, '«default»'), 1, text);
-        assert.ok(!/\{\w+\}/.test(text) && !text.includes('claude-opus'), text);
-      }
-      assert.ok(limited.includes(resetTime) && !over.includes(resetTime), `${limited} | ${over}`);
-      assert.ok(fromOpenCode.includes('Claude «default»'), fromOpenCode);
-      assert.ok(failed.includes('boom'), failed);
     });
 
     it('the deferred notice names both accounts once and promises no model, reset or command', () => {

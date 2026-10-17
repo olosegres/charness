@@ -10,8 +10,6 @@
  *   • `use <name>` in a topic sets the pick and moves the live session (the apply port's outcome is reported);
  *     in General it sets the instance default and moves every session; a logged-out profile is refused;
  *   • `remove`: default refused, the instance default refused, otherwise the picks that named it are dropped;
- *   • the «back» button of a topic the bot moved off a limited rung: first row of the screen, none in General, a tap
- *     goes to its port and answers with its notice, a stale tap only says so — both re-render the screen in place;
  *   • the auto-switch-on-limit toggle (OFF by default; its screen is /limits now): `autoswitch on|off` and the old buttons still work,
  *     General sets the instance default; a «switch to …» tap on a limit notice goes to its port and consumes the
  *     notice, a stale one only answers the callback.
@@ -46,10 +44,6 @@ const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
-/** The «back» button the stand-in bot offers (`null`: the topic was not moved off a limited rung), and what a tap on it answers. */
-let returnButton: { label: string; callbackData: string } | null = null;
-let returnResult: { kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean } = { kind: 'expired' };
-const returnTaps: Array<{ key: SessionKey; revision: string }> = [];
 
 function setStatus(configDir: string | null, status: ClaudeAuthStatus | null): void {
   statusByDir.set(configDir, status);
@@ -78,13 +72,6 @@ describe('claudeAccounts: /accounts over its ports', () => {
       },
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
-      },
-      getFallbackReturnButton: () => returnButton,
-      returnToFallbackOrigin: async (key, revision) => {
-        returnTaps.push({ key, revision });
-        const result = returnResult;
-        if (result.kind === 'done') returnButton = null; // the move forgets the remembered rung: the next render has no button
-        return result;
       },
       detectOpenCodeProviders: async () => openCodeProviders,
       disconnectOpenCodeProvider: async (key, providerId) => {
@@ -117,7 +104,6 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(harness.registeredCommandNames, ['account', 'accounts']);
     assert.deepEqual(harness.registeredActionPatterns, [
       String(/^acct_use_([a-z0-9][a-z0-9_-]{0,31})$/),
-      String(/^acct_ret_([0-9a-f]{8})$/),
       'acct_follow',
       'acct_add',
       'acct_ocadd',
@@ -252,70 +238,6 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(rerender?.text ?? '', /✓ default/);
     await harness.tapButton(picker!.messageId!, 'acct_follow');
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
-  });
-
-  it('a topic the bot moved off a limited rung gets the «back» button on top; General never does', async () => {
-    returnButton = { label: '↩️ Back to «default» (limit resets 01:00)', callbackData: 'acct_ret_0a1b2c3d' };
-    await harness.runCommand('account');
-    const picker = harness.replies.at(-1);
-    assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['↩️ Back to «default» (limit resets 01:00)'], 'the first row, a button of its own');
-    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_ret_0a1b2c3d']);
-    assert.ok(harness.getKeyboardData(picker).slice(1).every((row) => !row.includes('acct_ret_0a1b2c3d')), 'once');
-
-    isGeneralTopic = true;
-    try {
-      await harness.runCommand('account');
-      assert.ok(!harness.getKeyboardData(harness.replies.at(-1)).flat().includes('acct_ret_0a1b2c3d'), 'In General nothing changes');
-    } finally {
-      isGeneralTopic = false;
-    }
-  });
-
-  it('a tap on the «back» button goes to its port, answers with the notice and re-renders the screen without the button', async () => {
-    returnButton = { label: '↩️ Back to «default»', callbackData: 'acct_ret_0a1b2c3d' };
-    returnResult = { kind: 'done', notice: '↩️ This topic is back on «default».', isPosted: false };
-    await harness.runCommand('account');
-    const picker = harness.replies.at(-1);
-    returnTaps.length = 0;
-    await harness.tapButton(picker!.messageId!, 'acct_ret_0a1b2c3d');
-    assert.deepEqual(returnTaps, [{ key: harness.key, revision: '0a1b2c3d' }], 'the revision baked into the data reaches the port');
-    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '↩️ This topic is back on «default».');
-    const rerender = harness.edits.at(-1);
-    assert.equal(rerender?.messageId, picker!.messageId, 'in place');
-    assert.ok(!harness.getKeyboardData(rerender).flat().includes('acct_ret_0a1b2c3d'), 'the button is gone');
-  });
-
-  it('a tap whose notice the move already posted into the topic (a switch during a limit wait) answers the callback without repeating it', async () => {
-    returnButton = { label: '↩️ Back to «default»', callbackData: 'acct_ret_0a1b2c3d' };
-    returnResult = { kind: 'done', notice: '🔁 Account «work» hit its usage limit — this topic continues on «default».', isPosted: true };
-    await harness.runCommand('account');
-    const picker = harness.replies.at(-1);
-    const answersBefore = harness.fakeTelegram.callbackAnswers.length;
-    await harness.tapButton(picker!.messageId!, 'acct_ret_0a1b2c3d');
-    assert.deepEqual(harness.fakeTelegram.callbackAnswers.slice(answersBefore), [''], 'an empty answer: no toast with the notice');
-    assert.ok(!harness.getKeyboardData(harness.edits.at(-1)).flat().includes('acct_ret_0a1b2c3d'));
-  });
-
-  it('a stale «back» tap (the rung is forgotten or another one is remembered) only says so and re-renders', async () => {
-    returnButton = { label: '↩️ Back to «default»', callbackData: 'acct_ret_0a1b2c3d' };
-    await harness.runCommand('account');
-    const picker = harness.replies.at(-1);
-    returnResult = { kind: 'expired' };
-    returnButton = null;
-    await harness.tapButton(picker!.messageId!, 'acct_ret_0a1b2c3d');
-    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This button is out of date — there is nothing to switch back.');
-    assert.ok(!harness.getKeyboardData(harness.edits.at(-1)).flat().includes('acct_ret_0a1b2c3d'));
-  });
-
-  it('a «back» tap in General does nothing', async () => {
-    isGeneralTopic = true;
-    try {
-      returnTaps.length = 0;
-      await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ret_0a1b2c3d');
-      assert.deepEqual(returnTaps, []);
-    } finally {
-      isGeneralTopic = false;
-    }
   });
 
   it('in General, `use` sets the instance default and moves every session', async () => {

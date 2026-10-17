@@ -1,5 +1,5 @@
 /**
- * @description The usage-limit switch to and from OpenCode, and the way back, at PROCESS level: the BUILT charness
+ * @description The usage-limit switch to and from OpenCode at PROCESS level: the BUILT charness
  * started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API
  * (`telegramE2e/fakeTelegram.ts`), the fake `claude` (`jiraE2e/fakeClaude.ts`) and a fake OpenCode server + CLI
  * (`openCodeE2e/fakeOpenCodeServer.ts`) that serves only what the bot calls and lists anything else as `unhandled`.
@@ -7,14 +7,13 @@
  *
  *   A  Claude → OpenCode: the Claude agent hits a subscription limit, the chain's rung is an OpenCode model. The
  *      notice names the account that hit it and `OpenCode openai/gpt-5`; the OpenCode session is created in the
- *      topic's folder and its first prompt is the context bridge; the Claude conversation is parked. `/accounts`
- *      then offers «↩️ Back to Claude «default»»; a tap stops the OpenCode session and resumes the PARKED Claude
- *      conversation (same id) under the first account; the button is gone.
+ *      topic's folder and its first prompt is the context bridge; the Claude conversation is parked. A plain
+ *      `/claude` by hand then resumes the PARKED Claude conversation (same id) under the first account.
  *   B  OpenCode → Claude: the OpenCode session's turn fails with a usage limit, the chain's rung is a Claude account.
  *      The notice names the model that hit it and `Claude «work»`; a new Claude conversation starts under that
- *      account with the bridge; «↩️ Back to OpenCode …» resumes the parked OpenCode session (same id).
- *   C  OpenCode → OpenCode: the model changes within the session (the next prompt carries the new model, after the
- *      "continue" message); «Back» changes it back, silently — the next prompt carries the first model again.
+ *      account with the bridge; a plain `/opencode` resumes the parked OpenCode session (same id).
+ *   C  OpenCode → OpenCode: the model changes within the session; the next prompt — the "continue" message — carries
+ *      the rung's model.
  *
  * Nothing leaves the machine: every server is on loopback and every agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -26,7 +25,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
@@ -49,7 +48,6 @@ import {
   getAccountConfigDir,
   getResetClock,
   getSessionLaunches,
-  listReturnButtonData,
   listSwitchNotices,
   readPersistedState,
   restartCharnessWithState,
@@ -138,10 +136,6 @@ function getOpenCodeSessionOf(folder: string): { id: string } {
   const session = [...fakeOpenCode.sessions.values()].filter((candidate) => candidate.directory === folderPath).at(-1);
   assert.ok(session, `a fake OpenCode session for ${folderPath}`);
   return session;
-}
-
-async function openAccountsScreen(driver: TopicDriver): Promise<FakeTelegramMessage> {
-  return driver.sendAndAwaitReply('/accounts', 'Claude account for this topic');
 }
 
 describe('The usage-limit switch to and from OpenCode end to end: built charness, fake Bot API, fake claude, fake OpenCode', () => {
@@ -235,23 +229,17 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.equal(listSwitchNotices(claudeTopic).length, 1);
   });
 
-  it('`/accounts` offers «Back to Claude» with the reset; a tap resumes the PARKED Claude conversation under the first account, and the button is gone', async () => {
-    const screen = await openAccountsScreen(claudeTopic);
-    assert.deepEqual(claudeTopic.getKeyboardLabels(screen)[0], [`↩️ Back to Claude «${exhaustedAccount}» (limit resets ${resetClock})`]);
-    const [backData] = listReturnButtonData(claudeTopic, screen);
+  it('a plain `/claude` resumes the PARKED Claude conversation under the first account — the same id — and nothing more reaches OpenCode', async () => {
     const launchesBefore = getSessionLaunches(getLayout()).length;
     const openCodePromptsBefore = fakeOpenCode.prompts.length;
 
-    assert.equal(await claudeTopic.tapAndAwaitAnswer(screen, backData), `↩️ This topic is back on Claude «${exhaustedAccount}».`);
+    fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/claude');
 
     await waitForSessionRespawn(getCharness(), getLayout(), 'the parked Claude conversation to resume under the first account', null, claudeSessionId, launchesBefore);
     await getCharness().waitFor('the backend to be Claude again in state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === claudeJsonStreamAdapterName);
     assert.equal(readAgent(claudeToOpenCode.threadId)?.claudeSessionId, claudeSessionId, 'the SAME conversation');
     assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.opencodeSessionId, getOpenCodeSessionOf(claudeToOpenCode.folder).id, 'the OpenCode session is parked in its turn');
-
-    await claudeTopic.waitForMessageText('the screen re-rendered without the button', screen, () => listReturnButtonData(claudeTopic, screen).length === 0);
-    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
-    assert.equal(listSwitchNotices(claudeTopic).length, 1, 'going back is not a limit: no limit notice');
+    assert.equal(listSwitchNotices(claudeTopic).length, 1, 'going back by hand is not a limit: no limit notice');
     assert.equal(fakeOpenCode.prompts.length, openCodePromptsBefore, 'nothing more reaches OpenCode');
   });
 
@@ -280,22 +268,18 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(openCodeToClaude.threadId)]?.opencodeSessionId, session.id, 'the OpenCode session is parked for the way back');
   });
 
-  it('«Back to OpenCode» resumes the parked OpenCode session — same id, same model — and the button is gone', async () => {
-    const screen = await openAccountsScreen(toClaudeTopic);
-    assert.deepEqual(toClaudeTopic.getKeyboardLabels(screen)[0], [`↩️ Back to OpenCode ${defaultOpenCodeModel} (limit resets ${resetClock})`]);
+  it('a plain `/opencode` resumes the parked OpenCode session — the same id, no second session', async () => {
     const sessionRequestsBefore = fakeOpenCode.listRequests('GET', `/session/${openCodeSessionOfB}`).length;
 
-    assert.equal(await toClaudeTopic.tapAndAwaitAnswer(screen, listReturnButtonData(toClaudeTopic, screen)[0]), `↩️ This topic is back on OpenCode ${defaultOpenCodeModel}.`);
+    fakeTelegram.pushOperatorMessage(openCodeToClaude.threadId, '/opencode');
 
     await getCharness().waitFor('the OpenCode session to be resumed', agentStartTimeoutMs, () => fakeOpenCode.listRequests('GET', `/session/${openCodeSessionOfB}`).length > sessionRequestsBefore);
     await getCharness().waitFor('the backend to be OpenCode again in state.json', replyTimeoutMs, () => readAgent(openCodeToClaude.threadId)?.name === openCodeAdapterName);
     assert.equal(readAgent(openCodeToClaude.threadId)?.opencodeSessionId, openCodeSessionOfB, 'the SAME OpenCode session');
     assert.equal([...fakeOpenCode.sessions.values()].filter((session) => session.directory === path.join(getLayout().workRoot, openCodeToClaude.folder)).length, 1, 'no second session was created');
-    await toClaudeTopic.waitForMessageText('the screen re-rendered without the button', screen, () => listReturnButtonData(toClaudeTopic, screen).length === 0);
-    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
   });
 
-  it('OpenCode → OpenCode: the next prompt carries the rung\'s model after the "continue" message; «Back» changes the model back and the next prompt carries it', async () => {
+  it('OpenCode → OpenCode: the model changes within the session and the "continue" message carries the rung\'s model', async () => {
     await restartWithState((persisted) => {
       persisted.fallbackChain = [{ backend: 'opencode', providerId: 'google', modelId: 'gemini-2.5-pro' }];
     });
@@ -315,15 +299,5 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     await getCharness().waitFor('the "continue" message to reach OpenCode', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsBefore);
     assert.equal(fakeOpenCode.prompts.at(-1)?.model, chainOpenCodeModelAlternative, 'the interrupted turn continues on the rung\'s model');
 
-    const screen = await openAccountsScreen(openCodeTopic);
-    assert.deepEqual(openCodeTopic.getKeyboardLabels(screen)[0], [`↩️ Back to OpenCode ${defaultOpenCodeModel} (limit resets ${resetClock})`]);
-    const promptsAtBack = fakeOpenCode.prompts.length;
-    assert.equal(await openCodeTopic.tapAndAwaitAnswer(screen, listReturnButtonData(openCodeTopic, screen)[0]), `↩️ This topic is back on OpenCode ${defaultOpenCodeModel}.`);
-    assert.equal(fakeOpenCode.prompts.length, promptsAtBack, 'a plain move: no "continue" message');
-
-    ask(openCodeToOpenCode.threadId, 'AFTER-C');
-    await getCharness().waitFor('the next prompt to reach OpenCode', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > promptsAtBack);
-    assert.equal(fakeOpenCode.prompts.at(-1)?.model, defaultOpenCodeModel, 'the next prompt runs the first model again');
-    await getCharness().waitFor('the remembered rung to leave state.json', replyTimeoutMs, () => readPersistedState(getLayout()).fallbackReturns === undefined);
   });
 });

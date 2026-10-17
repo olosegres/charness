@@ -377,16 +377,8 @@ import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeP
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
-import {
-  buildFallbackDeferredNotice,
-  buildFallbackReturnDeferredNotice,
-  buildFallbackReturnedNotice,
-  buildFallbackReturnFailedNotice,
-  buildFallbackReturnLabel,
-  buildFallbackSwitchedNotice,
-} from './utils/fallbackSwitchNotice';
+import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
-import { buildFallbackReturnCallback, checkIsFallbackReturnCurrent, checkIsFallbackReturnForgotten, decideFallbackReturnAfterSwitch } from './utils/fallbackReturn';
 import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
@@ -4383,7 +4375,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   if (agent.startedAt !== undefined) next.startedAt = agent.startedAt;
   // The ids the new family keeps, and the parked slot: the family the thread LEAVES is parked and the parked id of the
   // family it RETURNS to is restored, in the same step (`utils/adapterSwitchSessionIds.ts`) — a cross-backend
-  // fallback switch, its «back» button or a plain /claude ↔ /opencode comes back to the conversation it left
+  // fallback switch or a plain /claude ↔ /opencode comes back to the conversation it left
   // (L-D4: a sleeping conversation is woken, `/new` is the fresh start). The reattach loop never reads the parked
   // slot, so the audit S12 bug (both ids on the live row) stays fixed.
   const switched = getAdapterSwitchSessionIds({ previousName: prevName, nextName: newName, agent, parked: state.getParkedSession(key), parkedAt: new Date().toISOString() });
@@ -6561,12 +6553,7 @@ async function handleAgentStart(
   // "Claude Code" is one user-facing choice with two backends (tmux-scrape vs
   // json-stream); open the thread's picked backend, default tmux-scrape (for now).
   if (adapterName === 'claude') adapterName = resolveClaudeBackendName(key);
-  const previousAdapterName = getThreadAdapterNameRaw(key);
   await switchThreadAdapter(key, adapterName);
-  // Going to another agent by hand makes the rung a limit switch took the topic from stale (the «back» button).
-  if (previousAdapterName && checkIsFallbackReturnForgotten({ kind: 'backendSwitch', isSameConversation: checkIsSameConversationSwitch(previousAdapterName, adapterName) })) {
-    await state.setFallbackReturn(key, null);
-  }
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
     await replyToThread(key, t('agent.already_active', { label: adapter.label }));
@@ -6952,10 +6939,7 @@ async function applyClaudePickToThread(key: SessionKey): Promise<ClaudeProfileAp
       return isSwitched ? 'respawned' : 'deferred';
     }
   }
-  const outcome = await applyClaudeProfileToThread(key);
-  // A pick by hand that moves the topic makes the rung a limit switch took it from stale (the «back» button).
-  if (checkIsFallbackReturnForgotten({ kind: 'accountPick', outcome, isClaudeBackend: checkIsClaudeProfileBackend(key) })) await state.setFallbackReturn(key, null);
-  return outcome;
+  return applyClaudeProfileToThread(key);
 }
 
 /**
@@ -7042,7 +7026,7 @@ function getFallbackResetTime(from: FallbackChainEntry | null): string | null {
   return formatLocalClockWithDateIfNotToday(untilMs, Date.now());
 }
 
-/** The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known (the topic is never moved back by itself). */
+/** The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known. */
 function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry, runningModel: string | null): string {
   return buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel });
 }
@@ -7083,61 +7067,18 @@ async function buildFallbackBridge(key: SessionKey, from: FallbackChainEntry | n
   });
 }
 
-/** What {@link moveTopicOntoRung} did: the topic is on the rung (with the first prompt of a cross-backend move), the move waits for the end of the answer, or it failed. */
-type RungMove =
-  | { kind: 'moved'; firstPrompt: { text: string; isRequestPrompt: boolean } | null; isStoppingBackground: boolean }
-  | { kind: 'deferred'; from: Extract<FallbackChainEntry, { backend: 'claude' }>; to: Extract<FallbackChainEntry, { backend: 'claude' }> }
-  | { kind: 'failed'; error: string };
-
 /**
- * @description Move the topic's agent onto rung `to` — the part of a switch the limit path
- * ({@link switchTopicToFallbackEntry}) and the way back ({@link returnTopicToFallbackOrigin}) share. WITHIN a
- * backend the conversation is kept: a Claude rung sets the topic's profile (the `/account` apply path re-spawns the
- * live session under the new directory, same transcript); an OpenCode rung changes the session's per-prompt model.
- * ACROSS backends the topic's adapter changes (the `/claude` / `/opencode` path: the old session is stopped and its
- * id parked for a switch back). `isAfterLimit` says the turn that ran is dead, so a working Claude session is
- * re-spawned now (without it, a working session is moved at the end of its turn: `deferred`); `hasBridge` builds the
- * context bridge from the old agent's last turns for a cross-backend move (the new agent's first prompt).
- */
-async function moveTopicOntoRung(
-  key: SessionKey,
-  from: FallbackChainEntry | null,
-  to: FallbackChainEntry,
-  options: { isAfterLimit: boolean; hasBridge: boolean },
-): Promise<RungMove> {
-  if (from?.backend === 'claude' && to.backend === 'claude') {
-    await state.setClaudeProfileOverride(key, to.profile);
-    const adapter = getThreadAdapter(key);
-    // After a limit the turn is dead: the session is stopped even over background work, and the notice says so.
-    const isStoppingBackground = options.isAfterLimit && adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
-    const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: options.isAfterLimit });
-    if (outcome === 'deferred' || outcome === 'restartRequired') return { kind: 'deferred', from, to };
-    return { kind: 'moved', firstPrompt: null, isStoppingBackground };
-  }
-  if (from !== null && from.backend === 'opencode' && to.backend === 'opencode') {
-    const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
-    return error ? { kind: 'failed', error } : { kind: 'moved', firstPrompt: null, isStoppingBackground: false };
-  }
-  const bridge = options.hasBridge ? await buildFallbackBridge(key, from, to) : null;
-  const targetName = to.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName;
-  if (to.backend === 'claude') await state.setClaudeProfileOverride(key, to.profile);
-  await switchThreadAdapter(key, targetName);
-  if (to.backend === 'opencode') {
-    const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
-    if (error) return { kind: 'failed', error };
-  }
-  return { kind: 'moved', firstPrompt: bridge === null ? null : { text: bridge, isRequestPrompt: false }, isStoppingBackground: false };
-}
-
-/**
- * @description Move a limited topic onto rung `to` and continue the work there ({@link moveTopicOntoRung}: the
- * conversation is kept within a backend, bridged across backends). The armed limit wait is disarmed and the prompt
- * goes the way the wait's own resume would deliver it — the context bridge for a cross-backend move, else the plain
- * "continue" nudge. After a limit the turn is dead, so a working Claude session is moved at once; only one that
- * cannot be re-spawned yet (a tmux session with nothing to resume) keeps its wait and moves at turn end. The rung the topic
- * left is remembered (`state.fallbackReturns`) for the «back» button of `/accounts`. Returns whether the work
- * continues now and the notice that says so (posted here only when `isAnnounced` — the auto-switch has no other
- * voice, while a tapped button's notice is edited into the same line by its handler).
+ * @description Move a limited topic onto rung `to` and continue the work there. WITHIN a backend the
+ * conversation is kept: a Claude rung sets the topic's profile (the `/account` apply path re-spawns the live
+ * session under the new directory, same transcript) and pins the rung's model when it names one the session is not
+ * already running; an OpenCode rung changes the session's per-prompt model. ACROSS backends the topic's adapter
+ * changes (the `/claude` / `/opencode` path: the old session is stopped and its id parked for a switch back), the
+ * new session is started or resumed, and its first prompt is the context bridge instead of the plain "continue"
+ * nudge. Either way the armed limit wait is disarmed and the prompt goes the way the wait's own resume would
+ * deliver it. After a limit the turn is dead, so a working Claude session is moved at once; only one that cannot
+ * be re-spawned yet (a tmux session with nothing to resume) keeps its wait and moves at turn end. Returns whether
+ * the work continues now and the notice that says so (posted here only when `isAnnounced` — the auto-switch has no
+ * other voice, while a tapped button's notice is edited into the same line by its handler).
  */
 async function switchTopicToFallbackEntry(
   key: SessionKey,
@@ -7148,27 +7089,45 @@ async function switchTopicToFallbackEntry(
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
+  const isSameFamily = from !== null && from.backend === to.backend;
+  const runningModel = readRunningModelBeforeMove(key, from, to);
   const say = async (notice: string): Promise<void> => {
     if (options.isAnnounced) await replyToThread(key, notice);
   };
-  const runningModel = readRunningModelBeforeMove(key, from, to);
-  const move = await moveTopicOntoRung(key, from, to, { isAfterLimit: true, hasBridge: true });
-  if (move.kind === 'failed') {
-    const notice = t('fallback.switchFailed', { to: toLabel, error: move.error });
+  const fail = async (error: string): Promise<{ isSwitched: boolean; notice: string }> => {
+    const notice = t('fallback.switchFailed', { to: toLabel, error });
     await say(notice);
     return { isSwitched: false, notice };
+  };
+  let firstPrompt: { text: string; isRequestPrompt: boolean } | null = null;
+  let isStoppingBackground = false;
+  if (from?.backend === 'claude' && to.backend === 'claude') {
+    await state.setClaudeProfileOverride(key, to.profile);
+    // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
+    const adapter = getThreadAdapter(key);
+    isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
+    const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
+    if (outcome === 'deferred' || outcome === 'restartRequired') {
+      fallbackSwitchOffers.delete(k);
+      const notice = buildFallbackDeferredNotice(from, to);
+      await say(notice);
+      return { isSwitched: false, notice };
+    }
+  } else if (isSameFamily && to.backend === 'opencode') {
+    const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
+    if (error) return fail(error);
+  } else {
+    const bridge = await buildFallbackBridge(key, from, to);
+    const targetName = to.backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName;
+    if (to.backend === 'claude') await state.setClaudeProfileOverride(key, to.profile);
+    await switchThreadAdapter(key, targetName);
+    if (to.backend === 'opencode') {
+      const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
+      if (error) return fail(error);
+    }
+    firstPrompt = { text: bridge, isRequestPrompt: false };
   }
-  if (move.kind === 'deferred') {
-    fallbackSwitchOffers.delete(k);
-    const notice = buildFallbackDeferredNotice(move.from, move.to);
-    await say(notice);
-    return { isSwitched: false, notice };
-  }
-  const { firstPrompt, isStoppingBackground } = move;
   cancelApiRetry(key); // retires the offer too: the switch consumed it
-  const returnUpdate = decideFallbackReturnAfterSwitch({ remembered: state.getFallbackReturn(key), from, to });
-  if (returnUpdate.action === 'remember') await state.setFallbackReturn(key, returnUpdate.rung);
-  else if (returnUpdate.action === 'forget') await state.setFallbackReturn(key, null);
   const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
   console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
   await say(notice);
@@ -7190,78 +7149,6 @@ async function switchTopicToFallbackEntry(
   await deliverPromptOrBuffer(key, prompt.text, startupPromptBuffer.checkIsStarting(k));
   await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
   return { isSwitched: true, notice };
-}
-
-/** Topics whose way back is under way: a second tap on the same button is stale, not a second move. */
-const fallbackReturnsInFlight = new Set<string>();
-
-/**
- * @description The «back» button of `/accounts` for a topic the bot moved off a limited rung
- * (`utils/fallbackReturn.ts`): its label (the rung it was moved from, with the reset while that rung is still
- * limited) and its callback data. `null` when nothing is remembered, the remembered account no longer exists, or
- * the topic is already there.
- */
-function getFallbackReturnButton(key: SessionKey): { label: string; callbackData: string } | null {
-  const origin = state.getFallbackReturn(key);
-  if (origin === null) return null;
-  if (origin.backend === 'claude' && origin.profile !== defaultClaudeProfileName && state.getClaudeProfileRecord(origin.profile) === undefined) return null;
-  const current = getTopicFallbackPosition(key);
-  if (current !== null && checkIsSameFallbackAccount(current, origin)) return null;
-  return {
-    label: buildFallbackReturnLabel({ current, origin, resetTime: getFallbackResetTime(origin) }),
-    callbackData: buildFallbackReturnCallback(origin),
-  };
-}
-
-/**
- * @description The way back (the «back» button of `/accounts`): move the topic onto the rung the limit switch took
- * it from, through the same move ({@link moveTopicOntoRung}). A plain move — no "continue" nudge or bridge, a working
- * Claude session is moved at the end of its turn — except while a usage-limit wait is armed: then the topic's turn
- * was interrupted, and the move is exactly an `/accounts use <x>` pick during the wait (the limit switch, with its
- * notice and its "continue" nudge). The remembered rung is forgotten once the topic is there (or its move is
- * queued); a failed move keeps it. `expired` when the button no longer names the remembered rung (an old keyboard)
- * or a tap is already being served. Otherwise the notice to answer the tap with — `isPosted` when it already went
- * into the topic.
- */
-async function returnTopicToFallbackOrigin(key: SessionKey, revision: string): Promise<{ kind: 'expired' } | { kind: 'done'; notice: string; isPosted: boolean }> {
-  const k = keyToString(key);
-  const origin = state.getFallbackReturn(key);
-  if (origin === null || !checkIsFallbackReturnCurrent(origin, revision) || fallbackReturnsInFlight.has(k)) return { kind: 'expired' };
-  fallbackReturnsInFlight.add(k);
-  try {
-    const from = getTopicFallbackPosition(key);
-    const isAlreadyThere = from !== null && checkIsSameFallbackAccount(from, origin);
-    if (!isAlreadyThere && getArmedApiRetry(key)?.kind === 'usageLimit') {
-      // Like `/accounts use <x>`: a Claude account is picked without a model (the remembered one is a reported id).
-      const target: FallbackChainEntry = origin.backend === 'claude' ? { ...origin, model: null } : origin;
-      const { notice } = await switchTopicToFallbackEntry(key, from, target, { isAnnounced: true });
-      return { kind: 'done', notice, isPosted: true };
-    }
-    const wasActive = getThreadAdapter(key).checkIsActive(key);
-    const runningModel = readRunningModelBeforeMove(key, from, origin);
-    const move: RungMove = isAlreadyThere
-      ? { kind: 'moved', firstPrompt: null, isStoppingBackground: false }
-      : await moveTopicOntoRung(key, from, origin, { isAfterLimit: false, hasBridge: false });
-    if (move.kind === 'failed') return { kind: 'done', notice: buildFallbackReturnFailedNotice(from, origin, move.error), isPosted: false };
-    await state.setFallbackReturn(key, null);
-    if (move.kind === 'deferred') return { kind: 'done', notice: buildFallbackReturnDeferredNotice(from, origin), isPosted: false };
-    cancelApiRetry(key); // a wait armed for the rung the topic just left is over (it retires the switch offer too)
-    console.log(`[fallback] ${k}: moved back from ${from ? formatFallbackEntry(from) : '?'} to ${formatFallbackEntry(origin)}`);
-    if (wasActive) {
-      const ensured = await ensureAgentSession(key);
-      if (ensured.message) await replyToThread(key, ensured.message);
-    }
-    // The model the topic had is restored silently, and only when the move provably changed it: the model the Claude
-    // session ran before the move is known, differs from the remembered one, and a session is up to take the pick.
-    const modelToRestore = runningModel !== null && getThreadAdapter(key).checkIsActive(key) ? getFallbackModelToPin(origin, runningModel) : null;
-    if (modelToRestore !== null) {
-      const error = await getThreadAdapter(key).setModel?.(key, modelToRestore);
-      if (error) console.warn(`[fallback] ${k}: restoring the model ${modelToRestore} failed: ${error}`);
-    }
-    return { kind: 'done', notice: buildFallbackReturnedNotice({ from, to: origin }), isPosted: false };
-  } finally {
-    fallbackReturnsInFlight.delete(k);
-  }
 }
 
 /**
@@ -7314,8 +7201,6 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
-  getFallbackReturnButton,
-  returnToFallbackOrigin: returnTopicToFallbackOrigin,
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   disconnectOpenCodeProvider: applyProviderDisconnect,
   startOpenCodeConnect: showConnectMethodPicker,
