@@ -835,6 +835,8 @@ export const esDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Cancelado — el tema sigue en {from}.',
   'backendSwitch.stale': 'Esta pregunta está desactualizada — no se cambió nada.',
   'backendSwitch.failed': '⚠️ El cambio a {to} falló: {error}',
+  'limits.addConfirm': '➕ ¿Añadir {label} a la lista de respaldo?',
+  'limits.enableConfirm': '➕ ¿Incluir {label} en el cambio automático?',
   'limits.usageHeading': 'Uso (% consumido)',
   'limits.topicRuns': 'Se ejecuta en: {current}',
   'limits.settingsGeneral': 'Valores por defecto para todos los temas.',

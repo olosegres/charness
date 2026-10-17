@@ -157,6 +157,23 @@ function withDisabledFlag(entry: FallbackChainEntry, disabled: unknown): Fallbac
   return disabled === true ? { ...entry, disabled: true } : entry;
 }
 
+/**
+ * @description Whether putting `entry` into automatic switching brings in a backend the list does not use yet: the
+ * rungs `chain` already has in automatic switching (the ones not left out) are not empty and none is of `entry`'s
+ * backend. A limit that moves a topic onto such a rung from the other backend hands its conversation over in
+ * compacted form, so the operator is asked once, when the list first becomes mixed. A list with nothing in
+ * automatic switching has no backend yet to differ from.
+ */
+export function checkIsNewBackendForChain(chain: readonly FallbackChainEntry[], entry: FallbackChainEntry): boolean {
+  const used = chain.filter((rung) => !checkIsFallbackEntryDisabled(rung));
+  return used.length > 0 && !used.some((rung) => rung.backend === entry.backend);
+}
+
+/** Whether the rungs in automatic switching span both backends (a switch along the list can hand a conversation over). */
+export function checkIsMixedFallbackChain(chain: readonly FallbackChainEntry[]): boolean {
+  return new Set(chain.filter((rung) => !checkIsFallbackEntryDisabled(rung)).map((rung) => rung.backend)).size > 1;
+}
+
 /** Whether the rung is excluded from automatic switching. */
 export function checkIsFallbackEntryDisabled(entry: FallbackChainEntry): boolean {
   return entry.disabled === true;
@@ -496,6 +513,13 @@ export const fallbackRemoveCallbackRe = new RegExp(`^fbk_rm_${indexGroup}_${revi
 export const fallbackToggleCallbackRe = new RegExp(`^fbk_tg_${indexGroup}_${revisionGroup}$`);
 /** Open a rung's detail view from the list (same baked revision + index). */
 export const fallbackOpenCallbackRe = new RegExp(`^fbk_op_${indexGroup}_${revisionGroup}$`);
+/**
+ * «✅ Continue» of the question before a rung of a NEW backend is included: `fbk_tgok_` for a rung left out (the
+ * toggle's own index + revision), `fbk_addok_` for an added one (the rung rides in the question message's snapshot,
+ * only the revision of the list it was asked about is baked in).
+ */
+export const fallbackToggleConfirmCallbackRe = new RegExp(`^fbk_tgok_${indexGroup}_${revisionGroup}$`);
+export const fallbackAddConfirmCallbackRe = new RegExp(`^fbk_addok_${revisionGroup}$`);
 /** Open the «add» sub-picker (accounts and providers), then a Claude account's model list. */
 export const fallbackAddCallback = 'fbk_add';
 
@@ -545,6 +569,14 @@ export function buildFallbackOpenCallback(index: number, revision: string): stri
 
 export function buildFallbackToggleCallback(index: number, revision: string): string {
   return `fbk_tg_${index}_${revision}`;
+}
+
+export function buildFallbackToggleConfirmCallback(index: number, revision: string): string {
+  return `fbk_tgok_${index}_${revision}`;
+}
+
+export function buildFallbackAddConfirmCallback(revision: string): string {
+  return `fbk_addok_${revision}`;
 }
 
 export function buildFallbackAddClaudeCallback(profile: string): string {

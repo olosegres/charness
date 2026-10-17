@@ -20,6 +20,7 @@ import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import {
   addFallbackEntry,
+  buildFallbackAddConfirmCallback,
   buildFallbackAddClaudeCallback,
   buildFallbackAddClaudeModelCallback,
   buildFallbackAddModelCallback,
@@ -29,9 +30,13 @@ import {
   buildFallbackMoveUpCallback,
   buildFallbackRemoveCallback,
   buildFallbackToggleCallback,
+  buildFallbackToggleConfirmCallback,
   checkIsFallbackEntryDisabled,
+  checkIsMixedFallbackChain,
+  checkIsNewBackendForChain,
   checkIsSameFallbackAccount,
   fallbackAddCallback,
+  fallbackAddConfirmCallbackRe,
   fallbackAddClaudeCallbackRe,
   fallbackAddClaudeModelCallbackRe,
   fallbackAddModelCallbackRe,
@@ -54,6 +59,7 @@ import {
   fallbackRemoveCallbackRe,
   fallbackSwitchCallbackRe,
   fallbackToggleCallbackRe,
+  fallbackToggleConfirmCallbackRe,
   fallbackWaitOffCallback,
   fallbackWaitOnCallback,
   fallbackWaitOpenCallback,
@@ -165,6 +171,8 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   } = ports;
 
   const addSnapshots = new Map<number, AddSnapshot>();
+  /** The rung each «add it?» question (per MESSAGE) waits to add; the revision of the list it was asked about rides in its button. */
+  const pendingAdds = new Map<number, FallbackChainEntry>();
 
   function getLabelWords(): { claude: string; openCode: string; topicModel: string } {
     return { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel') };
@@ -363,6 +371,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   async function rerenderPicker(key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
     if (messageId === null) return;
     addSnapshots.delete(messageId);
+    pendingAdds.delete(messageId);
     const picker = await buildPicker(key, isGeneral);
     await editThreadMessage(key, messageId, picker.text, picker.keyboard);
   }
@@ -425,6 +434,35 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }
     await getState().setFallbackChain(result.chain);
     return t('fallback.added', { label: formatEntry(entry) });
+  }
+
+  /**
+   * The question before a rung of a NEW backend joins automatic switching, in the message the tap came from: the
+   * rung, the shared line about the hand-over, ✅ Continue (the revision of the list is baked in) and ✖️ Cancel
+   * (`cancelData`: back to the list, or to the rung's detail view). A tap that comes late finds the list changed.
+   */
+  async function askAboutNewBackend(key: SessionKey, messageId: number, questionKey: 'limits.addConfirm' | 'limits.enableConfirm', entry: FallbackChainEntry, continueData: string, cancelData: string): Promise<void> {
+    const text = `${t(questionKey, { label: formatEntry(entry) })}\n${t('handover.note')}`;
+    await editThreadMessage(key, messageId, text, Markup.inlineKeyboard([[
+      Markup.button.callback(t('handover.continueButton'), continueData),
+      Markup.button.callback(t('handover.cancelButton'), cancelData),
+    ]]));
+  }
+
+  /**
+   * An «add» that finished its steps. A rung of a backend the list does not use yet asks first (the question
+   * replaces the picker in the same message); any other add goes ahead and the screen is re-rendered.
+   */
+  async function takeAdd(ctx: Context, key: SessionKey, isGeneral: boolean, messageId: number | null, entry: FallbackChainEntry): Promise<void> {
+    const chain = getState().getFallbackChain();
+    if (messageId !== null && addFallbackEntry(chain, entry).ok && checkIsNewBackendForChain(chain, entry)) {
+      await ctx.answerCbQuery();
+      pendingAdds.set(messageId, entry);
+      await askAboutNewBackend(key, messageId, 'limits.addConfirm', entry, buildFallbackAddConfirmCallback(getFallbackChainRevision(chain)), fallbackBackCallback);
+      return;
+    }
+    await answerTap(ctx, key, await applyAdd(entry));
+    await rerenderPicker(key, messageId, isGeneral);
   }
 
   /** Replace the chain with the draft and RETURN the confirmation. */
@@ -563,14 +601,23 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     confirm: (chain: FallbackChainEntry[], index: number) => string,
     /** Where the rung sits after the edit (the detail view follows it); `null` = back to the list. */
     nextIndex: (index: number) => number | null,
+    /** An edit that must ask first answers with the data of the question's two buttons; `null` = go ahead. */
+    gate?: (chain: FallbackChainEntry[], index: number, revision: string) => { continueData: string; cancelData: string } | null,
   ): void {
     bot.action(re, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const chain = getState().getFallbackChain();
-      const parsed = parseFallbackEditCallback(ctx.match[0], re, getFallbackChainRevision(chain));
+      const revision = getFallbackChainRevision(chain);
+      const parsed = parseFallbackEditCallback(ctx.match[0], re, revision);
       if (parsed === null) { await ctx.answerCbQuery(); return; }
       if (!parsed.isCurrent) {
         await ctx.answerCbQuery(t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      const question = gate?.(chain, parsed.index, revision);
+      if (question && messageId !== null && chain[parsed.index]) {
+        await ctx.answerCbQuery();
+        await askAboutNewBackend(key, messageId, 'limits.enableConfirm', chain[parsed.index], question.continueData, question.cancelData);
         return;
       }
       const result = edit(chain, parsed.index);
@@ -586,10 +633,17 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   function registerFallbackChainCallbacks(): void {
     registerEdit(fallbackMoveUpCallbackRe, (chain, index) => moveFallbackEntry(chain, index, -1), () => t('fallback.moved'), (index) => Math.max(0, index - 1));
     registerEdit(fallbackMoveDownCallbackRe, (chain, index) => moveFallbackEntry(chain, index, 1), () => t('fallback.moved'), (index) => index + 1);
-    registerEdit(fallbackToggleCallbackRe, toggleFallbackEntryDisabled, (chain, index) => t(
+    const confirmToggle = (chain: FallbackChainEntry[], index: number): string => t(
       checkIsFallbackEntryDisabled(chain[index]) ? 'limits.entryEnabled' : 'limits.entryDisabled',
       { label: formatEntry(chain[index]) },
-    ), (index) => index);
+    );
+    // Using a rung that is left out is a question when its backend is not in automatic switching yet.
+    registerEdit(fallbackToggleCallbackRe, toggleFallbackEntryDisabled, confirmToggle, (index) => index, (chain, index, revision) => {
+      const entry = chain[index];
+      if (!entry || !checkIsFallbackEntryDisabled(entry) || !checkIsNewBackendForChain(chain.filter((_, i) => i !== index), entry)) return null;
+      return { continueData: buildFallbackToggleConfirmCallback(index, revision), cancelData: buildFallbackOpenCallback(index, revision) };
+    });
+    registerEdit(fallbackToggleConfirmCallbackRe, toggleFallbackEntryDisabled, confirmToggle, (index) => index);
     registerEdit(fallbackRemoveCallbackRe, removeFallbackEntry, (chain, index) => t('fallback.removed', { label: formatEntry(chain[index]) }), () => null);
 
     // A rung's button on the list: open its detail view (a stale revision only re-renders the list).
@@ -618,8 +672,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
 
     bot.action(fallbackAddClaudeModelCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const model = ctx.match[2] === '-' ? null : ctx.match[2];
-      await answerTap(ctx, key, await applyAdd({ backend: 'claude', profile: ctx.match[1], model }));
-      await rerenderPicker(key, messageId, isGeneral);
+      await takeAdd(ctx, key, isGeneral, messageId, { backend: 'claude', profile: ctx.match[1], model });
     }));
 
     bot.action(fallbackAddProviderCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
@@ -657,7 +710,20 @@ export function createFallbackChain(ports: FallbackChainPorts) {
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await answerTap(ctx, key, await applyAdd({ backend: 'opencode', providerId: snapshot.providerId, modelId }));
+      await takeAdd(ctx, key, isGeneral, messageId, { backend: 'opencode', providerId: snapshot.providerId, modelId });
+    }));
+
+    // «✅ Continue» of the question before a rung of a new backend is added: only while the list is the one the
+    // question was asked about; a stale tap re-renders the list and adds nothing.
+    bot.action(fallbackAddConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
+      const entry = messageId === null ? undefined : pendingAdds.get(messageId);
+      if (!entry || ctx.match[1] !== getFallbackChainRevision(getState().getFallbackChain())) {
+        await ctx.answerCbQuery(t('fallback.stale'));
+        await rerenderPicker(key, messageId, isGeneral);
+        return;
+      }
+      if (messageId !== null) pendingAdds.delete(messageId);
+      await answerTap(ctx, key, await applyAdd(entry));
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
@@ -669,7 +735,10 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       }
       await ctx.answerCbQuery();
       if (messageId !== null) {
-        await editThreadMessage(key, messageId, t('limits.rebuildConfirm'), Markup.inlineKeyboard([
+        // A draft that holds both backends hands conversations over when a limit moves a topic along it: say so.
+        const draft = proposeFallbackChain(await detectFallbackOptions(), getState().getFallbackChain());
+        const text = checkIsMixedFallbackChain(draft) ? `${t('limits.rebuildConfirm')}\n${t('handover.note')}` : t('limits.rebuildConfirm');
+        await editThreadMessage(key, messageId, text, Markup.inlineKeyboard([
           [Markup.button.callback(t('fallback.proposeConfirmButton'), fallbackProposeConfirmCallback)],
           buildBackRow(),
         ]));

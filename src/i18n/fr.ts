@@ -835,6 +835,8 @@ export const frDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Annulé — le sujet reste sur {from}.',
   'backendSwitch.stale': 'Cette question est périmée — rien n\'a été basculé.',
   'backendSwitch.failed': '⚠️ La bascule vers {to} a échoué : {error}',
+  'limits.addConfirm': '➕ Ajouter {label} à la liste de secours ?',
+  'limits.enableConfirm': '➕ Inclure {label} dans la bascule automatique ?',
   'limits.usageHeading': 'Usage (% consommé)',
   'limits.topicRuns': 'Tourne sur : {current}',
   'limits.settingsGeneral': 'Valeurs par défaut pour tous les sujets.',

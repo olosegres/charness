@@ -829,6 +829,8 @@ export const jaDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ キャンセルしました — トピックは {from} のままです。',
   'backendSwitch.stale': 'この質問は古くなっています — 何も切り替えていません。',
   'backendSwitch.failed': '⚠️ {to} への切替に失敗しました: {error}',
+  'limits.addConfirm': '➕ {label} を予備リストに追加しますか？',
+  'limits.enableConfirm': '➕ {label} を自動切替に含めますか？',
   'limits.usageHeading': '使用状況（% 使用済み）',
   'limits.topicRuns': '実行先: {current}',
   'limits.settingsGeneral': '全トピックの既定値。',

@@ -836,6 +836,8 @@ export const ptDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Cancelado — o tópico continua em {from}.',
   'backendSwitch.stale': 'Esta pergunta está desatualizada — nada foi trocado.',
   'backendSwitch.failed': '⚠️ A troca para {to} falhou: {error}',
+  'limits.addConfirm': '➕ Adicionar {label} à lista de reserva?',
+  'limits.enableConfirm': '➕ Incluir {label} na troca automática?',
   'limits.usageHeading': 'Uso (% consumido)',
   'limits.topicRuns': 'Corre em: {current}',
   'limits.settingsGeneral': 'Predefinições para todos os tópicos.',

@@ -835,6 +835,8 @@ export const kaDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ გაუქმდა — თემა რჩება {from}-ზე.',
   'backendSwitch.stale': 'ეს კითხვა მოძველდა — არაფერი გადართულა.',
   'backendSwitch.failed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}',
+  'limits.addConfirm': '➕ დაემატოს {label} სარეზერვო სიას?',
+  'limits.enableConfirm': '➕ ჩაირთოს {label} ავტომატურ გადართვაში?',
   'limits.usageHeading': 'გამოყენება (% გამოყენებულია)',
   'limits.topicRuns': 'მუშაობს: {current}',
   'limits.settingsGeneral': 'ყველა თემის ნაგულისხმევი.',

@@ -188,6 +188,15 @@ switch a notice button triggers (`takeSwitchOffer`: the bot checks the episode i
 the index is inside that episode's remembered candidates, moves the topic and resumes the work; the notice is
 edited into the confirmation, a stale tap only answers the callback).
 
+**A rung of a new backend asks first.** Adding a rung whose backend the list does not use yet (rungs in automatic
+switching; a non-empty list — `checkIsNewBackendForChain`), or including a 🚫 one that does that, replaces the picker /
+detail view in the SAME message with `limits.addConfirm` / `limits.enableConfirm` + `handover.note` and ✅ Continue /
+✖️ Cancel: `fbk_addok_<rev>` (the rung rides in the question message's snapshot `pendingAdds`; a tap whose revision no longer
+matches, or on a message with no snapshot, re-renders and adds nothing) and `fbk_tgok_<i>_<rev>` (the toggle's own index +
+revision), Cancel being `fbk_back` / `fbk_op_<i>_<rev>`. A rung of a backend already in the list is added / enabled at
+once. «🔄 Fill from connected» keeps its own confirmation; when the draft holds both backends (`checkIsMixedFallbackChain`)
+its text gains the same `handover.note` line.
+
 ## `stt.ts`
 
 `/stt` (hidden aliases `/voice`, `/speech`) and its buttons `stt_<action>[_<arg>…]_<revision>` (every button matches

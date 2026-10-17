@@ -834,6 +834,8 @@ export const hiDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ रद्द किया गया — टॉपिक {from} पर ही रहेगा।',
   'backendSwitch.stale': 'यह प्रश्न पुराना हो गया है — कुछ स्विच नहीं हुआ।',
   'backendSwitch.failed': '⚠️ {to} पर स्विच विफल: {error}',
+  'limits.addConfirm': '➕ {label} को बैकअप सूची में जोड़ें?',
+  'limits.enableConfirm': '➕ {label} को स्वचालित स्विच में शामिल करें?',
   'limits.usageHeading': 'उपयोग (% खर्च)',
   'limits.topicRuns': 'इस पर चल रहा है: {current}',
   'limits.settingsGeneral': 'सभी टॉपिक के लिए डिफ़ॉल्ट।',

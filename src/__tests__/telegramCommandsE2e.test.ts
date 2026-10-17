@@ -18,7 +18,9 @@
  *     agent runs (the default effort and «as in General»: `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
- *     and the notices while no agent runs
+ *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
+ *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
+ *     such a rung again, while a rung of a backend already in the list goes in at once
  *   → `/stt`: the screen next to the instance's env file (also as `/voice`), a custom server added through the typed
  *     steps (an address with a login is refused and deleted, the pasted key is deleted, neither reaches a bot
  *     message or the output trace), a tap that saves, a keyboard from before a hand edit that is refused, and a
@@ -50,6 +52,9 @@ import * as path from 'path';
 import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
+import { restartCharnessWithState } from './e2e/fallbackFlowKit';
+import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
 import { fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
@@ -79,6 +84,10 @@ const projectFolder = 'proj';
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
 const threadKeyString = `${group.id}:${topicThreadId}`;
+/** The second Claude account of the `/limits` step, and the OpenCode model its list starts with. */
+const limitsAccount = 'work';
+const limitsOpenCodeRung: FallbackChainEntry = { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' };
+const handoverNote = 'The conversation context will be handed over in compacted form.';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -214,6 +223,7 @@ interface PersistedStateSlice {
   schedules?: Record<string, ScheduleRecord>;
   displayPrefs?: Record<string, Record<string, string>>;
   agents?: Record<string, { name?: string; claudeSessionId?: string; jsonStreamTail?: { claudeCodeVersion?: string } }>;
+  fallbackChain?: FallbackChainEntry[];
 }
 
 function readPersistedState(): PersistedStateSlice {
@@ -507,6 +517,84 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the screen re-rendered', screen, (text) => text.includes('🔁 as in General · ⏳ set for this topic'));
     await topic.sendAndAwaitReply('/auto_continue_limits off', 'Auto-resume after a usage limit: OFF for this topic');
     await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
+  });
+
+  it('/limits asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it; a rung of a backend already there goes in at once; including a left-out rung of a new backend asks again', async () => {
+    // No OpenCode catalog here to add from, so the list starts with the OpenCode rung the state holds and the other
+    // backend is a second Claude account, signed in.
+    createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: limitsAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, [limitsAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'work@example.com', subscriptionType: 'max' } };
+      persisted.fallbackChain = [limitsOpenCodeRung];
+    });
+    const screen = await topic.sendAndAwaitReply('/limits', 'Runs on:');
+    const waitForButton = async (description: string, pattern: RegExp): Promise<string> => {
+      let found = '';
+      await getCharness().waitFor(description, replyTimeoutMs, () => {
+        found = topic.getKeyboardData(screen).flat().find((data) => pattern.test(data)) ?? '';
+        return found !== '';
+      });
+      return found;
+    };
+    const askToAddAccount = async (modelPattern: RegExp): Promise<void> => {
+      await topic.tapAndAwaitAnswer(screen, 'fbk_add');
+      await topic.tapAndAwaitAnswer(screen, await waitForButton('the account step', new RegExp(`^fbk_addc_${limitsAccount}$`)));
+      await topic.tapAndAwaitAnswer(screen, await waitForButton('the model step', modelPattern));
+    };
+    const readChain = (): FallbackChainEntry[] => readPersistedState().fallbackChain ?? [];
+
+    // The other backend: asked first, Cancel keeps the list.
+    await askToAddAccount(new RegExp(`^fbk_addcm_${limitsAccount}_-$`));
+    await topic.waitForMessageText('the question', screen, (text) => text.startsWith('➕ Add'));
+    assert.equal(screen.text, `➕ Add Claude · ${limitsAccount} · topic's model to the fallback list?\n${handoverNote}`);
+    assert.deepEqual(topic.getKeyboardLabels(screen), [['✅ Continue', '✖️ Cancel']]);
+    assert.match(topic.getKeyboardData(screen)[0][0], /^fbk_addok_[0-9a-f]{8}$/, 'the revision of the list is baked into Continue');
+    assert.equal(topic.getKeyboardData(screen)[0][1], 'fbk_back');
+    assert.deepEqual(readChain(), [limitsOpenCodeRung], 'nothing is added before the answer');
+    await topic.tapAndAwaitAnswer(screen, 'fbk_back');
+    await topic.waitForMessageText('the list back', screen, (text) => text.includes('Runs on:'));
+    assert.deepEqual(readChain(), [limitsOpenCodeRung], 'Cancel changed nothing');
+
+    // The same add, confirmed: the rung joins the list and the screen is the list again.
+    await askToAddAccount(new RegExp(`^fbk_addcm_${limitsAccount}_-$`));
+    await topic.waitForMessageText('the question', screen, (text) => text.startsWith('➕ Add'));
+    const continueData = topic.getKeyboardData(screen)[0][0];
+    assert.equal(await topic.tapAndAwaitAnswer(screen, continueData), `✅ Added: Claude · ${limitsAccount} · topic's model`);
+    await getCharness().waitFor('the rung in state.json', replyTimeoutMs, () => readChain().length === 2);
+    assert.deepEqual(readChain()[1], { backend: 'claude', profile: limitsAccount, model: null });
+    await topic.waitForMessageText('the list re-rendered', screen, (text) => text.includes('Runs on:'));
+    assert.equal(await topic.tapAndAwaitAnswer(screen, continueData), 'The list changed since this keyboard was posted — it is re-rendered.', 'a Continue tap from before the change adds nothing');
+    assert.equal(readChain().length, 2);
+
+    // A rung of a backend the list already has goes in at once: no question.
+    await askToAddAccount(new RegExp(`^fbk_addcm_${limitsAccount}_(?!-$)[a-z0-9._-]+$`));
+    await getCharness().waitFor('the second Claude rung in state.json', replyTimeoutMs, () => readChain().length === 3);
+    assert.ok(!screen.text.includes(handoverNote), 'no question for a backend already in the list');
+    assert.equal(readChain()[2].backend, 'claude');
+
+    // Leave the OpenCode rung out, then include it again: Claude is the only backend left in automatic switching, so OpenCode is new.
+    await topic.tapAndAwaitAnswer(screen, await waitForButton('the OpenCode rung', /^fbk_op_0_[0-9a-f]{8}$/));
+    await topic.tapAndAwaitAnswer(screen, await waitForButton('the rung\'s detail view', /^fbk_tg_0_[0-9a-f]{8}$/));
+    await getCharness().waitFor('the OpenCode rung left out', replyTimeoutMs, () => readChain()[0].disabled === true);
+    await topic.waitForMessageText('the detail view of the left-out rung', screen, (text) => text.includes('Left out of automatic switching'));
+    await topic.tapAndAwaitAnswer(screen, await waitForButton('the include button', /^fbk_tg_0_[0-9a-f]{8}$/));
+    await topic.waitForMessageText('the question', screen, (text) => text.startsWith('➕ Include'));
+    assert.equal(screen.text, `➕ Include OpenCode · openai/gpt-5 in automatic switching?\n${handoverNote}`);
+    assert.deepEqual(topic.getKeyboardLabels(screen), [['✅ Continue', '✖️ Cancel']]);
+    assert.match(topic.getKeyboardData(screen)[0][0], /^fbk_tgok_0_[0-9a-f]{8}$/);
+    assert.match(topic.getKeyboardData(screen)[0][1], /^fbk_op_0_[0-9a-f]{8}$/, 'Cancel returns to the rung\'s detail view');
+    assert.equal(readChain()[0].disabled, true, 'still left out before the answer');
+    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][1]);
+    await topic.waitForMessageText('the detail view', screen, (text) => text.includes('Left out of automatic switching'));
+    assert.equal(readChain()[0].disabled, true, 'Cancel changed nothing');
+
+    await topic.tapAndAwaitAnswer(screen, await waitForButton('the detail view of the left-out rung', /^fbk_tg_0_[0-9a-f]{8}$/));
+    await topic.waitForMessageText('the question again', screen, (text) => text.startsWith('➕ Include'));
+    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][0]);
+    await getCharness().waitFor('the OpenCode rung included again', replyTimeoutMs, () => readChain()[0].disabled !== true);
+
+    await topic.sendAndAwaitReply('/limits clear', 'The list of fallback models is empty now.');
+    assert.deepEqual(readChain(), []);
   });
 
   it('/compact and /compact_on_idle say an agent session is needed', async () => {

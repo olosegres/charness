@@ -21,7 +21,8 @@ runs the other backend, and a Claude account picked in `/accounts` (`/accounts u
 which only recorded the pick before — ask «Switch this topic from OpenCode to Claude «work»? The conversation context
 will be handed over in compacted form.» with ✅ Continue / ✖️ Cancel when there is a conversation to hand over; Continue
 moves the topic the way a usage limit does (the other backend's parked conversation is resumed, the context bridge is the
-first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once.
+first prompt), Cancel changes nothing, and a topic with nothing to hand over switches at once. `/limits` asks the same
+way before a rung of a backend the list does not use yet is added or included again.
 
 ### Upgrading
 - **The default effort is `medium` now (it was `xhigh`).** Topics with no `/effort` pick of their own start their next

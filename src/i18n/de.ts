@@ -835,6 +835,8 @@ export const deDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Abgebrochen — dieses Thema bleibt auf {from}.',
   'backendSwitch.stale': 'Diese Frage ist veraltet — nichts wurde umgestellt.',
   'backendSwitch.failed': '⚠️ Umstellen auf {to} fehlgeschlagen: {error}',
+  'limits.addConfirm': '➕ {label} zur Ersatzliste hinzufügen?',
+  'limits.enableConfirm': '➕ {label} in den automatischen Wechsel einbeziehen?',
   'limits.usageHeading': 'Nutzung (% verbraucht)',
   'limits.topicRuns': 'Läuft auf: {current}',
   'limits.settingsGeneral': 'Standard für alle Themen.',

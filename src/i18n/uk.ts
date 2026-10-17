@@ -841,6 +841,8 @@ export const ukDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Скасовано — топік лишається на {from}.',
   'backendSwitch.stale': 'Питання застаріло — нічого не перемкнено.',
   'backendSwitch.failed': '⚠️ Перемикання на {to} не вдалося: {error}',
+  'limits.addConfirm': '➕ Додати {label} до списку запасних моделей?',
+  'limits.enableConfirm': '➕ Увімкнути {label} в автоматичне перемикання?',
   'limits.usageHeading': 'Ліміти (% витрачено)',
   'limits.topicRuns': 'Працює на: {current}',
   'limits.settingsGeneral': 'Типово для всіх топіків.',

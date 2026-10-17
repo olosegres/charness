@@ -14,6 +14,12 @@ import * as assert from 'node:assert/strict';
 import {
   addFallbackEntry,
   buildFallbackAddClaudeModelCallback,
+  buildFallbackAddConfirmCallback,
+  buildFallbackToggleConfirmCallback,
+  checkIsMixedFallbackChain,
+  checkIsNewBackendForChain,
+  fallbackAddConfirmCallbackRe,
+  fallbackToggleConfirmCallbackRe,
   buildFallbackToggleCallback,
   checkIsFallbackEntryDisabled,
   fallbackToggleCallbackRe,
@@ -467,4 +473,39 @@ test('earliest reset: an account at 100 % names the reset of the window it exhau
     nowMs,
   });
   assert.equal(found?.isCurrent, true, 'only the current rung names a reset');
+});
+
+test('a rung of a NEW backend (the question before it joins automatic switching): only a non-empty list of the other backend asks', () => {
+  assert.equal(checkIsNewBackendForChain([], openCode('openai', 'gpt-5')), false, 'an empty list has no backend yet to differ from');
+  assert.equal(checkIsNewBackendForChain([claude('default')], openCode('openai', 'gpt-5')), true);
+  assert.equal(checkIsNewBackendForChain([openCode('openai', 'gpt-5')], claude('work')), true);
+  assert.equal(checkIsNewBackendForChain([claude('default')], claude('work', 'opus')), false, 'a second account of the same backend is added at once');
+  assert.equal(checkIsNewBackendForChain([claude('default'), openCode('openai', 'gpt-5')], openCode('google', 'gemini-2.5-pro')), false, 'the list is mixed already');
+});
+
+test('a rung left out of automatic switching does not count as a backend the list uses', () => {
+  const leftOut: FallbackChainEntry = { ...claude('default'), disabled: true };
+  assert.equal(checkIsNewBackendForChain([leftOut], openCode('openai', 'gpt-5')), false, 'nothing is in automatic switching: no backend to differ from');
+  assert.equal(checkIsNewBackendForChain([leftOut, claude('work')], openCode('openai', 'gpt-5')), true);
+  assert.equal(checkIsNewBackendForChain([claude('work'), { ...openCode('openai', 'gpt-5'), disabled: true }], openCode('google', 'gemini-2.5-pro')), true, 'the only OpenCode rung is left out, so OpenCode is new again');
+});
+
+test('a list is mixed when its enabled rungs span both backends', () => {
+  assert.equal(checkIsMixedFallbackChain([]), false);
+  assert.equal(checkIsMixedFallbackChain([claude('default'), claude('work')]), false);
+  assert.equal(checkIsMixedFallbackChain([claude('default'), openCode('openai', 'gpt-5')]), true);
+  assert.equal(checkIsMixedFallbackChain([claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }]), false, 'a left-out rung never receives a topic');
+});
+
+test('the confirmation buttons of the new-backend question bake the list revision (toggle also its index) and round-trip', () => {
+  const revision = getFallbackChainRevision([claude('default')]);
+  const toggle = buildFallbackToggleConfirmCallback(3, revision);
+  assert.equal(toggle, `fbk_tgok_3_${revision}`);
+  assert.deepEqual(toggle.match(fallbackToggleConfirmCallbackRe)?.slice(1), ['3', revision]);
+  const add = buildFallbackAddConfirmCallback(revision);
+  assert.equal(add, `fbk_addok_${revision}`);
+  assert.deepEqual(add.match(fallbackAddConfirmCallbackRe)?.slice(1), [revision]);
+  assert.ok(checkIsCallbackDataWithinLimit(toggle) && checkIsCallbackDataWithinLimit(add), 'within the 64-byte cap');
+  assert.equal(fallbackToggleConfirmCallbackRe.test('fbk_tg_3_' + revision), false, 'the ask-first toggle is another pattern');
+  assert.equal(fallbackAddConfirmCallbackRe.test('fbk_addok_xyz'), false);
 });

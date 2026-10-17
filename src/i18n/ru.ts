@@ -839,6 +839,8 @@ export const ruDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Отменено — топик остаётся на {from}.',
   'backendSwitch.stale': 'Вопрос устарел — ничего не переключено.',
   'backendSwitch.failed': '⚠️ Переключение на {to} не удалось: {error}',
+  'limits.addConfirm': '➕ Добавить {label} в список запасных моделей?',
+  'limits.enableConfirm': '➕ Включить {label} в автоматическое переключение?',
   'limits.usageHeading': 'Лимиты (% израсходовано)',
   'limits.topicRuns': 'Работает на: {current}',
   'limits.settingsGeneral': 'По умолчанию для всех топиков.',

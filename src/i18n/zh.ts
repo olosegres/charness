@@ -829,6 +829,8 @@ export const zhDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ 已取消 — 话题仍在 {from}。',
   'backendSwitch.stale': '此问题已过期 — 未切换任何内容。',
   'backendSwitch.failed': '⚠️ 切换到 {to} 失败：{error}',
+  'limits.addConfirm': '➕ 将 {label} 加入备用列表？',
+  'limits.enableConfirm': '➕ 将 {label} 纳入自动切换？',
   'limits.usageHeading': '用量（已用 %）',
   'limits.topicRuns': '运行在：{current}',
   'limits.settingsGeneral': '所有话题的默认值。',

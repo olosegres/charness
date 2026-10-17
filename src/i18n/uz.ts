@@ -835,6 +835,8 @@ export const uzDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Bekor qilindi — mavzu {from} da qoladi.',
   'backendSwitch.stale': 'Bu savol eskirgan — hech narsa o\'zgarmadi.',
   'backendSwitch.failed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}',
+  'limits.addConfirm': '➕ {label} ni zaxira ro\'yxatiga qo\'shamizmi?',
+  'limits.enableConfirm': '➕ {label} ni avtomatik almashtirishga kiritamizmi?',
   'limits.usageHeading': 'Foydalanish (% ishlatilgan)',
   'limits.topicRuns': 'Ishlayapti: {current}',
   'limits.settingsGeneral': 'Barcha mavzular uchun standart.',

@@ -879,6 +879,8 @@ export const enDict: Record<string, string> = {
   'backendSwitch.cancelled': '✖️ Cancelled — this topic stays on {from}.',
   'backendSwitch.stale': 'This question is out of date — nothing was switched.',
   'backendSwitch.failed': '⚠️ Switching to {to} failed: {error}',
+  'limits.addConfirm': '➕ Add {label} to the fallback list?',
+  'limits.enableConfirm': '➕ Include {label} in automatic switching?',
   'limits.usageHeading': 'Usage (% used)',
   'limits.topicRuns': 'Runs on: {current}',
   'limits.settingsGeneral': 'Defaults for all topics.',

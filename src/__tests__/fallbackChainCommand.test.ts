@@ -15,7 +15,10 @@
  *     named, never-polled left out) — then what the topic runs on + where its settings come from, then the
  *     list's heading;
  *   • the limit-notice switch button reaches the port with its episode and index and consumes the notice,
- *     a stale tap only answers.
+ *     a stale tap only answers;
+ *   • a rung of a backend the list does not use yet — added, or re-enabled — asks first (✅ Continue / ✖️ Cancel,
+ *     the shared hand-over line, the list's revision baked in), a rung of a backend already in use goes at once;
+ *     «Fill from connected» adds the same line to its confirmation when its draft holds both backends.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -93,6 +96,7 @@ describe('fallbackChain: /limits over its ports', () => {
       String(/^fbk_up_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_dn_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_tg_(\d{1,2})_([0-9a-f]{8})$/),
+      String(/^fbk_tgok_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_rm_(\d{1,2})_([0-9a-f]{8})$/),
       String(/^fbk_op_(\d{1,2})_([0-9a-f]{8})$/),
       'fbk_add',
@@ -101,6 +105,7 @@ describe('fallbackChain: /limits over its ports', () => {
       String(/^fbk_addp_(\d{1,2})$/),
       String(/^fbk_addpg_(\d{1,3})$/),
       String(/^fbk_addm_(\d{1,3})$/),
+      String(/^fbk_addok_([0-9a-f]{8})$/),
       'fbk_prop',
       'fbk_propok',
       'fbk_clear',
@@ -519,5 +524,128 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(noticeId, 'fbsw_1750000000000_0');
     assert.equal(switchTaps.at(-1)?.episodeId, 1750000000000);
     assert.equal(harness.edits.length, editsBefore, 'a stale tap edits nothing');
+  });
+  describe('a rung of a NEW backend asks before it joins automatic switching', () => {
+    const handoverLine = 'The conversation context will be handed over in compacted form.';
+
+    /** The «add» steps down to the OpenCode model `index` of provider `openai` (index 0 = gpt-5), on a fresh screen. */
+    async function pickOpenAiModel(index: number): Promise<number> {
+      await harness.runCommand('limits');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      await harness.tapButton(pickerId, 'fbk_add');
+      await harness.tapButton(pickerId, 'fbk_addp_0');
+      await harness.tapButton(pickerId, `fbk_addm_${index}`);
+      return pickerId;
+    }
+
+    it('a list with only Claude rungs, an OpenCode model picked: the question names it and the hand-over, and nothing is added yet', async () => {
+      await harness.state.setFallbackChain([claude('default')]);
+      const revision = getFallbackChainRevision(harness.state.getFallbackChain());
+      const pickerId = await pickOpenAiModel(0);
+      const question = harness.edits.at(-1);
+      assert.equal(question?.text, `➕ Add OpenCode · openai/gpt-5 to the fallback list?\n${handoverLine}`);
+      assert.deepEqual(harness.getKeyboardLabels(question), [['✅ Continue', '✖️ Cancel']]);
+      assert.deepEqual(harness.getKeyboardData(question), [[`fbk_addok_${revision}`, 'fbk_back']]);
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default')], 'nothing is added before the answer');
+
+      await harness.tapButton(pickerId, 'fbk_back'); // ✖️ Cancel
+      assert.match(harness.edits.at(-1)?.text ?? '', /🪜 Fallback models, top first:$/, 'the list is back');
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default')]);
+      await harness.tapButton(pickerId, `fbk_addok_${revision}`);
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default')], 'the cancelled question cannot be continued');
+    });
+
+    it('✅ Continue adds the rung and returns to the list; one-shot — a second tap adds nothing', async () => {
+      await harness.state.setFallbackChain([claude('default')]);
+      const revision = getFallbackChainRevision(harness.state.getFallbackChain());
+      const pickerId = await pickOpenAiModel(0);
+      await harness.tapButton(pickerId, `fbk_addok_${revision}`);
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default'), openCode('openai', 'gpt-5')]);
+      assert.match(harness.edits.at(-1)?.text ?? '', /🪜 Fallback models, top first:$/);
+      await harness.tapButton(pickerId, `fbk_addok_${revision}`);
+      assert.equal(harness.state.getFallbackChain().length, 2);
+    });
+
+    it('a question left in the history after the list changed is stale: it adds nothing and re-renders the list', async () => {
+      await harness.state.setFallbackChain([claude('default')]);
+      const askedRevision = getFallbackChainRevision(harness.state.getFallbackChain());
+      const pickerId = await pickOpenAiModel(0);
+      await harness.state.setFallbackChain([claude('default'), claude('work')]);
+      await harness.tapButton(pickerId, `fbk_addok_${askedRevision}`);
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default'), claude('work')]);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed since this keyboard was posted — it is re-rendered.');
+    });
+
+    it('a rung of a backend already in use, an empty list, and a list with nothing in automatic switching go at once', async () => {
+      await harness.state.setFallbackChain([claude('default')]);
+      const pickerId = await harness.runCommand('limits').then(() => harness.replies.at(-1)!.messageId!);
+      await harness.tapButton(pickerId, 'fbk_add');
+      await harness.tapButton(pickerId, 'fbk_addc_work');
+      await harness.tapButton(pickerId, 'fbk_addcm_work_opus');
+      assert.deepEqual(harness.state.getFallbackChain(), [claude('default'), claude('work', 'opus')], 'Claude into a Claude list: no question');
+
+      await harness.state.setFallbackChain([]);
+      await pickOpenAiModel(0);
+      assert.deepEqual(harness.state.getFallbackChain(), [openCode('openai', 'gpt-5')], 'an empty list has no backend to differ from');
+
+      await harness.state.setFallbackChain([{ ...claude('default'), disabled: true }]);
+      await pickOpenAiModel(1);
+      assert.deepEqual(harness.state.getFallbackChain(), [{ ...claude('default'), disabled: true }, openCode('openai', 'gpt-5-mini')], 'a rung left out is not in automatic switching');
+    });
+
+    it('a rung left out of a backend that is not in use asks before it is used again; one of a backend in use does not', async () => {
+      await harness.state.setFallbackChain([claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }]);
+      await harness.runCommand('limits');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      const revision = getFallbackChainRevision(harness.state.getFallbackChain());
+      await harness.tapButton(pickerId, `fbk_op_1_${revision}`);
+      await harness.tapButton(pickerId, `fbk_tg_1_${revision}`);
+      const question = harness.edits.at(-1);
+      assert.equal(question?.text, `➕ Include OpenCode · openai/gpt-5 in automatic switching?\n${handoverLine}`);
+      assert.deepEqual(harness.getKeyboardLabels(question), [['✅ Continue', '✖️ Cancel']]);
+      assert.deepEqual(harness.getKeyboardData(question), [[`fbk_tgok_1_${revision}`, `fbk_op_1_${revision}`]]);
+      assert.equal(harness.state.getFallbackChain()[1].disabled, true, 'still left out');
+
+      await harness.tapButton(pickerId, `fbk_op_1_${revision}`); // ✖️ Cancel: back to the rung
+      assert.equal(harness.edits.at(-1)?.text, '🪜 2 of 2: OpenCode · openai/gpt-5\n✅ Ready.\n🚫 Left out of automatic switching.', 'back to the rung\'s view, still left out');
+      assert.equal(harness.state.getFallbackChain()[1].disabled, true);
+      await harness.tapButton(pickerId, `fbk_tgok_1_${revision}`); // ✅ Continue
+      assert.equal(harness.state.getFallbackChain()[1].disabled, undefined, 'used again');
+
+      await harness.state.setFallbackChain([claude('default'), { ...claude('work'), disabled: true }]);
+      const next = getFallbackChainRevision(harness.state.getFallbackChain());
+      await harness.tapButton(pickerId, `fbk_tg_1_${next}`);
+      assert.equal(harness.state.getFallbackChain()[1].disabled, undefined, 'Claude into Claude: no question');
+    });
+
+    it('a stale «Continue» of the re-enable question changes nothing', async () => {
+      await harness.state.setFallbackChain([claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }]);
+      const askedRevision = getFallbackChainRevision(harness.state.getFallbackChain());
+      await harness.runCommand('limits');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      await harness.state.setFallbackChain([claude('default'), claude('work'), { ...openCode('openai', 'gpt-5'), disabled: true }]);
+      await harness.tapButton(pickerId, `fbk_tgok_1_${askedRevision}`);
+      assert.equal(harness.state.getFallbackChain()[2].disabled, true);
+    });
+
+    it('«Fill from connected» confirms as before and adds the hand-over line only when its draft holds both backends', async () => {
+      await harness.state.setFallbackChain([claude('default')]);
+      await harness.runCommand('limits');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      await harness.tapButton(pickerId, 'fbk_prop');
+      assert.equal(harness.edits.at(-1)?.text, `🔄 Replace the list with one built from what is connected? Models marked 🚫 stay left out.\n${handoverLine}`);
+      assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [['fbk_propok'], ['fbk_back']]);
+
+      const connected = detection;
+      detection = { ...detection, openCodeModels: [], recentOpenCodeModels: [], openCodeLimits: {} };
+      try {
+        await harness.tapButton(pickerId, 'fbk_back');
+        await harness.tapButton(pickerId, 'fbk_prop');
+        assert.equal(harness.edits.at(-1)?.text, '🔄 Replace the list with one built from what is connected? Models marked 🚫 stay left out.', 'Claude only: no hand-over');
+      } finally {
+        detection = connected;
+      }
+      await harness.state.setFallbackChain([]);
+    });
   });
 });
