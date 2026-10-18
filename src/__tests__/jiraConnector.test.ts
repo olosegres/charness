@@ -858,12 +858,13 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(botSource, /hooks\.set\('jira', \{\s*onPromptSettled: \(key, requestId, outcome\) => jiraConnector\.onPromptSettled\(key, requestId, outcome\),/);
   });
 
-  it('C6: a fresh session start and every completed compaction reset the conversation\'s context — an idle stop, a resume or a restart does not', () => {
+  it('C6: a fresh session start, every completed compaction and a re-spawn onto a lost conversation reset the conversation\'s context — an idle stop, a resume or a restart does not', () => {
     const start = botSource.slice(botSource.indexOf('async function startAgentSession('), botSource.indexOf('async function startAgentSession(') + 3000);
     assert.match(start, /clearThreadContextMarker\(key\);\n(?:\s*\/\/[^\n]*\n)*\s*noteConversationContextReset\(key, 'fresh session'\);/, 'at the start, right after the preamble marker');
     assert.match(startBody, /onContextCompacted: \(key, trigger\) => dispatchAdapterEvent\(key, 'contextCompacted', \(\) => noteConversationContextReset\(key, `compaction \(\$\{trigger \?\? 'bot'\}\)`\)\),/);
     assert.match(botSource, /onContextReset: \(key, reason\) => jiraConnector\.onContextReset\(key, reason\),/);
-    assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 2, 'only the start and the compaction reset');
+    assert.match(startBody, /onConversationLost: \(key\) => dispatchAdapterEvent\(key, 'conversationLost', \(\) => withThreadLocale\(key, \(\) => handleConversationLost\(key\)\), \(\) => noteConversationContextReset\(key, 'its transcript was lost'\)\),/);
+    assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 3, 'only the start, the compaction and a live re-spawn that began a new conversation reset');
     const resume = botSource.slice(botSource.indexOf('async function resumeSleepingSession('), botSource.indexOf('async function resumeSleepingSession(') + 3000);
     assert.ok(!resume.includes('noteConversationContextReset'), 'a resume continues the conversation');
   });

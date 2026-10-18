@@ -10,14 +10,19 @@
  *   → the transcript is removed (the cleanup of old conversations) while the agent runs
  *   → General's `/limits`: a tap on the second account re-spawns the topic under it — with the Bot API refusing the
  *     tap's toast as expired (the re-spawns of every live topic outlast Telegram's wait): the board still moves its ✓,
- *     the confirmation is posted as a message, the conversation starts again under its id, nothing is said in the topic
+ *     the confirmation is posted as a message, the conversation starts again under its id; the stub the stopped agent left
+ *     is proof the conversation had turns, so the topic is told once that it is gone (no error)
  *   → a tap back on the first account right away (the first process has exited by now, its stub written unless the
- *     re-spawn waited for it): the topic's agent is started again, not refused, and the topic hears no error
+ *     re-spawn waited for it): the topic's agent is started again, not refused, and the topic hears no error and no second
+ *     notice (the agent just started took no turn: no file, nothing lost)
  *   → the topic's next message is answered; no re-spawn started while the process it replaced still ran
  *   → the bot is stopped, the topic's agent is gone and only the stub is left on disk, while the saved state still
  *     names the conversation (the live state of the incident): the topic's next message is told once that the
  *     conversation is gone (the resume is not even tried), starts a new session and is answered, and the message after
  *     it is answered with no further notice
+ *   → a topic whose agent never took a turn (a session started and left alone) and whose agent is gone: no transcript, so
+ *     nothing was lost — its next message wakes it silently under the same id
+ *   → an agent that ignores the stop signals is killed after the bounded wait and only then is the replacement launched
  *
  * What the unit tests cover instead: the transcript decision (`claudeTranscriptContent.test.ts`,
  * `claudeSessionLaunch.test.ts`), the board's and the accounts screen's late toast (`limitsBoard.test.ts`,
@@ -35,7 +40,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeExitFlushDelayFileName, getFakeClaudeTranscriptPath, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeExitFlushDelayFileName, fakeClaudeIgnoreStopSignalsFileName, getFakeClaudeTranscriptPath, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -71,6 +76,8 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'lost-transcript';
+const silentFolder = 'never-spoken';
+const silentTopicThreadId = 112;
 const firstAccount = 'default';
 const secondAccount = 'work';
 
@@ -79,6 +86,8 @@ const replyTimeoutMs = 20 * 1000;
 const exitFlushDelayMs = 1500;
 /** A General tap re-spawns the topic's agent: the old process is waited for (its exit flush), the new one starts and answers. */
 const respawnTimeoutMs = 60 * 1000;
+/** The bot's bounded wait for a stopped process (`pidExitWaitTimeoutMs`): a process that ignores the signals is killed after it. */
+const stopWaitMs = 5 * 1000;
 /** Lines the bot posts into a topic when its agent fails to come up or the CLI refuses a launch. */
 const topicErrorRe = /Claude error|API error|exited unexpectedly|Failed to start/;
 /** The one soft line a topic gets when its conversation is gone and a fresh session takes its place. */
@@ -89,11 +98,14 @@ let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let general: TopicDriver;
 let topic: TopicDriver;
+let silentTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 /** The conversation the topic's agent took its first turn on. */
 let sessionId = '';
 /** The process that ran it: the one the first re-spawn stops, and whose exit writes the stub. */
 let firstProcessPid = 0;
+/** The process the topic's agent runs in now (the last step that started one keeps it here). */
+let topicProcessPid = 0;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -118,8 +130,8 @@ function listTopicErrors(): string[] {
   return topic.listMessages().map((message) => message.text).filter((text) => topicErrorRe.test(text));
 }
 
-function listConversationLostNotices(): string[] {
-  return topic.listMessages().map((message) => message.text).filter((text) => conversationLostNoticeRe.test(text));
+function listConversationLostNotices(driver: TopicDriver = topic): string[] {
+  return driver.listMessages().map((message) => message.text).filter((text) => conversationLostNoticeRe.test(text));
 }
 
 /** The flags the newest session launch carries for the conversation: how the CLI was asked to open it. */
@@ -142,7 +154,7 @@ async function askAndAwaitAnswer(label: string): Promise<void> {
 describe('A conversation whose transcript was removed, end to end: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-losttr-', [projectFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-losttr-', [projectFolder, silentFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -154,6 +166,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
+    silentTopic = new TopicDriver(fakeTelegram, getCharness, silentTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -227,7 +240,9 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     await waitForSessionRespawn(getCharness(), getLayout(), 'the topic\'s agent to be re-spawned under the second account', getAccountConfigDir(getLayout(), secondAccount), sessionId, launchesBefore);
     assert.deepEqual(getNewestLaunchFlags(), { isFresh: true, isResume: false, configDir: getAccountConfigDir(getLayout(), secondAccount) }, 'nothing to resume: the conversation starts again under its id');
     assert.deepEqual(listTopicErrors(), [], 'the topic hears no error');
-    assert.deepEqual(listConversationLostNotices(), [], 'a live agent being moved is not a resume: nothing is said');
+    // The stopped agent left only a stub: proof the conversation HAD turns, and our re-spawn is what discarded it.
+    await topic.waitForMessage('the one-line notice that the conversation is gone', (message) => conversationLostNoticeRe.test(message.text));
+    assert.equal(listConversationLostNotices().length, 1, 'told once');
   });
 
   it('a tap back on the first account right away — the first process has exited by now — starts the topic\'s agent again instead of being refused; the topic hears no error and its next message is answered', async () => {
@@ -242,7 +257,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     assert.ok(!getCharness().output.includes('exited unexpectedly'), 'the agent did not die at its start');
     await askAndAwaitAnswer('LOST-2');
     assert.deepEqual(listTopicErrors(), []);
-    assert.deepEqual(listConversationLostNotices(), []);
+    assert.equal(listConversationLostNotices().length, 1, 'no second notice: the agent just re-spawned took no turn, so no file was left and nothing was lost');
     assert.deepEqual(
       getSessionLaunches(getLayout()).filter((launch) => launch.overlapsPid != null).map((launch) => launch.pid),
       [],
@@ -266,15 +281,64 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     const launchesBefore = getSessionLaunches(getLayout()).length;
     await askAndAwaitAnswer('LOST-3');
     const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+    const noticesBefore = 1; // the one the live re-spawn posted
     assert.equal(launches.length, 1, 'one new process for the message: the resume was not even tried');
     assert.equal(getFlagValues(launches[0].argv, '--resume').length, 0, 'nothing was resumed');
+    topicProcessPid = launches[0].pid;
     const freshSessionId = getLaunchSessionId(launches[0].argv);
     assert.ok(freshSessionId && freshSessionId !== sessionId, 'the conversation is a new one, under a new id');
-    assert.equal(listConversationLostNotices().length, 1, 'the topic is told once that the previous conversation is gone');
+    assert.equal(listConversationLostNotices().length, noticesBefore + 1, 'the topic is told once more that the previous conversation is gone');
     assert.deepEqual(listTopicErrors(), [], 'the topic hears no error');
     await getCharness().waitFor('the new conversation to be the saved one', replyTimeoutMs, () => readPersistedState(getLayout()).agents?.[`${group.id}:${topicThreadId}`]?.claudeSessionId === freshSessionId);
     await askAndAwaitAnswer('LOST-4');
-    assert.equal(listConversationLostNotices().length, 1, 'no second notice: the saved state no longer names the dead conversation');
+    assert.equal(listConversationLostNotices().length, noticesBefore + 1, 'no further notice: the saved state no longer names the dead conversation');
     assert.deepEqual(listTopicErrors(), []);
+  });
+
+  it('a session started and left alone has no transcript: when its agent is gone, the next message wakes it silently under the SAME id — nothing was lost, so no notice', async () => {
+    await silentTopic.sendAndAwaitReply(`/bind ${silentFolder}`, `Bound to \`${silentFolder}\``);
+    await silentTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    await silentTopic.sendAndAwaitReply('/claude', 'ready in');
+    const launch = getSessionLaunches(getLayout()).at(-1);
+    const silentSessionId = (launch && getLaunchSessionId(launch.argv)) ?? '';
+    assert.ok(launch && silentSessionId, 'the topic\'s agent runs on a conversation id');
+    const silentTranscriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, silentFolder), sessionId: silentSessionId });
+    await restartWith((persisted) => {
+      process.kill(launch.pid, 'SIGKILL'); // the agent is gone while the bot is down; the saved state still names its conversation
+      assert.equal(persisted.agents?.[`${group.id}:${silentTopicThreadId}`]?.claudeSessionId, silentSessionId, 'the saved state names the conversation');
+    });
+    assert.equal(await readClaudeTranscriptContent(silentTranscriptPath), 'absent', 'precondition: it never took a turn, so there is no file');
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    fakeTelegram.pushOperatorMessage(silentTopicThreadId, 'NEVER-1 [fake:answer] anyone there?');
+    await silentTopic.waitForMessage('the agent\'s answer', (message) => message.text.includes('Fake final answer for NEVER-1'));
+    const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(launches.length, 1, 'one new process for the message');
+    assert.deepEqual([getFlagValues(launches[0].argv, '--resume'), getFlagValues(launches[0].argv, '--session-id')], [[], [silentSessionId]], 'started under the same id, nothing to resume');
+    assert.deepEqual(listConversationLostNotices(silentTopic), [], 'no notice: there never was a conversation');
+  });
+
+  it('an agent that ignores the stop signals is killed after the bounded wait, and only then is the replacement launched: never two agents on one conversation', async () => {
+    assert.ok(topicProcessPid !== 0 && checkIsPidAlive(topicProcessPid), 'the topic\'s agent runs');
+    const ignoreFile = path.join(getLayout().fakeStateDir, fakeClaudeIgnoreStopSignalsFileName);
+    const board = await openLimitsBoard(fakeTelegram, topic, topicThreadId);
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const outputBefore = getCharness().output.length;
+    fs.writeFileSync(ignoreFile, '');
+    try {
+      const startedAt = Date.now();
+      await topic.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${secondAccount}`));
+      assert.ok(Date.now() - startedAt >= stopWaitMs - 500, 'the bot waited out its bounded wait before it gave up on the stop signals');
+      await getCharness().waitFor('the replacement to be launched under the second account', respawnTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
+      assert.equal(checkIsPidAlive(topicProcessPid), false, 'the process that ignored the signals was killed');
+      assert.ok(getCharness().output.slice(outputBefore).includes(`process ${topicProcessPid} was still running`), 'the bot said it had to kill it');
+      assert.deepEqual(
+        getSessionLaunches(getLayout()).filter((launch) => launch.overlapsPid != null).map((launch) => launch.pid),
+        [],
+        'the replacement started with the old process gone',
+      );
+    } finally {
+      fs.rmSync(ignoreFile, { force: true });
+      if (checkIsPidAlive(topicProcessPid)) process.kill(topicProcessPid, 'SIGKILL');
+    }
   });
 });

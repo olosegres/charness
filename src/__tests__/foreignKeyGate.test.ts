@@ -44,6 +44,8 @@ const expectedJiraRoutes: Record<AdapterEventName, 'telegramHandler' | 'requestS
   turnEnded: 'telegramHandler',
   // A completed compaction resets what an issue's conversation was told: the handler only tells its connector (C6).
   contextCompacted: 'telegramHandler',
+  // A re-spawn that began a new conversation where one was lost: the topic is told, an issue's connector sends the whole issue next.
+  conversationLost: 'requestSideHandler',
   error: 'requestSideHandler',
 };
 

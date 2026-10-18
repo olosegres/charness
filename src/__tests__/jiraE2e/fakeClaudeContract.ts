@@ -41,6 +41,11 @@ export const sessionViolationExitCode = 1;
  * decision for a heavy one (a live incident). A test of that incident writes a delay that puts the stub after the decision.
  */
 export const fakeClaudeExitFlushDelayFileName = 'exit-flush-delay-ms';
+/**
+ * A file in the fake's state dir that, while it exists, makes every fake process ignore SIGTERM and SIGHUP: a CLI that does
+ * not leave when it is asked to (only SIGKILL ends it). A test of a launch that must never run beside the process it replaces.
+ */
+export const fakeClaudeIgnoreStopSignalsFileName = 'ignore-stop-signals';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;

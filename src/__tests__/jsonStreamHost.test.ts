@@ -28,6 +28,7 @@ import * as path from 'path';
 
 import {
   buildJsonStreamTmuxSessionName,
+  checkIsPidAlive,
   resolveAdoptedTail,
   buildWrapperScript,
   parseWrapperScriptFlag,
@@ -47,6 +48,7 @@ import {
   readPidFile,
   resolveJsonStreamSessionDir,
   waitForPidExit,
+  waitForPidExitOrKill,
   wrapperCdFailExitCode,
   writeFifoText,
 } from '../utils/jsonStreamHost';
@@ -218,6 +220,52 @@ describe('waitForPidExit', () => {
     assert.equal(await waitForPidExit(child.pid, 150), false);
     assert.ok(Date.now() - startedAt >= 100, 'it waited until the deadline');
     child.kill('SIGKILL');
+  });
+});
+
+describe('waitForPidExitOrKill', () => {
+  const lingering: ChildProcess[] = [];
+
+  after(() => {
+    for (const child of lingering) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  });
+
+  it('a process that leaves within the wait is \'exited\' and is not killed', async () => {
+    const child = spawn('sh', ['-c', 'sleep 0.3'], { stdio: 'ignore' });
+    lingering.push(child);
+    assert.ok(child.pid);
+    assert.equal(await waitForPidExitOrKill(child.pid, { exitTimeoutMs: 5000, killTimeoutMs: 1000 }), 'exited');
+    assert.equal(child.signalCode, null, 'it left by itself');
+  });
+
+  it('a process still running at the deadline is killed (SIGKILL) and reported \'killed\' once it is gone', async () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    lingering.push(child);
+    assert.ok(child.pid);
+    const startedAt = Date.now();
+    assert.equal(await waitForPidExitOrKill(child.pid, { exitTimeoutMs: 200, killTimeoutMs: 2000 }), 'killed');
+    assert.ok(Date.now() - startedAt >= 150, 'it waited out the exit wait first');
+    assert.equal(checkIsPidAlive(child.pid), false);
+    assert.equal(child.signalCode, 'SIGKILL');
+  });
+
+  it('a process that survives the kill too is \'stuck\' — reported, never waited for forever', async () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    lingering.push(child);
+    assert.ok(child.pid);
+    const killed: number[] = [];
+    assert.equal(await waitForPidExitOrKill(child.pid, { exitTimeoutMs: 100, killTimeoutMs: 100, kill: (pid) => { killed.push(pid); } }), 'stuck');
+    assert.deepEqual(killed, [child.pid], 'the kill was tried once');
+    child.kill('SIGKILL');
+  });
+
+  it('a process that is already gone is \'exited\' at once and nothing is killed', async () => {
+    const child = spawn('true', [], { stdio: 'ignore' });
+    assert.ok(child.pid);
+    await new Promise((resolve) => child.once('exit', resolve));
+    const killed: number[] = [];
+    assert.equal(await waitForPidExitOrKill(child.pid, { exitTimeoutMs: 100, killTimeoutMs: 100, kill: (pid) => { killed.push(pid); } }), 'exited');
+    assert.deepEqual(killed, []);
   });
 });
 

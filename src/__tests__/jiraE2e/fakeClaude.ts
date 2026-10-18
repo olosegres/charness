@@ -22,6 +22,7 @@ import {
   fakeCompactionResultUsage,
   fakeTurnUsage,
   fakeClaudeExitFlushDelayFileName,
+  fakeClaudeIgnoreStopSignalsFileName,
   getFakeClaudeTranscriptPath,
   getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
@@ -285,12 +286,12 @@ function getExitFlushDelayMs(): number | null {
  * Stopped by a signal, a process that took a turn writes its metadata entries back and exits after
  * {@link getExitFlushDelayMs} — when a test asked for the flush; one that never took a turn writes nothing (the real CLI
  * too) and exits at once, and so does every process while no test asked: a flush at a teardown would race its removal of
- * the instance's directories.
+ * the instance's directories. While a test keeps {@link fakeClaudeIgnoreStopSignalsFileName} the signals are ignored.
  */
 function exitOnStopSignal(sessionId: string): void {
   let isExiting = false;
   const onSignal = (signal: NodeJS.Signals): void => {
-    if (isExiting) return;
+    if (isExiting || fs.existsSync(path.join(getStateDir(), fakeClaudeIgnoreStopSignalsFileName))) return;
     isExiting = true;
     const exitCode = 128 + (signal === 'SIGHUP' ? 1 : 15);
     const flushDelayMs = getExitFlushDelayMs();

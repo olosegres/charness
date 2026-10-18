@@ -87,7 +87,7 @@ import {
   claudeEffortFlag,
   checkIsPidAlive,
   pidExitWaitTimeoutMs,
-  waitForPidExit,
+  waitForPidExitOrKill,
   createStdoutTailState,
   decodeStdoutTailChunk,
   getFileSize,
@@ -329,10 +329,12 @@ export interface StreamSession {
 }
 
 /**
- * How a spawn opens its conversation: `new` under the id; `resume` it, failing when its transcript holds no conversation —
- * the caller recovers (a fresh session, the one-line notice, a whole prompt for a tracker); `resumeOrRestart` for a live
- * process the bot is moving (a model, effort or account change) — nobody above can recover a re-spawn, so a conversation
- * that is gone starts again under the same id.
+ * How a spawn opens its conversation: `new` under the id; `resume` it, failing when its transcript is the metadata-only
+ * stub of a conversation that is gone — the caller recovers (a fresh session, the one-line notice, a whole prompt for a
+ * tracker); `resumeOrRestart` for a live process the bot is moving (a model, effort or account change) — nobody above
+ * can recover a re-spawn, so a conversation that is gone starts again under the same id and the bot is told
+ * (`conversationLost`). A transcript that is simply missing loses nothing for either: a session that never took a turn
+ * has none, and its id is started.
  */
 type SpawnConversation = 'new' | 'resume' | 'resumeOrRestart';
 
@@ -498,11 +500,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
 
     // A conversation is resumable only when its transcript HOLDS one. A session that never took a turn
-    // (e.g. `/model` right after `/new`) has no transcript, and a conversation whose transcript the CLI's own
-    // cleanup removed leaves only a metadata stub when its process is stopped: `--resume` answers "No
-    // conversation found" and `--session-id` "already in use" on either (the stub is removed first).
-    const { isResumable } = await prepareClaudeSessionLaunch(getClaudeTranscriptPath(workDir, sessionId), opts.conversation !== 'new');
-    if (opts.conversation === 'resume' && !isResumable) {
+    // (e.g. `/model` right after `/new`) has no transcript: nothing is lost, its id is started. A conversation whose
+    // transcript the CLI's own cleanup removed leaves only a metadata stub when its process is stopped — proof it had
+    // turns: `--resume` answers "No conversation found" and `--session-id` "already in use" on it (the stub is removed first).
+    const { isResumable, isConversationLost } = await prepareClaudeSessionLaunch(getClaudeTranscriptPath(workDir, sessionId), opts.conversation !== 'new');
+    if (opts.conversation === 'resume' && isConversationLost) {
       throw new Error(`No conversation to resume for session ${sessionId}: its transcript holds none`);
     }
     const mcpFlags = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
@@ -608,6 +610,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     await this.performInitialize(session);
 
     this.emit('started', key);
+    // A live re-spawn that found the conversation gone began a new one under the same id: the bot says so.
+    if (isConversationLost) this.emit('conversationLost', key);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1026,16 +1030,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   /**
-   * @description SIGTERM the session's process, kill its tmux host and wait until the process is gone. A CLI stopped
-   * after a turn writes its transcript metadata back at exit — a metadata-only stub when the transcript was removed
-   * meanwhile — and the next launch on the same conversation id decides from the transcript: it must find what the
-   * exit leaves, not race it.
+   * @description SIGTERM the session's process, kill its tmux host and wait until the process is gone — for a bounded
+   * time, after which a process that ignores the stop is SIGKILLed. A CLI stopped after a turn writes its transcript
+   * metadata back at exit — a metadata-only stub when the transcript was removed meanwhile — and the next launch on the
+   * same conversation id decides from the transcript: it must find what the exit leaves, and never run beside the old
+   * process, which could still write into the file the new one uses.
    */
   private async terminateSessionProcess(session: StreamSession): Promise<void> {
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
     await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(session.key)));
-    if (!(await waitForPidExit(session.pid))) {
-      console.warn(`[ClaudeJson] ${keyToString(session.key)}: process ${session.pid} was still running ${pidExitWaitTimeoutMs} ms after it was stopped`);
+    const outcome = await waitForPidExitOrKill(session.pid);
+    if (outcome !== 'exited') {
+      console.warn(`[ClaudeJson] ${keyToString(session.key)}: process ${session.pid} was still running ${pidExitWaitTimeoutMs} ms after it was stopped${outcome === 'killed' ? ' — killed it' : ' and survived a kill'}`);
     }
   }
 

@@ -623,6 +623,7 @@ export interface EffortState {
  * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
  * - 'turnEnded' (key: SessionKey)                 — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5)
  * - 'contextCompacted' (key: SessionKey, trigger: string | null) — a compaction COMPLETED (json-stream): one the bot issued, or the CLI's own overflow compaction; the conversation's context was replaced by a summary (Jira prompt context C6)
+ * - 'conversationLost' (key: SessionKey)          — a live re-spawn (an account, model or effort change; json-stream) found the conversation's transcript gone and began a NEW conversation under the same id; the bot tells the topic and resets what the conversation was told
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)
  * - 'error'    (key: SessionKey, error: Error)    — asynchronous failure AFTER successful startSession resolution
  *

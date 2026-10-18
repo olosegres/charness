@@ -28,6 +28,7 @@ export const adapterEventNames = [
   'suspended',
   'turnEnded',
   'contextCompacted',
+  'conversationLost',
   'error',
 ] as const;
 
@@ -65,6 +66,8 @@ export const foreignKeyEventRoutes = {
   turnEnded: 'all',
   // A completed compaction resets what the conversation was told: its connector sends the whole issue next (C6).
   contextCompacted: 'all',
+  // A live re-spawn began a new conversation where one was lost: a connector that tracks what it told starts over (C6); only a topic gets the notice.
+  conversationLost: 'requestSide',
   started: 'none',
   // Logged; there is no topic to post it to.
   error: 'requestSide',

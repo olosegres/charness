@@ -11158,6 +11158,18 @@ function handleAgentStopped(key: SessionKey): void {
 }
 
 /**
+ * @description `conversationLost` from the adapter: a live re-spawn (an account, model or effort change) found the
+ * conversation's transcript gone — it held turns, the stopped process left only a metadata stub — and began a NEW
+ * conversation under the same id. The agent has forgotten everything, so say so in the one line a failed resume gets
+ * (`agent.resume_failed_fresh`), and forget that the thread-context preamble was injected: the new conversation was
+ * never told it.
+ */
+function handleConversationLost(key: SessionKey): void {
+  clearThreadContextMarker(key);
+  replyToThread(key, t('agent.resume_failed_fresh')).catch(() => {});
+}
+
+/**
  * @description `suspended` from the adapter — the idle stop (L3): the process is
  * gone, the conversation stays. The frame cleanup of {@link handleAgentStopped}
  * WITHOUT what a real end drops: the armed retry (a limit wait resumes the
@@ -12705,6 +12717,7 @@ export async function startBot(): Promise<void> {
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
+    onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => noteConversationContextReset(key, 'its transcript was lost')),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),

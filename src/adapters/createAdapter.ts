@@ -94,6 +94,7 @@ let onStopped: SessionKeyHandler | null = null;
 let onSuspended: SessionKeyHandler | null = null;
 let onTurnEnded: SessionKeyHandler | null = null;
 let onContextCompacted: ContextCompactedHandler | null = null;
+let onConversationLost: SessionKeyHandler | null = null;
 let onError: ErrorHandler | null = null;
 
 /** Per-thread display-prefs reader for BOTH adapters — same late-wiring idiom
@@ -231,6 +232,7 @@ function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onSuspended) adapter.on('suspended', onSuspended);
   if (onTurnEnded) adapter.on('turnEnded', onTurnEnded);
   if (onContextCompacted) adapter.on('contextCompacted', onContextCompacted);
+  if (onConversationLost) adapter.on('conversationLost', onConversationLost);
   // Always register error handler to prevent ERR_UNHANDLED_ERROR crash.
   adapter.on('error', (key: SessionKey, error: Error) => {
     if (onError) {
@@ -261,6 +263,7 @@ export function registerAdapterEventHandlers(handlers: {
   onSuspended?: SessionKeyHandler;
   onTurnEnded?: SessionKeyHandler;
   onContextCompacted?: ContextCompactedHandler;
+  onConversationLost?: SessionKeyHandler;
   onError?: ErrorHandler;
 }): void {
   onOutput = handlers.onOutput;
@@ -278,6 +281,7 @@ export function registerAdapterEventHandlers(handlers: {
   onSuspended = handlers.onSuspended ?? null;
   onTurnEnded = handlers.onTurnEnded ?? null;
   onContextCompacted = handlers.onContextCompacted ?? null;
+  onConversationLost = handlers.onConversationLost ?? null;
   onError = handlers.onError ?? null;
 
   // Wire to already-created instances

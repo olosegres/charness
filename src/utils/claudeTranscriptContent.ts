@@ -53,13 +53,18 @@ export async function readClaudeTranscriptContent(transcriptPath: string): Promi
 }
 
 /**
- * @description Whether the CLI can be launched with `--resume` on a session id (`isResumable`): a resume was asked for AND
- * the transcript holds a conversation. What a launch that cannot resume does is the caller's to decide (start the id
- * again, or report the lost conversation). A metadata-only stub is removed first — no launch flag accepts it («already in
- * use»), and it holds nothing a conversation could be rebuilt from.
+ * @description How the CLI can be launched on a session id: `isResumable` — a resume was asked for AND the transcript
+ * holds a conversation; `isConversationLost` — a resume was asked for and the transcript is the metadata-only STUB, which
+ * is proof the conversation had turns and is gone. A missing transcript loses nothing (a session that never took a turn
+ * has none): it is neither resumable nor lost, and the id is simply started. What a launch that cannot resume does is the
+ * caller's to decide. A metadata-only stub is removed first — no launch flag accepts it («already in use»), and it holds
+ * nothing a conversation could be rebuilt from.
  */
-export async function prepareClaudeSessionLaunch(transcriptPath: string, isResumeRequested: boolean): Promise<{ isResumable: boolean }> {
+export async function prepareClaudeSessionLaunch(
+  transcriptPath: string,
+  isResumeRequested: boolean,
+): Promise<{ isResumable: boolean; isConversationLost: boolean }> {
   const content = await readClaudeTranscriptContent(transcriptPath);
   if (content === 'metadataOnly') await fs.promises.rm(transcriptPath, { force: true });
-  return { isResumable: isResumeRequested && content === 'conversation' };
+  return { isResumable: isResumeRequested && content === 'conversation', isConversationLost: isResumeRequested && content === 'metadataOnly' };
 }

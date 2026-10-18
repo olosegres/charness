@@ -53,6 +53,8 @@ export const pidFilePollIntervalMs = 100;
 /** How long a stopped process is waited for: the CLI writes its transcript metadata back at exit, a moment after the signal. */
 export const pidExitWaitTimeoutMs = 5000;
 export const pidExitPollIntervalMs = 25;
+/** How long a process that was killed (SIGKILL) after it ignored its stop is waited for: a kill takes effect at once, so this only bounds a stuck pid. */
+export const pidKillWaitTimeoutMs = 2000;
 
 /** FIFO write-open guard (P1 probe): `O_WRONLY|O_NONBLOCK` raises `ENXIO`
  *  while nothing holds the read end — a BLOCKING open would hang forever.
@@ -313,6 +315,24 @@ export async function waitForPidExit(
     await sleep(pidExitPollIntervalMs);
   }
   return true;
+}
+
+/** How a stop ended: the process `exited` within the wait, was `killed` (SIGKILL) after it, or is `stuck` — still there after the kill. */
+export type PidStopOutcome = 'exited' | 'killed' | 'stuck';
+
+/**
+ * @description Wait (bounded) for `pid` to be gone and, when it still runs at the deadline, SIGKILL it and wait (bounded) again:
+ * whoever stops a process and then starts its replacement on the same conversation must not leave the two side by side.
+ * `kill` is injectable for a test of the `stuck` branch.
+ */
+export async function waitForPidExitOrKill(
+  pid: number,
+  options: { exitTimeoutMs?: number; killTimeoutMs?: number; kill?: (pid: number) => void } = {},
+): Promise<PidStopOutcome> {
+  const { exitTimeoutMs = pidExitWaitTimeoutMs, killTimeoutMs = pidKillWaitTimeoutMs, kill = (target: number) => process.kill(target, 'SIGKILL') } = options;
+  if (await waitForPidExit(pid, exitTimeoutMs)) return 'exited';
+  try { kill(pid); } catch { /* gone meanwhile, or not ours to kill: the second wait says which */ }
+  return (await waitForPidExit(pid, killTimeoutMs)) ? 'killed' : 'stuck';
 }
 
 /** Wait (bounded) for the wrapper to write the `pid` file after tmux spawn.
