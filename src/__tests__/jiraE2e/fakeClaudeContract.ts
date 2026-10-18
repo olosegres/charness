@@ -13,15 +13,34 @@ export const argvViolationExitCode = 3;
  * Where the fake holds a conversation: the real CLI's transcript, `<config dir>/projects/<work dir slug>/<id>.jsonl`
  * (`CLAUDE_CONFIG_DIR`, else `<home>/.claude`). The bot reads that location before a resume — a conversation without a
  * transcript is started again under the same id — so the fake keeps its conversations exactly there. The fake writes a
- * line per message; a transcript left EMPTY is a conversation the CLI cannot resume (`No conversation found`).
+ * line per message; a transcript with no conversation entry (empty, or only the metadata stub the real CLI leaves at
+ * exit — `readClaudeTranscriptContent`) is a conversation the CLI cannot resume (`No conversation found`) nor start
+ * again under its id (`already in use`).
  */
 export function getFakeClaudeTranscriptPath(options: { homeDir: string; configDir?: string | undefined; workDir: string; sessionId: string }): string {
   const configDir = options.configDir || path.join(options.homeDir, '.claude');
   return path.join(configDir, 'projects', options.workDir.replace(/[^a-zA-Z0-9]/g, '-'), `${options.sessionId}.jsonl`);
 }
 
+/**
+ * The name of a file in the fake's state dir that makes the fake refuse a `--resume` of conversation `sessionId` while it
+ * exists, although its transcript holds messages: a conversation the CLI cannot restore (a corrupt or incompatible
+ * transcript), which the bot cannot tell from a good one by reading it.
+ */
+export function getFakeClaudeUnrestorableConversationFileName(sessionId: string): string {
+  return `unrestorable-${sessionId}`;
+}
+
 /** What the real CLI exits with when it refuses a `--resume` / `--session-id` it cannot serve. */
 export const sessionViolationExitCode = 1;
+/**
+ * A file in the fake's state dir whose content is how many milliseconds after SIGTERM / SIGHUP a fake process that took
+ * a turn writes its metadata entries back into its transcript and exits (no file: no flush, the process dies at once, as
+ * it always did). The real CLI does exactly that at exit — into a FRESH file when its transcript was removed under it
+ * (Claude Code's cleanup of old transcripts) — within 22 ms for a small conversation and well after the bot's next launch
+ * decision for a heavy one (a live incident). A test of that incident writes a delay that puts the stub after the decision.
+ */
+export const fakeClaudeExitFlushDelayFileName = 'exit-flush-delay-ms';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**A conversation whose transcript Claude Code's cleanup removed no longer kills the topic's agent.** Claude Code deletes
+the transcripts of old conversations; a running agent that is stopped after that writes only a metadata stub back, which the
+CLI refuses to resume («No conversation found»). The bot took the stub for a conversation: a change of account, model or
+effort ended with an error in the topic and a dead agent, and the next message failed the same way. A transcript is now
+resumed only when it holds messages. A topic whose conversation is gone is told once and gets a fresh session; a running
+agent being moved to another account, model or effort starts the conversation again under the same id; and a re-spawn waits
+for the old process to exit, so two agents never run on one conversation.
+
 **The `/limits` board showed the old ✓ after a slow default change.** Changing the default Claude account from General
 re-spawns every running topic that follows it, which can take about half a minute; Telegram had stopped waiting for the
 tap by then, the pop-up was refused, and the board was never redrawn until the next `/limits`. The board (and `/accounts`,

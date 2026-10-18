@@ -21,13 +21,16 @@ import {
   fakeCompactionModelUsage,
   fakeCompactionResultUsage,
   fakeTurnUsage,
+  fakeClaudeExitFlushDelayFileName,
   getFakeClaudeTranscriptPath,
+  getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
   requiredJiraSessionFlags,
   sessionViolationExitCode,
 } from './fakeClaudeContract';
+import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 
 /**
  * @description A stand-in for the `claude` CLI in the process-level tests (Jira
@@ -42,8 +45,14 @@ import {
  *    Jira session must carry — on every launch path, a fresh `--session-id` and
  *    a `--resume` alike (R11); a Telegram topic's session carries neither;
  *  - like the real CLI, refuses a `--resume` of a conversation it never held and
- *    a `--session-id` already in use (a conversation exists once its first
- *    message arrived), so a resume by the wrong id cannot pass for the right one;
+ *    a `--session-id` already in use (a conversation exists once a transcript holds
+ *    a message — a metadata-only file is none), so a resume by the wrong id cannot
+ *    pass for the right one (a test can also make one conversation unrestorable: its transcript is fine and the CLI
+ *    refuses it anyway, `getFakeClaudeUnrestorableConversationFileName`); a refused `--resume` answers with the CLI's
+ *    own `error_during_execution` result on stdout before it exits;
+ *  - like the real CLI, writes its metadata entries back into its transcript when it
+ *    is signalled to stop after a turn — into a new file when the transcript was
+ *    removed meanwhile (the stub of a lost conversation);
  *  - speaks the stream-json protocol: the `initialize` control handshake,
  *    `system/init`, the `--replay-user-messages` echo, `result` at a turn's end;
  *  - in every turn streams what a real turn does (R6): a `system/status` frame
@@ -233,26 +242,81 @@ function getTranscriptPath(sessionId: string): string {
   return getFakeClaudeTranscriptPath({ homeDir: os.homedir(), configDir: process.env.CLAUDE_CONFIG_DIR, workDir: process.cwd(), sessionId });
 }
 
-/** A conversation is held once its transcript has a message; an emptied transcript is a lost conversation. */
-function checkIsConversationHeld(sessionId: string): boolean {
-  const transcriptPath = getTranscriptPath(sessionId);
-  return fs.existsSync(transcriptPath) && fs.statSync(transcriptPath).size > 0;
+/** A conversation is held once its transcript holds a message; a missing, emptied or metadata-only file is a lost one. */
+async function checkIsConversationHeld(sessionId: string): Promise<boolean> {
+  return (await readClaudeTranscriptContent(getTranscriptPath(sessionId))) === 'conversation';
 }
 
+/** What this process last recorded into its transcript: the `last-prompt` its exit flush writes back. */
+let lastRecordedPrompt: string | null = null;
+
 function recordTranscriptMessage(sessionId: string, content: string): void {
+  lastRecordedPrompt = content;
   const transcriptPath = getTranscriptPath(sessionId);
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
   fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'user', sessionId, message: { role: 'user', content } })}\n`);
 }
 
-/** @description What the real CLI says when it refuses this launch's conversation id, or `null` when it would run. */
-function getSessionViolation(argv: readonly string[]): string | null {
+/**
+ * The metadata entries the real CLI writes back into its transcript at exit (probe, CLI 2.1.302): the whole content of a
+ * transcript that was removed under a live process. They carry no message, so no launch flag accepts the file.
+ */
+function writeExitMetadata(sessionId: string): void {
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  const entries = [
+    { type: 'last-prompt', lastPrompt: lastRecordedPrompt, leafUuid: randomUUID(), sessionId },
+    { type: 'atis-latch', atis: '', sessionId },
+    { type: 'cost-state', sessionId, totalCostUSD: 0 },
+  ];
+  fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+}
+
+/**
+ * How long after a stop signal the exit flush runs: the content of {@link fakeClaudeExitFlushDelayFileName} while a test
+ * keeps one, else `null` (no flush: the process dies at once).
+ */
+function getExitFlushDelayMs(): number | null {
+  const delayPath = path.join(getStateDir(), fakeClaudeExitFlushDelayFileName);
+  return fs.existsSync(delayPath) ? Number(fs.readFileSync(delayPath, 'utf8').trim()) : null;
+}
+
+/**
+ * Stopped by a signal, a process that took a turn writes its metadata entries back and exits after
+ * {@link getExitFlushDelayMs} — when a test asked for the flush; one that never took a turn writes nothing (the real CLI
+ * too) and exits at once, and so does every process while no test asked: a flush at a teardown would race its removal of
+ * the instance's directories.
+ */
+function exitOnStopSignal(sessionId: string): void {
+  let isExiting = false;
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (isExiting) return;
+    isExiting = true;
+    const exitCode = 128 + (signal === 'SIGHUP' ? 1 : 15);
+    const flushDelayMs = getExitFlushDelayMs();
+    if (lastRecordedPrompt === null || flushDelayMs === null) process.exit(exitCode);
+    setTimeout(() => {
+      writeExitMetadata(sessionId);
+      process.exit(exitCode);
+    }, flushDelayMs);
+  };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGHUP', onSignal);
+}
+
+/**
+ * @description What the real CLI says when it refuses this launch's conversation id, or `null` when it would run. The
+ * refusal of a `--resume` is told on stdout first, as the CLI does: an `error_during_execution` result naming it.
+ */
+async function getSessionViolation(argv: readonly string[]): Promise<string | null> {
   const resumeId = getFlagValues(argv, '--resume')[0];
-  if (resumeId !== undefined && !checkIsConversationHeld(resumeId)) {
-    return `No conversation found with session ID: ${resumeId}`;
+  if (resumeId !== undefined && (!(await checkIsConversationHeld(resumeId)) || fs.existsSync(path.join(getStateDir(), getFakeClaudeUnrestorableConversationFileName(resumeId))))) {
+    const reason = `No conversation found with session ID: ${resumeId}`;
+    writeStdout({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resumeId, usage: { input_tokens: 0, output_tokens: 0 }, errors: [reason] });
+    return reason;
   }
   const freshId = getFlagValues(argv, '--session-id')[0];
-  if (freshId !== undefined && checkIsConversationHeld(freshId)) {
+  if (freshId !== undefined && await checkIsConversationHeld(freshId)) {
     return `Session ID ${freshId} is already in use.`;
   }
   return null;
@@ -503,11 +567,31 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
 }
 
+/**
+ * The pid of an EARLIER process of this launch's conversation that is still running, else `null`: two CLIs on one
+ * conversation id at once is what a launch that does not wait for the process it replaces produces. Each launch of a
+ * conversation records its pid in the state dir for the next one to look up.
+ */
+function takeOverlappingProcessPid(sessionId: string | undefined): number | null {
+  if (sessionId === undefined) return null;
+  const pidPath = path.join(getStateDir(), `conversation-${sessionId}.pid`);
+  const previousPid = fs.existsSync(pidPath) ? Number(fs.readFileSync(pidPath, 'utf8')) : null;
+  fs.writeFileSync(pidPath, process.pid.toString());
+  if (previousPid === null || previousPid === process.pid) return null;
+  try {
+    process.kill(previousPid, 0);
+    return previousPid;
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const isSessionLaunch = checkHasFlag(argv, ['--input-format', 'stream-json']);
+  const overlapsPid = isSessionLaunch ? takeOverlappingProcessPid(getLaunchSessionId(argv)) : null;
   // Variable NAMES only — the test checks what reached the agent, never a value.
-  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null });
+  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, overlapsPid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null });
   if (!isSessionLaunch) {
     process.stdout.write(`${fakeClaudeVersion}\n`);
     return;
@@ -529,13 +613,14 @@ async function main(): Promise<void> {
       process.exit(argvViolationExitCode);
     }
   }
-  const sessionViolation = getSessionViolation(argv);
+  const sessionViolation = await getSessionViolation(argv);
   if (sessionViolation !== null) {
     appendJsonLine(fakeClaudeLogFileNames.violations, { reason: sessionViolation, argv });
     process.stderr.write(`${sessionViolation}\n`);
     process.exit(sessionViolationExitCode);
   }
   const sessionId = getLaunchSessionId(argv) ?? randomUUID();
+  exitOnStopSignal(sessionId);
 
   // One turn at a time, in arrival order, as the real CLI does.
   let turnChain: Promise<void> = Promise.resolve();

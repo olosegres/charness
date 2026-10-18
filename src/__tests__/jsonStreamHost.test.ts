@@ -46,6 +46,7 @@ import {
   readExitCodeFile,
   readPidFile,
   resolveJsonStreamSessionDir,
+  waitForPidExit,
   wrapperCdFailExitCode,
   writeFifoText,
 } from '../utils/jsonStreamHost';
@@ -186,6 +187,37 @@ describe('pid / exitcode file readers', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('waitForPidExit', () => {
+  const lingering: ChildProcess[] = [];
+
+  after(() => {
+    for (const child of lingering) if (child.exitCode === null) child.kill('SIGKILL');
+  });
+
+  it('resolves true once a running process has exited (and not before), at once for one that is gone', async () => {
+    const child = spawn('sh', ['-c', 'sleep 0.4'], { stdio: 'ignore' });
+    lingering.push(child);
+    assert.ok(child.pid, 'the child started');
+    const startedAt = Date.now();
+    assert.equal(await waitForPidExit(child.pid, 5000), true);
+    assert.ok(Date.now() - startedAt >= 300, 'it waited for the exit, not for the deadline');
+    assert.equal(child.exitCode, 0);
+    const gone = Date.now();
+    assert.equal(await waitForPidExit(child.pid, 5000), true);
+    assert.ok(Date.now() - gone < 200, 'a process that is already gone costs nothing');
+  });
+
+  it('resolves false at the deadline while the process still runs', async () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    lingering.push(child);
+    assert.ok(child.pid);
+    const startedAt = Date.now();
+    assert.equal(await waitForPidExit(child.pid, 150), false);
+    assert.ok(Date.now() - startedAt >= 100, 'it waited until the deadline');
+    child.kill('SIGKILL');
   });
 });
 

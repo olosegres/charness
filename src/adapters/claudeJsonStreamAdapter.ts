@@ -68,6 +68,7 @@ import {
 import { execFilePromise, getTmuxSessionTarget, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
+import { prepareClaudeSessionLaunch } from '../utils/claudeTranscriptContent';
 import {
   busyIdleWatchdogMs,
   checkShouldClearBusyOnIdle,
@@ -85,6 +86,8 @@ import {
   claudeModelFlag,
   claudeEffortFlag,
   checkIsPidAlive,
+  pidExitWaitTimeoutMs,
+  waitForPidExit,
   createStdoutTailState,
   decodeStdoutTailChunk,
   getFileSize,
@@ -326,6 +329,14 @@ export interface StreamSession {
 }
 
 /**
+ * How a spawn opens its conversation: `new` under the id; `resume` it, failing when its transcript holds no conversation —
+ * the caller recovers (a fresh session, the one-line notice, a whole prompt for a tracker); `resumeOrRestart` for a live
+ * process the bot is moving (a model, effort or account change) — nobody above can recover a re-spawn, so a conversation
+ * that is gone starts again under the same id.
+ */
+type SpawnConversation = 'new' | 'resume' | 'resumeOrRestart';
+
+/**
  * @description SECOND Claude backend: drives the `claude` CLI over its
  * documented `--input-format stream-json --output-format stream-json` protocol
  * (typed events, no TUI scrape) as an EXTERNAL tmux-hosted process per
@@ -445,13 +456,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async startSession(key: SessionKey, workDir: string, _args?: string, sessionId?: string): Promise<void> {
     await this.stopSessionInternal(key);
     const id = sessionId && checkIsValidUuid(sessionId) ? sessionId : randomUUID();
-    await this.spawnSession(key, workDir, id, { ...this.getLaunchOptions(key), resume: false, configDir: this.resolveConfigDir(key) });
+    await this.spawnSession(key, workDir, id, { ...this.getLaunchOptions(key), conversation: 'new', configDir: this.resolveConfigDir(key) });
   }
 
   async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
     if (!checkIsValidUuid(sessionId)) throw new Error(`Invalid sessionId: ${sessionId}`);
-    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), resume: true, configDir: this.resolveConfigDir(key) });
+    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), conversation: 'resume', configDir: this.resolveConfigDir(key) });
 
     // Post the short last-N-turn context block ONLY on the explicit user resume
     // (`/sessions` pick) — a silent re-attach stays quiet (ResumeSessionOptions).
@@ -479,17 +490,21 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     key: SessionKey,
     workDir: string,
     sessionId: string,
-    opts: { effort: string | null; model: string | null; resume: boolean; configDir: string | null },
+    opts: { effort: string | null; model: string | null; conversation: SpawnConversation; configDir: string | null },
   ): Promise<void> {
     if (!checkIsInstalled('claude')) {
       this.emit('output', key, 'Installing Claude Code...');
       await installTool('claude');
     }
 
-    // Claude writes the transcript only with the first turn, so a session that never took one
-    // (e.g. `/model` right after `/new`) has nothing to `--resume` and the CLI exits
-    // "No conversation found". Such a session is started again under the same id instead.
-    const isResumable = opts.resume && fs.existsSync(getClaudeTranscriptPath(workDir, sessionId));
+    // A conversation is resumable only when its transcript HOLDS one. A session that never took a turn
+    // (e.g. `/model` right after `/new`) has no transcript, and a conversation whose transcript the CLI's own
+    // cleanup removed leaves only a metadata stub when its process is stopped: `--resume` answers "No
+    // conversation found" and `--session-id` "already in use" on either (the stub is removed first).
+    const { isResumable } = await prepareClaudeSessionLaunch(getClaudeTranscriptPath(workDir, sessionId), opts.conversation !== 'new');
+    if (opts.conversation === 'resume' && !isResumable) {
+      throw new Error(`No conversation to resume for session ${sessionId}: its transcript holds none`);
+    }
     const mcpFlags = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const args: string[] = [
       '-p',
@@ -1006,9 +1021,22 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.isSuspending = options.isSuspend;
     // Let the reject (and any queued frame) reach the FIFO before the kill.
     await session.stdinWriteChain.catch(() => { /* already logged */ });
+    await this.terminateSessionProcess(session);
+    this.finalizeExternalExit(session, null);
+  }
+
+  /**
+   * @description SIGTERM the session's process, kill its tmux host and wait until the process is gone. A CLI stopped
+   * after a turn writes its transcript metadata back at exit — a metadata-only stub when the transcript was removed
+   * meanwhile — and the next launch on the same conversation id decides from the transcript: it must find what the
+   * exit leaves, not race it.
+   */
+  private async terminateSessionProcess(session: StreamSession): Promise<void> {
     try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
     await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(session.key)));
-    this.finalizeExternalExit(session, null);
+    if (!(await waitForPidExit(session.pid))) {
+      console.warn(`[ClaudeJson] ${keyToString(session.key)}: process ${session.pid} was still running ${pidExitWaitTimeoutMs} ms after it was stopped`);
+    }
   }
 
   checkIsActive(key: SessionKey): boolean {
@@ -1973,10 +2001,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.clearTimers(session);
     session.isActive = false;
     this.closeFifo(session);
-    try { process.kill(session.pid, 'SIGTERM'); } catch { /* gone */ }
-    await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
+    await this.terminateSessionProcess(session);
     // spawnSession lays the host dir out fresh and replaces the map entry.
-    await this.spawnSession(key, workDir, sessionId, { effort: change.effort, model: change.model, resume: true, configDir });
+    await this.spawnSession(key, workDir, sessionId, { effort: change.effort, model: change.model, conversation: 'resumeOrRestart', configDir });
   }
 
   // ─────────────────────────────────────────────────────────────────────────

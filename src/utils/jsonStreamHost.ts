@@ -50,6 +50,9 @@ export const wrapperCdFailExitCode = 96;
 /** How long a fresh spawn waits for the wrapper to write the `pid` file. */
 export const pidFileWaitTimeoutMs = 5000;
 export const pidFilePollIntervalMs = 100;
+/** How long a stopped process is waited for: the CLI writes its transcript metadata back at exit, a moment after the signal. */
+export const pidExitWaitTimeoutMs = 5000;
+export const pidExitPollIntervalMs = 25;
 
 /** FIFO write-open guard (P1 probe): `O_WRONLY|O_NONBLOCK` raises `ENXIO`
  *  while nothing holds the read end — a BLOCKING open would hang forever.
@@ -297,6 +300,19 @@ export function checkIsPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/** Wait (bounded) until `pid` is gone. `true` when it is, `false` when it still runs at the deadline. */
+export async function waitForPidExit(
+  pid: number,
+  timeoutMs: number = pidExitWaitTimeoutMs,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (checkIsPidAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(pidExitPollIntervalMs);
+  }
+  return true;
 }
 
 /** Wait (bounded) for the wrapper to write the `pid` file after tmux spawn.

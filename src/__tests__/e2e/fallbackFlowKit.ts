@@ -48,6 +48,8 @@ export interface FakeLaunch {
   argv: string[];
   isSessionLaunch: boolean;
   pid: number;
+  /** The pid of an earlier process of the same conversation that was STILL running when this one started, else `null`. */
+  overlapsPid?: number | null;
   /** The `CLAUDE_CONFIG_DIR` the process was started with: a second account's directory; `null` for the first. */
   claudeConfigDir: string | null;
 }

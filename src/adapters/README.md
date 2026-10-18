@@ -112,6 +112,18 @@ read 24 k cached tokens; after 70 min the session's own cache was gone — hence
 the 55-minute mark). A resume that fails starts a fresh session and the topic
 gets one line. `/quit`, `/new` and leaving the folder release the id.
 
+**A resume is decided by what the transcript HOLDS, not by its existence** (`utils/claudeTranscriptContent.ts`,
+`prepareClaudeSessionLaunch`, called by `spawnSession` for every start, resume and re-spawn): only a transcript with a
+`user` / `assistant` / `attachment` entry is `--resume`d. Without one — no file (a transcript Claude Code's own cleanup of old
+conversations removed, a session that never took a turn) or the metadata-only stub a stopped process writes back into a
+removed transcript (`last-prompt`, `cost-state`, …) — `resumeSession` fails like any resume the CLI would refuse, and the
+bot's own recovery follows (`ensureAgentSession`: a fresh session, one line to the topic, a whole prompt for a tracker). A live
+re-spawn (`respawnWithChange`: model, effort, account) has no caller to recover it and starts the conversation again under
+the same id. Measured on CLI 2.1.302, a stub is refused by `--resume` («No conversation found with session ID») and by
+`--session-id` («already in use») alike, so it is removed before any launch. The teardown of a process (`terminateSessionProcess`:
+a stop, a re-spawn) waits for it to be gone, because that exit is what writes the stub — a launch has to find what the exit
+leaves, and never runs beside the process it replaces.
+
 **Working (L-D2).** A process is never stopped while it works: a running turn
 (`checkIsBusy`), or `checkHasBackgroundWork` — the CLI's live background-task
 list (`system/background_tasks_changed`, `tasks[].task_id`; a background Bash

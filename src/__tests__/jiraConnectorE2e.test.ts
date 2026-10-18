@@ -91,6 +91,7 @@ import {
   fakeCompactionModelUsage,
   fakeTurnUsage,
   getFakeClaudeTranscriptPath,
+  getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
   getForeignAgentEnvNames,
   getLaunchSessionId,
@@ -844,7 +845,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(isWholePrompt(await handOverAndAwaitAnswer('PROJ-13')), 'after the CLI\'s own compaction the prompt is whole');
   });
 
-  it('E4: a resume that fails starts a fresh session, and the fresh session gets the whole issue', async () => {
+  it('E4: a resume the CLI refuses starts a fresh session, and the fresh session gets the whole issue', async () => {
     const issueKey = 'PROJ-14';
     createIssue(issueKey, 'answer');
     await handOverAndAwaitAnswer(issueKey);
@@ -852,9 +853,9 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
     assert.ok(sessionId);
     await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
-    // The conversation is lost though its transcript file remains (the bot resumes only a conversation with a
-    // transcript on disk): the real CLI answers `No conversation found with session ID`.
-    fs.truncateSync(getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, projectFolder), sessionId }));
+    // The conversation cannot be restored though its transcript holds messages (the bot resumes a conversation whose
+    // transcript has a message): the real CLI answers `No conversation found with session ID`.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, getFakeClaudeUnrestorableConversationFileName(sessionId)), '');
     const text = await handOverAndAwaitAnswer(issueKey);
     assert.ok(isWholePrompt(text), `a fresh session knows nothing of the issue:\n${text}`);
     assert.ok(text.includes('Fake final answer for PROJ-14'), 'it learns what its predecessor already answered');
@@ -862,6 +863,28 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(getFlagValues(getLaunchOfPrompt(prompt)?.argv ?? [], '--session-id').length === 1, 'the answering process started a NEW conversation');
     const refusals = readFakeLog<{ reason: string }>(fakeClaudeLogFileNames.violations).filter((violation) => violation.reason === `No conversation found with session ID: ${sessionId}`);
     assert.equal(refusals.length, 1, 'the resume was tried once and refused');
+  });
+
+  it('E4b: a conversation whose transcript holds no message is not resumed at all: a fresh session starts at once and gets the whole issue', async () => {
+    const issueKey = 'PROJ-32';
+    createIssue(issueKey, 'answer');
+    await handOverAndAwaitAnswer(issueKey);
+    const [firstTurn] = getTurns(issueKey);
+    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
+    assert.ok(sessionId);
+    await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
+    // The CLI's cleanup removed the conversation; what a stopped process writes back is only its metadata, which no launch accepts.
+    const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, projectFolder), sessionId });
+    fs.writeFileSync(transcriptPath, `${JSON.stringify({ type: 'last-prompt', lastPrompt: 'an old prompt', sessionId })}\n${JSON.stringify({ type: 'cost-state', sessionId })}\n`);
+    const refusalsBefore = readFakeLog<{ reason: string }>(fakeClaudeLogFileNames.violations).length;
+    const text = await handOverAndAwaitAnswer(issueKey);
+    assert.ok(isWholePrompt(text), `a fresh session knows nothing of the issue:\n${text}`);
+    const prompt = getPrompts(issueKey)[1];
+    const argv = getLaunchOfPrompt(prompt)?.argv ?? [];
+    assert.equal(getFlagValues(argv, '--resume').length, 0, 'no resume was tried: the transcript holds nothing to resume');
+    assert.equal(getFlagValues(argv, '--session-id').length, 1, 'the answering process started a NEW conversation');
+    assert.notEqual(getLaunchSessionId(argv), sessionId, 'under a new id: the old one is not reused');
+    assert.equal(readFakeLog<{ reason: string }>(fakeClaudeLogFileNames.violations).length, refusalsBefore, 'no launch was refused');
   });
 
   it('E7: the attachment tool saves the issue\'s own file whole under files/<conversation>/jira, and refuses another issue\'s id', async () => {

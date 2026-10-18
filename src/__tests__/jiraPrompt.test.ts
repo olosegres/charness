@@ -255,8 +255,8 @@ describe('the launch model and effort of a Jira session (R15)', () => {
 
   it('the json-stream adapter uses them on both its start and its resume', () => {
     const adapterSource = fs.readFileSync(path.join(__dirname, '..', 'adapters', 'claudeJsonStreamAdapter.ts'), 'utf8');
-    const spawns = [...adapterSource.matchAll(/await this\.spawnSession\(key, workDir, \w+, \{ \.\.\.this\.getLaunchOptions\(key\), resume: (true|false), configDir: this\.resolveConfigDir\(key\) \}\);/g)];
-    assert.deepEqual(spawns.map((match) => match[1]).sort(), ['false', 'true']);
-    assert.ok(!/model: null, resume/.test(adapterSource), 'no launch path pins the model to null');
+    const spawns = [...adapterSource.matchAll(/await this\.spawnSession\(key, workDir, \w+, \{ \.\.\.this\.getLaunchOptions\(key\), conversation: '(new|resume)', configDir: this\.resolveConfigDir\(key\) \}\);/g)];
+    assert.deepEqual(spawns.map((match) => match[1]).sort(), ['new', 'resume']);
+    assert.ok(!/model: null, conversation/.test(adapterSource), 'no launch path pins the model to null');
   });
 });
