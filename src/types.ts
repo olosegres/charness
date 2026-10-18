@@ -148,6 +148,13 @@ export interface ResumeSessionOptions {
    * quiet, otherwise every hot rebuild spams every active topic.
    */
   isWithRecentContext?: boolean;
+  /**
+   * The bot saw this session take a turn (its seen watermark names it). Set by the wake of a sleeping conversation:
+   * a Claude transcript that is then missing was removed (Claude Code's cleanup of old conversations), so the resume
+   * fails like a refused one and the caller's recovery tells the topic; without it a missing transcript is a session
+   * that never took a turn and its id is started silently.
+   */
+  isConversationRecorded?: boolean;
 }
 
 /**

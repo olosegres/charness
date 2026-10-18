@@ -222,7 +222,7 @@ import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
-import { getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
+import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
@@ -4374,7 +4374,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // Wipe ids that don't belong to the new adapter. We persist via
   // setAgent (which merges), so build a fresh record with only the
   // surviving fields.
-  const next: { name: string; model?: string; claudeSessionId?: string; opencodeSessionId?: string; startedAt?: string } = { name: newName };
+  const next: { name: string; model?: string; claudeSessionId?: string; opencodeSessionId?: string; startedAt?: string; seenWatermark?: SeenWatermark } = { name: newName };
   if (agent.model !== undefined) next.model = agent.model;
   // Preserve the session-start time across a same-conversation backend switch
   // (`/claude_mode` tmux↔json-stream). A truly fresh start (the
@@ -4390,6 +4390,11 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   if (switched.ids.claudeSessionId) next.claudeSessionId = switched.ids.claudeSessionId;
   if (switched.ids.opencodeSessionId) next.opencodeSessionId = switched.ids.opencodeSessionId;
   if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked);
+  // The watermark is scoped to its session: it rides along while that session is kept. Every wake of a sleeping
+  // conversation passes through here, and the wake reads it as the proof the conversation took a turn.
+  if (agent.seenWatermark && [next.claudeSessionId, next.opencodeSessionId].includes(agent.seenWatermark.sessionId)) {
+    next.seenWatermark = agent.seenWatermark;
+  }
   // Overwrite by removing the row first; setAgent then writes only the
   // fields we kept.
   await state.removeAgent(key);
@@ -4804,7 +4809,9 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
   startupPromptBuffer.markStarting(kStr);
   markNeedsNewMessage(key);
   try {
-    await adapter.resumeSession(key, workDirDecision.workDir, sessionId);
+    // A conversation the bot saw take a turn whose transcript is now missing is lost, not new: the resume fails.
+    const isConversationRecorded = checkIsConversationRecorded(state.getAgent(key)?.seenWatermark, sessionId);
+    await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { isConversationRecorded });
     await persistSessionStart(key, adapter);
     console.log(`[ensure] resumed the sleeping session of ${kStr}`);
     void replayBufferedPrompts(key);

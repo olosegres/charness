@@ -54,17 +54,21 @@ export async function readClaudeTranscriptContent(transcriptPath: string): Promi
 
 /**
  * @description How the CLI can be launched on a session id: `isResumable` — a resume was asked for AND the transcript
- * holds a conversation; `isConversationLost` — a resume was asked for and the transcript is the metadata-only STUB, which
- * is proof the conversation had turns and is gone. A missing transcript loses nothing (a session that never took a turn
- * has none): it is neither resumable nor lost, and the id is simply started. What a launch that cannot resume does is the
- * caller's to decide. A metadata-only stub is removed first — no launch flag accepts it («already in use»), and it holds
- * nothing a conversation could be rebuilt from.
+ * holds a conversation; `isConversationLost` — a resume was asked for and the conversation is known to have had turns
+ * that are gone: the transcript is the metadata-only STUB (proof by itself), or it is missing while the caller
+ * `isConversationRecorded` (the bot saw the session take a turn — the file was removed by Claude Code's cleanup of
+ * old conversations). A missing transcript of a session nobody saw take a turn loses nothing (a session that never took
+ * a turn has none): it is neither resumable nor lost, and the id is simply started. What a launch that cannot resume does
+ * is the caller's to decide. A metadata-only stub is removed first — no launch flag accepts it («already in use»), and
+ * it holds nothing a conversation could be rebuilt from.
  */
 export async function prepareClaudeSessionLaunch(
   transcriptPath: string,
   isResumeRequested: boolean,
+  isConversationRecorded = false,
 ): Promise<{ isResumable: boolean; isConversationLost: boolean }> {
   const content = await readClaudeTranscriptContent(transcriptPath);
   if (content === 'metadataOnly') await fs.promises.rm(transcriptPath, { force: true });
-  return { isResumable: isResumeRequested && content === 'conversation', isConversationLost: isResumeRequested && content === 'metadataOnly' };
+  const isGone = content === 'metadataOnly' || (content === 'absent' && isConversationRecorded);
+  return { isResumable: isResumeRequested && content === 'conversation', isConversationLost: isResumeRequested && isGone };
 }

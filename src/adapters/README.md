@@ -116,8 +116,11 @@ gets one line. `/quit`, `/new` and leaving the folder release the id.
 `prepareClaudeSessionLaunch`, called by `spawnSession` for every start, resume and re-spawn): only a transcript with a
 `user` / `assistant` / `attachment` entry is `--resume`d. Two things are not one, and the difference matters:
 - **No file** (a session that never took a turn — `/new`, then an idle stop before the first prompt — or a transcript Claude
-  Code's cleanup of old conversations removed): nothing is known to be lost, so the id is simply STARTED under the same id,
-  silently, by a resume and a re-spawn alike.
+  Code's cleanup of old conversations removed while the conversation slept): the bot's seen watermark tells them apart.
+  When it names the session (`checkIsConversationRecorded`, passed as `ResumeSessionOptions.isConversationRecorded` by the
+  wake of a sleeping conversation; `switchThreadAdapter` keeps the watermark while its session is kept), the conversation
+  had turns and is gone: the resume fails like on a stub, below. Otherwise nothing is known to be lost, and the id is simply
+  STARTED under the same id, silently, by a resume and a re-spawn alike.
 - **The metadata-only stub** a stopped process writes back into a removed transcript (`last-prompt`, `cost-state`, …) — proof
   that the conversation HAD turns and is gone: `resumeSession` fails like any resume the CLI would refuse, and the bot's own
   recovery follows (`ensureAgentSession`: a fresh session, one line to the topic, a whole prompt for a tracker). A live

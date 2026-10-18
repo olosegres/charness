@@ -20,6 +20,9 @@
  *     names the conversation (the live state of the incident): the topic's next message is told once that the
  *     conversation is gone (the resume is not even tried), starts a new session and is answered, and the message after
  *     it is answered with no further notice
+ *   → the topic's agent is gone again and its transcript is removed ENTIRELY while the conversation sleeps (the cleanup
+ *     of conversations left alone for a month: no process, so no stub): the bot saw that conversation take turns, so its
+ *     next message is told once that it is gone and gets a new session — never a silent start under the old id
  *   → a topic whose agent never took a turn (a session started and left alone) and whose agent is gone: no transcript, so
  *     nothing was lost — its next message wakes it silently under the same id
  *   → an agent that ignores the stop signals is killed after the bounded wait and only then is the replacement launched
@@ -293,6 +296,31 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     await askAndAwaitAnswer('LOST-4');
     assert.equal(listConversationLostNotices().length, noticesBefore + 1, 'no further notice: the saved state no longer names the dead conversation');
     assert.deepEqual(listTopicErrors(), []);
+  });
+
+  it('a sleeping conversation whose transcript was removed ENTIRELY (no stub: no process was there to write one) is told once that it is gone and gets a new session — the bot saw it take turns', async () => {
+    const launch = getSessionLaunches(getLayout()).at(-1);
+    assert.ok(launch, 'the topic\'s agent runs');
+    const lostSessionId = getLaunchSessionId(launch.argv) ?? '';
+    const lostTranscriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, projectFolder), sessionId: lostSessionId });
+    assert.equal(await readClaudeTranscriptContent(lostTranscriptPath), 'conversation', 'precondition: the session took turns');
+    await restartWith((persisted) => {
+      process.kill(launch.pid, 'SIGKILL');
+      fs.rmSync(lostTranscriptPath, { force: true });
+      const agent = persisted.agents?.[`${group.id}:${topicThreadId}`];
+      assert.equal(agent?.claudeSessionId, lostSessionId, 'the saved state names the conversation');
+      assert.equal(agent?.seenWatermark?.sessionId, lostSessionId, 'the bot recorded that it took a turn');
+    });
+    const noticesBefore = listConversationLostNotices().length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    await askAndAwaitAnswer('LOST-5');
+    const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(launches.length, 1, 'one new process for the message: the resume was refused before any launch');
+    topicProcessPid = launches[0].pid;
+    const freshSessionId = getLaunchSessionId(launches[0].argv);
+    assert.ok(freshSessionId && freshSessionId !== lostSessionId, 'a new conversation under a new id, not a silent start under the lost one');
+    assert.equal(listConversationLostNotices().length, noticesBefore + 1, 'the topic is told once that the conversation is gone');
+    assert.deepEqual(listTopicErrors(), [], 'the topic hears no error');
   });
 
   it('a session started and left alone has no transcript: when its agent is gone, the next message wakes it silently under the SAME id — nothing was lost, so no notice', async () => {

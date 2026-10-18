@@ -2,7 +2,8 @@
  * @description How the CLI is launched on a session id (`prepareClaudeSessionLaunch`): resumed only when the transcript
  * holds a conversation and a resume was asked for; started under the id otherwise; a metadata-only stub — which no
  * launch flag accepts — is removed before the start and, when a resume was asked for, tells that the conversation is LOST
- * (it had turns), while a missing file loses nothing (a session that never took a turn has none); a transcript with a
+ * (it had turns); a missing file is lost only when the caller saw the session take a turn (the cleanup removed it while
+ * the conversation slept), and otherwise loses nothing (a session that never took a turn has none); a transcript with a
  * conversation is never touched.
  *
  * Live incident: the CLI's cleanup removed an old conversation's transcript under a running agent; stopping that agent
@@ -56,6 +57,14 @@ describe('prepareClaudeSessionLaunch', () => {
     setTranscript(null);
     assert.deepEqual(await prepareClaudeSessionLaunch(transcriptPath, true), { isResumable: false, isConversationLost: false });
     assert.equal(fs.existsSync(transcriptPath), false);
+  });
+
+  it('no transcript while the bot SAW the session take a turn: the file was removed while the conversation slept — lost, not new', async () => {
+    setTranscript(null);
+    assert.deepEqual(await prepareClaudeSessionLaunch(transcriptPath, true, true), { isResumable: false, isConversationLost: true });
+    assert.deepEqual(await prepareClaudeSessionLaunch(transcriptPath, false, true), { isResumable: false, isConversationLost: false }, 'a start under an id asked for no resume');
+    setTranscript(conversation);
+    assert.deepEqual(await prepareClaudeSessionLaunch(transcriptPath, true, true), { isResumable: true, isConversationLost: false }, 'a transcript that holds it is resumed');
   });
 
   it('the metadata-only stub is proof there was a conversation and it is gone: nothing to resume, lost, and the stub is removed so the id can be started', async () => {

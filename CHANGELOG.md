@@ -8,9 +8,10 @@ CLI refuses to resume («No conversation found»). The bot took the stub for a c
 effort ended with an error in the topic and a dead agent, and the next message failed the same way. A transcript is now
 resumed only when it holds messages. A topic whose conversation is gone gets one line saying so and a fresh session — on its
 next message, and also when an account, model or effort change re-spawned its running agent onto the lost conversation (it
-starts again under the same id; the agent has forgotten the earlier context, which the line says). A session that never took a
-turn has no transcript and nothing to lose: it wakes silently. A re-spawn waits up to 5 s for the old process to exit and
-kills it if it will not, so two agents never run on one conversation.
+starts again under the same id; the agent has forgotten the earlier context, which the line says). The same goes for a sleeping
+conversation whose transcript the cleanup removed entirely (no agent was running to leave a stub): the bot remembers that
+it took turns. A session that never took a turn has no transcript and nothing to lose: it wakes silently. A re-spawn waits
+up to 5 s for the old process to exit and kills it if it will not, so two agents never run on one conversation.
 
 **The `/limits` board showed the old ✓ after a slow default change.** Changing the default Claude account from General
 re-spawns every running topic that follows it, which can take about half a minute; Telegram had stopped waiting for the

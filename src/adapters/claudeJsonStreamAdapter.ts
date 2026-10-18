@@ -333,8 +333,9 @@ export interface StreamSession {
  * stub of a conversation that is gone — the caller recovers (a fresh session, the one-line notice, a whole prompt for a
  * tracker); `resumeOrRestart` for a live process the bot is moving (a model, effort or account change) — nobody above
  * can recover a re-spawn, so a conversation that is gone starts again under the same id and the bot is told
- * (`conversationLost`). A transcript that is simply missing loses nothing for either: a session that never took a turn
- * has none, and its id is started.
+ * (`conversationLost`). A transcript that is simply missing loses nothing — a session that never took a turn has none,
+ * and its id is started — unless a `resume` caller saw the session take a turn (`isConversationRecorded`): then the
+ * file was removed while the conversation slept, and the resume fails like on a stub.
  */
 type SpawnConversation = 'new' | 'resume' | 'resumeOrRestart';
 
@@ -464,7 +465,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);
     if (!checkIsValidUuid(sessionId)) throw new Error(`Invalid sessionId: ${sessionId}`);
-    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), conversation: 'resume', configDir: this.resolveConfigDir(key) });
+    await this.spawnSession(key, workDir, sessionId, { ...this.getLaunchOptions(key), conversation: 'resume', configDir: this.resolveConfigDir(key), isConversationRecorded: options?.isConversationRecorded === true });
 
     // Post the short last-N-turn context block ONLY on the explicit user resume
     // (`/sessions` pick) — a silent re-attach stays quiet (ResumeSessionOptions).
@@ -492,7 +493,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     key: SessionKey,
     workDir: string,
     sessionId: string,
-    opts: { effort: string | null; model: string | null; conversation: SpawnConversation; configDir: string | null },
+    opts: { effort: string | null; model: string | null; conversation: SpawnConversation; configDir: string | null; isConversationRecorded?: boolean },
   ): Promise<void> {
     if (!checkIsInstalled('claude')) {
       this.emit('output', key, 'Installing Claude Code...');
@@ -502,8 +503,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // A conversation is resumable only when its transcript HOLDS one. A session that never took a turn
     // (e.g. `/model` right after `/new`) has no transcript: nothing is lost, its id is started. A conversation whose
     // transcript the CLI's own cleanup removed leaves only a metadata stub when its process is stopped — proof it had
-    // turns: `--resume` answers "No conversation found" and `--session-id` "already in use" on it (the stub is removed first).
-    const { isResumable, isConversationLost } = await prepareClaudeSessionLaunch(getClaudeTranscriptPath(workDir, sessionId), opts.conversation !== 'new');
+    // turns: `--resume` answers "No conversation found" and `--session-id` "already in use" on it (the stub is removed
+    // first). Removed while it SLEPT, it leaves no file at all: only the caller knows it had turns (`isConversationRecorded`).
+    const { isResumable, isConversationLost } = await prepareClaudeSessionLaunch(
+      getClaudeTranscriptPath(workDir, sessionId),
+      opts.conversation !== 'new',
+      opts.isConversationRecorded === true,
+    );
     if (opts.conversation === 'resume' && isConversationLost) {
       throw new Error(`No conversation to resume for session ${sessionId}: its transcript holds none`);
     }

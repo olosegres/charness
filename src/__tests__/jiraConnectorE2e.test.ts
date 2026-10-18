@@ -887,6 +887,23 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.equal(readFakeLog<{ reason: string }>(fakeClaudeLogFileNames.violations).length, refusalsBefore, 'no launch was refused');
   });
 
+  it('E4c: a sleeping conversation whose transcript the cleanup removed ENTIRELY (no stub) is not started silently under its id: a fresh session gets the whole issue', async () => {
+    const issueKey = 'PROJ-33';
+    createIssue(issueKey, 'answer');
+    await handOverAndAwaitAnswer(issueKey);
+    const [firstTurn] = getTurns(issueKey);
+    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
+    assert.ok(sessionId);
+    await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
+    // Removed while no process was there to write a stub back: no file at all, like a session that never took a turn.
+    fs.rmSync(getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, projectFolder), sessionId }));
+    const text = await handOverAndAwaitAnswer(issueKey);
+    assert.ok(isWholePrompt(text), `a fresh session knows nothing of the issue:\n${text}`);
+    const argv = getLaunchOfPrompt(getPrompts(issueKey)[1])?.argv ?? [];
+    assert.equal(getFlagValues(argv, '--resume').length, 0, 'nothing to resume');
+    assert.notEqual(getLaunchSessionId(argv), sessionId, 'a NEW conversation under a new id, not the lost one started again');
+  });
+
   it('E7: the attachment tool saves the issue\'s own file whole under files/<conversation>/jira, and refuses another issue\'s id', async () => {
     createIssue('PROJ-15', 'fetch-attachment');
     createIssue('PROJ-16', 'answer');

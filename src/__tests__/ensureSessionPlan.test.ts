@@ -15,6 +15,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkIsConversationRecorded,
   getEnsureSessionPlan,
   getPersistedSessionIdForAdapter,
   getResumeFailureAction,
@@ -84,5 +85,14 @@ describe('getResumeFailureAction', () => {
   it('a failed resume starts fresh, except for a resume-only caller', () => {
     assert.equal(getResumeFailureAction(false), 'startFresh');
     assert.equal(getResumeFailureAction(true), 'fail');
+  });
+});
+
+describe('checkIsConversationRecorded', () => {
+  it('only a watermark taken against THIS session proves it took a turn', () => {
+    assert.equal(checkIsConversationRecorded({ sessionId: 'sess-1', claudeTranscriptOffset: 420 }, 'sess-1'), true);
+    assert.equal(checkIsConversationRecorded({ sessionId: 'sess-0', claudeTranscriptOffset: 420 }, 'sess-1'), false, 'a watermark of the session before /new');
+    assert.equal(checkIsConversationRecorded(undefined, 'sess-1'), false, 'a session that never relayed an answer');
+    assert.equal(checkIsConversationRecorded(null, 'sess-1'), false);
   });
 });

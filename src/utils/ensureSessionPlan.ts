@@ -10,6 +10,7 @@
  */
 
 import { openCodeAdapterName } from '../adapters/adapterNames';
+import type { SeenWatermark } from '../types';
 
 /** The persisted ids a conversation's agent row carries (one per backend family). */
 export interface PersistedSessionIds {
@@ -78,4 +79,13 @@ export function getEnsureSessionPlan(input: EnsureSessionPlanInput): EnsureSessi
  */
 export function getResumeFailureAction(isResumeOnly: boolean): 'startFresh' | 'fail' {
   return isResumeOnly ? 'fail' : 'startFresh';
+}
+
+/**
+ * @description Whether the bot saw the sleeping session `sessionId` take a turn: its seen watermark — advanced only
+ * when an answer was relayed — names that session. A Claude transcript that is then missing on disk was removed (Claude
+ * Code's cleanup of conversations left alone for a month), not never written: the resume is a LOST conversation.
+ */
+export function checkIsConversationRecorded(seenWatermark: SeenWatermark | null | undefined, sessionId: string): boolean {
+  return seenWatermark?.sessionId === sessionId;
 }
