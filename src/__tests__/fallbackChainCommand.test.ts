@@ -600,6 +600,42 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(switchTaps.at(-1)?.episodeId, 1750000000000);
     assert.equal(harness.edits.length, editsBefore, 'a stale tap edits nothing');
   });
+  it('a toast that comes too late (a slow switch: the re-spawn waits for the old process) never skips what the tap still does: the notice is still turned into its confirmation, a screen is still re-rendered', async () => {
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      // The limit notice's «switch to …» button: the switch happened, the notice must still become the confirmation.
+      const noticeId = (await harness.core.replyToThread(harness.key, 'limit notice'))!;
+      switchOutcome = 'switched to work';
+      await harness.tapButton(noticeId, 'fbsw_1760000000000_1');
+      assert.equal(harness.edits.at(-1)?.messageId, noticeId);
+      assert.equal(harness.edits.at(-1)?.text, 'switched to work');
+      assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)), [], 'the keyboard is dropped with the confirmation');
+
+      // A screen's taps: the setting toggle writes, its confirmation is a message, the screen is re-rendered; Back re-renders.
+      isGeneralTopic = true;
+      await harness.runCommand('limits_autoswitch');
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      let repliesBefore = harness.replies.length;
+      let editsBefore = harness.edits.length;
+      await harness.tapButton(pickerId, 'fbk_asw_on');
+      assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
+      assert.equal(harness.edits.length, editsBefore + 1, 'the screen was re-rendered');
+      assert.match(harness.replies[repliesBefore]?.text ?? '', /ON/, 'the confirmation is a message: its toast was refused');
+      editsBefore = harness.edits.length;
+      await harness.tapButton(pickerId, 'fbk_back');
+      assert.equal(harness.edits.length, editsBefore + 1, 'Back re-rendered the screen');
+      // The same with a stale tap: the «out of date» answer is followed by the re-render.
+      editsBefore = harness.edits.length;
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(pickerId, 'fbk_asw_off');
+      assert.equal(harness.edits.length, editsBefore + 1);
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+      switchOutcome = null;
+      await harness.state.setClaudeAutoSwitchOnLimitGlobalDefault(false);
+    }
+  });
+
   describe('a rung of a NEW backend asks before it joins automatic switching', () => {
     const handoverLine = 'The conversation context will be handed over in compacted form.';
 

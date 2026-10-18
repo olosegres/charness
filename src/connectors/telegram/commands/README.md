@@ -26,12 +26,17 @@ functions where the handlers used to be registered. A module never imports `bot.
   else shows it whole), use the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
   `answerCbQuery(text)` of a user-visible label is a bug.
 - **A late toast never changes what a handler does.** A handler that works first (a default-account change re-spawns every
-  live topic, ~30 s) answers after Telegram stopped waiting for the query, and the Bot API refuses it as «query is too old».
-  The `/limits`, `/accounts` and model-page handlers answer through `answerCallbackQuerySafely` (a refused late toast is only
-  logged) and `answerCallbackWithWholeText` posts the text as a message when its toast was lost, so the re-render that follows
-  always runs and the confirmation is never dropped. A tap handler of these modules never calls a bare `ctx.answerCbQuery`
-  (the access-denied answer, which nothing follows, is the one exception). The outcome text rides the toast on purpose: a query
-  takes ONE answer, so answering early (before the work) would drop the outcome for every pick to spare the rare slow one.
+  live topic, ~30 s; a model or effort pick re-spawns the session, and a re-spawn waits up to 5 s for the old process) answers
+  after Telegram stopped waiting for the query, and the Bot API refuses it as «query is too old». RULE, for every tap handler
+  that answers AFTER awaited work (a switch, a re-spawn, a write) and still has something to do after the answer (a re-render,
+  an edit, a message): answer through `answerCallbackQuerySafely` (a refused late toast is only logged) — or
+  `answerCallbackWithWholeText` / `createWholeTextAnswerer`, which post the text as a message when its toast was lost — never a
+  bare `ctx.answerCbQuery`. So the re-render that follows always runs and the confirmation is never dropped. `/limits`,
+  `/accounts`, the model pages and `/limits_autoswitch` (the limit notice's «🔁 Switch to …» included) use it for every toast
+  (the access-denied answer, which nothing follows, is the one exception); `/model` and `/effort` use it for the answer after
+  the pick. A handler that answers FIRST (compaction, the backend-switch question) needs nothing; so does a fast state write
+  with nothing after it. The outcome text rides the toast on purpose: a query takes ONE answer, so answering early (before the
+  work) would drop the outcome for every pick to spare the rare slow one.
 - **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 
 ## `displayModes.ts`

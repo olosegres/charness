@@ -55,7 +55,7 @@ import {
 } from '../../../utils/openCodeAuthLogin';
 import { getCallbackMessageId } from './callbackMessage';
 import { buildModelPageButtons, modelPageSize } from './modelPage';
-import { createWholeTextAnswerer } from './callbackToast';
+import { answerCallbackQuerySafely, createWholeTextAnswerer } from './callbackToast';
 import type { BotCore } from './botCore';
 
 export interface PendingProviderConnect {
@@ -1000,7 +1000,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
-      await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
+      await answerCallbackQuerySafely(ctx, t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
 
       // The pick is made, so the page's bare-digit affordance must go (an armed
       // thread swallows a later ordinary "3" prompt) — and with it the numbers in
@@ -1054,7 +1054,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
-      await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
+      await answerCallbackQuerySafely(ctx, t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
       // Re-render the SAME level: the pick just moved to the head and takes the ✓.
       await refreshRecentModelsLevel(ctx, key);
       await replyToThread(key, message);
@@ -1133,7 +1133,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
       }
-      await ctx.answerCbQuery(t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
+      await answerCallbackQuerySafely(ctx, t('cb.model_set', { model: displayLabel.split('/').pop() || displayLabel }));
       await replyToThread(key, message);
     });
 
@@ -1185,7 +1185,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         // the notice (whole) instead of "set".
         await answerWithWholeText(ctx, key, outcome.notice);
       } else {
-        await ctx.answerCbQuery(t('cb.effort_set', { level }));
+        await answerCallbackQuerySafely(ctx, t('cb.effort_set', { level }));
         await replyToThread(key, t('effort.set_success', { level }));
       }
       await updatePinnedStatus(key).catch(() => {});
@@ -1204,7 +1204,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       }
       await adapter.clearEffort(key);
       const { inForce: level } = getTopicEffortAmongLevels(key, adapter, await listTopicEffortLevels(key, adapter));
-      await ctx.answerCbQuery(t('cb.effort_same', { level }));
+      await answerCallbackQuerySafely(ctx, t('cb.effort_same', { level }));
       await replyToThread(key, t('effort.sameAsGeneralConfirmation', { level }));
       await updatePinnedStatus(key).catch(() => {});
       await rerenderEffortPicker(ctx, key);

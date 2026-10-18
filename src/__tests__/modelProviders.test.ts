@@ -178,6 +178,30 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     }
   });
 
+  it('a model pick whose toast comes too late (the re-spawn took long) still re-renders the page and posts what follows it', async () => {
+    const adapter = getThreadAdapter(harness.key);
+    const originalSetModel = adapter.setModel?.bind(adapter);
+    assert.ok(originalSetModel);
+    adapter.setModel = async () => null; // the backend accepted the pick
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      await harness.runCommand('model');
+      const picker = harness.replies.at(-1)?.messageId;
+      assert.ok(picker);
+      // The picker page is re-edited straight through the Bot API (no port records it): count the calls.
+      const pageEditsBefore = harness.fakeTelegram.listCalls('editMessageText').length;
+      await harness.tapButton(picker, 'mdl_0_1');
+      assert.ok(harness.fakeTelegram.listCalls('editMessageText').length > pageEditsBefore, 'the picker page was re-rendered with the ✓ on the model just picked');
+      // The legacy button posts the backend's own confirmation after the toast.
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(picker, 'model_sonnet');
+      assert.ok(harness.replies.length > repliesBefore, 'the confirmation after the toast was posted');
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+      adapter.setModel = originalSetModel;
+    }
+  });
+
   it('a typed number resolves against the page on screen and always consumes the bare-digit affordance', async () => {
     awaitingModelSelection.add(keyString);
     threadModelLists.set(keyString, ['sonnet', 'opus', 'haiku']);

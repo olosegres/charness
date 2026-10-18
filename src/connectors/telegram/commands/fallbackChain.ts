@@ -81,7 +81,7 @@ import {
 import { formatLimitSettingSource, formatLimitSettingState, limitSettingIds, readLimitSetting, type LimitSettingId, type LimitSettingValue } from '../../../utils/limitSettings';
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
-import { createWholeTextAnswerer } from './callbackToast';
+import { answerCallbackQuerySafely, createWholeTextAnswerer } from './callbackToast';
 import { buildModelPageButtons } from './modelPage';
 
 /** One setting's callbacks: the topic button that opens its sub-menu, and the sub-menu's on / off / same-as-General options. */
@@ -399,7 +399,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   async function takeAdd(ctx: Context, key: SessionKey, isGeneral: boolean, messageId: number | null, entry: FallbackChainEntry): Promise<void> {
     const chain = getState().getFallbackChain();
     if (messageId !== null && addFallbackEntry(chain, entry).ok && checkIsNewBackendForChain(chain, entry)) {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       pendingAdds.set(buildMessageSnapshotKey(key, messageId), entry);
       await askAboutNewBackend(key, messageId, 'limits.addConfirm', entry, buildFallbackAddConfirmCallback(getFallbackChainRevision(chain)), fallbackBackCallback);
       return;
@@ -531,20 +531,20 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const chain = getState().getFallbackChain();
       const revision = getFallbackChainRevision(chain);
       const parsed = parseFallbackEditCallback(ctx.match[0], re, revision);
-      if (parsed === null) { await ctx.answerCbQuery(); return; }
+      if (parsed === null) { await answerCallbackQuerySafely(ctx); return; }
       if (!parsed.isCurrent) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
       const question = gate?.(chain, parsed.index, revision);
       if (question && messageId !== null && chain[parsed.index]) {
-        await ctx.answerCbQuery();
+        await answerCallbackQuerySafely(ctx);
         await askAboutNewBackend(key, messageId, 'limits.enableConfirm', chain[parsed.index], question.continueData, question.cancelData);
         return;
       }
       const result = edit(chain, parsed.index);
-      if (!result.ok) { await ctx.answerCbQuery(t('fallback.stale')); await rerenderPicker(key, messageId, isGeneral); return; }
+      if (!result.ok) { await answerCallbackQuerySafely(ctx, t('fallback.stale')); await rerenderPicker(key, messageId, isGeneral); return; }
       await getState().setFallbackChain(result.chain);
       await answerWithWholeText(ctx, key, confirm(chain, parsed.index));
       const next = nextIndex(parsed.index);
@@ -573,23 +573,23 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     bot.action(fallbackOpenCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const chain = getState().getFallbackChain();
       const parsed = parseFallbackEditCallback(ctx.match[0], fallbackOpenCallbackRe, getFallbackChainRevision(chain));
-      if (parsed === null) { await ctx.answerCbQuery(); return; }
+      if (parsed === null) { await answerCallbackQuerySafely(ctx); return; }
       if (!parsed.isCurrent || parsed.index >= chain.length) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await renderRungDetail(key, messageId, parsed.index, isGeneral);
     }));
 
     bot.action(fallbackAddCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       if (messageId !== null) await renderAddAccountStep(key, messageId);
     }));
 
     bot.action(fallbackAddClaudeCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       if (messageId !== null) await renderAddClaudeModelStep(key, messageId, ctx.match[1]);
     }));
 
@@ -602,11 +602,11 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       const providerId = snapshot?.providers[Number(ctx.match[1])];
       if (messageId === null || !snapshot || providerId === undefined) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       const detection = await detectFallbackOptions();
       const models = listOpenCodeModelsOfProvider(detection.openCodeModels, providerId);
       const next: AddSnapshot = { ...snapshot, providerId, models };
@@ -617,11 +617,11 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     bot.action(fallbackAddModelPageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       if (messageId === null || !snapshot || snapshot.providerId === null) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await showAddModelPage(key, messageId, snapshot, Number(ctx.match[1]));
     }));
 
@@ -629,7 +629,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
       const snapshot = messageId === null ? undefined : addSnapshots.get(buildMessageSnapshotKey(key, messageId));
       const modelId = snapshot?.models[Number(ctx.match[1])];
       if (!snapshot || snapshot.providerId === null || modelId === undefined) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
@@ -641,7 +641,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     bot.action(fallbackAddConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const entry = messageId === null ? undefined : pendingAdds.get(buildMessageSnapshotKey(key, messageId));
       if (!entry || ctx.match[1] !== getFallbackChainRevision(getState().getFallbackChain())) {
-        await ctx.answerCbQuery(t('fallback.stale'));
+        await answerCallbackQuerySafely(ctx, t('fallback.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
@@ -656,7 +656,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       if (messageId !== null) {
         // A draft that holds both backends hands conversations over when a limit moves a topic along it: say so.
         const draft = proposeFallbackChain(await detectFallbackOptions(), getState().getFallbackChain());
@@ -679,7 +679,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     }));
 
     bot.action(fallbackBackCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
@@ -687,7 +687,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     // that still arrives there only re-renders the screen.
     for (const id of limitSettingIds) {
       bot.action(settingCallbacks[id].open, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-        await ctx.answerCbQuery();
+        await answerCallbackQuerySafely(ctx);
         if (isGeneral) await rerenderPicker(key, messageId, isGeneral);
         else await renderSettingMenu(key, messageId, id);
       }));
@@ -699,7 +699,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     ];
     for (const [callback, apply, enabled] of settingTaps) {
       bot.action(callback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-        if (enabled === null && isGeneral) { await ctx.answerCbQuery(); return; }
+        if (enabled === null && isGeneral) { await answerCallbackQuerySafely(ctx); return; }
         await answerWithWholeText(ctx, key, await apply(key, isGeneral, enabled));
         await rerenderPicker(key, messageId, isGeneral);
       }));
@@ -709,10 +709,10 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     // confirmation (keyboard dropped); a stale tap (the episode is over) only says so.
     bot.action(fallbackSwitchCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
       const parsed = parseFallbackSwitchCallbackData(ctx.match[0]);
-      if (parsed === null) { await ctx.answerCbQuery(); return; }
+      if (parsed === null) { await answerCallbackQuerySafely(ctx); return; }
       const confirmation = await takeSwitchOffer(key, parsed.episodeId, parsed.index);
-      if (confirmation === null) { await ctx.answerCbQuery(t('fallback.switchExpired')); return; }
-      await ctx.answerCbQuery();
+      if (confirmation === null) { await answerCallbackQuerySafely(ctx, t('fallback.switchExpired')); return; }
+      await answerCallbackQuerySafely(ctx);
       if (messageId !== null) await editThreadMessage(key, messageId, confirmation);
     }));
   }

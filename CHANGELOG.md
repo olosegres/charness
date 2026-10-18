@@ -13,7 +13,8 @@ for the old process to exit, so two agents never run on one conversation.
 **The `/limits` board showed the old ✓ after a slow default change.** Changing the default Claude account from General
 re-spawns every running topic that follows it, which can take about half a minute; Telegram had stopped waiting for the
 tap by then, the pop-up was refused, and the board was never redrawn until the next `/limits`. The board (and `/accounts`,
-and the model pages) now always redraw, and a confirmation whose pop-up could not be shown is posted as a message.
+the model pages, `/limits_autoswitch` — the limit notice's «Switch to …» button included — and the `/model` and `/effort` pickers)
+now always finish what the tap does, and a confirmation whose pop-up could not be shown is posted as a message.
 
 **`/limits` is a switch board: every account and provider with its usage, one tap to move the topic.** The message opens
 with `Usage (% used)` and a line per signed-in Claude account in the `/accounts` wording — `default — ⏱ 5h 14% 🔄 in 3h · week 3%
