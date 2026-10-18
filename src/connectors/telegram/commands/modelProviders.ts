@@ -870,11 +870,11 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     }
     const writeCode = saveInstanceDefaultEffort(level);
     if (writeCode !== null) {
-      await ctx.answerCbQuery(t('cb.effort_error', { error: writeCode }));
+      await answerCallbackQuerySafely(ctx, t('cb.effort_error', { error: writeCode }));
       await replyToThread(key, t('effort.general.writeFailedNotice', { path: getInstanceSettingsPath(), code: writeCode }));
       return;
     }
-    await ctx.answerCbQuery(t('cb.effort_set', { level }));
+    await answerCallbackQuerySafely(ctx, t('cb.effort_set', { level }));
     await replyToThread(key, t('effort.general.setConfirmation', { level }));
     await rerenderEffortPicker(ctx, key);
   }
@@ -1070,7 +1070,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       const provider = catalog.providers[Number(ctx.match[1])];
       if (provider === undefined) { await ctx.answerCbQuery(t('cb.model_provider_gone')); return; }
       await getState().setModelProviderHidden(provider, true);
-      await ctx.answerCbQuery(t('cb.model_hidden', { provider }));
+      await answerCallbackQuerySafely(ctx, t('cb.model_hidden', { provider }));
       await refreshModelProviderLevel(ctx, key);
     });
 
@@ -1081,7 +1081,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       const provider = catalog.providers[Number(ctx.match[1])];
       if (provider === undefined) { await ctx.answerCbQuery(t('cb.model_provider_gone')); return; }
       await getState().setModelProviderHidden(provider, false);
-      await ctx.answerCbQuery(t('cb.model_shown', { provider }));
+      await answerCallbackQuerySafely(ctx, t('cb.model_shown', { provider }));
       await refreshModelProviderLevel(ctx, key);
     });
 

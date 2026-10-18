@@ -415,6 +415,25 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     }
   });
 
+  it('a General effort tap whose toast is refused still confirms the new default and re-renders the picker', async () => {
+    fs.rmSync(settingsPath, { force: true });
+    harness.isGeneral = true;
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      await harness.runCommand('effort');
+      const picker = harness.replies.at(-1);
+      assert.ok(picker?.messageId);
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(picker.messageId, 'effort_high');
+      assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high' });
+      assert.match(harness.replies[repliesBefore]?.text ?? '', /^✅ Default effort for all topics: high\n/, 'the confirmation after the refused toast was posted');
+      assert.ok(harness.getKeyboardLabels(harness.edits.at(-1)).flat().includes('high ✓'), 'the picker was re-rendered with the ✓ on the new default');
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+      harness.isGeneral = false;
+    }
+  });
+
   it('/effort <level> in General sets the default too; an unknown level is refused and nothing is written', async () => {
     harness.isGeneral = true;
     try {
