@@ -511,7 +511,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
   it('the ✓ OpenCode row opens the model page of where the topic runs: a pick changes the model of the SAME session, with no question', async () => {
     const session = getOpenCodeSessionOf(claudeToOpenCode.folder);
     const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
-    assert.match(board.rowLabel('OpenCode · openai'), /^✓ OpenCode · openai · gpt-5-mini/);
+    assert.equal(board.rowLabel('OpenCode · openai'), '✓ OpenCode · openai', 'the name only: the model is on the page the row opens');
     await claudeTopic.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
     await claudeTopic.waitForMessageText('the openai model page', board.message, (text) => text === 'OpenCode · openai — pick the model for this topic:');
     assert.deepEqual(claudeTopic.getKeyboardLabels(board.message).flat(), ['gpt-5', 'gpt-5-mini ✓', '⬅️ Back'], 'the topic\'s model carries the ✓');
@@ -567,8 +567,10 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       };
     });
     const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
-    assert.equal(board.rowLabel('OpenCode · openai'), 'OpenCode · openai — 5h 12% · week 40%');
-    assert.match(board.rowLabel('OpenCode · google'), /^✓ OpenCode · google · gemini-2\.5-pro$/, 'an API-key provider has no usage to show');
+    assert.equal(board.rowLabel('OpenCode · openai'), 'OpenCode · openai', 'the buttons carry no figure');
+    assert.match(board.message.text, /\nopenai \(ChatGPT\) — ⏱ 5h 12% 🔄 in 3h · week 40% 🔄 in 4d\n/, 'the subscription\'s windows are in the message');
+    assert.ok(!/\ngoogle /.test(board.message.text), 'an API-key provider has no usage to show');
+    assert.equal(board.rowLabel('OpenCode · google'), '✓ OpenCode · google');
 
     const sentMessageId = fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/accounts');
     const picker = await claudeTopic.waitForMessage('the /accounts picker', (message) => message.message_id > sentMessageId && message.text.includes('OpenCode providers'));
@@ -580,7 +582,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
 
   it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
-    assert.match(board.message.text, /^Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\nTap a Claude account to make it the default\. 5h \/ week = % of the window used\./);
+    assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\n\nChoose the default Claude account:$/);
     assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the default account carries the ✓ in General');
     assert.equal(readPersistedState(getLayout()).claudeProfileDefault, undefined, 'no default of its own yet');
 

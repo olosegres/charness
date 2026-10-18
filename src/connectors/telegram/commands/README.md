@@ -238,12 +238,15 @@ its text gains the same `handover.note` line.
 ## `limitsBoard.ts`
 
 `/limits` — the SWITCH BOARD — and its five buttons `lim_c_<i>` (a Claude account row), `lim_o_<i>` (an OpenCode provider row), `lim_pg_<p>` /
-`lim_m_<i>` (the open model page's arrow / model) and `lim_back`. Every signed-in Claude account (in `/accounts` order) and every connected OpenCode
-provider (catalog order) is one full-width button whose label `utils/limitsBoardPlan.ts` builds (`[✓ ]<program> · <account or provider>[ · <model>][ — <status>]`:
-`⛔ until <time>` while limited — a provider until the earliest limit mark of its models — else `5h x% · week y%`, `⚠️` after out-of-date figures; the model only on
-the ✓ row; a signed-out account is not listed). The text is the two automatic-switching settings (read through `utils/limitSettings.ts`, with a link to
-`/limits_autoswitch`), the legend `limits.boardPercentHint` and — only while a row is out of date — `limits.boardStaleHint`; General prefixes
-«Defaults for all topics:» and says a tap makes a Claude account the default. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
+`lim_m_<i>` (the open model page's arrow / model) and `lim_back`. The MESSAGE carries every figure; the BUTTONS carry none (they do not fit a phone's
+button). Text, joined by blank lines: the usage block (`formatLimitsUsageBlock` in `utils/limitsBoardPlan.ts`: the heading `limits.usageHeading`, then
+`<name> — <first usage line>` per signed-in Claude account that has a figure or a limit, then per connected OpenCode provider that reports usage
+`openai (ChatGPT) — …`; the lines are `formatClaudeProfileUsageLines`, the ONE renderer `/accounts` uses, so the wording — `⏱ 5h … 🔄 in 3h · week …`,
+`⛔ at its limit until …`, `(stale)` — is never a second copy; no line at all ⇒ no block and no heading), the two automatic-switching settings (read through
+`utils/limitSettings.ts`, with a link to `/limits_autoswitch`; General prefixes «Defaults for all topics:») and the caption `limits.boardCaption`
+(«Choose the active model:»; General `limits.boardCaptionGeneral`, «Choose the default Claude account:»). Every signed-in Claude account (in `/accounts` order)
+and every connected OpenCode provider (catalog order) is one full-width button labelled by `buildLimitsBoardRows` as `[✓ ]<program> · <account or provider>` — the ✓ on
+the active row only, no model, no usage, no ⛔; a signed-out account is not listed. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
 The usage is refreshed through the `refreshUsage` port when the board OPENS (bounded, `refreshUsageWithinBudget`); a tap re-renders off the cache.
 
 A tap in a topic: an unbound topic is told to bind a folder first; a Claude row goes through the `pickClaudeAccount` port (the `/accounts` pick: login check, then the

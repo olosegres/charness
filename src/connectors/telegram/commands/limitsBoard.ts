@@ -1,13 +1,14 @@
 /**
- * `/limits` — the switch board: every signed-in Claude account and every connected OpenCode provider on one screen, each
- * with its usage or its limit, so a topic moves to another one with a single tap. A row is one full-width button; the
- * text holds only the two automatic-switching settings (their screen is `/limits_autoswitch`, `fallbackChain.ts`) and
- * the legend of the figures. A tap in a topic switches the topic through the one switch path
- * (`switchTopicByOperator`, `bot.ts`): a Claude account changes the account, an OpenCode provider opens the shared model
- * page and a model pick switches, the ✓ row opens the model page of where the topic runs; in General a Claude row sets
- * the instance default and an OpenCode row only says that a model is picked inside a topic. The old text verbs
- * (`rebuild`, `clear`, `switch`, `wait`) are handed to the `/limits_autoswitch` runner. See README.md in this folder
- * and `utils/limitsBoardPlan.ts`.
+ * `/limits` — the switch board: every signed-in Claude account and every connected OpenCode provider on one screen, so a
+ * topic moves to another one with a single tap. The MESSAGE carries the figures — the usage of each account and of the
+ * ChatGPT subscription in the `/accounts` wording, the state of the two automatic-switching settings (their screen is
+ * `/limits_autoswitch`, `fallbackChain.ts`) and the caption «Choose the active model:»; a row is one full-width button
+ * with its name only (`[✓ ]Claude · work`) — the figures do not fit a phone's button. A tap in a topic switches the
+ * topic through the one switch path (`switchTopicByOperator`, `bot.ts`): a Claude account changes the account, an OpenCode
+ * provider opens the shared model page and a model pick switches, the ✓ row opens the model page of where the topic runs;
+ * in General a Claude row sets the instance default and an OpenCode row only says that a model is picked inside a topic.
+ * The old text verbs (`rebuild`, `clear`, `switch`, `wait`) are handed to the `/limits_autoswitch` runner. See README.md
+ * in this folder and `utils/limitsBoardPlan.ts`.
  */
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
@@ -20,7 +21,7 @@ import {
   type FallbackDetection,
 } from '../../../utils/fallbackChain';
 import { formatLimitSettingState, readLimitSetting, type LimitSettingId, type LimitSettingValue } from '../../../utils/limitSettings';
-import { buildLimitsBoardRows, type LimitsBoardRow } from '../../../utils/limitsBoardPlan';
+import { buildLimitsBoardRows, formatLimitsUsageBlock, type LimitsBoardRow } from '../../../utils/limitsBoardPlan';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
@@ -143,31 +144,35 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
   }
 
   /**
-   * The board: the two settings' state with the link to their screen, the legend of the figures (and the ⚠️ line only
-   * when a row is out of date), then one full-width button per account / provider and «skip once» while a limit wait is
-   * armed for the topic.
+   * The board: the usage block (the heading and a line per account / provider with a figure or a limit — nothing when
+   * there is none), the two settings' state with the link to their screen, the caption, then one full-width button per
+   * account / provider and «skip once» while a limit wait is armed for the topic.
    */
   async function buildBoard(key: SessionKey, isGeneral: boolean): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard>; rows: BoardRowRef[] }> {
     const detection = await detectFallbackOptions();
     const rows = buildLimitsBoardRows({
       detection,
-      openCodeProviderUsage: getState().getOpenCodeProviderUsages(),
       current: getCurrentRung(key, isGeneral),
-      nowMs: Date.now(),
-      timezone: getInstanceTimezone(),
       words: getProgramWords(),
     });
+    const usageBlock = formatLimitsUsageBlock({
+      detection,
+      openCodeProviderUsage: getState().getOpenCodeProviderUsages(),
+      nowMs: Date.now(),
+      timezone: getInstanceTimezone(),
+    });
     const settingsLine = formatSettingsLine(key, isGeneral);
-    const lines = isGeneral
-      ? [`${t('limits.boardGeneral')}${settingsLine}`, `${t('limits.boardGeneralHint')} ${t('limits.boardPercentHint')}`]
-      : [settingsLine, t('limits.boardPercentHint')];
-    if (rows.some((row) => row.isStale)) lines.push(t('limits.boardStaleHint'));
+    const parts = [
+      ...(usageBlock === '' ? [] : [usageBlock]),
+      isGeneral ? `${t('limits.boardGeneral')}${settingsLine}` : settingsLine,
+      t(isGeneral ? 'limits.boardCaptionGeneral' : 'limits.boardCaption'),
+    ];
     const keyboardRows = rows.map((row, index) => [
       Markup.button.callback(row.label, row.kind === 'claude' ? buildClaudeRowCallback(index) : buildOpenCodeRowCallback(index)),
     ]);
     const armedFireAt = isGeneral ? null : getArmedLimitRetryFireAt(key);
     if (armedFireAt !== null) keyboardRows.push([Markup.button.callback(t('autoContinueLimits.skipButton'), buildSkipArmedRetryCallbackData(armedFireAt))]);
-    return { text: lines.join('\n'), keyboard: Markup.inlineKeyboard(keyboardRows), rows: rows.map(({ kind, id }) => ({ kind, id })) };
+    return { text: parts.join('\n\n'), keyboard: Markup.inlineKeyboard(keyboardRows), rows: rows.map(({ kind, id }) => ({ kind, id })) };
   }
 
   /** Open the board as a fresh message; the usage is refreshed first (bounded: a slow endpoint never holds the screen). */

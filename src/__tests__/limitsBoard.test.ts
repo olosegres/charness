@@ -4,8 +4,10 @@
  * sends). Pinned:
  *
  *   • WIRING — the command and the five buttons;
- *   • the screen: the two settings' state with the link to their screen, the legend, the ⚠️ line only when a row is stale,
- *     one full-width button per account / provider, «skip once» while a limit wait is armed; General's own wording;
+ *   • the screen: the message carries the usage block (the `/accounts` wording; the ChatGPT subscription beside the
+ *     accounts), the two settings' state with the link to their screen and the caption «Choose the active model:»; the
+ *     buttons are one full-width `[✓ ]<program> · <name>` per account / provider with no figure on them, «skip once» while a
+ *     limit wait is armed; General's own caption;
  *   • a tap in a topic: a Claude account goes through the `/accounts` pick (the outcome is the toast, `asked` has none),
  *     the ✓ row and an OpenCode provider open the shared model page (a provider with one model switches at once), a
  *     page pick goes through the switch path, a refusal stays on the page, anything else returns to the board;
@@ -50,7 +52,7 @@ const snapshot = (session: number, weekly: number, isStale = false): ClaudeUsage
   source: 'api',
   buckets: [
     { kind: 'session', percent: session, resetsAt: inHours(3), scopeModel: null },
-    { kind: 'weekly_all', percent: weekly, resetsAt: inHours(100), scopeModel: null },
+    { kind: 'weekly_all', percent: weekly, resetsAt: inHours(96), scopeModel: null },
   ],
   ...(isStale ? { isStale: true } : {}),
 });
@@ -130,42 +132,71 @@ describe('limitsBoard: /limits over its ports', () => {
     ]);
   });
 
-  it('a topic\'s board: the settings with the link to their screen, the legend, one full-width button per account and provider (the signed-out one left out), the ✓ on the row the topic runs on', async () => {
+  it('a topic\'s board: the usage block, the settings with the link to their screen, the caption; one full-width name-only button per account and provider (the signed-out one left out), the ✓ on the row the topic runs on', async () => {
     position = claudePerf();
     const board = await openBoard();
-    assert.equal(
-      board.text,
-      '🔁 Auto switch: OFF (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch\n5h / week = % of the window used.',
-      'no ⚠️ line: no row is out of date',
-    );
+    const [heading, perfLine, defaultLine, , settingsLine, , caption] = board.text.split('\n');
+    assert.equal(heading, 'Usage (% used)');
+    assert.equal(perfLine, 'perf — ⏱ 5h 5% 🔄 in 3h · week 78% 🔄 in 4d');
+    assert.match(defaultLine, /^default — ⛔ at its limit until (?:[A-Z][a-z]{2} )?\d{2}:\d{2}$/);
+    assert.equal(settingsLine, '🔁 Auto switch: OFF (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch');
+    assert.equal(caption, 'Choose the active model:');
+    assert.equal(board.text.split('\n').length, 7, 'nothing else: no legend, no ⚠️ line');
     assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).map((row) => row.length), [1, 1, 1, 1, 1], 'one button per row');
-    assert.equal(board.labels[0], '✓ Claude · perf · opus — 5h 5% · week 78%');
-    assert.match(board.labels[1], /^Claude · default — ⛔ until \d{2}:\d{2}$|^Claude · default — ⛔ until [A-Z][a-z]{2} \d{2}:\d{2}$/);
-    assert.deepEqual(board.labels.slice(2), ['OpenCode · openai — ⛔ until ' + board.labels[2].split('until ')[1], 'OpenCode · openrouter', 'OpenCode · solo']);
+    assert.deepEqual(board.labels, ['✓ Claude · perf', 'Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo'], 'the name only: no figure, no reset, no ⛔, no model');
     assert.deepEqual(board.data, ['lim_c_0', 'lim_c_1', 'lim_o_2', 'lim_o_3', 'lim_o_4']);
     assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand when the screen opens');
+  });
+
+  it('the ChatGPT subscription\'s usage follows the accounts\' in the message, and a provider the poller recorded no usage for has no line', async () => {
+    position = claudePerf();
+    harness.state.setOpenCodeProviderUsage('openai', { authKind: 'subscription', usage: snapshot(12, 40) });
+    harness.state.setOpenCodeProviderUsage('openrouter', { authKind: 'apiKey' });
+    try {
+      const board = await openBoard();
+      const lines = board.text.split('\n');
+      assert.equal(lines[3], 'openai (ChatGPT) — ⏱ 5h 12% 🔄 in 3h · week 40% 🔄 in 4d');
+      assert.equal(lines.some((line) => line.startsWith('openrouter')), false);
+      assert.deepEqual(board.labels.slice(2), ['OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo'], 'the buttons carry none of it');
+    } finally {
+      harness.state.setOpenCodeProviderUsage('openai', { authKind: 'unknown' });
+      harness.state.setOpenCodeProviderUsage('openrouter', { authKind: 'unknown' });
+    }
+  });
+
+  it('with no figure and no limit anywhere there is no usage block and no heading: the message is the settings and the caption', async () => {
+    detection = { ...detection, claudeProfiles: [buildProfile('perf'), buildProfile('default')] };
+    position = claudePerf();
+    try {
+      const board = await openBoard();
+      assert.equal(board.text, '🔁 Auto switch: OFF (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch\n\nChoose the active model:');
+    } finally {
+      resetDetection();
+    }
   });
 
   it('the settings line says where each value comes from: nothing after the topic\'s own value', async () => {
     await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, true);
     await harness.state.setAutoContinueOnLimitOverride(harness.key, false);
     try {
-      assert.match((await openBoard()).text, /^🔁 Auto switch: ON · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
+      assert.match((await openBoard()).text, /\n🔁 Auto switch: ON · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
       await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
-      assert.match((await openBoard()).text, /^🔁 Auto switch: OFF \(as in General\) · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
+      assert.match((await openBoard()).text, /\n🔁 Auto switch: OFF \(as in General\) · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
     } finally {
       await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
       await harness.state.setAutoContinueOnLimitOverride(harness.key, null);
     }
   });
 
-  it('the ⚠️ line appears only when a row\'s usage is out of date, «skip once» only while a limit wait is armed', async () => {
+  it('usage that is out of date carries the `/accounts` stale marker in the message and nothing on its button; «skip once» only while a limit wait is armed', async () => {
     detection = { ...detection, claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78, true) }), buildProfile('default')] };
+    const unarmed = await openBoard();
+    assert.equal(unarmed.text.split('\n')[1], 'perf — ⏱ 5h 5% 🔄 in 3h · week 78% 🔄 in 4d (stale)');
+    assert.equal(unarmed.data.some((data) => data.startsWith('acl_skip_')), false, 'no skip button while no wait is armed');
     armedFireAt = nowMs + 3_600_000;
     try {
       const board = await openBoard();
-      assert.match(board.text, /\n⚠️ = out of date: sign that account in again in \/accounts\.$/);
-      assert.match(board.labels[0], /^✓ Claude · perf · opus — 5h 5% · week 78% ⚠️$/);
+      assert.equal(board.labels[0], '✓ Claude · perf', 'no ⚠️ on the button');
       assert.equal(board.data.at(-1), buildSkipArmedRetryCallbackData(armedFireAt), 'the skip button is the last row');
       assert.equal(board.labels.at(-1), '⏭ Skip once');
     } finally {
@@ -184,7 +215,7 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), claudePickLine);
     const rerender = lastEdit();
     assert.equal(harness.edits.at(-1)?.messageId, board.messageId);
-    assert.equal(rerender.labels[0][0], 'Claude · perf — 5h 5% · week 78%', 'the old row lost its ✓ and its model');
+    assert.equal(rerender.labels[0][0], 'Claude · perf', 'the old row lost its ✓');
     assert.match(rerender.labels[1][0], /^✓ Claude · default/);
     claudePickLine = '✅ Claude account for this topic: work.';
   });
@@ -217,7 +248,7 @@ describe('limitsBoard: /limits over its ports', () => {
     await harness.tapButton(board.messageId, 'lim_m_2');
     assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'claude', profile: 'perf', model: 'sonnet' } }]);
     assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ This topic runs on stub label.', 'the short locked toast, not the route\'s long line');
-    assert.match(lastEdit().text, /^🔁 Auto switch:/, 'back on the board');
+    assert.match(lastEdit().text, /Choose the active model:$/, 'back on the board');
   });
 
   it('an OpenCode provider opens the shared model page: its models, the ⛔ mark on a limited one, ✓ on the topic\'s model; a pick switches and returns to the board', async () => {
@@ -232,7 +263,7 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.deepEqual(page.data, [['lim_m_0'], ['lim_m_1'], ['lim_back']]);
     await harness.tapButton(board.messageId, 'lim_m_1');
     assert.deepEqual(operatorSwitches, [{ key: harness.key, to: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5-mini' } }]);
-    assert.match(lastEdit().labels[2][0], /^✓ OpenCode · openai · gpt-5-mini/, 'back on the board, the ✓ moved');
+    assert.equal(lastEdit().labels[2][0], '✓ OpenCode · openai', 'back on the board, the ✓ moved (the model is not on the button)');
   });
 
   it('a long provider list pages ten to a page, and a pick on page two is the model of the WHOLE list', async () => {
@@ -265,7 +296,7 @@ describe('limitsBoard: /limits over its ports', () => {
       operatorOutcome = { kind: 'asked' };
       await harness.tapButton(board.messageId, 'lim_m_0');
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '');
-      assert.match(lastEdit().text, /^🔁 Auto switch:/);
+      assert.match(lastEdit().text, /Choose the active model:$/);
     } finally {
       operatorOutcome = { kind: 'switched', text: longSwitchLine, label: 'stub label' };
     }
@@ -299,10 +330,11 @@ describe('limitsBoard: /limits over its ports', () => {
     operatorSwitches.length = 0;
     try {
       const board = await openBoard();
-      assert.equal(
-        board.text,
-        'Defaults for all topics: 🔁 Auto switch: OFF · ⏳ Wait for reset: ON — /limits_autoswitch\nTap a Claude account to make it the default. 5h / week = % of the window used.',
-      );
+      const [heading, , , , settingsLine, , caption] = board.text.split('\n');
+      assert.equal(heading, 'Usage (% used)', 'the usage block is on the General board too');
+      assert.equal(settingsLine, 'Defaults for all topics: 🔁 Auto switch: OFF · ⏳ Wait for reset: ON — /limits_autoswitch');
+      assert.equal(caption, 'Choose the default Claude account:');
+      assert.deepEqual(board.labels, ['Claude · perf', '✓ Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo']);
       assert.equal(board.labels[1].startsWith('✓ Claude · default'), true, 'the default account carries the ✓');
       claudePickLine = '✅ Default Claude account for ALL topics: perf.';
       await harness.tapButton(board.messageId, 'lim_c_0');
@@ -354,7 +386,7 @@ describe('limitsBoard: /limits over its ports', () => {
       assert.equal(lastEdit().text, 'Claude · perf — pick the model for this topic:');
       await harness.tapButton(page.messageId, 'lim_m_2'); // sonnet
       assert.equal(operatorSwitches.length, 1);
-      assert.match(lastEdit().text, /^🔁 Auto switch:/, 'back on the board');
+      assert.match(lastEdit().text, /Choose the active model:$/, 'back on the board');
 
       // The «out of date» answer, the page arrows and Back re-render although their toast is refused.
       const editsBefore = harness.edits.length;
@@ -429,6 +461,6 @@ describe('limitsBoard: /limits over its ports', () => {
     const repliesBefore = harness.replies.length;
     await harness.runCommand('limits');
     assert.equal(harness.replies.length, repliesBefore + 1);
-    assert.match(harness.replies.at(-1)?.text ?? '', /^🔁 Auto switch:/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Choose the active model:$/);
   });
 });

@@ -151,8 +151,9 @@ per-backend controls are optional methods the bot checks before calling.
   of the continue nudge; both end in `cancelApiRetry` → `deliverPromptOrBuffer`. Never switched back by itself.
   OpenCode quota codes (`insufficient_quota`, `RESOURCE_EXHAUSTED`, …) classify as `usageLimit` ahead of the 429
   transient branch (`apiErrorRetry.ts`).
-- **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one button per signed-in
-  Claude account and connected OpenCode provider with its usage or `⛔ until`; the limit notice ends `Switch: /limits`. EVERY operator pick —
+- **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one name-only button
+  (`[✓ ]Claude · work`) per signed-in Claude account and connected OpenCode provider, the usage in the MESSAGE (`formatLimitsUsageBlock`: the `/accounts`
+  wording via the one `formatClaudeProfileUsageLines`, plus the ChatGPT subscription) — no figure fits a phone's button; the limit notice ends `Switch: /limits`. EVERY operator pick —
   a board or `/accounts` row, a model page, `/accounts use` — takes ONE path, `switchTopicByOperator` (`bot.ts`, the move decided by
   `utils/operatorSwitchPlan.ts`): a wait armed ⇒ the limit move (`switchTopicToFallbackEntry`; also a model of the SAME Claude account that the limit's exhausted
   window does not cover — `checkIsClaudeModelClearOfLimit`; a pick inside the limit only changes the model); the backend the topic runs ⇒ an account change

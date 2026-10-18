@@ -15,9 +15,12 @@ re-spawns every running topic that follows it, which can take about half a minut
 tap by then, the pop-up was refused, and the board was never redrawn until the next `/limits`. The board (and `/accounts`,
 and the model pages) now always redraw, and a confirmation whose pop-up could not be shown is posted as a message.
 
-**`/limits` is a switch board: every account and provider with its usage, one tap to move the topic.** It lists each
-signed-in Claude account and each connected OpenCode provider as one button — `✓ Claude · work · opus — 5h 5% · week 78%`,
-`Claude · default — ⛔ until Sun 01:00`, `OpenCode · openai — 5h 12% · week 40%` — and a tap switches this topic: another
+**`/limits` is a switch board: every account and provider with its usage, one tap to move the topic.** The message opens
+with `Usage (% used)` and a line per signed-in Claude account in the `/accounts` wording — `default — ⏱ 5h 14% 🔄 in 3h · week 3%
+🔄 in 6d`, `⛔ at its limit until Sun 01:00` while limited — and the ChatGPT subscription's windows after them (`openai (ChatGPT) — ⏱ 5h …`),
+then the automatic-switching state and the caption «Choose the active model:». Below it every signed-in Claude account and each connected
+OpenCode provider is one button with its name only — `✓ Claude · work`, `Claude · default`, `OpenCode · openai` (the figures do not fit a
+phone's button) — and a tap switches this topic: another
 account (model and conversation kept), an OpenCode provider (its model page opens; the same OpenCode session just changes the
 model), the ✓ row (change the model of where the topic runs). Across backends with a conversation to hand over it asks first;
 while a usage-limit wait is armed the tap is the limit move (on the limited Claude account a model the limit does not cover — `opus` under a Fable-only weekly limit — continues the work too). The usage-limit notice now ends «The limit resets <time>.
