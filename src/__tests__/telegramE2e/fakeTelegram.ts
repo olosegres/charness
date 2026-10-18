@@ -37,6 +37,13 @@ const callbackToastMaxLength = 200;
 interface ApiOk { ok: true; result: unknown }
 interface ApiError { ok: false; error_code: number; description: string }
 
+/** What the Bot API answers to an `answerCallbackQuery` sent after the query's time ran out. */
+const expiredCallbackQueryError: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: query is too old and response timeout expired or query ID is invalid',
+};
+
 export interface TelegramUser {
   id: number;
   is_bot: boolean;
@@ -116,6 +123,11 @@ export class FakeTelegram {
   readonly pinEvents: FakeTelegramPinEvent[] = [];
   /** Every `answerCallbackQuery` text, in order. */
   readonly callbackAnswers: string[] = [];
+  /**
+   * While set, every `answerCallbackQuery` is refused the way the Bot API refuses an answer that came too late (a tap whose
+   * handler worked longer than Telegram keeps the query open): the tap's spinner never gets its toast.
+   */
+  isCallbackAnswerExpired = false;
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
   /** The files `getFile` knows, by file id. */
@@ -380,6 +392,7 @@ export class FakeTelegram {
         return { ok: true, result: true };
       }
       case 'answerCallbackQuery': {
+        if (this.isCallbackAnswerExpired) return expiredCallbackQueryError;
         const toastText = String(payload.text ?? '');
         // The Bot API documents 0-200 characters for the notification and refuses a longer one: the tap then gets no feedback.
         if (toastText.length > callbackToastMaxLength) {

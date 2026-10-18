@@ -25,7 +25,7 @@ import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
-import { createWholeTextAnswerer } from './callbackToast';
+import { answerCallbackQuerySafely, createWholeTextAnswerer } from './callbackToast';
 import { buildOpenCodeProviderPage, buildProviderModelPage, handleModelPick, handleProviderTap, type ProviderModelPage } from './modelPage';
 import type { BotCore } from './botCore';
 
@@ -234,7 +234,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
 
   /** A tap whose message the board knows nothing about (a restart, an older screen): say so and re-render; it never acts. */
   async function answerStale(ctx: Context, key: SessionKey, messageId: number | null, isGeneral: boolean): Promise<void> {
-    await ctx.answerCbQuery(t('accounts.stale'));
+    await answerCallbackQuerySafely(ctx, t('accounts.stale'));
     await rerenderBoard(key, messageId, isGeneral);
   }
 
@@ -267,12 +267,12 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       if (!isGeneral && !checkIsBound(key)) { await answerWithWholeText(ctx, key, t('thread.bind_required')); return; }
       const current = isGeneral ? null : getTopicPosition(key);
       if (current?.backend === 'claude' && current.profile === row.id) {
-        await ctx.answerCbQuery();
+        await answerCallbackQuerySafely(ctx);
         await showModelPage(key, messageId, row, await listClaudeModels(key), 0);
         return;
       }
       const line = await pickClaudeAccount(key, isGeneral, row.id);
-      if (line === null) await ctx.answerCbQuery();
+      if (line === null) await answerCallbackQuerySafely(ctx);
       else await answerWithWholeText(ctx, key, line);
       await rerenderBoard(key, messageId, isGeneral);
     }));
@@ -282,7 +282,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       const snapshot = getSnapshot(key, messageId);
       const row = snapshot?.kind === 'board' ? snapshot.rows[Number(ctx.match[1])] : undefined;
       if (messageId === null || row === undefined || row.kind !== 'opencode') { await answerStale(ctx, key, messageId, isGeneral); return; }
-      if (isGeneral) { await ctx.answerCbQuery(t('limits.openCodeInTopicOnly')); return; }
+      if (isGeneral) { await answerCallbackQuerySafely(ctx, t('limits.openCodeInTopicOnly')); return; }
       if (!checkIsBound(key)) { await answerWithWholeText(ctx, key, t('thread.bind_required')); return; }
       const models = listOpenCodeModelsOfProvider((await detectFallbackOptions()).openCodeModels, row.id);
       await handleProviderTap({
@@ -298,7 +298,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     bot.action(boardPageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const snapshot = getSnapshot(key, messageId);
       if (messageId === null || snapshot?.kind !== 'page') { await answerStale(ctx, key, messageId, isGeneral); return; }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await showModelPage(key, messageId, snapshot.row, snapshot.models, Number(ctx.match[1]));
     }));
 
@@ -314,7 +314,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     }));
 
     bot.action(boardBackCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await rerenderBoard(key, messageId, isGeneral);
     }));
   }

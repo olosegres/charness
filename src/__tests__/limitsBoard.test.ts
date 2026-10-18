@@ -40,6 +40,8 @@ let operatorOutcome: OperatorSwitchOutcome = { kind: 'switched', text: longSwitc
 const autoSwitchRuns: Array<{ verb: string; value: string; usageKey: string }> = [];
 /** What the stand-in bot does after a successful pick: the topic is now where it was sent. */
 let followPicks = true;
+/** What the stand-in bot does with a pick in General: the instance default becomes that account (as the real one does, after re-spawning every session). */
+let generalPickSetsDefault = false;
 
 const nowMs = Date.now();
 const inHours = (hours: number): string => new Date(nowMs + hours * 3_600_000).toISOString();
@@ -96,6 +98,7 @@ describe('limitsBoard: /limits over its ports', () => {
       pickClaudeAccount: async (key, isGeneral, name) => {
         claudePicks.push({ key, isGeneral, name });
         if (followPicks && !isGeneral) position = { backend: 'claude', profile: name, model: null };
+        if (generalPickSetsDefault && isGeneral) await harness.state.setClaudeProfileGlobalDefault(name);
         return claudePickLine;
       },
       switchTopicByOperator: async (key, to) => {
@@ -311,6 +314,61 @@ describe('limitsBoard: /limits over its ports', () => {
     } finally {
       isGeneralTopic = false;
       claudePickLine = '✅ Claude account for this topic: work.';
+    }
+  });
+
+  it('a toast that comes too late (a slow pick: the default change re-spawns every live topic) never skips the re-render: the ✓ moves and the confirmation is posted in the topic instead', async () => {
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    await harness.state.upsertClaudeProfileRecord('perf', { loggedIn: true }); // the default can only be a profile the state knows
+    try {
+      // General: the board must show the NEW default, not the one it was drawn with.
+      isGeneralTopic = true;
+      generalPickSetsDefault = true;
+      claudePickLine = '✅ Default Claude account for ALL topics: perf.';
+      const general = await openBoard();
+      assert.match(general.labels[1], /^✓ Claude · default/, 'precondition: the board was drawn with the old default');
+      let repliesBefore = harness.replies.length;
+      await harness.tapButton(general.messageId, 'lim_c_0'); // perf
+      assert.equal(harness.state.getClaudeProfileGlobalDefault(), 'perf');
+      assert.match(lastEdit().labels[0][0], /^✓ Claude · perf/, 'the board was re-rendered with the new default');
+      assert.equal(harness.edits.at(-1)?.messageId, general.messageId);
+      assert.equal(harness.replies[repliesBefore]?.text, claudePickLine, 'the toast could not be shown: the confirmation is a message');
+      await harness.state.setClaudeProfileGlobalDefault('default');
+      generalPickSetsDefault = false;
+      isGeneralTopic = false;
+
+      // A topic: the switch lands, the board re-renders with the ✓ moved.
+      position = claudePerf();
+      claudePickLine = '✅ Claude account for this topic: default.';
+      const topic = await openBoard();
+      repliesBefore = harness.replies.length;
+      await harness.tapButton(topic.messageId, 'lim_c_1'); // default
+      assert.match(lastEdit().labels[1][0], /^✓ Claude · default/);
+      assert.equal(harness.replies[repliesBefore]?.text, claudePickLine);
+
+      // A model pick on a page (the shared model page): the switch lands, the board returns.
+      position = claudePerf();
+      operatorSwitches.length = 0;
+      const page = await openBoard();
+      await harness.tapButton(page.messageId, 'lim_c_0'); // the ✓ row opens its model page
+      assert.equal(lastEdit().text, 'Claude · perf — pick the model for this topic:');
+      await harness.tapButton(page.messageId, 'lim_m_2'); // sonnet
+      assert.equal(operatorSwitches.length, 1);
+      assert.match(lastEdit().text, /^🔁 Auto switch:/, 'back on the board');
+
+      // The «out of date» answer, the page arrows and Back re-render although their toast is refused.
+      const editsBefore = harness.edits.length;
+      await harness.tapButton(page.messageId + 9_000, 'lim_c_1');
+      assert.equal(harness.edits.length, editsBefore + 1, 'a tap on an unknown message re-rendered it');
+      await harness.tapButton(page.messageId, 'lim_back');
+      assert.equal(harness.edits.length, editsBefore + 2, 'Back re-rendered the board');
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+      generalPickSetsDefault = false;
+      isGeneralTopic = false;
+      claudePickLine = '✅ Claude account for this topic: work.';
+      await harness.state.setClaudeProfileGlobalDefault('default');
+      await harness.state.removeClaudeProfileRecord('perf');
     }
   });
 

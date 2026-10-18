@@ -25,6 +25,13 @@ functions where the handlers used to be registered. A module never imports `bot.
   (`applyQuestionAnswer` says so); a message that could not be edited, and a re-asked question's label (`reask_<i>`, nothing
   else shows it whole), use the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
   `answerCbQuery(text)` of a user-visible label is a bug.
+- **A late toast never changes what a handler does.** A handler that works first (a default-account change re-spawns every
+  live topic, ~30 s) answers after Telegram stopped waiting for the query, and the Bot API refuses it as «query is too old».
+  The `/limits`, `/accounts` and model-page handlers answer through `answerCallbackQuerySafely` (a refused late toast is only
+  logged) and `answerCallbackWithWholeText` posts the text as a message when its toast was lost, so the re-render that follows
+  always runs and the confirmation is never dropped. A tap handler of these modules never calls a bare `ctx.answerCbQuery`
+  (the access-denied answer, which nothing follows, is the one exception). The outcome text rides the toast on purpose: a query
+  takes ONE answer, so answering early (before the work) would drop the outcome for every pick to spare the rare slow one.
 - **A per-MESSAGE snapshot is keyed by chat + message id** (`buildMessageSnapshotKey` in `callbackMessage.ts`): a Telegram message id is unique only within one chat, so a map keyed by the bare id could answer a tap from another chat.
 
 ## `displayModes.ts`

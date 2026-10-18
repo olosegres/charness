@@ -69,7 +69,7 @@ import {
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
 import type { BotCore } from './botCore';
-import { createWholeTextAnswerer } from './callbackToast';
+import { answerCallbackQuerySafely, createWholeTextAnswerer } from './callbackToast';
 import { buildOpenCodeProviderPage, handleModelPick, handleProviderTap } from './modelPage';
 
 /**
@@ -658,28 +658,28 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   function registerClaudeAccountCallbacks(): void {
     bot.action(accountUseCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountUseCallbackRe, { allowDefault: true });
-      if (name === null) { await ctx.answerCbQuery(); return; }
+      if (name === null) { await answerCallbackQuerySafely(ctx); return; }
       const confirmation = await applyPick(key, isGeneral, name);
-      if (confirmation === null) await ctx.answerCbQuery();
+      if (confirmation === null) await answerCallbackQuerySafely(ctx);
       else await answerWithWholeText(ctx, key, confirmation);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(accountFollowDefaultCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      if (isGeneral) { await ctx.answerCbQuery(); return; }
+      if (isGeneral) { await answerCallbackQuerySafely(ctx); return; }
       await answerWithWholeText(ctx, key, await applyFollowDefault(key));
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(accountAddCallback, (ctx) => handleTap(ctx, async (key) => {
       awaitingProfileName.set(keyToString(key), 'claudeName');
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await replyToThread(key, `${t('account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
     }));
 
     bot.action(accountAddProviderCallback, (ctx) => handleTap(ctx, async (key) => {
       awaitingProfileName.set(keyToString(key), 'providerId');
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await replyToThread(key, `${t('accounts.askProvider')}\n${t('login.esc_hint')}`);
     }));
 
@@ -688,11 +688,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot.action(accountDisconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await editThreadMessage(key, messageId, t('accounts.confirmDisconnect', { provider }), Markup.inlineKeyboard([
         [Markup.button.callback(t('accounts.confirmDisconnectButton', { provider }), buildAccountDisconnectConfirmCallback(Number(ctx.match[1])))],
         [Markup.button.callback(t('account.backButton'), accountBackCallback)],
@@ -702,11 +702,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot.action(accountDisconnectConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await disconnectOpenCodeProvider(key, provider);
       await rerenderPicker(key, messageId, isGeneral);
     }));
@@ -715,11 +715,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot.action(accountReconnectCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       if (messageId === null || provider === undefined) {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await startOpenCodeConnect(key, provider);
     }));
 
@@ -728,11 +728,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot.action(accountOpenCodeUseCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const provider = messageId === null ? undefined : providerSnapshots.get(buildMessageSnapshotKey(key, messageId))?.[Number(ctx.match[1])];
       const answerStale = async (): Promise<void> => {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
       };
       if (messageId === null || provider === undefined) { await answerStale(); return; }
-      if (isGeneral) { await ctx.answerCbQuery(t('limits.openCodeInTopicOnly')); return; }
+      if (isGeneral) { await answerCallbackQuerySafely(ctx, t('limits.openCodeInTopicOnly')); return; }
       if (getState().getBinding(key) === null) { await answerWithWholeText(ctx, key, t('thread.bind_required')); return; }
       const models = listOpenCodeModelsOfProvider(await listOpenCodeModels(), provider);
       await handleProviderTap({
@@ -748,11 +748,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot.action(accountOpenCodePageCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const page = messageId === null ? undefined : pageSnapshots.get(buildMessageSnapshotKey(key, messageId));
       if (messageId === null || page === undefined) {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await showProviderModelPage(key, messageId, page.providerId, page.models, Number(ctx.match[1]));
     }));
 
@@ -761,7 +761,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       const page = messageId === null ? undefined : pageSnapshots.get(buildMessageSnapshotKey(key, messageId));
       const modelId = page?.models[Number(ctx.match[1])];
       if (messageId === null || page === undefined || modelId === undefined) {
-        await ctx.answerCbQuery(t('accounts.stale'));
+        await answerCallbackQuerySafely(ctx, t('accounts.stale'));
         await rerenderPicker(key, messageId, isGeneral);
         return;
       }
@@ -769,12 +769,12 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountLoginMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       if (messageId !== null) await editThreadMessage(key, messageId, t('account.pickLogin'), buildProfileChoiceKeyboard(buildAccountLoginCallback, true));
     }));
 
     bot.action(accountRemoveMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       if (Object.keys(getState().getClaudeProfileRecords()).length === 0) {
         await replyToThread(key, t('account.nothingToRemove'));
         return;
@@ -783,14 +783,14 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }));
 
     bot.action(accountBackCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
-      await ctx.answerCbQuery();
+      await answerCallbackQuerySafely(ctx);
       await rerenderPicker(key, messageId, isGeneral);
     }));
 
     bot.action(accountLoginCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountLoginCallbackRe, { allowDefault: true });
-      if (name === null) { await ctx.answerCbQuery(); return; }
-      await ctx.answerCbQuery();
+      if (name === null) { await answerCallbackQuerySafely(ctx); return; }
+      await answerCallbackQuerySafely(ctx);
       await rerenderPicker(key, messageId, isGeneral); // the sub-picker is consumed back into the main picker
       const message = await loginProfile(key, name);
       if (message) await replyToThread(key, message);
@@ -798,15 +798,15 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
     bot.action(accountRemoveCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountRemoveCallbackRe, { allowDefault: true });
-      if (name === null || !checkIsKnownProfile(name)) { await ctx.answerCbQuery(t('account.unknown', { name: name ?? '?' })); return; }
-      await ctx.answerCbQuery();
+      if (name === null || !checkIsKnownProfile(name)) { await answerCallbackQuerySafely(ctx, t('account.unknown', { name: name ?? '?' })); return; }
+      await answerCallbackQuerySafely(ctx);
       const confirmation = buildRemoveConfirmation(name);
       if (messageId !== null) await editThreadMessage(key, messageId, confirmation.text, confirmation.keyboard);
     }));
 
     bot.action(accountRemoveConfirmCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountRemoveConfirmCallbackRe, { allowDefault: true });
-      if (name === null) { await ctx.answerCbQuery(); return; }
+      if (name === null) { await answerCallbackQuerySafely(ctx); return; }
       const result = await removeProfile(name);
       await answerWithWholeText(ctx, key, result);
       await rerenderPicker(key, messageId, isGeneral);

@@ -1,12 +1,19 @@
 /**
  * @description The toast a button tap is answered with holds 200 characters. A text that fits is the toast, whole; a
  * longer one is cut for the toast (ellipsis, on a character boundary — never inside an emoji) and handed over to be
- * posted in full. Nothing is ever dropped, and no text is cut at some arbitrary shorter length.
+ * posted in full. Nothing is ever dropped, and no text is cut at some arbitrary shorter length. A toast the Bot API
+ * refuses because the tap's query expired (a slow handler) never throws out of the handler: what the handler still has
+ * to do runs, and the text is posted instead.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answerCallbackWithFittedText, answerCallbackWithWholeText, callbackToastMaxLength } from '../connectors/telegram/commands/callbackToast';
+import {
+  answerCallbackQuerySafely,
+  answerCallbackWithFittedText,
+  answerCallbackWithWholeText,
+  callbackToastMaxLength,
+} from '../connectors/telegram/commands/callbackToast';
 
 /** A tap context that records the toast and the texts posted beside it, in order. */
 function createRecorder() {
@@ -89,4 +96,53 @@ test('fitted: the cut never splits a combined emoji here either', async () => {
   assert.ok(toast.length <= callbackToastMaxLength);
   const body = toast.slice(0, -1);
   assert.equal(body, family.repeat(body.length / family.length));
+});
+
+/** What telegraf throws for an `answerCallbackQuery` sent after Telegram stopped waiting for it. */
+function createStaleQueryError(): Error {
+  return Object.assign(new Error('400: Bad Request: query is too old and response timeout expired or query ID is invalid'), {
+    response: { error_code: 400, description: 'Bad Request: query is too old and response timeout expired or query ID is invalid' },
+    on: { method: 'answerCallbackQuery' },
+  });
+}
+
+/** A tap context whose toast is refused with `error`; records the texts posted beside it. */
+function createRefusingRecorder(error: Error) {
+  const log: string[] = [];
+  return {
+    log,
+    ctx: { answerCbQuery: async (): Promise<true> => { throw error; } },
+    postWhole: async (text: string) => { log.push(`post:${text}`); },
+  };
+}
+
+test('a toast that arrives after the query expired does not throw, and the text is posted as a message instead', async () => {
+  const { ctx, postWhole, log } = createRefusingRecorder(createStaleQueryError());
+  await answerCallbackWithWholeText(ctx, 'Default account changed.', postWhole);
+  assert.deepEqual(log, ['post:Default account changed.']);
+});
+
+test('any other failure of the toast is still an error: it is not swallowed, and nothing is posted', async () => {
+  const failure = new Error('socket hang up');
+  const { ctx, postWhole, log } = createRefusingRecorder(failure);
+  await assert.rejects(answerCallbackWithWholeText(ctx, 'Default account changed.', postWhole), failure);
+  assert.deepEqual(log, []);
+  const tooLong = createRefusingRecorder(Object.assign(new Error('400: Bad Request: the notification text is too long'), { response: { error_code: 400, description: 'Bad Request: the notification text is too long' }, on: { method: 'answerCallbackQuery' } }));
+  await assert.rejects(answerCallbackWithWholeText(tooLong.ctx, 'x', tooLong.postWhole), /too long/);
+});
+
+test('safely: reports whether the toast reached the user, swallows only the expired query, passes the text on', async () => {
+  const { ctx, log } = createRecorder();
+  assert.equal(await answerCallbackQuerySafely(ctx, 'Done.'), true);
+  assert.equal(await answerCallbackQuerySafely(ctx), true);
+  assert.deepEqual(log, ['toast:Done.', 'toast:']);
+  assert.equal(await answerCallbackQuerySafely(createRefusingRecorder(createStaleQueryError()).ctx, 'Done.'), false);
+  const failure = new Error('socket hang up');
+  await assert.rejects(answerCallbackQuerySafely(createRefusingRecorder(failure).ctx), failure);
+});
+
+test('fitted: an expired query does not throw either, and the cut flag is still reported', async () => {
+  const { ctx } = createRefusingRecorder(createStaleQueryError());
+  assert.equal(await answerCallbackWithFittedText(ctx, 'short'), false);
+  assert.equal(await answerCallbackWithFittedText(ctx, 'z'.repeat(callbackToastMaxLength + 1)), true);
 });

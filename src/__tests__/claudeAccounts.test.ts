@@ -269,6 +269,45 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
   });
 
+  it('a toast that comes too late (a slow pick: the default change re-spawns every live topic) never skips the picker\'s re-render: the ✓ moves and the confirmation is posted as a message instead', async () => {
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      // A topic's pick and its «follow the default».
+      await harness.runCommand('account');
+      const picker = harness.replies.at(-1);
+      applyOutcome = 'respawned';
+      let repliesBefore = harness.replies.length;
+      await harness.tapButton(picker!.messageId!, 'acct_use_work');
+      assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'work');
+      assert.match(harness.edits.at(-1)?.text ?? '', /✓ work/, 'the picker was re-rendered with the new pick');
+      assert.match(harness.replies[repliesBefore]?.text ?? '', /account for this topic: work/, 'the toast could not be shown: the confirmation is a message');
+      repliesBefore = harness.replies.length;
+      const editsBefore = harness.edits.length;
+      await harness.tapButton(picker!.messageId!, 'acct_follow');
+      assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
+      assert.equal(harness.edits.length, editsBefore + 1, 'the picker was re-rendered');
+      assert.match(harness.replies[repliesBefore]?.text ?? '', /follows the default/);
+
+      // General: the instance default changes, and the picker shows it.
+      isGeneralTopic = true;
+      try {
+        await harness.runCommand('account');
+        const generalPicker = harness.replies.at(-1);
+        repliesBefore = harness.replies.length;
+        await harness.tapButton(generalPicker!.messageId!, 'acct_use_work');
+        assert.equal(harness.state.getClaudeProfileGlobalDefault(), 'work');
+        assert.match(harness.edits.at(-1)?.text ?? '', /✓ work/);
+        assert.match(harness.replies[repliesBefore]?.text ?? '', /Default Claude account for ALL topics: work/);
+      } finally {
+        isGeneralTopic = false;
+        await harness.state.setClaudeProfileGlobalDefault('default');
+      }
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+      applyOutcome = 'inactive';
+    }
+  });
+
   it('on a topic that runs OpenCode a pick is a switch to Claude: the bot decides (`switchTopicByOperator`), an «asked» pick records nothing and posts no confirmation line', async () => {
     await harness.state.setClaudeProfileOverride(harness.key, null);
     operatorSwitches.length = 0;

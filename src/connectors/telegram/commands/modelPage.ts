@@ -17,6 +17,7 @@ import { paginateList } from '../../../utils/paginateList';
 import { getModelShortLabel } from '../../../utils/modelPickerPlan';
 import { formatOpenCodeModelLimitSuffix, getRunningModelOfProvider, type FallbackChainEntry } from '../../../utils/fallbackChain';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
+import { answerCallbackQuerySafely } from './callbackToast';
 
 /**
  * Models per page. Model names are long, so each gets a full-width row; 10 rows keep the keyboard scroll-free and the
@@ -167,7 +168,7 @@ export interface ProviderPickDeps {
  */
 export async function handleModelPick(deps: ProviderPickDeps, to: FallbackChainEntry): Promise<void> {
   const outcome = await deps.switchTopicByOperator(deps.key, to);
-  if (outcome.kind === 'asked') await deps.ctx.answerCbQuery();
+  if (outcome.kind === 'asked') await answerCallbackQuerySafely(deps.ctx);
   else await deps.answerWholeText(deps.ctx, deps.key, outcome.kind === 'switched' ? t('limits.switched', { label: outcome.label }) : outcome.text);
   if (outcome.kind !== 'refused') await deps.rerender();
 }
@@ -192,6 +193,6 @@ export async function handleProviderTap(deps: ProviderTapDeps): Promise<void> {
     await handleModelPick(deps, { backend: 'opencode', providerId: deps.providerId, modelId: deps.models[0] });
     return;
   }
-  await deps.ctx.answerCbQuery();
+  await answerCallbackQuerySafely(deps.ctx);
   await deps.showPage();
 }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**The `/limits` board showed the old ✓ after a slow default change.** Changing the default Claude account from General
+re-spawns every running topic that follows it, which can take about half a minute; Telegram had stopped waiting for the
+tap by then, the pop-up was refused, and the board was never redrawn until the next `/limits`. The board (and `/accounts`,
+and the model pages) now always redraw, and a confirmation whose pop-up could not be shown is posted as a message.
+
 **`/limits` is a switch board: every account and provider with its usage, one tap to move the topic.** It lists each
 signed-in Claude account and each connected OpenCode provider as one button — `✓ Claude · work · opus — 5h 5% · week 78%`,
 `Claude · default — ⛔ until Sun 01:00`, `OpenCode · openai — 5h 12% · week 40%` — and a tap switches this topic: another
