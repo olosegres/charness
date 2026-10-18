@@ -125,8 +125,9 @@ gets one line. `/quit`, `/new` and leaving the folder release the id.
   that the conversation HAD turns and is gone: `resumeSession` fails like any resume the CLI would refuse, and the bot's own
   recovery follows (`ensureAgentSession`: a fresh session, one line to the topic, a whole prompt for a tracker). A live
   re-spawn (`respawnWithChange`: model, effort, account) has no caller to recover it: it starts the conversation again under the
-  same id and emits `conversationLost` — the bot posts the same one line and forgets that the thread-context preamble was
-  injected; a tracker's connector sends the whole issue next.
+  same id and emits `conversationLost` — the bot posts the same one line, forgets that the thread-context preamble was
+  injected and drops the seen watermark (it measured the lost conversation: kept, a sleep before the new one's first turn
+  would wake as lost a second time); a tracker's connector sends the whole issue next.
 
 Measured on CLI 2.1.302, a stub is refused by `--resume` («No conversation found with session ID») and by `--session-id`
 («already in use») alike, so it is removed before any launch. The teardown of a process (`terminateSessionProcess`: a stop, a

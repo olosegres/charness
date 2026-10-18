@@ -1215,6 +1215,22 @@ export class StateStore {
   }
 
   /**
+   * @description Drop the per-thread {@link SeenWatermark}: the conversation it measured is gone and the one begun
+   * under the same id has taken no turn yet. Left in place, it would pass for proof that the new conversation took
+   * turns (`checkIsConversationRecorded`). No-op when the thread has no watermark.
+   */
+  async clearSeenWatermark(key: SessionKey): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const existing = this.state.agents[k];
+      if (existing?.seenWatermark === undefined) return;
+      const { seenWatermark: _drop, ...rest } = existing;
+      this.state.agents[k] = rest;
+      this.scheduleSave();
+    });
+  }
+
+  /**
    * @description Persist the json-stream stdout tail offset (advanced by the
    * adapter's tail poller through the injected writer, sealed by the shutdown
    * `flush()`). Merge-only like {@link setSeenWatermark}: never flips

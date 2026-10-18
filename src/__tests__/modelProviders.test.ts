@@ -202,6 +202,24 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     }
   });
 
+  it('a provider hide / show tap whose toast is refused still stores the filter and re-renders the provider level', async () => {
+    const provider = getThreadAdapter(harness.key).label;
+    harness.fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      await harness.runCommand('model');
+      const picker = harness.replies.at(-1)?.messageId;
+      assert.ok(picker);
+      for (const [callbackData, isHidden] of [['mdlhide_0', true], ['mdlshow_0', false]] as const) {
+        const pageEditsBefore = harness.fakeTelegram.listCalls('editMessageText').length;
+        await harness.tapButton(picker, callbackData);
+        assert.equal(harness.state.getHiddenModelProviders().includes(provider), isHidden, `${callbackData}: the filter was stored`);
+        assert.ok(harness.fakeTelegram.listCalls('editMessageText').length > pageEditsBefore, `${callbackData}: the provider level was re-rendered after the refused toast`);
+      }
+    } finally {
+      harness.fakeTelegram.isCallbackAnswerExpired = false;
+    }
+  });
+
   it('a typed number resolves against the page on screen and always consumes the bare-digit affordance', async () => {
     awaitingModelSelection.add(keyString);
     threadModelLists.set(keyString, ['sonnet', 'opus', 'haiku']);

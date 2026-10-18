@@ -460,6 +460,24 @@ test('setSeenWatermark: persists to disk and survives a reload', async () => {
   assert.deepEqual(second.getAgent(key1)?.seenWatermark, { sessionId: 'oc-id-1', opencodeMessageId: 'msg-42' });
 });
 
+test('clearSeenWatermark: drops the watermark only, keeps the rest of the row, and the drop survives a reload', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setAgent(key1, { name: 'claude', model: 'sonnet' });
+  await first.setClaudeSessionId(key1, 'claude-uuid-1');
+  await first.setSeenWatermark(key1, { sessionId: 'claude-uuid-1', claudeTranscriptOffset: 4096 });
+  assert.deepEqual(first.getAgent(key1)?.seenWatermark, { sessionId: 'claude-uuid-1', claudeTranscriptOffset: 4096 }, 'precondition: the watermark is set');
+  await first.clearSeenWatermark(key1);
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  const agent = second.getAgent(key1);
+  assert.equal(agent?.seenWatermark, undefined, 'the watermark is gone');
+  assert.equal(agent?.claudeSessionId, 'claude-uuid-1', 'the session id stays');
+  assert.equal(agent?.model, 'sonnet', 'the model stays');
+});
+
 test('clearAgentSessionIds: the wipe is persisted to disk', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();

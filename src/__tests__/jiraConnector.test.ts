@@ -863,7 +863,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(start, /clearThreadContextMarker\(key\);\n(?:\s*\/\/[^\n]*\n)*\s*noteConversationContextReset\(key, 'fresh session'\);/, 'at the start, right after the preamble marker');
     assert.match(startBody, /onContextCompacted: \(key, trigger\) => dispatchAdapterEvent\(key, 'contextCompacted', \(\) => noteConversationContextReset\(key, `compaction \(\$\{trigger \?\? 'bot'\}\)`\)\),/);
     assert.match(botSource, /onContextReset: \(key, reason\) => jiraConnector\.onContextReset\(key, reason\),/);
-    assert.match(startBody, /onConversationLost: \(key\) => dispatchAdapterEvent\(key, 'conversationLost', \(\) => withThreadLocale\(key, \(\) => handleConversationLost\(key\)\), \(\) => noteConversationContextReset\(key, 'its transcript was lost'\)\),/);
+    assert.match(startBody, /onConversationLost: \(key\) => dispatchAdapterEvent\(key, 'conversationLost', \(\) => withThreadLocale\(key, \(\) => handleConversationLost\(key\)\), \(\) => \{ dropLostConversationWatermark\(key\); noteConversationContextReset\(key, 'its transcript was lost'\); \}\),/);
     assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 3, 'only the start, the compaction and a live re-spawn that began a new conversation reset');
     const resume = botSource.slice(botSource.indexOf('async function resumeSleepingSession('), botSource.indexOf('async function resumeSleepingSession(') + 3000);
     assert.ok(!resume.includes('noteConversationContextReset'), 'a resume continues the conversation');

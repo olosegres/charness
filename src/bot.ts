@@ -11172,8 +11172,18 @@ function handleAgentStopped(key: SessionKey): void {
  * never told it.
  */
 function handleConversationLost(key: SessionKey): void {
+  dropLostConversationWatermark(key);
   clearThreadContextMarker(key);
   replyToThread(key, t('agent.resume_failed_fresh')).catch(() => {});
+}
+
+/**
+ * @description The seen watermark measured the conversation a live re-spawn found gone; the one begun under its id
+ * has taken no turn. Kept, it would make that conversation's next wake fail as lost — a second notice for one loss
+ * (Telegram) or a second whole prompt (a tracker). Its first turn writes a new one.
+ */
+function dropLostConversationWatermark(key: SessionKey): void {
+  state.clearSeenWatermark(key).catch((e) => console.error(`[Bot] clearSeenWatermark failed for ${keyToString(key)}:`, e));
 }
 
 /**
@@ -12724,7 +12734,7 @@ export async function startBot(): Promise<void> {
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
-    onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => noteConversationContextReset(key, 'its transcript was lost')),
+    onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => { dropLostConversationWatermark(key); noteConversationContextReset(key, 'its transcript was lost'); }),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
     }),

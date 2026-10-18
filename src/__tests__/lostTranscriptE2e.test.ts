@@ -14,8 +14,10 @@
  *     is proof the conversation had turns, so the topic is told once that it is gone (no error)
  *   → a tap back on the first account right away (the first process has exited by now, its stub written unless the
  *     re-spawn waited for it): the topic's agent is started again, not refused, and the topic hears no error and no second
- *     notice (the agent just started took no turn: no file, nothing lost)
- *   → the topic's next message is answered; no re-spawn started while the process it replaced still ran
+ *     notice (the agent just started took no turn: no file, nothing lost); no re-spawn started while the process it
+ *     replaced still ran
+ *   → the agent is gone before the conversation begun again under its id took a turn: the topic's next message wakes it
+ *     silently under the same id and is answered (the watermark of the lost conversation was dropped with it)
  *   → the bot is stopped, the topic's agent is gone and only the stub is left on disk, while the saved state still
  *     names the conversation (the live state of the incident): the topic's next message is told once that the
  *     conversation is gone (the resume is not even tried), starts a new session and is answered, and the message after
@@ -248,7 +250,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     assert.equal(listConversationLostNotices().length, 1, 'told once');
   });
 
-  it('a tap back on the first account right away — the first process has exited by now — starts the topic\'s agent again instead of being refused; the topic hears no error and its next message is answered', async () => {
+  it('a tap back on the first account right away — the first process has exited by now — starts the topic\'s agent again instead of being refused; the topic hears no error', async () => {
     // The process the first re-spawn stopped writes its metadata entries back as it exits, a moment after the signal: with
     // nothing waiting for it, its stub is on disk by now.
     await getCharness().waitFor('the first process to be gone', exitFlushDelayMs * 4, () => !checkIsPidAlive(firstProcessPid));
@@ -258,14 +260,31 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     await waitForSessionRespawn(getCharness(), getLayout(), 'the topic\'s agent to be re-spawned under the first account', null, sessionId, launchesBefore);
     assert.deepEqual(listTopicErrors(), [], 'the topic hears no error');
     assert.ok(!getCharness().output.includes('exited unexpectedly'), 'the agent did not die at its start');
-    await askAndAwaitAnswer('LOST-2');
-    assert.deepEqual(listTopicErrors(), []);
     assert.equal(listConversationLostNotices().length, 1, 'no second notice: the agent just re-spawned took no turn, so no file was left and nothing was lost');
     assert.deepEqual(
       getSessionLaunches(getLayout()).filter((launch) => launch.overlapsPid != null).map((launch) => launch.pid),
       [],
       'every re-spawn waited for the process it replaced: never two agents on one conversation',
     );
+  });
+
+  it('the conversation begun again under its id sleeps before its first turn: its next message wakes it silently under the same id — the topic was already told once', async () => {
+    const launch = getSessionLaunches(getLayout()).at(-1);
+    assert.ok(launch, 'the topic\'s agent runs');
+    await restartWith((persisted) => {
+      process.kill(launch.pid, 'SIGKILL'); // the agent is gone while the bot is down; the saved state still names its conversation
+      const agent = persisted.agents?.[`${group.id}:${topicThreadId}`];
+      assert.equal(agent?.claudeSessionId, sessionId, 'the saved state names the conversation');
+      assert.equal(agent?.seenWatermark, undefined, 'the watermark of the lost conversation is not taken for a turn of the new one');
+    });
+    assert.equal(await readClaudeTranscriptContent(getTranscriptPath()), 'absent', 'precondition: the new conversation took no turn, so there is no file');
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    await askAndAwaitAnswer('LOST-2');
+    const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(launches.length, 1, 'one new process for the message');
+    assert.deepEqual([getFlagValues(launches[0].argv, '--resume'), getFlagValues(launches[0].argv, '--session-id')], [[], [sessionId]], 'started under the same id, nothing to resume');
+    assert.equal(listConversationLostNotices().length, 1, 'no second notice for the one loss');
+    assert.deepEqual(listTopicErrors(), []);
   });
 
   it('a topic left with a gone agent and only the stub on disk while the saved state still names the conversation: its next message is told once that the conversation is gone, starts a new session, and the message after it is answered with no further notice', async () => {
