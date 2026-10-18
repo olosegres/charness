@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Charness (formerly TelegramCode): run Claude Code and OpenCode from Telegram, on your own VPS</title>
-  <meta name="description" content="Self-hosted Telegram bot that runs OpenCode and Claude Code coding agents on your own machine or VPS, driven from your phone. One topic per project, voice input, scheduled prompts, no open ports. MIT." />
+  <title>Charness (formerly TelegramCode): Claude Code and OpenCode sessions grouped by project, reachable from anywhere 24/7</title>
+  <meta name="description" content="Group your Claude Code and OpenCode sessions by project instead of by chat; the topic's agent manages them, and they are reachable from anywhere, 24/7, on your own machine or VPS. Telegram and Jira, voice input, scheduled prompts, no open ports. MIT." />
   <link rel="canonical" href="https://github.com/olosegres/charness" />
   <style>
     :root { color-scheme: light dark; }
@@ -40,16 +40,21 @@
 </head>
 <body>
   <h1>Charness</h1>
-  <p class="tagline">Run OpenCode and Claude Code coding agents on your own machine or VPS, driven from Telegram on your phone.</p>
+  <p class="tagline">Your coding agents grouped by project, not by chat, and reachable from anywhere, 24/7.</p>
 
   <p>
-    Charness (formerly TelegramCode) is a self-hosted Telegram bot that turns Telegram into a terminal
-    for agentic coding CLIs. It runs on your own machine or server and connects out
-    to Telegram only, so there are no open inbound ports. You bind each forum topic
-    (or the bot's own DM) to a project folder, and each topic runs its own isolated
-    OpenCode or Claude Code session that you drive by chat, voice, or file. Topics
-    work like terminal tabs: one topic is one project, and two topics can share a
-    folder for parallel work.
+    Most agent apps split everything into sessions or chats, and tracking dozens of them over time gets very
+    hard, while keeping a project or a direction in your head stays easy. Charness (formerly TelegramCode)
+    adds a level of grouping above the session: a topic is a project, a direction, a category or a theme.
+    Sessions live inside it: the topic's agent works as their manager, starting the working sessions and
+    keeping an eye on them, while the bot runs their lifecycle, so you talk to the project instead of to every chat.
+  </p>
+
+  <p>
+    The second idea is availability. Charness is self-hosted: it runs on your own machine or server and
+    connects out to Telegram only, so there are no open inbound ports, and your agents are reachable from
+    your phone at any hour. You bind each forum topic (or the bot's own DM) to a project folder and drive
+    its OpenCode or Claude Code session by chat, voice, or file. Two topics can share a folder for parallel work.
   </p>
 
   <h2>What it does</h2>

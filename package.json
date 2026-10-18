@@ -3,7 +3,7 @@
   "version": "3.2.0",
   "license": "MIT",
   "author": "Sergei Solo",
-  "description": "Charness (formerly TelegramCode): Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
+  "description": "Charness (formerly TelegramCode): coding-agent sessions grouped by project, not by chat — the topic's agent manages them, reachable from anywhere 24/7 via Telegram or Jira",
   "keywords": [
     "charness",
     "telegramcode",
@@ -13,6 +13,9 @@
     "claude-code",
     "coding-agent",
     "ai-agent",
+    "multi-agent",
+    "agent-orchestration",
+    "session-management",
     "self-hosted",
     "vibe-coding",
     "voice",

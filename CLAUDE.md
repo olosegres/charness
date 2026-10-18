@@ -20,6 +20,11 @@
 
 ## What this project is
 
+**The idea:** agent apps split everything into sessions/chats, and tracking dozens of them over time is very hard,
+while keeping a project or direction in your head is easy. Charness adds a level above the session — the topic (a
+project / direction / category / theme) — with the topic's agent starting and watching the sessions inside it as their manager, and keeps
+the agents reachable from anywhere 24/7. Design features around the topic as the unit, not the chat.
+
 A Telegram **forum-supergroup bot that proxies user commands and messages to agentic CLIs** — **Claude Code**
 and **OpenCode** (plus a raw `$SHELL`). The bot has almost no "AI" logic: routing, session lifecycle,
 translating chat input into the right call to the agent, and streaming the output back into the topic. The
