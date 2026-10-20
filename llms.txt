@@ -1,8 +1,8 @@
 # Charness
 
-> Self-hosted Telegram (and Jira) bot that groups your Claude Code and OpenCode agent sessions by project instead of by chat, and keeps them reachable from anywhere, 24/7. A topic is a project or direction; its sessions live inside it, the topic's agent starts and watches them as their manager, and the bot runs their lifecycle.
+> Self-hosted Telegram bot that runs OpenCode and Claude Code coding agents on your own machine or VPS, driven from your phone. One forum topic is one project with its own isolated agent session, like terminal tabs.
 
-Most agent apps split everything into sessions or chats, and tracking dozens of them over time gets very hard, while keeping a project or a direction in your head stays easy. Charness (formerly TelegramCode) adds a level of grouping above the session: a forum topic in Telegram is a project, sessions live inside it, the topic's agent starts and watches them as their manager, and the bot runs their lifecycle. The second idea is availability: it runs on your own machine or server and connects out to Telegram only, so there are no open inbound ports, and your agents are reachable from your phone at any hour. You bind each forum topic (or the bot's own DM) to a project folder and drive its OpenCode or Claude Code session by chat, voice, or file. Sessions survive both bot restarts and agent-server restarts. It supports voice input (Whisper), photo/file/PDF intake, scheduled prompts, pinned question alerts (a pin pierces a muted topic for exactly one notification), a raw `/terminal` shell, an agent-facing MCP so the agent can send back files/images/video and schedule itself, and 12 UI languages. MIT licensed, Node 22.12+, install with `npm install -g charness` (the command keeps the former name, `telegramcode`; `charness` works too).
+Charness (formerly TelegramCode) turns Telegram into a terminal for agentic coding CLIs. It runs on your own machine or server and connects out to Telegram only, so there are no open inbound ports. You bind each forum topic (or the bot's own DM) to a project folder, and each topic runs its own isolated OpenCode or Claude Code session that you drive by chat, voice, or file. Sessions survive both bot restarts and agent-server restarts. It supports voice input (Whisper), photo/file/PDF intake, scheduled prompts, pinned question alerts (a pin pierces a muted topic for exactly one notification), a raw `/terminal` shell, an agent-facing MCP so the agent can send back files/images/video and schedule itself, and 12 UI languages. MIT licensed, Node 22.12+, install with `npm install -g charness` (the command keeps the former name, `telegramcode`; `charness` works too).
 
 ## Project
 
@@ -14,7 +14,7 @@ Most agent apps split everything into sessions or chats, and tracking dozens of 
 ## Key features
 
 - [Two agent backends](https://github.com/olosegres/charness#common-any-surface): OpenCode (native server API over HTTP+SSE) and Claude Code (tmux and json-stream backends).
-- [Projects, not chats](https://github.com/olosegres/charness#common-any-surface): a topic is a project or direction bound to a folder, with its sessions inside it and isolated from other topics; two topics can share a folder for parallel work.
+- [One topic per project](https://github.com/olosegres/charness#two-surfaces-group-topics-bot-dm-or-both): forum topics act like terminal tabs, one isolated session each; two topics can share a folder for parallel work.
 - [Voice control](https://github.com/olosegres/charness#telegram): send a voice note, it is transcribed with Whisper and forwarded to the agent.
 - [Scheduled and self-driving runs](https://github.com/olosegres/charness#scheduler-schedule-telegram): `/schedule` arms cron, one-shot, or N-times jobs per topic, and the agent can schedule itself.
 - [Pinned question alerts](https://github.com/olosegres/charness#telegram): when the agent asks a question the bot pins it, so even a muted topic notifies you once.

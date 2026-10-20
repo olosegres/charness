@@ -6,23 +6,12 @@
   <a href="https://github.com/olosegres/charness/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/charness" alt="license"></a>
 </p>
 
-<h2 align="center">Your coding agents grouped by project, not by chat — and reachable from anywhere, 24/7.</h2>
+<h2 align="center">Run multiple Claude Code / OpenCode agents and connect them to your Telegram or Jira.</h2>
 
-Most agent apps — desktop, web or terminal — split everything into sessions: one chat per task, and a few weeks later
-dozens of them. Keeping track of which session did what gets harder every week; keeping a project or a direction in
-your head stays easy.
-
-**Charness adds the missing level above the session: the topic — a project, a direction, a category, a theme.**
-Sessions live inside it: the topic's agent works as their **manager** — it starts the working sessions and keeps an
-eye on them — while the bot runs their lifecycle, so you talk to the project instead of tracking every chat.
-
-The second idea is availability. Charness runs on your own machine or server and only connects out, so your agents are
-there from your phone, tablet or laptop at any hour. It runs fine on your laptop, but it is called a <b>c</b>loud
-<b>harness</b> for a reason — put it on a server and the agents keep working while the laptop sleeps.
-
-- **In Telegram** every forum topic is one project, bound to a folder: its sessions and its agent live there, and you
-  drive them by text or voice from a phone, with scheduling on top.
+- **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
 - **In Jira** it starts an agent when you assign a ticket to a special user: the agent reads the description, comments and attachments and does the work according to the ticket's status — like a real employee.
+
+<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a server and your agents keep working while the laptop sleeps.</p>
 
 <p align="center">
   <img src="docs/images/hero-v2.png" alt="Charness — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
@@ -34,7 +23,6 @@ there from your phone, tablet or laptop at any hour. It runs fine on your laptop
 
 These hold whichever surface you drive it from — the same core serves all of them:
 
-- **Projects, not chats** — a topic is a project or direction; inside it you start a fresh session, resume an earlier one (`/sessions`), or leave it asleep until the next message. Sessions of one project stay together, and the bot keeps their lifecycle running (sleep and resume, restarts, usage-limit waits) so you only follow the project
 - **Agent backends** — OpenCode (native server API over HTTP+SSE) and Claude Code (three backends — json-stream, per-turn and tmux)
 - **Sleeping agents** — a Claude json-stream topic's process is stopped when idle (or after every turn in per-turn mode) and the next message resumes the same conversation by itself, prompt cache still warm
 - **Several Claude accounts** — keep more than one Claude subscription signed in side by side and choose per topic which one a session runs on (`/accounts`); every account's usage windows are shown next to it, and `/limits` is a one-tap switch board over all of them and over the OpenCode providers. See [Several accounts](#several-accounts-accounts)
@@ -43,10 +31,9 @@ These hold whichever surface you drive it from — the same core serves all of t
 
 ### Telegram
 
-In Telegram a forum topic is a project: bind it to a folder and its agent and
-sessions live there. Open as many topics as you have projects or directions —
-even two on the same folder for parallel work — and drive them from your phone
-or tablet, voice messages included.
+Charness turns Telegram into a terminal for running agentic CLIs. Open as
+many tabs as you need — even two on the same project for parallel work — and
+drive the agents from your phone or tablet, voice messages included.
 
 Think **OpenClaw for vibe coding**, driven entirely from Telegram: no complex
 setup, no extra dashboards — direct access to your own **OpenCode** /
@@ -54,7 +41,7 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 
 - **Simple setup & management** — install the CLI, put your bot token in one `.env`, bind a topic to a folder, and run; everything after is managed from Telegram — no dashboards
 - **Multi-thread / topic** — one topic per directory with your agent; two topics can share one folder for parallel work — run almost unlimited agents in parallel
-- **Two chat surfaces** — forum-group topics and the owner's bot DM, both served at once by default, with topics on either
+- **Two chat surfaces** — forum-group topics and the owner's bot DM, both served at once by default, with tabs on either
 - **Raw terminal** — `/terminal` binds a topic to a real `$SHELL` in the project folder
 - **Notifications** — when the agent asks a question, the bot pins that message so even a muted topic notifies you: the pin pierces mute, giving exactly one notification per question (unpinned once you answer)
 - **Scheduled & self-driving runs** — `/schedule` arms cron / one-shot / N-times jobs per topic, and the agent can schedule *itself* via injected MCP tools: nightly reviews, recurring reports, a "finish this tomorrow at 9" hand-off. Each job fires as a fresh session with your prompt; restart-safe, with one catch-up for a run missed while the bot was down
@@ -71,12 +58,12 @@ setup, no extra dashboards — direct access to your own **OpenCode** /
 
 The bot serves two Telegram surfaces:
 
-- **Forum supergroup** — every topic is a project. The most familiar UX: a visible
+- **Forum supergroup** — every topic is a tab. The most familiar UX: a visible
   topic list, per-topic names and icons, quick switching between agents. The
   trade-off is Telegram's group throughput cap (about 20 messages/min per
   group), so the bot paces and coalesces heavy output streams.
 - **The bot's own DM** (owner only) — the private
-  chat runs in topic mode too, so you get the same topic-per-project layout
+  chat runs in topic mode too, so you get the same thread-per-agent tabs
   there, and live output streams through Telegram's native draft "cursor":
   the reply grows in place in one message instead of arriving as a flood of
   separate messages.
@@ -731,7 +718,7 @@ Set up your VPS once with git, your repos, the agent CLIs, and `charness`, then 
 Yes, both a bot restart and an agent-server restart. State is persisted to disk; on restart the bot re-attaches to the running Claude session in tmux or re-connects to OpenCode, and an in-flight turn is delivered once it is back. A prompt sent during startup is buffered and replayed, never dropped.
 
 **Does it run both Claude Code and OpenCode?**
-Yes. Each topic picks its backend independently: OpenCode over its native HTTP+SSE server, or Claude Code (tmux or json-stream). One topic is one project, kept isolated from the other topics, and two topics can point at the same folder for parallel work.
+Yes. Each topic picks its backend independently: OpenCode over its native HTTP+SSE server, or Claude Code (tmux or json-stream). One topic is one project with its own isolated session, like terminal tabs, and two topics can point at the same folder for parallel work.
 
 **Can I talk to the agent by voice?**
 Yes. Send a voice message to a topic and it is transcribed (by Groq, OpenAI or your own Whisper-compatible server) and forwarded to the agent as a normal prompt, so you can vibe code hands-free from your phone.
