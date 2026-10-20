@@ -699,11 +699,14 @@ function getPidListeningOnEndpoint(hostname: string, port: string): number | nul
     ? ['127.0.0.1', '::1']
     : [normalizedHostname];
   for (const listenerAddress of listenerAddresses) {
+    // lsof wants IPv6 bracketed (`-iTCP@[::1]:4096`); unbracketed it rejects the
+    // address and prints its usage into the bot's log.
+    const lsofAddress = listenerAddress.includes(':') ? `[${listenerAddress}]` : listenerAddress;
     try {
       const output = execFileSync(
         'lsof',
-        ['-nP', `-iTCP@${listenerAddress}:${port}`, '-sTCP:LISTEN', '-t'],
-        { encoding: 'utf8', timeout: 3000 },
+        ['-nP', `-iTCP@${lsofAddress}:${port}`, '-sTCP:LISTEN', '-t'],
+        { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] },
       ).trim();
       const pid = Number.parseInt(output.split('\n')[0], 10);
       if (Number.isFinite(pid)) return pid;
