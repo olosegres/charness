@@ -879,7 +879,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {
     const ensure = botSource.slice(botSource.indexOf('async function ensureAgentSessionNow('), botSource.indexOf('function getResumableSessionId('));
     assert.match(ensure, /case 'ready':\s*return \{ ok: true, message: '', isFresh: false \};/);
-    assert.match(ensure, /if \(await resumeSleepingSession\(key, plan\.sessionId\)\) return \{ ok: true, message: '', isFresh: false \};/);
+    assert.match(ensure, /const resumeFailure = await resumeSleepingSession\(key, plan\.sessionId\);\s*if \(resumeFailure === null\) return \{ ok: true, message: '', isFresh: false \};/);
     assert.equal((ensure.match(/\? \{ ok: true, message, isFresh: true \}/g) ?? []).length, 2, 'both starts are fresh');
     assert.match(botSource, /if \(result\.ok\) return \{ ok: true, isFresh: result\.isFresh \};/);
   });
