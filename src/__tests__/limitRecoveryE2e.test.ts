@@ -16,7 +16,9 @@
  *     "continue" nudge
  *   → a LIVE limit error is announced whatever its reset says, a reset already past included
  *   → a reset in a NAMED zone (`resets 2:10pm (Europe/Moscow)`, the way Claude Code writes it) is read in that zone:
- *     the notice names it in the instance zone, not the Moscow clock as if it were local.
+ *     the notice names it in the instance zone, not the Moscow clock as if it were local
+ *   → a weekly reset written with its date (`resets Oct 25, 3pm (Europe/Moscow)`) is waited for until that date —
+ *     it used to be unparsed, and the topic was resumed into the limit every hour for six hours.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -72,6 +74,8 @@ const hoursPerHalfDay = 12;
 const minutesPadLength = 2;
 /** Moscow's offset from UTC (no daylight saving since 2014). */
 const moscowOffsetMs = 3 * 60 * 60 * 1000;
+/** How far ahead the weekly window resets — more than a day, so Claude Code writes the date. */
+const weeklyResetAheadMs = 3 * 24 * 60 * 60 * 1000;
 /** The bot's limit wait notice ("🚧 Usage limit reached — …") and its resume notice. */
 const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
@@ -122,6 +126,22 @@ function backdateTranscriptApiError(transcriptPath: string, writtenAt: Date): vo
   });
   assert.ok(lines.some((line) => line.includes('"isApiErrorMessage":true')), 'the fake recorded the API error in the transcript');
   fs.writeFileSync(transcriptPath, lines.join('\n'));
+}
+
+/** A Moscow wall clock the way Claude Code writes a reset: `2:10pm`. */
+function formatMoscowClock(atMs: number): string {
+  const moscow = new Date(atMs + moscowOffsetMs);
+  const hour = moscow.getUTCHours();
+  const hour12 = hour % hoursPerHalfDay === 0 ? hoursPerHalfDay : hour % hoursPerHalfDay;
+  return `${hour12}:${moscow.getUTCMinutes().toString().padStart(minutesPadLength, '0')}${hour < hoursPerHalfDay ? 'am' : 'pm'}`;
+}
+
+/** A dated Moscow reset the way Claude Code writes one more than a day ahead: `Oct 25, 3:10pm` (the year when not this one). */
+function formatMoscowDatedReset(atMs: number): string {
+  const moscow = new Date(atMs + moscowOffsetMs);
+  const month = moscow.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  const year = moscow.getUTCFullYear() === new Date(Date.now() + moscowOffsetMs).getUTCFullYear() ? '' : `, ${moscow.getUTCFullYear()}`;
+  return `${month} ${moscow.getUTCDate()}${year}, ${formatMoscowClock(atMs)}`;
 }
 
 /** The UTC clock the bot names a reset instant with in an instance whose zone is UTC (`HH:MM`, or with the date). */
@@ -227,12 +247,20 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const limitNoticesBefore = listSentLimitNotices().length;
     // Two hours from now in Moscow (+03:00, no DST), on the whole minute, as Claude Code writes it.
     const resetAtMs = Math.floor((Date.now() + 2 * 60 * 60 * 1000) / msPerMinute) * msPerMinute;
-    const moscow = new Date(resetAtMs + moscowOffsetMs);
-    const moscowHour = moscow.getUTCHours();
-    const moscowClock = `${moscowHour % hoursPerHalfDay === 0 ? hoursPerHalfDay : moscowHour % hoursPerHalfDay}:${moscow.getUTCMinutes().toString().padStart(minutesPadLength, '0')}${moscowHour < hoursPerHalfDay ? 'am' : 'pm'} (Europe/Moscow)`;
+    const moscowClock = `${formatMoscowClock(resetAtMs)} (Europe/Moscow)`;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-zone [fake:usage-limit-once] [limit-resets:${moscowClock}] once more`);
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     const notice = listSentLimitNotices()[limitNoticesBefore];
     assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the reset in UTC, got: ${notice}`);
+  });
+
+  it('a weekly reset written with its date is waited for until that date', async () => {
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const resetAtMs = Math.floor((Date.now() + weeklyResetAheadMs) / msPerMinute) * msPerMinute;
+    const datedReset = `${formatMoscowDatedReset(resetAtMs)} (Europe/Moscow)`;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-weekly [fake:usage-limit-once] [limit-resets:${datedReset}] the weekly window`);
+    await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+    const notice = listSentLimitNotices()[limitNoticesBefore];
+    assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the dated reset, got: ${notice}`);
   });
 });

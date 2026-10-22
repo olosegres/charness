@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A weekly usage limit waits for its reset date instead of retrying every hour.** A limit more than a day away is written
+with its date — «You've hit your weekly limit · resets Oct 25, 3pm» — which the bot could not read: it resumed the topic into
+the limit every hour, and after six tries gave up with «Couldn't resume». It now waits for that date and time (in the zone
+the message names) and resumes once.
+
 **A usage-limit reset written with its time zone is read in that zone.** Claude Code names the zone it wrote the reset in
 — «You've hit your session limit · resets 2:10pm (Europe/Moscow)» — and the bot read the clock in its own zone instead: when
 the two differ, the topic resumed too early (and hit the limit again) or waited hours too long. Daylight saving is the named

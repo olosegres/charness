@@ -77,6 +77,16 @@ const trailingZoneRegex = /^\s*\(?\s*(UTC|GMT|Z|[+-]\d{2}:?\d{2})\b\s*\)?/i;
  * `resets 2:10pm (Europe/Moscow)`. An IANA name (`Area/Location`, possibly deeper); validated by `Intl` before use.
  */
 const trailingNamedZoneRegex = /^\s*\(\s*([A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+)\s*\)/;
+/**
+ * Matches a DATED reset — a window more than a day ahead, written by Claude Code as `toLocaleString('en-US', { month:
+ * 'short', day: 'numeric', hour: 'numeric' })`: `resets Oct 25, 3pm`, `resets Oct 25, 3:30pm`, `resets Jan 2, 2027,
+ * 3pm` (the year only when it is not this one); claude.ai's `It resets Oct 25 at 3pm` too. Tried BEFORE the bare clock,
+ * whose `at 3pm` would otherwise win and drop the date.
+ */
+const monthDayResetRegex =
+  /\breset(?:s|ting)?\s+(?:on\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?(?:\s*,\s*|\s+at\s+|\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i;
+/** The month abbreviations {@link monthDayResetRegex} captures, in calendar order. */
+const monthAbbreviations = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 /** Matches an ISO-8601 timestamp anywhere in the text. */
 const isoTimestampRegex = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/;
 
@@ -274,8 +284,10 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
 /**
  * @description Best-effort parse of a "reset time" out of a usage-limit message.
  * Never throws: any unparseable / absent time yields `undefined`, which the
- * caller treats as "use the fixed delay". Handles three shapes, in order:
+ * caller treats as "use the fixed delay". Handles four shapes, in order:
  *  - relative: "resets in 2h" / "in 45m" → `now + duration`.
+ *  - dated: "resets Oct 25, 3pm (Europe/Moscow)" — a weekly window, more than a
+ *    day ahead → that date and clock, in the stated zone (or the local one).
  *  - absolute clock: "resets at 3pm" / "at 15:00" / "resets 10:50pm (UTC)" → the
  *    NEXT occurrence of that clock time at or after `now`. An EXPLICIT zone
  *    suffix — an offset (`(UTC)`, `+05:00`) or a named zone (`(Europe/Moscow)`,
@@ -298,6 +310,12 @@ export function parseResetAt(text: string, now: number): number | undefined {
     const unit = relativeMatch[2].toLowerCase();
     const isHours = unit.startsWith('h');
     return now + amount * (isHours ? msPerHour : msPerMinute);
+  }
+
+  const monthDayMatch = monthDayResetRegex.exec(text);
+  if (monthDayMatch) {
+    const resolved = resolveMonthDayResetTime(monthDayMatch, text, now);
+    if (resolved !== undefined) return resolved;
   }
 
   const clockMatch = clockResetRegex.exec(text);
@@ -332,6 +350,41 @@ function getZoneOffsetMs(zone: string): number | undefined {
   return sign * (hours * msPerHour + minutes * msPerMinute);
 }
 
+/** @description A 12-hour clock (`3`, `pm`) as the hour of a 24-hour day; a bare hour is taken as written. */
+function getHourOfDay(rawHour: number, meridiem: string | undefined): number {
+  const lowerMeridiem = meridiem?.toLowerCase();
+  if (lowerMeridiem === 'pm' && rawHour < 12) return rawHour + 12;
+  if (lowerMeridiem === 'am' && rawHour === 12) return 0;
+  return rawHour;
+}
+
+/**
+ * Resolve a dated reset ({@link monthDayResetRegex}) to its epoch ms: in the zone named or offset right after it, else
+ * in the process-local zone. Without a written year it is this year's date — or next year's once this year's has passed
+ * (a reset is always ahead). `undefined` for an out-of-range day or clock.
+ */
+function resolveMonthDayResetTime(match: RegExpExecArray, text: string, now: number): number | undefined {
+  const month = monthAbbreviations.indexOf(match[1].toLowerCase()) + 1;
+  const day = Number.parseInt(match[2], 10);
+  const writtenYear = match[3] ? Number.parseInt(match[3], 10) : null;
+  const hour = getHourOfDay(Number.parseInt(match[4], 10), match[6]);
+  const minute = match[5] ? Number.parseInt(match[5], 10) : 0;
+  if (day < 1 || day > 31 || hour >= hoursPerDay || minute >= minutesPerHour) return undefined;
+
+  const textAfterClock = text.slice(match.index + match[0].length);
+  const namedZone = getTrailingNamedZone(textAfterClock);
+  const zoneMatch = namedZone === null ? trailingZoneRegex.exec(textAfterClock) : null;
+  const offsetMs = zoneMatch ? getZoneOffsetMs(zoneMatch[1]) : undefined;
+  const resolveInYear = (year: number): number => {
+    if (namedZone !== null) return getEpochMsOfZonedWallClock(namedZone, { year, month, day, hour, minute });
+    if (offsetMs !== undefined) return Date.UTC(year, month - 1, day, hour, minute) - offsetMs;
+    return new Date(year, month - 1, day, hour, minute).getTime();
+  };
+  const currentYear = namedZone !== null ? getZonedWallClock(namedZone, now).year : new Date(now).getFullYear();
+  const resolved = resolveInYear(writtenYear ?? currentYear);
+  return writtenYear === null && resolved < now ? resolveInYear(currentYear + 1) : resolved;
+}
+
 /** The IANA zone named in parentheses at the start of `textAfterClock`, canonicalized; `null` when none or unknown. */
 function getTrailingNamedZone(textAfterClock: string): string | null {
   const zoneName = trailingNamedZoneRegex.exec(textAfterClock)?.[1];
@@ -357,13 +410,8 @@ function resolveNextZonedClockTime(timezone: string, hour: number, minute: numbe
  * Returns `undefined` for an out-of-range hour/minute rather than guessing.
  */
 function resolveNextClockTime(match: RegExpExecArray, text: string, now: number): number | undefined {
-  const rawHour = Number.parseInt(match[1], 10);
   const minute = match[2] ? Number.parseInt(match[2], 10) : 0;
-  const meridiem = match[3]?.toLowerCase();
-
-  let hour = rawHour;
-  if (meridiem === 'pm' && rawHour < 12) hour = rawHour + 12;
-  else if (meridiem === 'am' && rawHour === 12) hour = 0;
+  const hour = getHourOfDay(Number.parseInt(match[1], 10), match[3]);
 
   if (hour < 0 || hour >= hoursPerDay || minute < 0 || minute >= minutesPerHour) {
     return undefined;

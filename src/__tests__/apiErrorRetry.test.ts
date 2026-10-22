@@ -455,3 +455,43 @@ test('parseResetAt: an unknown zone name falls back to the bot\'s own zone, as b
     assert.equal(parseResetAt('resets 2:10pm (Mars/Olympus_Mons)', fixedNow), Date.parse('2026-06-09T14:10:00.000Z'));
   });
 });
+
+// A reset more than a day ahead — a weekly window — is written with its date: Claude Code 2.1.304 formats it
+// `toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric' })` → "resets Oct 25, 3pm (Europe/Moscow)",
+// with the year when it is not this year ("Jan 2, 2027, 3pm"). Unparsed, a real weekly limit was retried every hour
+// for six hours — six pointless resumes into the limit — and then given up.
+const weeklyNow = Date.parse('2026-10-22T10:00:00.000Z');
+
+test('parseResetAt: a weekly reset with its date and named zone', () => {
+  withProcessTimezone('Asia/Dubai', () => {
+    // 3pm in Moscow on Oct 25 is 12:00Z.
+    assert.equal(parseResetAt("You've hit your weekly limit · resets Oct 25, 3pm (Europe/Moscow)", weeklyNow), Date.parse('2026-10-25T12:00:00.000Z'));
+    assert.equal(parseResetAt('resets Oct 25, 3:30pm (Europe/Moscow)', weeklyNow), Date.parse('2026-10-25T12:30:00.000Z'));
+  });
+});
+
+test('parseResetAt: a dated reset without a zone is the bot\'s own wall clock; with an offset, that offset', () => {
+  withProcessTimezone('Asia/Dubai', () => {
+    assert.equal(parseResetAt("You've hit your Opus limit · resets Oct 25, 3pm", weeklyNow), Date.parse('2026-10-25T11:00:00.000Z'));
+    assert.equal(parseResetAt('resets Oct 25, 3pm (UTC)', weeklyNow), Date.parse('2026-10-25T15:00:00.000Z'));
+  });
+});
+
+test('parseResetAt: the year when it is written; the next year when the date has passed this year; the "at" form', () => {
+  withProcessTimezone('UTC', () => {
+    assert.equal(parseResetAt('resets Jan 2, 2027, 3pm (UTC)', weeklyNow), Date.parse('2027-01-02T15:00:00.000Z'));
+    const lateDecember = Date.parse('2026-12-30T10:00:00.000Z');
+    assert.equal(parseResetAt('resets Jan 2, 3pm', lateDecember), Date.parse('2027-01-02T15:00:00.000Z'));
+    // claude.ai's wording: "It resets Oct 25 at 3pm" — the date must win over the bare "at 3pm" clock.
+    assert.equal(parseResetAt("You've reached your weekly limit. It resets Oct 25 at 3pm.", weeklyNow), Date.parse('2026-10-25T15:00:00.000Z'));
+  });
+});
+
+test('classify: a weekly limit with a dated reset arms the wait for that date', () => {
+  withProcessTimezone('UTC', () => {
+    assert.deepEqual(classifyAgentApiError("You've hit your weekly limit · resets Oct 25, 3pm (Europe/Moscow)", weeklyNow), {
+      kind: 'usageLimit',
+      resetAt: Date.parse('2026-10-25T12:00:00.000Z'),
+    });
+  });
+});
