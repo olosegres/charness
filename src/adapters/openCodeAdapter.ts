@@ -1018,12 +1018,26 @@ export function getOpenCodeErrorMessage(error: unknown): string {
  * shape to a constant, and the classifier reads text to decide whether an error
  * is an auto-retryable rate-limit / usage-limit. Feeding it that constant
  * silently cancelled the retry of a real rate limit, so the two paths are split:
- * the user gets the constant, the classifier gets the full payload.
+ * the user gets the constant, the classifier gets the payload's text. For
+ * OpenCode's own `{ name, data }` provider error that text is the message, the
+ * response body and the status code only — never its headers or metadata (see
+ * the inline note); an unrecognised shape is serialized whole.
  */
 function getOpenCodeErrorClassificationText(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
   if (!error || typeof error !== 'object') return '';
+  const apiErrorData = getOpenCodeApiErrorData(error);
+  if (apiErrorData) {
+    // OpenCode's own shape: what the PROVIDER said — its message, its response body, the status code. Never the
+    // response headers or the metadata: they name limits and resets of their own (`x-…-limit-…`, a per-minute
+    // counter's `…-reset: <ISO>`), which read as a usage window that is not there.
+    return [
+      apiErrorData.message,
+      apiErrorData.responseBody,
+      typeof apiErrorData.statusCode === 'number' ? `HTTP ${apiErrorData.statusCode}` : undefined,
+    ].filter((part): part is string => typeof part === 'string' && part !== '').join('\n');
+  }
   try {
     // A payload whose `toJSON` opts out yields undefined rather than text.
     const serialized: string | undefined = JSON.stringify(error);
@@ -1032,6 +1046,45 @@ function getOpenCodeErrorClassificationText(error: unknown): string {
     // Circular / non-serialisable payload (e.g. a self-referencing error object).
     return '';
   }
+}
+
+const msPerSecond = 1000;
+
+/** The fields of OpenCode's `{ name, data }` provider error the bot reads — untrusted, checked field by field. */
+interface OpenCodeApiErrorData {
+  message?: string;
+  statusCode?: number;
+  responseBody?: string;
+  responseHeaders?: Record<string, string>;
+}
+
+/** @description The `data` of an OpenCode `{ name, data: { message, … } }` error, or `null` for any other shape. */
+function getOpenCodeApiErrorData(error: object): OpenCodeApiErrorData | null {
+  const data: OpenCodeApiErrorData | undefined = 'data' in error && error.data && typeof error.data === 'object' ? error.data : undefined;
+  return data && typeof data.message === 'string' ? data : null;
+}
+
+/**
+ * @description The reset a provider states as a FIELD: the `retry-after-ms` / `retry-after` response header of an
+ * OpenCode provider error (seconds, or an HTTP date), as epoch ms; `undefined` when there is none. The one header the
+ * bot reads — the others name limits and counters of their own.
+ */
+export function getOpenCodeErrorRetryAfterAt(error: unknown, now: number): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const headers = getOpenCodeApiErrorData(error)?.responseHeaders;
+  if (!headers || typeof headers !== 'object') return undefined;
+  const readHeader = (name: string): string | undefined => {
+    const entry = Object.entries(headers).find(([headerName]) => headerName.toLowerCase() === name);
+    return typeof entry?.[1] === 'string' ? entry[1] : undefined;
+  };
+  const retryAfterMs = Number.parseFloat(readHeader('retry-after-ms') ?? '');
+  if (Number.isFinite(retryAfterMs)) return now + retryAfterMs;
+  const retryAfter = readHeader('retry-after');
+  if (retryAfter === undefined) return undefined;
+  const retryAfterSeconds = Number.parseFloat(retryAfter);
+  if (Number.isFinite(retryAfterSeconds)) return now + retryAfterSeconds * msPerSecond;
+  const retryAfterDateMs = Date.parse(retryAfter);
+  return Number.isNaN(retryAfterDateMs) ? undefined : retryAfterDateMs;
 }
 
 /**
@@ -5347,12 +5400,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // Classified from the RAW payload, not from `errorMsg`: the surfaced text
     // collapses an unrecognised shape to a constant that carries no marker to
     // classify. The raw text stops here — the classifier returns only a class.
+    const now = Date.now();
     const apiError: AgentApiErrorClass | null = classifyAgentApiError(
       getOpenCodeErrorClassificationText(properties.error),
-      Date.now(),
+      now,
     );
     if (apiError) {
-      this.emit('apiError', key, apiError);
+      // A usage limit whose text names no reset takes the provider's Retry-After, read as a field.
+      const resetAt = apiError.kind === 'usageLimit' ? apiError.resetAt ?? getOpenCodeErrorRetryAfterAt(properties.error, now) : undefined;
+      this.emit('apiError', key, apiError.kind === 'usageLimit' ? { ...apiError, resetAt } : apiError);
     }
   }
 

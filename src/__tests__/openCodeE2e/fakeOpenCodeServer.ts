@@ -127,6 +127,25 @@ export class FakeOpenCodeServer {
     this.broadcast({ type: 'session.error', properties: { sessionID: sessionId, error: { name: 'APIError', data: { message, statusCode: 429, isRetryable: false } } } }, session.directory);
   }
 
+  /**
+   * @description OpenCode retrying the provider by itself: the `session.status` of type `retry` it emits between attempts
+   * (`message` is the provider's error message, `next` the epoch ms of the next attempt).
+   */
+  emitProviderRetry(sessionId: string, retry: { attempt: number; message: string; next: number }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'retry', ...retry } } }, session.directory);
+  }
+
+  /**
+   * @description A `session.error` carrying `error` as OpenCode relays it (`{ name: 'APIError', data: { message,
+   * statusCode, responseHeaders, responseBody, … } }`), for the session `sessionId` — which may be one the fake never
+   * created (a sub-agent's child session, a foreign session in the same folder): `directory` routes it then.
+   */
+  emitSessionError(sessionId: string, error: Record<string, unknown>, directory: string | null = this.sessions.get(sessionId)?.directory ?? null): void {
+    this.broadcast({ type: 'session.error', properties: { sessionID: sessionId, error } }, directory);
+  }
+
   private broadcast(payload: { type: string; properties: Record<string, unknown> }, directory: string | null = null): void {
     const frame = `data: ${JSON.stringify(directory === null ? { payload } : { directory, payload })}\n\n`;
     for (const stream of this.eventStreams) stream.write(frame);

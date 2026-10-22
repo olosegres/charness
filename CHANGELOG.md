@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**An OpenCode error's response headers no longer turn it into a usage limit, or set its reset.** The bot read the whole
+error OpenCode relays, response headers included, and headers name limits and resets of their own: a plain 400 could be
+announced as «🚧 Usage limit reached», and a real limit could be given the reset of a per-minute counter (or a stamp a day
+away). Now only what the provider said — its message, its response body, the status code — is read, and a reset that the
+message does not name comes from the provider's Retry-After.
+
 **A per-minute provider throttle is no longer announced as an exhausted usage limit.** Google answers a used-up
 PER-MINUTE Gemini quota with the same «You exceeded your current quota … Please retry in 40s» / «Resource has been
 exhausted» as a per-day one, and a concurrency or tokens-per-minute cap reads «exceeded your rate limit» / «limit
