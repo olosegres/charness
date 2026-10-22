@@ -19,7 +19,9 @@
  *     three hours away): UNCONFIRMED on its own — a two-minute probe retry, no limit notice; the same error right
  *     after the probe's resume confirms it, and only then is the wait to the reset announced
  *   → in a third topic, OpenCode Go's usage limit "It will reset in 2 hours 30 minutes": the notice names the reset
- *     two and a half hours ahead — only the "2 hours" used to be read.
+ *     two and a half hours ahead — only the "2 hours" used to be read
+ *   → in a fourth topic, a usage limit whose reset is a ZONE-LESS ISO stamp: the plain hourly retry, not a reset time
+ *     guessed in the bot's zone.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -65,6 +67,8 @@ const geminiTopic = { threadId: 151, folder: 'gemini-throttle' };
 const anthropicTopic = { threadId: 152, folder: 'anthropic-unconfirmed' };
 /** A third topic for OpenCode Go's usage limit, whose reset is written in several parts. */
 const goTopic = { threadId: 153, folder: 'opencode-go-limit' };
+/** A fourth topic for a usage limit whose reset is a zone-less ISO stamp. */
+const zonelessTopic = { threadId: 154, folder: 'zoneless-reset' };
 const fakeOpenCodeVersion = '1.17.11';
 const geminiModel = 'google/gemini-2.5-flash';
 const openCodeModels = [geminiModel] as const;
@@ -130,7 +134,7 @@ function getTopicKey(threadId: number = geminiTopic.threadId): string {
 describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder, zonelessTopic.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -297,5 +301,20 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     const expectedClocks = [0, msPerMinute].map((driftMs) => new Date(sentAt + resetInMs + driftMs).toISOString().slice(11, 16));
     // The bot adds the date when the reset is not today (the run may cross midnight UTC).
     assert.ok(expectedClocks.some((clock) => new RegExp(`~(?:\\d{4}-\\d{2}-\\d{2} )?${clock}\\)`).test(notice)), `the reset 2 h 30 min ahead (${expectedClocks.join(' or ')}), got: ${notice}`);
+  });
+
+  it('a usage limit whose reset is a zone-less ISO stamp: the plain hourly retry, no guessed reset time', async () => {
+    const driver = new TopicDriver(fakeTelegram, getCharness, zonelessTopic.threadId, replyTimeoutMs);
+    await driver.sendAndAwaitReply(`/bind ${zonelessTopic.folder}`, `Bound to \`${zonelessTopic.folder}\``);
+    await driver.sendAndAwaitReply('/opencode', 'ready in');
+    const zonelessStamp = new Date(Date.now() + 3 * 60 * msPerMinute).toISOString().slice(0, 19).replace('T', ' ');
+    fakeOpenCode.emitSessionError(getTopicSessionId(zonelessTopic.folder), {
+      name: 'APIError',
+      data: { message: `Usage limit reached for this key. It resets at ${zonelessStamp}.`, statusCode: 403, isRetryable: false },
+    });
+
+    await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(zonelessTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
+    const notice = listSentTexts(zonelessTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
+    assert.match(notice, /retrying in 60 min/, `an unknown reset, got: ${notice}`);
   });
 });

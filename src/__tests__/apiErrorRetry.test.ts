@@ -564,3 +564,18 @@ test('parseResetAt: a relative reset in several parts is their sum', () => {
   assert.equal(parseResetAt('resets in 1h30m', fixedNow), fixedNow + 90 * minuteMs);
   assert.equal(parseResetAt('Usage limit reached. It will reset in 45 minutes.', fixedNow), fixedNow + 45 * minuteMs);
 });
+
+// An ISO stamp with no zone says nothing about which zone it is in (RFC 3339 requires an offset; no provider documents
+// a zone-less reset). Read in the bot's zone it could be hours off either way — a resume into the limit, or a wait long
+// past it. It counts only with a zone after it; otherwise the reset is unknown (the fixed delay, or OpenCode's own
+// Retry-After) rather than guessed.
+test('parseResetAt: a zone-less ISO stamp is not a reset unless a zone follows it', () => {
+  withProcessTimezone('Asia/Dubai', () => {
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09 23:29:00.', fixedNow), undefined);
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09T23:29:00, try later.', fixedNow), undefined);
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09 23:29 UTC.', fixedNow), Date.parse('2026-06-09T23:29:00.000Z'));
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09 23:29 (Europe/Moscow).', fixedNow), Date.parse('2026-06-09T20:29:00.000Z'));
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09T23:29:00Z.', fixedNow), Date.parse('2026-06-09T23:29:00.000Z'));
+    assert.equal(parseResetAt('Your quota resets at 2026-06-09T23:29:00+04:00.', fixedNow), Date.parse('2026-06-09T19:29:00.000Z'));
+  });
+});

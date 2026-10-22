@@ -93,8 +93,8 @@ const monthDayResetRegex =
   /\breset(?:s|ting)?\s+(?:on\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,\s*(\d{4}))?(?:\s*,\s*|\s+at\s+|\s+)(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i;
 /** The month abbreviations {@link monthDayResetRegex} captures, in calendar order. */
 const monthAbbreviations = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-/** Matches an ISO-8601 timestamp anywhere in the text. */
-const isoTimestampRegex = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/;
+/** Matches an ISO-8601 timestamp anywhere in the text: its date and clock, and its zone when it carries one. */
+const isoTimestampRegex = /\b(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2})?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/;
 
 const hoursPerDay = 24;
 const minutesPerHour = 60;
@@ -352,7 +352,8 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
  *    IN THAT ZONE, not in the instance/host zone. Without it a `10:50pm (UTC)` reset on a `+04:00` box
  *    resolved four hours EARLY — the retry fires while the limit still holds,
  *    re-errors, and burns one of the six attempts for nothing.
- *  - ISO timestamp anywhere in the text → `Date.parse`.
+ *  - ISO timestamp anywhere in the text → that instant; a zone-less one only with
+ *    a zone right after it (see {@link resolveIsoResetTime}).
  *
  * A clock shape that fails to resolve (out-of-range hour) falls THROUGH to the
  * ISO branch rather than giving up, so a message carrying both still parses.
@@ -385,10 +386,7 @@ export function parseResetAt(text: string, now: number): number | undefined {
   }
 
   const isoMatch = isoTimestampRegex.exec(text);
-  if (isoMatch) {
-    const parsed = Date.parse(isoMatch[0]);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
+  if (isoMatch) return resolveIsoResetTime(isoMatch, text);
 
   return undefined;
 }
@@ -443,6 +441,26 @@ function resolveMonthDayResetTime(match: RegExpExecArray, text: string, now: num
   const currentYear = namedZone !== null ? getZonedWallClock(namedZone, now).year : new Date(now).getFullYear();
   const resolved = resolveInYear(writtenYear ?? currentYear);
   return writtenYear === null && resolved < now ? resolveInYear(currentYear + 1) : resolved;
+}
+
+/**
+ * Resolve an ISO stamp ({@link isoTimestampRegex}) to epoch ms. One with its own zone is that instant. A ZONE-LESS one
+ * says nothing about its zone (RFC 3339 requires an offset, and no provider documents a zone-less reset): read in the
+ * bot's own zone it could be hours off either way, so it counts only with a zone right after it (`… 23:29 UTC`,
+ * `… (Europe/Moscow)`) — else `undefined`, an unknown reset (the fixed delay, or OpenCode's own Retry-After), not a guess.
+ */
+function resolveIsoResetTime(match: RegExpExecArray, text: string): number | undefined {
+  if (match[6] !== undefined) {
+    const parsed = Date.parse(match[0]);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  const [year, month, day, hour, minute] = match.slice(1, 6).map((part) => Number.parseInt(part, 10));
+  const textAfterStamp = text.slice(match.index + match[0].length);
+  const namedZone = getTrailingNamedZone(textAfterStamp);
+  if (namedZone !== null) return getEpochMsOfZonedWallClock(namedZone, { year, month, day, hour, minute });
+  const zoneMatch = trailingZoneRegex.exec(textAfterStamp);
+  const offsetMs = zoneMatch ? getZoneOffsetMs(zoneMatch[1]) : undefined;
+  return offsetMs === undefined ? undefined : Date.UTC(year, month - 1, day, hour, minute) - offsetMs;
 }
 
 /** The IANA zone named in parentheses at the start of `textAfterClock`, canonicalized; `null` when none or unknown. */

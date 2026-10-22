@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A reset time written without a time zone is no longer guessed.** An ISO stamp with no zone («resets at 2026-10-22
+23:29») was read in the bot's own zone — hours off when the provider meant another. It now counts only with a zone after it;
+otherwise the reset is treated as unknown and the topic retries hourly (or as the provider's Retry-After says).
+
 **A reset written in several parts («reset in 2 hours 30 minutes») is read whole.** Only the first part was read, so
 the topic resumed half an hour early (OpenCode Go writes its limits that way, «in 1 day 3 hours» too), hit the limit
 again and used up a retry.
