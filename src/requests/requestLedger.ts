@@ -297,6 +297,16 @@ export class RequestLedger {
   }
 
   /** Open entries whose group key still decodes (a key of an unregistered platform is left alone), oldest first. */
+  /**
+   * @description The `createdAt` of a request created now: the clock, but always after every open request's — the open
+   * requests are ordered by it (oldest first), and two created in the same millisecond tied, the tie falling back to the
+   * store's key order, where a superseded requester's slot keeps the position of its FIRST request.
+   */
+  private getNextCreatedAt(): number {
+    const newestOpenCreatedAt = Math.max(...Object.values(this.store.getOpenRequests()).map((request) => request.createdAt), Number.NEGATIVE_INFINITY);
+    return Math.max(this.now(), newestOpenCreatedAt + 1);
+  }
+
   private getOpenEntries(): OpenRequestEntry[] {
     const entries: OpenRequestEntry[] = [];
     for (const [groupString, request] of Object.entries(this.store.getOpenRequests())) {
@@ -408,7 +418,7 @@ export class RequestLedger {
    */
   async createRequest(key: SessionKey, origin: RequestOrigin, options: CreateRequestOptions = {}): Promise<OpenRequestState> {
     this.assertLoaded();
-    const createdAt = this.now();
+    const createdAt = this.getNextCreatedAt();
     const conversationKey = keyToString(key);
     const group = getRequestGroupKey(key, origin);
     const id = this.createRequestId();

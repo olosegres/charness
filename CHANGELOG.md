@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**Two requests opened in the same instant keep their order.** When two people wrote to a topic within the same
+millisecond, the bot could take the older request for the newer one — and answer or remind the wrong person first.
+
 **«⏭ Skip once» and a given-up limit wait stay settled across a bot restart.** When a Claude topic's limit wait ended
 without its resume — skipped, given up, or taken over — the next restart (hot mode restarts on every update) found the
 same limit error at the end of the agent's log and armed the wait again: the «usage limit reached» notice came back and the

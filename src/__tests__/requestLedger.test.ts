@@ -165,6 +165,21 @@ describe('RequestLedger requests', () => {
     ]);
   });
 
+  it('requests created within the same millisecond stay oldest first, a superseding one included', async () => {
+    // A frozen clock: every request gets the same millisecond, as two people writing at once can. Sorted by `createdAt`
+    // alone, the tie fell back to the store's key order — where the operator's slot sits before the colleague's because
+    // the operator's FIRST request claimed it — so the operator's newer request read as the older one.
+    const store = await createStore();
+    const frozenNowMs = Date.parse('2026-10-23T09:00:00.000Z');
+    const ledger = await createLoadedLedger(store, () => frozenNowMs);
+    await ledger.createRequest(topicKey, operatorOrigin);
+    const colleague = await ledger.createRequest(topicKey, colleagueOrigin);
+    const operatorSecond = await ledger.createRequest(topicKey, operatorOrigin);
+
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey).map((request) => request.id), [colleague.id, operatorSecond.id], 'oldest first');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.id, operatorSecond.id);
+  });
+
   it('a new request supersedes only the SAME requester\'s open one; another requester\'s stays open beside it', async () => {
     const store = await createStore();
     const ledger = await createLoadedLedger(store);
