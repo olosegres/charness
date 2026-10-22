@@ -8,7 +8,10 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { getClaudeAgentErrorLine } from '../adapters/claudeCliAdapter';
+import { ClaudeCliAdapter, getClaudeAgentErrorLine } from '../adapters/claudeCliAdapter';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { keyToString, type SessionKey } from '../sessionKey';
+import type { AgentApiErrorClass } from '../types';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { getNewPaneContent } from '../utils/paneDiff';
 
@@ -208,4 +211,81 @@ test('end-to-end: a detected limit row classifies to usageLimit with a reset tim
   const cls = classifyAgentApiError(line, fixedNow);
   assert.equal(cls?.kind, 'usageLimit');
   assert.equal(cls?.resetAt, Date.parse('2026-07-01T22:50:00.000Z'));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  A usage WARNING is not a limit. Claude Code (2.1.304) words the non-blocking
+//  `allowed_warning` status `Approaching <window> · resets <time>` or
+//  `You've used N% of your <window> · resets <time>`, and the overage one
+//  `You're close to your usage limit`; only `rejected` reads
+//  `You've hit your <window> · resets <time>`. The warning row carries the window
+//  name and the reset time, so it was detected and classified as an exhausted
+//  limit: the topic got "Usage limit reached — will auto-resume after reset" while
+//  the account still had room, and the work stopped until the reset.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The warning rows the CLI renders, verbatim shapes from its message builder. */
+const usageWarningRows = [
+  'Approaching session limit · resets 11:29pm',
+  'Approaching weekly limit · resets Oct 25, 3pm',
+  'Approaching Opus limit · resets Oct 25, 3pm',
+  '⎿  Approaching session limit · resets 11:29pm',
+  "You've used 90% of your session limit · resets 11:29pm",
+  "You've used 75% of your weekly limit · resets Oct 25, 3pm · Run /usage-credits to turn on extra usage",
+  "You're close to your usage credit limit",
+];
+
+test('NEGATIVE: a usage WARNING row (allowed_warning) is not detected as a limit error', () => {
+  for (const line of usageWarningRows) {
+    assert.equal(getClaudeAgentErrorLine(line), null, line);
+  }
+});
+
+test('NEGATIVE: a usage WARNING text never classifies as an exhausted usage limit', () => {
+  for (const text of [
+    ...usageWarningRows,
+    // claude.ai / credits wordings (support article "Understanding Claude error messages"): work continues.
+    '5-hour limit resets 11:29pm - continuing with usage credits',
+    'Now using credits. Your plan limit resets Thu at 11:29pm',
+    "You're now using extra usage · Your session limit resets 11:29pm",
+    'Now using usage credits for Opus · Your Opus limit resets 11:29pm',
+  ]) {
+    assert.equal(classifyAgentApiError(text, fixedNow), null, text);
+  }
+});
+
+test('a warning row followed by the real block in the same delta → the block row is the one detected', () => {
+  const pane = [
+    'Approaching session limit · resets 11:29pm',
+    '● Working on the next step.',
+    "You've hit your session limit · resets 11:29pm",
+    '❯ ',
+  ].join('\n');
+  assert.equal(getClaudeAgentErrorLine(pane), "You've hit your session limit · resets 11:29pm");
+});
+
+test('adapter: a warning row on the pane arms NO limit wait; the block row that follows does', () => {
+  const key: SessionKey = makeTelegramKey(-1001111111111, 42);
+  const adapter = new ClaudeCliAdapter();
+  const session = adapter['createSession']({
+    key,
+    workDir: '/tmp/work',
+    sessionName: `claude-${keyToString(key)}`,
+    claudeSessionId: '00000000-0000-4000-8000-000000000000',
+    configDir: null,
+    isActive: true,
+    handledAutoEnter: false,
+    handledAutoAccept: false,
+  });
+  const apiErrors: AgentApiErrorClass[] = [];
+  adapter.on('apiError', (_key: SessionKey, apiError: AgentApiErrorClass) => {
+    apiErrors.push(apiError);
+  });
+  const warningPane = ['● Refactoring the parser now.', 'Approaching session limit · resets 11:29pm', '❯ '].join('\n');
+  adapter['handleAutoLifecycle'](session, warningPane, getNewPaneContent('● Refactoring the parser now.\n❯ ', warningPane).text);
+  assert.equal(apiErrors.length, 0, 'a warning must not reach the bot as a usage-limit error');
+
+  const blockedPane = `${warningPane}\nYou've hit your session limit · resets 11:29pm`;
+  adapter['handleAutoLifecycle'](session, blockedPane, getNewPaneContent(warningPane, blockedPane).text);
+  assert.deepEqual(apiErrors.map((apiError) => apiError.kind), ['usageLimit'], 'the real block still arms the wait');
 });

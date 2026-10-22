@@ -26,7 +26,7 @@ import type {
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
-import { classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry';
+import { checkIsUsageLimitWarningText, classifyAgentApiError, usageLimitPhraseSource } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
@@ -2793,7 +2793,8 @@ const CLAUDE_LIMIT_ROW_SHAPE_RE = /\b(?:reached|exceeded|resets|resetting|try ag
  *   d) a row whose content LEADS with a usage/session-limit phrase AND reads like
  *      an error ({@link CLAUDE_LIMIT_ROW_SHAPE_RE}) — `You've hit your session
  *      limit · resets 10:50pm (UTC)` carries no `API Error:` marker at all, so
- *      (a)–(c) all missed it.
+ *      (a)–(c) all missed it. A usage WARNING row (`Approaching session limit ·
+ *      resets …`) has the same shape and is skipped ({@link checkIsUsageLimitWarningText}).
  * FALSE-POSITIVE GUARD: prose never starts a line with the `⎿` glyph nor with
  * `API Error:`. But TOOL results (Bash/Read/Grep output) ARE rendered by the TUI
  * under a `⎿` marker, so a result row that QUOTES an auth phrase deeper in the
@@ -2807,6 +2808,10 @@ const CLAUDE_LIMIT_ROW_SHAPE_RE = /\b(?:reached|exceeded|resets|resetting|try ag
  */
 export function getClaudeAgentErrorLine(content: string): string | null {
   for (const line of content.split('\n')) {
+    // A usage WARNING row (`Approaching session limit · resets 11:29pm`) passes the
+    // limit shape (d) but nothing is exhausted — skip it, so a real block row later
+    // in the same delta is the one returned.
+    if (checkIsUsageLimitWarningText(line)) continue;
     if (CLAUDE_API_ERROR_START_RE.test(line)) return line;
     if (CLAUDE_AUTH_ROW_RE.test(line)) return line;
     if (CLAUDE_LIMIT_ROW_RE.test(line) && CLAUDE_LIMIT_ROW_SHAPE_RE.test(line)) return line;

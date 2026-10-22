@@ -146,6 +146,30 @@ export const usageLimitPhrasesRe = new RegExp(usageLimitPhraseSource, 'i');
 const usageWindowPhrasesRe = new RegExp(usageWindowPhrases.join('|'), 'i');
 
 /**
+ * Claude Code's NON-blocking usage notices: the `allowed_warning` status
+ * (`Approaching session limit · resets 11:29pm`, `You've used 90% of your weekly
+ * limit · resets …`, `You're close to your usage limit`) and the switch onto paid
+ * extra usage (`5-hour limit resets 11:29pm - continuing with usage credits`,
+ * `Now using extra usage`). They name the window and its reset exactly like the
+ * block does (`You've hit your session limit · resets …`, status `rejected`), but
+ * the request went through — read as a limit, they stopped a working topic until
+ * the reset. The warning lead-ins are anchored at the text start (after any glyph),
+ * the way the CLI renders them; the extra-usage wordings may sit anywhere.
+ */
+const usageLimitWarningRe =
+  /^\W*(?:approaching\b|you['\u2019]ve used \d+%|you['\u2019]re close to\b)|continuing with (?:usage|extra) (?:credits|usage)|\b(?:now )?using (?:usage credits|extra usage|credits|your usage allocation)\b/i;
+
+/**
+ * @description Whether a text is a usage WARNING (see {@link usageLimitWarningRe})
+ * — the account is still allowed, so it is never a usage-limit error. Shared with
+ * the Claude scrape detector (`getClaudeAgentErrorLine`), which skips such a row so
+ * a real block further down the same pane delta is still found.
+ */
+export function checkIsUsageLimitWarningText(text: string): boolean {
+  return usageLimitWarningRe.test(text);
+}
+
+/**
  * A limit that WAITING can never clear: a context / token / prompt-length overflow
  * is fixed by sending less, not by sitting out a window. The real provider wording
  * ("input length and `max_tokens` exceed context limit: … decrease input length …
@@ -193,6 +217,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
+ *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
+ *     request went through; it names a window and a reset like the block does.
  *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) or the observed
  *     subscription wording ({@link subscriptionLimitMessageRe}) → `usageLimit`.
  *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
@@ -213,6 +239,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   if (authErrorPhrasesRe.test(text)) {
     return { kind: 'auth' };
   }
+  if (checkIsUsageLimitWarningText(text)) return null;
   if (exhaustedQuotaCodesRe.test(text) || subscriptionLimitMessageRe.test(text)) {
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
