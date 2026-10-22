@@ -1550,15 +1550,19 @@ describe('JiraInbound', () => {
     });
 
     it('R22: polls that keep failing back off — the base interval doubled per failure, up to a cap', async () => {
+      // The first poll at once, then the 10 ms base doubled per failure in a row: 20, 40, 80, 160.
+      const expectedWaitsMs = [0, 20, 40, 80, 160];
+      /** Generous: the asked waits add up to 300 ms; a loaded box may run them late, never asked differently. */
+      const backoffObservationBudgetMs = 10_000;
       assert.deepEqual([0, 1, 2, 3].map((failures) => getJiraRetryDelayMs(1_000, failures)), [1_000, 2_000, 4_000, 8_000]);
       assert.equal(getJiraRetryDelayMs(60_000, 10), jiraRetryBackoffCapMs);
       assert.equal(getJiraRetryDelayMs(jiraRetryBackoffCapMs * 2, 3), jiraRetryBackoffCapMs * 2, 'never below the base interval');
-      const pollTimes: number[] = [];
+      // The waits the loop ASKS for are asserted, not the machine's scheduling of them: measured wall-clock gaps under a
+      // loaded suite came out 20, 94, 82 ms for asked waits of 20, 40, 80 and failed a "growing" check.
       const flaky = createInbound({
         pollIntervalMs: 10,
         client: {
           searchIssues: async () => {
-            pollTimes.push(Date.now());
             throw new Error('Jira 503');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
@@ -1566,13 +1570,17 @@ describe('JiraInbound', () => {
           ...emptyIssueContext,
         },
       });
+      const requestedWaitsMs: number[] = [];
+      const scheduleNext = flaky['scheduleNext'].bind(flaky);
+      flaky['scheduleNext'] = (delayMs: number) => {
+        requestedWaitsMs.push(delayMs);
+        scheduleNext(delayMs);
+      };
       flaky.start();
-      await waitMs(200);
+      const deadline = Date.now() + backoffObservationBudgetMs;
+      while (requestedWaitsMs.length < expectedWaitsMs.length && Date.now() < deadline) await waitMs(5);
       flaky.stop();
-      // 10, 20, 40, 80 ms waits: at most five polls in 200 ms (a fixed 10 ms interval would make ~20).
-      assert.ok(pollTimes.length >= 3 && pollTimes.length <= 5, `${pollTimes.length} polls`);
-      const gaps = pollTimes.slice(1).map((time, index) => time - pollTimes[index]);
-      assert.ok(gaps.every((gap, index) => index === 0 || gap > gaps[index - 1]), `growing waits: ${gaps.join(', ')}`);
+      assert.deepEqual(requestedWaitsMs.slice(0, expectedWaitsMs.length), expectedWaitsMs);
     });
 
     it('R22: a poll that succeeds again resets the backoff to the base interval', async () => {
