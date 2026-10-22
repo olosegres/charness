@@ -215,6 +215,13 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
   `botCommands` set, or the `message('text')` handler re-forwards the slash to the agent; branch on the
   thread's adapter if it controls the agent. Agent-facing templates stay English with a baked "IN <language>"
   reply directive.
+- **Settings live in the JSON config, not in env:** a setting the bot does not need before it can start goes
+  into `settings.json` (`instanceSettings.ts`) and is changed from Telegram — never a new `CHARNESS_*` env var,
+  not even as an override. `.env` holds only what startup itself needs (bot token, paths, `DATA_DIR`).
+- **CHANGELOG:** every commit with a user-visible change adds an entry under `## Unreleased` in
+  `CHANGELOG.md`, starting with a **bold first sentence** that reads on its own — it becomes the item in the
+  release notes and in the "what's new" message users get after an update. Pre-commit review FAILS a
+  user-visible change without its entry.
 - **Inline keyboards:** `callback_data` is capped at 64 BYTES, so pickers carry INDEXES (`mdlp_<i>_<page>`,
   `resume_<i>`, …). When an index points into a mutable list, snapshot that list per MESSAGE or bake the
   identity into the data (`acl_skip_<fireAt>`, a wizard id) so an old keyboard can never act on newer
