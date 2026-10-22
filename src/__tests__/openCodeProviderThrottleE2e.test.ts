@@ -15,6 +15,7 @@
  *   → a sub-agent's CHILD session (lineage from `session.updated`) and a FOREIGN session in the same folder report a
  *     daily quota: neither arms the topic — it used to be held, its model marked limited.
  *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it
+ *   → the same wording while the topic's short retry is pending: that retry stays, no probe is armed over it
  *   → in a second topic, Anthropic's "This request would exceed your account's rate limit" (OpenCode's next attempt
  *     three hours away): UNCONFIRMED on its own — a two-minute probe retry, no limit notice; the same error right
  *     after the probe's resume confirms it, and only then is the wait to the reset announced
@@ -259,6 +260,21 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey()]?.kind, 'transient', 'a short retry is armed, not a limit wait');
   });
 
+
+  it('the unconfirmed Anthropic wording while a short retry is pending: the pending retry stays, no probe is armed over it', async () => {
+    // A probe armed over a pending retry replaced its record and left its timer running: both fired, two "continue" nudges.
+    const sessionId = getTopicSessionId();
+    const pending = readPersistedState(getLayout()).apiRetries?.[getTopicKey()];
+    assert.equal(pending?.kind, 'transient', 'precondition: the short retry of the step before is pending');
+    fakeOpenCode.emitSessionBusy(sessionId);
+    fakeOpenCode.emitProviderRetry(sessionId, { attempt: 1, message: anthropicUnconfirmedMessage, next: Date.now() + anthropicRetryAfterMs });
+
+    // The barrier: the error is handled before the bot answers a later /limits.
+    await openLimitsBoard(fakeTelegram, topic, geminiTopic.threadId);
+    assert.ok(getCharness().output.includes(`${getTopicKey()}: an unconfirmed usage limit — a retry is already pending`), 'the unconfirmed limit was seen and left to the pending retry');
+    assert.deepEqual(readPersistedState(getLayout()).apiRetries?.[getTopicKey()], pending, 'the pending retry is untouched');
+    assert.equal(listSentTexts().some((text) => text.includes('auto-retrying in 2 min')), false, 'no probe notice');
+  });
 
   it('Anthropic\'s "would exceed your account\'s rate limit" alone: a two-minute probe, no limit notice', async () => {
     const driver = new TopicDriver(fakeTelegram, getCharness, anthropicTopic.threadId, replyTimeoutMs);

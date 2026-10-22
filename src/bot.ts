@@ -1750,6 +1750,10 @@ interface ApiRetryArming {
  * (it means ARMED), start the unref'd timer whose callback is {@link fireApiRetry}, and keep the in-memory entry.
  */
 function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
+  // One armed timer per thread: a still-pending one it replaces must not fire as well.
+  const previousTimer = apiRetryTimers.get(keyToString(key))?.timer;
+  if (previousTimer) clearTimeout(previousTimer);
+
   // S3: the notice landed below any pending question — bring it back to the
   // bottom (debounced; no-op when no question is pending).
   onThreadActivityWhileQuestionPending(key);
@@ -1776,13 +1780,18 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
 /**
  * @description An UNCONFIRMED usage limit (`isUnconfirmed`) of `key`: the probe retry it gets first — or `false` when the
  * limit is confirmed and takes the usual usage-limit wait. Confirmed when it came again right after the probe fired, or
- * the topic's account shows a window at 100 % ({@link checkIsTopicAccountUsageExhausted}); a probe already pending
- * swallows the duplicate (`true`, nothing more to do).
+ * the topic's account shows a window at 100 % ({@link checkIsTopicAccountUsageExhausted}); a retry already pending —
+ * the probe or a short retry — takes it with it (`true`, nothing more to do).
  */
 function handleUnconfirmedLimit(key: SessionKey): boolean {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
-  if (entry?.isLimitProbe === true && entry.timer !== null) return true;
+  // A retry already pending (the probe itself, or a short retry) takes this error with it — as `decideRetryAction`
+  // ignores a repeat while armed. A probe armed over it replaced its record and left its timer: two "continue" nudges.
+  if (entry?.timer != null) {
+    console.log(`[apiRetry] ${k}: an unconfirmed usage limit — a retry is already pending, it stays`);
+    return true;
+  }
   const isRepeatAfterProbe = entry?.isLimitProbe === true && entry.firedAt !== null && Date.now() - entry.firedAt <= retryRecurrenceGraceMs;
   const action = getUnconfirmedLimitAction({ isRepeatAfterProbe, isUsageExhausted: checkIsTopicAccountUsageExhausted(key) });
   if (action === 'waitForReset') {
