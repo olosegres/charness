@@ -18,8 +18,9 @@
  * answered by itself — a flow decides what the "model" does next: {@link FakeOpenCodeServer.emitUsageLimit} makes the
  * session's turn fail the way a subscription limit does.
  *
- * `writeFakeOpenCodeBinary` writes the `opencode` executable the bot shells out to (`opencode models`, `--version`)
- * into the instance's private PATH. Loopback only; nothing leaves the machine.
+ * `writeFakeOpenCodeBinary` writes the `opencode` executable the bot shells out to (`opencode models`, `--version`,
+ * and — when a flow asks for it — the `opencode serve` the bot spawns once the server is down), and `writeFakeNpm`
+ * the `npm` its install step runs. Loopback only; nothing leaves the machine.
  */
 
 import * as fs from 'fs';
@@ -251,20 +252,61 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   }
 }
 
+/** @description What the fake `opencode` executable does besides `--version` and `models`. */
+export interface FakeOpenCodeBinaryOptions extends Pick<FakeOpenCodeOptions, 'version' | 'models'> {
+  /**
+   * When set, `opencode serve` appends its pid to this file and then stays up (it serves nothing: the flow starts
+   * the {@link FakeOpenCodeServer} again on the port once it sees the pid). Unset, `serve` fails like any other command.
+   */
+  servePidFile?: string;
+}
+
 /**
  * @description Write the `opencode` executable the bot shells out to into `binDir` (the instance's private PATH):
- * `opencode --version` prints the version, `opencode models` lists the models, anything else fails loudly.
+ * `opencode --version` prints the version, `opencode models` lists the models, `opencode serve` is what
+ * {@link FakeOpenCodeBinaryOptions.servePidFile} says, anything else fails loudly.
  */
-export function writeFakeOpenCodeBinary(binDir: string, options: Pick<FakeOpenCodeOptions, 'version' | 'models'>): string {
+export function writeFakeOpenCodeBinary(binDir: string, options: FakeOpenCodeBinaryOptions): string {
   const binaryPath = path.join(binDir, 'opencode');
   fs.writeFileSync(binaryPath, [
     '#!/bin/sh',
     'case "$1" in',
     `  --version) echo '${options.version}' ;;`,
     `  models) printf '%s\\n' ${options.models.map((model) => `'${model}'`).join(' ')} ;;`,
+    ...(options.servePidFile ? [`  serve) echo "$$" >> '${options.servePidFile}'; exec sleep 3600 ;;`] : []),
     '  *) echo "fake opencode: unsupported command: $*" >&2; exit 2 ;;',
     'esac',
     '',
   ].join('\n'), { mode: 0o755 });
   return binaryPath;
+}
+
+/** @description What the fake `npm` does on `npm install -g opencode-ai`. */
+export interface FakeNpmOptions {
+  /** Each install call appends a line here, so a flow can count them. */
+  callLogFile: string;
+  /** How many install calls fail first (the way a concurrent upgrade's lock makes npm fail) before one succeeds. */
+  failingCalls: number;
+  /** The executable a successful install puts in `$NPM_CONFIG_PREFIX/bin/opencode`, as real npm would. */
+  installedBinaryTemplate: string;
+}
+
+/**
+ * @description Write the `npm` executable the bot's install step runs (`NPM_CONFIG_PREFIX=… npm install -g
+ * opencode-ai`) into `binDir`, so a flow can install OpenCode without the network: the first
+ * {@link FakeNpmOptions.failingCalls} calls fail, later ones copy the template into the prefix's `bin`.
+ */
+export function writeFakeNpm(binDir: string, options: FakeNpmOptions): string {
+  const npmPath = path.join(binDir, 'npm');
+  fs.writeFileSync(npmPath, [
+    '#!/bin/sh',
+    `echo "$*" >> '${options.callLogFile}'`,
+    `calls=$(wc -l < '${options.callLogFile}')`,
+    `if [ "$calls" -le ${options.failingCalls} ]; then echo 'npm ERR! code ENOTEMPTY (fake: another install is running)' >&2; exit 1; fi`,
+    'mkdir -p "$NPM_CONFIG_PREFIX/bin"',
+    `cp '${options.installedBinaryTemplate}' "$NPM_CONFIG_PREFIX/bin/opencode"`,
+    'chmod 755 "$NPM_CONFIG_PREFIX/bin/opencode"',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return npmPath;
 }

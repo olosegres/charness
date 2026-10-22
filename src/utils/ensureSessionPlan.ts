@@ -73,11 +73,22 @@ export function getEnsureSessionPlan(input: EnsureSessionPlanInput): EnsureSessi
 }
 
 /**
- * @description What follows a resume that FAILED (the CLI refused the id, the
- * process did not come up): a caller that may start fresh does — the conversation
- * is told its previous one could not be resumed; a resume-only caller stops.
+ * @description How the resume of a sleeping conversation failed: `refused` — the
+ * backend refused the id or the process did not come up; `backendUnavailable` —
+ * the backend's server could not be brought up at all, so the conversation was
+ * never even tried and is intact.
  */
-export function getResumeFailureAction(isResumeOnly: boolean): 'startFresh' | 'fail' {
+export type ResumeFailureKind = 'refused' | 'backendUnavailable';
+
+/**
+ * @description What follows a resume that FAILED: a server that could not be
+ * brought up is reported as such — a fresh start would need the same server and
+ * would wrongly tell the topic its conversation is lost; otherwise a caller that
+ * may start fresh does (the conversation is told its previous one could not be
+ * resumed) and a resume-only caller stops.
+ */
+export function getResumeFailureAction(failure: ResumeFailureKind, isResumeOnly: boolean): 'startFresh' | 'fail' | 'reportUnavailable' {
+  if (failure === 'backendUnavailable') return 'reportUnavailable';
   return isResumeOnly ? 'fail' : 'startFresh';
 }
 

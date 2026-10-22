@@ -733,14 +733,16 @@ export const ptDict: Record<string, string> = {
     '⚠️ Claude está desconectado — executa /login para continuar.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: credenciais inválidas — reinicia o servidor opencode.',
-  'openCodeServer.crashedRestartingNotice':
-    '⚠️ O servidor do OpenCode parou inesperadamente ({reason}) — reiniciando…',
   'openCodeServer.restartedSessionRestoredNotice':
     '✅ Servidor do OpenCode reiniciado, a sessão foi restaurada. A resposta em andamento se perdeu — reenvie se precisar.',
   'openCodeServer.restartedSessionLostNotice':
     '⚠️ Servidor do OpenCode reiniciado, mas a sessão anterior se perdeu. Inicie uma nova com /opencode (ou /quit para liberar o tópico).',
-  'openCodeServer.restartFailedNotice':
-    '⚠️ Não foi possível reiniciar o servidor do OpenCode. Sua próxima mensagem tentará de novo.',
+  'openCodeServer.installingNotice':
+    'Instalando o OpenCode…',
+  'openCodeServer.startingNotice':
+    'Iniciando o servidor do OpenCode…',
+  'agent.serverUnavailableNotice':
+    '⚠️ Não foi possível iniciar o servidor do {label}. Sua próxima mensagem tentará de novo.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

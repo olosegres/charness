@@ -82,9 +82,14 @@ describe('getPersistedSessionIdForAdapter', () => {
 });
 
 describe('getResumeFailureAction', () => {
-  it('a failed resume starts fresh, except for a resume-only caller', () => {
-    assert.equal(getResumeFailureAction(false), 'startFresh');
-    assert.equal(getResumeFailureAction(true), 'fail');
+  it('a refused resume starts fresh, except for a resume-only caller', () => {
+    assert.equal(getResumeFailureAction('refused', false), 'startFresh');
+    assert.equal(getResumeFailureAction('refused', true), 'fail');
+  });
+
+  it('a server that could not be brought up is reported — never a fresh start that would call the conversation lost', () => {
+    assert.equal(getResumeFailureAction('backendUnavailable', false), 'reportUnavailable');
+    assert.equal(getResumeFailureAction('backendUnavailable', true), 'reportUnavailable');
   });
 });
 

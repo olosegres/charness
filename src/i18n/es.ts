@@ -732,14 +732,16 @@ export const esDict: Record<string, string> = {
     '⚠️ Claude está desconectado — ejecuta /login para continuar.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: credenciales inválidas — reinicia el servidor opencode.',
-  'openCodeServer.crashedRestartingNotice':
-    '⚠️ El servidor de OpenCode se detuvo inesperadamente ({reason}) — reiniciando…',
   'openCodeServer.restartedSessionRestoredNotice':
     '✅ Servidor de OpenCode reiniciado, la sesión se ha restaurado. Se perdió la respuesta en curso — reenvíala si hace falta.',
   'openCodeServer.restartedSessionLostNotice':
     '⚠️ Servidor de OpenCode reiniciado, pero la sesión anterior se perdió. Inicia una nueva con /opencode (o /quit para liberar el tema).',
-  'openCodeServer.restartFailedNotice':
-    '⚠️ No se pudo reiniciar el servidor de OpenCode. Tu próximo mensaje lo intentará de nuevo.',
+  'openCodeServer.installingNotice':
+    'Instalando OpenCode…',
+  'openCodeServer.startingNotice':
+    'Iniciando el servidor de OpenCode…',
+  'agent.serverUnavailableNotice':
+    '⚠️ No se pudo iniciar el servidor de {label}. Tu próximo mensaje lo intentará de nuevo.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

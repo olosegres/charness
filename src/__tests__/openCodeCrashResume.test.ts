@@ -38,6 +38,7 @@ import {
   type OpenCodeServerRestartOps,
   type OpenCodeSession,
 } from '../adapters/openCodeAdapter';
+import { AgentBackendUnavailableError } from '../adapters/backendUnavailableError';
 import { defaultLocale, runWithLocale, t } from '../i18n';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -48,8 +49,10 @@ const sessionId = 'ses_persisted_7';
 const workDir = '/tmp/work-crash';
 const restoredNotice = runWithLocale(defaultLocale, () => t('openCodeServer.restartedSessionRestoredNotice'));
 const lostNotice = runWithLocale(defaultLocale, () => t('openCodeServer.restartedSessionLostNotice'));
-const restartFailedNotice = runWithLocale(defaultLocale, () => t('openCodeServer.restartFailedNotice'));
-/** What `spawn` rejects with while the binary is gone (an npm reinstall/upgrade of opencode in progress). */
+const serverUnavailableNotice = runWithLocale(defaultLocale, () => t('agent.serverUnavailableNotice', { label: 'OpenCode' }));
+const startingNotice = runWithLocale(defaultLocale, () => t('openCodeServer.startingNotice'));
+const installingNotice = runWithLocale(defaultLocale, () => t('openCodeServer.installingNotice'));
+/** What `spawn` rejects with while the binary is gone. */
 const spawnEnoentMessage = 'spawn opencode ENOENT';
 /** Pauses short enough for a test; the budget is out of reach so only the pause count bounds the retries. */
 const testRetryDelaysMs: readonly number[] = [1, 1];
@@ -57,13 +60,14 @@ const unreachableBudgetMs = 60_000;
 
 useStubbedOpenCodeServer();
 
-function createActiveSession(): OpenCodeSession {
+function createActiveSession(isTurnInFlight = false): OpenCodeSession {
   return createOpenCodeSessionFixture({
     key,
     sessionId,
     workDir,
     isModelInfoShown: true,
     currentModelLabel: 'anthropic/claude',
+    isBusy: isTurnInFlight,
   });
 }
 
@@ -71,18 +75,21 @@ function createActiveSession(): OpenCodeSession {
  * Build an adapter with one active session injected and the network-touching
  * private methods stubbed. `sessionExists` controls the `GET /session/:id`
  * outcome: `true` → the restarted server still has the id (resume succeeds);
- * `false` → 404, so resume throws and the teardown fallback runs.
+ * `false` → 404, so resume throws and the teardown fallback runs. `isTurnInFlight`:
+ * the session was mid-turn when the server went down (its reply is lost).
  */
-function createAdapter(sessionExists: boolean): {
+function createAdapter(sessionExists: boolean, isTurnInFlight = false): {
   adapter: OpenCodeAdapter;
   outputs: string[];
   closedKeys: SessionKey[];
   getSessionRequests: string[];
+  promptPosts: string[];
 } {
   const adapter = new OpenCodeAdapter();
-  adapter['sessions'].set(keyToString(key), createActiveSession());
+  adapter['sessions'].set(keyToString(key), createActiveSession(isTurnInFlight));
 
   const getSessionRequests: string[] = [];
+  const promptPosts: string[] = [];
   adapter['apiRequest'] = (async (method: string, urlPath: string) => {
     // The session-verify call is `GET /session/:id` (the basis of the resume
     // decision). `stopSessionInner` also fires a fire-and-forget
@@ -96,6 +103,10 @@ function createAdapter(sessionExists: boolean): {
       return { id: sessionId };
     }
     if (urlPath.endsWith('/abort')) {
+      return undefined;
+    }
+    if (method === 'POST' && urlPath.endsWith('/prompt_async')) {
+      promptPosts.push(urlPath);
       return undefined;
     }
     throw new Error(`unexpected apiRequest in test: ${method} ${urlPath}`);
@@ -114,7 +125,7 @@ function createAdapter(sessionExists: boolean): {
     closedKeys.push(closedKey);
   });
 
-  return { adapter, outputs, closedKeys, getSessionRequests };
+  return { adapter, outputs, closedKeys, getSessionRequests, promptPosts };
 }
 
 /** @description The calls the scripted restart ops saw, in order. */
@@ -132,19 +143,30 @@ interface RestartOpsCalls {
  */
 function scriptServerRestart(
   adapter: OpenCodeAdapter,
-  script: { isInstalledByAttempt?: readonly boolean[]; startErrorByAttempt?: readonly (Error | null)[] },
+  script: {
+    isInstalledByAttempt?: readonly boolean[];
+    startErrorByAttempt?: readonly (Error | null)[];
+    /** The server is down until a start succeeded (a session start / resume finds it down). */
+    isServerDownAtFirst?: boolean;
+    /** Each server start waits for this before it settles (a restart that is still in progress). */
+    startGate?: Promise<void>;
+  },
 ): RestartOpsCalls {
   const calls: RestartOpsCalls = { installChecks: 0, installs: 0, ensures: 0, forcedRestarts: 0 };
+  let isServerUp = script.isServerDownAtFirst !== true;
   const getStartError = (): Error | null => script.startErrorByAttempt?.[calls.ensures + calls.forcedRestarts - 1] ?? null;
   const ops: OpenCodeServerRestartOps = {
     checkIsInstalled: () => script.isInstalledByAttempt?.[calls.installChecks++] ?? true,
     installTool: async () => {
       calls.installs += 1;
     },
+    checkIsServerRunning: async () => isServerUp,
     ensureServer: async () => {
       calls.ensures += 1;
+      await script.startGate;
       const error = getStartError();
       if (error) throw error;
+      isServerUp = true;
     },
     restartServer: async () => {
       calls.forcedRestarts += 1;
@@ -173,7 +195,7 @@ describe('OpenCode crash-resume in restartServer', () => {
     assert.equal(isForcedRestart, true, 'OAuth credential reload must stop a healthy server generation');
   });
 
-  it('crash → restart OK → GET /session/:id issued, session stays active with the SAME id, restored notice, NO closed', async () => {
+  it('crash → restart OK → GET /session/:id issued, an idle session stays active with the SAME id, NOTHING posted, NO closed', async () => {
     const { adapter, outputs, closedKeys, getSessionRequests } = createAdapter(true);
 
     const result = await adapter['restartServer']();
@@ -188,10 +210,18 @@ describe('OpenCode crash-resume in restartServer', () => {
     assert.equal(session.sessionId, sessionId, 'restored session must keep the SAME id');
     assert.equal(session.isActive, true, 'restored session must be active');
 
-    // Restored notice emitted; no teardown.
-    assert.ok(outputs.includes(restoredNotice), `expected restored notice, got: ${JSON.stringify(outputs)}`);
-    assert.equal(outputs.includes(lostNotice), false, 'must not emit the "previous session lost" notice on success');
+    // A silent restore: an idle topic lost nothing, so it hears nothing; no teardown.
+    assert.deepEqual(outputs, [], 'an idle session is restored silently');
     assert.deepEqual(closedKeys, [], 'a restored session must NOT emit closed');
+  });
+
+  it('a session whose turn was in flight is told its reply was lost — once, after the restore', async () => {
+    const { adapter, outputs, closedKeys } = createAdapter(true, true);
+
+    assert.equal(await adapter['restartServer'](), true);
+
+    assert.deepEqual(outputs, [restoredNotice], 'the in-flight reply is gone: the topic is told to resend');
+    assert.deepEqual(closedKeys, []);
   });
 
   it('the binary is gone at the first attempt (spawn ENOENT), back at the retry → installed, session restored, no failure posted', async () => {
@@ -211,7 +241,7 @@ describe('OpenCode crash-resume in restartServer', () => {
     const session = adapter['sessions'].get(keyToString(key));
     assert.equal(session?.sessionId, sessionId, 'the SAME session id must survive the retried restart');
     assert.equal(session?.isActive, true, 'the restored session must be active');
-    assert.deepEqual(outputs, [restoredNotice], 'the topic gets only the restored notice — nothing while retrying, no failure');
+    assert.deepEqual(outputs, [], 'an idle topic hears nothing — not while retrying, not after');
     assert.deepEqual(closedKeys, [], 'a restored session must NOT emit closed');
   });
 
@@ -229,13 +259,13 @@ describe('OpenCode crash-resume in restartServer', () => {
 
     assert.equal(result, false, 'a restart whose every attempt failed must report failure');
     assert.equal(calls.ensures, testRetryDelaysMs.length + 1, 'one first attempt plus one retry per pause');
-    assert.deepEqual(outputs, [restartFailedNotice], 'exactly one short localized line reaches the topic');
+    assert.deepEqual(outputs, [serverUnavailableNotice], 'exactly one short localized line reaches the topic');
     assert.equal(outputs.some((text) => text.includes('ENOENT')), false, 'the technical detail stays in the log');
     assert.deepEqual(getSessionRequests, [], 'no session is resumed on a server that never came back');
     assert.equal(adapter['sessions'].get(keyToString(key)), undefined, 'the session is dropped');
     assert.deepEqual(stoppedKeys, [key], 'the session is reported stopped, so its next message starts it again');
     assert.deepEqual(closedKeys, [], 'the persisted id is kept (stopped, not closed)');
-    assert.equal(adapter['isServerRestarting'], false, 'the restart gate is released after giving up');
+    assert.equal(adapter['serverRestart'], null, 'the restart gate is released after giving up');
   });
 
   it('a forced restart (credential reload) retries through the controlled restart, never by adopting the old server', async () => {
@@ -247,10 +277,10 @@ describe('OpenCode crash-resume in restartServer', () => {
     assert.equal(result, true);
     assert.equal(calls.forcedRestarts, 2, 'the retry must stop and start again, not adopt the server holding the old credential');
     assert.equal(calls.ensures, 0);
-    assert.deepEqual(outputs, [restoredNotice]);
+    assert.deepEqual(outputs, []);
   });
 
-  it('a crash posts the localized "restarting" notice to every active topic', () => {
+  it('a crash restarts the server without posting anything first', () => {
     const adapter = new OpenCodeAdapter();
     adapter['sessions'].set(keyToString(key), createActiveSession());
     let restartCount = 0;
@@ -265,9 +295,57 @@ describe('OpenCode crash-resume in restartServer', () => {
 
     adapter['handleServerCrash'](137, null);
 
-    const expected = runWithLocale(defaultLocale, () => t('openCodeServer.crashedRestartingNotice', { reason: 'out of memory (OOM killed)' }));
-    assert.deepEqual(outputs, [expected]);
+    assert.deepEqual(outputs, [], 'the restart speaks only if it matters to the topic');
     assert.equal(restartCount, 1, 'the crash starts a restart');
+  });
+
+  it('a prompt sent while the restart runs is held and posted to the restored session — not lost to the dead server', async () => {
+    const { adapter, outputs, promptPosts } = createAdapter(true);
+    let releaseStart: () => void = () => {};
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    scriptServerRestart(adapter, { startGate });
+
+    const restart = adapter['restartServer']();
+    adapter.sendInput(key, 'the question typed during the restart');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(promptPosts, [], 'nothing is posted while the server is down');
+
+    releaseStart();
+    assert.equal(await restart, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(promptPosts, [`/session/${sessionId}/prompt_async`], 'the held prompt goes to the restored session');
+    assert.deepEqual(outputs, [], 'no error, no notice');
+  });
+
+  it('a session start or resume brings a down server up through the same retries, telling the topic in its language', async () => {
+    const { adapter, outputs } = createAdapter(true);
+    adapter['sessions'].clear();
+    const calls = scriptServerRestart(adapter, {
+      isServerDownAtFirst: true,
+      isInstalledByAttempt: [false, true],
+      startErrorByAttempt: [new Error(spawnEnoentMessage), null],
+    });
+
+    await adapter.resumeSession(key, workDir, sessionId);
+
+    assert.equal(calls.installs, 1, 'the missing binary is installed first');
+    assert.equal(calls.ensures, 2, 'the failed start is retried');
+    assert.deepEqual(outputs, [installingNotice, startingNotice], 'what is happening, once each — not once per retry');
+    assert.equal(adapter['sessions'].get(keyToString(key))?.isActive, true);
+  });
+
+  it('a session start or resume whose server never comes up fails with the typed "unavailable" error, no raw text posted', async () => {
+    const { adapter, outputs } = createAdapter(true);
+    adapter['sessions'].clear();
+    scriptServerRestart(adapter, {
+      isServerDownAtFirst: true,
+      startErrorByAttempt: Array.from({ length: testRetryDelaysMs.length + 1 }, () => new Error(spawnEnoentMessage)),
+    });
+
+    await assert.rejects(adapter.resumeSession(key, workDir, sessionId), AgentBackendUnavailableError);
+    assert.equal(outputs.some((text) => text.includes('ENOENT')), false, 'the raw error never reaches the topic');
   });
 
   it('crash → GET /session/:id 404 → teardown + closed + lost notice', async () => {

@@ -597,11 +597,13 @@ or adopted ownership is revalidated against the exact hostname and port before
 a signal is sent, without trusting a reused PID or assuming an adopted listener
 owns its process group.
 A source rebuild therefore does not terminate an in-flight OpenCode turn.
-When `opencode serve` itself dies, the bot restarts it — installing the binary
-first if it is missing (e.g. mid-upgrade) — and retries a failed start for about
-a minute; the topic sees only the "restarting" line and then "session restored".
-Only if every attempt fails does it get one short line saying the next message
-will try again (the error itself goes to the bot log).
+When `opencode serve` itself dies, the bot brings it back the same way a session
+start does — installing the binary first if it is missing, retrying a failed
+start for about a minute — and restores the sessions silently: only a topic whose
+reply was in progress is told it was lost, and a message sent meanwhile is held
+and delivered once the server is back. Only if every attempt fails does a topic
+get one short line saying the next message will try again (the error itself goes
+to the bot log).
 The supervisor reads the same checkout `.env` as the worker before the initial
 start. Hot mode supports Linux and macOS; it refuses to start on Windows because
 nodemon cannot gracefully drain its worker tree there.

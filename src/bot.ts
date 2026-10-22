@@ -222,7 +222,8 @@ import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
-import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction } from './utils/ensureSessionPlan';
+import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction, type ResumeFailureKind } from './utils/ensureSessionPlan';
+import { AgentBackendUnavailableError } from './adapters/backendUnavailableError';
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
@@ -4629,11 +4630,18 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
     // self-greeting start armed the sustained loader, and no output is coming.
     startupPromptBuffer.discardPrompts(kStr);
     getOutboundFor(key).setActivity(key, 'idle');
-    return t('agent.start_failed', {
-      label: adapter.label,
-      error: e instanceof Error ? e.message : String(e),
-    });
+    return getAgentStartFailureText(adapter.label, e, (error) => t('agent.start_failed', { label: adapter.label, error }));
   }
+}
+
+/**
+ * @description The topic's text for a session start or resume that threw: a backend whose server could not be
+ * brought up gets one localized line (its cause is already in the log, and means nothing to the reader); any other
+ * failure keeps its own text, rendered by `formatError`.
+ */
+function getAgentStartFailureText(adapterLabel: string, error: unknown, formatError: (errorText: string) => string): string {
+  if (error instanceof AgentBackendUnavailableError) return t('agent.serverUnavailableNotice', { label: adapterLabel });
+  return formatError(error instanceof Error ? error.message : String(error));
 }
 
 /**
@@ -4646,7 +4654,8 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
  * happened). On failure, `reason` distinguishes a missing binding (`unbound`),
  * a bound topic that has never picked an agent and none was supplied
  * (`no-adapter` — refuse rather than silently launch a default), and a start
- * that threw (`start-failed`); `message` carries the matching localized text.
+ * that threw (`start-failed` — also a resume whose backend server could not be
+ * brought up); `message` carries the matching localized text.
  */
 export type EnsureAgentSessionResult =
   | { ok: true; message: string; isFresh: boolean }
@@ -4763,8 +4772,13 @@ async function ensureAgentSessionNow(
       return { ok: false, reason: 'nothing-to-resume', message: t('agent.no_session') };
     case 'resume': {
       await switchThreadAdapter(key, plan.adapterName);
-      if (await resumeSleepingSession(key, plan.sessionId)) return { ok: true, message: '', isFresh: false };
-      if (getResumeFailureAction(options.isResumeOnly === true) === 'fail') {
+      const resumeFailure = await resumeSleepingSession(key, plan.sessionId);
+      if (resumeFailure === null) return { ok: true, message: '', isFresh: false };
+      const failureAction = getResumeFailureAction(resumeFailure, options.isResumeOnly === true);
+      if (failureAction === 'reportUnavailable') {
+        return { ok: false, reason: 'start-failed', message: t('agent.serverUnavailableNotice', { label: getThreadAdapter(key).label }) };
+      }
+      if (failureAction === 'fail') {
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
       // The previous conversation is lost to this topic: say so in one line, then start fresh.
@@ -4802,13 +4816,14 @@ function getResumableSessionId(key: SessionKey): string | null {
  * a message typed meanwhile is buffered and replayed, like a fresh start. The
  * conversation keeps its compaction latch, its thread-context marker and its
  * start time: nothing about it changed, only the process is back. Resolves
- * `false` when the backend refused the id or the process did not come up — the
- * caller decides between a fresh start and giving up.
+ * `null` once resumed, else how it failed — the backend refused the id or the
+ * process did not come up, or the backend's server could not be brought up; the
+ * caller decides what follows ({@link getResumeFailureAction}).
  */
-async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<boolean> {
+async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<ResumeFailureKind | null> {
   const kStr = keyToString(key);
   const workDirDecision = getWorkDirStartDecision(key);
-  if (!workDirDecision.ok) return false;
+  if (!workDirDecision.ok) return 'refused';
   const adapter = getThreadAdapter(key);
   startupPromptBuffer.markStarting(kStr);
   markNeedsNewMessage(key);
@@ -4819,12 +4834,12 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
     await persistSessionStart(key, adapter);
     console.log(`[ensure] resumed the sleeping session of ${kStr}`);
     void replayBufferedPrompts(key);
-    return adapter.checkIsActive(key);
+    return adapter.checkIsActive(key) ? null : 'refused';
   } catch (e) {
     console.warn(`[ensure] could not resume the sleeping session of ${kStr}:`, e instanceof Error ? e.message : e);
     // A fresh start (if the caller takes one) re-opens its own window; otherwise the held prompts have nowhere to go.
     startupPromptBuffer.discardPrompts(kStr);
-    return false;
+    return e instanceof AgentBackendUnavailableError ? 'backendUnavailable' : 'refused';
   }
 }
 
@@ -7637,7 +7652,7 @@ async function resumeSessionByIndex(
     await state.setAgentStartedAt(key, formatIsoLocalOffset(Date.now()));
     return t('session.resumed');
   } catch (e) {
-    return t('session.resume_failed', { error: e instanceof Error ? e.message : String(e) });
+    return getAgentStartFailureText(adapter.label, e, (error) => t('session.resume_failed', { error }));
   }
 }
 

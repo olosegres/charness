@@ -5,7 +5,7 @@
 **A usage warning is no longer announced as an exhausted limit.** Claude Code warns before a limit is reached —
 «Approaching session limit · resets 11:29pm», «You've used 90% of your weekly limit · resets …», and «… continuing with usage
 credits» / «Now using extra usage» once paid extra usage takes over. On a topic running Claude in tmux mode the bot read the
-warning as the limit itself: it posted «🚧 Usage limit reached — will auto-resume after reset (~23:29)» while the account still
+warning as the limit itself: it posted «🚧 Usage limit reached — will auto-resume after reset (~<time>)» while the account still
 had room, and the work waited for the reset. Only the real block («You've hit your session limit · resets …») stops a topic now.
 
 **After a restart, a limit that had already reset is no longer announced as exhausted until the next day.** When the bot
@@ -13,12 +13,15 @@ came back to a topic still parked on a limit error (`resets 10:50pm`), it read t
 of the error, so a window that had reset at 22:50 became «resumes after reset (~tomorrow 22:50)». The topic now resumes at
 once with the «limit window has reset» line, and no limit notice.
 
-**An OpenCode server that fails to restart once no longer drops every session with a raw error.** When `opencode serve`
-died, the bot made one attempt to start it again; a binary briefly missing during an OpenCode upgrade («spawn opencode
-ENOENT») or a slow start posted the raw error into every OpenCode topic and stopped their sessions. The bot now installs a
-missing binary first and retries for about a minute, silently; the sessions are restored as usual when it comes back. Only
-if every attempt fails does the topic get one short line, in its language, saying the next message will try again. The
-crash, restored and lost-session lines of this restart are now translated too.
+**An OpenCode server that goes down no longer floods the topics with errors and drops their sessions.** When `opencode
+serve` stopped, the bot made one attempt to start it again; if that attempt failed — the binary not found («spawn opencode
+ENOENT»), a slow start — every OpenCode topic got the raw error and lost its session, and a message sent meanwhile failed
+with «fetch failed». A session start or resume that found the server down failed the same way. Now every way of bringing the
+server up installs a missing binary first and retries for about a minute. A restart is silent: the sessions are restored,
+only a topic whose reply was in progress is told it was lost, and a message sent during the restart is delivered once the
+server is back. Only if every attempt fails does a topic get one short line, in its language, saying the next message will
+try again — and that next message no longer claims the conversation was lost and starts a new one. A binary that only lives
+in `~/.npm-global/bin` is no longer reinstalled on every start.
 
 **A conversation whose transcript Claude Code's cleanup removed no longer kills the topic's agent.** Claude Code deletes
 the transcripts of old conversations; a running agent that is stopped after that writes only a metadata stub back, which the

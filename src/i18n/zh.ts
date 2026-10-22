@@ -726,14 +726,16 @@ export const zhDict: Record<string, string> = {
     '⚠️ Claude 已登出 — 运行 /login 继续。',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: 凭据无效 — 重启 opencode 服务器。',
-  'openCodeServer.crashedRestartingNotice':
-    '⚠️ OpenCode 服务器意外停止（{reason}）— 正在重启…',
   'openCodeServer.restartedSessionRestoredNotice':
     '✅ OpenCode 服务器已重启，会话已恢复。正在进行的回复已丢失 — 如有需要请重新发送。',
   'openCodeServer.restartedSessionLostNotice':
     '⚠️ OpenCode 服务器已重启，但之前的会话已丢失。用 /opencode 开始新会话（或用 /quit 释放话题）。',
-  'openCodeServer.restartFailedNotice':
-    '⚠️ 无法重启 OpenCode 服务器。你的下一条消息会再次尝试。',
+  'openCodeServer.installingNotice':
+    '正在安装 OpenCode…',
+  'openCodeServer.startingNotice':
+    '正在启动 OpenCode 服务器…',
+  'agent.serverUnavailableNotice':
+    '⚠️ 无法启动 {label} 服务器。你的下一条消息会再次尝试。',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

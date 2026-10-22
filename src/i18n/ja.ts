@@ -726,14 +726,16 @@ export const jaDict: Record<string, string> = {
     '⚠️ Claude がログアウトしています — 続行するには /login を実行してください。',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: 認証情報が無効です — opencode サーバーを再起動してください。',
-  'openCodeServer.crashedRestartingNotice':
-    '⚠️ OpenCode サーバーが予期せず停止しました（{reason}）— 再起動しています…',
   'openCodeServer.restartedSessionRestoredNotice':
     '✅ OpenCode サーバーを再起動し、セッションを復元しました。進行中だった返信は失われました — 必要なら再送してください。',
   'openCodeServer.restartedSessionLostNotice':
     '⚠️ OpenCode サーバーを再起動しましたが、以前のセッションは失われました。/opencode で新しく開始してください（トピックを解放するなら /quit）。',
-  'openCodeServer.restartFailedNotice':
-    '⚠️ OpenCode サーバーを再起動できませんでした。次のメッセージで再試行します。',
+  'openCodeServer.installingNotice':
+    'OpenCode をインストールしています…',
+  'openCodeServer.startingNotice':
+    'OpenCode サーバーを起動しています…',
+  'agent.serverUnavailableNotice':
+    '⚠️ {label} サーバーを起動できませんでした。次のメッセージで再試行します。',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

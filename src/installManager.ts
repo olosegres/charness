@@ -45,15 +45,17 @@ function getCustomBinaryPath(toolName: string): string | null {
 }
 
 /**
- * @description Check if a CLI tool is installed and available in PATH.
- * Also checks for custom binary path via TOOL_BIN env var.
+ * @description Where {@link installTool} puts a tool's binary (`~/.npm-global/bin/<tool>`), when it is there.
+ * The spawns look there too — the OpenCode server and version probe put that directory first on PATH, the
+ * Claude binary falls back to it — so a binary that lives only there is installed, not missing.
  */
-export function checkIsInstalled(toolName: string): boolean {
-  // Check custom binary path first
-  if (getCustomBinaryPath(toolName)) {
-    return true;
-  }
-  
+function getNpmGlobalBinaryPath(toolName: string): string | null {
+  const binaryPath = path.join(npmPrefix, 'bin', toolName);
+  return fs.existsSync(binaryPath) ? binaryPath : null;
+}
+
+/** @description Whether `which` finds the tool on the process PATH. */
+function checkIsOnPath(toolName: string): boolean {
   try {
     execSync(`which ${toolName}`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
     return true;
@@ -63,15 +65,26 @@ export function checkIsInstalled(toolName: string): boolean {
 }
 
 /**
- * @description Get the command/path to run a tool.
- * Uses custom binary if TOOL_BIN env var is set.
+ * @description Check if a CLI tool is installed: a custom binary (TOOL_BIN env var), the tool on PATH, or the
+ * copy {@link installTool} left in `~/.npm-global/bin`. Checking PATH alone read that copy as missing, so every
+ * start re-ran `npm install -g`.
+ */
+export function checkIsInstalled(toolName: string): boolean {
+  return getCustomBinaryPath(toolName) !== null || checkIsOnPath(toolName) || getNpmGlobalBinaryPath(toolName) !== null;
+}
+
+/**
+ * @description Get the command/path to run a tool: the custom binary (TOOL_BIN env var), else the bare name when
+ * it is on PATH, else the `~/.npm-global/bin` copy by its full path — so a spawn that does not put that directory on
+ * PATH (`opencode models`) runs the same binary {@link checkIsInstalled} found.
  */
 export function getToolCommand(toolName: string): string {
   const customPath = getCustomBinaryPath(toolName);
   if (customPath) {
     return customPath;
   }
-  return toolName;
+  if (checkIsOnPath(toolName)) return toolName;
+  return getNpmGlobalBinaryPath(toolName) ?? toolName;
 }
 
 /**

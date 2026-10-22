@@ -738,14 +738,16 @@ export const ukDict: Record<string, string> = {
     '⚠️ Claude вийшов із системи — виконай /login, щоб продовжити.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: неправильні облікові дані — перезапусти opencode-сервер.',
-  'openCodeServer.crashedRestartingNotice':
-    '⚠️ Сервер OpenCode неочікувано зупинився ({reason}) — перезапускаю…',
   'openCodeServer.restartedSessionRestoredNotice':
     '✅ Сервер OpenCode перезапущено, сесію відновлено. Відповідь, що була в процесі, втрачено — за потреби надішліть повідомлення ще раз.',
   'openCodeServer.restartedSessionLostNotice':
     '⚠️ Сервер OpenCode перезапущено, але попередню сесію втрачено. Почніть нову через /opencode (або /quit, щоб звільнити топік).',
-  'openCodeServer.restartFailedNotice':
-    '⚠️ Не вдалося перезапустити сервер OpenCode. Ваше наступне повідомлення спробує знову.',
+  'openCodeServer.installingNotice':
+    'Встановлюю OpenCode…',
+  'openCodeServer.startingNotice':
+    'Запускаю сервер OpenCode…',
+  'agent.serverUnavailableNotice':
+    '⚠️ Не вдалося запустити сервер {label}. Ваше наступне повідомлення спробує знову.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':
