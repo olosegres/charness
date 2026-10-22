@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**A per-minute provider throttle is no longer announced as an exhausted usage limit.** Google answers a used-up
+PER-MINUTE Gemini quota with the same «You exceeded your current quota … Please retry in 40s» / «Resource has been
+exhausted» as a per-day one, and a concurrency or tokens-per-minute cap reads «exceeded your rate limit» / «limit
+exceeded». The bot took all of them for a usage limit: «🚧 Usage limit reached» and a wait of an hour or more for a
+limit that cleared in seconds. They are now retried within minutes; a quota that names a day, a week or a month — and
+the explicit usage windows — still waits for its reset.
+
 **Two requests opened in the same instant keep their order.** When two people wrote to a topic within the same
 millisecond, the bot could take the older request for the newer one — and answer or remind the wrong person first.
 

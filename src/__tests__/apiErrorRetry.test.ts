@@ -74,8 +74,8 @@ test('classify: OpenCode-relayed provider quota codes → usageLimit even with t
   // OpenAI: a used-up monthly quota comes as HTTP 429 with the `insufficient_quota` code.
   const openAi = 'AI_APICallError: 429 {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}';
   assert.equal(classifyAgentApiError(openAi, fixedNow)?.kind, 'usageLimit');
-  // Google: RESOURCE_EXHAUSTED rides a 429 too.
-  assert.equal(classifyAgentApiError('429 RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).', fixedNow)?.kind, 'usageLimit');
+  // Google: a RESOURCE_EXHAUSTED that names a DAILY quota (its quota id) rides a 429 too and is a usage limit.
+  assert.equal(classifyAgentApiError(googleDailyQuotaBody, fixedNow)?.kind, 'usageLimit');
   // The OpenAI Codex subscription limit names a reset.
   const codex = classifyAgentApiError("usage_limit_reached: You've hit your usage limit. Try again in 3h", fixedNow);
   assert.equal(codex?.kind, 'usageLimit');
@@ -85,6 +85,50 @@ test('classify: OpenCode-relayed provider quota codes → usageLimit even with t
   // Underscored window names and the billing hard limit are usage limits as well.
   assert.equal(classifyAgentApiError('usage_limit exceeded for this key', fixedNow)?.kind, 'usageLimit');
   assert.equal(classifyAgentApiError('Billing hard limit has been reached', fixedNow)?.kind, 'usageLimit');
+});
+
+// Short-window throttles — per minute / per second / concurrency, or "retry in <seconds>" — are cleared by the next
+// retry, whatever quota vocabulary they carry. Google answers a used-up PER-MINUTE quota with the same 429
+// RESOURCE_EXHAUSTED ("You exceeded your current quota … Please retry in 40s") as a per-DAY one; only the quota id
+// tells them apart. Read as a usage limit, a free-tier Gemini topic got «Usage limit reached» and an hour's wait for a
+// limit that cleared in seconds.
+const googlePerMinuteQuotaMessage = 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 10, model: gemini-2.5-flash\nPlease retry in 40.15s.';
+function buildGoogleQuotaBody(quotaId: string): string {
+  return JSON.stringify({ error: { code: 429, message: googlePerMinuteQuotaMessage, status: 'RESOURCE_EXHAUSTED', details: [
+    { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId }] },
+    { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '40s' },
+  ] } });
+}
+const googleDailyQuotaBody = buildGoogleQuotaBody('GenerateRequestsPerDayPerProjectPerModel-FreeTier');
+
+test('classify: short-window throttles (per minute / second, concurrency, "retry in Ns", RPM / TPM) → transient, whatever quota words they carry', () => {
+  for (const text of [
+    googlePerMinuteQuotaMessage,
+    buildGoogleQuotaBody('GenerateRequestsPerMinutePerProjectPerModel-FreeTier'),
+    'Resource has been exhausted (e.g. check quota).',
+    '429 RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).',
+    'Resource exhausted. Please try again later.',
+    'Number of concurrent connections has exceeded your rate limit. Please try again later.',
+    'Tokens per minute limit exceeded - too many tokens processed.',
+    'Concurrency limit reached, try again shortly',
+    'Request limit reached (RPM). Please try again in 12 seconds.',
+    "You've hit your rate limit, retry after 20s",
+    'You have exceeded your rate limit. Please try again later.',
+  ]) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'transient' }, text);
+  }
+});
+
+test('classify: a quota or window that names a LONG window stays a usage limit, a short retry hint beside it notwithstanding', () => {
+  for (const text of [
+    googleDailyQuotaBody,
+    'You exceeded your current quota (requests per day). Please retry in 30s.',
+    'daily limit exceeded for this project, try again tomorrow',
+    "You've hit your weekly limit · resets Oct 25, 3pm",
+    'usage_limit_reached: monthly token quota used up',
+  ]) {
+    assert.equal(classifyAgentApiError(text, fixedNow)?.kind, 'usageLimit', text);
+  }
 });
 
 test('classify: usage / credit / quota phrasings → usageLimit', () => {

@@ -113,7 +113,8 @@ export const authErrorPhrasesRe = /please run \/login|not logged in|invalid auth
  */
 const usageWindowPhrases = [
   String.raw`(?:session|usage|weekly|daily|monthly|hourly|\d+-hours?)[\s_]+limit`,
-  String.raw`(?:hit|reached|exceeded)\s+your\s+(?:[\w-]+\s+){0,3}limit`,
+  // "exceeded your RATE limit" / "your CONCURRENCY limit" is a throttle, not a window.
+  String.raw`(?:hit|reached|exceeded)\s+your\s+(?:(?!rate\b|concurren)[\w-]+\s+){0,3}limit`,
   String.raw`credit balance (?:is )?too low`,
   String.raw`out of (?:credits|usage)`,
   String.raw`quota`,
@@ -136,6 +137,30 @@ const exhaustedQuotaCodesRe = /insufficient_quota|exceeded your current quota|us
  * relay that truncates the tail or types a curly apostrophe still matches.
  */
 const subscriptionLimitMessageRe = /would exceed your account['\u2019]?s rate limit/i;
+
+/**
+ * Markers of a SHORT-window throttle — per minute / per second (spelled out, or in a Google quota id such as
+ * `GenerateRequestsPerMinutePerProjectPerModel`), RPM / TPM, concurrency, a retry hint in seconds (`Please retry in
+ * 40.15s`, Google's `"retryDelay": "40s"`), and Google's bare `Resource (has been) exhausted`. Such a limit clears by
+ * the next retry, so it is transient whatever quota vocabulary rides along: Google answers a used-up per-MINUTE quota
+ * with the same 429 RESOURCE_EXHAUSTED and "You exceeded your current quota" as a per-DAY one.
+ */
+const shortWindowThrottleRe =
+  /\bper[\s_-]?(?:minute|min|second|sec)\b|per(?:minute|second)|\b(?:rpm|tpm|rps|tps|qpm|qps)\b|\bconcurren(?:t|cy)\b|\b(?:retry|try again)\s+(?:in|after)\s+\d+(?:\.\d+)?\s*(?:ms|s|secs?|seconds?)\b|"retryDelay"\s*:\s*"\d+(?:\.\d+)?s"|\bresource[\s_]+(?:has\s+been\s+)?exhausted\b/i;
+
+/**
+ * Markers of a LONG window — a day, a week, a month (spelled out, in a quota id such as `…PerDayPerProjectPerModel`,
+ * or as RPD / TPD), a session / N-hour / usage window, a used-up balance. Where one is named, a short retry hint beside
+ * it (Google's RetryInfo comes with a daily quota too) does not make the limit transient.
+ */
+const longWindowRe =
+  /\bper[\s_-]?(?:day|week|month)\b|per(?:day|week|month)|\b(?:rpd|tpd)\b|\b(?:daily|weekly|monthly)\b|\b(?:session|usage|hourly|\d+-hours?)[\s_]+limit|usage_limit_reached|insufficient_quota|credit balance|out of (?:credits|usage)|billing\s+(?:hard\s+)?limit/i;
+
+/**
+ * That a text REPORTS a limit being hit rather than describing one — "the API limit is 5 requests per minute" is prose.
+ * The short-window rule needs it beside {@link shortWindowThrottleRe}.
+ */
+const limitHitRe = /\b(?:exceeded|exhausted|reached|hit your|too many|throttl\w*|retry|try again)\b/i;
 
 /** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
 const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;
@@ -235,6 +260,10 @@ export function checkIsUsageLimitText(text: string): boolean {
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
+ *  1c. a SHORT-window throttle ({@link shortWindowThrottleRe}, reported as hit —
+ *     {@link limitHitRe}) that names no long
+ *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
+ *     "retry in 40s" — ahead of the quota codes, which they share with daily quotas.
  *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) or the observed
  *     subscription wording ({@link subscriptionLimitMessageRe}) → `usageLimit`.
  *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
@@ -256,6 +285,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'auth' };
   }
   if (checkIsUsageLimitWarningText(text)) return null;
+  if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !longWindowRe.test(text)) return { kind: 'transient' };
   if (exhaustedQuotaCodesRe.test(text) || subscriptionLimitMessageRe.test(text)) {
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
