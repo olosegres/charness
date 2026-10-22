@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { resolveDataDir, type StateStore } from '../state';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
-import { emptyRequester, getRequestGroupKey, tryRequestGroupKeyFromString, type RequestGroupKey } from './requestGroup';
+import { emptyRequester, getRequestGroupKey, requestGroupKeyToString, tryRequestGroupKeyFromString, type RequestGroupKey } from './requestGroup';
 import type {
   ClosedRequestRecord,
   OpenRequestState,
@@ -298,13 +298,21 @@ export class RequestLedger {
 
   /** Open entries whose group key still decodes (a key of an unregistered platform is left alone), oldest first. */
   /**
-   * @description The `createdAt` of a request created now: the clock, but always after every open request's — the open
-   * requests are ordered by it (oldest first), and two created in the same millisecond tied, the tie falling back to the
-   * store's key order, where a superseded requester's slot keeps the position of its FIRST request.
+   * @description The `createdAt` of a request created now in `conversationKey`: the clock, but after every request that
+   * stays open beside it — another requester's in the same conversation. A conversation's open requests are ordered by
+   * it (oldest first), and two created in the same millisecond tied, the tie falling back to the store's key order, where
+   * a superseded requester's slot keeps the position of its FIRST request. The groups the new request replaces
+   * (`replacedGroups`) and other conversations do not count: they never sit beside it.
    */
-  private getNextCreatedAt(): number {
-    const newestOpenCreatedAt = Math.max(...Object.values(this.store.getOpenRequests()).map((request) => request.createdAt), Number.NEGATIVE_INFINITY);
-    return Math.max(this.now(), newestOpenCreatedAt + 1);
+  private getNextCreatedAt(conversationKey: string, replacedGroups: readonly RequestGroupKey[]): number {
+    const replacedGroupKeys = new Set(replacedGroups.map((replaced) => requestGroupKeyToString(replaced)));
+    let newestBesideCreatedAt = Number.NEGATIVE_INFINITY;
+    for (const [groupString, request] of Object.entries(this.store.getOpenRequests())) {
+      const openGroup = tryRequestGroupKeyFromString(groupString);
+      if (!openGroup || replacedGroupKeys.has(groupString) || keyToString(openGroup.conversation) !== conversationKey) continue;
+      newestBesideCreatedAt = Math.max(newestBesideCreatedAt, request.createdAt);
+    }
+    return Math.max(this.now(), newestBesideCreatedAt + 1);
   }
 
   private getOpenEntries(): OpenRequestEntry[] {
@@ -418,11 +426,11 @@ export class RequestLedger {
    */
   async createRequest(key: SessionKey, origin: RequestOrigin, options: CreateRequestOptions = {}): Promise<OpenRequestState> {
     this.assertLoaded();
-    const createdAt = this.getNextCreatedAt();
     const conversationKey = keyToString(key);
     const group = getRequestGroupKey(key, origin);
     const id = this.createRequestId();
     const requesterlessGroup: RequestGroupKey = { conversation: key, requester: emptyRequester };
+    const createdAt = this.getNextCreatedAt(conversationKey, [group, requesterlessGroup]);
     const requesterless = group.requester === emptyRequester ? undefined : this.store.getOpenRequest(requesterlessGroup);
     let request: OpenRequestState | null = null;
     const settled: Array<{ requestId: string; outcome: RequestPromptOutcome }> = [];
