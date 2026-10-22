@@ -700,8 +700,9 @@ test('an exhausted-usage-limit provider retry is aborted and reported once as a 
 
   assert.deepEqual(requests.map(r => [r.method, r.path]), [['POST', `/session/${own}/abort`]]);
   assert.equal(apiErrors.length, 1, 'one apiError per retry episode, not per attempt');
-  // With no explicit reset, preserve the long retry deadline as a conservative wait hint.
-  assert.deepEqual(apiErrors[0], { kind: 'usageLimit', resetAt });
+  // With no explicit reset, preserve the long retry deadline as a conservative wait hint. The wording alone is
+  // unconfirmed: the bot probes once before it takes that wait (handleUnconfirmedLimit).
+  assert.deepEqual(apiErrors[0], { kind: 'usageLimit', resetAt, isUnconfirmed: true });
   assert.equal(outputs.length, 0, 'no transient notice for an exhausted limit');
   assert.equal(adapter.checkIsBusy(key), false, 'the aborted retry no longer owns the turn');
 

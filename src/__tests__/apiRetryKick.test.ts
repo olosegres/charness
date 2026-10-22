@@ -553,10 +553,13 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
 
   it('every path that arms a retry saves it, and every path that stops it being armed clears the saved record', () => {
     const handle = getFunction('function handleApiError(');
-    // Arm: saved before the timer and the entry exist.
-    const save = handle.indexOf('.setApiRetry(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt })');
-    const entry = handle.indexOf('apiRetryTimers.set(k, {');
+    // Arm: one helper (the limit / transient path and the unconfirmed-limit probe use it), saved before the timer and the entry exist.
+    const arm = getFunction('function armApiRetryTimer(');
+    const save = arm.indexOf('.setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt })');
+    const entry = arm.indexOf('apiRetryTimers.set(keyToString(key), {');
     assert.ok(save > 0 && entry > save, 'arm: the saved twin is written with the entry');
+    assert.ok(handle.includes('armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt'), 'the error path arms through it');
+    assert.ok(getFunction('function handleUnconfirmedLimit(').includes('armApiRetryTimer(key, {'), 'the probe arms through it');
     // Give up: the saved record and the entry go together.
     assert.ok(handle.includes('clearSavedApiRetry(key);\n    apiRetryTimers.delete(k);'), 'give up');
     // Cancel (a user message, a teardown).
