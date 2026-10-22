@@ -18,7 +18,10 @@
  *   → a reset in a NAMED zone (`resets 2:10pm (Europe/Moscow)`, the way Claude Code writes it) is read in that zone:
  *     the notice names it in the instance zone, not the Moscow clock as if it were local
  *   → a weekly reset written with its date (`resets Oct 25, 3pm (Europe/Moscow)`) is waited for until that date —
- *     it used to be unparsed, and the topic was resumed into the limit every hour for six hours.
+ *     it used to be unparsed, and the topic was resumed into the limit every hour for six hours
+ *   → «⏭ Skip once» on a live wait, then a restart: the dismissed wait stays dismissed — the recovery used to arm it
+ *     again, because only the recovery itself marked an episode as handled
+ *   → a wait that gave up (every resume hit the limit again) is not armed again by the next restart either.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -50,7 +53,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
-import { getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeAlwaysUsageLimitFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
@@ -66,6 +69,7 @@ const requestLabel = 'REC-1';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
+const giveUpTimeoutMs = 3 * 60 * 1000;
 const msPerMinute = 60 * 1000;
 /** How long before the restart the window reset, and how long before that the error was written. */
 const resetAgoMs = 30 * msPerMinute;
@@ -262,5 +266,48 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     const notice = listSentLimitNotices()[limitNoticesBefore];
     assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the dated reset, got: ${notice}`);
+  });
+
+  it('a wait dismissed with «Skip once» is not armed again by the next restart', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const armedFireAt = readPersistedState(getLayout()).apiRetries?.[key]?.fireAt;
+    assert.ok(armedFireAt, 'the weekly limit left a wait armed');
+    const boardRequestId = fakeTelegram.pushOperatorMessage(topicThreadId, '/limits');
+    const board = await topic.waitForMessage('the /limits board with «Skip once»', (message) => message.message_id > boardRequestId && topic.getKeyboardData(message).flat().includes(`acl_skip_${armedFireAt}`));
+    await topic.tapAndAwaitAnswer(board, `acl_skip_${armedFireAt}`);
+    await getCharness().waitFor('the wait to be dropped', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[key] === undefined);
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const turnsBefore = getAllAgentTurns(getLayout()).length;
+
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+
+    // The boot recovery runs before the bot starts polling, which the restart already waited for.
+    assert.equal(getCharness().output.includes(recoveryLogLine), false, 'the dismissed wait is not re-armed');
+    assert.ok(getCharness().output.includes(`[limitRecovery] ${key}: skipped (alreadyHandled)`), 'the episode is known as handled');
+    assert.equal(readPersistedState(getLayout()).apiRetries?.[key], undefined, 'nothing armed');
+    assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'no limit notice again');
+    assert.equal(getAllAgentTurns(getLayout()).length, turnsBefore, 'the agent is not nudged');
+  });
+
+  it('a wait that gave up is not armed again by the next restart', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    // Every turn hits a limit whose reset is already past: each resume fires at once and hits it again, until the give-up.
+    const alwaysLimitPath = path.join(getLayout().fakeStateDir, fakeClaudeAlwaysUsageLimitFileName);
+    fs.writeFileSync(alwaysLimitPath, new Date(Date.now() - resetAgoMs).toISOString());
+    try {
+      const giveUpRequestId = fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-giveup every resume hits it`);
+      // Six resumes, each with its paced notice, before the give-up.
+      await getCharness().waitFor('the give-up', giveUpTimeoutMs, () => topic.listMessages().some((message) => message.message_id > giveUpRequestId && message.text.includes("Couldn't resume after")));
+    } finally {
+      fs.rmSync(alwaysLimitPath, { force: true });
+    }
+    assert.equal(readPersistedState(getLayout()).apiRetries?.[key], undefined, 'nothing armed after the give-up');
+    const turnsBefore = getAllAgentTurns(getLayout()).length;
+
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+
+    assert.equal(getCharness().output.includes(recoveryLogLine), false, 'the given-up wait is not re-armed');
+    assert.ok(getCharness().output.includes(`[limitRecovery] ${key}: skipped (alreadyHandled)`), 'the episode is known as handled');
+    assert.equal(getAllAgentTurns(getLayout()).length, turnsBefore, 'the agent is not nudged');
   });
 });

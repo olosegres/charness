@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**«⏭ Skip once» and a given-up limit wait stay settled across a bot restart.** When a Claude topic's limit wait ended
+without its resume — skipped, given up, or taken over — the next restart (hot mode restarts on every update) found the
+same limit error at the end of the agent's log and armed the wait again: the «usage limit reached» notice came back and the
+topic was resumed after all. Such a wait is now remembered as handled; a new limit error later is still picked up.
+
 **A weekly usage limit waits for its reset date instead of retrying every hour.** A limit more than a day away is written
 with its date — «You've hit your weekly limit · resets Oct 25, 3pm» — which the bot could not read: it resumed the topic into
 the limit every hour, and after six tries gave up with «Couldn't resume». It now waits for that date and time (in the zone

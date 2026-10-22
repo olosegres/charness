@@ -1692,7 +1692,10 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     clearSavedApiRetry(key);
     apiRetryTimers.delete(k);
     // Nothing resumes this limit any more: a reminder would hit it and arm a fresh episode, endlessly.
-    if (cls.kind === 'usageLimit') void requestWakeUpEngine?.stopWakingForLimitWait(key);
+    if (cls.kind === 'usageLimit') {
+      void requestWakeUpEngine?.stopWakingForLimitWait(key);
+      markLimitEpisodeSettled(key);
+    }
     return;
   }
 
@@ -2003,6 +2006,8 @@ function cancelApiRetry(key: SessionKey): void {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (entry?.timer) clearTimeout(entry.timer);
+  // A limit wait that ends here ends without its resume: the error it waited on stays the log's last word.
+  if (entry?.kind === 'usageLimit') markLimitEpisodeSettled(key);
   // Prompts held during the wait (R23) are not dropped with it: they ride the next
   // prompt forwarded to the session — the operator's message that cancelled the
   // wait — or go to the next session on their own (`limitHeldPrompts`).
@@ -11847,6 +11852,29 @@ function restoreApiRetries(): void {
  * log, and hot mode reloads the bot on every code change — without the stamp each
  * reload resurrected the settled wait.
  */
+/**
+ * @description Record a json-stream conversation's stdout log, as it is now, as a limit episode already handled
+ * (`limitEpisodesRecovered`, the stamp {@link recoverLimitEpisodesFromDisk} checks). A live wait that ends without
+ * its resume — «⏭ Skip once», a give-up, a takeover — leaves the error it waited on as the log's last terminal frame,
+ * and the next boot's recovery armed it again: only the recovery itself wrote the stamp. A later turn writes to the
+ * log and changes its identity, so a NEW parked error is still recovered.
+ */
+function markLimitEpisodeSettled(key: SessionKey): void {
+  const agent = state.getAgent(key);
+  if (!agent || !checkIsJsonStreamBackend(agent.name)) return;
+  const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getDataDir(), key));
+  let log: LimitEpisodeMarker;
+  try {
+    const stat = fs.statSync(stdoutFile);
+    log = { sizeBytes: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return; // no stdout log for this thread — nothing a boot could recover
+  }
+  void state
+    .setLimitEpisodeRecovered(key, log)
+    .catch((e) => console.error('[limitRecovery] marker persist failed:', e));
+}
+
 /**
  * @description When the parked `errorText` of a json-stream conversation was written, from its Claude transcript's
  * API-error entry ({@link getParkedErrorWrittenAtMs}); `null` when the transcript tail cannot be read or holds no such

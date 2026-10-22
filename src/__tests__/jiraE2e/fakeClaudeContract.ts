@@ -67,6 +67,12 @@ export const fakeCompactionModelUsage = { 'fake-model': { inputTokens: 1446, out
  * user message — before it echoes or answers it: a prompt that reached the agent and was never taken in (E3).
  */
 export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
+
+/**
+ * A file in the fake's state dir that, while it exists, makes EVERY turn end on a subscription limit whose reset is the
+ * file's content — the bot's own "continue" nudge included, so a flow can drive a limit wait through all its attempts.
+ */
+export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
 /**
  * The question the fake's `ask` mode puts to the user (an `AskUserQuestion`, the real CLI's tool): one short option,
  * one whose label is longer than a Telegram toast holds (200 characters).
