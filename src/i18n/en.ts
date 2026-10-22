@@ -776,6 +776,14 @@ export const enDict: Record<string, string> = {
     '⚠️ Claude is logged out — run /login to continue.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: invalid credentials — restart the opencode server.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ OpenCode server stopped unexpectedly ({reason}) — restarting…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ OpenCode server restarted, the session is restored. A reply that was in progress was lost — resend it if needed.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ OpenCode server restarted, but the previous session is gone. Start a new one with /opencode (or /quit to release the topic).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ Couldn\'t restart the OpenCode server. Your next message will try again.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

@@ -732,6 +732,14 @@ export const deDict: Record<string, string> = {
     '⚠️ Claude ist abgemeldet — führe /login aus, um fortzufahren.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: ungültige Anmeldedaten — starte den opencode-Server neu.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ Der OpenCode-Server wurde unerwartet beendet ({reason}) — starte neu…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ OpenCode-Server neu gestartet, die Sitzung ist wiederhergestellt. Eine laufende Antwort ging verloren — sende sie bei Bedarf erneut.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ OpenCode-Server neu gestartet, aber die vorherige Sitzung ist weg. Starte eine neue mit /opencode (oder /quit, um das Thema freizugeben).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ Der OpenCode-Server ließ sich nicht neu starten. Deine nächste Nachricht versucht es erneut.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

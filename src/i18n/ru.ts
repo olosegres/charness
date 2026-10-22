@@ -736,6 +736,14 @@ export const ruDict: Record<string, string> = {
     '⚠️ Claude разлогинен — отправь /login, чтобы продолжить.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: неверные учётные данные — перезапусти opencode-сервер.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ Сервер OpenCode неожиданно остановился ({reason}) — перезапускаю…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ Сервер OpenCode перезапущен, сессия восстановлена. Ответ, который был в процессе, потерян — при необходимости отправьте сообщение ещё раз.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ Сервер OpenCode перезапущен, но прежняя сессия утеряна. Начните новую через /opencode (или /quit, чтобы освободить топик).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ Не удалось перезапустить сервер OpenCode. Следующее ваше сообщение попробует снова.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

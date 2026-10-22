@@ -11,6 +11,7 @@ import { classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
 import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
+import { sleep } from '../utils';
 import {
   checkIsEventForSession,
   checkShouldLogDrop,
@@ -1327,6 +1328,59 @@ export function getSchedulerMcpRetryDelayMs(attempt: number): number | null {
   return schedulerMcpRetryDelaysMs[attempt] ?? null;
 }
 
+/**
+ * Pauses before each retry of a failed OpenCode server restart. A restart fails
+ * transiently: `spawn opencode ENOENT` while an npm reinstall/upgrade of the
+ * binary is in progress, or a server that did not become ready in time on a
+ * loaded machine. One attempt used to tear every active session down.
+ */
+export const openCodeServerRestartRetryDelaysMs: readonly number[] = [2_000, 5_000, 10_000, 15_000, 20_000];
+
+/**
+ * The bound on a restart's retries, counted from its first attempt: no retry is
+ * paused for once it would start past this. An attempt that waits out the server
+ * readiness probe takes ~15 s, so the bound — not the pause list — is what keeps
+ * a hopeless restart from holding the topics for minutes.
+ */
+export const openCodeServerRestartRetryBudgetMs = 60_000;
+
+/**
+ * @description The pause before restart retry number `retryIndex` (0-based), or
+ * `null` once the pauses are used up or the retry would start past `budgetMs`
+ * after the first attempt began (`elapsedMs` ago).
+ */
+export function getOpenCodeServerRestartRetryDelayMs(
+  retryIndex: number,
+  elapsedMs: number,
+  delaysMs: readonly number[] = openCodeServerRestartRetryDelaysMs,
+  budgetMs: number = openCodeServerRestartRetryBudgetMs,
+): number | null {
+  const delayMs = delaysMs[retryIndex];
+  if (delayMs === undefined || elapsedMs + delayMs > budgetMs) return null;
+  return delayMs;
+}
+
+/**
+ * @description The installManager calls one restart attempt makes. An instance
+ * field of the adapter so a test can simulate a missing binary or a failing
+ * start without installing or spawning anything.
+ */
+export interface OpenCodeServerRestartOps {
+  checkIsInstalled(): boolean;
+  installTool(): Promise<void>;
+  /** Adopt a healthy current server or start one. */
+  ensureServer(): Promise<void>;
+  /** Stop the current server generation and start a new one (never adopts). */
+  restartServer(): Promise<void>;
+}
+
+const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
+  checkIsInstalled: () => checkIsInstalled('opencode'),
+  installTool: () => installTool('opencode'),
+  ensureServer: ensureOpenCodeServer,
+  restartServer: restartOpenCodeServer,
+};
+
 export function buildProviderApiAuthPayload(apiKey: string): Record<string, string> {
   return { type: 'api', key: apiKey };
 }
@@ -1577,6 +1631,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private isServerRestarting = false;
 
   /**
+   * The restart attempt's installManager calls and its retry schedule. Instance
+   * fields (initialised from the module defaults) only so the crash-resume test
+   * can fail attempts and shrink the pauses — production never changes them.
+   */
+  private serverRestartOps: OpenCodeServerRestartOps = defaultOpenCodeServerRestartOps;
+  private serverRestartRetryDelaysMs: readonly number[] = openCodeServerRestartRetryDelaysMs;
+  private serverRestartRetryBudgetMs = openCodeServerRestartRetryBudgetMs;
+
+  /**
    * Per-thread display-prefs reader, injected by the bot at boot via
    * `createAdapter.registerDisplayPrefsReader` (S4). DELIBERATE deviation from
    * the S2/S3 "adapter stays mode-agnostic" pattern: the sub-agent branch
@@ -1682,7 +1745,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // Notify all active session threads about the crash
     for (const session of this.sessions.values()) {
       if (session.isActive) {
-        this.emit('output', session.key, `OpenCode server crashed (${reason}). Restarting...`);
+        this.emit('output', session.key, this.tl(session.key, () => t('openCodeServer.crashedRestartingNotice', { reason })));
       }
     }
 
@@ -1708,10 +1771,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     this.isServerRestarting = true;
     try {
-      console.log(`[OpenCode] Attempting server restart...`);
-      if (force) await restartOpenCodeServer();
-      else await ensureOpenCodeServer();
-      console.log(`[OpenCode] Server restarted successfully`);
+      await this.startServerWithRetries(force);
 
       // Close the global stream up front: its reader points at the crashed
       // server's connection. The resume loop below re-opens the (idempotent)
@@ -1740,7 +1800,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           // lifecycle lock here exactly like the public resumeSession does, so
           // the lock is taken once (no double-acquire from the crash handler).
           await this.withLifecycleLock(k, () => this.resumeSessionInner(sessionKey, workDir, sessionId));
-          this.emit('output', sessionKey, `OpenCode server restarted; session restored. In-flight reply was lost — resend if needed.`);
+          this.emit('output', sessionKey, this.tl(sessionKey, () => t('openCodeServer.restartedSessionRestoredNotice')));
         } catch (e) {
           // The id is gone on the restarted server (or resume otherwise
           // failed). Tear the session down and notify, same as before. Emit
@@ -1748,7 +1808,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           // wipes the persisted session id too — otherwise the next bot
           // restart would try to resume an id the server no longer has.
           console.error(`[OpenCode] Could not restore session ${sessionId} after restart:`, e);
-          this.emit('output', sessionKey, `OpenCode server restarted; previous session lost. Starting a fresh one with /opencode (or /quit to release).`);
+          this.emit('output', sessionKey, this.tl(sessionKey, () => t('openCodeServer.restartedSessionLostNotice')));
           this.stopSessionInner(sessionKey);
           this.emit('closed', sessionKey);
           // Defensive: stopSessionInner deletes from `this.sessions`, but
@@ -1758,13 +1818,16 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       }
       return true;
     } catch (e) {
-      console.error(`[OpenCode] Server restart failed:`, e);
+      // The technical detail stays in the log; the topic gets one short
+      // localized line — a raw exception (`spawn opencode ENOENT`) tells the
+      // person in the topic nothing they can act on.
+      console.error(`[OpenCode] Server restart failed, giving up:`, e);
       // Notify threads about the failure and tear them down
       // Take a snapshot first so we can safely mutate `this.sessions` inside the loop.
       const snapshot = Array.from(this.sessions.entries());
       for (const [k, session] of snapshot) {
         if (session.isActive) {
-          this.emit('output', session.key, `Failed to restart OpenCode server: ${e instanceof Error ? e.message : String(e)}`);
+          this.emit('output', session.key, this.tl(session.key, () => t('openCodeServer.restartFailedNotice')));
           // Mark session as inactive — no point keeping it alive
           session.isActive = false;
           // This teardown bypasses stopSessionInner, so the replacement bound
@@ -1777,6 +1840,44 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       return false;
     } finally {
       this.isServerRestarting = false;
+    }
+  }
+
+  /**
+   * @description Bring the server back for {@link restartServer}, retrying a
+   * failed attempt on the {@link openCodeServerRestartRetryDelaysMs} pauses
+   * within {@link openCodeServerRestartRetryBudgetMs}. Each attempt first makes
+   * sure the binary is installed, like a session start does — a binary missing
+   * mid-reinstall is the commonest transient failure. Retries post nothing to
+   * the topics; throws the last attempt's error once the retries are used up.
+   */
+  private async startServerWithRetries(force: boolean): Promise<void> {
+    const firstAttemptStartedAt = Date.now();
+    for (let retryIndex = 0; ; retryIndex++) {
+      try {
+        console.log(`[OpenCode] Attempting server restart (attempt ${retryIndex + 1})...`);
+        if (!this.serverRestartOps.checkIsInstalled()) {
+          console.log(`[OpenCode] opencode binary not found, installing before the restart...`);
+          await this.serverRestartOps.installTool();
+        }
+        if (force) await this.serverRestartOps.restartServer();
+        else await this.serverRestartOps.ensureServer();
+        console.log(`[OpenCode] Server restarted successfully`);
+        return;
+      } catch (e) {
+        const delayMs = getOpenCodeServerRestartRetryDelayMs(
+          retryIndex,
+          Date.now() - firstAttemptStartedAt,
+          this.serverRestartRetryDelaysMs,
+          this.serverRestartRetryBudgetMs,
+        );
+        if (delayMs === null) throw e;
+        console.warn(
+          `[OpenCode] Server restart attempt ${retryIndex + 1} failed, retrying in ${Math.round(delayMs / 1000)}s:`,
+          e instanceof Error ? e.message : e,
+        );
+        await sleep(delayMs);
+      }
     }
   }
 

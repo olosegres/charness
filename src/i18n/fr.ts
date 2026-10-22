@@ -732,6 +732,14 @@ export const frDict: Record<string, string> = {
     '⚠️ Claude est déconnecté — lancez /login pour continuer.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode : identifiants invalides — redémarrez le serveur opencode.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ Le serveur OpenCode s\'est arrêté de façon inattendue ({reason}) — redémarrage…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ Serveur OpenCode redémarré, la session est restaurée. La réponse en cours a été perdue — renvoyez-la si besoin.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ Serveur OpenCode redémarré, mais la session précédente est perdue. Démarrez-en une nouvelle avec /opencode (ou /quit pour libérer le sujet).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ Impossible de redémarrer le serveur OpenCode. Votre prochain message réessaiera.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

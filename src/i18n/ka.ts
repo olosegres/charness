@@ -732,6 +732,14 @@ export const kaDict: Record<string, string> = {
     '⚠️ Claude გამოსულია — გასაგრძელებლად გაუშვით /login.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: არასწორი ავტორიზაციის მონაცემები — გადატვირთეთ opencode სერვერი.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ OpenCode სერვერი მოულოდნელად გაჩერდა ({reason}) — ვრთავ ხელახლა…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ OpenCode სერვერი გადაიტვირთა, სესია აღდგენილია. მიმდინარე პასუხი დაიკარგა — საჭიროების შემთხვევაში ხელახლა გაგზავნეთ.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ OpenCode სერვერი გადაიტვირთა, მაგრამ წინა სესია დაიკარგა. დაიწყეთ ახალი /opencode-ით (ან /quit თემის გასათავისუფლებლად).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ OpenCode სერვერის გადატვირთვა ვერ მოხერხდა. თქვენი შემდეგი შეტყობინება ისევ სცდის.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

@@ -731,6 +731,14 @@ export const hiDict: Record<string, string> = {
     '⚠️ Claude लॉगआउट है — जारी रखने के लिए /login चलाएँ।',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: अमान्य क्रेडेंशियल — opencode सर्वर पुनः प्रारंभ करें।',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ OpenCode सर्वर अचानक रुक गया ({reason}) — फिर से शुरू कर रहा हूँ…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ OpenCode सर्वर फिर से शुरू हुआ, सत्र बहाल हो गया। जो जवाब चल रहा था वह खो गया — ज़रूरत हो तो दोबारा भेजें।',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ OpenCode सर्वर फिर से शुरू हुआ, लेकिन पिछला सत्र खो गया। /opencode से नया शुरू करें (या टॉपिक छोड़ने के लिए /quit)।',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ OpenCode सर्वर फिर से शुरू नहीं हो सका। आपका अगला संदेश फिर से कोशिश करेगा।',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':

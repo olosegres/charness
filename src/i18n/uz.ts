@@ -732,6 +732,14 @@ export const uzDict: Record<string, string> = {
     '⚠️ Claude tizimdan chiqdi — davom etish uchun /login ni ishga tushiring.',
   'apiRetry.loggedOutOpenCode':
     '⚠️ OpenCode: yaroqsiz e\'tilbar ma\'lumotlar — opencode serverini qayta ishga tushiring.',
+  'openCodeServer.crashedRestartingNotice':
+    '⚠️ OpenCode serveri kutilmaganda to\'xtadi ({reason}) — qayta ishga tushiryapman…',
+  'openCodeServer.restartedSessionRestoredNotice':
+    '✅ OpenCode serveri qayta ishga tushdi, sessiya tiklandi. Jarayondagi javob yo\'qoldi — kerak bo\'lsa, qayta yuboring.',
+  'openCodeServer.restartedSessionLostNotice':
+    '⚠️ OpenCode serveri qayta ishga tushdi, lekin oldingi sessiya yo\'qoldi. /opencode bilan yangisini boshlang (yoki mavzuni bo\'shatish uchun /quit).',
+  'openCodeServer.restartFailedNotice':
+    '⚠️ OpenCode serverini qayta ishga tushirib bo\'lmadi. Keyingi xabaringiz yana urinib ko\'radi.',
 
   // ── startup readiness status (boot-time owner notice) ──
   'startup.ready':
