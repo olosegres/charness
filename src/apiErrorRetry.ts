@@ -17,6 +17,7 @@
 
 import type { AgentApiErrorClass } from './types';
 import { maxTimeoutMs } from './scheduler/engine';
+import { getCanonicalTimezone, getEpochMsOfZonedWallClock, getZonedWallClock } from './utils/timezone';
 
 /** One minute in milliseconds — the unit the backoff schedules are expressed in. */
 const msPerMinute = 60_000;
@@ -71,6 +72,11 @@ const clockResetRegex = /\b(?:reset(?:s|ting)?|at)\s+(\d{1,2})(?!\d)(?::(\d{2}))
  * `Zoom`) is not read as the Zulu zone.
  */
 const trailingZoneRegex = /^\s*\(?\s*(UTC|GMT|Z|[+-]\d{2}:?\d{2})\b\s*\)?/i;
+/**
+ * A NAMED zone in parentheses right after the clock — Claude Code formats the reset in its own zone and says which:
+ * `resets 2:10pm (Europe/Moscow)`. An IANA name (`Area/Location`, possibly deeper); validated by `Intl` before use.
+ */
+const trailingNamedZoneRegex = /^\s*\(\s*([A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+)\s*\)/;
 /** Matches an ISO-8601 timestamp anywhere in the text. */
 const isoTimestampRegex = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/;
 
@@ -272,8 +278,9 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
  *  - relative: "resets in 2h" / "in 45m" → `now + duration`.
  *  - absolute clock: "resets at 3pm" / "at 15:00" / "resets 10:50pm (UTC)" → the
  *    NEXT occurrence of that clock time at or after `now`. An EXPLICIT zone
- *    suffix is load-bearing: the clock is then resolved IN THAT ZONE, not in the
- *    instance/host zone. Without it a `10:50pm (UTC)` reset on a `+04:00` box
+ *    suffix — an offset (`(UTC)`, `+05:00`) or a named zone (`(Europe/Moscow)`,
+ *    the way Claude Code writes it) — is load-bearing: the clock is then resolved
+ *    IN THAT ZONE, not in the instance/host zone. Without it a `10:50pm (UTC)` reset on a `+04:00` box
  *    resolved four hours EARLY — the retry fires while the limit still holds,
  *    re-errors, and burns one of the six attempts for nothing.
  *  - ISO timestamp anywhere in the text → `Date.parse`.
@@ -325,6 +332,23 @@ function getZoneOffsetMs(zone: string): number | undefined {
   return sign * (hours * msPerHour + minutes * msPerMinute);
 }
 
+/** The IANA zone named in parentheses at the start of `textAfterClock`, canonicalized; `null` when none or unknown. */
+function getTrailingNamedZone(textAfterClock: string): string | null {
+  const zoneName = trailingNamedZoneRegex.exec(textAfterClock)?.[1];
+  return zoneName === undefined ? null : getCanonicalTimezone(zoneName);
+}
+
+/**
+ * The next instant at or after `now` at which `timezone` reads `hour:minute`: today's in that zone, or tomorrow's
+ * once today's has passed. Daylight saving is the zone's own (`Intl`), not a fixed offset.
+ */
+function resolveNextZonedClockTime(timezone: string, hour: number, minute: number, now: number): number {
+  const today = getZonedWallClock(timezone, now);
+  const todayMs = getEpochMsOfZonedWallClock(timezone, { year: today.year, month: today.month, day: today.day, hour, minute });
+  if (todayMs >= now) return todayMs;
+  return getEpochMsOfZonedWallClock(timezone, { year: today.year, month: today.month, day: today.day + 1, hour, minute });
+}
+
 /**
  * Resolve a clock match to the next epoch ms at or after `now` that lands on that
  * wall-clock time. When the text carries an explicit zone right after the clock
@@ -345,7 +369,10 @@ function resolveNextClockTime(match: RegExpExecArray, text: string, now: number)
     return undefined;
   }
 
-  const zoneMatch = trailingZoneRegex.exec(text.slice(match.index + match[0].length));
+  const textAfterClock = text.slice(match.index + match[0].length);
+  const namedZone = getTrailingNamedZone(textAfterClock);
+  if (namedZone !== null) return resolveNextZonedClockTime(namedZone, hour, minute, now);
+  const zoneMatch = trailingZoneRegex.exec(textAfterClock);
   const offsetMs = zoneMatch ? getZoneOffsetMs(zoneMatch[1]) : undefined;
   if (offsetMs !== undefined) {
     // Shift onto the zone's timeline, snap to that zone's midnight, then shift

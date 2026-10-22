@@ -417,3 +417,41 @@ test('window over: only a usage limit whose reset is already behind now', () => 
   assert.equal(checkIsUsageLimitWindowOver({ kind: 'usageLimit' }, fixedNow), false, 'an unknown reset is still a limit');
   assert.equal(checkIsUsageLimitWindowOver({ kind: 'transient', resetAt: fixedNow - 1 }, fixedNow), false);
 });
+
+// Claude Code 2.1.304 appends the zone it formatted the reset in, by its IANA name: "resets 2:10pm (Europe/Moscow)".
+// Ignored, the clock was read in the bot's own zone — off by the difference between the two (an hour early, and the
+// retry re-errors; or hours late, and the topic waits for nothing).
+function withProcessTimezone(timezone: string, run: () => void): void {
+  const originalTz = process.env.TZ;
+  process.env.TZ = timezone;
+  try {
+    run();
+  } finally {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  }
+}
+
+test('parseResetAt: a named IANA zone after the clock is the zone the clock is in, not the bot\'s', () => {
+  withProcessTimezone('Asia/Dubai', () => {
+    // 2:10pm in Moscow (+03:00, no DST) is 11:10Z — ahead of fixedNow (10:00Z) the same day.
+    assert.equal(parseResetAt("You've hit your session limit · resets 2:10pm (Europe/Moscow)", fixedNow), Date.parse('2026-06-09T11:10:00.000Z'));
+    // 8am in Moscow is 05:00Z, already past → tomorrow's.
+    assert.equal(parseResetAt('resets 8am (Europe/Moscow)', fixedNow), Date.parse('2026-06-10T05:00:00.000Z'));
+  });
+});
+
+test('parseResetAt: a named zone follows its daylight saving', () => {
+  withProcessTimezone('Asia/Dubai', () => {
+    // New York is -04:00 in June and -05:00 in January.
+    assert.equal(parseResetAt('resets 4pm (America/New_York)', fixedNow), Date.parse('2026-06-09T20:00:00.000Z'));
+    const winterNow = Date.parse('2026-01-15T10:00:00.000Z');
+    assert.equal(parseResetAt('resets 4pm (America/New_York)', winterNow), Date.parse('2026-01-15T21:00:00.000Z'));
+  });
+});
+
+test('parseResetAt: an unknown zone name falls back to the bot\'s own zone, as before', () => {
+  withProcessTimezone('UTC', () => {
+    assert.equal(parseResetAt('resets 2:10pm (Mars/Olympus_Mons)', fixedNow), Date.parse('2026-06-09T14:10:00.000Z'));
+  });
+});

@@ -14,7 +14,9 @@
  *     reached" notice (the reset used to be read against the boot time — tomorrow's 10:20am — and the topic was
  *     told it waits a day for a limit that had already reset); it resumes at once, says so, and the agent takes the
  *     "continue" nudge
- *   → a LIVE limit error is announced whatever its reset says, a reset already past included.
+ *   → a LIVE limit error is announced whatever its reset says, a reset already past included
+ *   → a reset in a NAMED zone (`resets 2:10pm (Europe/Moscow)`, the way Claude Code writes it) is read in that zone:
+ *     the notice names it in the instance zone, not the Moscow clock as if it were local.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -68,6 +70,8 @@ const resetAgoMs = 30 * msPerMinute;
 const errorAgoMs = 60 * msPerMinute;
 const hoursPerHalfDay = 12;
 const minutesPadLength = 2;
+/** Moscow's offset from UTC (no daylight saving since 2014). */
+const moscowOffsetMs = 3 * 60 * 60 * 1000;
 /** The bot's limit wait notice ("🚧 Usage limit reached — …") and its resume notice. */
 const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
@@ -118,6 +122,13 @@ function backdateTranscriptApiError(transcriptPath: string, writtenAt: Date): vo
   });
   assert.ok(lines.some((line) => line.includes('"isApiErrorMessage":true')), 'the fake recorded the API error in the transcript');
   fs.writeFileSync(transcriptPath, lines.join('\n'));
+}
+
+/** The UTC clock the bot names a reset instant with in an instance whose zone is UTC (`HH:MM`, or with the date). */
+function formatUtcNoticeClock(atMs: number, nowMs: number): string {
+  const at = new Date(atMs).toISOString();
+  const isToday = at.slice(0, 10) === new Date(nowMs).toISOString().slice(0, 10);
+  return isToday ? at.slice(11, 16) : `${at.slice(0, 10)} ${at.slice(11, 16)}`;
 }
 
 function listSentLimitNotices(): string[] {
@@ -210,5 +221,18 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const pastResetIso = new Date(Date.now() - resetAgoMs).toISOString();
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-live [fake:usage-limit-once] [limit-resets:${pastResetIso}] again`);
     await getCharness().waitFor('the live limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+  });
+
+  it('a reset in a named zone is read in that zone: the notice names the instant in the instance zone', async () => {
+    const limitNoticesBefore = listSentLimitNotices().length;
+    // Two hours from now in Moscow (+03:00, no DST), on the whole minute, as Claude Code writes it.
+    const resetAtMs = Math.floor((Date.now() + 2 * 60 * 60 * 1000) / msPerMinute) * msPerMinute;
+    const moscow = new Date(resetAtMs + moscowOffsetMs);
+    const moscowHour = moscow.getUTCHours();
+    const moscowClock = `${moscowHour % hoursPerHalfDay === 0 ? hoursPerHalfDay : moscowHour % hoursPerHalfDay}:${moscow.getUTCMinutes().toString().padStart(minutesPadLength, '0')}${moscowHour < hoursPerHalfDay ? 'am' : 'pm'} (Europe/Moscow)`;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-zone [fake:usage-limit-once] [limit-resets:${moscowClock}] once more`);
+    await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+    const notice = listSentLimitNotices()[limitNoticesBefore];
+    assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the reset in UTC, got: ${notice}`);
   });
 });

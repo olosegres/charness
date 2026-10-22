@@ -228,6 +228,54 @@ function getZoneClockParts(timezone: string, nowMs: number): ZoneClockParts {
   };
 }
 
+/** @description A calendar date and wall-clock time, as some zone reads them (`month` 1–12). */
+export interface ZonedWallClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+}
+
+const msPerSecond = 1000;
+
+/**
+ * @description The zone's calendar date and wall clock at `atMs`. Throws `RangeError` for an unknown zone — callers
+ * validate with {@link getCanonicalTimezone} first.
+ */
+export function getZonedWallClock(timezone: string, atMs: number): ZonedWallClock & { second: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(atMs));
+  const read = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((part) => part.type === type)?.value);
+  return { year: read('year'), month: read('month'), day: read('day'), hour: read('hour'), minute: read('minute'), second: read('second') };
+}
+
+/** @description The zone's offset from UTC at `atMs`, in ms (positive east of Greenwich), daylight saving included. */
+export function getZoneOffsetMsAt(timezone: string, atMs: number): number {
+  const wholeSecondMs = Math.floor(atMs / msPerSecond) * msPerSecond;
+  const clock = getZonedWallClock(timezone, wholeSecondMs);
+  return Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second) - wholeSecondMs;
+}
+
+/**
+ * @description The instant at which `timezone` reads the wall clock `clock`. Two passes, because the offset at a first
+ * guess can differ from the offset at the answer across a daylight-saving change; a date past the month's end rolls
+ * over (`day: 32` is the next month's first), which is how a caller asks for "the next day".
+ */
+export function getEpochMsOfZonedWallClock(timezone: string, clock: ZonedWallClock): number {
+  const wallAsUtcMs = Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute);
+  const firstGuessMs = wallAsUtcMs - getZoneOffsetMsAt(timezone, wallAsUtcMs);
+  return wallAsUtcMs - getZoneOffsetMsAt(timezone, firstGuessMs);
+}
+
 /**
  * @description The zone's current wall clock as `18:42 (+03:00)` — the tail of
  * every `/timezone` confirmation and of the `/status` zone row, so a wrong pick

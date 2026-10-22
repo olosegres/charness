@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A usage-limit reset written with its time zone is read in that zone.** Claude Code names the zone it wrote the reset in
+— «You've hit your session limit · resets 2:10pm (Europe/Moscow)» — and the bot read the clock in its own zone instead: when
+the two differ, the topic resumed too early (and hit the limit again) or waited hours too long. Daylight saving is the named
+zone's own.
+
 **A usage warning is no longer announced as an exhausted limit.** Claude Code warns before a limit is reached —
 «Approaching session limit · resets 11:29pm», «You've used 90% of your weekly limit · resets …», and «… continuing with usage
 credits» / «Now using extra usage» once paid extra usage takes over. On a topic running Claude in tmux mode the bot read the

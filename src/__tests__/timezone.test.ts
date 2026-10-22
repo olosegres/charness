@@ -31,6 +31,9 @@ import {
   formatZoneNowWithDate,
   getCanonicalTimezone,
   getEffectiveTimezone,
+  getEpochMsOfZonedWallClock,
+  getZoneOffsetMsAt,
+  getZonedWallClock,
   getHostTimezone,
   getTimezoneRegion,
   getTimezonesForRegion,
@@ -182,4 +185,21 @@ test('applyProcessTimezone(null) restores the launch environment', () => {
     getHostTimezone(),
     '/timezone auto must return to the host zone',
   );
+});
+
+test('getZoneOffsetMsAt: a zone\'s offset at an instant, its daylight saving included', () => {
+  const hourMs = 60 * 60 * 1000;
+  assert.equal(getZoneOffsetMsAt('Europe/Moscow', referenceInstantMs), 3 * hourMs);
+  assert.equal(getZoneOffsetMsAt('America/New_York', Date.UTC(2026, 6, 1, 12)), -4 * hourMs);
+  assert.equal(getZoneOffsetMsAt('America/New_York', Date.UTC(2026, 0, 15, 12)), -5 * hourMs);
+});
+
+test('getEpochMsOfZonedWallClock: the instant a zone reads a wall clock, across a DST change and a month end', () => {
+  assert.equal(getEpochMsOfZonedWallClock('Europe/Moscow', { year: 2026, month: 9, day: 14, hour: 18, minute: 42 }), Date.UTC(2026, 8, 14, 15, 42));
+  // New York leaves daylight saving on 2026-11-01: 4pm that day is -05:00, 4pm the day before -04:00.
+  assert.equal(getEpochMsOfZonedWallClock('America/New_York', { year: 2026, month: 10, day: 31, hour: 16, minute: 0 }), Date.UTC(2026, 9, 31, 20));
+  assert.equal(getEpochMsOfZonedWallClock('America/New_York', { year: 2026, month: 11, day: 1, hour: 16, minute: 0 }), Date.UTC(2026, 10, 1, 21));
+  // `day: 31` of a 30-day month rolls over to the next month's first — how "the next day" is asked for.
+  assert.equal(getEpochMsOfZonedWallClock('Europe/Moscow', { year: 2026, month: 9, day: 31, hour: 0, minute: 0 }), Date.UTC(2026, 8, 30, 21));
+  assert.deepEqual(getZonedWallClock('Europe/Moscow', Date.UTC(2026, 8, 30, 21)), { year: 2026, month: 10, day: 1, hour: 0, minute: 0, second: 0 });
 });
