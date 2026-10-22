@@ -146,6 +146,16 @@ export class FakeOpenCodeServer {
     this.broadcast({ type: 'session.error', properties: { sessionID: sessionId, error } }, directory);
   }
 
+  /**
+   * @description A sub-agent's child session appearing: the `session.updated` whose `info.parentID` names the parent —
+   * how OpenCode tells the bot a session's lineage. The child is not added to {@link sessions}: the bot never created it.
+   */
+  emitChildSession(parentSessionId: string, childSessionId: string): void {
+    const parent = this.sessions.get(parentSessionId);
+    if (!parent) throw new Error(`no such fake OpenCode session: ${parentSessionId}`);
+    this.broadcast({ type: 'session.updated', properties: { info: { id: childSessionId, parentID: parentSessionId, title: 'sub-agent' } } }, parent.directory);
+  }
+
   private broadcast(payload: { type: string; properties: Record<string, unknown> }, directory: string | null = null): void {
     const frame = `data: ${JSON.stringify(directory === null ? { payload } : { directory, payload })}\n\n`;
     for (const stream of this.eventStreams) stream.write(frame);

@@ -80,3 +80,28 @@ test('the response body still counts: a quota code only in the body is read', ()
   }) });
   assert.equal(apiErrors[0]?.kind, 'usageLimit');
 });
+
+// Paths 6 and 7: a `session.error` routed to the topic is not always the topic's OWN session's. A sub-agent's child
+// session (often on another model or provider) reports its own quota, and a foreign session in the same folder (the
+// operator's own `opencode` TUI, an old session still retrying) is routed to the folder's one topic. Armed as the
+// topic's limit, the parent — still working — was held, its model marked limited, the operator told «Usage limit reached».
+const quotaError = buildApiError({ message: 'You exceeded your current quota (requests per day).', statusCode: 429, isRetryable: false });
+
+test('a CHILD (sub-agent) session\'s quota error does not arm the topic\'s limit wait', () => {
+  const { adapter, apiErrors } = createAdapterWithSession();
+  adapter['sessionLineage'].set('ses_child', own);
+  adapter['handleSessionError'](key, 'ses_child', { error: quotaError });
+  assert.deepEqual(apiErrors, []);
+});
+
+test('a FOREIGN session\'s quota error, routed by the folder, does not arm the topic\'s limit wait', () => {
+  const { adapter, apiErrors } = createAdapterWithSession();
+  adapter['handleSessionError'](key, 'ses_foreign_in_same_folder', { error: quotaError });
+  assert.deepEqual(apiErrors, []);
+});
+
+test('the topic\'s OWN session\'s quota error still does', () => {
+  const { adapter, apiErrors } = createAdapterWithSession();
+  adapter['handleSessionError'](key, own, { error: quotaError });
+  assert.equal(apiErrors[0]?.kind, 'usageLimit');
+});

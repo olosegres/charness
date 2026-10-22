@@ -5391,7 +5391,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       this.closeSubagentStatusOnParentTurnEnd(key);
     }
 
-    // Provider-side API error at the proxy boundary → emit `apiError`. transient
+    // Provider-side API error of the OWN session at the proxy boundary → emit `apiError`. transient
     // / usageLimit arm the auto-retry (the session stays active after
     // `session.error`, so the kick reuses it); `auth` (logged out / bad
     // credentials) is SURFACED as a pinned notice by the bot, never retried.
@@ -5400,6 +5400,14 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // Classified from the RAW payload, not from `errorMsg`: the surfaced text
     // collapses an unrecognised shape to a constant that carries no marker to
     // classify. The raw text stops here — the classifier returns only a class.
+    // Only the topic's OWN session's error is the topic's: a sub-agent's child session (often on another model or
+    // provider) and a foreign session routed here by the folder report limits that are not this conversation's —
+    // armed, they held a parent that was still working and marked its model limited. A child's real limit reaches the
+    // parent as a failed tool call; if it is the parent's too, the parent's own retry or error says so.
+    if (!isOwnSession) {
+      console.log(`[OpenCode] ${keyToString(key)}: session.error of session ${eventSessionId}, not the topic's own — no retry armed`);
+      return;
+    }
     const now = Date.now();
     const apiError: AgentApiErrorClass | null = classifyAgentApiError(
       getOpenCodeErrorClassificationText(properties.error),

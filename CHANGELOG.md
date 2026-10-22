@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**A sub-agent's limit, or another session's in the same folder, no longer stops the topic.** On OpenCode a sub-agent runs
+in a child session — often on another model or provider — and the folder's events can also carry a session the topic does
+not own (your own `opencode` in the same folder, an old session still retrying). Their quota errors were taken for the
+topic's: «🚧 Usage limit reached», the topic's messages held and its model marked limited while its own agent kept working.
+Only the topic's own session can arm a limit wait now.
+
 **An OpenCode error's response headers no longer turn it into a usage limit, or set its reset.** The bot read the whole
 error OpenCode relays, response headers included, and headers name limits and resets of their own: a plain 400 could be
 announced as «🚧 Usage limit reached», and a real limit could be given the reset of a per-minute counter (or a stamp a day

@@ -11,7 +11,10 @@
  *   → a plain 400 whose headers name limits and resets: shown as an error, nothing armed — the headers alone made
  *     it a usage limit
  *   → the same quota as a `session.error` whose response HEADERS carry an ISO reset a day away: a short transient
- *     retry, NO usage-limit notice — the headers used to be read too, making it a usage limit "until" that stamp.
+ *     retry, NO usage-limit notice — the headers used to be read too, making it a usage limit "until" that stamp
+ *   → a sub-agent's CHILD session (lineage from `session.updated`) and a FOREIGN session in the same folder report a
+ *     daily quota: neither arms the topic — it used to be held, its model marked limited.
+ *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -43,7 +46,8 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { openLimitsBoard, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { skipArmedRetryCallbackPrefix as skipOnceCallbackPrefix } from '../utils/autoContinueOnLimit';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -167,6 +171,28 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     assert.deepEqual(listSentTexts().filter((text) => text.startsWith(limitNoticeMark)), [], 'a per-minute quota is not a usage limit');
     assert.equal(fakeOpenCode.listRequests('POST', `/session/${sessionId}/abort`).length, abortsBefore, 'OpenCode\'s retry goes on — the turn continues');
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey()], undefined, 'no limit wait armed');
+  });
+
+  it('a sub-agent CHILD session and a FOREIGN session in the same folder hit a daily quota: the topic is not armed', async () => {
+    const parentSessionId = getTopicSessionId();
+    const childSessionId = 'ses_fakechild1';
+    const dailyQuotaError = {
+      name: 'APIError',
+      data: { message: 'You exceeded your current quota (requests per day).', statusCode: 429, isRetryable: false, responseBody: '{"error":{"status":"RESOURCE_EXHAUSTED"}}' },
+    };
+    // One event stream, read in order: the lineage is known before the child's error arrives.
+    fakeOpenCode.emitChildSession(parentSessionId, childSessionId);
+    fakeOpenCode.emitSessionError(childSessionId, dailyQuotaError);
+    await getCharness().waitFor('the child\'s error to be handled', replyTimeoutMs, () => getCharness().output.includes(`session.error of session ${childSessionId}, not the topic's own`));
+    const foreignSessionId = 'ses_fakeforeign1';
+    fakeOpenCode.emitSessionError(foreignSessionId, dailyQuotaError, path.join(getLayout().workRoot, geminiTopic.folder));
+    await getCharness().waitFor('the foreign session\'s error to be handled', replyTimeoutMs, () => getCharness().output.includes(`session.error of session ${foreignSessionId}, not the topic's own`));
+
+    // A barrier that cannot race: `/limits` is handled after these events, and offers «⏭ Skip once» exactly when a
+    // limit wait is armed for the topic (in memory, set synchronously by the error handling).
+    const board = await openLimitsBoard(fakeTelegram, topic, geminiTopic.threadId);
+    assert.equal(topic.getKeyboardData(board.message).flat().some((data) => data.startsWith(skipOnceCallbackPrefix)), false, 'no limit wait armed for the topic');
+    assert.deepEqual(listSentTexts().filter((text) => text.startsWith(limitNoticeMark)), [], 'no usage-limit notice');
   });
 
   it('a plain 400 whose response headers name limits and resets: the error is shown, no retry and no limit is armed', async () => {
