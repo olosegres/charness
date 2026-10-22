@@ -579,3 +579,35 @@ test('parseResetAt: a zone-less ISO stamp is not a reset unless a zone follows i
     assert.equal(parseResetAt('Your quota resets at 2026-06-09T23:29:00+04:00.', fixedNow), Date.parse('2026-06-09T19:29:00.000Z'));
   });
 });
+
+// Google's subscription / Antigravity quotas: "You have exhausted your capacity on this model. Your quota will reset
+// after 2s." — and after "8h27m3s", "146h52m11s. Your plan's baseline quota will refresh on …" (forum reports). The
+// stated duration decides: seconds are a throttle the next retry clears; hours are a usage window to wait out. Neither
+// "after" nor seconds were read, so the 2 s one became «Usage limit reached» and an hour's wait, and the hours-long one
+// wrapped in RESOURCE_EXHAUSTED became short retries that gave up long before the reset.
+const googleCapacityMessage = (duration: string): string => `You have exhausted your capacity on this model. Your quota will reset after ${duration}.`;
+const wrapInGoogleBody = (message: string): string => JSON.stringify({ error: { code: 429, message, status: 'RESOURCE_EXHAUSTED' } });
+
+test('classify: Google\'s "exhausted your capacity … reset after Ns" is a short throttle, bare or in its JSON body', () => {
+  for (const text of [googleCapacityMessage('2s'), `RESOURCE_EXHAUSTED (code 429): ${googleCapacityMessage('1s')}`, wrapInGoogleBody(googleCapacityMessage('2s'))]) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'transient' }, text);
+  }
+});
+
+test('classify: the same wording with an hours-long reset is a usage limit until then, bare or in RESOURCE_EXHAUSTED', () => {
+  const sec = 1000;
+  const minute = 60 * sec;
+  for (const [text, resetInMs] of [
+    [googleCapacityMessage('8h27m3s'), 8 * hourMs + 27 * minute + 3 * sec],
+    [wrapInGoogleBody(googleCapacityMessage('8h27m3s')), 8 * hourMs + 27 * minute + 3 * sec],
+    [`${googleCapacityMessage('146h52m11s')} Your plan's baseline quota will refresh on 3/24/2026 5:50 PM.`, 146 * hourMs + 52 * minute + 11 * sec],
+  ] as const) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + resetInMs }, text);
+  }
+});
+
+test('parseResetAt: "after <duration>" and seconds are read', () => {
+  assert.equal(parseResetAt('Your quota will reset after 8h27m3s.', fixedNow), fixedNow + 8 * hourMs + 27 * 60_000 + 3_000);
+  assert.equal(parseResetAt('quota resets in 90s', fixedNow), fixedNow + 90_000);
+  assert.equal(parseResetAt('Please retry in 40.15s.', fixedNow), fixedNow + 40_150);
+});

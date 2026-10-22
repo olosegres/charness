@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Google's «You have exhausted your capacity on this model. Your quota will reset after …» is read by its duration.** The
+Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan
+(«after 146h52m11s»). The seconds-long one was announced as «🚧 Usage limit reached» with an hour's wait, and an hours-long
+one inside Google's RESOURCE_EXHAUSTED was retried a few times and given up. A reset within a few minutes is now a short
+retry; a longer one is waited for until the time it names.
+
 **A voice message no longer fails when two starts of the local speech engine meet.** When the bot restarted while the
 local engine was loading, the second start finds the first one running and steps aside — on a busy machine that was taken
 for a failed start, and the voice was not transcribed by the local engine.

@@ -21,7 +21,10 @@
  *   → in a third topic, OpenCode Go's usage limit "It will reset in 2 hours 30 minutes": the notice names the reset
  *     two and a half hours ahead — only the "2 hours" used to be read
  *   → in a fourth topic, a usage limit whose reset is a ZONE-LESS ISO stamp: the plain hourly retry, not a reset time
- *     guessed in the bot's zone.
+ *     guessed in the bot's zone
+ *   → in a fifth topic, Google's subscription wording "You have exhausted your capacity on this model. Your quota will
+ *     reset after 2s." as OpenCode's own retry (the message alone): its short notice, no usage-limit notice; then the
+ *     same wording "after 8h27m3s" in a RESOURCE_EXHAUSTED body: the limit wait, named 8 h 27 min ahead.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -69,6 +72,8 @@ const anthropicTopic = { threadId: 152, folder: 'anthropic-unconfirmed' };
 const goTopic = { threadId: 153, folder: 'opencode-go-limit' };
 /** A fourth topic for a usage limit whose reset is a zone-less ISO stamp. */
 const zonelessTopic = { threadId: 154, folder: 'zoneless-reset' };
+/** A fifth topic for Google's subscription wording "You have exhausted your capacity … reset after <duration>". */
+const capacityTopic = { threadId: 155, folder: 'google-capacity' };
 const fakeOpenCodeVersion = '1.17.11';
 const geminiModel = 'google/gemini-2.5-flash';
 const openCodeModels = [geminiModel] as const;
@@ -134,7 +139,7 @@ function getTopicKey(threadId: number = geminiTopic.threadId): string {
 describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder, zonelessTopic.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder, zonelessTopic.folder, capacityTopic.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -316,5 +321,37 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(zonelessTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
     const notice = listSentTexts(zonelessTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
     assert.match(notice, /retrying in 60 min/, `an unknown reset, got: ${notice}`);
+  });
+
+  it('Google\'s "exhausted your capacity … reset after 2s" is a throttle; "after 8h27m3s" in RESOURCE_EXHAUSTED is a wait until then', async () => {
+    const driver = new TopicDriver(fakeTelegram, getCharness, capacityTopic.threadId, replyTimeoutMs);
+    await driver.sendAndAwaitReply(`/bind ${capacityTopic.folder}`, `Bound to \`${capacityTopic.folder}\``);
+    await driver.sendAndAwaitReply('/opencode', 'ready in');
+    fakeTelegram.pushOperatorMessage(capacityTopic.threadId, 'CAP-1 continue the refactor');
+    await getCharness().waitFor('the prompt to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('CAP-1')));
+    const sessionId = getTopicSessionId(capacityTopic.folder);
+    const capacityMessage = (duration: string): string => `You have exhausted your capacity on this model. Your quota will reset after ${duration}.`;
+    const abortsBefore = fakeOpenCode.listRequests('POST', `/session/${sessionId}/abort`).length;
+    fakeOpenCode.emitProviderRetry(sessionId, { attempt: 1, message: capacityMessage('2s'), next: Date.now() + 2 * msPerSecond });
+
+    await getCharness().waitFor('OpenCode\'s retry notice', replyTimeoutMs, () => listSentTexts(capacityTopic.threadId).some((text) => text.startsWith(openCodeRetryNoticeStart)));
+    assert.deepEqual(listSentTexts(capacityTopic.threadId).filter((text) => text.startsWith(limitNoticeMark)), [], 'a 2-second reset is not a usage limit');
+    assert.equal(fakeOpenCode.listRequests('POST', `/session/${sessionId}/abort`).length, abortsBefore, 'OpenCode\'s retry goes on');
+
+    const sentAt = Date.now();
+    const resetInMs = ((8 * 60 + 27) * 60 + 3) * msPerSecond;
+    fakeOpenCode.emitSessionError(sessionId, {
+      name: 'APIError',
+      data: {
+        message: capacityMessage('8h27m3s'),
+        statusCode: 429,
+        isRetryable: false,
+        responseBody: JSON.stringify({ error: { code: 429, message: capacityMessage('8h27m3s'), status: 'RESOURCE_EXHAUSTED' } }),
+      },
+    });
+    await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(capacityTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
+    const notice = listSentTexts(capacityTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
+    const expectedClocks = [0, msPerMinute].map((driftMs) => new Date(sentAt + resetInMs + driftMs).toISOString().slice(11, 16));
+    assert.ok(expectedClocks.some((clock) => new RegExp(`~(?:\\d{4}-\\d{2}-\\d{2} )?${clock}\\)`).test(notice)), `the reset 8 h 27 min ahead (${expectedClocks.join(' or ')}), got: ${notice}`);
   });
 });

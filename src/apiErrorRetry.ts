@@ -19,8 +19,9 @@ import type { AgentApiErrorClass } from './types';
 import { maxTimeoutMs } from './scheduler/engine';
 import { getCanonicalTimezone, getEpochMsOfZonedWallClock, getZonedWallClock } from './utils/timezone';
 
+const msPerSecond = 1000;
 /** One minute in milliseconds — the unit the backoff schedules are expressed in. */
-const msPerMinute = 60_000;
+const msPerMinute = 60 * msPerSecond;
 /** One hour in milliseconds. */
 const msPerHour = 60 * msPerMinute;
 
@@ -31,6 +32,12 @@ const msPerHour = 60 * msPerMinute;
 export const transientBackoffMinutes = [5, 10, 20] as const;
 /** Max transient attempts before giving up (= `transientBackoffMinutes.length`). */
 export const transientMaxAttempts = transientBackoffMinutes.length;
+/**
+ * A limit whose stated reset is at most this far ahead is a throttle: the first transient retry already outwaits it.
+ * Google's subscription quotas say "Your quota will reset after 2s" for a momentary cap and "after 146h52m11s" for a
+ * spent plan — the same words, told apart only by the duration.
+ */
+export const shortStatedResetMaxMs = transientBackoffMinutes[0] * msPerMinute;
 
 /**
  * Fixed delay for a usage-limit error whose text exposed no reset time (the
@@ -54,13 +61,14 @@ export const retryRecurrenceGraceMs = 2 * msPerMinute;
  */
 export const resetBufferMs = 60_000;
 
-/** One part of a relative reset — `2 hours`, `30m`, `1 day` — closed by a non-letter (`1h30m` has no word break). */
-const relativeResetPartSource = String.raw`(\d+)\s*(d|days?|h|hours?|m|mins?|minutes?)(?![a-z])`;
+/** One part of a relative reset — `2 hours`, `30m`, `1 day`, `3s`, `40.15s` — closed by a non-letter (`1h30m` has no word break). */
+const relativeResetPartSource = String.raw`(\d+(?:\.\d+)?)\s*(d|days?|h|hours?|m|mins?|minutes?|s|secs?|seconds?)(?![a-z])`;
 /**
- * Matches a relative reset — "resets in 2h", "in 45m", "in 90 min" — and every part that follows it: OpenCode Go writes
- * "It will reset in 2 hours 30 minutes" / "in 1 day 3 hours", "2h 15m" and "1h30m" are common too.
+ * Matches a relative reset — "resets in 2h", "in 45m", "in 90 min", "reset after 8h27m3s" — and every part that follows
+ * it: OpenCode Go writes "It will reset in 2 hours 30 minutes" / "in 1 day 3 hours"; Google's subscription quotas
+ * "Your quota will reset after 2s" / "after 146h52m11s".
  */
-const relativeResetRegex = new RegExp(String.raw`\bin\s+((?:${relativeResetPartSource}(?:\s*(?:,|and)?\s*))+)`, 'i');
+const relativeResetRegex = new RegExp(String.raw`\b(?:in|after)\s+((?:${relativeResetPartSource}(?:\s*(?:,|and)?\s*))+)`, 'i');
 const relativeResetPartRegex = new RegExp(relativeResetPartSource, 'gi');
 /**
  * Matches absolute clock phrasings after a reset trigger word. The trigger is
@@ -267,6 +275,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
+ *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
+ *     a longer one keeps 1c from calling the limit short.
  *  1c. a SHORT-window throttle ({@link shortWindowThrottleRe}, reported as hit —
  *     {@link limitHitRe}) that names no long
  *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
@@ -292,12 +302,22 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'auth' };
   }
   if (checkIsUsageLimitWarningText(text)) return null;
-  if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !longWindowRe.test(text)) return { kind: 'transient' };
+  // The reset the provider states decides a limit's length when it names one: within the first transient retry it is a
+  // throttle, beyond it a window — whatever short-window code (RESOURCE_EXHAUSTED) or quota words ride along. A NAMED
+  // long window (a daily quota id beside Google's "retry in 40s") still wins, and a reset already behind `now` decides
+  // nothing here (a live error naming one is still announced).
+  const statedResetAt = parseResetAt(text, now);
+  const statedResetInMs = statedResetAt === undefined ? null : statedResetAt - now;
+  const isShortStatedReset = statedResetInMs !== null && statedResetInMs >= 0 && statedResetInMs <= shortStatedResetMaxMs;
+  const isLongStatedReset = statedResetInMs !== null && statedResetInMs > shortStatedResetMaxMs;
+  const isLongWindowNamed = longWindowRe.test(text);
+  if (isShortStatedReset && limitHitRe.test(text) && !isLongWindowNamed) return { kind: 'transient' };
+  if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !isLongWindowNamed && !isLongStatedReset) return { kind: 'transient' };
   if (exhaustedQuotaCodesRe.test(text)) {
-    return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
+    return { kind: 'usageLimit', resetAt: statedResetAt };
   }
   if (subscriptionLimitMessageRe.test(text)) {
-    return { kind: 'usageLimit', resetAt: parseResetAt(text, now), isUnconfirmed: true };
+    return { kind: 'usageLimit', resetAt: statedResetAt, isUnconfirmed: true };
   }
   // The observed subscription wording is handled above, including a 429 wrapper.
   // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch,
@@ -306,7 +326,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'transient' };
   }
   if (checkIsUsageLimitText(text)) {
-    return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
+    return { kind: 'usageLimit', resetAt: statedResetAt };
   }
   return null;
 }
@@ -366,11 +386,11 @@ export function parseResetAt(text: string, now: number): number | undefined {
   if (relativeMatch) {
     let durationMs = 0;
     for (const part of relativeMatch[1].matchAll(relativeResetPartRegex)) {
-      const amount = Number.parseInt(part[1], 10);
+      const amount = Number.parseFloat(part[1]);
       const unit = part[2].toLowerCase();
-      durationMs += amount * (unit.startsWith('d') ? msPerDay : unit.startsWith('h') ? msPerHour : msPerMinute);
+      durationMs += amount * (unit.startsWith('d') ? msPerDay : unit.startsWith('h') ? msPerHour : unit.startsWith('m') ? msPerMinute : msPerSecond);
     }
-    return now + durationMs;
+    return now + Math.round(durationMs);
   }
 
   const monthDayMatch = monthDayResetRegex.exec(text);
