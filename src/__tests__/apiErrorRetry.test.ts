@@ -18,6 +18,7 @@ import {
   retryRecurrenceGraceMs,
   usageLimitDefaultMs,
   resetBufferMs,
+  checkIsUsageLimitWindowOver,
 } from '../apiErrorRetry';
 import { maxTimeoutMs } from '../scheduler/engine';
 
@@ -407,4 +408,12 @@ test('classify: the "(not your usage limit)" transient trap still wins over the 
   // The transient branch is evaluated BEFORE usage — the broader limit vocabulary
   // must not steal this string.
   assert.deepEqual(classifyAgentApiError(liveTransientString, fixedNow), { kind: 'transient' });
+});
+
+test('window over: only a usage limit whose reset is already behind now', () => {
+  assert.equal(checkIsUsageLimitWindowOver({ kind: 'usageLimit', resetAt: fixedNow - 1 }, fixedNow), true);
+  assert.equal(checkIsUsageLimitWindowOver({ kind: 'usageLimit', resetAt: fixedNow }, fixedNow), true, 'the reset moment itself is over');
+  assert.equal(checkIsUsageLimitWindowOver({ kind: 'usageLimit', resetAt: fixedNow + 1 }, fixedNow), false);
+  assert.equal(checkIsUsageLimitWindowOver({ kind: 'usageLimit' }, fixedNow), false, 'an unknown reset is still a limit');
+  assert.equal(checkIsUsageLimitWindowOver({ kind: 'transient', resetAt: fixedNow - 1 }, fixedNow), false);
 });

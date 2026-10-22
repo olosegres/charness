@@ -299,3 +299,28 @@ test('decide: a reset time already in the past still arms — the delay clamp ha
   });
   assert.equal(decision.action, 'arm');
 });
+
+// The reset a recovered error names is resolved against the moment the error was
+// WRITTEN (the log's mtime — nothing real follows it), not against the boot. A
+// clock-only reset ("resets 10:50pm") resolves to its NEXT occurrence: read at a
+// boot after 22:50 it became tomorrow 22:50, so a window that had already reset
+// was announced as "usage limit reached — will auto-resume after reset" for
+// another day, and the parked topic waited for it.
+test('decide: the reset is read relative to the error, so a window that reset before the boot is not pushed to the next day', () => {
+  const errorAt = Date.parse('2026-09-24T22:00:00.000Z');
+  const bootAt = Date.parse('2026-09-24T23:30:00.000Z');
+  const decision = decideLimitEpisodeRecovery({ errorText: liveLimitText, log: buildLog(errorAt), now: bootAt, hasArmedRetry: false });
+  assert.equal(decision.action, 'arm');
+  assert.equal(
+    decision.action === 'arm' && decision.cls.kind === 'usageLimit' ? decision.cls.resetAt : null,
+    Date.parse('2026-09-24T22:50:00.000Z'),
+    'the 10:50pm reset of the error written at 22:00 — already past at the boot, so the resume is immediate',
+  );
+});
+
+test('decide: a recovered reset still ahead keeps its time', () => {
+  const errorAt = Date.parse('2026-09-24T22:00:00.000Z');
+  const bootAt = Date.parse('2026-09-24T22:20:00.000Z');
+  const decision = decideLimitEpisodeRecovery({ errorText: liveLimitText, log: buildLog(errorAt), now: bootAt, hasArmedRetry: false });
+  assert.equal(decision.action === 'arm' && decision.cls.kind === 'usageLimit' ? decision.cls.resetAt : null, Date.parse('2026-09-24T22:50:00.000Z'));
+});

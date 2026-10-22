@@ -345,7 +345,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
+import { decideRetryAction, classifyAgentApiError, checkIsUsageLimitWindowOver, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -1662,10 +1662,11 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     ? { attempt: entry.attempt, firedAt: entry.firedAt, pending: entry.timer !== null }
     : null;
 
+  const now = Date.now();
   const action = decideRetryAction({
     kind: cls.kind,
     resetAt: cls.resetAt,
-    now: Date.now(),
+    now,
     prev,
   });
 
@@ -1703,7 +1704,10 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     limitWait = cls.resetAt !== undefined
       ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
+    // A window that is already over (a parked error recovered after its reset) is
+    // no limit: the retry fires at once and its "work resumed" notice says it all.
+    if (checkIsUsageLimitWindowOver(cls, now)) console.log(`[apiRetry] ${k}: the limit window has already reset — resuming without a limit notice`);
+    else void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -11807,8 +11811,9 @@ function restoreApiRetries(): void {
  * arming path to keep in sync.
  *
  * MUST run AFTER {@link restoreApiRetries} so an already-armed thread is visible
- * and skipped. A re-armed episode whose reset time has passed needs no special
- * case: the retry plan clamps the negative delay to zero.
+ * and skipped. A re-armed episode whose reset time has passed (read against the
+ * error's own time) resumes at once: the retry plan clamps the negative delay to
+ * zero, and {@link handleApiError} announces no limit for a window that is over.
  *
  * Each arming STAMPS the log's identity (`state.json` `limitEpisodesRecovered`), so
  * an episode is recovered at most once: «⏭ Skip once», a user takeover and a

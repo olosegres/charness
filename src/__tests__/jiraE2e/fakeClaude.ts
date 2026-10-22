@@ -103,9 +103,10 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
- *    session limit is hit and when it resets (the instant of a `[limit-resets:<ISO instant>]` token in the
+ *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
- *    answers `final`.
+ *    answers `final`. Also honoured by a turn WITHOUT a request (a topic whose view has requests off), for the
+ *    prompt carrying the token.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
@@ -469,8 +470,15 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
     emitTurnActivity(sessionId, noRequestIssueKey);
-    // `ask` is the one mode a turn without a request honours: a question needs no request to be put to the user.
-    if (modeRe.exec(content)?.[1] === 'ask') {
+    // A turn without a request honours two modes, by the token in ITS OWN text: `ask` (a question needs no request
+    // to be put to the user) and `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
+    // nudge carries no token, so it is answered — the "once").
+    const noRequestMode = modeRe.exec(content)?.[1];
+    if (noRequestMode === 'usage-limit-once') {
+      endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
+      return;
+    }
+    if (noRequestMode === 'ask') {
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion() });
     }
     endTurn(sessionId, 'Nothing to do.');

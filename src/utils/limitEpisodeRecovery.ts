@@ -118,8 +118,12 @@ function checkIsSameHandledLog(handled: LimitEpisodeMarker | undefined, log: Lim
  *  - only the `usageLimit` class (a transient error is long past by restart time,
  *    and an `auth` error needs a human, not a wait);
  *  - only when the log is younger than {@link limitEpisodeMaxAgeMs}.
- * A `resetAt` already in the past needs no special case: the retry plan clamps a
- * negative delay to zero and the boot arming turns that into one prompt catch-up.
+ * The reset the error names is resolved against the moment it was WRITTEN — the
+ * log's mtime, since nothing real follows the error — not against the boot: a
+ * clock-only reset (`resets 10:50pm`) resolves to its NEXT occurrence, so read at a
+ * boot after 22:50 it became TOMORROW 22:50 and a window that had already reset was
+ * announced as exhausted for another day. A `resetAt` that is in the past by now is
+ * a window that is over: the bot resumes at once without announcing a limit.
  */
 export function decideLimitEpisodeRecovery(input: {
   errorText: string | null;
@@ -134,7 +138,7 @@ export function decideLimitEpisodeRecovery(input: {
   if (checkIsSameHandledLog(input.handled, input.log)) return { action: 'skip', reason: 'alreadyHandled' };
   if (!input.errorText) return { action: 'skip', reason: 'noError' };
   if (input.now - input.log.mtimeMs > limitEpisodeMaxAgeMs) return { action: 'skip', reason: 'stale' };
-  const cls = classifyAgentApiError(input.errorText, input.now);
+  const cls = classifyAgentApiError(input.errorText, input.log.mtimeMs);
   if (cls?.kind !== 'usageLimit') return { action: 'skip', reason: 'notUsageLimit' };
   return { action: 'arm', cls };
 }

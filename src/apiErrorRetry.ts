@@ -256,6 +256,17 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
 }
 
 /**
+ * @description Whether a usage-limit error names a reset that is already behind
+ * `now`: the window is over, so there is no limit to announce — the retry fires at
+ * once and its resume notice is the only message. Boot recovery produces one (it
+ * reads a parked error against the time it was written), as does an ISO reset in
+ * the past.
+ */
+export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number): boolean {
+  return cls.kind === 'usageLimit' && cls.resetAt !== undefined && cls.resetAt <= now;
+}
+
+/**
  * @description Best-effort parse of a "reset time" out of a usage-limit message.
  * Never throws: any unparseable / absent time yields `undefined`, which the
  * caller treats as "use the fixed delay". Handles three shapes, in order:
