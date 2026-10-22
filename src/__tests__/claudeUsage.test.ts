@@ -16,6 +16,7 @@ import {
   buildClaudeProfilesReport,
   checkClaudeUsageBucketsChanged,
   checkHasHeadroomForClaudeModel,
+  checkIsClaudeUsageExhausted,
   checkIsClaudeModelClearOfLimit,
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
@@ -320,6 +321,24 @@ describe('the claude-profiles CLI line', () => {
       buckets: [...entry.buckets, { kind: 'weekly_scoped', percent: 3, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: 'Fable' }],
     }, nowMs);
     assert.match(withFable, /week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h$/);
+  });
+});
+
+describe('checkIsClaudeUsageExhausted — does the reading SHOW a window at 100 % for the model', () => {
+  const snapshotOf = (session: number, weekly: number): ClaudeUsageSnapshot => ({
+    fetchedAt: '2026-10-12T09:59:00.000Z',
+    source: 'api',
+    buckets: [
+      { kind: 'session', percent: session, resetsAt: '2026-10-12T13:00:00.000Z', scopeModel: null },
+      { kind: 'weekly_all', percent: weekly, resetsAt: '2026-10-17T21:00:00.000Z', scopeModel: null },
+    ],
+  });
+
+  it('a window the model drains at 100 % is exhausted; a reading below that, or none at all, is not proof', () => {
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet'), true);
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(10, 100), 'opus'), true);
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(84, 40), 'sonnet'), false, 'the 429 also comes at 84 % — the reading does not confirm it');
+    assert.equal(checkIsClaudeUsageExhausted(undefined, 'sonnet'), false, 'unknown is not exhausted');
   });
 });
 

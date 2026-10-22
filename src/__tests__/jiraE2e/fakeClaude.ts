@@ -17,6 +17,7 @@ import {
   fakeAskToolName,
   fakeClaudeCrashOnPromptFileName,
   fakeClaudeAlwaysUsageLimitFileName,
+  fakeClaudeApiErrorOnceFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
   fakeCompactionModelUsage,
@@ -103,7 +104,8 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
- *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode);
+ *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
+ *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -474,6 +476,14 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   recordTranscriptMessage(sessionId, content);
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
+  const apiErrorOncePath = path.join(getStateDir(), fakeClaudeApiErrorOnceFileName);
+  if (fs.existsSync(apiErrorOncePath)) {
+    const errorText = fs.readFileSync(apiErrorOncePath, 'utf8').trim();
+    fs.rmSync(apiErrorOncePath, { force: true });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage });
+    return;
+  }
   const alwaysUsageLimitPath = path.join(getStateDir(), fakeClaudeAlwaysUsageLimitFileName);
   if (fs.existsSync(alwaysUsageLimitPath)) {
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });

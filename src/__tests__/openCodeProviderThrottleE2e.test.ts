@@ -14,7 +14,10 @@
  *     retry, NO usage-limit notice — the headers used to be read too, making it a usage limit "until" that stamp
  *   → a sub-agent's CHILD session (lineage from `session.updated`) and a FOREIGN session in the same folder report a
  *     daily quota: neither arms the topic — it used to be held, its model marked limited.
- *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it.
+ *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it
+ *   → in a second topic, Anthropic's "This request would exceed your account's rate limit" (OpenCode's next attempt
+ *     three hours away): UNCONFIRMED on its own — a two-minute probe retry, no limit notice; the same error right
+ *     after the probe's resume confirms it, and only then is the wait to the reset announced.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -56,6 +59,8 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 
 const geminiTopic = { threadId: 151, folder: 'gemini-throttle' };
+/** A second topic for the Anthropic wording, so the transient retry the Gemini steps leave pending cannot hide its errors. */
+const anthropicTopic = { threadId: 152, folder: 'anthropic-unconfirmed' };
 const fakeOpenCodeVersion = '1.17.11';
 const geminiModel = 'google/gemini-2.5-flash';
 const openCodeModels = [geminiModel] as const;
@@ -70,6 +75,12 @@ const googlePerMinuteQuotaMessage = 'You exceeded your current quota, please che
 /** The bot's usage-limit wait notice («🚧 Usage limit reached — …»), its transient retry notice, and OpenCode's own. */
 const limitNoticeMark = '🚧';
 const transientNoticeStart = '⏳ API rate-limited';
+const anthropicUnconfirmedMessage = "This request would exceed your account's rate limit. Please try again later.";
+const msPerMinute = 60 * msPerSecond;
+/** How far OpenCode's next attempt sits for the Anthropic wording: the window's reset, per its Retry-After. */
+const anthropicRetryAfterMs = 3 * 60 * msPerMinute;
+/** The probe retry (two minutes) plus the resume's round trip. */
+const probeTimeoutMs = 4 * msPerMinute;
 const openCodeRetryNoticeStart = '⏳ Provider error — OpenCode retries';
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -94,28 +105,28 @@ function removeInstanceSync(): void {
 }
 
 /** What the bot SENT to the topic (the Bot API call log), oldest first. */
-function listSentTexts(): string[] {
+function listSentTexts(threadId: number = geminiTopic.threadId): string[] {
   return fakeTelegram
     .listCalls('sendMessage')
-    .filter((call) => call.payload.message_thread_id === geminiTopic.threadId)
+    .filter((call) => call.payload.message_thread_id === threadId)
     .map((call) => (typeof call.payload.text === 'string' ? call.payload.text : ''));
 }
 
-function getTopicSessionId(): string {
-  const folderPath = path.join(getLayout().workRoot, geminiTopic.folder);
+function getTopicSessionId(folder: string = geminiTopic.folder): string {
+  const folderPath = path.join(getLayout().workRoot, folder);
   const session = [...fakeOpenCode.sessions.values()].find((candidate) => candidate.directory === folderPath);
   assert.ok(session, `a fake OpenCode session for ${folderPath}`);
   return session.id;
 }
 
-function getTopicKey(): string {
-  return `${group.id}:${geminiTopic.threadId}`;
+function getTopicKey(threadId: number = geminiTopic.threadId): string {
+  return `${group.id}:${threadId}`;
 }
 
 describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -233,4 +244,30 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey()]?.kind, 'transient', 'a short retry is armed, not a limit wait');
   });
 
+
+  it('Anthropic\'s "would exceed your account\'s rate limit" alone: a two-minute probe, no limit notice', async () => {
+    const driver = new TopicDriver(fakeTelegram, getCharness, anthropicTopic.threadId, replyTimeoutMs);
+    await driver.sendAndAwaitReply(`/bind ${anthropicTopic.folder}`, `Bound to \`${anthropicTopic.folder}\``);
+    await driver.sendAndAwaitReply('/opencode', 'ready in');
+    fakeTelegram.pushOperatorMessage(anthropicTopic.threadId, 'ANT-1 refactor the parser');
+    await getCharness().waitFor('the prompt to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('ANT-1')));
+    fakeOpenCode.emitProviderRetry(getTopicSessionId(anthropicTopic.folder), { attempt: 1, message: anthropicUnconfirmedMessage, next: Date.now() + anthropicRetryAfterMs });
+
+    await getCharness().waitFor('the probe notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(transientNoticeStart) && text.includes('2 min')));
+    assert.deepEqual(listSentTexts(anthropicTopic.threadId).filter((text) => text.startsWith(limitNoticeMark)), [], 'not announced as a usage limit on the wording alone');
+    assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey(anthropicTopic.threadId)]?.kind, 'transient', 'a short probe is armed, not a limit wait');
+  });
+
+  it('the same error right after the probe\'s resume confirms the limit: the wait to the reset is announced', async () => {
+    const sessionId = getTopicSessionId(anthropicTopic.folder);
+    const promptsBefore = fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === sessionId).length;
+    await getCharness().waitFor('the probe to resume the topic', probeTimeoutMs, () => fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === sessionId).length > promptsBefore);
+    fakeOpenCode.emitSessionBusy(sessionId);
+    const resetAt = Date.now() + anthropicRetryAfterMs;
+    fakeOpenCode.emitProviderRetry(sessionId, { attempt: 1, message: anthropicUnconfirmedMessage, next: resetAt });
+
+    await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
+    const notice = listSentTexts(anthropicTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
+    assert.match(notice, /will auto-resume after reset/, `the wait to the reset, got: ${notice}`);
+  });
 });

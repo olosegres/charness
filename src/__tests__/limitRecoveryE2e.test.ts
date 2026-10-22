@@ -21,7 +21,9 @@
  *     it used to be unparsed, and the topic was resumed into the limit every hour for six hours
  *   → «⏭ Skip once» on a live wait, then a restart: the dismissed wait stays dismissed — the recovery used to arm it
  *     again, because only the recovery itself marked an episode as handled
- *   → a wait that gave up (every resume hit the limit again) is not armed again by the next restart either.
+ *   → a wait that gave up (every resume hit the limit again) is not armed again by the next restart either
+ *   → Anthropic's unconfirmed "would exceed your account's rate limit", while the account's usage reading shows its
+ *     session window at 100 %: confirmed by the reading — the limit wait is announced at once, no probe first.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -53,7 +55,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
-import { fakeClaudeAlwaysUsageLimitFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeAlwaysUsageLimitFileName, fakeClaudeApiErrorOnceFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
@@ -309,5 +311,29 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     assert.equal(getCharness().output.includes(recoveryLogLine), false, 'the given-up wait is not re-armed');
     assert.ok(getCharness().output.includes(`[limitRecovery] ${key}: skipped (alreadyHandled)`), 'the episode is known as handled');
     assert.equal(getAllAgentTurns(getLayout()).length, turnsBefore, 'the agent is not nudged');
+  });
+
+  it('the unconfirmed Anthropic wording with the account\'s session window read at 100 %: the wait is announced at once', async () => {
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const sessionResetsAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        default: {
+          ...persisted.claudeProfiles?.default,
+          createdAt: persisted.claudeProfiles?.default?.createdAt ?? new Date().toISOString(),
+          usage: { fetchedAt: new Date().toISOString(), source: 'api', buckets: [
+            { kind: 'session', percent: 100, resetsAt: sessionResetsAt, scopeModel: null },
+            { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
+          ] },
+        },
+      };
+    });
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-confirmed one more step`);
+
+    await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+    assert.ok(getCharness().output.includes('the usage reading is at 100 %'), 'confirmed by the reading, not by a repeat');
+    assert.equal(topic.listMessages().some((message) => message.text.includes('auto-retrying in 2 min')), false, 'no probe first');
   });
 });

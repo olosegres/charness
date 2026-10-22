@@ -346,7 +346,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError, checkIsUsageLimitWindowOver, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
+import { decideRetryAction, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -378,7 +378,7 @@ import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
+import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
@@ -1656,6 +1656,8 @@ interface HandleApiErrorOptions {
  */
 function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: HandleApiErrorOptions = {}): void {
   const k = keyToString(key);
+  // An unconfirmed usage limit is probed first; it reaches the wait below only once confirmed.
+  if (cls.kind === 'usageLimit' && cls.isUnconfirmed === true && handleUnconfirmedLimit(key)) return;
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     const isFirstOffNotice = !autoContinueOffNoticedThreads.has(k);
     autoContinueOffNoticedThreads.add(k);
@@ -1730,27 +1732,80 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     }));
   }
 
+  armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, delayMs: action.delayMs, limitWait });
+}
+
+/** @description What {@link armApiRetryTimer} arms: the retry's class, attempt and instant, and its extras. */
+interface ApiRetryArming {
+  kind: AgentApiErrorClass['kind'];
+  attempt: number;
+  fireAt: number;
+  delayMs: number;
+  limitWait?: UsageLimitWait;
+  isLimitProbe?: boolean;
+}
+
+/**
+ * @description Arm a thread's retry once its notice is posted: keep a pending question last, persist the record
+ * (it means ARMED), start the unref'd timer whose callback is {@link fireApiRetry}, and keep the in-memory entry.
+ */
+function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   // S3: the notice landed below any pending question — bring it back to the
   // bottom (debounced; no-op when no question is pending).
   onThreadActivityWhileQuestionPending(key);
 
   void state
-    .setApiRetry(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt })
+    .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt })
     .catch(e => console.error('[apiRetry] persist failed:', e));
 
-  const delayMs = Math.min(action.delayMs, maxTimeoutMs);
   const timer = setTimeout(() => {
     void fireApiRetry(key);
-  }, delayMs);
+  }, Math.min(arming.delayMs, maxTimeoutMs));
   timer.unref?.();
-  apiRetryTimers.set(k, {
+  apiRetryTimers.set(keyToString(key), {
     timer,
-    attempt: action.attempt,
-    kind: cls.kind,
+    attempt: arming.attempt,
+    kind: arming.kind,
     firedAt: null,
-    fireAt: action.fireAt,
-    limitWait,
+    fireAt: arming.fireAt,
+    limitWait: arming.limitWait,
+    isLimitProbe: arming.isLimitProbe,
   });
+}
+
+/**
+ * @description An UNCONFIRMED usage limit (`isUnconfirmed`) of `key`: the probe retry it gets first — or `false` when the
+ * limit is confirmed and takes the usual usage-limit wait. Confirmed when it came again right after the probe fired, or
+ * the topic's account shows a window at 100 % ({@link checkIsTopicAccountUsageExhausted}); a probe already pending
+ * swallows the duplicate (`true`, nothing more to do).
+ */
+function handleUnconfirmedLimit(key: SessionKey): boolean {
+  const k = keyToString(key);
+  const entry = apiRetryTimers.get(k);
+  if (entry?.isLimitProbe === true && entry.timer !== null) return true;
+  const isRepeatAfterProbe = entry?.isLimitProbe === true && entry.firedAt !== null && Date.now() - entry.firedAt <= retryRecurrenceGraceMs;
+  const action = getUnconfirmedLimitAction({ isRepeatAfterProbe, isUsageExhausted: checkIsTopicAccountUsageExhausted(key) });
+  if (action === 'waitForReset') {
+    console.log(`[apiRetry] ${k}: the unconfirmed usage limit is confirmed (${isRepeatAfterProbe ? 'it came again after the probe' : 'the usage reading is at 100 %'}) — waiting for the reset`);
+    return false;
+  }
+  console.log(`[apiRetry] ${k}: an unconfirmed usage limit — probing with a short retry before waiting for the reset`);
+  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(unconfirmedLimitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
+  const now = Date.now();
+  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + unconfirmedLimitProbeDelayMs, delayMs: unconfirmedLimitProbeDelayMs, isLimitProbe: true });
+  return true;
+}
+
+/**
+ * @description Whether the topic's account usage reading proves its limit: a Claude topic's live profile marked limited
+ * (a rejected `rate_limit_event`) or showing a window its model drains at 100 %. Other backends carry no reading for the
+ * account an unconfirmed wording names: `false`, and only a repeat confirms it.
+ */
+function checkIsTopicAccountUsageExhausted(key: SessionKey): boolean {
+  if (!checkIsClaudeProfileBackend(key)) return false;
+  const info = state.getClaudeProfileInfo(resolveLiveClaudeProfileName(key));
+  const limitedUntilMs = info?.limitedUntil ? Date.parse(info.limitedUntil) : Number.NaN;
+  return (Number.isFinite(limitedUntilMs) && limitedUntilMs > Date.now()) || checkIsClaudeUsageExhausted(info?.usage, getThreadClaudeModel(key));
 }
 
 /**

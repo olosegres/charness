@@ -137,6 +137,13 @@ export class FakeOpenCodeServer {
     this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'retry', ...retry } } }, session.directory);
   }
 
+  /** @description The session working on a turn: the `session.status` of type `busy` OpenCode emits as a turn starts. */
+  emitSessionBusy(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'busy' } } }, session.directory);
+  }
+
   /**
    * @description A `session.error` carrying `error` as OpenCode relays it (`{ name: 'APIError', data: { message,
    * statusCode, responseHeaders, responseBody, … } }`), for the session `sessionId` — which may be one the fake never

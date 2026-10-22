@@ -48,6 +48,8 @@ export interface ApiRetryTimerEntry {
   limitWait?: UsageLimitWait;
   /** The chain rung a usage-limit wait ends on (the earliest-resetting one): the kick moves the topic there first. */
   resumeOn?: FallbackChainEntry;
+  /** The short probe retry of an UNCONFIRMED usage limit: the same error right after it confirms the limit. */
+  isLimitProbe?: boolean;
 }
 
 /** What the kick needs to know of {@link ensureAgentSession}'s answer. */

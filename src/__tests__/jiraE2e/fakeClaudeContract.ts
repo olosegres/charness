@@ -73,6 +73,12 @@ export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
  * file's content — the bot's own "continue" nudge included, so a flow can drive a limit wait through all its attempts.
  */
 export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
+
+/**
+ * A file in the fake's state dir that makes the NEXT turn end on an API error whose text is the file's content — any
+ * provider wording a flow needs — and is removed by that turn.
+ */
+export const fakeClaudeApiErrorOnceFileName = 'api-error-once';
 /**
  * The question the fake's `ask` mode puts to the user (an `AskUserQuestion`, the real CLI's tool): one short option,
  * one whose label is longer than a Telegram toast holds (200 characters).

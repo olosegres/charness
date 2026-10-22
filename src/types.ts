@@ -240,6 +240,12 @@ export interface AgentApiErrorClass {
   kind: 'transient' | 'usageLimit' | 'auth';
   /** Epoch ms when a usage window resets, if the error text exposed one. */
   resetAt?: number;
+  /**
+   * A usage-limit wording that does not by itself prove the window is used up — Anthropic's "This request would
+   * exceed your account's rate limit" comes at 0–84 % shown usage too. The bot probes once with a short retry and
+   * waits for the reset only when it repeats right after the probe or the account's usage reading is at 100 %.
+   */
+  isUnconfirmed?: boolean;
 }
 
 /**

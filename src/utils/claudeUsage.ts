@@ -292,6 +292,15 @@ export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | unde
 }
 
 /**
+ * @description Whether the usage reading SHOWS a window `model` drains at 100 % — the proof an unconfirmed usage-limit
+ * wording lacks. Unknown figures prove nothing (`false`), unlike {@link checkHasHeadroomForClaudeModel}, which takes an
+ * unknown window as covering the model.
+ */
+export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefined, model: string | null): boolean {
+  return getRelevantClaudeUsageKinds(model).some((kind) => (getClaudeUsageBucket(usage, kind)?.percent ?? 0) >= 100);
+}
+
+/**
  * @description Whether a pick of `pickedModel`, on the account a usage limit stopped while it ran `limitedModel`, is clear of that
  * limit. The window that stopped the limited model is one of the windows IT drains, so a picked model that drains all of them
  * (the same model, a model on the same windows, or Fable after any other model — Fable drains the shared windows too) is covered

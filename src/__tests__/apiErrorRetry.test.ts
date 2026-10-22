@@ -19,6 +19,7 @@ import {
   usageLimitDefaultMs,
   resetBufferMs,
   checkIsUsageLimitWindowOver,
+  getUnconfirmedLimitAction,
 } from '../apiErrorRetry';
 import { maxTimeoutMs } from '../scheduler/engine';
 
@@ -57,8 +58,9 @@ test('classify: the Anthropic subscription window relayed by OpenCode → usageL
   // Verbatim live wording (2026-10-14); OpenCode's retry deadline was days away.
   // This observed wording is an exception, not evidence that all bare rate limits are quota errors.
   const live = "This request would exceed your account's rate limit. Please try again later.";
-  assert.deepEqual(classifyAgentApiError(live, fixedNow), { kind: 'usageLimit', resetAt: undefined });
-  assert.deepEqual(classifyAgentApiError(`429 rate_limit_error: ${live}`, fixedNow), { kind: 'usageLimit', resetAt: undefined });
+  // UNCONFIRMED: the same 429 comes at 0–84 % shown usage too (claude-code#19673), so the bot probes before waiting.
+  assert.deepEqual(classifyAgentApiError(live, fixedNow), { kind: 'usageLimit', resetAt: undefined, isUnconfirmed: true });
+  assert.deepEqual(classifyAgentApiError(`429 rate_limit_error: ${live}`, fixedNow), { kind: 'usageLimit', resetAt: undefined, isUnconfirmed: true });
   // A relay that drops the tail or types a typographic apostrophe is the same window.
   for (const variant of ["This request would exceed your account's rate limit", 'This request would exceed your account\u2019s rate limit. Please try again later.']) {
     assert.equal(classifyAgentApiError(variant, fixedNow)?.kind, 'usageLimit', variant);
@@ -538,4 +540,15 @@ test('classify: a weekly limit with a dated reset arms the wait for that date', 
       resetAt: Date.parse('2026-10-25T12:00:00.000Z'),
     });
   });
+});
+
+test('unconfirmed limit: the first one is probed with a short retry; a repeat right after the probe, or a usage reading at 100 %, waits for the reset', () => {
+  assert.equal(getUnconfirmedLimitAction({ isRepeatAfterProbe: false, isUsageExhausted: false }), 'probe');
+  assert.equal(getUnconfirmedLimitAction({ isRepeatAfterProbe: true, isUsageExhausted: false }), 'waitForReset');
+  assert.equal(getUnconfirmedLimitAction({ isRepeatAfterProbe: false, isUsageExhausted: true }), 'waitForReset');
+});
+
+test('classify: only the Anthropic "would exceed your account\'s rate limit" wording is unconfirmed — an explicit window is not', () => {
+  assert.equal(classifyAgentApiError("You've hit your session limit · resets 10:50pm (UTC)", fixedNow)?.isUnconfirmed, undefined);
+  assert.equal(classifyAgentApiError('insufficient_quota: You exceeded your current quota', fixedNow)?.isUnconfirmed, undefined);
 });

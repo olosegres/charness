@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**Anthropic's «This request would exceed your account's rate limit» is checked before the topic waits for the reset.** The
+same refusal also comes while the account shows plenty of room, and the bot took it for an exhausted window: «🚧 Usage limit
+reached — will auto-resume after reset» and hours of waiting. It now retries once after two minutes, and waits for the reset
+only when the refusal comes again right after that retry — or when the account's usage shows a window at 100 %.
+
 **A sub-agent's limit, or another session's in the same folder, no longer stops the topic.** On OpenCode a sub-agent runs
 in a child session — often on another model or provider — and the folder's events can also carry a session the topic does
 not own (your own `opencode` in the same folder, an old session still retrying). Their quota errors were taken for the

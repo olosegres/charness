@@ -134,7 +134,8 @@ const exhaustedQuotaCodesRe = /insufficient_quota|exceeded your current quota|us
 /**
  * Observed subscription-window wording ("This request would exceed your account's rate limit. Please try
  * again later."); do not generalize it to every bare rate limit. Keyed on the distinctive head only, so a
- * relay that truncates the tail or types a curly apostrophe still matches.
+ * relay that truncates the tail or types a curly apostrophe still matches. UNCONFIRMED on its own: the same
+ * 429 comes at 0–84 % shown usage (claude-code#19673) — see {@link getUnconfirmedLimitAction}.
  */
 const subscriptionLimitMessageRe = /would exceed your account['\u2019]?s rate limit/i;
 
@@ -265,7 +266,7 @@ export function checkIsUsageLimitText(text: string): boolean {
  *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
  *     "retry in 40s" — ahead of the quota codes, which they share with daily quotas.
  *  2. an exhausted-quota provider CODE ({@link exhaustedQuotaCodesRe}) or the observed
- *     subscription wording ({@link subscriptionLimitMessageRe}) → `usageLimit`.
+ *     subscription wording ({@link subscriptionLimitMessageRe}, flagged `isUnconfirmed`) → `usageLimit`.
  *     Ahead of transient because these ride a 429 (OpenAI `insufficient_quota`,
  *     Google `RESOURCE_EXHAUSTED`), which the next branch would read as a hiccup.
  *  3. transient (rate-limited, overloaded, 429/503/529, or a bare "rate limit" without an explicit
@@ -286,8 +287,11 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   }
   if (checkIsUsageLimitWarningText(text)) return null;
   if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !longWindowRe.test(text)) return { kind: 'transient' };
-  if (exhaustedQuotaCodesRe.test(text) || subscriptionLimitMessageRe.test(text)) {
+  if (exhaustedQuotaCodesRe.test(text)) {
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
+  }
+  if (subscriptionLimitMessageRe.test(text)) {
+    return { kind: 'usageLimit', resetAt: parseResetAt(text, now), isUnconfirmed: true };
   }
   // The observed subscription wording is handled above, including a 429 wrapper.
   // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch,
@@ -299,6 +303,22 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'usageLimit', resetAt: parseResetAt(text, now) };
   }
   return null;
+}
+
+/**
+ * The short retry an UNCONFIRMED usage limit ({@link AgentApiErrorClass.isUnconfirmed}) gets first: long enough not to
+ * hammer an account that is really limited, short enough that a refused single request costs the topic two minutes, not
+ * the hours to the window's reset.
+ */
+export const unconfirmedLimitProbeDelayMs = 2 * msPerMinute;
+
+/**
+ * @description What an UNCONFIRMED usage limit does: `probe` — a short retry ({@link unconfirmedLimitProbeDelayMs}),
+ * no limit notice; `waitForReset` — the usual usage-limit wait, once the limit is confirmed: it repeated right after
+ * the probe (`isRepeatAfterProbe`), or the account's usage reading shows a window at 100 % (`isUsageExhausted`).
+ */
+export function getUnconfirmedLimitAction(input: { isRepeatAfterProbe: boolean; isUsageExhausted: boolean }): 'probe' | 'waitForReset' {
+  return input.isRepeatAfterProbe || input.isUsageExhausted ? 'waitForReset' : 'probe';
 }
 
 /**
