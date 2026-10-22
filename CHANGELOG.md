@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A reset written in several parts («reset in 2 hours 30 minutes») is read whole.** Only the first part was read, so
+the topic resumed half an hour early (OpenCode Go writes its limits that way, «in 1 day 3 hours» too), hit the limit
+again and used up a retry.
+
 **Anthropic's «This request would exceed your account's rate limit» is checked before the topic waits for the reset.** The
 same refusal also comes while the account shows plenty of room, and the bot took it for an exhausted window: «🚧 Usage limit
 reached — will auto-resume after reset» and hours of waiting. It now retries once after two minutes, and waits for the reset

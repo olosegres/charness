@@ -17,7 +17,9 @@
  *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it
  *   → in a second topic, Anthropic's "This request would exceed your account's rate limit" (OpenCode's next attempt
  *     three hours away): UNCONFIRMED on its own — a two-minute probe retry, no limit notice; the same error right
- *     after the probe's resume confirms it, and only then is the wait to the reset announced.
+ *     after the probe's resume confirms it, and only then is the wait to the reset announced
+ *   → in a third topic, OpenCode Go's usage limit "It will reset in 2 hours 30 minutes": the notice names the reset
+ *     two and a half hours ahead — only the "2 hours" used to be read.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -32,7 +34,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
@@ -61,6 +63,8 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const geminiTopic = { threadId: 151, folder: 'gemini-throttle' };
 /** A second topic for the Anthropic wording, so the transient retry the Gemini steps leave pending cannot hide its errors. */
 const anthropicTopic = { threadId: 152, folder: 'anthropic-unconfirmed' };
+/** A third topic for OpenCode Go's usage limit, whose reset is written in several parts. */
+const goTopic = { threadId: 153, folder: 'opencode-go-limit' };
 const fakeOpenCodeVersion = '1.17.11';
 const geminiModel = 'google/gemini-2.5-flash';
 const openCodeModels = [geminiModel] as const;
@@ -126,7 +130,7 @@ function getTopicKey(threadId: number = geminiTopic.threadId): string {
 describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -167,6 +171,8 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
 
   it('boots, binds the topic and starts a Gemini session; a prompt is in flight', async () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    // The notices name reset times in the instance zone: UTC, so the flow can compute them.
+    await new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs).sendAndAwaitReply('/timezone UTC', 'Timezone: UTC');
     await topic.sendAndAwaitReply(`/bind ${geminiTopic.folder}`, `Bound to \`${geminiTopic.folder}\``);
     await topic.sendAndAwaitReply('/opencode', 'ready in');
     fakeTelegram.pushOperatorMessage(geminiTopic.threadId, `${promptLabel} summarise the module`);
@@ -269,5 +275,27 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
     const notice = listSentTexts(anthropicTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
     assert.match(notice, /will auto-resume after reset/, `the wait to the reset, got: ${notice}`);
+  });
+
+  it('OpenCode Go\'s "It will reset in 2 hours 30 minutes": the notice names the whole duration', async () => {
+    const driver = new TopicDriver(fakeTelegram, getCharness, goTopic.threadId, replyTimeoutMs);
+    await driver.sendAndAwaitReply(`/bind ${goTopic.folder}`, `Bound to \`${goTopic.folder}\``);
+    await driver.sendAndAwaitReply('/opencode', 'ready in');
+    fakeTelegram.pushOperatorMessage(goTopic.threadId, 'GO-1 one more module');
+    await getCharness().waitFor('the prompt to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('GO-1')));
+    const sentAt = Date.now();
+    const resetInMs = (2 * 60 + 30) * msPerMinute;
+    fakeOpenCode.emitProviderRetry(getTopicSessionId(goTopic.folder), {
+      attempt: 1,
+      message: 'Go usage limit reached. It will reset in 2 hours 30 minutes. To continue using this model now, enable usage from your available balance - https://opencode.ai/workspace/wrk_example/go',
+      next: sentAt + resetInMs,
+    });
+
+    await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(goTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
+    const notice = listSentTexts(goTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
+    // The bot reads its clock a moment after `sentAt`: the reset's minute is that of `sentAt` + 2:30, or the next one.
+    const expectedClocks = [0, msPerMinute].map((driftMs) => new Date(sentAt + resetInMs + driftMs).toISOString().slice(11, 16));
+    // The bot adds the date when the reset is not today (the run may cross midnight UTC).
+    assert.ok(expectedClocks.some((clock) => new RegExp(`~(?:\\d{4}-\\d{2}-\\d{2} )?${clock}\\)`).test(notice)), `the reset 2 h 30 min ahead (${expectedClocks.join(' or ')}), got: ${notice}`);
   });
 });

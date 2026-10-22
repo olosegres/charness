@@ -552,3 +552,15 @@ test('classify: only the Anthropic "would exceed your account\'s rate limit" wor
   assert.equal(classifyAgentApiError("You've hit your session limit · resets 10:50pm (UTC)", fixedNow)?.isUnconfirmed, undefined);
   assert.equal(classifyAgentApiError('insufficient_quota: You exceeded your current quota', fixedNow)?.isUnconfirmed, undefined);
 });
+
+// OpenCode Go words its usage-limit reset as every unit there is: "It will reset in 2 hours 30 minutes",
+// "in 1 day 3 hours" (opencode `session/retry.ts`). Only the first part was read — the resume came 30 minutes early,
+// hit the limit again and burned an attempt.
+test('parseResetAt: a relative reset in several parts is their sum', () => {
+  const minuteMs = 60 * 1000;
+  assert.equal(parseResetAt('Usage limit reached. It will reset in 2 hours 30 minutes. To continue …', fixedNow), fixedNow + 2 * hourMs + 30 * minuteMs);
+  assert.equal(parseResetAt('Usage limit reached. It will reset in 1 day 3 hours.', fixedNow), fixedNow + 27 * hourMs);
+  assert.equal(parseResetAt('resets in 2h 15m', fixedNow), fixedNow + 2 * hourMs + 15 * minuteMs);
+  assert.equal(parseResetAt('resets in 1h30m', fixedNow), fixedNow + 90 * minuteMs);
+  assert.equal(parseResetAt('Usage limit reached. It will reset in 45 minutes.', fixedNow), fixedNow + 45 * minuteMs);
+});

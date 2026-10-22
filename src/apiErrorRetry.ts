@@ -54,8 +54,14 @@ export const retryRecurrenceGraceMs = 2 * msPerMinute;
  */
 export const resetBufferMs = 60_000;
 
-/** Matches reset phrasings like "resets in 2h", "in 45m", "in 90 min". */
-const relativeResetRegex = /\bin\s+(\d+)\s*(h|hours?|m|min|minutes?)\b/i;
+/** One part of a relative reset — `2 hours`, `30m`, `1 day` — closed by a non-letter (`1h30m` has no word break). */
+const relativeResetPartSource = String.raw`(\d+)\s*(d|days?|h|hours?|m|mins?|minutes?)(?![a-z])`;
+/**
+ * Matches a relative reset — "resets in 2h", "in 45m", "in 90 min" — and every part that follows it: OpenCode Go writes
+ * "It will reset in 2 hours 30 minutes" / "in 1 day 3 hours", "2h 15m" and "1h30m" are common too.
+ */
+const relativeResetRegex = new RegExp(String.raw`\bin\s+((?:${relativeResetPartSource}(?:\s*(?:,|and)?\s*))+)`, 'i');
+const relativeResetPartRegex = new RegExp(relativeResetPartSource, 'gi');
 /**
  * Matches absolute clock phrasings after a reset trigger word. The trigger is
  * either `at` (`resets at 3pm`, `at 15:00`) OR a BARE `reset`/`resets` — Claude's
@@ -335,7 +341,8 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
  * @description Best-effort parse of a "reset time" out of a usage-limit message.
  * Never throws: any unparseable / absent time yields `undefined`, which the
  * caller treats as "use the fixed delay". Handles four shapes, in order:
- *  - relative: "resets in 2h" / "in 45m" → `now + duration`.
+ *  - relative: "resets in 2h" / "in 45m" / "in 2 hours 30 minutes" → `now` + the
+ *    sum of the parts.
  *  - dated: "resets Oct 25, 3pm (Europe/Moscow)" — a weekly window, more than a
  *    day ahead → that date and clock, in the stated zone (or the local one).
  *  - absolute clock: "resets at 3pm" / "at 15:00" / "resets 10:50pm (UTC)" → the
@@ -356,10 +363,13 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
 export function parseResetAt(text: string, now: number): number | undefined {
   const relativeMatch = relativeResetRegex.exec(text);
   if (relativeMatch) {
-    const amount = Number.parseInt(relativeMatch[1], 10);
-    const unit = relativeMatch[2].toLowerCase();
-    const isHours = unit.startsWith('h');
-    return now + amount * (isHours ? msPerHour : msPerMinute);
+    let durationMs = 0;
+    for (const part of relativeMatch[1].matchAll(relativeResetPartRegex)) {
+      const amount = Number.parseInt(part[1], 10);
+      const unit = part[2].toLowerCase();
+      durationMs += amount * (unit.startsWith('d') ? msPerDay : unit.startsWith('h') ? msPerHour : msPerMinute);
+    }
+    return now + durationMs;
   }
 
   const monthDayMatch = monthDayResetRegex.exec(text);
