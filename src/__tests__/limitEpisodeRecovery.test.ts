@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   getLastTerminalErrorText,
+  getParkedErrorWrittenAtMs,
   decideLimitEpisodeRecovery,
   limitEpisodeMaxAgeMs,
 } from '../utils/limitEpisodeRecovery';
@@ -323,4 +324,40 @@ test('decide: a recovered reset still ahead keeps its time', () => {
   const bootAt = Date.parse('2026-09-24T22:20:00.000Z');
   const decision = decideLimitEpisodeRecovery({ errorText: liveLimitText, log: buildLog(errorAt), now: bootAt, hasArmedRetry: false });
   assert.equal(decision.action === 'arm' && decision.cls.kind === 'usageLimit' ? decision.cls.resetAt : null, Date.parse('2026-09-24T22:50:00.000Z'));
+});
+
+// The log's mtime moves whenever anything is appended after the parked error — a background sub-agent finishing,
+// an ambient rate-limit frame — so it can land past a clock reset and push it to the next day again. The Claude
+// transcript records the API error itself, with its own `timestamp`: that is the error's time; the mtime is only
+// the fallback when the transcript has no such entry.
+function buildTranscriptApiErrorLine(text: string, timestampIso: string): string {
+  return JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', timestamp: timestampIso, message: { role: 'assistant', content: [{ type: 'text', text }] } });
+}
+
+test('transcript: the parked error\'s time is the timestamp of the API-error entry with the same text — the last one', () => {
+  const tail = [
+    '{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-09-24T08:00:00.000Z","message":{"content":[{"type":"text","text":"Prompt is too long"}]}}',
+    buildTranscriptApiErrorLine(liveLimitText, '2026-09-24T21:00:00.000Z'),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'continue' } }),
+    buildTranscriptApiErrorLine(liveLimitText, '2026-09-24T22:00:00.000Z'),
+  ].join('\n');
+  assert.equal(getParkedErrorWrittenAtMs(tail, liveLimitText), Date.parse('2026-09-24T22:00:00.000Z'));
+});
+
+test('transcript: no API-error entry with that text (or a torn line, a bad timestamp) → null, the mtime decides', () => {
+  assert.equal(getParkedErrorWrittenAtMs(buildTranscriptApiErrorLine('Prompt is too long', '2026-09-24T22:00:00.000Z'), liveLimitText), null);
+  assert.equal(getParkedErrorWrittenAtMs(`{"type":"assis\n${buildTranscriptApiErrorLine(liveLimitText, 'not a time')}`, liveLimitText), null);
+  assert.equal(getParkedErrorWrittenAtMs('', liveLimitText), null);
+});
+
+test('decide: the transcript\'s error time wins over a log mtime that frames written later moved past the reset', () => {
+  const errorAt = Date.parse('2026-09-24T22:00:00.000Z');
+  const laterFrameAt = Date.parse('2026-09-24T23:00:00.000Z');
+  const bootAt = Date.parse('2026-09-24T23:30:00.000Z');
+  const decision = decideLimitEpisodeRecovery({ errorText: liveLimitText, errorWrittenAtMs: errorAt, log: buildLog(laterFrameAt), now: bootAt, hasArmedRetry: false });
+  assert.equal(
+    decision.action === 'arm' && decision.cls.kind === 'usageLimit' ? decision.cls.resetAt : null,
+    Date.parse('2026-09-24T22:50:00.000Z'),
+    'the 10:50pm reset of the error written at 22:00, though the log was last written at 23:00',
+  );
 });

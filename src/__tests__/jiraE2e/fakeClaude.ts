@@ -407,8 +407,16 @@ function endTurn(sessionId: string, resultText: string): void {
 }
 
 /** A turn the provider refused for a usage limit: an error `result` whose text names the window and its reset. */
+/**
+ * A turn refused for a subscription limit, the way the real CLI records it: the API-error entry in the transcript
+ * (`isApiErrorMessage`, with its `timestamp`), then the error `result` on stdout.
+ */
 function endTurnOnUsageLimit(sessionId: string, resetsAt: string): void {
-  writeStdout({ type: 'result', subtype: 'success', is_error: true, result: `You've hit your session limit · resets ${resetsAt}`, session_id: sessionId, usage: fakeTurnUsage });
+  const errorText = `You've hit your session limit · resets ${resetsAt}`;
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', timestamp: new Date().toISOString(), sessionId, message: { role: 'assistant', content: [{ type: 'text', text: errorText }] } })}\n`);
+  writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage });
 }
 
 /** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the answers the bot's `control_response` carries. */

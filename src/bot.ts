@@ -53,7 +53,7 @@ import './connectors/jira/sessionKeyCodec';
 // booting Telegraf (audit S19 / #25).
 import { parseAgentTrigger as checkIsStartAgentPhrase } from './agentTrigger';
 import { checkSessionPickAction } from './sessionPick';
-import { ClaudeCliAdapter, getClaudeReplyRoute } from './adapters/claudeCliAdapter';
+import { ClaudeCliAdapter, getClaudeReplyRoute, getClaudeTranscriptPath } from './adapters/claudeCliAdapter';
 import { listSavedOpenCodeModelLabels, type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
 import { TerminalAdapter } from './adapters/terminalAdapter';
 import {
@@ -354,6 +354,7 @@ import {
 import {
   decideLimitEpisodeRecovery,
   getLastTerminalErrorText,
+  getParkedErrorWrittenAtMs,
   limitEpisodeTailMaxBytes,
 } from './utils/limitEpisodeRecovery';
 import {
@@ -1632,6 +1633,12 @@ const wedgeRecoveryTier = new Map<string, number>();
  */
 const wedgeRecoveriesInFlight = new Set<string>();
 
+/** @description Where an {@link handleApiError} call comes from, when it is not a live `apiError`. */
+interface HandleApiErrorOptions {
+  /** A parked error the boot recovery found on disk (`recoverLimitEpisodesFromDisk`), not one the agent just hit. */
+  isRecoveredEpisode?: boolean;
+}
+
 /**
  * @description `apiError` from the adapter — arm (or escalate) an auto-retry, or
  * give up. The pure decision lives in {@link decideRetryAction}; this handler is
@@ -1647,7 +1654,7 @@ const wedgeRecoveriesInFlight = new Set<string>();
  * 5/10/20-min retries) and `auth` (surfaced, never retried) are untouched by the
  * toggle — a rate-limit hiccup always wants the automatic retry.
  */
-function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
+function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: HandleApiErrorOptions = {}): void {
   const k = keyToString(key);
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     const isFirstOffNotice = !autoContinueOffNoticedThreads.has(k);
@@ -1705,10 +1712,14 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass): void {
     limitWait = cls.resetAt !== undefined
       ? { kind: 'afterReset', resetAt: cls.resetAt, fireAt: action.fireAt }
       : { kind: 'nextAttempt', fireAt: action.fireAt };
-    // A window that is already over (a parked error recovered after its reset) is
-    // no limit: the retry fires at once and its "work resumed" notice says it all.
-    if (checkIsUsageLimitWindowOver(cls, now)) console.log(`[apiRetry] ${k}: the limit window has already reset — resuming without a limit notice`);
-    else void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
+    // A recovered episode whose window is already over is no limit: the retry fires
+    // at once and its "work resumed" notice says it all. A LIVE error is always
+    // announced, whatever its reset says (a clock behind the provider's included).
+    if (options.isRecoveredEpisode === true && checkIsUsageLimitWindowOver(cls, now)) {
+      console.log(`[apiRetry] ${k}: the recovered limit window has already reset — resuming without a limit notice`);
+    } else {
+      void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
+    }
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -11836,6 +11847,24 @@ function restoreApiRetries(): void {
  * log, and hot mode reloads the bot on every code change — without the stamp each
  * reload resurrected the settled wait.
  */
+/**
+ * @description When the parked `errorText` of a json-stream conversation was written, from its Claude transcript's
+ * API-error entry ({@link getParkedErrorWrittenAtMs}); `null` when the transcript tail cannot be read or holds no such
+ * entry — the recovery then goes by the stdout log's mtime.
+ */
+function readParkedErrorWrittenAtMs(key: SessionKey, claudeSessionId: string, errorText: string): number | null {
+  const workDirDecision = getWorkDirStartDecision(key);
+  if (!workDirDecision.ok) return null;
+  const transcriptPath = getClaudeTranscriptPath(workDirDecision.workDir, claudeSessionId);
+  try {
+    const sizeBytes = fs.statSync(transcriptPath).size;
+    const tail = readFileByteRange(transcriptPath, Math.max(0, sizeBytes - limitEpisodeTailMaxBytes), sizeBytes);
+    return getParkedErrorWrittenAtMs(tail.toString('utf8'), errorText);
+  } catch {
+    return null; // no transcript on disk — the mtime decides
+  }
+}
+
 function recoverLimitEpisodesFromDisk(): void {
   const now = Date.now();
   let recovered = 0;
@@ -11876,6 +11905,7 @@ function recoverLimitEpisodesFromDisk(): void {
 
     const decision = decideLimitEpisodeRecovery({
       errorText,
+      errorWrittenAtMs: errorText === null ? null : readParkedErrorWrittenAtMs(key, agent.claudeSessionId, errorText),
       log,
       handled: state.getLimitEpisodeRecovered(key),
       now,
@@ -11892,7 +11922,7 @@ function recoverLimitEpisodesFromDisk(): void {
     void state
       .setLimitEpisodeRecovered(key, log)
       .catch(e => console.error('[limitRecovery] marker persist failed:', e));
-    void withThreadLocale(key, () => handleApiError(key, decision.cls));
+    void withThreadLocale(key, () => handleApiError(key, decision.cls, { isRecoveredEpisode: true }));
     recovered += 1;
   }
   if (recovered > 0) console.log(`[reattach] limit episodes: recovered ${recovered}`);

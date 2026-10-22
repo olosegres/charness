@@ -87,6 +87,51 @@ function checkIsSessionActivity(action: ClaudeStreamAction): boolean {
   return false;
 }
 
+/** One content block of a transcript message (only text blocks carry the error). */
+interface TranscriptContentBlock {
+  type?: string;
+  text?: string;
+}
+
+/** One line of a Claude transcript, as far as {@link getParkedErrorWrittenAtMs} reads it — untrusted, checked field by field. */
+interface TranscriptApiErrorEntry {
+  isApiErrorMessage?: boolean;
+  timestamp?: string;
+  message?: { content?: string | TranscriptContentBlock[] };
+}
+
+/** @description The text blocks of a transcript entry's message, joined. */
+function getTranscriptEntryText(entry: TranscriptApiErrorEntry): string {
+  const content = entry.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((block) => (block?.type === 'text' && typeof block.text === 'string' ? block.text : '')).join('');
+}
+
+/**
+ * @description When the parked error was written, read off the Claude transcript tail: the `timestamp` of the LAST
+ * API-error entry (`isApiErrorMessage`) whose text is the error's. `null` when there is no such entry or its timestamp
+ * does not parse — the caller falls back to the stdout log's mtime, which anything appended later (a background
+ * sub-agent, an ambient frame) moves.
+ */
+export function getParkedErrorWrittenAtMs(transcriptTail: string, errorText: string): number | null {
+  let writtenAtMs: number | null = null;
+  const expectedText = errorText.trim();
+  for (const line of transcriptTail.split('\n')) {
+    if (!line.includes('"isApiErrorMessage"')) continue;
+    let entry: TranscriptApiErrorEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // the tail's torn first line
+    }
+    if (entry.isApiErrorMessage !== true || getTranscriptEntryText(entry).trim() !== expectedText) continue;
+    const parsedMs = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN;
+    writtenAtMs = Number.isNaN(parsedMs) ? null : parsedMs;
+  }
+  return writtenAtMs;
+}
+
 export type LimitEpisodeDecision =
   /** Arm the limit wait through the normal live-error path. */
   | { action: 'arm'; cls: AgentApiErrorClass }
@@ -118,15 +163,18 @@ function checkIsSameHandledLog(handled: LimitEpisodeMarker | undefined, log: Lim
  *  - only the `usageLimit` class (a transient error is long past by restart time,
  *    and an `auth` error needs a human, not a wait);
  *  - only when the log is younger than {@link limitEpisodeMaxAgeMs}.
- * The reset the error names is resolved against the moment it was WRITTEN — the
- * log's mtime, since nothing real follows the error — not against the boot: a
- * clock-only reset (`resets 10:50pm`) resolves to its NEXT occurrence, so read at a
- * boot after 22:50 it became TOMORROW 22:50 and a window that had already reset was
- * announced as exhausted for another day. A `resetAt` that is in the past by now is
- * a window that is over: the bot resumes at once without announcing a limit.
+ * The reset the error names is resolved against the moment it was WRITTEN —
+ * `errorWrittenAtMs` (the transcript's own timestamp, {@link getParkedErrorWrittenAtMs}),
+ * else the log's mtime — not against the boot: a clock-only reset (`resets 10:50pm`)
+ * resolves to its NEXT occurrence, so read at a boot after 22:50 it became TOMORROW
+ * 22:50 and a window that had already reset was announced as exhausted for another
+ * day. A `resetAt` that is in the past by now is a window that is over: the bot
+ * resumes at once without announcing a limit.
  */
 export function decideLimitEpisodeRecovery(input: {
   errorText: string | null;
+  /** When the error was written, from the transcript; absent → the log's mtime. */
+  errorWrittenAtMs?: number | null;
   /** Identity (size + mtime) of the session's `stdout.jsonl` right now. */
   log: LimitEpisodeMarker;
   /** Identity recorded when a previous boot armed from this log, if any. */
@@ -138,7 +186,7 @@ export function decideLimitEpisodeRecovery(input: {
   if (checkIsSameHandledLog(input.handled, input.log)) return { action: 'skip', reason: 'alreadyHandled' };
   if (!input.errorText) return { action: 'skip', reason: 'noError' };
   if (input.now - input.log.mtimeMs > limitEpisodeMaxAgeMs) return { action: 'skip', reason: 'stale' };
-  const cls = classifyAgentApiError(input.errorText, input.log.mtimeMs);
+  const cls = classifyAgentApiError(input.errorText, input.errorWrittenAtMs ?? input.log.mtimeMs);
   if (cls?.kind !== 'usageLimit') return { action: 'skip', reason: 'notUsageLimit' };
   return { action: 'arm', cls };
 }

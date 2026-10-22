@@ -7,11 +7,14 @@
  *     "🚧 Usage limit reached — will auto-resume after reset (~<time>)")
  *   → the topic's agent stops on a session limit whose wording names a CLOCK reset ("resets 10:20am (UTC)")
  *   → the bot is stopped; the wait it armed is gone (as when the wording was not recognised live) and the error is
- *     an hour old, written BEFORE that clock — so the window reset half an hour before the bot comes back
+ *     an hour old, written BEFORE that clock — so the window reset half an hour before the bot comes back. The stdout
+ *     log was written to since (as a background sub-agent's frames do), so only the transcript's API-error entry,
+ *     with its own timestamp, still says when the error happened
  *   → the bot starts again and recovers the parked episode: the window is over, so it posts NO "usage limit
  *     reached" notice (the reset used to be read against the boot time — tomorrow's 10:20am — and the topic was
  *     told it waits a day for a limit that had already reset); it resumes at once, says so, and the agent takes the
- *     "continue" nudge.
+ *     "continue" nudge
+ *   → a LIVE limit error is announced whatever its reset says, a reset already past included.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -25,6 +28,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
+import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
@@ -41,7 +45,8 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getAllAgentTurns, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
@@ -102,6 +107,19 @@ function formatUtcResetClock(atMs: number): string {
  * Every limit notice the bot SENT to the topic — read off the Bot API calls, not the topic's current messages: a
  * notice the resume removes again a moment later still reached the user as a notification.
  */
+/**
+ * Move the transcript's API-error entry back to `writtenAt`: the moment the error happened, which the stdout log's
+ * mtime no longer tells once later frames were appended.
+ */
+function backdateTranscriptApiError(transcriptPath: string, writtenAt: Date): void {
+  const lines = fs.readFileSync(transcriptPath, 'utf8').split('\n').map((line) => {
+    if (!line.includes('"isApiErrorMessage":true')) return line;
+    return JSON.stringify({ ...JSON.parse(line), timestamp: writtenAt.toISOString() });
+  });
+  assert.ok(lines.some((line) => line.includes('"isApiErrorMessage":true')), 'the fake recorded the API error in the transcript');
+  fs.writeFileSync(transcriptPath, lines.join('\n'));
+}
+
 function listSentLimitNotices(): string[] {
   return fakeTelegram
     .listCalls('sendMessage')
@@ -169,16 +187,28 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const limitNoticesBefore = listSentLimitNotices().length;
     const key = makeTelegramKey(group.id, topicThreadId);
     const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, key));
+    const sessionId = readPersistedState(getLayout()).agents?.[keyToString(key)]?.claudeSessionId ?? '';
+    assert.ok(sessionId, 'the topic ran a Claude conversation');
+    const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, topicFolder), sessionId });
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
-      // The wait the live bot armed is gone — the case the recovery exists for — and the error is an hour old.
+      // The wait the live bot armed is gone — the case the recovery exists for — and the error is an hour old, while
+      // the stdout log was written to just now (after the reset): its mtime would read the reset as tomorrow's.
       delete persisted.apiRetries?.[keyToString(key)];
-      const errorWrittenAt = new Date(Date.now() - errorAgoMs);
-      fs.utimesSync(stdoutFile, errorWrittenAt, errorWrittenAt);
+      backdateTranscriptApiError(transcriptPath, new Date(Date.now() - errorAgoMs));
+      const laterFrameAt = new Date();
+      fs.utimesSync(stdoutFile, laterFrameAt, laterFrameAt);
     });
 
     await getCharness().waitFor('the parked episode to be recovered', agentStartTimeoutMs, () => getCharness().output.includes(recoveryLogLine));
     await topic.waitForMessage('the resume notice', (message) => message.text.includes(resumedNoticeText));
     await getCharness().waitFor('the agent to take the "continue" nudge', agentStartTimeoutMs, () => getAllAgentTurns(getLayout()).length === 2);
     assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'a window that is over is not announced as a usage limit');
+  });
+
+  it('a LIVE limit error is announced even when the reset it names is already past (only a recovered episode resumes silently)', async () => {
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const pastResetIso = new Date(Date.now() - resetAgoMs).toISOString();
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-live [fake:usage-limit-once] [limit-resets:${pastResetIso}] again`);
+    await getCharness().waitFor('the live limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
   });
 });
