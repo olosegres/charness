@@ -727,12 +727,18 @@ test('a voice that asks while the sidecar loads its model waits for the port ins
 test('two starts at once: the later one finds the record claimed, leaves, and its ensure uses the earlier sidecar — not a failure, however often it happens', { timeout: 60_000 }, async () => {
   const owner = createSttSidecarOwner(createDeps());
   for (let round = 1; round <= 3; round++) {
-    fakeArgs = ['--claim-delay-ms', '500']; // OUR spawn claims late: the earlier start gets in first
+    // OUR spawn claims only after the earlier start holds the record — gated on a file, not a delay: under a loaded
+    // suite the earlier one's start alone outlasted a 500 ms delay, ours claimed first and won (a fine outcome, but
+    // not the one this test is about).
+    const claimGate = path.join(dataDir, `claim-gate-${round}`);
+    fakeArgs = ['--claim-after-file', claimGate];
     const identitiesBefore = startedIdentities.length;
     const ensuring = owner.ensure(defaultSettings);
     await getCharnessWait(() => startedIdentities.length > identitiesBefore, 10_000, 'our spawn');
     const ours = startedIdentities[identitiesBefore];
     const earlier = await startEarlierSidecar(['--ready-delay-ms', '900'], `earlier-token-${round}`);
+    await getCharnessWait(() => fs.existsSync(getRecordPath()) && readRecord().pid === earlier.pid, 10_000, 'the earlier start to claim the record');
+    fs.writeFileSync(claimGate, '');
 
     const endpoint = await ensuring;
     assert.equal(endpoint.token, `earlier-token-${round}`, 'the earlier start won');
@@ -749,7 +755,9 @@ test('two starts at once: the later one finds the record claimed, leaves, and it
 test('a start that claimed the record and never listens is replaced after the wait; one that dies during the wait is replaced at once', { timeout: 60_000 }, async () => {
   const wedged = await startEarlierSidecar(['--never-ready']);
   await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the wedged sidecar to claim its record');
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 600 }));
+  // The one ready wait covers both the wedged start (waited out, then replaced) and the replacement, which must come
+  // up: it gets the time a loaded box needs to spawn a process (600 ms here failed under the parallel suite).
+  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: startedReadyTimeoutMs }));
   const endpoint = await owner.ensure(defaultSettings);
   assert.equal(startCalls.length, 1, 'a replacement was started');
   assert.ok(await waitUntilGone(wedged, 3_000), 'the wedged one was stopped');

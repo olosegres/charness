@@ -11,6 +11,7 @@
  * that finds the record held by another live sidecar exits with code 4 instead of becoming an orphan.
  *
  * Test knobs (not part of the contract): --claim-delay-ms N (start slowly: the window before the claim),
+ * --claim-after-file PATH (claim only once PATH exists: an order between two starts that load cannot change),
  * --ready-delay-ms N (the "model load": between the claim and the listening port), --never-ready (claims, then
  * hangs without ever listening), --crash-after-ms N (hard exit 1 after it is ready, record left behind),
  * --idle-seconds N (overrides --idle-minutes), --ignore-sigterm, --health-delay-ms N (answer /health late, like a
@@ -36,6 +37,8 @@ const configHash = readArg('--config-hash');
 const healthDelayMs = Number(readArg('--health-delay-ms', '0'));
 const readyDelayMs = Number(readArg('--ready-delay-ms', '0'));
 const claimDelayMs = Number(readArg('--claim-delay-ms', '0'));
+const claimAfterFile = readArg('--claim-after-file');
+const claimGatePollMs = 20;
 const duplicateExitCode = 4;
 const crashAfterMs = Number(readArg('--crash-after-ms', '0'));
 const idleSeconds = readArg('--idle-seconds') !== undefined
@@ -155,7 +158,7 @@ function listenAndReport(isRecorded) {
   });
 }
 
-setTimeout(() => {
+function startUp() {
   if (hasFlag('--fail-to-record')) process.exit(1);
   const isRecorded = !hasFlag('--skip-record');
   if (isRecorded && !claimRecord()) process.exit(duplicateExitCode);
@@ -164,7 +167,15 @@ setTimeout(() => {
     return;
   }
   setTimeout(() => listenAndReport(isRecorded), readyDelayMs);
-}, claimDelayMs);
+}
+
+/** --claim-after-file: claim only once the test creates the file — an order that holds however loaded the box is. */
+function startUpAfterGate() {
+  if (claimAfterFile === undefined || fs.existsSync(claimAfterFile)) return startUp();
+  setTimeout(startUpAfterGate, claimGatePollMs);
+}
+
+setTimeout(startUpAfterGate, claimDelayMs);
 
 setInterval(() => {
   let isOwnerAlive = true;

@@ -368,6 +368,29 @@ test(
   },
 );
 
+/** How long the test waits, synchronously, for a SIGKILLed child to be gone. */
+const childGoneBudgetMs = 5_000;
+
+test(
+  'a child that started and exited before its host did is STARTED — its identity is returned, and reads as gone',
+  { skip: process.platform === 'win32' },
+  async () => {
+    // A child may leave at once by design: a sidecar start that finds another start already holding the record. Its
+    // host had identified and released it, yet under load the host's own exit came later and rejected the start
+    // ("host exited before starting its child"), which the speech-engine owner reported as a failed start. Whether a
+    // started child is still alive is its caller's question.
+    // Deterministic: the child is identified, then killed — and seen gone — before its host is released and exits.
+    const hostedProcess = await startExternallyParentedProcess(process.execPath, ['-e', persistentChildScript], process.env, {
+      prepareProcessIdentity: (identity) => {
+        process.kill(identity.pid, 'SIGKILL');
+        const deadline = Date.now() + childGoneBudgetMs;
+        while (checkIsProcessIdentityCurrent(identity) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      },
+    });
+    assert.equal(checkIsProcessIdentityCurrent(hostedProcess), false, 'the caller sees it gone');
+  },
+);
+
 test(
   'external process host timeout removes a child that was already started',
   { skip: process.platform === 'win32' },

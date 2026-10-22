@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A voice message no longer fails when two starts of the local speech engine meet.** When the bot restarted while the
+local engine was loading, the second start finds the first one running and steps aside — on a busy machine that was taken
+for a failed start, and the voice was not transcribed by the local engine.
+
 **A reset time written without a time zone is no longer guessed.** An ISO stamp with no zone («resets at 2026-10-22
 23:29») was read in the bot's own zone — hours off when the provider meant another. It now counts only with a zone after it;
 otherwise the reset is treated as unknown and the topic retries hourly (or as the provider's Retry-After says).

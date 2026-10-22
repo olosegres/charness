@@ -354,7 +354,10 @@ export function startExternallyParentedProcess(
         settleWithError(new Error(`External process host failed: ${hostError}`));
         return;
       }
-      if (code !== 0 || !hostedProcess || !checkIsProcessIdentityCurrent(hostedProcess)) {
+      // A child the host identified and released has STARTED, even if it has already exited again (a sidecar start
+      // that found another start holding the record leaves at once): whether it still runs is the caller's question —
+      // each one checks it. Under load the host's exit could come after the child's, and the start read as failed.
+      if (code !== 0 || !hostedProcess) {
         settleWithError(
           new Error(
             `External process host exited before starting its child ` +
