@@ -34,6 +34,8 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 export const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
 const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 export const fakeClaudePath = path.join(__dirname, '..', 'jiraE2e', 'fakeClaude.ts');
+/** The fake interactive Claude Code TUI (the tmux backend's agent). */
+const fakeClaudeTuiPath = path.join(__dirname, '..', 'tmuxE2e', 'fakeClaudeTui.ts');
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
 
@@ -436,6 +438,20 @@ export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform
     `export FAKE_CLAUDE_STATE_DIR='${layout.fakeStateDir}'`,
     ...(platform === null ? [] : [`export ${fakeClaudePlatformEnvName}='${platform}'`]),
     `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudePath}' "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return claudeBin;
+}
+
+/**
+ * @description Write the instance's `claude` as the fake interactive TUI (`tmuxE2e/fakeClaudeTui.ts`) instead of the
+ * stream-json fake — for a flow that drives the tmux backend; returns the launcher's path (the instance's `CLAUDE_BIN`).
+ */
+export function writeFakeClaudeTuiLauncher(layout: IsolatedInstanceLayout): string {
+  const claudeBin = path.join(layout.binDir, 'claude');
+  fs.writeFileSync(claudeBin, [
+    '#!/bin/sh',
+    `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudeTuiPath}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
   return claudeBin;
