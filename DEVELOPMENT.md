@@ -156,14 +156,23 @@ docker exec charness-main charness-restart-bot   # restart only the bot; agents 
 
 ## Releases
 
-`.github/workflows/publish.yml` releases charness to npm without anyone doing anything. Every day at 09:17
-(Asia/Tbilisi) it decides by itself: nothing shipped changed → a green run, no tag, no publish; otherwise it
-typechecks, builds and runs the FULL `yarn test` on the runner, checks the package, commits `chore(release): X.Y.Z`,
-tags `vX.Y.Z`, publishes to the `latest` dist-tag with provenance (npm trusted publishing from the `release`
-environment, no npm token anywhere) and creates the GitHub Release from the CHANGELOG section. Red anywhere → no
-tag, no publish, the run is red; the next day's run tries again by itself. The logic is in `src/release/` (pure
-`releasePlan.ts` + the `cli.ts` wrapper, run by `tsx`, never built into `dist/`).
+Two workflows. **`.github/workflows/test.yml` (`Tests`)** runs typecheck, build and the FULL `yarn test` on every push to
+`main`. **`.github/workflows/publish.yml`** releases charness to npm without anyone doing anything: every day at 09:17
+(Asia/Tbilisi) it decides by itself: nothing shipped changed → a green run, no tag, no publish; otherwise it checks the tests
+of the commit it would release (below), checks the package, commits `chore(release): X.Y.Z`, tags `vX.Y.Z`, publishes to the
+`latest` dist-tag with provenance (npm trusted publishing from the `release` environment, no npm token anywhere) and creates
+the GitHub Release from the CHANGELOG section. Red anywhere → no tag, no publish, the run is red; the next day's run tries
+again by itself. The logic is in `src/release/` (pure `releasePlan.ts` and `testGate.ts` + the `cli.ts` wrapper, run by
+`tsx`, never built into `dist/`).
 
+- **Tests gate:** the release does not run the suite again when the exact commit already passed. It asks GitHub for the
+  `Tests` workflow's runs of that commit's SHA (the newest run of the commit decides): **passed** → go on; **no run at all**
+  (a manual dispatch before CI ran) → the release runs the suite itself; **failed or still running** → the daily run
+  releases nothing that day and ends green with the reason (a red head is not skipped over to an older green commit), a
+  manual dispatch or a hand-pushed tag fails with it. The release commit may differ from the tested one ONLY in
+  `package.json`'s `"version"` line and `CHANGELOG.md`: `verify-delta` checks the diff before the tag and again in the publish
+  job (the tag against the tested SHA) and refuses otherwise. A hand-pushed tag is gated on the tagged commit itself — pushing
+  `main` and the tag together finds `Tests` still running: re-run the release once it is green.
 - **Version** (Conventional Commits since the last `v*` tag): a `feat` that changes shipped code → minor; any other
   shipped change (`fix`, `perf`, `refactor`, `revert`, `chore`, …) → patch; `chore(release)` commits never count. A `!`
   after the type or a `BREAKING CHANGE:` footer in ANY commit makes the automatic run **fail**, naming the commits: a
@@ -178,7 +187,7 @@ tag, no publish, the run is red; the next day's run tries again by itself. The l
   publish and the GitHub Release and prints the plan, the CHANGELOG diff, the notes and the package check.
 - **By hand:** `npm version minor` locally (its `preversion` runs typecheck, build and the tests, its
   `version` script moves the CHANGELOG heading, `.npmrc` gives the commit npm's message `chore(release): X.Y.Z`), then
-  push `main` with the tag; the workflow runs the same gate and publishes that tag.
+  push `main` with the tag; the workflow gates that tag on its commit's `Tests` run (above) and publishes it.
 - **CHANGELOG:** `## Unreleased` becomes `## X.Y.Z — YYYY-MM-DD` (Tbilisi date) with a fresh empty `## Unreleased`
   above; that section is the GitHub Release text and ships inside the package. Every entry of it — a top-level
   paragraph or `- ` bullet, in any `###` subsection — starts with a bold first sentence (`**…**`); the run fails,

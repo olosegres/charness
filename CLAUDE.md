@@ -274,8 +274,9 @@ History was scrubbed of real operator identifiers — keep it that way:
   `dist/`: a broken edit cannot take the bot down, agents survive reloads; Linux/macOS only). Hot mode reloads
   only the worker: a change to a supervisor file (`src/cli.ts`, `src/cli/hot.ts`, `nodemon.json`) needs a full
   service restart, because nodemon never reloads the process that spawned it.
-- **Releases:** `.github/workflows/publish.yml` publishes to npm daily (09:17 Asia/Tbilisi), after the FULL `yarn test`;
-  a change users see needs its CHANGELOG entry under `## Unreleased` opening with a bold first sentence, or the run
+- **Releases:** `.github/workflows/test.yml` runs the FULL suite on every push to `main`; `.github/workflows/publish.yml`
+  publishes to npm daily (09:17 Asia/Tbilisi) the head commit whose `Tests` run is green (no re-run; a red head = no release
+  that day); a change users see needs its CHANGELOG entry under `## Unreleased` opening with a bold first sentence, or the run
   fails. Rules, manual dispatch and the `npm version` path: DEVELOPMENT.md § Releases; the planner is `src/release/`.
 - **tmux safety in tests and by hand.** Run anything that touches tmux as `env -u TMUX -u TMUX_PANE …`. Never
   touch the DEFAULT tmux server: a bare `kill-server` run from inside tmux goes to the server `$TMUX` names,

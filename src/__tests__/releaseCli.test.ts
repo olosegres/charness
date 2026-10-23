@@ -10,7 +10,8 @@
 
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -407,6 +408,196 @@ describe('check-publish', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /`npm publish --dry-run` failed \(exit 1\)/);
     assert.match(result.stderr, /cannot publish over the previously published versions/);
+  });
+});
+
+describe('verify-delta', () => {
+  function getHeadSha(): string {
+    return runGit('rev-parse', 'HEAD');
+  }
+
+  function bumpVersionAndChangelog(): void {
+    writeRepoFile('package.json', fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8').replace('"version": "3.2.0"', '"version": "3.3.0"'));
+    writeRepoFile('CHANGELOG.md', initialChangelog.replace('## Unreleased', '## Unreleased\n\n## 3.3.0 — 2026-10-23'));
+  }
+
+  test('the working tree with only the version bump and the CHANGELOG moved is the tested commit plus its release', () => {
+    const tested = getHeadSha();
+    bumpVersionAndChangelog();
+    const result = runCli('verify-delta', '--base', tested);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /differs from the tested commit [0-9a-f]{7} only in the version and the CHANGELOG/);
+  });
+
+  test('a committed release is checked against the tested commit through --head', () => {
+    const tested = getHeadSha();
+    bumpVersionAndChangelog();
+    runGit('add', '-A');
+    runGit('commit', '-q', '-m', 'chore(release): 3.3.0');
+    assert.equal(runCli('verify-delta', '--base', tested, '--head', 'HEAD').status, 0);
+  });
+
+  test('another file differing — an untested commit that landed in between — is named and refused', () => {
+    const tested = getHeadSha();
+    commitFile('src/bot.ts', 'export const bot = 2;\n', 'fix: something nobody tested');
+    bumpVersionAndChangelog();
+    runGit('add', '-A');
+    runGit('commit', '-q', '-m', 'chore(release): 3.3.0');
+    const result = runCli('verify-delta', '--base', tested, '--head', 'HEAD');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /The release is not the tested commit [0-9a-f]{7} plus its version bump; nothing is published/);
+    assert.match(result.stderr, /src\/bot\.ts differs from the tested commit/);
+  });
+
+  test('package.json changed beyond its version line is refused', () => {
+    const tested = getHeadSha();
+    bumpVersionAndChangelog();
+    writeRepoFile('package.json', fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8').replace('"left": "^1.0.0"', '"left": "^9.0.0"'));
+    const result = runCli('verify-delta', '--base', tested);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /package\.json differs from the tested commit in more than its "version" line/);
+  });
+
+  test('--base is required', () => {
+    const result = runCli('verify-delta');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /verify-delta needs --base/);
+  });
+});
+
+describe('test-gate', () => {
+  type FakeRun = { id: number; head_sha: string; status: string; conclusion: string | null; created_at: string; html_url: string };
+  const workflowRunsPath = '/repos/example-owner/example-repo/actions/workflows/test.yml/runs';
+  let apiServer: http.Server;
+  let apiUrl: string;
+  let requests: { url: string; authorization: string | undefined }[];
+  let apiStatus: number;
+  let apiRuns: FakeRun[];
+
+  beforeEach(async () => {
+    requests = [];
+    apiStatus = 200;
+    apiRuns = [];
+    apiServer = http.createServer((request, response) => {
+      requests.push({ url: request.url ?? '', authorization: request.headers.authorization });
+      response.writeHead(apiStatus, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ workflow_runs: apiRuns }));
+    });
+    await new Promise<void>((resolve) => apiServer.listen(0, '127.0.0.1', resolve));
+    const address = apiServer.address();
+    assert.ok(address && typeof address !== 'string');
+    apiUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => apiServer.close(() => resolve()));
+  });
+
+  /** The server answers from THIS process, so the CLI is an async child (spawnSync would block the server it asks). */
+  function runGateCli(...args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, [tsxCliPath, releaseCliPath, 'test-gate', ...args], {
+        cwd: repoDir,
+        env: { ...createChildEnv(), GITHUB_API_URL: apiUrl, GITHUB_REPOSITORY: 'example-owner/example-repo', GITHUB_TOKEN: 'fake-token-for-the-loopback-api', GITHUB_STEP_SUMMARY: path.join(sandboxDir, 'summary') },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+  }
+
+  function createFakeRun(overrides: Partial<FakeRun> = {}): FakeRun {
+    return { id: 1, head_sha: runGit('rev-parse', 'HEAD'), status: 'completed', conclusion: 'success', created_at: '2026-10-23T09:00:00Z', html_url: 'https://github.example/runs/1', ...overrides };
+  }
+
+  test('asks the API for the Tests workflow\'s runs of the exact HEAD commit, with the token', async () => {
+    apiRuns = [createFakeRun()];
+    const sha = runGit('rev-parse', 'HEAD');
+    const result = await runGateCli('--event', 'schedule');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, `${workflowRunsPath}?head_sha=${sha}&per_page=100`);
+    assert.equal(requests[0].authorization, 'Bearer fake-token-for-the-loopback-api');
+  });
+
+  test('a green run → proceed without the suite; the outputs say so', async () => {
+    apiRuns = [createFakeRun()];
+    const result = await runGateCli('--event', 'workflow_dispatch');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(
+      [readGithubOutput().state, readGithubOutput().proceed, readGithubOutput().runSuite, readGithubOutput().sha],
+      ['passed', 'true', 'false', runGit('rev-parse', 'HEAD')],
+    );
+    assert.match(result.stdout, /does not run the suite again/);
+    assert.match(fs.readFileSync(path.join(sandboxDir, 'summary'), 'utf8'), /### Tests of [0-9a-f]{7}/);
+  });
+
+  test('no run of the commit (only another commit\'s) → proceed and run the suite here', async () => {
+    apiRuns = [createFakeRun({ head_sha: 'f'.repeat(40) })];
+    const result = await runGateCli('--event', 'workflow_dispatch');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual([readGithubOutput().state, readGithubOutput().proceed, readGithubOutput().runSuite], ['none', 'true', 'true']);
+  });
+
+  test('a red head on the daily run → exit 0, proceed=false, a warning with the reason', async () => {
+    apiRuns = [createFakeRun({ conclusion: 'failure' })];
+    const result = await runGateCli('--event', 'schedule');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual([readGithubOutput().state, readGithubOutput().proceed, readGithubOutput().runSuite], ['failed', 'false', 'false']);
+    assert.match(result.stdout, /^::warning title=No release today::No release today: the Tests run for [0-9a-f]{7} did not pass: failure/m);
+  });
+
+  test('a red or still-running commit on a manual dispatch → exit 1 with a clear reason, nothing proceeds', async () => {
+    apiRuns = [createFakeRun({ status: 'in_progress', conclusion: null })];
+    const running = await runGateCli('--event', 'workflow_dispatch');
+    assert.equal(running.status, 1);
+    assert.match(running.stderr, /Refusing to release: the Tests run for [0-9a-f]{7} is still in progress.*wait for it to finish/);
+    apiRuns = [createFakeRun({ conclusion: 'cancelled' })];
+    const cancelled = await runGateCli('--event', 'push');
+    assert.equal(cancelled.status, 1);
+    assert.match(cancelled.stderr, /did not pass: cancelled/);
+    assert.equal(readGithubOutput().proceed, 'false');
+  });
+
+  test('a --sha that is not a full commit SHA is refused before any request', async () => {
+    const result = await runGateCli('--sha', 'abc123&per_page=1', '--event', 'schedule');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--sha must be a full 40-character commit SHA/);
+    assert.equal(requests.length, 0);
+  });
+
+  test('an explicit --sha is the one looked up', async () => {
+    const otherSha = 'c'.repeat(40);
+    apiRuns = [createFakeRun({ head_sha: otherSha })];
+    const result = await runGateCli('--sha', otherSha, '--event', 'workflow_dispatch');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(requests[0].url, `${workflowRunsPath}?head_sha=${otherSha}&per_page=100`);
+    assert.equal(readGithubOutput().state, 'passed');
+  });
+
+  test('an API that cannot be reached refuses, naming the lookup', async () => {
+    apiUrl = 'http://127.0.0.1:1';
+    const result = await runGateCli('--event', 'schedule');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Cannot look up the Tests runs of [0-9a-f]{7}: /);
+    assert.equal(readGithubOutput().proceed, undefined);
+  });
+
+  test('outside GitHub Actions (no repository in the environment) it says so instead of guessing', () => {
+    const result = runCli('test-gate');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /GITHUB_REPOSITORY is not set; the test gate runs inside GitHub Actions/);
+  });
+
+  test('a lookup that cannot be made refuses: the API answering an error says what the job needs', async () => {
+    apiStatus = 403;
+    const result = await runGateCli('--event', 'schedule');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /GitHub answered 403 for test\.yml \(the job needs `actions: read`\)/);
+    assert.equal(readGithubOutput().proceed, undefined);
   });
 });
 

@@ -9,6 +9,8 @@
  *   notes <version>                                             print the version's CHANGELOG section
  *   check-pack [--version X.Y.Z] [--skip-install]               package contents + bin paths + install smoke test
  *   check-publish                                               `npm publish --dry-run`: refuses what npm would drop from package.json
+ *   test-gate [--sha <commit>] [--event <name>]                 the Tests workflow's result for the exact commit; exits 1 on a refusal
+ *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
  *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
  */
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -34,7 +36,15 @@ import {
   type ReleaseCommit,
   type ReleasePlan,
 } from './releasePlan';
+import {
+  decideTestGate,
+  getReleaseDeltaProblems,
+  getTestGateVerdict,
+  testWorkflowFile,
+  type WorkflowRun,
+} from './testGate';
 
+const shortShaLength = 7;
 const gitTimeoutMs = 60_000;
 const gitPushTimeoutMs = 5 * 60_000;
 const npmPackTimeoutMs = 3 * 60_000;
@@ -59,7 +69,13 @@ const releaseBotIdentity = [
 const manifestFileName = 'package.json';
 const changelogFileName = 'CHANGELOG.md';
 const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
+const fullShaPattern = /^[0-9a-f]{40}$/;
 const annotationNewline = '%0A';
+const defaultGithubApiUrl = 'https://api.github.com';
+const githubApiVersion = '2022-11-28';
+const githubApiTimeoutMs = 60_000;
+/** A commit has a handful of runs; one page is all of them. */
+const workflowRunsPageSize = 100;
 
 function runCommand(command: string, args: string[], timeoutMs: number, cwd?: string): string {
   return execFileSync(command, args, {
@@ -299,6 +315,80 @@ function runCheckPack(args: string[]): number {
   return 0;
 }
 
+function readEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new ReleaseError(`${name} is not set; the test gate runs inside GitHub Actions.`);
+  return value;
+}
+
+/** The `Tests` workflow's runs of one exact commit (GitHub API: workflow runs filtered by `head_sha`). */
+async function fetchTestWorkflowRuns(sha: string, workflowFile: string): Promise<WorkflowRun[]> {
+  const apiUrl = process.env.GITHUB_API_URL || defaultGithubApiUrl;
+  const url = `${apiUrl}/repos/${readEnvironment('GITHUB_REPOSITORY')}/actions/workflows/${workflowFile}/runs?head_sha=${sha}&per_page=${workflowRunsPageSize}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${readEnvironment('GITHUB_TOKEN')}`,
+        'X-GitHub-Api-Version': githubApiVersion,
+      },
+      signal: AbortSignal.timeout(githubApiTimeoutMs),
+    });
+  } catch (error) {
+    throw new ReleaseError(`Cannot look up the Tests runs of ${sha.slice(0, shortShaLength)}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) {
+    throw new ReleaseError(`Cannot look up the Tests runs of ${sha.slice(0, shortShaLength)}: GitHub answered ${response.status} for ${workflowFile} (the job needs \`actions: read\`).`);
+  }
+  const body: { workflow_runs?: WorkflowRun[] } = JSON.parse(await response.text());
+  return body.workflow_runs ?? [];
+}
+
+/**
+ * What the Tests workflow says about the exact commit this release is cut from (`--sha`, default HEAD). Passed → the release does not
+ * run the suite; no run → it runs it; red or still running → the daily run ends green with the reason, any other entry fails.
+ */
+async function runTestGate(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { sha: { type: 'string' }, event: { type: 'string' } } });
+  const sha = values.sha ?? git('rev-parse', 'HEAD').trim();
+  if (!fullShaPattern.test(sha)) throw new ReleaseError(`--sha must be a full 40-character commit SHA, got "${sha}".`);
+  const event = values.event ?? process.env.GITHUB_EVENT_NAME ?? '';
+  const verdict = getTestGateVerdict(await fetchTestWorkflowRuns(sha, testWorkflowFile), sha);
+  const decision = decideTestGate(verdict, event);
+  writeGithubOutput('sha', sha);
+  writeGithubOutput('state', verdict.state);
+  writeGithubOutput('proceed', String(decision.proceed));
+  writeGithubOutput('runSuite', String(decision.runSuite));
+  writeGithubOutput('message', decision.message);
+  writeStepSummary(`### Tests of ${sha.slice(0, shortShaLength)}\n\n${decision.message}`);
+  if (decision.isRefusal) throw new ReleaseError(decision.message);
+  process.stdout.write(`${decision.message}\n`);
+  if (!decision.proceed) process.stdout.write(`::warning title=No release today::${decision.message}\n`);
+  return 0;
+}
+
+/**
+ * The release commit may differ from the commit the tests passed on ONLY in package.json's version line and CHANGELOG.md. `--head`
+ * a revision, or none for the working tree (the applied release before it is committed).
+ */
+function runVerifyDelta(args: string[]): number {
+  const { values } = parseArgs({ args, options: { base: { type: 'string' }, head: { type: 'string' } } });
+  if (!values.base) throw new ReleaseError('verify-delta needs --base <the tested commit>.');
+  const revisions = values.head ? [values.base, values.head] : [values.base];
+  const problems = getReleaseDeltaProblems({
+    changedPaths: splitPaths(git('diff', '--name-only', '--no-renames', ...revisions)),
+    manifestDiff: git('diff', '-U0', '--no-color', '--no-renames', ...revisions, '--', manifestFileName),
+  });
+  if (problems.length > 0) {
+    throw new ReleaseError(
+      `The release is not the tested commit ${values.base.slice(0, shortShaLength)} plus its version bump; nothing is published:\n${problems.map((line) => `  ${line}`).join('\n')}`,
+    );
+  }
+  process.stdout.write(`The release differs from the tested commit ${values.base.slice(0, shortShaLength)} only in the version and the CHANGELOG.\n`);
+  return 0;
+}
+
 /**
  * `npm publish --dry-run` exits 0 while it drops a field of `package.json` from the manifest it would send to the registry
  * (a warning); the release refuses that. A dry run that fails itself (a version already on npm, the registry unreachable) fails
@@ -373,7 +463,7 @@ function runCommitRelease(args: string[]): number {
   return 0;
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const [subcommand, ...args] = argv;
   switch (subcommand) {
     case 'plan':
@@ -390,16 +480,23 @@ function main(argv: string[]): number {
       return runCheckPublish();
     case 'commit-release':
       return runCommitRelease(args);
+    case 'test-gate':
+      return runTestGate(args);
+    case 'verify-delta':
+      return runVerifyDelta(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-publish | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-publish | test-gate | verify-delta | commit-release.`);
   }
 }
 
-try {
-  process.exitCode = main(process.argv.slice(2));
-} catch (error) {
-  if (!(error instanceof ReleaseError)) throw error;
-  process.stderr.write(`${error.message}\n`);
-  process.stdout.write(formatErrorAnnotation('Release failed', error.message));
-  process.exitCode = 1;
-}
+main(process.argv.slice(2)).then(
+  (exitCode) => {
+    process.exitCode = exitCode;
+  },
+  (error) => {
+    if (!(error instanceof ReleaseError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    process.stdout.write(formatErrorAnnotation('Release failed', error.message));
+    process.exitCode = 1;
+  },
+);

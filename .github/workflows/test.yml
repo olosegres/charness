@@ -1,0 +1,32 @@
+name: Tests
+
+# The full suite (typecheck, build, unit tests and the process-level flows) on every push to main. The release workflow looks up THIS
+# workflow's result for the exact commit it releases and does not run the suite again when that run is green
+# (src/release/testGate.ts, DEVELOPMENT.md § Releases). Keep the file name: the release looks the runs up by it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      # corepack BEFORE setup-node: the repo pins Yarn 4 in `packageManager`, the runner's global Yarn is 1.x.
+      - run: corepack enable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --immutable
+      # The flows drive real tmux sessions.
+      - name: Install tmux
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - run: yarn typecheck
+      - run: yarn build
+      - run: yarn test

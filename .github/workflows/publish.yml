@@ -9,6 +9,11 @@ name: Release to npm
 #
 # prepare and publish are two jobs of ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start
 # another workflow run, so the bot's own tag push cannot publish twice.
+#
+# The suite is not run here when the exact commit already passed in the `Tests` workflow (test.yml, every push to main): the
+# release looks that run up by the commit's SHA. Passed → go on; no run at all → run the suite here; red or still running → the
+# daily run releases nothing that day (green, with the reason), a dispatch or a hand-pushed tag fails. The release commit itself may
+# differ from the tested one only in package.json's version line and CHANGELOG.md — checked before the tag and before the publish.
 on:
   schedule:
     # 09:17 Tbilisi, off the top of the hour: GitHub delays scheduled runs at :00.
@@ -47,8 +52,10 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: write
+      actions: read # the Tests workflow's runs
     outputs:
       tag: ${{ steps.push.outputs.tag }}
+      tested: ${{ steps.gate.outputs.sha }}
     steps:
       - name: Release only from main
         if: github.ref != 'refs/heads/main'
@@ -73,35 +80,48 @@ jobs:
           INPUT_BUMP: ${{ inputs.bump }}
           INPUT_FORCE: ${{ inputs.force }}
         run: yarn tsx src/release/cli.ts plan --bump "${INPUT_BUMP:-auto}" --force "${INPUT_FORCE:-false}"
-      - name: Install tmux
+      # The exact commit this run releases: what the Tests workflow says about it decides everything below.
+      - name: Tests of this commit (the Tests workflow's result)
+        id: gate
         if: steps.plan.outputs.kind == 'release'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: yarn tsx src/release/cli.ts test-gate
+      - name: Install tmux
+        if: steps.gate.outputs.runSuite == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
       - name: Typecheck
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.runSuite == 'true'
         run: yarn typecheck
+      # The package check packs dist/, so the build runs whether or not the suite does.
       - name: Build
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.proceed == 'true'
         run: yarn build
       - name: Test (unit and flows)
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.runSuite == 'true'
         run: yarn test
       - name: Apply the version (package.json, CHANGELOG.md)
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.proceed == 'true'
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: yarn tsx src/release/cli.ts apply "$VERSION"
+      - name: The release is the tested commit plus its version bump
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          TESTED: ${{ steps.gate.outputs.sha }}
+        run: yarn tsx src/release/cli.ts verify-delta --base "$TESTED"
       - name: Package check
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.proceed == 'true'
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
       # npm >= 11.10 drops a bin path written "./dist/…" at publish and only warns (3.3.0 shipped without its command):
       # refuse before the tag exists.
       - name: npm publish dry run (refuses what npm would drop from package.json)
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.proceed == 'true'
         run: yarn tsx src/release/cli.ts check-publish
       - name: What the release changes
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.gate.outputs.proceed == 'true'
         env:
           VERSION: ${{ steps.plan.outputs.version }}
           BUMP: ${{ steps.plan.outputs.bump }}
@@ -121,7 +141,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Commit, tag and push (not in a dry run)
         id: push
-        if: steps.plan.outputs.kind == 'release' && inputs.dryRun != true
+        if: steps.gate.outputs.proceed == 'true' && inputs.dryRun != true
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: yarn tsx src/release/cli.ts commit-release "$VERSION"
@@ -136,6 +156,7 @@ jobs:
     permissions:
       contents: write # the GitHub Release
       id-token: write # npm trusted publishing (OIDC)
+      actions: read # the Tests workflow's runs (a hand-pushed tag)
     env:
       TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
       GH_REPO: ${{ github.repository }}
@@ -164,13 +185,30 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
       - name: Build
         run: yarn build
-      # prepare already gated the exact commit of a scheduled / dispatched release; a hand-pushed tag has not been.
-      - name: Gate for a hand-pushed tag (typecheck, unit and flows)
-        if: github.event_name == 'push'
+      # prepare already gated the tested commit of a scheduled / dispatched release: the tag is that commit plus its version bump.
+      - name: The tag is the tested commit plus its version bump
+        if: needs.prepare.outputs.tested != ''
+        env:
+          TESTED: ${{ needs.prepare.outputs.tested }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq tmux
-          yarn typecheck
-          yarn test
+          git fetch --no-tags --depth=1 origin "${TESTED}"
+          yarn tsx src/release/cli.ts verify-delta --base "${TESTED}" --head HEAD
+      # A hand-pushed tag has not been gated: the Tests workflow's result for the tagged commit decides (no run → the suite here).
+      - name: Tests of the tagged commit (the Tests workflow's result)
+        id: gate
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: yarn tsx src/release/cli.ts test-gate
+      - name: Install tmux
+        if: steps.gate.outputs.runSuite == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Typecheck
+        if: steps.gate.outputs.runSuite == 'true'
+        run: yarn typecheck
+      - name: Test (unit and flows)
+        if: steps.gate.outputs.runSuite == 'true'
+        run: yarn test
       - name: Release notes (read before publishing, so a missing section fails early)
         run: yarn tsx src/release/cli.ts notes "$VERSION" > "${RUNNER_TEMP}/release-notes.md"
       - name: Package check
