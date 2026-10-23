@@ -129,3 +129,40 @@ docker compose down charness && docker compose up -d charness   # examples/docke
 docker compose logs -f charness             # tail logs
 docker exec charness-main charness-restart-bot   # restart only the bot; agents keep running
 ```
+
+## Releases
+
+`.github/workflows/publish.yml` releases charness to npm without anyone doing anything. Every day at 09:17
+(Asia/Tbilisi) it decides by itself: nothing shipped changed → a green run, no tag, no publish; otherwise it
+typechecks, builds and runs the FULL `yarn test` on the runner, checks the package, commits `chore(release): X.Y.Z`,
+tags `vX.Y.Z`, publishes to the `latest` dist-tag with provenance (npm trusted publishing from the `release`
+environment, no npm token anywhere) and creates the GitHub Release from the CHANGELOG section. Red anywhere → no
+tag, no publish, the run is red; the next day's run tries again by itself. The logic is in `src/release/` (pure
+`releasePlan.ts` + the `cli.ts` wrapper, run by `tsx`, never built into `dist/`).
+
+- **Version** (Conventional Commits since the last `v*` tag): a `feat` that changes shipped code → minor; any other
+  shipped change (`fix`, `perf`, `refactor`, `revert`, `chore`, …) → patch; `chore(release)` commits never count. A `!`
+  after the type or a `BREAKING CHANGE:` footer in ANY commit makes the automatic run **fail**, naming the commits: a
+  major is released only by dispatching the workflow with `bump=major`.
+- **Nothing to release** (green, nothing tagged): no commits since the last tag, `HEAD` already tagged, or no shipped
+  path in the net diff from the tag — `src/**/*.ts` outside `src/__tests__` and `src/release`, `stt/gigaam_sidecar.py`,
+  and `package.json` only when `dependencies`, `bin`, `engines`, `files` or `main` differ. A docs-only or tests-only
+  day, or a change and its revert, publishes nothing; README / SETUP changes reach the npm page with the next code
+  release.
+- **Manual run** (Actions → Release to npm → Run workflow): `bump` `auto|patch|minor|major`; `force` releases even when
+  the skip rules say skip (never past the breaking-change guard of `auto`); `dryRun` does everything but the push, the
+  publish and the GitHub Release and prints the plan, the CHANGELOG diff, the notes and the package check.
+- **By hand:** `npm version minor` locally (its `preversion` runs typecheck, build and the tests, its
+  `version` script moves the CHANGELOG heading, `.npmrc` gives the commit npm's message `chore(release): X.Y.Z`), then
+  push `main` with the tag; the workflow runs the same gate and publishes that tag.
+- **CHANGELOG:** `## Unreleased` becomes `## X.Y.Z — YYYY-MM-DD` (Tbilisi date) with a fresh empty `## Unreleased`
+  above; that section is the GitHub Release text and ships inside the package. Every entry of it — a top-level
+  paragraph or `- ` bullet, in any `###` subsection — starts with a bold first sentence (`**…**`); the run fails,
+  quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
+  `## Unreleased` is filled with the `feat` / `fix` subjects.
+- **Package check** before any tag: the tarball holds `dist/cli.js`, `stt/gigaam_sidecar.py`, `CHANGELOG.md`,
+  `README.md`, `LICENSE` and no `src/` or tests, and `charness --version` of it, installed into a temp prefix, prints
+  the new version (`yarn tsx src/release/cli.ts check-pack`, after `yarn build`).
+- **After a release** the clone is one commit behind `main`: `git pull --rebase` before pushing. A new CHANGELOG entry
+  goes under `## Unreleased` (a push that races the release can conflict there; the run then fails with nothing
+  published).
