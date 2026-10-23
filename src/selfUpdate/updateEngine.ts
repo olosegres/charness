@@ -6,7 +6,7 @@ import type { HotSupervisorRecord, SupervisorSignalResult } from './hotSuperviso
 import { npmManualCommand, type InstallKind } from './installKind';
 import { UpdateSourceError, type NpmSource } from './npmSource';
 import { getCheckoutReleaseNotes, getNpmReleaseNotes, type WhatsNewSummary } from './releaseNotes';
-import { compareVersionTexts } from './semver';
+import { compareVersionTexts, parseSemVer } from './semver';
 import type { LastRunVersion, SelfUpdateRecord, UpdateObservation } from './types';
 import type { UpdateFailureReason, UpdateMessage } from './updateMessages';
 import type { AutoUpdateMode, UpdateSettings } from './updateModes';
@@ -294,6 +294,8 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     if (isCheckRunning) return;
     isCheckRunning = true;
     try {
+      noteInstalledVersion();
+      if (getPendingKind() !== null) armIdleLoop();
       if (deps.installKind.kind === 'ephemeral') return;
       const isFailing = deps.state.getRecord().isCheckFailing === true;
       try {
@@ -331,9 +333,12 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
 
   async function runScheduledCheck(): Promise<void> {
     try {
-      // `off` makes no registry or git traffic at all; the timer keeps ticking so a hand edit to `on` takes effect.
+      // A newer install on disk is no update decision, only the running process catching up with its own install, so it is
+      // noticed whatever the mode. `off` makes no registry or git traffic: the timer keeps ticking so a hand edit to `on` applies.
+      noteInstalledVersion();
       if (deps.getSettings().autoUpdate !== 'off') await runCheck({ isManual: false });
     } finally {
+      if (getPendingKind() !== null) armIdleLoop();
       scheduleNextCheck(checkIntervalMs);
     }
   }
@@ -438,7 +443,8 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     phase = 'installing';
     try {
       try {
-        await deps.npm.install(request.target);
+        // An operator's own `npm i -g` may already have put the target there: it is checked and restarted onto, not installed twice.
+        if (deps.readInstalledVersion() !== request.target) await deps.npm.install(request.target);
       } catch (error) {
         await failInstall(request.target, 'install', error instanceof Error ? error.message : String(error), null);
         return;
@@ -469,7 +475,17 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     try {
       result = await deps.git.apply({ holdBreaking: !request.isBreakingAllowed });
     } catch (error) {
-      await failInstall(request.target, 'install', error instanceof Error ? error.message : String(error), null);
+      // The script may have fast-forwarded before its install or build failed: put the checkout back on the commit that ran.
+      // Resetting to where it already is changes nothing, so a failure before the pull needs no special case.
+      let rollbackFailure: string | null = null;
+      if (deps.running.commit !== null) {
+        try {
+          await deps.git.rollback({ from: deps.running.commit, to: request.target, isHot: deps.isHotMode });
+        } catch (rollbackError) {
+          rollbackFailure = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        }
+      }
+      await failInstall(request.target, 'install', error instanceof Error ? error.message : String(error), rollbackFailure);
       return;
     }
     if (result.status === 'held') {
@@ -541,10 +557,19 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
       return;
     }
     if (phase !== 'restartPending') {
-      // A newer install already on disk (a manual `npm i -g`, another instance's install): the restart onto it is this
-      // bot's own doing, so it gets the same marker — the new boot says "Updated" and a version that cannot start is rolled back.
+      // A newer install already on disk (a manual `npm i -g`, another instance's install): probed first, like one this bot
+      // made — a broken one is not restarted onto — and the restart gets the same marker, so the new boot says "Updated" and a
+      // version that cannot start is rolled back.
       const installed = deps.readInstalledVersion();
-      if (installed !== null) deps.marker.write(createMarker('npm', { version: installed, commit: null }, false));
+      if (installed !== null) {
+        const check = await deps.runSelfCheck(installed);
+        if (!check.ok) {
+          isRestartBlocked = true;
+          deps.log(`[update] the install on disk (${installed}) fails its self-check, not restarting onto it: ${check.detail}`);
+          return;
+        }
+        deps.marker.write(createMarker('npm', { version: installed, commit: null }, pendingInstall?.isUserRequested ?? false));
+      }
     }
     phase = 'restartPending';
     try {
@@ -672,13 +697,19 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     const observation = deps.state.getRecord().lastResult?.observation;
     if (observation?.kind === 'npm') {
       const latest = { version: observation.latestVersion, engines: observation.engines, isDeprecated: observation.isDeprecated };
+      // What a TAP could do now (no hold, a major allowed) decides the button — a version this Node cannot run has none — and a
+      // Node that is too old is said at once, not after the hold that only delays what the bot itself would announce.
+      const tapDecision = decideNpm(latest, true, true);
+      const base = { target: latest.version, until: null, required: null, skipReason: null, canInstallNow: canInstall && tapDecision.action === 'install' };
+      if (tapDecision.action === 'needsNode') return { ...base, action: 'needsNode', required: tapDecision.required, canInstallNow: false };
       const decision = decideNpm(latest, false, true);
-      const base = { target: latest.version, until: null, required: null, skipReason: null, canInstallNow: canInstall };
+      const isMajor = (parseSemVer(latest.version)?.major ?? 0) > (parseSemVer(deps.running.version)?.major ?? 0);
       switch (decision.action) {
         case 'none':
           return null;
         case 'waitHold':
-          return { ...base, action: 'waitHold', until: decision.until };
+          // A major is never installed by itself, hold or not: say that, not "will install by itself".
+          return isMajor ? { ...base, action: 'offerMajor' } : { ...base, action: 'waitHold', until: decision.until };
         case 'install':
           return { ...base, action: 'installWhenIdle' };
         case 'notify':

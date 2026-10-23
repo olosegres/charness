@@ -91,6 +91,7 @@ function createHarness(options: HarnessOptions = {}) {
     selfCheck: { ok: true, detail: '' },
     gitApply: { status: 'updated', from: 'a1b2c3d', to: 'd4e5f6a', migrationGuides: [] } as GitApplyResult,
     gitRollbackError: null as Error | null,
+    gitApplyError: null as Error | null,
     lockHeld: false,
     checkError: null as Error | null,
     restartError: null as Error | null,
@@ -123,6 +124,7 @@ function createHarness(options: HarnessOptions = {}) {
     apply: async ({ holdBreaking }) => {
       calls.push(`git.apply${holdBreaking ? ' hold' : ''}`);
       assert.ok(marker !== null, 'the pending marker is written BEFORE the pull');
+      if (control.gitApplyError) throw control.gitApplyError;
       return control.gitApply;
     },
     getChangelogDiff: async () => control.changelogDiff,
@@ -358,6 +360,18 @@ describe('npm: versions that are not installed', () => {
     assert.equal(await harness.engine.requestInstall('3.5.0'), 'alreadyUpToDate');
   });
 
+  test('the screen says what a version is at once, not after the hold: a Node that is too old (no tap), a major (a tap, never by itself)', async () => {
+    const needsNode = createHarness({ latest: { version: '3.5.0', engines: '>=24', isDeprecated: false } });
+    await startAndCheck(needsNode);
+    assert.deepEqual(needsNode.engine.getStatus().offer, { target: '3.5.0', action: 'needsNode', until: null, required: '>=24', skipReason: null, canInstallNow: false });
+    assert.deepEqual(needsNode.posted, [], 'the BOT still says nothing before the hold ends');
+
+    const major = createHarness({ latest: { version: '4.0.0', engines: null, isDeprecated: false } });
+    await startAndCheck(major);
+    assert.deepEqual(major.engine.getStatus().offer, { target: '4.0.0', action: 'offerMajor', until: null, required: null, skipReason: null, canInstallNow: true });
+    assert.deepEqual(major.posted, []);
+  });
+
   test('a prefix that cannot be written: one notice per version after the hold, with the manual command; nothing installs', async () => {
     const readOnly: InstallKind = { kind: 'notifyOnly', reason: 'readOnlyPrefix', manualCommand: 'npm install -g charness@latest', isCheckout: false };
     const harness = createHarness({ installKind: readOnly });
@@ -508,7 +522,37 @@ describe('two instances, one install, and a manual install', () => {
     harness.state.idleVerdict = idle;
     await harness.advance(idlePollIntervalMs);
     assert.deepEqual(harness.calls.filter((call) => call === 'restart' || call.startsWith('npm.install')), ['restart']);
+    assert.ok(harness.calls.includes('selfCheck 3.5.0'), 'a newer install on disk is probed before the bot restarts onto it');
     assert.equal(harness.control.markerAtRestart?.status, 'pending');
+  });
+
+  test('a manual install is noticed at the next check — «Check now» or the hourly tick — even with the mode off', async () => {
+    const manualCheck = createHarness({ settings: { autoUpdate: 'off' } });
+    manualCheck.state.idleVerdict = idle;
+    await manualCheck.engine.runBootStep();
+    manualCheck.state.installedVersion = '3.5.0';
+    await manualCheck.engine.checkNow();
+    await manualCheck.advance(idlePollIntervalMs);
+    assert.ok(manualCheck.calls.includes('restart'));
+
+    const hourly = createHarness({ settings: { autoUpdate: 'off' } });
+    hourly.state.idleVerdict = idle;
+    hourly.engine.start();
+    hourly.state.installedVersion = '3.5.0';
+    await hourly.advance(firstCheckDelayMs);
+    await hourly.advance(idlePollIntervalMs);
+    assert.ok(hourly.calls.includes('restart'));
+    assert.equal(hourly.calls.includes('npm.getLatest'), false, 'still no registry traffic with the mode off');
+  });
+
+  test('«Update now» for a version an operator already installed by hand: no second npm install — checked, marked, restarted onto at once', async () => {
+    const harness = createHarness({ installedVersion: '3.5.0' });
+    await harness.engine.checkNow();
+    harness.state.idleVerdict = idle;
+    assert.equal(await harness.engine.requestInstall('3.5.0'), 'started');
+    await harness.settle();
+    assert.deepEqual(harness.calls.filter((call) => call !== 'npm.getLatest' && call !== 'lock.release'), ['selfCheck 3.5.0', 'marker.write pending', 'restart']);
+    assert.ok(harness.state.idleRequests.at(-1), 'a tap skips the quiet period');
   });
 
   test('a read-only prefix updated by hand is followed too', async () => {
@@ -518,6 +562,18 @@ describe('two instances, one install, and a manual install', () => {
     await harness.engine.runBootStep();
     await harness.advance(idlePollIntervalMs);
     assert.ok(harness.calls.includes('restart'));
+  });
+
+  test('a newer install on disk that fails its self-check is not restarted onto — logged once, not retried every poll', async () => {
+    const harness = createHarness({ installedVersion: '3.5.0' });
+    harness.control.selfCheck = { ok: false, detail: 'bot.js does not pass node --check' };
+    harness.state.idleVerdict = idle;
+    await harness.engine.runBootStep();
+    await harness.advance(idlePollIntervalMs * 6);
+    assert.equal(harness.calls.includes('restart'), false);
+    assert.equal(harness.calls.filter((call) => call === 'selfCheck 3.5.0').length, 1);
+    assert.match(harness.log.join('\n'), /fails its self-check, not restarting onto it: bot\.js does not pass node --check/);
+    assert.equal(harness.getMarker(), null);
   });
 
   test('a restart that cannot be done is logged once and not tried again every poll', async () => {
@@ -747,6 +803,29 @@ describe('a git checkout', () => {
     await harness.advance(checkIntervalMs);
     await harness.advance(idlePollIntervalMs);
     assert.equal(harness.calls.filter((call) => call.startsWith('git.apply')).length, applies + 1, 'a newer upstream commit is tried');
+  });
+
+  test('a build that fails after the pull: the checkout is put back on the commit that ran, one line, not retried', async () => {
+    const harness = createHarness({ installKind: checkout, running: checkoutRunning, gitCheck: behind });
+    harness.control.gitApplyError = new UpdateSourceError('self-update.sh failed: yarn build: error TS2307');
+    harness.state.idleVerdict = idle;
+    await startAndCheck(harness);
+    await harness.advance(idlePollIntervalMs);
+    assert.ok(harness.calls.includes('git.rollback a1b2c3d d4e5f6a'), 'the script may have fast-forwarded before it failed');
+    assert.equal(harness.calls.includes('restart'), false);
+    assert.equal(harness.getMarker(), null);
+    assert.deepEqual(harness.getRecord().failedTargets, ['d4e5f6a']);
+    assert.deepEqual(harness.posted, [{ kind: 'installFailed', target: 'd4e5f6a', reason: 'install', stillRunning: 'a1b2c3d', manualCommand: '/srv/charness/scripts/self-update.sh' }]);
+  });
+
+  test('…and when even the way back fails, that is the pinned kind of message', async () => {
+    const harness = createHarness({ installKind: checkout, running: checkoutRunning, gitCheck: behind });
+    harness.control.gitApplyError = new UpdateSourceError('boom');
+    harness.control.gitRollbackError = new UpdateSourceError('git reset failed: local changes');
+    harness.state.idleVerdict = idle;
+    await startAndCheck(harness);
+    await harness.advance(idlePollIntervalMs);
+    assert.deepEqual(harness.posted.map((message) => message.kind), ['rollbackFailed']);
   });
 
   test('a range that adds a migration guide is offered once and not pulled; the tap pulls it', async () => {

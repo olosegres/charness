@@ -266,11 +266,15 @@ describe('the text forms', () => {
     assert.match(sent.at(-1)?.text ?? '', /cannot update itself/);
   });
 
-  test('/update now with nothing to install says so without asking the engine', async () => {
+  test('/update now with nothing to install says it is up to date — or, for an install that cannot update itself, that it cannot', async () => {
     createFeature();
+    installResult = 'alreadyUpToDate';
     await runCommand('/update now');
     assert.equal(sent.at(-1)?.text, 'ℹ️ Already up to date.');
-    assert.deepEqual(engineCalls, []);
+    installResult = 'cannotInstall';
+    await runCommand('/update now');
+    assert.match(sent.at(-1)?.text ?? '', /cannot update itself/);
+    assert.deepEqual(engineCalls, ['requestInstall ', 'requestInstall ']);
   });
 });
 

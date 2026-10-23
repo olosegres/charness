@@ -150,8 +150,10 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
       await replyToThread(key, code === null ? withThreadLocale(key, () => t(isOn ? 'update.cmd.whatsNewSet.on' : 'update.cmd.whatsNewSet.off')) : getWriteFailedText(key, code));
       return;
     }
+    // With nothing to install the engine is asked all the same, for "" — an install that cannot update itself says so,
+    // instead of claiming it is up to date.
     const target = getInstallableTarget();
-    const result = target === null ? 'alreadyUpToDate' : await (getUpdateEngine()?.requestInstall(target) ?? Promise.resolve<InstallRequestResult>('alreadyUpToDate'));
+    const result = (await getUpdateEngine()?.requestInstall(target ?? '')) ?? 'alreadyUpToDate';
     await replyToThread(key, getInstallResultText(key, result, target ?? ''));
     if (result === 'started') await sendScreen(key);
   }
