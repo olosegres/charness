@@ -7946,11 +7946,12 @@ command(escapeCommandNames, async (_ctx, key) => {
     // The operator interrupted the turn: its open request closes silently.
     cancelConversationRequest(key);
     markNeedsNewMessage(key);
-    // An OpenCode turn blocked on a question ends with it: the question is closed on the server before the abort
-    // (an open one is re-found at every reattach) and its buttons are retired, as when a prompt walks away from it.
-    if (pendingQuestions.has(keyToString(key))) await retirePendingQuestion(key);
+    // A turn blocked on a question ends with it: the question is closed on the agent first (an open OpenCode one is
+    // re-found at every reattach; a Claude stream-json one is denied), then the turn is stopped — neither waits for Telegram. Only
+    // then the question's buttons are retired, as when a prompt walks away from it (that edit goes through the send pacer).
     adapter.rejectQuestion?.(key);
     adapter.sendEscape(key);
+    if (pendingQuestions.has(keyToString(key))) await retirePendingQuestion(key);
   } else {
     await replyToThread(key, `Not supported for ${adapter.label}`);
   }

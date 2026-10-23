@@ -13,7 +13,7 @@
  *   → an interrupt before the turn produced anything: the aborted turn's idle is not taken for a session that ran
  *     nothing, so the prompt is not replayed on a recovered session
  *   → a turn blocked on a question: `/interrupt` cancels the question (its buttons are retired, the server's question
- *     is rejected) and aborts the turn.
+ *     is rejected) and aborts the turn — without waiting for Telegram's answer to the buttons' edit.
  *
  * What the unit tests cover instead: the abort request and the wedged-turn watch (`openCodeInterrupt.test.ts`), the
  * menu entries (`modelPickerSurface.test.ts`).
@@ -69,6 +69,7 @@ const abortedErrorFragment = 'Aborted';
 const questionRequestId = 'que_interrupt_1';
 const questionHeader = 'Lexer';
 const questionText = 'Which lexer should I write?';
+const cancelledQuestionLabel = enDict['agent.question_cancelled_msg_label'].replace('{header}', questionHeader);
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -267,8 +268,17 @@ describe('/interrupt on an OpenCode topic end to end: built charness, fake Bot A
     assert.ok(topic.getKeyboardData(bubble).flat().some((data) => data.startsWith('qa_')), 'the options are buttons');
 
     const rejectsBefore = fakeOpenCode.listRequests('POST', `/question/${questionRequestId}/reject`).length;
-    await interruptWith('/interrupt', sessionId);
-    await topic.waitForMessageText('the question retired', bubble, (text) => text === enDict['agent.question_cancelled_msg_label'].replace('{header}', questionHeader));
+    // The Telegram answer to the question buttons' edit is held: the abort must not wait for it (that edit goes through the
+    // send pacer, seconds late on a busy instance, while the agent keeps working).
+    let releaseEdit = (): void => {};
+    fakeTelegram.holdNextResponse('editMessageText', new Promise<void>((resolve) => { releaseEdit = resolve; }), (payload) => payload.text === cancelledQuestionLabel);
+    try {
+      await interruptWith('/interrupt', sessionId);
+      await getCharness().waitFor('the question rejected on the server while the buttons\' edit is still held', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/question/${questionRequestId}/reject`).length > rejectsBefore);
+    } finally {
+      releaseEdit();
+    }
+    await topic.waitForMessageText('the question retired', bubble, (text) => text === cancelledQuestionLabel);
     assert.equal(fakeOpenCode.listRequests('POST', `/question/${questionRequestId}/reject`).length, rejectsBefore + 1, 'the question is rejected on the server');
     assert.deepEqual(topic.getKeyboardData(bubble).flat(), [], 'the stale buttons are gone');
   });

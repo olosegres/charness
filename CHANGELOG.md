@@ -12,8 +12,10 @@ which has no topics, the command says so.
 **`/interrupt` stops a running OpenCode turn.** `/esc` answered «Not supported for OpenCode», so an OpenCode topic had
 no way to stop the agent and redirect it. `/interrupt` (the new name of `/esc` — both work, and `/interrupt` is in the
 command menu) aborts the generation, cancels a question the agent was waiting on, and leaves the conversation as it
-is: the next message steers the agent. Stopping a turn before the agent had written anything (also with `/c`) is no
-longer taken for a stuck session, whose "recovery" ran the request again.
+is: the next message steers the agent. On the Claude
+stream-json backends `/esc` now also declines a question the agent is waiting on (it used to leave it open under the
+aborted turn). Stopping a turn before the agent had written anything (also with `/c`) is no longer taken for a stuck
+session, whose "recovery" ran the request again.
 
 ## 3.3.2 — 2026-10-23
 

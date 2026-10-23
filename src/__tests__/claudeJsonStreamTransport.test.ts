@@ -486,6 +486,56 @@ describe('json-stream idle watchdog — the stuck-busy / hung-typing backstop', 
   });
 });
 
+describe('json-stream /esc on a pending AskUserQuestion', () => {
+  let dir: string;
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('the bot rejects the question, then interrupts: the process gets the deny BEFORE the interrupt, and the question is gone', () => {
+    // `/esc` runs `adapter.rejectQuestion(key)` then `adapter.sendEscape(key)` (see the order pinned in
+    // `openCodeQuestionReject.test.ts`): on this backend that is a deny control_response, then the interrupt — the tool call
+    // is answered ("declined") instead of left open under a turn that is being aborted.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-esc-question-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    session.pendingQuestion = {
+      requestId: 'req_question',
+      toolUseId: 'toolu_question',
+      rawInput: { questions: [{ question: 'Which lexer?', options: [{ label: 'hand-written' }] }] },
+      questions: [{ question: 'Which lexer?', options: [{ label: 'hand-written' }] }],
+    };
+    const frames: Array<Record<string, unknown>> = [];
+    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => {
+      frames.push(frame);
+    };
+
+    adapter.rejectQuestion(session.key);
+    adapter.sendEscape(session.key);
+
+    assert.equal(session.pendingQuestion, null, 'the question is closed');
+    assert.deepEqual(frames.map((frame) => frame.type), ['control_response', 'control_request']);
+    assert.deepEqual(frames[0], {
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'req_question', response: { behavior: 'deny', message: 'User declined to answer the question.', toolUseID: 'toolu_question' } },
+    });
+    assert.deepEqual((frames[1].request as Record<string, unknown>).subtype, 'interrupt');
+  });
+
+  it('with no question pending, /esc sends the interrupt alone', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-esc-plain-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const frames: Array<Record<string, unknown>> = [];
+    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => {
+      frames.push(frame);
+    };
+
+    adapter.rejectQuestion(session.key);
+    adapter.sendEscape(session.key);
+
+    assert.deepEqual(frames.map((frame) => frame.type), ['control_request']);
+  });
+});
+
 describe('json-stream interrupt-aborted turn — no bogus "Claude error" surfaces', () => {
   let dir: string;
   afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
