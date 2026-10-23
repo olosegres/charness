@@ -42,6 +42,14 @@ export const buildTopicPageCallback = (wizardId: string, page: number): string =
 export const topicPageCallbackRe = new RegExp(`^topic_page_${wizardIdPattern}_(\\d+)$`);
 export const buildTopicCreateFolderCallback = (wizardId: string): string => `topic_create_${wizardId}`;
 export const topicCreateFolderCallbackRe = new RegExp(`^topic_create_${wizardIdPattern}$`);
+export const buildTopicCancelCallback = (wizardId: string): string => `topic_cancel_${wizardId}`;
+export const topicCancelCallbackRe = new RegExp(`^topic_cancel_${wizardIdPattern}$`);
+
+/** The wizard's «cancel» row, the last one of the folder question and of the picker. */
+const buildTopicCancelButton = (wizardId: string): { label: string; callback: string } => ({
+  label: t('topic.cancelButton'),
+  callback: buildTopicCancelCallback(wizardId),
+});
 
 /** @description The picker's buttons pointing at the wizard `wizardId` instead of at the topic the keyboard sits in. */
 export function buildTopicPickerCallbacks(wizardId: string): BindPickerCallbacks {
@@ -49,6 +57,7 @@ export function buildTopicPickerCallbacks(wizardId: string): BindPickerCallbacks
     getFolderCallback: (_subdir, index) => buildTopicFolderCallback(wizardId, index),
     getPageCallback: (page) => buildTopicPageCallback(wizardId, page),
     createFolderCallback: buildTopicCreateFolderCallback(wizardId),
+    cancelButton: buildTopicCancelButton(wizardId),
   };
 }
 
@@ -81,6 +90,8 @@ export type WorkFolderResult = { outcome: 'invalid' } | { outcome: 'failed' } | 
 export interface TopicCommandPorts extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext'> {
   /** Whether the key is the owner's private chat — it has no topics to create. */
   checkIsDmKey: (key: SessionKey) => boolean;
+  /** End `/bind`'s own «create new folder» question of the topic — two readers of the next plain message would race for it. */
+  disarmFolderCreation: (key: SessionKey) => void;
   /** The `WORK_ROOT` subfolders the picker lists. */
   listAvailableSubdirs: () => string[];
   /** Validate and create the folder a user typed (what `/bind`'s «create new folder» does); reports a refusal to `key`'s topic. */
@@ -122,14 +133,15 @@ export function getPublicChatUsername(chat: Chat | undefined): string | null {
 }
 
 /**
- * @description Build the `/topic` feature over its ports: the command, its five buttons, and the capture of the topic
- * name and the new folder's name (the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; `/esc` and any
- * other command end it through `cancelTopicInput`).
+ * @description Build the `/topic` feature over its ports: the command, its six buttons, and the capture of the topic
+ * name and the new folder's name (the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; any other
+ * command ends it through `cancelTopicInput`). `/esc` ends the wizard at ANY step through `cancelTopicWizard`, as the
+ * «cancel» button does.
  */
 export function createTopicCommand(ports: TopicCommandPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, checkIsDmKey,
-    listAvailableSubdirs, createWorkFolder, bindNewTopic,
+    disarmFolderCreation, listAvailableSubdirs, createWorkFolder, bindNewTopic,
   } = ports;
 
   const wizards = new Map<string, TopicWizard>();
@@ -190,11 +202,38 @@ export function createTopicCommand(ports: TopicCommandPorts) {
     return getCapture(key) !== null;
   }
 
-  /** End the topic's pending question and its wizard (`/esc`, or any other command). Returns whether one was pending. */
+  /**
+   * End the topic's pending name question and its wizard, silently (any command but `/esc`, arming `/bind`'s own
+   * question). A wizard that waits for a tap is left alone: its keyboard is still a valid question. Returns whether one
+   * was pending.
+   */
   function cancelTopicInput(key: SessionKey): boolean {
     const capture = getCapture(key);
     if (!capture) return false;
     forgetWizard(capture.wizard);
+    return true;
+  }
+
+  /** The topic's newest wizard that can still be stopped: alive and not already creating its topic. */
+  function findCancellableWizard(key: SessionKey): TopicWizard | null {
+    const keyText = keyToString(key);
+    let newest: TopicWizard | null = null;
+    for (const wizard of [...wizards.values()]) {
+      if (keyToString(wizard.originKey) === keyText && getWizard(wizard.id) !== null && !wizard.isCreating) newest = wizard;
+    }
+    return newest;
+  }
+
+  /**
+   * `/esc`: end the topic's newest wizard at whatever step it waits — a name question or a keyboard — and say so (the
+   * wizard's message is consumed into the notice, else the notice is a new message). Returns whether there was one; if
+   * not, `/esc` is the interrupt of the agent again.
+   */
+  async function cancelTopicWizard(key: SessionKey): Promise<boolean> {
+    const wizard = findCancellableWizard(key);
+    if (!wizard) return false;
+    forgetWizard(wizard);
+    await showAnswer(wizard, t('topic.cancelled'), null);
     return true;
   }
 
@@ -237,9 +276,11 @@ export function createTopicCommand(ports: TopicCommandPorts) {
       await showPicker(wizard);
       return;
     }
+    const cancelButton = buildTopicCancelButton(wizard.id);
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback(t('topic.sameFolderButton', { subdir: wizard.currentSubdir }), buildTopicSameFolderCallback(wizard.id))],
       [Markup.button.callback(t('topic.otherFolderButton'), buildTopicOtherFolderCallback(wizard.id))],
+      [Markup.button.callback(cancelButton.label, cancelButton.callback)],
     ]);
     wizard.messageId = await replyToThread(wizard.originKey, t('topic.askFolder', { name }), keyboard);
   }
@@ -386,10 +427,18 @@ export function createTopicCommand(ports: TopicCommandPorts) {
       const wizard = await takeWizardTap(ctx, ctx.match[1], { toast: t('bind.create_cb') });
       if (!wizard || wizard.messageId === null) return;
       armCapture(wizard, 'folderName');
+      disarmFolderCreation(wizard.originKey);
       // The picker is consumed: the message becomes the question for the folder's name.
       await editThreadMessage(wizard.originKey, wizard.messageId, `${t('topic.createFolderPrompt', { name: wizard.name ?? '' })}\n${t('login.esc_hint')}`);
     });
+
+    bot.action(topicCancelCallbackRe, async (ctx) => {
+      const wizard = await takeWizardTap(ctx, ctx.match[1]);
+      if (!wizard) return;
+      forgetWizard(wizard);
+      await showAnswer(wizard, t('topic.cancelled'), null);
+    });
   }
 
-  return { registerTopicCommand, registerTopicCallbacks, checkIsAwaitingTopicInput, submitTopicInput, cancelTopicInput };
+  return { registerTopicCommand, registerTopicCallbacks, checkIsAwaitingTopicInput, submitTopicInput, cancelTopicInput, cancelTopicWizard };
 }

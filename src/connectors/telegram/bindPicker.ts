@@ -31,6 +31,8 @@ export interface BindPickerCallbacks {
   getFolderCallback: (subdir: string, index: number) => string;
   getPageCallback: (page: number) => string;
   createFolderCallback: string;
+  /** A full-width last row of its own — the way out of a wizard (`/bind`'s picker has none). */
+  cancelButton?: { label: string; callback: string };
 }
 
 /** `/bind`'s own: the folder name rides in the data, pages are numbered. */
@@ -65,7 +67,8 @@ export const bindPickerCallbacks: BindPickerCallbacks = {
  * `bind_<subdir>` action regex. They ride on every page so they're reachable
  * regardless of pagination.
  *
- * `callbacks` re-targets the buttons (the `/topic` wizard's); the layout stays the one `/bind` has.
+ * `callbacks` re-targets the buttons (the `/topic` wizard's, which adds a «cancel» row at the bottom); the layout
+ * stays the one `/bind` has.
  */
 export function buildBindKeyboard(
   subdirs: readonly string[],
@@ -105,6 +108,10 @@ export function buildBindKeyboard(
       nav.push(Markup.button.callback('Next ➡️', callbacks.getPageCallback(currentPage + 1)));
     }
     rows.push(nav);
+  }
+
+  if (callbacks.cancelButton) {
+    rows.push([Markup.button.callback(callbacks.cancelButton.label, callbacks.cancelButton.callback)]);
   }
 
   return Markup.inlineKeyboard(rows);

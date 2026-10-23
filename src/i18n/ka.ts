@@ -58,6 +58,7 @@ export const kaDict: Record<string, string> = {
   'topic.cancelled': '✖ გაუქმდა — თემა არ შექმნილა.',
   'topic.dmUnsupported': '🧵 თემები არსებობს ჯგუფში, სადაც თემები ჩართულია — გაუშვით /topic იქ. ამ ჩატში მათ არ აქვს.',
   'topic.staleChoice': 'ეს არჩევანი მოძველდა — გაუშვით /topic ხელახლა.',
+  'topic.cancelButton': '✖️ გაუქმება',
 
   'ls.header': '📁 `{workRoot}`-ის ქვესაქაღალდეები:',
   'ls.empty': '📁 `WORK_ROOT`-ის ქვეშ დასაკავშირებელი ქვესაქაღალდეები არ არის.',

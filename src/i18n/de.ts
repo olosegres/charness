@@ -58,6 +58,7 @@ export const deDict: Record<string, string> = {
   'topic.cancelled': '✖ Abgebrochen — es wurde kein Thread erstellt.',
   'topic.dmUnsupported': '🧵 Threads gibt es in einer Gruppe mit aktivierten Themen — führe /topic dort aus. Dieser Chat hat keine.',
   'topic.staleChoice': 'Diese Auswahl ist veraltet — führe /topic erneut aus.',
+  'topic.cancelButton': '✖️ Abbrechen',
 
   'ls.header': '📁 Unterordner von `{workRoot}`:',
   'ls.empty': '📁 Keine verknüpfbaren Unterordner unter `WORK_ROOT`.',

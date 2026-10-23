@@ -58,6 +58,7 @@ export const frDict: Record<string, string> = {
   'topic.cancelled': '✖ Annulé — aucun fil n’a été créé.',
   'topic.dmUnsupported': '🧵 Les fils vivent dans un groupe avec les sujets activés — lancez /topic là-bas. Ce chat n’en a pas.',
   'topic.staleChoice': 'Ce choix est périmé — relancez /topic.',
+  'topic.cancelButton': '✖️ Annuler',
 
   'ls.header': '📁 Sous-dossiers de `{workRoot}` :',
   'ls.empty': '📁 Aucun sous-dossier liaisable sous `WORK_ROOT`.',

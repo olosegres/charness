@@ -58,6 +58,7 @@ export const esDict: Record<string, string> = {
   'topic.cancelled': '✖ Cancelado — no se creó ningún hilo.',
   'topic.dmUnsupported': '🧵 Los hilos viven en un grupo con temas activados — ejecuta /topic allí. Este chat no los tiene.',
   'topic.staleChoice': 'Esta elección está desactualizada — ejecuta /topic de nuevo.',
+  'topic.cancelButton': '✖️ Cancelar',
 
   'ls.header': '📁 Subcarpetas de `{workRoot}`:',
   'ls.empty': '📁 No hay subcarpetas vinculables bajo `WORK_ROOT`.',

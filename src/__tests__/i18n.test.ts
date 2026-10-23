@@ -472,6 +472,7 @@ test('/topic keys exist in every locale and keep their placeholders', () => {
     'topic.cancelled': [],
     'topic.dmUnsupported': [],
     'topic.staleChoice': [],
+    'topic.cancelButton': [],
   };
   for (const [code, placeholders] of Object.entries(placeholdersByKey)) {
     assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);

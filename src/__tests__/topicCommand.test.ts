@@ -10,8 +10,9 @@
  *     is refused and asked again; the owner's private chat is told topics need a group;
  *   • the answers: «as here», a picked folder and a created folder each make ONE topic (a second tap makes none), bind it,
  *     and turn the question's message into the answer carrying the link; a refused `createForumTopic` says what is missing;
- *   • the wizard's lifetime: `/esc` cancels the capture and the wizard's keyboards go stale; a keyboard of another message is refused;
- *     a wizard expires.
+ *   • the wizard's lifetime: the «cancel» button and `/esc` end it at ANY step (a name question, the folder question, the
+ *     picker, the folder-name question) and consume its keyboard, every other command ends only a pending name question;
+ *     a keyboard of another message is refused; a wizard expires; creating the topic cannot be cancelled.
  *
  * What the flow test covers instead: the text handler reaching the capture, the real group, the welcome in the new topic.
  */
@@ -21,6 +22,7 @@
 import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildTopicCancelCallback,
   buildTopicCreateFolderCallback,
   buildTopicFolderCallback,
   buildTopicLink,
@@ -52,6 +54,7 @@ let folderOutcome: WorkFolderResult = { outcome: 'ready', subdir: 'made-up' };
 let bindFailure: string | null = null;
 const createdFolderNames: string[] = [];
 const boundTopics: Array<{ key: SessionKey; subdir: string; topicName: string }> = [];
+const disarmedFolderCreationKeys: SessionKey[] = [];
 
 /** The last thing the module sent to the topic. */
 function getLastReply(): RecordedSend {
@@ -75,12 +78,31 @@ function getUrlButtons(sent: RecordedSend | undefined): string[] {
   return markup.inline_keyboard.flat().flatMap((button) => (button.url === undefined ? [] : [button.url]));
 }
 
+/** Poll until `check` holds (bounded). */
+async function waitFor(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** `/topic Release notes` in the bound topic: the folder question and its wizard id. */
+async function askAboutFolder(): Promise<{ question: RecordedSend; wizardId: string }> {
+  await harness.runCommand('topic', 'Release notes');
+  const question = getLastReply();
+  return { question, wizardId: getWizardId(question) };
+}
+
 describe('topicCommand: /topic over its ports', () => {
   before(async () => {
     harness = await createCommandHarness();
     topic = createTopicCommand({
       ...harness.core,
       checkIsDmKey: () => isDirectChat,
+      disarmFolderCreation: (key) => {
+        disarmedFolderCreationKeys.push(key);
+      },
       listAvailableSubdirs: () => workFolders,
       createWorkFolder: async (_key, rawName) => {
         createdFolderNames.push(rawName);
@@ -100,6 +122,8 @@ describe('topicCommand: /topic over its ports', () => {
   });
 
   beforeEach(async () => {
+    // Whatever wizard an earlier test left alive.
+    while (await topic.cancelTopicWizard(harness.key)) { /* drained */ }
     harness.replies.length = 0;
     harness.edits.length = 0;
     harness.isGeneral = false;
@@ -109,10 +133,10 @@ describe('topicCommand: /topic over its ports', () => {
     bindFailure = null;
     createdFolderNames.length = 0;
     boundTopics.length = 0;
+    disarmedFolderCreationKeys.length = 0;
     harness.fakeTelegram.canManageTopics = true;
     harness.fakeTelegram.createdTopics.length = 0;
     harness.fakeTelegram.callbackAnswers.length = 0;
-    topic.cancelTopicInput(harness.key);
     await harness.state.setBinding(harness.key, folderRepoName);
   });
 
@@ -120,9 +144,9 @@ describe('topicCommand: /topic over its ports', () => {
     mock.timers.reset();
   });
 
-  it('registers the command and its five buttons', () => {
+  it('registers the command and its six buttons', () => {
     assert.deepEqual(harness.registeredCommandNames, ['topic']);
-    assert.equal(harness.registeredActionPatterns.length, 5);
+    assert.equal(harness.registeredActionPatterns.length, 6);
     assert.ok(harness.registeredActionPatterns.every((pattern) => pattern.startsWith('/^topic_')));
   });
 
@@ -157,6 +181,7 @@ describe('topicCommand: /topic over its ports', () => {
         buildTopicFolderCallback(wizardId, 9999),
         buildTopicPageCallback(wizardId, 9999),
         buildTopicCreateFolderCallback(wizardId),
+        buildTopicCancelCallback(wizardId),
       ]) {
         assert.ok(Buffer.byteLength(data) <= 64, `${data} fits`);
       }
@@ -188,7 +213,7 @@ describe('topicCommand: /topic over its ports', () => {
       await topic.submitTopicInput(harness.key, '  Release   notes ');
       const question = getLastReply();
       assert.equal(question.text, t('topic.askFolder', { name: 'Release notes' }));
-      assert.deepEqual(harness.getKeyboardLabels(question), [[t('topic.sameFolderButton', { subdir: folderRepoName })], [t('topic.otherFolderButton')]]);
+      assert.deepEqual(harness.getKeyboardLabels(question), [[t('topic.sameFolderButton', { subdir: folderRepoName })], [t('topic.otherFolderButton')], [t('topic.cancelButton')]]);
       assert.equal(topic.checkIsAwaitingTopicInput(harness.key), false, 'the name was taken: the next message is the agent\'s again');
     });
 
@@ -210,6 +235,7 @@ describe('topicCommand: /topic over its ports', () => {
         [buildTopicCreateFolderCallback(wizardId)],
         [buildTopicFolderCallback(wizardId, 0), buildTopicFolderCallback(wizardId, 1)],
         [buildTopicFolderCallback(wizardId, 2)],
+        [buildTopicCancelCallback(wizardId)],
       ]);
     });
 
@@ -275,6 +301,7 @@ describe('topicCommand: /topic over its ports', () => {
       assert.deepEqual(harness.getKeyboardData(picker).flat(), [
         buildTopicCreateFolderCallback(wizardId),
         buildTopicFolderCallback(wizardId, 0), buildTopicFolderCallback(wizardId, 1), buildTopicFolderCallback(wizardId, 2),
+        buildTopicCancelCallback(wizardId),
       ]);
 
       await harness.tapButton(question.messageId ?? 0, buildTopicFolderCallback(wizardId, 1));
@@ -353,11 +380,50 @@ describe('topicCommand: /topic over its ports', () => {
   });
 
   describe("the wizard's lifetime", () => {
-    it('/esc cancels the pending name question and the wizard with it', async () => {
+    it('any other command ends the pending name question silently, and the wizard with it', async () => {
       await harness.runCommand('topic');
       assert.equal(topic.cancelTopicInput(harness.key), true);
       assert.equal(topic.checkIsAwaitingTopicInput(harness.key), false);
-      assert.equal(topic.cancelTopicInput(harness.key), false, 'nothing left to cancel: /esc is the interrupt again');
+      assert.equal(topic.cancelTopicInput(harness.key), false, 'nothing pending any more');
+      assert.deepEqual(harness.replies.map((reply) => reply.text), [`${t('topic.askName')}\n${t('login.esc_hint')}`], 'nothing was said');
+    });
+
+    it('a command leaves a question that waits for a tap alone: its keyboard is still a valid question', async () => {
+      const { question, wizardId } = await askAboutFolder();
+      assert.equal(topic.cancelTopicInput(harness.key), false);
+      await harness.tapButton(question.messageId ?? 0, buildTopicSameFolderCallback(wizardId));
+      assert.equal(harness.fakeTelegram.createdTopics.length, 1);
+    });
+
+    it('/esc cancels the pending name question: said in a new message, since there is no message of the wizard yet', async () => {
+      await harness.runCommand('topic');
+      assert.equal(await topic.cancelTopicWizard(harness.key), true);
+      assert.equal(getLastReply().text, t('topic.cancelled'));
+      assert.equal(topic.checkIsAwaitingTopicInput(harness.key), false);
+      assert.equal(await topic.cancelTopicWizard(harness.key), false, 'nothing left to cancel: /esc is the interrupt again');
+    });
+
+    it('/esc at the folder question consumes it into the notice; its buttons go stale', async () => {
+      const { question, wizardId } = await askAboutFolder();
+      assert.equal(await topic.cancelTopicWizard(harness.key), true);
+      const notice = harness.edits.at(-1);
+      assert.equal(notice?.messageId, question.messageId, 'the question message itself');
+      assert.equal(notice?.text, t('topic.cancelled'));
+      assert.deepEqual(harness.getKeyboardData(notice).flat(), [], 'its keyboard is dropped');
+      await harness.tapButton(question.messageId ?? 0, buildTopicSameFolderCallback(wizardId));
+      assert.equal(harness.fakeTelegram.createdTopics.length, 0);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), t('topic.staleChoice'));
+    });
+
+    it('/esc in the picker ends the wizard the same way', async () => {
+      await harness.state.removeBinding(harness.key);
+      await harness.runCommand('topic', 'Release notes');
+      const picker = getLastReply();
+      const wizardId = getWizardId(picker);
+      assert.equal(await topic.cancelTopicWizard(harness.key), true);
+      assert.equal(harness.edits.at(-1)?.text, t('topic.cancelled'));
+      await harness.tapButton(picker.messageId ?? 0, buildTopicFolderCallback(wizardId, 0));
+      assert.equal(harness.fakeTelegram.createdTopics.length, 0);
     });
 
     it('/esc during the folder-name question cancels it; the keyboards of the wizard go stale', async () => {
@@ -366,10 +432,48 @@ describe('topicCommand: /topic over its ports', () => {
       const picker = getLastReply();
       const wizardId = getWizardId(picker);
       await harness.tapButton(picker.messageId ?? 0, buildTopicCreateFolderCallback(wizardId));
-      assert.equal(topic.cancelTopicInput(harness.key), true);
+      assert.equal(await topic.cancelTopicWizard(harness.key), true);
+      assert.equal(harness.edits.at(-1)?.text, t('topic.cancelled'), 'the folder-name question message becomes the notice');
+      assert.equal(topic.checkIsAwaitingTopicInput(harness.key), false);
       await harness.tapButton(picker.messageId ?? 0, buildTopicFolderCallback(wizardId, 0));
       assert.equal(harness.fakeTelegram.createdTopics.length, 0);
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), t('topic.staleChoice'));
+    });
+
+    it('the «cancel» button on the folder question and on the picker does what /esc does', async () => {
+      const { question, wizardId } = await askAboutFolder();
+      await harness.tapButton(question.messageId ?? 0, buildTopicCancelCallback(wizardId));
+      assert.equal(harness.edits.at(-1)?.text, t('topic.cancelled'));
+      assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).flat(), []);
+      assert.equal(await topic.cancelTopicWizard(harness.key), false, 'the wizard is gone');
+
+      await harness.state.removeBinding(harness.key);
+      await harness.runCommand('topic', 'Second');
+      const picker = getLastReply();
+      await harness.tapButton(picker.messageId ?? 0, buildTopicCancelCallback(getWizardId(picker)));
+      assert.equal(harness.edits.at(-1)?.messageId, picker.messageId);
+      assert.equal(harness.edits.at(-1)?.text, t('topic.cancelled'));
+      assert.equal(harness.fakeTelegram.createdTopics.length, 0);
+    });
+
+    it('/esc cannot stop a topic that is being created; the tap that started it goes on', async () => {
+      const { question, wizardId } = await askAboutFolder();
+      let release = (): void => {};
+      harness.fakeTelegram.holdNextResponse('createForumTopic', new Promise<void>((resolve) => { release = resolve; }));
+      const tap = harness.tapButton(question.messageId ?? 0, buildTopicSameFolderCallback(wizardId));
+      await waitFor(() => harness.fakeTelegram.createdTopics.length === 1);
+      assert.equal(await topic.cancelTopicWizard(harness.key), false, 'the topic exists already: /esc is the interrupt again');
+      release();
+      await tap;
+      assert.equal(harness.edits.at(-1)?.text, t('topic.created', { name: 'Release notes', subdir: folderRepoName }));
+    });
+
+    it('«create new folder» ends /bind\'s own folder-name question of the topic: the two would race for the next message', async () => {
+      await harness.state.removeBinding(harness.key);
+      await harness.runCommand('topic', 'Release notes');
+      const picker = getLastReply();
+      await harness.tapButton(picker.messageId ?? 0, buildTopicCreateFolderCallback(getWizardId(picker)));
+      assert.deepEqual(disarmedFolderCreationKeys, [harness.key]);
     });
 
     it('a keyboard of another message is refused, though the wizard is alive', async () => {

@@ -58,6 +58,7 @@ export const ptDict: Record<string, string> = {
   'topic.cancelled': '✖ Cancelado — nenhum tópico foi criado.',
   'topic.dmUnsupported': '🧵 Os tópicos existem num grupo com tópicos ativados — executa /topic lá. Este chat não os tem.',
   'topic.staleChoice': 'Esta escolha está desatualizada — executa /topic de novo.',
+  'topic.cancelButton': '✖️ Cancelar',
 
   'ls.header': '📁 Subpastas de `{workRoot}`:',
   'ls.empty': '📁 Sem subpastas vinculáveis sob `WORK_ROOT`.',

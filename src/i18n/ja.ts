@@ -58,6 +58,7 @@ export const jaDict: Record<string, string> = {
   'topic.cancelled': '✖ キャンセルしました — トピックは作成されていません。',
   'topic.dmUnsupported': '🧵 トピックはトピック機能が有効なグループにあります。そちらで /topic を実行してください。このチャットにはありません。',
   'topic.staleChoice': 'この選択は古くなっています — /topic をもう一度実行してください。',
+  'topic.cancelButton': '✖️ キャンセル',
 
   'ls.header': '📁 `{workRoot}` のサブフォルダ:',
   'ls.empty': '📁 `WORK_ROOT` の下にバインド可能なサブフォルダがありません。',

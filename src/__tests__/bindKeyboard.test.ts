@@ -99,4 +99,12 @@ describe('buildBindKeyboard — re-targeted callbacks (the /topic wizard)', () =
     const navRow = keyboard.reply_markup.inline_keyboard.at(-1) ?? [];
     assert.deepEqual(navRow.map((button) => ('callback_data' in button ? button.callback_data : '')), ['wiz_page_0', 'bind_page_noop']);
   });
+
+  it('a cancel button is the last row, below the nav row; without one there is none', () => {
+    const withCancel = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, false, { ...wizardCallbacks, cancelButton: { label: 'Cancel', callback: 'wiz_cancel' } });
+    const rows = withCancel.reply_markup.inline_keyboard;
+    assert.deepEqual(getRowCallbacks(withCancel, rows.length - 1), ['wiz_cancel']);
+    assert.deepEqual(getRowCallbacks(withCancel, rows.length - 2), ['bind_page_noop', 'wiz_page_1'], 'the nav row stays above it');
+    assert.ok(!getAllCallbacks(buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, false, wizardCallbacks)).includes('wiz_cancel'));
+  });
 });

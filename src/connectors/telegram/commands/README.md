@@ -321,9 +321,13 @@ once in General or an unbound topic), the picker, and finally the answer with th
 keyboard is always consumed. The picker is `bindPicker.ts`'s `buildBindKeyboard` — `/bind`'s own layout, create row included — with
 its buttons re-targeted (`BindPickerCallbacks`) at the wizard; its folders are indexes into the list the wizard listed, so a folder
 created meanwhile cannot shift them. The next plain message of the origin topic is the answer to a name question (the topic's, or the
-new folder's) while the wizard holds the capture: the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; `/esc`
-cancels it out loud and any other command silently (`cancelTopicInput`, called from the `/esc` handler and
-`exitPendingInputModes`). The folder work is the bot's: `createWorkFolder` (the validation and `mkdir` `/bind`'s «create new folder»
+new folder's) while the wizard holds the capture: the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; any
+command but `/esc` ends that capture silently (`cancelTopicInput`, called from `exitPendingInputModes`, `armFolderCreation` and the
+text handler's slash branch) and leaves a question that waits for a tap alone. The way out of a wizard at ANY step is the «✖️ Cancel»
+row (the picker's last row, the folder question's third) and `/esc`: `cancelTopicWizard` ends the topic's newest wizard that is not yet
+creating its topic, consumes its message into the notice and returns `false` when there is none — then `/esc` is the interrupt of the
+agent. Arming the picker's «create new folder» ends `/bind`'s own armed folder-name question (`disarmFolderCreation` port): the two
+would race for the next message. The folder work is the bot's: `createWorkFolder` (the validation and `mkdir` `/bind`'s «create new folder»
 does) and `bindNewTopic` (`applyBinding` with the topic's name, then the usual binding welcome — no agent starts, and no collision
 warning for a folder the person chose on purpose) come through ports. `createForumTopic` is the Bot API call; its refusal for want of
 `can_manage_topics` shows the existing `error.tg.perm.manage_topics` hint. The link is `t.me/c/<chat id without -100>/<topic id>` (a

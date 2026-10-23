@@ -7587,9 +7587,13 @@ const {
   checkIsAwaitingTopicInput,
   submitTopicInput,
   cancelTopicInput,
+  cancelTopicWizard,
 } = createTopicCommand({
   ...botCore,
   checkIsDmKey,
+  disarmFolderCreation: (key) => {
+    awaitingFolderName.delete(keyToString(key));
+  },
   listAvailableSubdirs: () => listAvailableSubdirs(ENV.workRoot),
   createWorkFolder,
   bindNewTopic,
@@ -7927,7 +7931,7 @@ command('tab', async (_ctx, key) => {
 });
 
 command(escapeCommandNames, async (_ctx, key) => {
-  // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a pending `/topic` prompt take
+  // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a `/topic` wizard take
   // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
   if (cancelProfileNameCapture(key)) {
     await replyToThread(key, t('account.askNameCancelled'));
@@ -7937,10 +7941,8 @@ command(escapeCommandNames, async (_ctx, key) => {
     await replyToThread(key, t('login.cancelled'));
     return;
   }
-  if (cancelTopicInput(key)) {
-    await replyToThread(key, t('topic.cancelled'));
-    return;
-  }
+  // A `/topic` wizard is ended at whatever step it waits (it says so itself).
+  if (await cancelTopicWizard(key)) return;
   const adapter = getThreadAdapter(key);
   if (adapter.sendEscape) {
     // The operator interrupted the turn: its open request closes silently.

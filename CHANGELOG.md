@@ -6,8 +6,8 @@
 command), then for the folder: the one this topic is bound to («as here») or another one from the same picker as `/bind`,
 «create new folder» included — in General and in an unbound topic the picker comes first. The bot creates the topic, binds
 it, greets it as `/bind` does and answers with an «Open topic →» button; no agent starts by itself. The bot needs the
-`can_manage_topics` right (without it the usual hint is shown), `/esc` cancels the question, and in the bot's private chat,
-which has no topics, the command says so.
+`can_manage_topics` right (without it the usual hint is shown), «✖️ Cancel» (on the folder question and in the picker) and
+`/esc` (at any step) end it, and in the bot's private chat, which has no topics, the command says so.
 
 **`/interrupt` stops a running OpenCode turn.** `/esc` answered «Not supported for OpenCode», so an OpenCode topic had
 no way to stop the agent and redirect it. `/interrupt` (the new name of `/esc` — both work, and `/interrupt` is in the

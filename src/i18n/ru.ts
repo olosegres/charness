@@ -62,6 +62,7 @@ export const ruDict: Record<string, string> = {
   'topic.cancelled': '✖ Отменено — тред не создан.',
   'topic.dmUnsupported': '🧵 Треды живут в группе с включёнными темами — запусти /topic там. В этом чате их нет.',
   'topic.staleChoice': 'Этот выбор устарел — запусти /topic заново.',
+  'topic.cancelButton': '✖️ Отмена',
 
   'ls.header': '📁 Подпапки `{workRoot}`:',
   'ls.empty': '📁 В `WORK_ROOT` нет подходящих подпапок.',

@@ -58,6 +58,7 @@ export const hiDict: Record<string, string> = {
   'topic.cancelled': '✖ रद्द किया गया — कोई थ्रेड नहीं बना।',
   'topic.dmUnsupported': '🧵 थ्रेड्स उस ग्रुप में होते हैं जिसमें टॉपिक चालू हैं — /topic वहीं चलाएँ। इस चैट में वे नहीं हैं।',
   'topic.staleChoice': 'यह विकल्प पुराना हो गया है — /topic फिर से चलाएँ।',
+  'topic.cancelButton': '✖️ रद्द करें',
 
   'ls.header': '📁 `{workRoot}` के सबफ़ोल्डर:',
   'ls.empty': '📁 `WORK_ROOT` के अंतर्गत कोई बाइंड करने योग्य सबफ़ोल्डर नहीं।',

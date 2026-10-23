@@ -58,6 +58,7 @@ export const zhDict: Record<string, string> = {
   'topic.cancelled': '✖ 已取消 — 未创建话题。',
   'topic.dmUnsupported': '🧵 话题存在于启用了话题功能的群组中 — 请在那里运行 /topic。此聊天中没有话题。',
   'topic.staleChoice': '此选择已过期 — 请重新运行 /topic。',
+  'topic.cancelButton': '✖️ 取消',
 
   'ls.header': '📁 `{workRoot}` 的子文件夹：',
   'ls.empty': '📁 `WORK_ROOT` 下没有可绑定的子文件夹。',

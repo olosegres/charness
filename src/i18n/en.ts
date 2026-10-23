@@ -62,6 +62,7 @@ export const enDict: Record<string, string> = {
   'topic.cancelled': '✖ Cancelled — no topic was created.',
   'topic.dmUnsupported': '🧵 Topics live in a group with topics enabled — run /topic there. This chat has none.',
   'topic.staleChoice': 'This choice is out of date — run /topic again.',
+  'topic.cancelButton': '✖️ Cancel',
 
   'ls.header': '📁 Subfolders of `{workRoot}`:',
   'ls.empty': '📁 No bindable subfolders under `WORK_ROOT`.',

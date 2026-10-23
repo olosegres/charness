@@ -58,6 +58,7 @@ export const uzDict: Record<string, string> = {
   'topic.cancelled': '✖ Bekor qilindi — mavzu yaratilmadi.',
   'topic.dmUnsupported': '🧵 Mavzular mavzular yoqilgan guruhda bo‘ladi — /topic ni o‘sha yerda ishga tushiring. Bu chatda ular yo‘q.',
   'topic.staleChoice': 'Bu tanlov eskirgan — /topic ni qaytadan ishga tushiring.',
+  'topic.cancelButton': '✖️ Bekor qilish',
 
   'ls.header': '📁 `{workRoot}` quyi papkalari:',
   'ls.empty': '📁 `WORK_ROOT` ostida bog‘lanadigan quyi papkalar yo‘q.',

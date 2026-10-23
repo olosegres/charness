@@ -64,6 +64,7 @@ export const ukDict: Record<string, string> = {
   'topic.cancelled': '✖ Скасовано — тред не створено.',
   'topic.dmUnsupported': '🧵 Треди живуть у групі з увімкненими темами — запусти /topic там. У цьому чаті їх немає.',
   'topic.staleChoice': 'Цей вибір застарів — запусти /topic знову.',
+  'topic.cancelButton': '✖️ Скасувати',
 
   'ls.header': '📁 Підпапки `{workRoot}`:',
   'ls.empty': '📁 У `WORK_ROOT` немає придатних підпапок.',
