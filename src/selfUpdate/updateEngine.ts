@@ -100,6 +100,9 @@ export interface UpdateOffer {
 export interface UpdateStatus {
   running: LastRunVersion;
   installKind: InstallKind;
+  /** Run as a hot worker (`charness hot`): the watcher, not a restart, brings an update in. */
+  isHotMode: boolean;
+  runningNode: string;
   settings: UpdateSettings;
   lastCheckAt: number | null;
   observation: UpdateObservation | null;
@@ -711,6 +714,8 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     return {
       running: deps.running,
       installKind: deps.installKind,
+      isHotMode: deps.isHotMode,
+      runningNode: deps.runningNode,
       settings: deps.getSettings(),
       lastCheckAt: record.lastCheckAt ?? null,
       observation: record.lastResult?.observation ?? null,

@@ -415,6 +415,7 @@ import { createLimitsBoard } from './connectors/telegram/commands/limitsBoard';
 import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
 import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operatorSwitchPlan';
 import { checkNeedsBackendSwitchConfirmation, getBackendFamily, getBackendSwitchModelToPin, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
+import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
 import { resolveClaudeBinary } from './utils/resolveBinary';
@@ -6199,13 +6200,12 @@ async function getCliVersion(cmd: string, args: string[] = ['--version']): Promi
 }
 
 command('version', async (_ctx, key) => {
-  // Read our own version from package.json so we don't drift if it ever bumps
-  // again without us updating a hardcoded string here.
-  let botVersion = t('version.unknown');
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-    botVersion = pkg.version || botVersion;
-  } catch { /* fall through to unknown */ }
+  // The version this process STARTED as, read once at boot by the updater's runtime: an in-place install rewrites package.json
+  // under a running bot, and the new number must not show before the restart that makes it true.
+  const updateStatus = updateEngine?.getStatus();
+  const botVersion = updateStatus?.running.version ?? t('version.unknown');
+  const offer = updateStatus?.offer;
+  const availableUpdate = offer && offer.action !== 'skipped' && offer.action !== 'needsNode' ? offer.target : null;
 
   const [tmuxV, claudeV, opencodeV] = await Promise.all([
     getCliVersion('tmux', ['-V']),
@@ -6213,17 +6213,16 @@ command('version', async (_ctx, key) => {
     getCliVersion('opencode'),
   ]);
 
-  await replyToThread(
-    key,
-    t('version.report', {
-      bot: botVersion,
-      node: process.version,
-      tmux: tmuxV,
-      claude: claudeV,
-      opencode: opencodeV,
-    }),
-    { parse_mode: 'Markdown' },
-  );
+  const report = t('version.report', {
+    bot: botVersion,
+    node: process.version,
+    tmux: tmuxV,
+    claude: claudeV,
+    opencode: opencodeV,
+  });
+  await replyToThread(key, availableUpdate === null ? report : `${report}\n${t('version.updateAvailable', { version: availableUpdate })}`, {
+    parse_mode: 'Markdown',
+  });
 });
 
 command('whoami', async (ctx, key) => {
@@ -7631,6 +7630,17 @@ registerLimitsBoardCommands();
 
 registerSttCommands();
 
+const { registerSelfUpdateCommands, registerSelfUpdateCallbacks } = createSelfUpdate({
+  ...botCore,
+  getUpdateEngine: () => updateEngine,
+  getSettingsPath: () => getInstanceSettingsPath(),
+  now: () => Date.now(),
+  // The instance's time zone is `process.env.TZ` (`/timezone`), which `toLocaleTimeString` follows.
+  formatClock: (epochMs) => new Date(epochMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+});
+
+registerSelfUpdateCommands();
+
 registerCompactionCommands();
 
 /**
@@ -8267,7 +8277,7 @@ const botCommands = new Set([
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
 /**
@@ -9564,6 +9574,8 @@ registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
 registerLimitsBoardCallbacks();
 registerSttCallbacks();
+
+registerSelfUpdateCallbacks();
 
 // «⏭ Skip once» on the `/limits` board and the `/limits_autoswitch` screen: drop THIS armed resume and
 // leave the on/off setting alone. The episode is identified by the `fireAt` baked
@@ -11374,6 +11386,7 @@ export const COMMANDS_MENU = [
   { command: 'limits', description: '🚧 Usage limits — switch this topic' },
   { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },
   { command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' },
+  { command: 'update', description: '🔄 Bot updates: automatic, notify only, off' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
   { command: 'status', description: '📊 Show status' },
