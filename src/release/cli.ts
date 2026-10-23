@@ -7,10 +7,11 @@
  *   apply <version>                                             write package.json version + CHANGELOG
  *   changelog                                                   CHANGELOG only, version from package.json
  *   notes <version>                                             print the version's CHANGELOG section
- *   check-pack [--version X.Y.Z] [--skip-install]               package contents + install smoke test
+ *   check-pack [--version X.Y.Z] [--skip-install]               package contents + bin paths + install smoke test
+ *   check-publish                                               `npm publish --dry-run`: refuses what npm would drop from package.json
  *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -21,7 +22,9 @@ import {
   createChangelogRelease,
   createReleasePlan,
   getChangelogFallback,
+  getInvalidBinPaths,
   getPackViolations,
+  getPublishDryRunProblems,
   getReleaseDate,
   getReleaseNotes,
   releaseTagPrefix,
@@ -35,6 +38,8 @@ import {
 const gitTimeoutMs = 60_000;
 const gitPushTimeoutMs = 5 * 60_000;
 const npmPackTimeoutMs = 3 * 60_000;
+const npmPublishDryRunTimeoutMs = 5 * 60_000;
+const outputTailChars = 4000;
 const npmInstallTimeoutMs = 10 * 60_000;
 const smokeTestTimeoutMs = 60_000;
 const gitMaxBufferBytes = 64 * 1024 * 1024;
@@ -123,9 +128,12 @@ function getNetDiff(tag: string): { paths: string[]; changesShippedManifest: boo
   return { paths, changesShippedManifest };
 }
 
+function readPackageManifest(): PackageManifest & { version: string } {
+  return JSON.parse(fs.readFileSync(manifestFileName, 'utf8'));
+}
+
 function readPackageVersion(): string {
-  const manifest: { version: string } = JSON.parse(fs.readFileSync(manifestFileName, 'utf8'));
-  return manifest.version;
+  return readPackageManifest().version;
 }
 
 function writePackageVersion(version: string): void {
@@ -272,6 +280,12 @@ function runInstallSmokeTest(expectedVersion: string): void {
 function runCheckPack(args: string[]): number {
   const { values } = parseArgs({ args, options: { version: { type: 'string' }, 'skip-install': { type: 'boolean' } } });
   const version = values.version ?? readPackageVersion();
+  const invalidBinPaths = getInvalidBinPaths(readPackageManifest().bin);
+  if (invalidBinPaths.length > 0) {
+    throw new ReleaseError(
+      `${manifestFileName} has bin paths npm >= 11.10 drops at publish (write them without "./"):\n${invalidBinPaths.map((line) => `  ${line}`).join('\n')}`,
+    );
+  }
   const [listing]: PackListing[] = JSON.parse(runCommand('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], npmPackTimeoutMs));
   const violations = getPackViolations(listing, version);
   if (violations.length > 0) {
@@ -282,6 +296,29 @@ function runCheckPack(args: string[]): number {
     runInstallSmokeTest(version);
     process.stdout.write(`Installed from the tarball: charness --version prints ${version}.\n`);
   }
+  return 0;
+}
+
+/**
+ * `npm publish --dry-run` exits 0 while it drops a field of `package.json` from the manifest it would send to the registry
+ * (a warning); the release refuses that. A dry run that fails itself (a version already on npm, the registry unreachable) fails
+ * the check too — it runs only where a publish is about to happen.
+ */
+function runCheckPublish(): number {
+  const result = spawnSync('npm', ['publish', '--dry-run', '--ignore-scripts'], {
+    encoding: 'utf8',
+    timeout: npmPublishDryRunTimeoutMs,
+    maxBuffer: gitMaxBufferBytes,
+  });
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.error || result.status !== 0) {
+    throw new ReleaseError(`\`npm publish --dry-run\` failed (${result.error?.message ?? `exit ${result.status}`}):\n${output.slice(-outputTailChars)}`);
+  }
+  const problems = getPublishDryRunProblems(output);
+  if (problems.length > 0) {
+    throw new ReleaseError(`npm would change ${manifestFileName} when publishing; fix it (npm pkg fix) before releasing:\n${problems.map((line) => `  ${line}`).join('\n')}`);
+  }
+  process.stdout.write('npm publish --dry-run: nothing in package.json is dropped or rewritten.\n');
   return 0;
 }
 
@@ -349,10 +386,12 @@ function main(argv: string[]): number {
       return runNotes(args);
     case 'check-pack':
       return runCheckPack(args);
+    case 'check-publish':
+      return runCheckPublish();
     case 'commit-release':
       return runCommitRelease(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-publish | commit-release.`);
   }
 }
 

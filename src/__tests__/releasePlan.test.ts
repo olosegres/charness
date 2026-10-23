@@ -17,8 +17,10 @@ import {
   createReleasePlan,
   getChangelogFallback,
   getChangelogFormatViolations,
+  getInvalidBinPaths,
   getNextVersion,
   getPackViolations,
+  getPublishDryRunProblems,
   getReleaseBump,
   getReleaseDate,
   getReleaseNotes,
@@ -410,5 +412,44 @@ describe('the pack check', () => {
 
   test('the packed version must be the new one', () => {
     assert.deepEqual(getPackViolations(createListing(goodFiles, '3.2.0'), '3.3.0'), ['the package version is 3.2.0, expected 3.3.0']);
+  });
+});
+
+describe('getInvalidBinPaths', () => {
+  test('bin targets without a leading "./" are fine, in the object and the string form', () => {
+    assert.deepEqual(getInvalidBinPaths({ charness: 'dist/cli.js', telegramcode: 'dist/cli.js' }), []);
+    assert.deepEqual(getInvalidBinPaths('dist/cli.js'), []);
+    assert.deepEqual(getInvalidBinPaths(undefined), []);
+  });
+
+  test('every "./"-prefixed target is named by its command', () => {
+    assert.deepEqual(getInvalidBinPaths({ charness: './dist/cli.js', telegramcode: 'dist/cli.js', telegramCode: './dist/cli.js' }), [
+      'bin.charness: ./dist/cli.js',
+      'bin.telegramCode: ./dist/cli.js',
+    ]);
+    assert.deepEqual(getInvalidBinPaths('./dist/cli.js'), ['bin: ./dist/cli.js']);
+  });
+});
+
+describe('getPublishDryRunProblems', () => {
+  /** What npm 11.10 printed for a package whose bin was written "./dist/cli.js" (exit 0, a warning only). */
+  const droppedBinOutput = [
+    'npm warn publish npm auto-corrected some errors in your package.json when publishing.  Please run "npm pkg fix" to address these errors.',
+    'npm warn publish errors corrected:',
+    'npm warn publish "bin[probe]" script name dist/cli.js was invalid and removed',
+    'npm notice',
+    'npm notice 📦  probe@1.0.0',
+    '+ probe@1.0.0',
+  ].join('\n');
+
+  test('a dry run that dropped a field is named line by line', () => {
+    assert.deepEqual(getPublishDryRunProblems(droppedBinOutput), [
+      'npm warn publish npm auto-corrected some errors in your package.json when publishing.  Please run "npm pkg fix" to address these errors.',
+      'npm warn publish "bin[probe]" script name dist/cli.js was invalid and removed',
+    ]);
+  });
+
+  test('a clean dry run (notices only) has no problems', () => {
+    assert.deepEqual(getPublishDryRunProblems(['npm notice', 'npm notice 📦  probe@1.0.0', '+ probe@1.0.0'].join('\n')), []);
   });
 });

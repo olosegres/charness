@@ -22,6 +22,9 @@ export const requiredPackFiles = [
 ];
 const forbiddenPackPathPrefixes = ['src/', 'dist/release/'];
 const forbiddenPackPathFragment = '__tests__';
+const relativePathPrefix = './';
+/** What `npm publish` prints (only as a warning, exit 0) when it drops or rewrites a `package.json` field of the manifest it sends to the registry. */
+const droppedManifestMarkers = ['was invalid and removed', 'auto-corrected some errors'];
 
 const shippedSourceRoot = 'src/';
 const shippedSourceExtension = '.ts';
@@ -348,4 +351,24 @@ export function getPackViolations(listing: PackListing, expectedVersion: string)
     violations.push(`the package version is ${listing.version}, expected ${expectedVersion}`);
   }
   return violations;
+}
+
+/**
+ * @description The `bin` targets written with a leading "./": npm >= 11.10 drops such an entry from the manifest it publishes
+ * (a warning, exit 0), so the registry's version has no command — 3.3.0 shipped that way. Named `bin.<command>: <path>`.
+ */
+export function getInvalidBinPaths(bin: PackageManifest['bin']): string[] {
+  const targets: [string, string][] = typeof bin === 'string' ? [['bin', bin]] : Object.entries(bin ?? {}).map(([command, target]) => [`bin.${command}`, target]);
+  return targets.filter(([, target]) => target.startsWith(relativePathPrefix)).map(([label, target]) => `${label}: ${target}`);
+}
+
+/**
+ * @description The lines of an `npm publish --dry-run` output that say npm dropped or rewrote part of `package.json` for the
+ * registry — what the checked-in `package.json` must never cause, though npm treats it as a warning only.
+ */
+export function getPublishDryRunProblems(npmOutput: string): string[] {
+  return npmOutput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => droppedManifestMarkers.some((marker) => line.includes(marker)));
 }

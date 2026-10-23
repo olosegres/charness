@@ -25,7 +25,8 @@ const initialPackage = {
   name: 'demo-package',
   version: '3.2.0',
   files: ['dist/', 'stt/gigaam_sidecar.py', 'README.md', 'LICENSE', 'CHANGELOG.md'],
-  bin: { charness: './dist/cli.js' },
+  // No "./": npm >= 11.10 drops a "./dist/…" bin entry at publish, and check-pack refuses it.
+  bin: { charness: 'dist/cli.js' },
   scripts: { version: 'tsx src/release/cli.ts changelog && git add CHANGELOG.md', test: 'node --test' },
   dependencies: { left: '^1.0.0' },
   devDependencies: { dev: '^1.0.0' },
@@ -344,6 +345,17 @@ describe('check-pack', () => {
     assert.match(result.stderr, /the package version is 3\.2\.0, expected 3\.9\.9/);
   });
 
+  test('a bin path written "./dist/cli.js" is refused before anything is packed', () => {
+    writePackableFiles();
+    writeRepoFile('package.json', `${JSON.stringify({ ...initialPackage, bin: { charness: './dist/cli.js', telegramcode: 'dist/cli.js' } }, null, 2)}\n`);
+    const result = runCli('check-pack', '--skip-install');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /bin paths npm >= 11\.10 drops at publish/);
+    assert.match(result.stderr, /bin\.charness: \.\/dist\/cli\.js/);
+    assert.doesNotMatch(result.stderr, /bin\.telegramcode/);
+    assert.doesNotMatch(result.stdout, /Package contents ok/);
+  });
+
   test('a missing required file and a shipped source file are both named', () => {
     writePackableFiles();
     fs.rmSync(path.join(repoDir, 'LICENSE'));
@@ -353,6 +365,48 @@ describe('check-pack', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /missing from the package: LICENSE/);
     assert.match(result.stderr, /must not ship: src\/leaked\.ts/);
+  });
+});
+
+describe('check-publish', () => {
+  /** A stand-in `npm` ahead of the real one on the PATH: prints `script` and exits with `exitCode`, whatever the arguments. */
+  function runWithFakeNpm(output: string, exitCode: number): { status: number | null; stdout: string; stderr: string } {
+    const binDir = path.join(homeDir, 'fake-bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const outputFile = path.join(binDir, 'npm-output.txt');
+    fs.writeFileSync(outputFile, output);
+    fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/sh\ncat '${outputFile}' >&2\nexit ${exitCode}\n`, { mode: 0o755 });
+    const result = spawnSync(process.execPath, [tsxCliPath, releaseCliPath, 'check-publish'], {
+      cwd: repoDir,
+      env: { ...createChildEnv(), PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
+      encoding: 'utf8',
+      timeout: cliTimeoutMs,
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  test('a dry run that only prints notices passes', () => {
+    const result = runWithFakeNpm('npm notice\nnpm notice 📦  demo-package@3.3.0\n+ demo-package@3.3.0\n', 0);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /nothing in package\.json is dropped or rewritten/);
+  });
+
+  test('a dry run that exits 0 but says it removed a field is refused, naming the field', () => {
+    const result = runWithFakeNpm(
+      'npm warn publish npm auto-corrected some errors in your package.json when publishing.\nnpm warn publish "bin[charness]" script name dist/cli.js was invalid and removed\n',
+      0,
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /npm would change package\.json when publishing/);
+    assert.match(result.stderr, /"bin\[charness\]" script name dist\/cli\.js was invalid and removed/);
+    assert.match(result.stdout, /^::error title=Release failed::/m);
+  });
+
+  test('a dry run that fails itself fails the check, with the output tail', () => {
+    const result = runWithFakeNpm('npm error You cannot publish over the previously published versions: 3.3.0.\n', 1);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /`npm publish --dry-run` failed \(exit 1\)/);
+    assert.match(result.stderr, /cannot publish over the previously published versions/);
   });
 });
 

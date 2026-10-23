@@ -186,7 +186,11 @@ tag, no publish, the run is red; the next day's run tries again by itself. The l
   `## Unreleased` is filled with the `feat` / `fix` subjects.
 - **Package check** before any tag: the tarball holds `dist/cli.js`, `stt/gigaam_sidecar.py`, `CHANGELOG.md`,
   `README.md`, `LICENSE` and no `src/` or tests, and `charness --version` of it, installed into a temp prefix, prints
-  the new version (`yarn tsx src/release/cli.ts check-pack`, after `yarn build`).
+  the new version (`yarn tsx src/release/cli.ts check-pack`, after `yarn build`). `bin` paths are written
+  `dist/cli.js`, never `./dist/cli.js`: npm >= 11.10 silently drops a "./" entry from the manifest it publishes (3.3.0
+  reached the registry without its commands), so `check-pack` and `packageManifest.test.ts` refuse one, and
+  `check-publish` (`npm publish --dry-run`, run before the tag and again right before the publish) refuses a package.json
+  that npm reports it would drop or rewrite anything from.
 - **After a release** the clone is one commit behind `main`: `git pull --rebase` before pushing. A new CHANGELOG entry
   goes under `## Unreleased` (a push that races the release can conflict there; the run then fails with nothing
   published).

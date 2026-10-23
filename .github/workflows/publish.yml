@@ -64,6 +64,8 @@ jobs:
         with:
           node-version: 22
           cache: yarn
+      # The same npm as the publish job: only npm >= 11.10 reports what it would drop from package.json (the dry run below).
+      - run: npm install -g 'npm@^11.5.1'
       - run: yarn install --immutable
       - name: Plan the release
         id: plan
@@ -93,6 +95,11 @@ jobs:
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
+      # npm >= 11.10 drops a bin path written "./dist/…" at publish and only warns (3.3.0 shipped without its command):
+      # refuse before the tag exists.
+      - name: npm publish dry run (refuses what npm would drop from package.json)
+        if: steps.plan.outputs.kind == 'release'
+        run: yarn tsx src/release/cli.ts check-publish
       - name: What the release changes
         if: steps.plan.outputs.kind == 'release'
         env:
@@ -174,6 +181,7 @@ jobs:
           if npm view "${name}@${VERSION}" version > /dev/null 2>&1; then
             echo "${name}@${VERSION} is already on npm; not publishing it again (a re-run after a later step failed)."
           else
+            yarn tsx src/release/cli.ts check-publish
             npm publish --provenance --access public
           fi
       - name: GitHub Release
