@@ -79,11 +79,17 @@ const requestLabel = 'REC-1';
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const giveUpTimeoutMs = 3 * 60 * 1000;
-/** The probe's two minutes, the restart and the resume's round trip. */
-const probeResumeTimeoutMs = 4 * 60 * 1000;
-/** How long the probe's resume turn works before its error: past the restart the step makes in between, within the 2-minute grace. */
-const resumeTurnErrorDelayMs = 45 * 1000;
 const msPerMinute = 60 * 1000;
+/** The probe of an unconfirmed limit, shortened in this flow (`CHARNESS_TEST_TIMINGS`): 30 s instead of two minutes. */
+const limitProbeDelayMs = 30 * 1000;
+/** The probe's notice: its delay in whole minutes, as the bot words it. */
+const probeNoticeText = `auto-retrying in ${Math.round(limitProbeDelayMs / msPerMinute)} min`;
+/** What the bot logs when it arms the probe — and for no other retry. */
+const probeArmedLogPhrase = 'an unconfirmed usage limit — probing';
+/** The probe's delay, the restart and the resume's round trip, with room to spare. */
+const probeResumeTimeoutMs = 4 * 60 * 1000;
+/** How long the probe's resume turn works before its error: past the restart the step makes in between (a few seconds), within the 2-minute grace. */
+const resumeTurnErrorDelayMs = 20 * 1000;
 /** How long before the restart the window reset, and how long before that the error was written. */
 const resetAgoMs = 30 * msPerMinute;
 const errorAgoMs = 60 * msPerMinute;
@@ -202,7 +208,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      ...getTelegramFlowTestTimingsEnv({ limitProbeDelayMs }),
     });
   });
 
@@ -350,7 +356,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
 
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     assert.ok(getCharness().output.includes('the account is marked limited or reads a window at 100 %'), 'confirmed by the reading, not by a repeat');
-    assert.equal(topic.listMessages().some((message) => message.text.includes('auto-retrying in 2 min')), false, 'no probe first');
+    assert.ok(!getCharness().output.includes(probeArmedLogPhrase), 'no probe first');
   });
 
   it('the unconfirmed wording with a 100 % reading whose window has reset since: the probe, not the wait', async () => {
@@ -378,7 +384,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
       };
     });
 
-    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')));
+    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes(probeNoticeText)));
     assert.ok(getCharness().output.includes(`${key}: an unconfirmed usage limit — probing`), 'decided by the probe rule');
     assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'an out-of-date reading does not confirm the limit');
   });
@@ -408,12 +414,13 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-stalesnapshot one more step`);
 
-    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')));
+    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes(probeNoticeText)));
     assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'a stale reading does not confirm the limit');
   });
 
   it('a restart while the probe is armed: its resume hits the same error, and that confirms the limit — no second probe', async () => {
     const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    await getCharness().waitFor('the probe of the step before persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[key] !== undefined);
     assert.equal(readPersistedState(getLayout()).apiRetries?.[key]?.isLimitProbe, true, 'precondition: the probe is armed, and saved as one');
     const limitNoticesBefore = listSentLimitNotices().length;
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
@@ -423,7 +430,8 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
 
     await getCharness().waitFor('the limit notice after the restored probe\'s resume', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
-    assert.equal(fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')), false, 'no second probe');
+    assert.ok(!getCharness().output.includes(probeArmedLogPhrase), 'no second probe');
+    assert.equal(fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes(probeNoticeText)), false, 'and no probe notice');
   });
 
   it('a restart AFTER the probe fired, while its resume turn works: the error it ends on confirms the limit — no second probe', async () => {
@@ -442,7 +450,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     });
     const listProbeNotices = (fromCall: number): string[] => fakeTelegram.listCalls('sendMessage').slice(fromCall)
       .map((call) => (typeof call.payload.text === 'string' ? call.payload.text : ''))
-      .filter((text) => text.includes('auto-retrying in 2 min'));
+      .filter((text) => text.includes(probeNoticeText));
     await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => listProbeNotices(callsBefore).length > 0);
     const turnsBefore = getAllAgentTurns(getLayout()).length;
     await getCharness().waitFor('the probe to fire and its resume turn to start', probeResumeTimeoutMs, () => getAllAgentTurns(getLayout()).length > turnsBefore);
@@ -451,9 +459,10 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const limitNoticesBefore = listSentLimitNotices().length;
     const callsBeforeRestart = fakeTelegram.listCalls('sendMessage').length;
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
-    await getCharness().waitFor('the resume turn\'s error to be decided', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore || listProbeNotices(callsBeforeRestart).length > 0);
+    await getCharness().waitFor('the resume turn\'s error to be decided', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore || getCharness().output.includes(probeArmedLogPhrase));
     fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), { force: true });
-    assert.deepEqual(listProbeNotices(callsBeforeRestart), [], 'no second probe');
+    assert.ok(!getCharness().output.includes(probeArmedLogPhrase), 'no second probe');
+    assert.deepEqual(listProbeNotices(callsBeforeRestart), [], 'and no probe notice');
     assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
   });
 });
