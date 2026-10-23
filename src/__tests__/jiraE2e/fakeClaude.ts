@@ -64,7 +64,7 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *    is signalled to stop after a turn — into a new file when the transcript was
  *    removed meanwhile (the stub of a lost conversation);
  *  - speaks the stream-json protocol: the `initialize` control handshake,
- *    `system/init`, the `--replay-user-messages` echo, `result` at a turn's end (with the conversation's running `total_cost_usd`, `fakeTurnCostUsd` per answered turn, continued across its processes);
+ *    `system/init`, the `--replay-user-messages` echo, `result` at a turn's end (with the conversation's running `total_cost_usd`, `fakeTurnCostUsd` per answered turn, restored on a resume from the transcript's last `cost-state` — the exit flush writes it, as the real CLI's does);
  *  - in every turn streams what a real turn does (R6): a `system/status` frame
  *    (dropped by the classifier, as the real one is), a thinking block, and a
  *    tool call with its result — the call is what makes the adapter emit its
@@ -313,12 +313,35 @@ function getStateDir(): string {
   return stateDir;
 }
 
-/** Add `amountUsd` to the conversation's running cost (kept in the state dir across its processes); the new total. */
-function addConversationCost(sessionId: string, amountUsd: number): number {
-  const costPath = path.join(getStateDir(), `conversation-cost-${sessionId}`);
-  const total = (fs.existsSync(costPath) ? Number(fs.readFileSync(costPath, 'utf8')) : 0) + amountUsd;
-  fs.writeFileSync(costPath, total.toString());
+/**
+ * The conversation's running cost (`total_cost_usd`), as the real CLI keeps it (2.1.304): per PROCESS, starting from
+ * the transcript's last `cost-state` entry on a `--resume` (0 without one, and for `--session-id`), written back by the
+ * exit flush ({@link writeExitMetadata}) — so a process stopped without that flush leaves the older total behind.
+ */
+let conversationCostUsd = 0;
+
+/** What a `--resume` of `sessionId` restores: the total of the transcript's last `cost-state` entry of it, else 0. */
+function readRestoredConversationCost(sessionId: string): number {
+  const transcriptPath = getTranscriptPath(sessionId);
+  if (!fs.existsSync(transcriptPath)) return 0;
+  let total = 0;
+  for (const line of fs.readFileSync(transcriptPath, 'utf8').split('\n')) {
+    if (!line.includes('"cost-state"')) continue;
+    let entry: { type?: unknown; sessionId?: unknown; totalCostUSD?: unknown } | null = null;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // a torn line restores nothing
+    }
+    if (entry?.type === 'cost-state' && entry.sessionId === sessionId && typeof entry.totalCostUSD === 'number') total = entry.totalCostUSD;
+  }
   return total;
+}
+
+/** Add `amountUsd` to the conversation's running cost; the new total. */
+function addConversationCost(amountUsd: number): number {
+  conversationCostUsd += amountUsd;
+  return conversationCostUsd;
 }
 
 function getStatePath(requestId: string): string {
@@ -361,7 +384,7 @@ function writeExitMetadata(sessionId: string): void {
   const entries = [
     { type: 'last-prompt', lastPrompt: lastRecordedPrompt, leafUuid: randomUUID(), sessionId },
     { type: 'atis-latch', atis: '', sessionId },
-    { type: 'cost-state', sessionId, totalCostUSD: 0 },
+    { type: 'cost-state', sessionId, totalCostUSD: conversationCostUsd },
   ];
   fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 }
@@ -495,7 +518,7 @@ function emitTurnActivity(sessionId: string, issueKey: string): void {
 }
 
 function endTurn(sessionId: string, resultText: string): void {
-  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(sessionId, fakeTurnCostUsd) });
+  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
 
 /** A turn the provider refused for a usage limit: an error `result` whose text names the window and its reset. */
@@ -508,7 +531,7 @@ function endTurnOnUsageLimit(sessionId: string, resetsAt: string): void {
   const transcriptPath = getTranscriptPath(sessionId);
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
   fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', timestamp: new Date().toISOString(), sessionId, message: { role: 'assistant', content: [{ type: 'text', text: errorText }] } })}\n`);
-  writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(sessionId, 0) });
+  writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(0) });
 }
 
 /** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the answers the bot's `control_response` carries. */
@@ -552,7 +575,7 @@ function runCompactionTurn(sessionId: string): void {
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
   appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid });
   // The real CLI's compaction result: an all-zero `usage`, the summary call only under `modelUsage`.
-  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: sessionId, usage: fakeCompactionResultUsage, modelUsage: fakeCompactionModelUsage, total_cost_usd: addConversationCost(sessionId, fakeCompactionCostUsd) });
+  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: sessionId, usage: fakeCompactionResultUsage, modelUsage: fakeCompactionModelUsage, total_cost_usd: addConversationCost(fakeCompactionCostUsd) });
 }
 
 /** The model a turn reports on `system/init`: the one the process was launched with (`--model`), else the fake's own. */
@@ -571,7 +594,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const apiErrorDelayPath = path.join(getStateDir(), fakeClaudeApiErrorDelayFileName);
     if (fs.existsSync(apiErrorDelayPath)) await new Promise((resolve) => setTimeout(resolve, Number(fs.readFileSync(apiErrorDelayPath, 'utf8').trim())));
-    writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(sessionId, 0) });
+    writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(0) });
     return;
   }
   const alwaysUsageLimitPath = path.join(getStateDir(), fakeClaudeAlwaysUsageLimitFileName);
@@ -761,6 +784,7 @@ async function main(): Promise<void> {
     process.exit(sessionViolationExitCode);
   }
   const sessionId = getLaunchSessionId(argv) ?? randomUUID();
+  if (getFlagValues(argv, '--resume')[0] === sessionId) conversationCostUsd = readRestoredConversationCost(sessionId);
   exitOnStopSignal(sessionId);
 
   // One turn at a time, in arrival order, as the real CLI does.

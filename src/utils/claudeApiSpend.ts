@@ -3,13 +3,15 @@
  * the bot, from the `total_cost_usd` of Claude's stream `result` frames (the json-stream backend; the tmux backend
  * reports no figure).
  *
- * That figure is the CONVERSATION's running cost, not the turn's: Claude Code writes it into the transcript and
- * restores it on `--resume`, so a resumed process starts from the conversation's last total, and a subscription turn
- * of the same conversation counts in it too (a notional figure). The turn's spend is therefore the DELTA against the
- * last total the bot saw for that conversation (a per-topic baseline it keeps for every account), and only a turn on
- * an API account adds to that account's spend. With no baseline for the conversation, a NEW conversation started
- * from zero — the whole total is the turn's; a resumed one began at a total the bot never saw, so that turn only sets
- * the baseline (an undercount of one turn, never a doubled figure).
+ * That figure is the CONVERSATION's running cost, not the turn's: Claude Code writes it into the transcript when its
+ * process exits and restores it on `--resume`, so a resumed process starts from the conversation's last saved total,
+ * and a subscription turn of the same conversation counts in it too (a notional figure). The turn's spend is therefore
+ * a DELTA, and only a turn on an API account adds to that account's spend. The first turn of a process the bot
+ * started is measured against the total that process restored (the adapter reads it from the transcript before the
+ * launch: `0` for a new conversation) — never against the last total the bot saw, which a turn the bot did not see
+ * (the tmux backend's, which reports none) or a process that died without its exit flush (the next one restores an
+ * OLDER total) makes wrong. Every later turn is measured against the last total the bot saw for that conversation (a
+ * per-topic baseline it keeps for every account, persisted, so an adopted process after a restart goes on from it).
  *
  * It is what the bot OBSERVED, not the organization's balance: reading that needs an Admin API key.
  *
@@ -35,37 +37,37 @@ export interface ClaudeApiSpend {
 }
 
 /**
- * @description The spend of the turn whose `result` reported `totalCostUsd` for `sessionId` (see the module): the
- * delta against the baseline of the same conversation — a total BELOW it means the CLI counted from zero again (a
- * process that did not restore it), so the total is the turn's; without a baseline, the whole total for a new
- * conversation, `null` (unknown) for a resumed one.
+ * @description The spend of the turn whose `result` reported `totalCostUsd` for `sessionId` (see the module). The first
+ * turn of a process the bot started (`startCostUsd` known) counts from the total that process restored; any other turn
+ * is the delta against the baseline of the same conversation, `null` (unknown) without one. A total BELOW the figure it
+ * is measured against means the CLI counted from zero (it restored nothing), so the total is the turn's.
  */
 export function computeClaudeTurnCostUsd(input: {
   previous: ClaudeCostBaseline | undefined;
   sessionId: string;
   totalCostUsd: number;
-  isNewConversation: boolean;
+  startCostUsd: number | null;
 }): number | null {
   const { previous, totalCostUsd } = input;
-  if (previous && previous.sessionId === input.sessionId) {
-    const delta = totalCostUsd - previous.totalCostUsd;
-    return delta >= 0 ? delta : totalCostUsd;
-  }
-  return input.isNewConversation ? totalCostUsd : null;
+  const measuredFromUsd = input.startCostUsd ?? (previous?.sessionId === input.sessionId ? previous.totalCostUsd : null);
+  if (measuredFromUsd === null) return null;
+  const delta = totalCostUsd - measuredFromUsd;
+  return delta >= 0 ? delta : totalCostUsd;
 }
 
 /** What one turn's cost report does to the account it ran on. */
 export interface ClaudeTurnCostOutcome {
   /** What to add to the account's spend: the turn's cost on an account billed to API credits; `null` for nothing. */
   spendUsd: number | null;
-  /** The turn went through on an API account marked out of credits: the balance is back, the mark ends. */
+  /** A billed turn went through on an API account marked out of credits: the balance is back, the mark ends. */
   isCreditMarkCleared: boolean;
 }
 
 /**
  * @description The effect of a turn's cost on its account: only an account billed to API credits has spend (a
- * subscription's figure is notional), and only a positive, known cost adds to it; a turn on it that did not end on an
- * error proves its credits are back.
+ * subscription's figure is notional), and only a positive, known cost adds to it. Only a turn on it that did not end on
+ * an error AND was billed proves its credits are back — a result that made no request (a compaction with nothing to
+ * compact, a local command) costs nothing and proves nothing.
  */
 export function getClaudeTurnCostOutcome(input: {
   billing: ClaudeProfileBilling | null;
@@ -74,10 +76,8 @@ export function getClaudeTurnCostOutcome(input: {
   turnCostUsd: number | null;
 }): ClaudeTurnCostOutcome {
   if (input.billing !== 'api') return { spendUsd: null, isCreditMarkCleared: false };
-  return {
-    spendUsd: input.turnCostUsd !== null && input.turnCostUsd > 0 ? input.turnCostUsd : null,
-    isCreditMarkCleared: input.isCreditExhausted && !input.isError,
-  };
+  const spendUsd = input.turnCostUsd !== null && input.turnCostUsd > 0 ? input.turnCostUsd : null;
+  return { spendUsd, isCreditMarkCleared: input.isCreditExhausted && !input.isError && spendUsd !== null };
 }
 
 /** The account's spend after a turn that cost `turnCostUsd` at `atIso` (the first counted turn opens `since`). */

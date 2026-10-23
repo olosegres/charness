@@ -18,7 +18,9 @@
  *     `/status` marks the account `💳 API`
  *   → spend: a turn on the subscription (its figure is notional and never counted), then a limit there moves the topic
  *     to the API account INCLUDED in the chain with switching ON — the «switched» notice says it bills per request —
- *     and its next turn counts only its own cost, not the conversation's total; `/status` and `/accounts` show it
+ *     and its next turn counts only its own cost, not the conversation's total; the agent then dies without its exit
+ *     flush, so the resume restores the conversation's OLDER saved total — the next turn still counts only itself;
+ *     `/status` and `/accounts` show it
  *   → its credits run out («Credit balance is too low») with switching ON and a subscription in the chain: one
  *     notice says the credits are used up, the topic moves to the subscription at once, the account is marked out of
  *     credits (💸 in `/limits_autoswitch`), and NO wait for a reset is armed
@@ -44,7 +46,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeApiErrorOnceFileName, fakeClaudeLoginUrl, fakeTurnCostUsd, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeApiErrorOnceFileName, fakeClaudeExitFlushDelayFileName, fakeClaudeLoginUrl, fakeTurnCostUsd, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -289,7 +291,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.match(status.text, new RegExp(`Account: ${keyAccount} · 💳 API`));
   });
 
-  it('spend: a subscription turn is not counted; a limit moves the topic onto the included API account, whose notice says it bills, and its turn counts only itself', async () => {
+  it('spend: a subscription turn is not counted; a limit moves the topic onto the included API account, whose notice says it bills, and each of its turns counts only itself — after a hard stop too', async () => {
     await restartWithState((persisted) => {
       persisted.fallbackChain = [{ backend: 'claude', profile: 'default', model: null }, { backend: 'claude', profile: keyAccount, model: null }];
       persisted.claudeAutoSwitchOnLimitEnabled = true;
@@ -300,6 +302,9 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     fakeTelegram.pushOperatorMessage(topicThreadId, 'SPEND-1 please carry on');
     await getCharness().waitFor('the subscription turn to set the baseline', agentStartTimeoutMs, () =>
       readPersistedState(getLayout()).claudeCostBaselines?.[topicKey]?.totalCostUsd === fakeTurnCostUsd);
+    // From here a stopped agent writes its running cost back into the transcript, as the real CLI does at exit.
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    fs.writeFileSync(exitFlushDelayPath, '0');
 
     launchesBefore = getSessionLaunches(getLayout()).length;
     fakeTelegram.pushOperatorMessage(topicThreadId, `SPEND-2 [fake:usage-limit-once] [limit-resets:${computeResetsAtIso(2)}] please carry on`);
@@ -313,10 +318,21 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.equal(persisted.claudeProfiles?.default?.apiSpend, undefined, 'a subscription never has spend');
     assert.ok(getAgentTurns(getLayout(), 'SPEND-1').length === 1);
 
+    // The API account's agent dies with the bot down, without its exit flush: the resume restores the subscription
+    // process's saved total, below the last one the bot saw — the turn is still counted from where the process started.
+    fs.rmSync(exitFlushDelayPath, { force: true });
+    const apiLaunch = getSessionLaunches(getLayout()).at(-1);
+    assert.ok(apiLaunch, 'the API account\'s agent runs');
+    await restartWithState(() => process.kill(apiLaunch.pid, 'SIGKILL'));
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'SPEND-3 please carry on');
+    await getCharness().waitFor('the turn after the hard stop', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'SPEND-3').length === 1);
+    await getCharness().waitFor('the turn after the hard stop to be counted', replyTimeoutMs, () =>
+      readPersistedState(getLayout()).claudeProfiles?.[keyAccount]?.apiSpend?.totalUsd === 2 * fakeTurnCostUsd);
+
     const status = await topic.sendAndAwaitReply('/status', 'Account:');
-    assert.match(status.text, new RegExp(`💳 API spend on ${keyAccount}: \\$0\\.25 since \\d{2}\\.\\d{2} \\(last turn \\$0\\.25\\)`));
+    assert.match(status.text, new RegExp(`💳 API spend on ${keyAccount}: \\$0\\.50 since \\d{2}\\.\\d{2} \\(last turn \\$0\\.25\\)`));
     const screen = await topic.sendAndAwaitReply('/accounts', 'This topic runs on');
-    assert.match(screen.text, new RegExp(`${keyAccount} — [^\\n]*\\n {4}💳 \\$0\\.25 spent since \\d{2}\\.\\d{2} · last turn \\$0\\.25`));
+    assert.match(screen.text, new RegExp(`${keyAccount} — [^\\n]*\\n {4}💳 \\$0\\.50 spent since \\d{2}\\.\\d{2} · last turn \\$0\\.25`));
   });
 
   it('credits used up with switching ON and a subscription in the chain: one notice, the topic moves at once, the account is marked, and no wait is armed', async () => {
@@ -331,7 +347,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     runOutOfCredits('BAL-1');
     await topic.waitForMessage('the credits notice', (message) => message.text.startsWith('💸'));
     assert.match(listBalanceNotices()[0], new RegExp(`^💸 «${keyAccount}»: the API credits are used up \\(«Credit balance is too low»\\)\\. Waiting does not refill them`));
-    assert.match(listBalanceNotices()[0], /\n💳 Spent through the bot on this account: \$0\.25 since \d{2}\.\d{2}\.$/, 'and what it spent');
+    assert.match(listBalanceNotices()[0], /\n💳 Spent through the bot on this account: \$0\.50 since \d{2}\.\d{2}\.$/, 'and what it spent');
     const switched = await topic.waitForMessage('the switch notice', (message) => message.message_id > lastMessageId && message.text.startsWith('🔁'));
     assert.match(switched.text, new RegExp(`«${keyAccount}» .*continues on «default»`));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation to continue on the subscription', null, sessionId, launchesBefore);
@@ -358,7 +374,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     const noticesBefore = listBalanceNotices().length;
     runOutOfCredits('BAL-2');
     await getCharness().waitFor('the second credits notice', replyTimeoutMs, () => listBalanceNotices().length === noticesBefore + 1);
-    assert.match(listBalanceNotices().at(-1) ?? '', /Top up the balance .* then pick the account again: \/limits\n💳 Spent through the bot on this account: \$0\.25 since \d{2}\.\d{2}\.$/);
+    assert.match(listBalanceNotices().at(-1) ?? '', /Top up the balance .* then pick the account again: \/limits\n💳 Spent through the bot on this account: \$0\.50 since \d{2}\.\d{2}\.$/);
     // Settle: an armed wait would be persisted right after the notice.
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     const persisted = readPersistedState(getLayout());

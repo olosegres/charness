@@ -2050,7 +2050,7 @@ function formatBalanceOwner(from: FallbackChainEntry | null): string {
 /**
  * @description A used-up API credit balance on `key` («Credit balance is too low», `isBalanceExhausted`): nothing resets
  * it, so no wait for a reset is armed and no hourly retry runs. The Claude account is marked out of credits
- * (`creditExhaustedAt`, until the operator picks it or signs it in again, or a turn on it goes through), the parked
+ * (`creditExhaustedAt`, until the operator picks it or signs it in again, or a billed turn on it goes through), the parked
  * episode is settled (a restart does not run this again), and the fallback chain decides as for a limit, with that
  * account out: switching ON moves the topic at once; OFF puts «switch to …» buttons on the notice. With no rung free
  * now, the topic waits only for a rung that comes back at a KNOWN time (the earliest reset, and only with «wait for
@@ -7105,8 +7105,8 @@ function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimit
 /**
  * A json-stream turn's cost (`utils/claudeApiSpend.ts`): the topic's conversation baseline moves on for EVERY account
  * (a later API turn of the same conversation must count only itself), and the turn's spend adds to the account's only
- * when it is billed to API credits. A turn on such an account that went through ends a used-up-credits mark: the
- * balance is back.
+ * when it is billed to API credits. A billed turn on such an account that went through ends a used-up-credits mark:
+ * the balance is back.
  */
 function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: ClaudeTurnCostReport): void {
   const turnCostUsd = computeClaudeTurnCostUsd({ previous: state.getClaudeCostBaseline(key), ...report });

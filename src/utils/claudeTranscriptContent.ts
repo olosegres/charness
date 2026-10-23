@@ -72,3 +72,44 @@ export async function prepareClaudeSessionLaunch(
   const isGone = content === 'metadataOnly' || (content === 'absent' && isConversationRecorded);
   return { isResumable: isResumeRequested && content === 'conversation', isConversationLost: isResumeRequested && isGone };
 }
+
+/** The CLI's own ceiling on a restored `cost-state` total (its schema refuses a larger one). */
+const maxRestoredCostUsd = 1e9;
+
+/** The `totalCostUSD` of a `cost-state` line of `sessionId`; `null` for any other, torn or out-of-range line. */
+function readCostStateTotalUsd(line: string, sessionId: string): number | null {
+  try {
+    // The CLI skips NUL padding in front of a line (a torn append) before it parses one.
+    const entry: { type?: unknown; sessionId?: unknown; totalCostUSD?: unknown } | null = JSON.parse(line.replace(/^\0+/, ''));
+    if (entry?.type !== 'cost-state' || entry.sessionId !== sessionId) return null;
+    const total = entry.totalCostUSD;
+    return typeof total === 'number' && Number.isFinite(total) && total >= 0 && total <= maxRestoredCostUsd ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description The running cost a `--resume` of `sessionId` starts from: the CLI keeps a conversation's
+ * `total_cost_usd` in a `cost-state` entry it writes into the transcript when its process EXITS (CLI 2.1.304, last one
+ * wins) and restores it on resume — `0` when the transcript holds none (the CLI then counts from zero). A process that
+ * died without its exit flush leaves the older entry, which is what the next one restores. `null` when the file cannot
+ * be read: the start is unknown. Streams the file; only the lines that name the entry are parsed.
+ */
+export async function readClaudeTranscriptRestoredCostUsd(transcriptPath: string, sessionId: string): Promise<number | null> {
+  const stream = fs.createReadStream(transcriptPath, { encoding: 'utf8' });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let restoredUsd = 0;
+  try {
+    for await (const line of lines) {
+      if (!line.includes('"cost-state"')) continue;
+      restoredUsd = readCostStateTotalUsd(line, sessionId) ?? restoredUsd;
+    }
+    return restoredUsd;
+  } catch {
+    return null;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+}

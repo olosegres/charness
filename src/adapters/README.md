@@ -308,11 +308,15 @@ the `configDir` the session runs under: the bot folds the frame's `unifiedWindow
 that profile's usage snapshot and marks the profile limited on a `rejected` status
 (`utils/claudeUsageRefresher.ts`). Nothing is rendered into the topic (parity).
 Every `result` frame's `total_cost_usd` goes the same way to the `ClaudeTurnCostSink`
-(`registerClaudeTurnCostSink`), with the conversation id and whether this process
-STARTED the conversation (`--session-id`; an adopted or resumed one did not): the figure
-is the conversation's running cost — the CLI restores it on `--resume` — so the bot
-counts a turn's spend as the delta against the last total it saw for that topic
-(`utils/claudeApiSpend.ts`), for an account billed to API credits only.
+(`registerClaudeTurnCostSink`), with the conversation id. The figure is the conversation's
+running cost: the CLI writes it into the transcript (`cost-state`) when its process EXITS and
+restores it on `--resume`. So the first report of a process the bot started also carries the
+total it started from (`0` for `--session-id`; for a resume, the transcript's last `cost-state`,
+read before the launch — `readClaudeTranscriptRestoredCostUsd`), and the bot counts that turn
+from it, every later one from the last total it saw for that topic (`utils/claudeApiSpend.ts`),
+for an account billed to API credits only. Measuring a new process from the bot's last total
+would be wrong after turns it did not see (the tmux backend's) or a process that died without
+its exit flush (the next one restores an OLDER total).
 
 ## Shared session store
 

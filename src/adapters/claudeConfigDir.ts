@@ -33,8 +33,9 @@ export interface ClaudeTurnCostReport {
   sessionId: string;
   /** `total_cost_usd`: the CONVERSATION's running cost (Claude Code restores it on `--resume`). */
   totalCostUsd: number;
-  /** The process started this conversation (`--session-id`, no transcript): its running cost began at zero. */
-  isNewConversation: boolean;
+  /** On the first turn of a process the bot started: the running cost it started from (`0` for a new conversation, the
+   *  total a resume restored from the transcript); `null` on every later turn and for an adopted process. */
+  startCostUsd: number | null;
   /** The turn ended on an error (a refused request, a used-up balance). */
   isError: boolean;
 }

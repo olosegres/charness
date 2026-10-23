@@ -68,7 +68,7 @@ import {
 import { execFilePromise, getTmuxSessionTarget, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
-import { prepareClaudeSessionLaunch } from '../utils/claudeTranscriptContent';
+import { prepareClaudeSessionLaunch, readClaudeTranscriptRestoredCostUsd } from '../utils/claudeTranscriptContent';
 import {
   busyIdleWatchdogMs,
   checkShouldClearBusyOnIdle,
@@ -238,9 +238,10 @@ export interface StreamSession {
   /** The `CLAUDE_CONFIG_DIR` this process runs with (its account profile, `utils/claudeProfiles.ts`); `null` =
    *  the default profile. Set at spawn from the reader, recovered from the wrapper script at adopt. */
   configDir: string | null;
-  /** This process STARTED its conversation (`--session-id`, no transcript), so the conversation's running cost began
-   *  at zero; `false` for a resume and for an adopted process (whose start the bot did not see). */
-  isNewConversation: boolean;
+  /** The conversation's running cost this process started from, until its first turn reports one: `0` for a new
+   *  conversation, the transcript's last saved total for a resume (what the CLI restores); `null` from then on, for an
+   *  adopted process (whose start the bot did not see) and when the transcript could not be read. */
+  startCostUsd: number | null;
   /** The topic's profile changed while the process worked: re-spawn under the reader's directory at turn end. */
   isConfigDirSwitchPending: boolean;
   // — answer accumulation —
@@ -523,11 +524,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // transcript the CLI's own cleanup removed leaves only a metadata stub when its process is stopped — proof it had
     // turns: `--resume` answers "No conversation found" and `--session-id` "already in use" on it (the stub is removed
     // first). Removed while it SLEPT, it leaves no file at all: only the caller knows it had turns (`isConversationRecorded`).
+    const transcriptPath = getClaudeTranscriptPath(workDir, sessionId);
     const { isResumable, isConversationLost } = await prepareClaudeSessionLaunch(
-      getClaudeTranscriptPath(workDir, sessionId),
+      transcriptPath,
       opts.conversation !== 'new',
       opts.isConversationRecorded === true,
     );
+    // What the new process restores, read while none of the conversation runs (an API account's spend counts from it).
+    const startCostUsd = isResumable ? await readClaudeTranscriptRestoredCostUsd(transcriptPath, sessionId) : 0;
     if (opts.conversation === 'resume' && isConversationLost) {
       throw new Error(`No conversation to resume for session ${sessionId}: its transcript holds none`);
     }
@@ -611,7 +615,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
-      configDir: opts.configDir, isConfigDirSwitchPending: false, isNewConversation: !isResumable,
+      configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -935,7 +939,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // the topic resolves to now, and a later re-spawn passes them on.
       model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
-      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false, isNewConversation: false,
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false, startCostUsd: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1700,8 +1704,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // Every turn's cost, the compaction turn's too: what an account billed to API credits spends (the bot keeps the baseline).
     if (action.totalCostUsd !== null) {
       this.claudeTurnCostSink?.(session.key, session.configDir, {
-        sessionId: session.sessionId, totalCostUsd: action.totalCostUsd, isNewConversation: session.isNewConversation, isError: action.isError,
+        sessionId: session.sessionId, totalCostUsd: action.totalCostUsd, startCostUsd: session.startCostUsd, isError: action.isError,
       });
+      session.startCostUsd = null;
     }
     this.applyTurnEnd(session, action);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
