@@ -11,7 +11,12 @@ export const npmHoldMs = 4 * hourMs;
 export const quietPeriodMs = 10 * minuteMs;
 /** How often a waiting install re-checks whether the bot has become idle. */
 export const idlePollIntervalMs = 30 * 1000;
-export const npmInstallTimeoutMs = 10 * minuteMs;
+/** An npm install, a checkout's pull + install + build, a rollback. */
+export const installTimeoutMs = 10 * minuteMs;
+/** A read-only registry / remote query (`npm view`, `self-update.sh --check`). */
+export const queryTimeoutMs = 2 * minuteMs;
+/** How old a host-wide update lock may get before it is taken over even though its pid answers. */
+export const hostLockStaleMs = 30 * minuteMs;
 export const selfCheckTimeoutMs = 60 * 1000;
 /** Hot mode: a pull that has not produced a new worker after this long is a failed build. */
 export const hotBuildDeadlineMs = 10 * minuteMs;

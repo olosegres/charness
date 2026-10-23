@@ -106,6 +106,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The updater's pre-switch probe of a new install (hidden: not in --help).
+  if (sub === 'self-check') {
+    const { runSelfCheckCli } = await import('./selfUpdate/selfCheck');
+    process.exitCode = await runSelfCheckCli(process.argv.slice(3), path.resolve(__dirname, '..'));
+    return;
+  }
+
   process.stderr.write(`Unknown command: ${sub}\n\n`);
   printUsage();
   process.exit(2);

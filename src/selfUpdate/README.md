@@ -21,3 +21,19 @@ Pure decisions first, effects after:
   checkout = the entries a `git diff` of the file ADDED. The entry splitter is `../changelogEntries.ts`, the same one the
   release gate uses (every entry opens with a bold first sentence, which is the headline).
 - `types.ts` — what `state.json` keeps (`selfUpdate`, `lastRunVersion`).
+
+Sources — what talks to the world, each behind a `CommandRunner` (`commandRunner.ts`: `execFile` with a deadline, never
+throws, a result the caller words):
+
+- `npmSource.ts` — `npm view charness@latest version engines deprecated --json`; `npm install -g --prefix <prefix>
+  charness@X` with the npm NEXT TO the running `node` (nvm-safe, the user's `.npmrc` honoured), scripts on (node-pty builds);
+  a rollback adds `--prefer-offline`. Never sudo.
+- `hostLock.ts` — one installer per host: `<prefix>/lib/node_modules/.charness-update.lock` (created exclusively, pid + start
+  time; taken over when its pid is dead or it is older than 30 min). The others find the new version on disk and restart onto it.
+- `gitSource.ts` — drives `scripts/self-update.sh`: `--check` (fetch only → `status=behind|upToDate|skip`, `reason`, `from`,
+  `to`, `behind`, `migrationGuides`), apply with `--hold-breaking` (exit 3 = held at a range that adds a `MIGRATION_*.md`), the
+  whole-file diff of `CHANGELOG.md` for the notes, and the rollback (`git reset --keep <from>`, `yarn install` when the lock
+  moved, `yarn build` unless a hot watcher rebuilds).
+- `selfCheck.ts` — `charness self-check [--expect <version>]` (hidden), run on a NEW install before the switch: the version,
+  `node-pty`'s native binding, every built module importable (entry points and tests left out; `bot.js` only `node --check`ed,
+  it exits without its settings), under a throwaway `DATA_DIR`.
