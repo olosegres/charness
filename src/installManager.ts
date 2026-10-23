@@ -1,4 +1,4 @@
-import { execSync, execFileSync, exec, spawn } from 'child_process';
+import { execFileSync, exec, spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -54,14 +54,57 @@ function getNpmGlobalBinaryPath(toolName: string): string | null {
   return fs.existsSync(binaryPath) ? binaryPath : null;
 }
 
-/** @description Whether `which` finds the tool on the process PATH. */
-function checkIsOnPath(toolName: string): boolean {
+/** What a PATH lookup reads of its host: the process's own by default; a test hands it another platform's. */
+export interface PathLookupEnvironment {
+  platform: NodeJS.Platform;
+  pathValue: string;
+  /** Windows' `PATHEXT` (`.COM;.EXE;.BAT;.CMD`, …); unread elsewhere. */
+  pathExtValue: string | undefined;
+}
+
+/** The extensions a Windows shell tries when `PATHEXT` is unset. */
+const defaultWindowsPathExt = '.COM;.EXE;.BAT;.CMD';
+
+function getProcessPathLookupEnvironment(): PathLookupEnvironment {
+  return { platform: process.platform, pathValue: process.env.PATH ?? '', pathExtValue: process.env.PATHEXT };
+}
+
+/** @description Whether `candidatePath` is a file the platform would run: on POSIX also executable. */
+function checkIsRunnableFile(candidatePath: string, platform: NodeJS.Platform): boolean {
   try {
-    execSync(`which ${toolName}`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
+    if (!fs.statSync(candidatePath).isFile()) return false;
+    if (platform !== 'win32') fs.accessSync(candidatePath, fs.constants.X_OK);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * @description The first file on PATH that runs as `toolName`, or `null` — what `which` (POSIX) and `where` (Windows)
+ * find, without spawning either: Windows has no `which`, so every tool read as missing there. POSIX: the bare name, if
+ * executable. Windows: the name with each `PATHEXT` extension (npm installs `opencode.cmd`), as `where` does.
+ */
+export function findToolOnPath(toolName: string, environment: PathLookupEnvironment = getProcessPathLookupEnvironment()): string | null {
+  const isWindows = environment.platform === 'win32';
+  const directories = environment.pathValue.split(isWindows ? ';' : ':').filter((directory) => directory !== '');
+  const extensions = isWindows
+    ? (environment.pathExtValue || defaultWindowsPathExt).split(';').filter((extension) => extension !== '')
+      // Windows matches the extension case-insensitively; the lower-case spelling is how npm writes its shims.
+      .flatMap((extension) => [...new Set([extension.toLowerCase(), extension])])
+    : [''];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidatePath = path.join(directory, `${toolName}${extension}`);
+      if (checkIsRunnableFile(candidatePath, environment.platform)) return candidatePath;
+    }
+  }
+  return null;
+}
+
+/** @description Whether the tool is on the process PATH ({@link findToolOnPath}). */
+function checkIsOnPath(toolName: string): boolean {
+  return findToolOnPath(toolName) !== null;
 }
 
 /**

@@ -8,6 +8,9 @@ opened by their checked path on those systems, held to the file that was checked
 swapped meanwhile still cannot reach outside it. If a send does fail, the agent is told to give the file's path in its
 reply and carry on.
 
+**On Windows the bot finds the agent CLI installed on PATH.** It looked the tool up with `which`, which Windows lacks,
+so an installed `opencode` read as missing.
+
 **Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
 sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
 topic now gets one short line and the bot continues the work at once; if the same refusal comes right back, it says it
