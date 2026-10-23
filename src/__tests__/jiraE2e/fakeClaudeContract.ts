@@ -59,7 +59,6 @@ export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
  * it exists — a test puts an older CLI behind a conversation (the L-D10 per-turn refusal) without a second fake.
  */
 export const fakeClaudeCodeVersionOverrideFileName = 'claude-code-version';
-/** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
 /**
  * What one answered turn of the fake costs, and a compaction turn: every `result` frame carries the conversation's
  * running total as `total_cost_usd` (kept per conversation in the state dir, so a resumed process continues it, as the
@@ -67,6 +66,7 @@ export const fakeClaudeCodeVersionOverrideFileName = 'claude-code-version';
  */
 export const fakeTurnCostUsd = 0.25;
 export const fakeCompactionCostUsd = 0.05;
+/** The token accounting every fake turn's `result` reports (L-D11): distinctive values the e2e finds in the bot's usage line. */
 export const fakeTurnUsage = { input_tokens: 7, cache_creation_input_tokens: 1301, cache_read_input_tokens: 24601, output_tokens: 43 } as const;
 /**
  * What a real `/compact` turn's `result` reports (probe 2026-10-05): an all-zero `usage` and the summary

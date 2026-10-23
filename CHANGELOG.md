@@ -28,6 +28,31 @@ stream-json backends `/esc` now also declines a question the agent is waiting on
 aborted turn). Stopping a turn before the agent had written anything (also with `/c`) is no longer taken for a stuck
 session, whose "recovery" ran the request again.
 
+**You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
+counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
+under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a
+limit switches a topic onto it («billed per request … spent through the bot so far») and in its «credits used up»
+notice. It is what the bot saw, not the Console's balance. A request on the account that goes through again also ends
+its «credits used up» mark.
+
+**An account billed to API credits never spends money unasked, and «Credit balance is too low» no longer waits for a
+reset that never comes.** The `claude_profiles` recommendation and `charness claude-profiles --best` never name such an
+account, the switch to another Claude account never offers it, and «🔄 Fill from connected» puts it last in the
+fallback list and left out of automatic switching — tap it on the `/limits` board (`Claude · console 💳`), or include it.
+When its credits run out, the topic gets one `💸` notice instead of hourly retries, the account is marked as out of
+credits (`💸` in `/limits_autoswitch`, `/accounts`, `/limits`, `/status`) until you pick it or sign it in again, and the
+fallback list takes over as for a limit: an available entry, a «Switch to …» button, or a wait for an entry that comes
+back at a known time. An API rate limit (429) is still a short retry.
+
+**A Claude account can bill the API credits of a Claude Console organization.** `/accounts` → «➕ Claude API account
+(Console credits)» (or `/accounts add <name> api`) signs it in with `claude auth login --console`, which creates an API
+key in that organization and keeps it in the account's own directory; or paste an existing API key while the sign-in
+waits (on its own or as an `ANTHROPIC_API_KEY=…` line) — the message is deleted, the key is checked with the API and kept
+for that account only, never in `state.json` or in an environment variable. A key pasted where the name is asked, or typed
+on the `/accounts` command line, is deleted too. `/accounts` shows such an account as `💳 API · pay per use`, `/status` marks it
+`💳 API`, and picking it says every request is billed. Your subscription accounts are unchanged: they still never
+see an `ANTHROPIC_API_KEY`. Any `sk-ant-…` text is redacted from the output trace.
+
 ## 3.3.2 — 2026-10-23
 
 **On Windows the bot can start an `opencode` that npm installed.** 3.3.0 found npm's `opencode.cmd` on PATH but still
@@ -61,31 +86,6 @@ already posted, and dropped: neither shown nor retried.
 and `npx` still worked, the package itself carried them).
 
 ## 3.3.0 — 2026-10-23
-
-**You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
-counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
-under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a
-limit switches a topic onto it («billed per request … spent through the bot so far») and in its «credits used up»
-notice. It is what the bot saw, not the Console's balance. A request on the account that goes through again also ends
-its «credits used up» mark.
-
-**An account billed to API credits never spends money unasked, and «Credit balance is too low» no longer waits for a
-reset that never comes.** The `claude_profiles` recommendation and `charness claude-profiles --best` never name such an
-account, the switch to another Claude account never offers it, and «🔄 Fill from connected» puts it last in the
-fallback list and left out of automatic switching — tap it on the `/limits` board (`Claude · console 💳`), or include it.
-When its credits run out, the topic gets one `💸` notice instead of hourly retries, the account is marked as out of
-credits (`💸` in `/limits_autoswitch`, `/accounts`, `/limits`, `/status`) until you pick it or sign it in again, and the
-fallback list takes over as for a limit: an available entry, a «Switch to …» button, or a wait for an entry that comes
-back at a known time. An API rate limit (429) is still a short retry.
-
-**A Claude account can bill the API credits of a Claude Console organization.** `/accounts` → «➕ Claude API account
-(Console credits)» (or `/accounts add <name> api`) signs it in with `claude auth login --console`, which creates an API
-key in that organization and keeps it in the account's own directory; or paste an existing API key while the sign-in
-waits (on its own or as an `ANTHROPIC_API_KEY=…` line) — the message is deleted, the key is checked with the API and kept
-for that account only, never in `state.json` or in an environment variable. A key pasted where the name is asked, or typed
-on the `/accounts` command line, is deleted too. `/accounts` shows such an account as `💳 API · pay per use`, `/status` marks it
-`💳 API`, and picking it says every request is billed. Your subscription accounts are unchanged: they still never
-see an `ANTHROPIC_API_KEY`. Any `sk-ant-…` text is redacted from the output trace.
 
 **A usage limit waits until the exact reset when the provider sends one, instead of a guessed hour.** Claude reports the
 reset of the window that refused the request, but the bot read it only from the message text. A wording that names no
