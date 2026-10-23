@@ -25,7 +25,9 @@
  *   → Anthropic's unconfirmed "would exceed your account's rate limit", while the account's usage reading shows its
  *     session window at 100 %: confirmed by the reading — the limit wait is announced at once, no probe first
  *   → the same with that 100 % window's reset already past: an out-of-date reading proves nothing — the probe first
- *   → and with a 100 % window still ahead but the snapshot stale (the refresher could not re-read it): the probe too.
+ *   → and with a 100 % window still ahead but the snapshot stale (the refresher could not re-read it): the probe too
+ *   → a restart while that probe is armed: the probe it re-arms is still one, so the same error on its resume
+ *     confirms the limit (the wait), instead of a second probe.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -74,6 +76,8 @@ const requestLabel = 'REC-1';
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 const giveUpTimeoutMs = 3 * 60 * 1000;
+/** The probe's two minutes, the restart and the resume's round trip. */
+const probeResumeTimeoutMs = 4 * 60 * 1000;
 const msPerMinute = 60 * 1000;
 /** How long before the restart the window reset, and how long before that the error was written. */
 const resetAgoMs = 30 * msPerMinute;
@@ -396,5 +400,19 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
 
     await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')));
     assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'a stale reading does not confirm the limit');
+  });
+
+  it('a restart while the probe is armed: its resume hits the same error, and that confirms the limit — no second probe', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    assert.equal(readPersistedState(getLayout()).apiRetries?.[key]?.isLimitProbe, true, 'precondition: the probe is armed, and saved as one');
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const callsBefore = fakeTelegram.listCalls('sendMessage').length;
+    // The probe's "continue" turn hits the wording again.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+
+    await getCharness().waitFor('the limit notice after the restored probe\'s resume', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+    assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
+    assert.equal(fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')), false, 'no second probe');
   });
 });

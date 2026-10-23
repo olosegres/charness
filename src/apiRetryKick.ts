@@ -237,6 +237,7 @@ export function restoreApiRetryTimers(deps: ApiRetryRestoreDeps, records: Readon
       firedAt: null,
       fireAt: record.fireAt,
       ...(record.resumeOn ? readResumeOn(record.resumeOn) : {}),
+      ...(record.isLimitProbe === true ? { isLimitProbe: true } : {}),
     });
     restored += 1;
   }

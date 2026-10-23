@@ -1759,7 +1759,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   onThreadActivityWhileQuestionPending(key);
 
   void state
-    .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt })
+    .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}) })
     .catch(e => console.error('[apiRetry] persist failed:', e));
 
   const timer = setTimeout(() => {

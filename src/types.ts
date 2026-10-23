@@ -276,6 +276,11 @@ export interface ApiRetryState {
    * continues where it is. Persisted, so a restart keeps the target.
    */
   resumeOn?: FallbackChainEntry;
+  /**
+   * The short probe retry of an UNCONFIRMED usage limit ({@link AgentApiErrorClass.isUnconfirmed}). Persisted, so the
+   * same error right after a probe that a restart re-armed still confirms the limit instead of being probed again.
+   */
+  isLimitProbe?: boolean;
 }
 
 /**

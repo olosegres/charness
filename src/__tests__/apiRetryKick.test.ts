@@ -473,6 +473,14 @@ describe('restoring the saved retries at boot', () => {
     assert.equal(boot(), 1);
   });
 
+  it('the probe of an unconfirmed limit stays a probe across a restart, so the repeat right after it is recognised', () => {
+    saveRetry(topicKey, { isLimitProbe: true });
+    saveRetry(otherTopicKey);
+    boot();
+    assert.equal(world.entries.get(keyToString(topicKey))?.isLimitProbe, true, 'restored as a probe');
+    assert.equal(world.entries.get(keyToString(otherTopicKey))?.isLimitProbe, undefined, 'a plain retry is no probe');
+  });
+
   it('a wait longer than the longest timer is clamped to it (a longer delay would fire at once)', () => {
     saveRetry(topicKey, { fireAt: clockMs + 10 * maxTimeoutMs });
     boot();
@@ -555,7 +563,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     const handle = getFunction('function handleApiError(');
     // Arm: one helper (the limit / transient path and the unconfirmed-limit probe use it), saved before the timer and the entry exist.
     const arm = getFunction('function armApiRetryTimer(');
-    const save = arm.indexOf('.setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt })');
+    const save = arm.indexOf('.setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}) })');
     const entry = arm.indexOf('apiRetryTimers.set(keyToString(key), {');
     assert.ok(save > 0 && entry > save, 'arm: the saved twin is written with the entry');
     assert.ok(handle.includes('armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt'), 'the error path arms through it');

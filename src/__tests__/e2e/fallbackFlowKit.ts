@@ -31,7 +31,7 @@ export interface PersistedState {
   agents?: Record<string, AgentData>;
   parkedSessions?: Record<string, ParkedSession>;
   /** The armed API-error retries (a usage-limit wait among them), keyed by the topic. */
-  apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number }>;
+  apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number; isLimitProbe?: boolean }>;
   [field: string]: unknown;
 }
 
