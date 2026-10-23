@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.4.0 — 2026-10-23
+
 **Charness now updates itself.** Every hour the bot checks for a new version; when nobody is using it — no agent working,
 no input waiting, nobody has written for 10 minutes — it installs it and restarts in place, the same process, so every agent
 keeps running, and General gets «Updated a → b» with what the new version brought. An npm install takes a version 4 hours
