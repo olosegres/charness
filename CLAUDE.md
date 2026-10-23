@@ -223,7 +223,9 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
   reply directive.
 - **Settings live in the JSON config, not in env:** a setting the bot does not need before it can start goes
   into `settings.json` (`instanceSettings.ts`) and is changed from Telegram — never a new `CHARNESS_*` env var,
-  not even as an override. `.env` holds only what startup itself needs (bot token, paths, `DATA_DIR`).
+  not even as an override. `.env` holds only what startup itself needs (bot token, paths, `DATA_DIR`). The one
+  exception is the test-only timing seam `CHARNESS_TEST_TIMINGS` (`testTimings.ts`), set only by a flow's env file —
+  add a test window there, never as a setting or a variable of its own.
 - **CHANGELOG:** every commit with a user-visible change adds an entry under `## Unreleased` in
   `CHANGELOG.md`, starting with a **bold first sentence** that reads on its own — it becomes the item in the
   release notes and in the "what's new" message users get after an update. Pre-commit review FAILS a

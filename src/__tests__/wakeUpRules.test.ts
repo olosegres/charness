@@ -149,6 +149,13 @@ describe('post retries (R28)', () => {
     assert.equal(getPostRetryUpdate(createRequest({ postRetryCount: 3 }), nowMs), null);
   });
 
+  it('a test instance\'s first retry delay replaces the first minute only', () => {
+    const firstDelayMs = 5_000;
+    assert.deepEqual(getPostRetryUpdate(createRequest(), nowMs, firstDelayMs), { postRetryCount: 1, nextPostRetryAt: nowMs + firstDelayMs });
+    assert.deepEqual(getPostRetryUpdate(createRequest({ postRetryCount: 1 }), nowMs, firstDelayMs), { postRetryCount: 2, nextPostRetryAt: nowMs + 5 * minuteMs });
+    assert.equal(getPostRetryUpdate(createRequest({ postRetryCount: 3 }), nowMs, firstDelayMs), null);
+  });
+
   it('a due retry wakes under its own reason, outside the wake-up cap', () => {
     const due = createRequest({ nextPostRetryAt: nowMs, wakeCount: maxWakeUpsPerRequest });
     assert.deepEqual(decideUnwatchedRequest(due, idleProbe, nowMs, backstopMs), {

@@ -37,10 +37,11 @@ export const postRetryDelaysMs = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000] as c
 /**
  * @description The next post retry after a failed post (R28), or `null` once the
  * retries are spent — the normal backstop / alert rules take the request then.
+ * `firstDelayMs` replaces the first delay only (a test instance's shorter one).
  */
-export function getPostRetryUpdate(request: OpenRequestState, nowMs: number): OpenRequestUpdate | null {
+export function getPostRetryUpdate(request: OpenRequestState, nowMs: number, firstDelayMs?: number): OpenRequestUpdate | null {
   const retryCount = request.postRetryCount ?? 0;
-  const delayMs = postRetryDelaysMs[retryCount];
+  const delayMs = retryCount === 0 && firstDelayMs !== undefined ? firstDelayMs : postRetryDelaysMs[retryCount];
   return delayMs === undefined ? null : { postRetryCount: retryCount + 1, nextPostRetryAt: nowMs + delayMs };
 }
 

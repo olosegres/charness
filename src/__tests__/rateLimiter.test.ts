@@ -29,6 +29,7 @@ import {
   RateLimitedError,
   GlobalSendPacer,
   __setGlobalPacerForTest,
+  configureGlobalSendInterval,
   globalSendIntervalMs,
   enterShutdownDrain,
   drainPendingSends,
@@ -642,5 +643,21 @@ test('shutdown drain: drainPendingSends reports timeout when a send outlives the
     assert.equal(await drainPendingSends(1000), 'drained', 'an emptied FIFO reports drained');
   } finally {
     clearInterval(keepEventLoopAlive);
+  }
+});
+
+test('configureGlobalSendInterval: the boot\'s test-instance interval paces sends across threads instead of the 2 s default', async () => {
+  // Two threads, so only the process pacer spaces the sends (a thread's own FIFO would order them anyway).
+  const testIntervalMs = 150;
+  configureGlobalSendInterval(testIntervalMs);
+  try {
+    const startedAt: number[] = [];
+    await Promise.all([k(7101, 1), k(7101, 2)].map((key) => enqueueSend(key, async () => { startedAt.push(Date.now()); })));
+    const gapMs = startedAt[1] - startedAt[0];
+    assert.ok(gapMs >= testIntervalMs - 10, `the second send waited the configured interval (${gapMs} ms)`);
+    // Half the production interval: a 2 s timer that fires a millisecond early must not pass for the configured one.
+    assert.ok(gapMs < globalSendIntervalMs / 2, `far below the production ${globalSendIntervalMs} ms (${gapMs} ms)`);
+  } finally {
+    __setGlobalPacerForTest(new GlobalSendPacer(1));
   }
 });

@@ -145,6 +145,13 @@ A flow's own time budget is that same limit less a teardown reserve (`getFlowDea
 `--test-timeout`), so a flow that runs long fails first, at the wait that is late and with charness's output tail,
 not with the runner's bare timeout. Run one flow directly with `--test-timeout=<ms>`.
 
+A flow does not wait out the production windows in real time: its env file sets `CHARNESS_TEST_TIMINGS`, a JSON object
+of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `jiraPollIntervalMs` —
+below the 10 s floor of `jira.json`, `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's
+minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit). It is the ONE test-only timing seam,
+never a setting: unset, every window is the production one; set, the boot prints `[test-timings] … overrides active`, and
+an unknown key or a bad value stops the start naming it.
+
 The Docker dev loop (never `docker compose restart` — it ignores
 `depends_on`):
 

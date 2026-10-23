@@ -1,0 +1,62 @@
+import { z } from 'zod';
+
+/**
+ * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
+ * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
+ * Jira poll's 10 s floor, the wake-up sweep's minute, the first re-post retry's minute, the two-minute probe of an
+ * unconfirmed usage limit). It is NOT a setting: no operator sets it and it is documented only for developers
+ * (DEVELOPMENT.md); settings live in `settings.json`.
+ *
+ * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
+ * key or a bad value fails the start with the key named, and a valid one prints one line, so an instance that carries it
+ * by mistake is visible at once.
+ */
+
+/** The variable the instance reads; set only by a test's env file. */
+export const testTimingsEnvName = 'CHARNESS_TEST_TIMINGS';
+
+const positiveMsSchema = z.number().int().positive();
+
+const testTimingsSchema = z.strictObject({
+  /** The global Telegram send pacer's interval (production: `globalSendIntervalMs`, 2 s). */
+  telegramSendIntervalMs: positiveMsSchema.optional(),
+  /** The Jira poll's interval, below `jira.json`'s 10 s floor (production: `pollIntervalSeconds`). */
+  jiraPollIntervalMs: positiveMsSchema.optional(),
+  /** How often the wake-up engine sweeps the unwatched open requests (production: `unwatchedSweepMs`, 1 min). */
+  requestSweepIntervalMs: positiveMsSchema.optional(),
+  /** The first retry of a request whose prompt could not be posted (production: `postRetryDelaysMs[0]`, 1 min). */
+  requestFirstPostRetryDelayMs: positiveMsSchema.optional(),
+  /** The short retry that probes an unconfirmed usage limit (production: `unconfirmedLimitProbeDelayMs`, 2 min). */
+  limitProbeDelayMs: positiveMsSchema.optional(),
+});
+
+/** @name TestTimings @description The overrides in force; an absent key keeps its production window. */
+export type TestTimings = z.infer<typeof testTimingsSchema>;
+
+export type TestTimingsParse = { ok: true; timings: TestTimings } | { ok: false; errors: string[] };
+
+/**
+ * @description Read `CHARNESS_TEST_TIMINGS`. Unset or blank = no overrides. Every error names the variable and, for a
+ * field, the key (`CHARNESS_TEST_TIMINGS limitProbeDelayMs: …`).
+ */
+export function parseTestTimings(rawValue: string | undefined): TestTimingsParse {
+  if (rawValue === undefined || rawValue.trim() === '') return { ok: true, timings: {} };
+  let parsedJson: object;
+  try {
+    parsedJson = JSON.parse(rawValue);
+  } catch (error) {
+    return { ok: false, errors: [`${testTimingsEnvName} is not JSON: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  const parsed = testTimingsSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    return { ok: false, errors: parsed.error.issues.map((issue) => `${testTimingsEnvName} ${issue.path.join('.') || '(root)'}: ${issue.message}`) };
+  }
+  return { ok: true, timings: parsed.data };
+}
+
+/** @description The boot line of an instance running with overrides; `null` when none is set. */
+export function formatTestTimingsBootLine(timings: TestTimings): string | null {
+  const entries = Object.entries(timings);
+  if (entries.length === 0) return null;
+  return `[test-timings] ${testTimingsEnvName} overrides active: ${entries.map(([name, valueMs]) => `${name}=${valueMs}`).join(', ')}`;
+}

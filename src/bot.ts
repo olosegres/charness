@@ -75,8 +75,10 @@ import {
   enterShutdownDrain,
   drainPendingSends,
   shutdownDrainMaxMs,
+  configureGlobalSendInterval,
   type ShutdownDrainVerdict,
 } from './rateLimiter';
+import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
 import {
   stopOpenCodeServer,
   ensureOpenCodeServer,
@@ -522,12 +524,17 @@ function parseEnv() {
     errors.push(`WORK_ROOT="${workRoot}" is not accessible (${code})`);
   }
 
+  // A test instance's timing overrides (never a setting); an unknown key or a bad value stops the boot, naming it.
+  const testTimingsParse = parseTestTimings(process.env[testTimingsEnvName]);
+  if (!testTimingsParse.ok) errors.push(...testTimingsParse.errors);
+
   if (errors.length > 0) {
     for (const err of errors) console.error(`[startup] ${err}`);
     process.exit(1);
   }
 
   return {
+    testTimings: testTimingsParse.ok ? testTimingsParse.timings : {},
     botToken,
     servedPlatforms: getServedPlatforms(connectors),
     isTelegramServed,
@@ -540,6 +547,12 @@ function parseEnv() {
 }
 
 const ENV = parseEnv();
+
+const testTimingsBootLine = formatTestTimingsBootLine(ENV.testTimings);
+if (testTimingsBootLine !== null) console.log(testTimingsBootLine);
+if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInterval(ENV.testTimings.telegramSendIntervalMs);
+/** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
+const limitProbeDelayMs = ENV.testTimings.limitProbeDelayMs ?? unconfirmedLimitProbeDelayMs;
 
 // The instance default effort (`/effort` in General) is `settings.json`'s `defaultEffort`, re-read when the file changes.
 setInstanceDefaultEffortReader(createInstanceDefaultEffortReader(() => getInstanceSettingsPath(), (line) => console.error(line)));
@@ -1854,9 +1867,9 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
     return false;
   }
   console.log(`[apiRetry] ${k}: an unconfirmed usage limit — probing with a short retry before waiting for the reset`);
-  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(unconfirmedLimitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
+  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(limitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
   const now = Date.now();
-  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + unconfirmedLimitProbeDelayMs, delayMs: unconfirmedLimitProbeDelayMs, isLimitProbe: true });
+  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + limitProbeDelayMs, delayMs: limitProbeDelayMs, isLimitProbe: true });
   return true;
 }
 
@@ -12955,6 +12968,7 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
       dataDir: path.dirname(state.stateFilePath),
       workRoot: ENV.workRoot,
       openCodeUrl: process.env.OPENCODE_URL,
+      pollIntervalMsOverride: ENV.testTimings.jiraPollIntervalMs,
     });
   } catch (error) {
     const reasons = error instanceof JiraConnectorStartError ? error.reasons : [error instanceof Error ? error.message : String(error)];
@@ -13094,6 +13108,8 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
+    firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,
