@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.5.0 — 2026-10-23
+
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
 counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
 under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a
