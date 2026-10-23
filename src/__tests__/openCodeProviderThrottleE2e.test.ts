@@ -25,7 +25,9 @@
  *     guessed in the bot's zone
  *   → in a fifth topic, Google's subscription wording "You have exhausted your capacity on this model. Your quota will
  *     reset after 2s." as OpenCode's own retry (the message alone): its short notice, no usage-limit notice; then the
- *     same wording "after 8h27m3s" in a RESOURCE_EXHAUSTED body: the limit wait, named 8 h 27 min ahead.
+ *     same wording "after 8h27m3s" in a RESOURCE_EXHAUSTED body: the limit wait, named 8 h 27 min ahead
+ *   → in a sixth topic, a Gemini DAILY quota with Google's "Please retry in 40.15s" and a 40-second Retry-After: the
+ *     usual usage-limit wait of an hour — the hint used to be taken as the reset, a wait of ~100 s.
  *
  * What the unit tests cover instead: every wording (`apiErrorRetry.test.ts`), what a `session.error` is classified from
  * and its Retry-After reset (`openCodeSessionErrorClassification.test.ts`).
@@ -75,6 +77,8 @@ const goTopic = { threadId: 153, folder: 'opencode-go-limit' };
 const zonelessTopic = { threadId: 154, folder: 'zoneless-reset' };
 /** A fifth topic for Google's subscription wording "You have exhausted your capacity … reset after <duration>". */
 const capacityTopic = { threadId: 155, folder: 'google-capacity' };
+/** A sixth topic for a Gemini daily quota whose text and header carry a short retry hint. */
+const dailyQuotaTopic = { threadId: 156, folder: 'gemini-daily-quota' };
 const fakeOpenCodeVersion = '1.17.11';
 const geminiModel = 'google/gemini-2.5-flash';
 const openCodeModels = [geminiModel] as const;
@@ -96,6 +100,8 @@ const anthropicRetryAfterMs = 3 * 60 * msPerMinute;
 /** The probe retry (two minutes) plus the resume's round trip. */
 const probeTimeoutMs = 4 * msPerMinute;
 const openCodeRetryNoticeStart = '⏳ Provider error — OpenCode retries';
+/** The least a usage-limit wait without a stated reset sits ahead (the usual hour, less slack); the hint put it at ~100 s. */
+const usageLimitWaitMinMs = 55 * msPerMinute;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -140,7 +146,7 @@ function getTopicKey(threadId: number = geminiTopic.threadId): string {
 describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder, zonelessTopic.folder, capacityTopic.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-octhrottle-', [geminiTopic.folder, anthropicTopic.folder, goTopic.folder, zonelessTopic.folder, capacityTopic.folder, dailyQuotaTopic.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -369,5 +375,32 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     const notice = listSentTexts(capacityTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
     const expectedClocks = [0, msPerMinute].map((driftMs) => new Date(sentAt + resetInMs + driftMs).toISOString().slice(11, 16));
     assert.ok(expectedClocks.some((clock) => new RegExp(`~(?:\\d{4}-\\d{2}-\\d{2} )?${clock}\\)`).test(notice)), `the reset 8 h 27 min ahead (${expectedClocks.join(' or ')}), got: ${notice}`);
+  });
+
+  it('a Gemini DAILY quota with "Please retry in 40.15s" and a 40-second Retry-After: the usual hour-long usage-limit wait', async () => {
+    const driver = new TopicDriver(fakeTelegram, getCharness, dailyQuotaTopic.threadId, replyTimeoutMs);
+    await driver.sendAndAwaitReply(`/bind ${dailyQuotaTopic.folder}`, `Bound to \`${dailyQuotaTopic.folder}\``);
+    await driver.sendAndAwaitReply('/opencode', 'ready in');
+    const sentAt = Date.now();
+    fakeOpenCode.emitSessionError(getTopicSessionId(dailyQuotaTopic.folder), {
+      name: 'APIError',
+      data: {
+        message: googlePerMinuteQuotaMessage,
+        statusCode: 429,
+        isRetryable: false,
+        responseHeaders: { 'retry-after': '40' },
+        responseBody: JSON.stringify({ error: { code: 429, message: googlePerMinuteQuotaMessage, status: 'RESOURCE_EXHAUSTED', details: [
+          { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '40s' },
+        ] } }),
+      },
+    });
+
+    await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(dailyQuotaTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
+    const notice = listSentTexts(dailyQuotaTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
+    assert.match(notice, /retrying in 60 min/, `the usual usage-limit wait, not the 40-second hint, got: ${notice}`);
+    const retry = readPersistedState(getLayout()).apiRetries?.[getTopicKey(dailyQuotaTopic.threadId)];
+    assert.equal(retry?.kind, 'usageLimit');
+    assert.ok((retry?.fireAt ?? 0) >= sentAt + usageLimitWaitMinMs, `the wait is set an hour ahead, got ${new Date(retry?.fireAt ?? 0).toISOString()}`);
   });
 });

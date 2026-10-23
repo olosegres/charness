@@ -133,6 +133,18 @@ test('classify: a quota or window that names a LONG window stays a usage limit, 
   }
 });
 
+test('classify: inside a usage limit a short relative retry hint is not the reset — a clock reset a few minutes ahead is', () => {
+  // Google sends a used-up DAILY quota with the same "Please retry in 40.15s" as a per-minute one. Read as the reset,
+  // it put the usage-limit wait at ~100 s and spent the attempts in minutes; the wait is the usual usage-limit delay.
+  for (const text of [googleDailyQuotaBody, 'You exceeded your current quota (requests per day). Please retry in 30s.']) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: undefined }, text);
+  }
+  // A window's own end, written as a clock time, stays the reset however close it is.
+  const closeClockReset = new Date(fixedNow + 3 * minuteMs);
+  const clockText = `You've hit your session limit · resets ${closeClockReset.getHours()}:${closeClockReset.getMinutes().toString().padStart(2, '0')}`;
+  assert.equal(classifyAgentApiError(clockText, fixedNow)?.resetAt, fixedNow + 3 * minuteMs);
+});
+
 test('classify: usage / credit / quota phrasings → usageLimit', () => {
   assert.equal(classifyAgentApiError('Claude usage limit reached', fixedNow)?.kind, 'usageLimit');
   assert.equal(classifyAgentApiError('Credit balance is too low', fixedNow)?.kind, 'usageLimit');

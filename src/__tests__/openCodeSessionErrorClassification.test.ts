@@ -64,6 +64,17 @@ test('a usage limit takes its reset from the retry-after header, never from an I
   assert.ok(Math.abs(resetAt - (startedAt + 2 * msPerHour)) < clockToleranceMs, `the reset is retry-after's two hours, got ${new Date(resetAt).toISOString()}`);
 });
 
+test('a usage limit does not take a short retry-after as its reset: inside a daily quota it is a retry hint', () => {
+  const { adapter, apiErrors } = createAdapterWithSession();
+  adapter['handleSessionError'](key, own, { error: buildApiError({
+    message: 'You exceeded your current quota (requests per day).',
+    statusCode: 429,
+    isRetryable: false,
+    responseHeaders: { 'retry-after': '40' },
+  }) });
+  assert.deepEqual(apiErrors, [{ kind: 'usageLimit', resetAt: undefined }], 'the usual usage-limit wait, not 40 s');
+});
+
 test('the status code still counts: a bare 429 APIError is a transient hiccup', () => {
   const { adapter, apiErrors } = createAdapterWithSession();
   adapter['handleSessionError'](key, own, { error: buildApiError({ message: 'Too Many Requests', statusCode: 429, isRetryable: true }) });

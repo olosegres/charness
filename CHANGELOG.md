@@ -6,7 +6,8 @@
 Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan
 («after 146h52m11s»). The seconds-long one was announced as «🚧 Usage limit reached» with an hour's wait, and an hours-long
 one inside Google's RESOURCE_EXHAUSTED was retried a few times and given up. A reset within a few minutes is now a short
-retry; a longer one is waited for until the time it names.
+retry; a longer one is waited for until the time it names. A daily quota keeps the usual hour-long wait: the short
+«Please retry in 40s» Google sends beside it is a retry hint, not the time the quota resets.
 
 **A voice message no longer fails when two starts of the local speech engine meet.** When the bot restarted while the
 local engine was loading, the second start finds the first one running and steps aside — on a busy machine that was taken

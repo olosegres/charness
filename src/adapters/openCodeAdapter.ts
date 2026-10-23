@@ -7,7 +7,7 @@ import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, 
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
-import { classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
+import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
 import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
@@ -5414,8 +5414,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       now,
     );
     if (apiError) {
-      // A usage limit whose text names no reset takes the provider's Retry-After, read as a field.
-      const resetAt = apiError.kind === 'usageLimit' ? apiError.resetAt ?? getOpenCodeErrorRetryAfterAt(properties.error, now) : undefined;
+      // A usage limit whose text names no reset takes the provider's Retry-After, read as a field — unless it is a
+      // short retry hint (a daily quota comes with Google's 40-second one), which is not the window's reset.
+      const retryAfterAt = apiError.kind === 'usageLimit' && apiError.resetAt === undefined ? getOpenCodeErrorRetryAfterAt(properties.error, now) : undefined;
+      const limitRetryAfterAt = retryAfterAt !== undefined && !checkIsShortStatedReset(retryAfterAt, now) ? retryAfterAt : undefined;
+      const resetAt = apiError.kind === 'usageLimit' ? apiError.resetAt ?? limitRetryAfterAt : undefined;
       this.emit('apiError', key, apiError.kind === 'usageLimit' ? { ...apiError, resetAt } : apiError);
     }
   }

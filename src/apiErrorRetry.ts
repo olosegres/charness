@@ -39,6 +39,11 @@ export const transientMaxAttempts = transientBackoffMinutes.length;
  */
 export const shortStatedResetMaxMs = transientBackoffMinutes[0] * msPerMinute;
 
+/** @description Whether a stated reset (a parsed text reset or a Retry-After field) is within {@link shortStatedResetMaxMs} ahead. */
+export function checkIsShortStatedReset(resetAt: number, now: number): boolean {
+  return resetAt >= now && resetAt - now <= shortStatedResetMaxMs;
+}
+
 /**
  * Fixed delay for a usage-limit error whose text exposed no reset time (the
  * common case for Claude's "blocked" message): 60 minutes, re-armed on each
@@ -276,7 +281,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
  *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
- *     a longer one keeps 1c from calling the limit short.
+ *     a longer one keeps 1c from calling the limit short. A short RELATIVE one that reaches the usage-limit branches
+ *     below (a long window named beside it) is a retry hint: their `resetAt` drops it.
  *  1c. a SHORT-window throttle ({@link shortWindowThrottleRe}, reported as hit —
  *     {@link limitHitRe}) that names no long
  *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
@@ -308,16 +314,21 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   // nothing here (a live error naming one is still announced).
   const statedResetAt = parseResetAt(text, now);
   const statedResetInMs = statedResetAt === undefined ? null : statedResetAt - now;
-  const isShortStatedReset = statedResetInMs !== null && statedResetInMs >= 0 && statedResetInMs <= shortStatedResetMaxMs;
+  const isShortStatedReset = statedResetAt !== undefined && checkIsShortStatedReset(statedResetAt, now);
   const isLongStatedReset = statedResetInMs !== null && statedResetInMs > shortStatedResetMaxMs;
   const isLongWindowNamed = longWindowRe.test(text);
   if (isShortStatedReset && limitHitRe.test(text) && !isLongWindowNamed) return { kind: 'transient' };
   if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !isLongWindowNamed && !isLongStatedReset) return { kind: 'transient' };
+  // Past this point it is a usage limit, and a SHORT relative reset beside one is a retry hint, not the window's end:
+  // Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken as the reset
+  // it set the wait at ~100 s and spent the attempts in minutes. A clock reset is the window's own end however close.
+  // `parseResetAt` reads the relative shape first, so a relative match is the reset it stated.
+  const limitResetAt = isShortStatedReset && relativeResetRegex.test(text) ? undefined : statedResetAt;
   if (exhaustedQuotaCodesRe.test(text)) {
-    return { kind: 'usageLimit', resetAt: statedResetAt };
+    return { kind: 'usageLimit', resetAt: limitResetAt };
   }
   if (subscriptionLimitMessageRe.test(text)) {
-    return { kind: 'usageLimit', resetAt: statedResetAt, isUnconfirmed: true };
+    return { kind: 'usageLimit', resetAt: limitResetAt, isUnconfirmed: true };
   }
   // The observed subscription wording is handled above, including a 429 wrapper.
   // Ordinary rate-limit errors must not fall into the generic limit + retry-hint branch,
@@ -326,7 +337,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'transient' };
   }
   if (checkIsUsageLimitText(text)) {
-    return { kind: 'usageLimit', resetAt: statedResetAt };
+    return { kind: 'usageLimit', resetAt: limitResetAt };
   }
   return null;
 }
