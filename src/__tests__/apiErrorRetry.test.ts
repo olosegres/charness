@@ -256,11 +256,16 @@ test('getRetryPlan / decideRetryAction: a conversation-tail refusal is retried o
     { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs },
   );
   assert.deepEqual(
-    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'conversationTail', attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
     { action: 'giveUp', attempts: 1 },
   );
+  // Another class is another episode: a refusal on the "continue" of a short throttle retry still gets its one retry.
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'transient', attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs },
+  );
   // A refusal long after the last retry is a fresh episode.
-  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
+  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'conversationTail', attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
 });
 
 test('getRetryPlan: transient attempts 1/2/3 → 5/10/20 min', () => {
@@ -329,7 +334,7 @@ test('decideRetryAction: a retry already pending → ignore (dedup the same erro
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 1, firedAt: null, pending: true },
+    prev: { kind: 'transient', attempt: 1, firedAt: null, pending: true },
   });
   assert.deepEqual(result, { action: 'ignore' });
 });
@@ -338,7 +343,7 @@ test('decideRetryAction: a prior fire WITHIN the grace window → escalate to at
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
+    prev: { kind: 'transient', attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
@@ -352,7 +357,7 @@ test('decideRetryAction: a prior fire BEYOND the grace window → fresh episode,
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 3, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
+    prev: { kind: 'transient', attempt: 3, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
@@ -367,7 +372,7 @@ test('decideRetryAction: transient escalation past the cap → giveUp with attem
     kind: 'transient',
     now: fixedNow,
     // attempt 3 fired inside grace → next attempt is 4 → over the cap of 3.
-    prev: { attempt: 3, firedAt: fixedNow - 1, pending: false },
+    prev: { kind: 'transient', attempt: 3, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 3 });
 });
@@ -377,7 +382,7 @@ test('decideRetryAction: usageLimit escalation past the cap → giveUp with atte
     kind: 'usageLimit',
     now: fixedNow,
     // attempt 6 fired inside grace → next attempt is 7 → over the cap of 6.
-    prev: { attempt: 6, firedAt: fixedNow - 1, pending: false },
+    prev: { kind: 'usageLimit', attempt: 6, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 6 });
 });
@@ -393,7 +398,7 @@ test('decideRetryAction: auth → surface (never arms a timer, ignores prior rec
     decideRetryAction({
       kind: 'auth',
       now: fixedNow,
-      prev: { attempt: 2, firedAt: fixedNow - 1, pending: true },
+      prev: { kind: 'auth', attempt: 2, firedAt: fixedNow - 1, pending: true },
     }),
     { action: 'surface' },
   );

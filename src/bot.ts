@@ -1673,7 +1673,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   }
   const entry = apiRetryTimers.get(k);
   const prev = entry
-    ? { attempt: entry.attempt, firedAt: entry.firedAt, pending: entry.timer !== null }
+    ? { kind: entry.kind, attempt: entry.attempt, firedAt: entry.firedAt, pending: entry.timer !== null }
     : null;
 
   const now = Date.now();

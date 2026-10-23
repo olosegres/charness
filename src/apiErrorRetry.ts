@@ -671,6 +671,8 @@ function clampDelay(delayMs: number): number {
  * the only state the pure decision needs.
  */
 export interface RetryEntrySnapshot {
+  /** The class of the currently / last armed retry: attempts are counted per class. */
+  kind: AgentApiErrorClass['kind'];
   /** 1-based attempt of the currently / last armed retry. */
   attempt: number;
   /** Epoch ms when the last armed retry actually fired, or `null` if still pending. */
@@ -718,8 +720,9 @@ export interface DecideRetryActionArgs {
  *  1. `prev.pending` → `ignore` (a retry is already armed — dedup the episode;
  *     this is what stops Claude's repeated scrape frames AND any duplicate
  *     `session.error` from re-arming).
- *  2. same episode (a `prev` that fired within {@link retryRecurrenceGraceMs}) →
- *     escalate to `prev.attempt + 1`; otherwise a fresh episode → attempt 1.
+ *  2. same episode (a `prev` OF THE SAME CLASS that fired within {@link retryRecurrenceGraceMs}) →
+ *     escalate to `prev.attempt + 1`; otherwise a fresh episode → attempt 1. Another class is another episode:
+ *     a model-turn refusal on the "continue" of a short throttle retry still gets its one retry.
  *  3. ask {@link getRetryPlan}: `giveUp` → `giveUp` with `attempts` already made
  *     (= attempt − 1); else `arm` at `now + delayMs`.
  */
@@ -728,7 +731,7 @@ export function decideRetryAction(args: DecideRetryActionArgs): RetryAction {
   if (kind === 'auth') return { action: 'surface' };
   if (prev?.pending) return { action: 'ignore' };
 
-  const sameEpisode = !!prev && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
+  const sameEpisode = !!prev && prev.kind === kind && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
   const attempt = sameEpisode ? prev.attempt + 1 : 1;
 
   const plan = getRetryPlan({ kind, attempt, resetAt, now });
