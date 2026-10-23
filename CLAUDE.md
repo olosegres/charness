@@ -243,6 +243,8 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
 - **Restart in place:** `src/cli.ts` imports `selfUpdate/launchEnvironment` FIRST — it snapshots `process.env` before any `.env`
   is read, and every `execve` restart (an update, the hot supervisor's re-exec) hands that snapshot to the new image. Nothing may
   be imported ahead of it, and a settings value is never a new env var.
+- **Before a manual release:** run `yarn install --immutable` and `npm publish --dry-run` locally — a `package.json` change needs
+  `yarn.lock` refreshed, and `bin` paths are written `dist/cli.js` without "./" (npm >= 11.10 silently drops a "./" entry).
 - **Secrets:** never log or echo a token/key; a pasted secret (`/login` code, `/connect` key) is deleted from
   the topic and redacted from the trace preview.
 
