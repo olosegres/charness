@@ -1,10 +1,15 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { loadEnvWithConnectorGuards } from './connectorGuards';
 import { acquireLock, installLockCleanupHandlers } from '../instanceLock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
 import { warnLegacyNamesAtBoot } from '../legacyNames';
 import { migrateLegacyNames } from '../legacyMigration';
+import { createBootRollback } from '../selfUpdate/bootRollback';
+import { getLaunchEnvironment } from '../selfUpdate/launchEnvironment';
+import { createDefaultReexecDeps, getReexecTarget, reexecProcess } from '../selfUpdate/restart';
+import { runBootUpdateCheck } from '../selfUpdate/updatePending';
 
 /**
  * @description Shared bot startup used by the public no-arg CLI and the
@@ -22,11 +27,13 @@ import { migrateLegacyNames } from '../legacyMigration';
  *      the projects/topics you want to bind.
  *   3. Validate `WORK_ROOT` resolves to an existing directory — fail fast
  *      with a clear message if not.
- *   4. Acquire the single-instance lock and wire cleanup handlers.
- *   5. Dynamically import `../bot` (which reads env at module scope) and
+ *   4. Count this boot against a pending update (`update-pending.json`): a new version that has failed to start twice
+ *      is rolled back here — before the bot module can break the boot — and the process restarts onto the old one.
+ *   5. Acquire the single-instance lock and wire cleanup handlers.
+ *   6. Dynamically import `../bot` (which reads env at module scope) and
  *      call `startBot()`.
  *
- * The dynamic import in step 5 is deliberate: a static `import` at the top
+ * The dynamic import in step 6 is deliberate: a static `import` at the top
  * of this file would resolve `process.env` at module-load time, before
  * the env load ran, and we'd see undefined tokens. `await import(...)`
  * defers binding until after env is populated.
@@ -65,6 +72,8 @@ export async function runBot(options: { isHotWorker?: boolean } = {}): Promise<v
     process.exit(1);
   }
 
+  await handleUpdateRollbackAtBoot(options.isHotWorker === true);
+
   await acquireLock();
   installLockCleanupHandlers();
 
@@ -78,4 +87,24 @@ export async function runBot(options: { isHotWorker?: boolean } = {}): Promise<v
   // `process.env.*` reads run. See file-level docstring for rationale.
   const { startBot } = await import('../bot');
   await startBot();
+}
+
+/**
+ * @description The boot-time half of a safe update: a version that cannot start is put back by the process that failed to
+ * start it. A plain process then restarts onto the restored install (`process.execve`, nothing held yet — the lock is not
+ * taken); a hot worker exits cleanly instead, and its watcher rebuilds the reset checkout and starts a new worker.
+ */
+async function handleUpdateRollbackAtBoot(isHotWorker: boolean): Promise<void> {
+  const packageRoot = path.resolve(__dirname, '..', '..');
+  const outcome = await runBootUpdateCheck({
+    dataDir: resolveDataDir(),
+    rollback: createBootRollback({ packageRoot, execPath: process.execPath, platform: process.platform, hasExecve: typeof process.execve === 'function', isHotWorker }),
+    log: (line) => console.error(line),
+  });
+  if (outcome !== 'rolledBack') return;
+  if (isHotWorker) {
+    process.exit(0);
+    return;
+  }
+  reexecProcess(getReexecTarget({ execPath: process.execPath, packageRoot, argv: process.argv }), getLaunchEnvironment(), createDefaultReexecDeps());
 }

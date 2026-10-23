@@ -22,6 +22,9 @@ import {
   type SttOwnerContext,
 } from '../stt/sttSidecarOwner';
 import { migrateLegacyNamesUnderLock } from '../legacyMigration';
+import { getLaunchEnvironment } from '../selfUpdate/launchEnvironment';
+import { createDefaultReexecDeps, getReexecProblems, getReexecTarget, reexecProcess } from '../selfUpdate/restart';
+import { collectLoadedDistModules, supervisorReexecSignal, writeHotSupervisorRecord } from '../selfUpdate/hotSupervisor';
 
 interface HotOpenCodeDeps {
   checkIsInstalled: (toolName: string) => boolean;
@@ -56,6 +59,13 @@ const tscWatchTailLength = tscWatchReadyMarker.length - 1;
  * subcommand makes the same workflow reachable from any CWD — we just
  * resolve the project root from the bin's own realpath. `yarn hot` in the
  * repo is the in-project equivalent.
+ *
+ * **Re-executing itself.** A worker reload is all an update needs — until a file the SUPERVISOR itself loaded changed.
+ * Right at its start the supervisor writes `DATA_DIR/hot-supervisor.json` (its pid, start token and the hash of every
+ * `dist/` module it loaded); a worker that finds one of those files changed signals it with `SIGUSR2` at an idle point,
+ * and the supervisor stops `tsc -w` and nodemon, leaves the OpenCode server and the speech sidecar alone, and replaces
+ * itself with `process.execve` — the same pid, so a Docker entrypoint `wait`ing on it, `charness-restart-bot` and systemd
+ * see nothing. The new image gets the environment this one was launched with, not what it loaded since.
  *
  * The supervisor is also the OWNER of the local speech engine's sidecar: it exports its pid and start
  * token to the worker (`buildHotWorkerEnv`), the sidecar dies with it (its own watchdog covers a SIGKILL), and
@@ -131,8 +141,23 @@ export async function runHot(): Promise<void> {
   if (connectors.ok && connectors.connectors.includes('telegram')) await prepareHotOpenCodeServer();
 
   // The data dir the worker will use (a relative DATA_DIR resolves against the project root, nodemon's cwd).
-  const sttDataDir = path.resolve(projectRoot, process.env.DATA_DIR || resolveDefaultDataDir());
+  const workerDataDir = path.resolve(projectRoot, process.env.DATA_DIR || resolveDefaultDataDir());
   const supervisorIdentity = getProcessIdentity(process.pid);
+  const reexecTarget = getReexecTarget({ execPath: process.execPath, packageRoot: projectRoot, argv: process.argv });
+  const canReexec = supervisorIdentity !== null && typeof process.execve === 'function';
+  // Before anything rebuilds `dist/`: the hashes must be those of the code this process actually loaded.
+  if (supervisorIdentity) {
+    try {
+      writeHotSupervisorRecord(workerDataDir, {
+        pid: supervisorIdentity.pid,
+        startToken: supervisorIdentity.startToken,
+        canReexec,
+        modules: collectLoadedDistModules(path.join(projectRoot, 'dist'), Object.keys(require.cache)),
+      });
+    } catch (error) {
+      process.stderr.write(`charness hot: could not write the supervisor record: ${error instanceof Error ? error.message : error}\n`);
+    }
+  }
   const sttOwner: SttOwnerContext | undefined = supervisorIdentity
     ? { pid: supervisorIdentity.pid, startToken: supervisorIdentity.startToken }
     : undefined;
@@ -150,6 +175,7 @@ export async function runHot(): Promise<void> {
   const children = new Set<ChildProcess>();
   let nodemonChild: ChildProcess | null = null;
   let shuttingDown = false;
+  let isReexecuting = false;
   let isSidecarStopped = false;
   let finalCode = 0;
   let resolveChildrenStopped: (() => void) | null = null;
@@ -161,17 +187,24 @@ export async function runHot(): Promise<void> {
     if (shuttingDown && children.size === 0 && isSidecarStopped) resolveChildrenStopped?.();
   };
 
-  const forwardSignal = (sig: NodeJS.Signals) => {
+  const forwardSignal = (sig: NodeJS.Signals, options: { isReexec?: boolean } = {}) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    isReexecuting = options.isReexec === true;
     for (const child of children) {
       if (child.killed || child.exitCode !== null) continue;
       const childName: HotChildName = child === nodemonChild ? 'nodemon' : 'tsc';
       child.kill(getHotChildShutdownSignal(childName, sig));
     }
+    // A re-exec keeps the sidecar (and the OpenCode server): the new image is the same process, the same owner.
+    if (isReexecuting) {
+      isSidecarStopped = true;
+      checkShouldResolveChildren();
+      return;
+    }
     // The sidecar does not outlive its owner: stop the recorded one (guarded, bounded at ~3 s) while the
     // watchers wind down; the wrapper exits only after both.
-    void stopRecordedSttSidecar(createDefaultSttSidecarOwnerDeps(() => sttDataDir))
+    void stopRecordedSttSidecar(createDefaultSttSidecarOwnerDeps(() => workerDataDir))
       .catch((error) => {
         process.stderr.write(`charness hot: stopping the local speech engine failed: ${error instanceof Error ? error.message : error}\n`);
       })
@@ -184,6 +217,17 @@ export async function runHot(): Promise<void> {
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(sig, () => forwardSignal(sig));
   }
+  // A worker asks for a re-exec (see the docstring). Checked first: nothing is stopped when the new image could not start.
+  process.on(supervisorReexecSignal, () => {
+    if (shuttingDown || !canReexec) return;
+    const problems = getReexecProblems(reexecTarget);
+    if (problems.length > 0) {
+      process.stderr.write(`charness hot: not re-executing — ${problems.join('; ')}\n`);
+      return;
+    }
+    process.stderr.write('charness hot: re-executing the supervisor (a file it loaded changed)\n');
+    forwardSignal('SIGTERM', { isReexec: true });
+  });
 
   const registerChild = (child: ChildProcess, childName: HotChildName) => {
     children.add(child);
@@ -258,6 +302,10 @@ export async function runHot(): Promise<void> {
 
   await childrenStopped;
 
+  if (isReexecuting) {
+    reexecProcess(reexecTarget, getLaunchEnvironment(), createDefaultReexecDeps());
+    return;
+  }
   process.exit(finalCode);
 }
 

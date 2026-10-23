@@ -37,3 +37,25 @@ throws, a result the caller words):
 - `selfCheck.ts` — `charness self-check [--expect <version>]` (hidden), run on a NEW install before the switch: the version,
   `node-pty`'s native binding, every built module importable (entry points and tests left out; `bot.js` only `node --check`ed,
   it exits without its settings), under a throwaway `DATA_DIR`.
+
+Restart and rollback:
+
+- `launchEnvironment.ts` — the environment as it was at launch, snapshotted by `cli.ts`'s FIRST import, before any `.env` is
+  read. A re-exec uses it, so an edited `.env` is read afresh and a removed key is gone.
+- `restart.ts` — `process.execve` in place (the SAME pid: systemd, pm2, nohup, a foreground terminal see nothing): the new image is
+  `node <packageRoot>/dist/cli.js <the original arguments>`; its problems (a missing node or `cli.js`) are found BEFORE anything is
+  shut down; an `execve` that fails is logged and ends with exit 75 rather than a silent death.
+- `hotSupervisor.ts` + `cli/hot.ts` — a worker reload is all an update needs until a file the SUPERVISOR loaded changed. At its
+  start the supervisor writes `DATA_DIR/hot-supervisor.json` (pid, start token, hash of every `dist/` module it loaded); a worker
+  that finds one changed signals it with `SIGUSR2` — only when the pid still has that start token — and the supervisor stops
+  `tsc -w` and nodemon, leaves the OpenCode server and the speech sidecar alone, and re-executes itself. A supervisor that predates
+  this has no record and no handler: it is never signalled (an unhandled `SIGUSR2` kills a process).
+- `updatePending.ts` + `bootRollback.ts` — `DATA_DIR/update-pending.json` is written BEFORE the switch. Each boot of an unconfirmed
+  version counts itself in (in `cli/bot.ts`, before the bot module is imported); the boot after two unconfirmed ones puts the
+  previous version back (npm: reinstall from the cache; checkout: `git reset --keep` + rebuild) and restarts onto it — a plain
+  process by `execve`, a hot worker by exiting cleanly so its watcher rebuilds. The marker stays as `rolledBack` /
+  `rollbackFailed` for the restored version to report; the running bot deletes it once the new version is confirmed.
+
+Verified by hand with a real `opencode serve` spawned the way the supervisor spawns it (a direct child with piped stdio) and then
+`process.execve`d: the server keeps answering after its stdout pipe is closed. An inherited child that EXITS later stays defunct
+(`Z`) until the supervisor itself exits — Node reaps only the children it spawned — a process-table entry and nothing more.

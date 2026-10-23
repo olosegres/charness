@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// FIRST import, on purpose: it snapshots the launch environment before anything reads a `.env` file into `process.env`.
+import './selfUpdate/launchEnvironment';
 import * as fs from 'fs';
 import * as path from 'path';
 import { applyDnsFix } from './cli/applyDnsFix';
