@@ -89,3 +89,41 @@ export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActi
   if (input.isWindowOpen) return 'buffer';
   return input.isSessionActive ? 'forward' : 'wake';
 }
+
+/**
+ * @name LatePromptDeliveryPorts
+ * @description What {@link deliverLatePrompt} acts through, for one prompt: the session's state read NOW, and the three
+ * ways out. `reportNoSession` runs when the wake found nothing to resume (the ids released, the topic unbound, a start
+ * that failed): it tells the person, as the arrival-time paths do, and closes what the prompt opened.
+ */
+export interface LatePromptDeliveryPorts {
+  checkIsWindowOpen: () => boolean;
+  checkIsSessionActive: () => boolean;
+  buffer: () => Promise<void>;
+  /** Resume the sleeping conversation; `true` once a session is up to forward to. */
+  wake: () => Promise<boolean>;
+  forward: () => Promise<void>;
+  reportNoSession: () => Promise<void>;
+}
+
+/** @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to. */
+export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession';
+
+/**
+ * @description Deliver a prompt whose handler decided, when it arrived, that the session is live — routed again by
+ * {@link getLatePromptRoute} now, after the handler's awaits. A wake that finds nothing never forwards: the forward
+ * would show the topic as working while the adapter drops the text.
+ */
+export async function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LatePromptOutcome> {
+  const route = getLatePromptRoute({ isWindowOpen: ports.checkIsWindowOpen(), isSessionActive: ports.checkIsSessionActive() });
+  if (route === 'buffer') {
+    await ports.buffer();
+    return 'buffered';
+  }
+  if (route === 'wake' && !(await ports.wake())) {
+    await ports.reportNoSession();
+    return 'noSession';
+  }
+  await ports.forward();
+  return 'forwarded';
+}
