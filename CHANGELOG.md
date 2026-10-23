@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+**On Windows the bot can start an `opencode` that npm installed.** 3.3.0 found npm's `opencode.cmd` on PATH but still
+started the bare `opencode`, which Windows cannot run that way, so the OpenCode server did not come up. The bot now runs
+the script npm's shim wraps (another batch file through `cmd.exe`), and installing a missing CLI works on Windows too.
+
+**A Claude CLI that dies as it starts is reported as a failed start.** The topic used to be told the session was
+«ready», then that it «ended» — once per attempt — after waiting out a 15-second handshake each time. It now gets one
+line with the CLI's own error, at once.
+
+**When the agent cannot be started again for a message, the topic gets one line saying why.** A message or a button tap
+that had to wake a sleeping conversation added «No agent running» under the start's own reason. And a re-asked
+question's buttons stopped working when its answer reached no session — they keep working now.
+
+**Gemini's «Requests ending with a model turn are not supported» recovers even right after another retry.** It was
+counted as a repeat of any retry in the two minutes before — Google's short «reset after 2s» retry, for one — and the
+bot gave up without continuing the work.
+
+**A `/compact` that fails the way the turn before it did is shown.** The failure was taken for the previous turn's,
+already posted, and dropped: neither shown nor retried.
+
+**A daily quota's «retry your request in 30s» keeps the usual usage-limit wait.** Only a retry hint placed right after
+«retry» was recognised; with a few words in between, the bot waited 30 seconds and marked the model limited for that long.
+
+**The give-up line reads right for one attempt.** «Couldn't resume after 1 attempts» is now «Couldn't resume (attempts:
+1)», in every language.
+
 ## 3.3.1 — 2026-10-23
 
 **The npm listing names the `charness` command again.** The 3.3.0 listing on npm showed no commands (installs
@@ -20,14 +47,8 @@ opened by their checked path on those systems, held to the file that was checked
 swapped meanwhile still cannot reach outside it. If a send does fail, the agent is told to give the file's path in its
 reply and carry on.
 
-**On Windows the bot finds and starts the agent CLI installed on PATH.** It looked the tool up with `which`, which
-Windows lacks, so an installed `opencode` read as missing; and npm installs it as `opencode.cmd`, which cannot be
-started the way a program is. The bot now finds it the way `where` does and runs the script npm's shim wraps (another
-batch file through `cmd.exe`); installing a missing CLI works on Windows too.
-
-**A Claude CLI that dies as it starts is reported as a failed start.** The topic used to be told the session was
-«ready», then that it «ended» — once per attempt — after waiting out a 15-second handshake each time. It now gets one
-line with the CLI's own error, at once.
+**On Windows the bot finds the agent CLI installed on PATH.** It looked the tool up with `which`, which Windows lacks,
+so an installed `opencode` read as missing.
 
 **Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
 sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
