@@ -31,7 +31,7 @@ could not resume, as for other errors.
 **An OpenCode failure is posted once, without an auth plugin's debug block.** OpenCode reports most failures twice, and
 both were posted, each as the provider's whole message cut at 500 characters — with opencode-antigravity-auth that
 included a «[Debug Info]» block naming your Google project. One line is posted now, and the block stays in the bot log.
-A sub-agent's failed step is no longer posted as the topic's error.
+A sub-agent's failed step is posted once too: only its session error shows.
 
 **Google's «You have exhausted your capacity on this model. Your quota will reset after …» is read by its duration.** The
 Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan

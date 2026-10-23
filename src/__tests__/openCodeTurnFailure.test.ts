@@ -94,6 +94,24 @@ test('a new prompt is a new turn: the same failure again is handled again', () =
   assert.deepEqual(outputs, [`OpenCode error: ${contextError.data.message}`, `OpenCode error: ${contextError.data.message}`]);
 });
 
+test('a turn the bot did not start with a prompt (a /compact, an outside client) is a new turn too: its failure is posted', () => {
+  const { adapter, outputs } = createAdapterWithSession();
+  emitSessionError(adapter, own, contextError);
+  adapter['handleSessionStatus'](key, own, { status: { type: 'idle' } });
+  adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
+  emitSessionError(adapter, own, contextError);
+  assert.deepEqual(outputs, [`OpenCode error: ${contextError.data.message}`, `OpenCode error: ${contextError.data.message}`]);
+});
+
+test('a busy status inside the same turn does not reset it: the second channel of the failure is still skipped', () => {
+  const { adapter, outputs } = createAdapterWithSession();
+  adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
+  emitSessionError(adapter, own, contextError);
+  adapter['handleSessionStatus'](key, own, { status: { type: 'busy' } });
+  emitFailedMessage(adapter, own, contextError);
+  assert.deepEqual(outputs, [`OpenCode error: ${contextError.data.message}`]);
+});
+
 test('Gemini\'s "model turn" refusal on both channels: nothing posted, one conversation-tail retry', () => {
   for (const order of [['session', 'message'], ['message', 'session']] as const) {
     const { adapter, outputs, apiErrors } = createAdapterWithSession();

@@ -335,7 +335,8 @@ export interface OpenCodeSession {
   /**
    * The failures of the current turn already handled, by their surfaced text. OpenCode reports most failures twice —
    * `session.error` AND the failed assistant message's `info.error`, in either order — and may update that message
-   * more than once: each is posted (or handed to the auto-retry) once. Cleared by each prompt sent.
+   * more than once: each is posted (or handed to the auto-retry) once. Cleared by each prompt sent and at the session's
+   * own idle → busy edge (a turn started otherwise: `/compact`, a client outside the bot).
    */
   handledTurnErrorTexts: Set<string>;
   /**
@@ -5286,6 +5287,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     const status = properties.status as OpenCodeSessionStatus | undefined;
     const isProviderRetry = status?.type === 'retry';
+    const wasBusy = session.isBusy;
     const wasForeignBusyIgnored = applyOpenCodeStatusEvent(
       session,
       session.sessionId,
@@ -5315,6 +5317,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       return;
     }
     if (!isOwnSession) return;
+    // A turn the bot did not start with a prompt (`/compact`'s summarize, one started outside the bot) begins here:
+    // the previous turn's handled failures must not silence its own.
+    if (status?.type === 'busy' && !wasBusy) session.handledTurnErrorTexts.clear();
     if (status?.type === 'busy' && session.isAwaitingProviderRetryReplacementStart) {
       // `busy` is the observable boundary for the replacement request. Older
       // retry termination events can no longer consume this new turn's idle, and
@@ -5470,7 +5475,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // still shown, but never closes the parent's sub-agent status (its delegation is still in flight).
     if (!isOwnSession) {
       console.error(`[OpenCode] Session error:`, getOpenCodeErrorLogText(properties.error));
-      this.emit('output', key, `OpenCode error: ${errorMsg}`);
+      this.emit('output', key, `${openCodeFailurePrefixes['session.error']}${errorMsg}`);
       console.log(`[OpenCode] ${keyToString(key)}: session.error of session ${eventSessionId}, not the topic's own — no retry armed`);
       return;
     }
