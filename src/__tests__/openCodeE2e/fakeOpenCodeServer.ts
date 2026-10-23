@@ -10,7 +10,7 @@
  *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `telegramBot` server there);
  *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
  *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
- *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`;
+ *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`;
  *   • `POST /instance/dispose`.
  *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
@@ -137,6 +137,14 @@ export class FakeOpenCodeServer {
     this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'retry', ...retry } } }, session.directory);
   }
 
+  /** @description The session done with its turn: the `session.status` of type `idle` and the `session.idle` OpenCode emits. */
+  emitSessionIdle(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'idle' } } }, session.directory);
+    this.broadcast({ type: 'session.idle', properties: { sessionID: sessionId } }, session.directory);
+  }
+
   /** @description The session working on a turn: the `session.status` of type `busy` OpenCode emits as a turn starts. */
   emitSessionBusy(sessionId: string): void {
     const session = this.sessions.get(sessionId);
@@ -212,6 +220,8 @@ export class FakeOpenCodeServer {
         return reply(toApiSession(session));
       }
       if (session && method === 'POST' && action === '/abort') return reply(true);
+      // A compaction (`/compact`): accepted and recorded; what the model then does is the flow's to emit.
+      if (session && method === 'POST' && action === '/summarize') return reply(true);
       if (session && method === 'POST' && action === '/prompt_async') {
         this.recordPrompt(session, record.body as PromptBody | null);
         response.writeHead(noContentStatus);

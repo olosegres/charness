@@ -11,7 +11,9 @@
  *     message (`message.updated` with `info.error`): the topic gets ONE short localized line, no raw text, no
  *     `[Debug Info]`, no project id, and the bot sends its "continue" (a user turn) to the same session at once. It
  *     used to post the plugin's whole message twice, cut at 500 characters, and recover nothing
- *   → the same refusal on that "continue": the usual give-up line, no third prompt.
+ *   → the same refusal on that "continue": the usual give-up line, no third prompt
+ *   → a turn fails with an error the bot does not classify (posted), then a `/compact` fails the same way: posted too —
+ *     the compaction's turn is not started by a prompt, and its failure used to be dropped as the earlier one.
  *
  * What the unit tests cover instead: the classifier and the retry plan (`apiErrorRetry.test.ts`), the channel de-dup,
  * the child-session guard and the `[Debug Info]` cut (`openCodeTurnFailure.test.ts`), the kick posting no second line
@@ -73,6 +75,9 @@ const modelTurnError = {
     responseBody: JSON.stringify({ error: { code: 400, message: modelTurnReason, status: 'INVALID_ARGUMENT' } }),
   },
 };
+/** A failure the classifier does not know: posted as it is, so the topic shows whether each one arrived. */
+const sameFailureReason = 'Invalid argument: the tool schema was rejected.';
+const sameFailure = { name: 'APIError', data: { message: sameFailureReason, statusCode: 400, isRetryable: false } };
 const continueNudge = enDict['apiRetry.continueNudge'];
 const tailNotice = enDict['apiRetry.conversationTailNotice'];
 const giveUpLine = enDict['apiRetry.giveUp'].replace('{attempts}', '1');
@@ -209,5 +214,30 @@ describe('Gemini\'s "model turn" refusal on OpenCode end to end: built charness,
     assert.equal(countSessionPrompts(sessionId), promptsBefore, 'no further "continue"');
     assert.deepEqual(listSentLines(callsBefore), [giveUpLine], 'the give-up line alone: no second "continuing…", no raw text');
   });
-});
 
+  it('a /compact that fails the way the turn before it did: its failure is posted too, not taken for the earlier one', async () => {
+    // The per-turn memory of handled failures used to be cleared only by a prompt the bot sent: the compaction's turn
+    // — started by /summarize, not a prompt — kept the previous turn's, and its failure was dropped as already posted.
+    const sessionId = getTopicSessionId();
+    fakeTelegram.pushOperatorMessage(geminiTopic.threadId, 'TAIL-2 one more step');
+    await getCharness().waitFor('the prompt to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('TAIL-2')));
+    const callsBefore = fakeTelegram.calls.length;
+    const failureLine = `OpenCode error: ${sameFailureReason}`;
+    fakeOpenCode.emitSessionError(sessionId, sameFailure);
+    fakeOpenCode.emitFailedAssistantMessage(sessionId, 'msg_failed_3', sameFailure);
+    await topic.waitForMessage('the turn\'s failure', (message) => message.text === failureLine);
+    fakeOpenCode.emitSessionIdle(sessionId);
+
+    const summarizesBefore = fakeOpenCode.listRequests('POST', `/session/${sessionId}/summarize`).length;
+    fakeTelegram.pushOperatorMessage(geminiTopic.threadId, '/compact');
+    await getCharness().waitFor('the compaction to reach the server', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/session/${sessionId}/summarize`).length > summarizesBefore);
+    fakeOpenCode.emitSessionBusy(sessionId);
+    fakeOpenCode.emitSessionError(sessionId, sameFailure);
+    fakeOpenCode.emitFailedAssistantMessage(sessionId, 'msg_failed_4', sameFailure);
+    fakeOpenCode.emitSessionIdle(sessionId);
+
+    await getCharness().waitFor('the compaction\'s failure in the topic', replyTimeoutMs, () => listSentLines(callsBefore).filter((text) => text === failureLine).length >= 2);
+    await openLimitsBoard(fakeTelegram, topic, geminiTopic.threadId);
+    assert.equal(listSentLines(callsBefore).filter((text) => text === failureLine).length, 2, 'each failure once: the turn\'s and the compaction\'s');
+  });
+});
