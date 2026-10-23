@@ -485,6 +485,8 @@ export interface IsolatedCharnessOptions {
   cliPath?: string;
   /** Arguments after the command (`['hot']` starts the hot supervisor). */
   cliArgs?: readonly string[];
+  /** Run this program (with the instance's environment, `ENV_FILE` included) instead — the Docker entrypoint's loop, for one. Wins over `cliPath`. */
+  launch?: { file: string; args: readonly string[] };
 }
 
 export class IsolatedCharness {
@@ -521,7 +523,9 @@ export class IsolatedCharness {
     };
     const cliArgs = this.options.cliArgs ?? [];
     // Another install than the checkout's gets exactly what run-isolated.sh gives the checkout's: `node <cli.js>` with ENV_FILE.
-    const child = this.options.cliPath
+    const child = this.options.launch
+      ? spawn(this.options.launch.file, [...this.options.launch.args], { env: { ...instanceEnv, ENV_FILE: this.layout.envFile }, cwd: this.layout.testRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+      : this.options.cliPath
       ? spawn(process.execPath, [this.options.cliPath, ...cliArgs], { env: { ...instanceEnv, ENV_FILE: this.layout.envFile }, cwd: this.layout.testRoot, stdio: ['ignore', 'pipe', 'pipe'] })
       : spawn(runIsolatedPath, [this.layout.envFile, ...cliArgs], { env: instanceEnv, cwd: this.layout.testRoot, stdio: ['ignore', 'pipe', 'pipe'] });
     this.child = child;

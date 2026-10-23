@@ -5,6 +5,7 @@
  * is this repository's (a symlink), and `yarn` is a stand-in that builds with `tsc` and installs nothing — a real Yarn would need the
  * network and a dependency tree the copy does not have.
  */
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -56,15 +57,29 @@ function copyEntry(entry: string, destinationRoot: string): void {
   fs.cpSync(source, path.join(destinationRoot, entry), { recursive: true, filter: (from) => !from.endsWith(`${path.sep}__tests__`) });
 }
 
+export interface CheckoutFixtureOptions {
+  /**
+   * `node_modules` as a folder of links to this repository's entries instead of one link to the folder, so a file the flow writes
+   * INTO it (the image's install stamp) lands in the temp checkout and never in this repository's dependency tree.
+   */
+  isolatedNodeModules?: boolean;
+}
+
 /** @description Build the fixture under `root` (a folder of the flow's layout); `home` is the git home of the flow. */
-export function createCheckoutFixture(root: string, home: string): CheckoutFixture {
+export function createCheckoutFixture(root: string, home: string, options: CheckoutFixtureOptions = {}): CheckoutFixture {
   const checkoutDir = path.join(root, 'checkout');
   const remoteDir = path.join(root, 'remote.git');
   const otherDir = path.join(root, 'other');
   fs.mkdirSync(checkoutDir, { recursive: true });
   for (const entry of copiedEntries) copyEntry(entry, checkoutDir);
   fs.cpSync(path.join(repoRoot, 'dist'), path.join(checkoutDir, 'dist'), { recursive: true });
-  fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(checkoutDir, 'node_modules'));
+  const repoModules = path.join(repoRoot, 'node_modules');
+  if (options.isolatedNodeModules) {
+    fs.mkdirSync(path.join(checkoutDir, 'node_modules'));
+    for (const entry of fs.readdirSync(repoModules)) fs.symlinkSync(path.join(repoModules, entry), path.join(checkoutDir, 'node_modules', entry));
+  } else {
+    fs.symlinkSync(repoModules, path.join(checkoutDir, 'node_modules'));
+  }
   fs.writeFileSync(path.join(checkoutDir, '.gitignore'), 'dist/\nnode_modules\n');
 
   runGit(root, home, ['init', '-q', '--bare', '-b', 'main', remoteDir]);
@@ -116,4 +131,42 @@ export function writeYarnStandIn(binDir: string): void {
     ].join('\n'),
     { mode: 0o755 },
   );
+}
+
+/**
+ * @description What the image's entrypoint leaves in `node_modules` once it installed the dependencies for THIS `yarn.lock`
+ * (`node_modules/.charness-image`, the lock's sha256) — written ahead, so the entrypoint finds the install current and runs nothing
+ * the `yarn` stand-in cannot do. Needs the fixture's `isolatedNodeModules`.
+ */
+export function writeImageInstallStamp(checkoutDir: string): void {
+  const lockHash = createHash('sha256').update(fs.readFileSync(path.join(checkoutDir, 'yarn.lock'))).digest('hex');
+  fs.writeFileSync(path.join(checkoutDir, 'node_modules', '.charness-image'), `${lockHash}\n`);
+}
+
+export interface PatchedDockerScripts {
+  entrypointPath: string;
+  restartBotPath: string;
+  supervisorPidFile: string;
+}
+
+/**
+ * @description The image's own `docker/entrypoint.sh` (the hot-mode restart loop) and `docker/restart-bot.sh`, with ONLY their paths
+ * pointed into `directory` (the checkout, the supervisor pid file, the restart marker) and the restart delay set to `delaySeconds` —
+ * so the real loop and the real command run on a host that has no Docker and no `/opt/charness`. Everything else in them is untouched.
+ */
+export function writePatchedDockerScripts(directory: string, checkoutDir: string, delaySeconds: number): PatchedDockerScripts {
+  const supervisorPidFile = path.join(directory, 'charness-supervisor.pid');
+  const restartNowFile = path.join(directory, 'charness-restart-now');
+  const patch = (source: string): string =>
+    source
+      .replace('checkout=/opt/charness\n', `checkout=${checkoutDir}\n`)
+      .replace('supervisorPidFile=/tmp/charness-supervisor.pid', `supervisorPidFile=${supervisorPidFile}`)
+      .replace('restartNowFile=/tmp/charness-restart-now', `restartNowFile=${restartNowFile}`)
+      .replace('restartDelaySeconds=20', `restartDelaySeconds=${delaySeconds}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const entrypointPath = path.join(directory, 'charness-entrypoint');
+  const restartBotPath = path.join(directory, 'charness-restart-bot');
+  fs.writeFileSync(entrypointPath, patch(fs.readFileSync(path.join(repoRoot, 'docker', 'entrypoint.sh'), 'utf8')), { mode: 0o755 });
+  fs.writeFileSync(restartBotPath, patch(fs.readFileSync(path.join(repoRoot, 'docker', 'restart-bot.sh'), 'utf8')), { mode: 0o755 });
+  return { entrypointPath, restartBotPath, supervisorPidFile };
 }

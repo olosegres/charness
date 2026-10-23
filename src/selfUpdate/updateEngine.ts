@@ -589,6 +589,14 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
     const result = deps.supervisor.requestReexec(record);
     isSupervisorReexecWanted = false;
     deps.log(`[update] supervisor re-exec requested: ${result}`);
+    // The re-exec ends this boot ON PURPOSE (and runs synchronously before the supervisor's signal reaches this worker): it is not a
+    // start that failed, so it must not use up the boots the update may fail — a restart soon after would roll a healthy version back.
+    if (result === 'signaled') releaseBootAttempt();
+  }
+
+  function releaseBootAttempt(): void {
+    const marker = deps.marker.read();
+    if (marker?.status === 'pending' && marker.attempts > 0) deps.marker.write({ ...marker, attempts: marker.attempts - 1 });
   }
 
   // ── booting ──

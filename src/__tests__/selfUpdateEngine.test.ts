@@ -50,6 +50,7 @@ interface HarnessOptions {
   runningNode?: string;
   supervisorRecord?: HotSupervisorRecord | null;
   supervisorStale?: string[];
+  reexecResult?: SupervisorSignalResult;
 }
 
 const npmGlobal: InstallKind = { kind: 'npmGlobal', prefix: '/home/u/.npm-global' };
@@ -97,6 +98,7 @@ function createHarness(options: HarnessOptions = {}) {
     restartError: null as Error | null,
     supervisorStale: options.supervisorStale ?? [],
     supervisorRecord: options.supervisorRecord === undefined ? null : options.supervisorRecord,
+    reexecResult: options.reexecResult ?? 'signaled',
     commitCount: 12 as number | null,
     changelogDiff: '',
     markerAtRestart: null as UpdatePendingMarker | null,
@@ -201,7 +203,7 @@ function createHarness(options: HarnessOptions = {}) {
       getStaleModules: () => control.supervisorStale,
       requestReexec: (): SupervisorSignalResult => {
         calls.push('supervisor.reexec');
-        return 'signaled';
+        return control.reexecResult;
       },
     },
   };
@@ -914,6 +916,36 @@ describe('the hot supervisor', () => {
     assert.equal(harness.calls.filter((call) => call === 'supervisor.reexec').length, 1);
     await harness.advance(idlePollIntervalMs * 4);
     assert.equal(harness.calls.filter((call) => call === 'supervisor.reexec').length, 1);
+  });
+
+  const pendingBoot: UpdatePendingMarker = { kind: 'git', status: 'pending', from: { version: '3.4.0', commit: 'a1b2c3d' }, to: { version: '3.4.0', commit: 'd4e5f6a' }, attempts: 1, isUserRequested: false };
+
+  test('the re-exec hands this boot back: it is not a failed start, so the update keeps its boots for real failures', async () => {
+    const harness = createHarness({ isHotMode: true, supervisorRecord: record, supervisorStale: ['cli/hot.js'], installKind: checkout, running: { version: '3.4.0', commit: 'd4e5f6a' }, lastRun: { version: '3.4.0', commit: 'a1b2c3d' }, record: { isFeatureAnnounced: true }, marker: pendingBoot });
+    harness.state.idleVerdict = idle;
+    await harness.engine.runBootStep();
+    await harness.advance(idlePollIntervalMs);
+    assert.equal(harness.calls.filter((call) => call === 'supervisor.reexec').length, 1);
+    assert.equal(harness.getMarker()?.attempts, 0);
+    assert.equal(harness.getMarker()?.status, 'pending');
+  });
+
+  test('a re-exec that was not delivered (the supervisor is gone) hands nothing back', async () => {
+    const harness = createHarness({ isHotMode: true, supervisorRecord: record, supervisorStale: ['cli/hot.js'], reexecResult: 'gone', installKind: checkout, running: { version: '3.4.0', commit: 'd4e5f6a' }, lastRun: { version: '3.4.0', commit: 'a1b2c3d' }, record: { isFeatureAnnounced: true }, marker: pendingBoot });
+    harness.state.idleVerdict = idle;
+    await harness.engine.runBootStep();
+    await harness.advance(idlePollIntervalMs);
+    assert.equal(harness.calls.filter((call) => call === 'supervisor.reexec').length, 1);
+    assert.equal(harness.getMarker()?.attempts, 1);
+  });
+
+  test('a re-exec of a version that is already settled (no pending marker) touches no marker', async () => {
+    const harness = createHarness({ isHotMode: true, supervisorRecord: record, supervisorStale: ['cli/hot.js'], installKind: checkout, running: { version: '3.4.0', commit: 'a1b2c3d' }, lastRun: { version: '3.4.0', commit: 'a1b2c3d' }, record: { isFeatureAnnounced: true } });
+    harness.state.idleVerdict = idle;
+    await harness.engine.runBootStep();
+    await harness.advance(idlePollIntervalMs);
+    assert.equal(harness.calls.filter((call) => call === 'supervisor.reexec').length, 1);
+    assert.equal(harness.calls.some((call) => call.startsWith('marker.write')), false);
   });
 
   test('a supervisor whose files did not change is left alone', async () => {

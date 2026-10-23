@@ -51,8 +51,9 @@ Restart and rollback:
   `tsc -w` and nodemon, leaves the OpenCode server and the speech sidecar alone, and re-executes itself. A supervisor that predates
   this has no record and no handler: it is never signalled (an unhandled `SIGUSR2` kills a process).
 - `updatePending.ts` + `bootRollback.ts` — `DATA_DIR/update-pending.json` is written BEFORE the switch. Each boot of an unconfirmed
-  version counts itself in (in `cli/bot.ts`, before the bot module is imported); the boot after two unconfirmed ones puts the
-  previous version back (npm: reinstall from the cache; checkout: `git reset --keep` + rebuild) and restarts onto it — a plain
+  version counts itself in (in `cli/bot.ts`, before the bot module is imported) — except a boot that asks the hot supervisor to
+  re-execute, which hands its count back (that end is deliberate, and without it a healthy supervisor update would leave one boot
+  of the budget); the boot after two unconfirmed ones puts the previous version back (npm: reinstall from the cache; checkout: `git reset --keep` + rebuild) and restarts onto it — a plain
   process by `execve`, a hot worker by exiting cleanly so its watcher rebuilds. The marker stays as `rolledBack` /
   `rollbackFailed` for the restored version to report; the running bot deletes it once the new version is confirmed.
 
