@@ -347,3 +347,26 @@ describe('check-pack', () => {
     assert.match(result.stderr, /must not ship: src\/leaked\.ts/);
   });
 });
+
+describe('the manual `npm version` path', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+
+  test('`npm version minor` commits `chore(release): X.Y.Z` with the moved CHANGELOG heading in it and tags vX.Y.Z', () => {
+    const realManifest: { scripts: { version: string } } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    // The repository's own `version` script and `.npmrc`, with `tsx <script>` pointed at this checkout's files.
+    const versionScript = realManifest.scripts.version.replace('tsx src/release/cli.ts', `node ${tsxCliPath} ${releaseCliPath}`);
+    assert.notEqual(versionScript, realManifest.scripts.version, 'the version script no longer runs src/release/cli.ts');
+    writeRepoFile('package.json', `${JSON.stringify({ ...initialPackage, scripts: { version: versionScript } }, null, 2)}\n`);
+    fs.copyFileSync(path.join(repoRoot, '.npmrc'), path.join(repoDir, '.npmrc'));
+    runGit('add', '-A');
+    runGit('commit', '-q', '-m', 'chore: the version script');
+
+    const result = spawnSync('npm', ['version', 'minor'], { cwd: repoDir, env: createChildEnv(), encoding: 'utf8', timeout: cliTimeoutMs });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    assert.equal(runGit('log', '-1', '--format=%s'), 'chore(release): 3.3.0');
+    assert.equal(runGit('tag', '--points-at', 'HEAD'), 'v3.3.0');
+    assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'package.json']);
+    assert.match(runGit('show', 'HEAD:CHANGELOG.md'), /## Unreleased\n\n## 3\.3\.0 — \d{4}-\d{2}-\d{2}\n\n\*\*A change users see\./);
+  });
+});

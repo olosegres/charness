@@ -22,6 +22,7 @@ import {
   getReleaseBump,
   getReleaseDate,
   getReleaseNotes,
+  getUnreleasedSection,
   requiredPackFiles,
   type ChangelogFallback,
   type PackListing,
@@ -362,6 +363,12 @@ describe('the CHANGELOG rewrite', () => {
       '* starred plain',
     ].join('\n');
     assert.deepEqual(getChangelogFormatViolations(section), ['Plain paragraph.', '- plain bullet', '* starred plain']);
+  });
+
+  test('the Unreleased body is returned with its blank edges trimmed; null without the heading', () => {
+    assert.equal(getUnreleasedSection(changelog), '**A hand-written headline.** Its details.\n\n### Fixed\n- **A fix.** Details.');
+    assert.equal(getUnreleasedSection('# Changelog\n\n## Unreleased\n\n## 3.2.0 — x\n'), '');
+    assert.equal(getUnreleasedSection('# Changelog\n\n## 3.2.0 — x\n'), null);
   });
 
   test('release notes: the body of the version section, null when missing or empty', () => {

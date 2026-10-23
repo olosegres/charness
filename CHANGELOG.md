@@ -195,16 +195,17 @@ conversation the same way.
   controls and their key or address. Memory: about 0.5 GB while it runs, up to about 0.9 GB on a long voice.
 
 ### Fixed
-- A voice note whose Telegram `duration` is 0 (a sender that gave no length) is treated as of unknown length, not as a
-  0-second voice: it gets the same time budget as a voice without a length, so a long one no longer falls back to the
+- **A voice note whose Telegram `duration` is 0 is treated as of unknown length, not as a 0-second voice.** A sender
+  that gave no length gets the same time budget as a voice without a length, so a long one no longer falls back to the
   next engine at the bare base timeout.
-- Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch to an OpenCode model and back) resumes
-  the Claude conversation the topic left; it used to come back to a fresh one, because leaving OpenCode overwrote the
-  parked Claude conversation id with the OpenCode session's. The same holds the other way round.
-- A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
-  one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
-- An OpenCode model that has no effort levels shows none: `/status`, the pinned banner and the ready notice no longer
-  name General's default for a session that runs without any level (`/effort` already said «not available»).
+- **Going from Claude to OpenCode and back resumes the Claude conversation the topic left.** This holds for `/opencode`
+  then `/claude` and for a usage-limit switch to an OpenCode model and back; it used to come back to a fresh one,
+  because leaving OpenCode overwrote the parked Claude conversation id with the OpenCode session's. The same holds the
+  other way round.
+- **A Claude json-stream session re-attached after a bot restart keeps its model.** A `/model` pick, or Jira's
+  configured one, survives a re-spawn for an effort or account change; it used to restart on Claude's default model.
+- **An OpenCode model that has no effort levels shows none.** `/status`, the pinned banner and the ready notice no
+  longer name General's default for a session that runs without any level (`/effort` already said «not available»).
 
 ## 3.2.0 — 2026-10-16
 

@@ -260,6 +260,17 @@ function trimBlankLines(lines: string[]): string[] {
   return lines.slice(first, last);
 }
 
+function checkIsUnreleasedHeading(line: string): boolean {
+  return line.trimEnd() === unreleasedHeading;
+}
+
+/** @description The body of `## Unreleased`, blank edges trimmed; null when the heading is missing. */
+export function getUnreleasedSection(changelogText: string): string | null {
+  const lines = changelogText.split('\n');
+  const range = findSectionRange(lines, checkIsUnreleasedHeading);
+  return range ? trimBlankLines(lines.slice(range.start + 1, range.end)).join('\n') : null;
+}
+
 function checkIsVersionHeading(line: string, version: string): boolean {
   return line === `## ${version}` || line.startsWith(`## ${version} `);
 }
@@ -277,7 +288,7 @@ export function createChangelogRelease(
   fallback: ChangelogFallback,
 ): { changelog: string; notes: string } {
   const lines = changelogText.split('\n');
-  const range = findSectionRange(lines, (line) => line.trimEnd() === unreleasedHeading);
+  const range = findSectionRange(lines, checkIsUnreleasedHeading);
   if (!range) throw new ReleaseError(`CHANGELOG.md has no "${unreleasedHeading}" heading to release.`);
   if (lines.some((line) => checkIsVersionHeading(line, version))) {
     throw new ReleaseError(`CHANGELOG.md already has a section for ${version}.`);

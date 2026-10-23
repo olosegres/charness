@@ -25,6 +25,7 @@
   "files": [
     "dist/",
     "stt/gigaam_sidecar.py",
+    "CHANGELOG.md",
     "README.md",
     "DEVELOPMENT.md",
     "SETUP.md",
@@ -61,6 +62,7 @@
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "prepublishOnly": "yarn typecheck && yarn build",
     "preversion": "yarn typecheck && yarn build && yarn test",
+    "version": "tsx src/release/cli.ts changelog && git add CHANGELOG.md",
     "test": "yarn test:unit && yarn test:flows",
     "test:unit": "node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=120000 'src/__tests__/**/!(*E2e|*Live).test.ts'",
     "test:flows": "node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=1200000 'src/__tests__/**/*E2e.test.ts'",
