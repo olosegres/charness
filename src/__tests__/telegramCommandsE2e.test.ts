@@ -21,6 +21,9 @@
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
  *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
  *     such a rung again, while a rung of a backend already in the list goes in at once
+ *   → `/update`: the status of the bot's own updates — in a topic without buttons ("Change it in General"), in General with the controls;
+ *     a tap and the typed forms write `autoUpdate` / `whatsNew` into `settings.json` beside the env file and re-render, a hand edit
+ *     shows on the next render, `/version` names the version (the updates themselves: `selfUpdate*E2e.test.ts`)
  *   → `/stt`: the screen next to the instance's env file (also as `/voice`) with only the engine list, Add engine and Language;
  *     the local engine on its own card (added through Add engine — with the install confirmation, and Cancel writing nothing,
  *     while the model is missing — idle and workers there only, remove from list / remove model
@@ -53,7 +56,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
-import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
@@ -169,6 +172,7 @@ let fakeTelegram: FakeTelegram;
 let defaultTmuxSessionsBefore: string[] = [];
 let authStateDir = '';
 let topic: TopicDriver;
+let general: TopicDriver;
 /** The speech engines the voice steps talk to: one that answers, one that always fails, one that fails once. */
 let workingSpeechEngine: FakeSpeechEngine;
 let brokenSpeechEngine: FakeSpeechEngine;
@@ -265,6 +269,11 @@ function readLoginPid(): number {
 }
 
 /** `stt.json` sits beside the instance's env file (the symlink-free case of the config location). */
+/** `settings.json` sits beside the instance's env file, like `stt.json`. */
+function getInstanceSettingsFilePath(): string {
+  return path.join(path.dirname(getLayout().envFile), 'settings.json');
+}
+
 function getSttConfigFilePath(): string {
   return path.join(path.dirname(getLayout().envFile), 'stt.json');
 }
@@ -348,6 +357,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     flakySpeechUrl = await flakySpeechEngine.start();
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
+    general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -619,6 +629,55 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
   it('/compact and /compact_on_idle say an agent session is needed', async () => {
     await topic.sendAndAwaitReply('/compact', 'No active session. Start an agent first');
     await topic.sendAndAwaitReply('/compact_on_idle', 'applies to an active agent session');
+  });
+
+  // ── /update ──────────────────────────────────────────────────────────
+
+  it('/update in a topic is the status without buttons and says where to change it; /version names the version the bot runs', async () => {
+    const status = await topic.sendAndAwaitReply('/update', 'Charness ');
+    assert.match(status.text, /^Charness \d+\.\d+\.\d+ · /);
+    assert.match(status.text, /Automatic updates: OFF/, 'an instance under test starts with updates off');
+    assert.match(status.text, /Not checked yet\./);
+    assert.match(status.text, /Change it in General\.$/);
+    assert.deepEqual(topic.getKeyboardData(status), []);
+    const version = await topic.sendAndAwaitReply('/version', 'Charness');
+    assert.match(version.text, /^\*Charness \d+\.\d+\.\d+\*\n/, 'the first line names the version the bot runs (the CLI tools below it may be unavailable)');
+    assert.ok(listMenuCommandNames().includes('update'), 'the menu lists /update');
+  });
+
+  it('a write form typed in a topic changes nothing and says where to change it', async () => {
+    const before = fs.readFileSync(getInstanceSettingsFilePath(), 'utf8');
+    await topic.sendAndAwaitReply('/update notify', 'Change it in General.');
+    assert.equal(fs.readFileSync(getInstanceSettingsFilePath(), 'utf8'), before);
+  });
+
+  it('/update in General carries the controls; a mode tap writes settings.json and re-renders its own message, the typed forms do the same, a hand edit shows on the next render', async () => {
+    const screen = await general.sendAndAwaitReply('/update', 'Automatic updates: OFF');
+    assert.deepEqual(general.getKeyboardData(screen).flat(), ['upd_mode_on', 'upd_mode_notify', 'upd_mode_off', 'upd_notes_off', 'upd_check']);
+    assert.deepEqual(general.getKeyboardLabels(screen)[0], ['Automatic', 'Notify only', '✓ Off']);
+
+    const toast = await general.tapAndAwaitAnswer(screen, 'upd_mode_notify');
+    assert.equal(toast, '✅ Automatic updates: notify only.');
+    assert.deepEqual(JSON.parse(fs.readFileSync(getInstanceSettingsFilePath(), 'utf8')), { autoUpdate: 'notify' });
+    await general.waitForMessageText('the screen to follow the tap', screen, (text) => text.includes('Automatic updates: NOTIFY ONLY'));
+    assert.deepEqual(general.getKeyboardLabels(screen)[0], ['Automatic', '✓ Notify only', 'Off']);
+
+    await general.tapAndAwaitAnswer(screen, 'upd_notes_off');
+    assert.deepEqual(JSON.parse(fs.readFileSync(getInstanceSettingsFilePath(), 'utf8')), { autoUpdate: 'notify', whatsNew: false });
+    await general.waitForMessageText("the what's-new line to follow the tap", screen, (text) => text.includes("What's new after an update: not shown"));
+
+    await general.sendAndAwaitReply('/update whatsnew on', '✅ What\'s new after an update: shown.');
+    await general.sendAndAwaitReply('/update off', '✅ Automatic updates: off.');
+    assert.deepEqual(JSON.parse(fs.readFileSync(getInstanceSettingsFilePath(), 'utf8')), { autoUpdate: 'off', whatsNew: true });
+
+    // A hand edit the way an editor saves it: a new file renamed over the old.
+    const editedPath = `${getInstanceSettingsFilePath()}.by-hand`;
+    fs.writeFileSync(editedPath, '{"autoUpdate":"notify","whatsNew":false}\n');
+    fs.renameSync(editedPath, getInstanceSettingsFilePath());
+    await general.sendAndAwaitReply('/update', 'Automatic updates: NOTIFY ONLY');
+
+    // Back to the baseline: this long flow must never reach the updater's first check with updates on.
+    await general.sendAndAwaitReply('/update off', '✅ Automatic updates: off.');
   });
 
   // ── /stt ─────────────────────────────────────────────────────────────
