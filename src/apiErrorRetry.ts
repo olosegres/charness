@@ -281,8 +281,8 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
  *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
- *     a longer one keeps 1c from calling the limit short. A short RELATIVE one that reaches the usage-limit branches
- *     below (a long window named beside it) is a retry hint: their `resetAt` drops it.
+ *     a longer one keeps 1c from calling the limit short. A short one a RETRY verb states ("retry in 40s") that reaches
+ *     the usage-limit branches below (a long window named beside it) is a retry hint: their `resetAt` drops it.
  *  1c. a SHORT-window throttle ({@link shortWindowThrottleRe}, reported as hit —
  *     {@link limitHitRe}) that names no long
  *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
@@ -319,11 +319,11 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   const isLongWindowNamed = longWindowRe.test(text);
   if (isShortStatedReset && limitHitRe.test(text) && !isLongWindowNamed) return { kind: 'transient' };
   if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !isLongWindowNamed && !isLongStatedReset) return { kind: 'transient' };
-  // Past this point it is a usage limit, and a SHORT relative reset beside one is a retry hint, not the window's end:
-  // Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken as the reset
-  // it set the wait at ~100 s and spent the attempts in minutes. A clock reset is the window's own end however close.
-  // `parseResetAt` reads the relative shape first, so a relative match is the reset it stated.
-  const limitResetAt = isShortStatedReset && relativeResetRegex.test(text) ? undefined : statedResetAt;
+  // Past this point it is a usage limit, and a SHORT reset a RETRY verb states beside one is a retry hint, not the
+  // window's end: Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken
+  // as the reset it set the wait at ~100 s and spent the attempts in minutes. What a "reset(s) in / after" or a clock
+  // states is the window's own end, however close.
+  const limitResetAt = isShortStatedReset && checkIsRetryHintReset(text) ? undefined : statedResetAt;
   if (exhaustedQuotaCodesRe.test(text)) {
     return { kind: 'usageLimit', resetAt: limitResetAt };
   }
@@ -340,6 +340,18 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'usageLimit', resetAt: limitResetAt };
   }
   return null;
+}
+
+/** A retry verb right before a relative reset: "Please retry in 40s", "try again after 30s". */
+const retryVerbBeforeResetRe = /\b(?:retry|try again)\s*$/i;
+
+/**
+ * @description Whether the relative reset {@link parseResetAt} reads in `text` (it reads the relative shape first) is a
+ * retry hint — stated by a retry verb — rather than a reset ("Your quota will reset after 4m30s", "resets in 2 minutes").
+ */
+function checkIsRetryHintReset(text: string): boolean {
+  const match = relativeResetRegex.exec(text);
+  return match !== null && retryVerbBeforeResetRe.test(text.slice(0, match.index));
 }
 
 /**

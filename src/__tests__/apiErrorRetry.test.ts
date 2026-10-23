@@ -133,12 +133,17 @@ test('classify: a quota or window that names a LONG window stays a usage limit, 
   }
 });
 
-test('classify: inside a usage limit a short relative retry hint is not the reset — a clock reset a few minutes ahead is', () => {
+test('classify: inside a usage limit a short retry hint ("retry in Ns") is not the reset — a stated reset or a clock a few minutes ahead is', () => {
   // Google sends a used-up DAILY quota with the same "Please retry in 40.15s" as a per-minute one. Read as the reset,
   // it put the usage-limit wait at ~100 s and spent the attempts in minutes; the wait is the usual usage-limit delay.
   for (const text of [googleDailyQuotaBody, 'You exceeded your current quota (requests per day). Please retry in 30s.']) {
     assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: undefined }, text);
   }
+  // A reset the text states as one — "reset(s) in / after" — is the window's own end, however close it is.
+  assert.deepEqual(classifyAgentApiError('Daily usage limit reached. Your quota will reset after 4m30s.', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 4.5 * minuteMs });
+  assert.deepEqual(classifyAgentApiError('Session limit reached, resets in 2 minutes', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 2 * minuteMs });
+  // "try again in" is a retry verb as well.
+  assert.deepEqual(classifyAgentApiError('Daily quota exceeded. Please try again in 30s.', fixedNow), { kind: 'usageLimit', resetAt: undefined });
   // A window's own end, written as a clock time, stays the reset however close it is.
   const closeClockReset = new Date(fixedNow + 3 * minuteMs);
   const clockText = `You've hit your session limit · resets ${closeClockReset.getHours()}:${closeClockReset.getMinutes().toString().padStart(2, '0')}`;
