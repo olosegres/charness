@@ -53,6 +53,7 @@ import {
 } from './fakeClaudeContract';
 import { getAdfText } from '../../connectors/jira/adf';
 import type { ClosedRequestRecord } from '../../requests/types';
+import { testTimingsEnvName, type TestTimings } from '../../testTimings';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
 import { foreignKeyAccessorErrorPrefix } from '../../connectors/telegram/sessionKeyCodec';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../../connectors/telegram/telegramCallGuard';
@@ -74,8 +75,22 @@ export const projectFolder = 'proj';
 const claudeMemoryFileName = 'CLAUDE.md';
 /** The instance's secret: the AI account's token, which jira.json takes from the env file. */
 const instanceTokenEnvName = 'CHARNESS_JIRA_AI_API_TOKEN';
-/** The shortest poll the config allows. */
+/** The shortest poll `jira.json` allows (the instance polls faster: {@link jiraFlowTestTimings}). */
 const pollIntervalSeconds = 10;
+/**
+ * The production windows the flows would wait out, shortened (`CHARNESS_TEST_TIMINGS`): a 2 s poll instead of `jira.json`'s
+ * 10 s floor, the wake-up engine's sweep and first re-post retry at 10 s instead of a minute each. What the steps count
+ * stays the same — polls, sweeps, retries — only their spacing shrinks.
+ */
+const jiraFlowTestTimings = {
+  jiraPollIntervalMs: 2_000,
+  requestSweepIntervalMs: 10_000,
+  requestFirstPostRetryDelayMs: 10_000,
+} satisfies TestTimings;
+/** The `slow-once` turn: longer than a stop plus a boot of the instance (each a few seconds), so its process is adopted mid-turn. */
+const slowTurnMs = 20_000;
+/** The cap of an `answer-after-queued` turn: five polls, by which the hand-over made mid-turn has long become a request. */
+const queuedWaitMaxMs = 5 * jiraFlowTestTimings.jiraPollIntervalMs;
 /** The shortest useful one, so the killed agent's request is taken up by the first sweep after it. */
 const backstopMinutes = '0.1';
 /** The idle mark (lifecycle plan L3): an answered issue's process is compacted and stopped this long after its last activity. */
@@ -84,14 +99,14 @@ const idleMinutes = '0.5';
 const bootTimeoutMs = 60 * 1000;
 /** A poll, a session start and a turn, with room to spare. */
 export const answerTimeoutMs = 60 * 1000;
-/** The backstop window plus the wake-up engine's one-minute sweep, twice over. */
+/** The backstop window plus the wake-up engine's sweep and a resume, with room to spare. */
 export const resumeTimeoutMs = 3 * 60 * 1000;
 /** The idle window, the compaction turn and the stop, with room to spare. */
 export const idleStopTimeoutMs = 2 * 60 * 1000;
 /** A per-turn stop follows the answer at once — well inside the 30 s idle window, which would stop the process too (L5). */
 export const perTurnStopTimeoutMs = 15 * 1000;
-/** The restart step waits for this many polls. */
-export const restartPollWaitMs = 3 * pollIntervalSeconds * 1000;
+/** The bound of a wait for the next two polls: the time of five, as the polls come every interval after the last ENDED. */
+export const restartPollWaitMs = 5 * jiraFlowTestTimings.jiraPollIntervalMs;
 
 let layout: IsolatedInstanceLayout | null = null;
 /** The fake Jira of this flow's process; started by {@link registerJiraFlowHooks}. */
@@ -247,7 +262,7 @@ export async function startCharness(): Promise<void> {
   const outputStart = charness.output.length;
   await charness.start(
     bootTimeoutMs,
-    (runOutput) => runOutput.includes(`[jira] polling PROJ every ${pollIntervalSeconds} s`) && getPollJqlProjectKeys(runOutput).length > 0,
+    (runOutput) => runOutput.includes(`[jira] polling PROJ every ${jiraFlowTestTimings.jiraPollIntervalMs / 1000} s`) && getPollJqlProjectKeys(runOutput).length > 0,
   );
   assertMcpListeningOn(charness.output.slice(outputStart), botMcpPort);
 }
@@ -299,7 +314,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config:
   const instance = getLayout();
   writeJiraConfig(config.adapter, config.trustedGroup);
 
-  const claudeBin = writeFakeClaudeLauncher(instance, 'jira');
+  const claudeBin = writeFakeClaudeLauncher(instance, 'jira', { slowTurnMs, queuedWaitMaxMs });
   writeInstanceEnvFile(instance, {
     CONNECTORS: 'jira',
     DATA_DIR: instance.dataDir,
@@ -311,6 +326,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config:
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
     AGENT_IDLE_MINUTES: idleMinutes,
+    [testTimingsEnvName]: JSON.stringify(jiraFlowTestTimings),
     [instanceTokenEnvName]: aiCredentials.apiToken,
   });
 }
@@ -384,8 +400,22 @@ export async function bootJiraOnly(): Promise<void> {
   assert.deepEqual(getPollJqlProjectKeys(getCharness().output), [['PROJ']]);
 }
 
-/** @description The flow's last steps: what every session launch, the agents' environment and the tmux calls of the whole flow held. */
+/** The issue whose agent is mid-turn while the last steps read the instance's tmux server. */
+const liveAgentIssueKey = 'PROJ-99';
+
+/**
+ * @description The flow's last steps: what every session launch, the agents' environment and the tmux calls of the whole
+ * flow held. The checks read the instance's private tmux server, which ends with its last session — so an agent is left
+ * mid-turn first (a flow on the per-turn lifecycle stops every other process after its turn).
+ */
 export function itHoldsTheInstanceInvariants(): void {
+  it('an agent mid-turn keeps the instance\'s private tmux server up for the checks below', async () => {
+    createIssue(liveAgentIssueKey, 'hang-once');
+    handIssueToAi(liveAgentIssueKey, requester);
+    await waitFor(`${liveAgentIssueKey}'s turn under way`, answerTimeoutMs, () => getTurns(liveAgentIssueKey).length === 1);
+    assert.ok(checkIsProcessAlive(getTurns(liveAgentIssueKey)[0].pid), 'its process runs on the private server');
+  });
+
   it('the agent and its tmux server hold no instance variable: the allowlist only (R32)', () => {
     const sessionLaunches = readFakeLog<FakeLaunch>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch);
     assert.ok(sessionLaunches.length > 0);
