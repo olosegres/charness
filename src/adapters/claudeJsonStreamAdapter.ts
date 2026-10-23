@@ -279,6 +279,12 @@ export interface StreamSession {
   // — api error one-shot guard (re-armed on recovery) —
   apiErrorFired: boolean;
   /**
+   * When the window that REJECTED this session's last request resets (epoch ms, its `rate_limit_event`); cleared by an
+   * allowed one. The usage-limit error that follows names the reset in a wording that changes between releases (or not
+   * at all) — this exact value wins over the parse of it.
+   */
+  rejectedResetAtMs: number | null;
+  /**
    * One-shot: swallow the NEXT terminal `result{is_error}` because it is the
    * direct consequence of an interrupt WE issued (`sendInterrupt`), not a real
    * provider error. Without it a user-initiated abort — a `/esc`, or the
@@ -597,7 +603,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
       pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
-      pendingQuestion: null, apiErrorFired: false, swallowNextAbortError: false,
+      pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       backgroundTaskIds: new Set(), claudeCodeVersion: null, applyingChunk: null,
       adoptCatchUpOffset: null, adoptCatchUpResolvers: [],
@@ -909,7 +915,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: this.readQuestionSidecar(paths),
-      apiErrorFired: false, swallowNextAbortError: false,
+      apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       // The frames that built the list and reported the version lie before the
       // tail offset (not replayed): both come from the persisted record.
@@ -1480,11 +1486,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         this.handleCompactBoundary(session, action);
         return;
       case 'rateLimit':
-        // Subscription usage-window signal; not surfaced to the topic (parity) — handed to the bot's usage
-        // cache for the profile this process runs on.
-        this.claudeRateLimitSink?.(session.configDir, {
-          status: action.status, rateLimitType: action.rateLimitType, resetsAtMs: action.resetsAtMs, windows: action.windows,
-        });
+        this.handleRateLimit(session, action);
         return;
       case 'userEcho':
         // Claude has read one of our user messages. A message written mid-turn
@@ -1766,11 +1768,32 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   // — api error —
 
-  /** Classify + emit an `apiError` once per episode; returns whether it fired. */
+  /**
+   * Subscription usage-window signal; not surfaced to the topic (parity) — handed to the bot's usage cache for the
+   * profile this process runs on, and a rejection's reset kept for the usage-limit error that follows it.
+   */
+  private handleRateLimit(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'rateLimit' }>): void {
+    if (action.status === 'rejected') session.rejectedResetAtMs = action.resetsAtMs;
+    else if (action.status === 'allowed' || action.status === 'allowed_warning') session.rejectedResetAtMs = null;
+    this.claudeRateLimitSink?.(session.configDir, {
+      status: action.status, rateLimitType: action.rateLimitType, resetsAtMs: action.resetsAtMs, windows: action.windows,
+    });
+  }
+
+  /**
+   * Classify + emit an `apiError` once per episode; returns whether it fired. A usage limit takes the reset of the window
+   * that rejected the request when one is still ahead — exact, where the text's is a parse of whatever this release
+   * prints. (The same rejection marks the profile limited, which is what confirms an `isUnconfirmed` wording.)
+   */
   private maybeEmitApiError(session: StreamSession, text: string): boolean {
     if (session.apiErrorFired) return false;
-    const apiError = classifyAgentApiError(text, Date.now());
-    if (!apiError) return false;
+    const now = Date.now();
+    const classified = classifyAgentApiError(text, now);
+    if (!classified) return false;
+    const rejectedResetAtMs = session.rejectedResetAtMs;
+    const apiError = classified.kind === 'usageLimit' && rejectedResetAtMs !== null && rejectedResetAtMs > now
+      ? { ...classified, resetAt: rejectedResetAtMs }
+      : classified;
     session.apiErrorFired = true;
     this.emit('apiError', session.key, apiError);
     return true;

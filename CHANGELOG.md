@@ -2,6 +2,13 @@
 
 ## 3.3.0 — 2026-10-23
 
+**A usage limit waits until the exact reset when the provider sends one, instead of a guessed hour.** Claude reports the
+reset of the window that refused the request, but the bot read it only from the message text. A wording that names no
+time, such as «This request would exceed your account's rate limit», fell back to a retry every hour once the limit was
+confirmed. On the default Claude backend the wait now ends at the reset Claude reported. A ChatGPT subscription limit on
+OpenCode now waits until the reset in the provider's response (`resets_at`, or `resets_in_seconds`), not the hourly retry.
+An older Claude Code's `Claude AI usage limit reached|<epoch>` is read the same way.
+
 **The agent can send files to the topic on Windows and macOS.** `send_file_to_user`, and `send_messages_to_user` with a
 file, refused with «secure file sending is unsupported on win32», and an agent could stop its work over it. Files are now
 opened by their checked path on those systems, held to the file that was checked inside the bound folder, so a path

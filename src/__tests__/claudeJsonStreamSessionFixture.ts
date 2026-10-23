@@ -74,6 +74,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     pendingCompaction: null,
     pendingQuestion: null,
     apiErrorFired: false,
+    rejectedResetAtMs: null,
     swallowNextAbortError: false,
     lastWatermarkOffset: -1,
     unconsumedInputCount: 0,
