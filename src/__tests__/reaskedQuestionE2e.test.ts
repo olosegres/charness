@@ -13,6 +13,10 @@
  *     as ONE message, and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
+ *   → a tap read while the process is live, whose delivery the idle stop overtakes (the fake Bot API holds the
+ *     re-asked question's and the toast's responses to put the stop between the two): the stop still under way when the
+ *     label is delivered — it is held and reaches the resumed process; the stop already over — the conversation is
+ *     woken and gets it. Both used to be lost: written to the process being stopped, or dropped for a gone one
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -26,7 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeAskQuestion, fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeClaudeIgnoreStopSignalsFileName, fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -85,6 +89,16 @@ function removeInstanceSync(): void {
 function getAgentPrompts(label: string): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes(label));
 }
+
+/**
+ * How long the fake Bot API holds its answer to the re-asked question: the idle stop follows that send, so it starts this
+ * long after the question is in the topic — after the test's tap has been read.
+ */
+const reaskedQuestionHoldMs = 3_000;
+/** How long the tap's toast is held when the stop is still under way at the delivery: past the stop's start, inside its kill wait (5 s). */
+const toastHoldDuringStopMs = 4_500;
+/** How long the tap's toast is held when the stop is over at the delivery: past the stop's start and its end. */
+const toastHoldAfterStopMs = 7_000;
 
 /** The line the bot logs once the idle fire has stopped the agent's process (the conversation then sleeps). */
 const idleStopLine = 'process stopped; the session sleeps';
@@ -208,5 +222,48 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     await getCharness().waitFor('the label to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > promptsBefore);
     // A process being stopped may still read the prompt; only a live one ANSWERS it.
     await waitingTopic.waitForMessage('the agent to answer the label', (message) => message.message_id > reasked.message_id && message.text.includes(unlabelledTurnText));
+  });
+
+  /**
+   * A tap read while the process is live, delivered only after the idle stop began: the re-asked question's send is held
+   * (the stop starts {@link reaskedQuestionHoldMs} after the question is in the topic) and so is the tap's toast (the
+   * label is delivered `toastHoldMs` after the tap). The label must reach a process started AFTER the one that put the
+   * question — the one being stopped may still read it, only the resumed one answers.
+   */
+  async function tapBeforeTheIdleStopOvertakesIt(warmUpLabel: string, promptLabel: string, toastHoldMs: number): Promise<void> {
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${warmUpLabel} [fake:answer] one more turn to compress`);
+    await getCharness().waitFor(`the warm-up turn ${warmUpLabel} to reach the agent`, agentStartTimeoutMs, () => getAgentPrompts(warmUpLabel).length > 0);
+    const labelPromptsBefore = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+    const idleStopsBefore = countIdleStops();
+    fakeTelegram.holdNextResponse('sendMessage', reaskedQuestionHoldMs, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('reask_'));
+    fakeTelegram.holdNextResponse('answerCallbackQuery', toastHoldMs);
+
+    const reasked = await waitForReaskedQuestion(promptLabel, { isIdleStopAwaited: false });
+    const askingPid = getAgentPrompts(promptLabel)[0]?.pid;
+    assert.ok(askingPid !== undefined, 'the process that put the question');
+    const toast = await topic.tapAndAwaitAnswer(reasked, 'reask_0');
+    assert.equal(toast, fakeAskQuestion.shortOptionLabel);
+    assert.equal(countIdleStops(), idleStopsBefore, 'precondition: the tap was read before the stop');
+
+    await getCharness().waitFor('the idle stop', agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
+    await getCharness().waitFor('the label to reach a resumed process', agentStartTimeoutMs, () =>
+      getAgentPrompts(fakeAskQuestion.shortOptionLabel).slice(labelPromptsBefore).some((prompt) => prompt.pid !== askingPid));
+    await waitingTopic.waitForMessage('the agent to answer the label', (message) => message.message_id > reasked.message_id && message.text.includes(unlabelledTurnText));
+  }
+
+  it('a tap read while the process is live, delivered while the idle stop is still under way: held, and the resumed process gets it', async () => {
+    // The process ignores the stop signals, so the stop lasts its kill wait: the label is delivered inside the stop window.
+    const ignoreStopSignalsPath = path.join(getLayout().fakeStateDir, fakeClaudeIgnoreStopSignalsFileName);
+    fs.writeFileSync(ignoreStopSignalsPath, '');
+    try {
+      await tapBeforeTheIdleStopOvertakesIt('WARM-4', 'REASK-4', toastHoldDuringStopMs);
+    } finally {
+      fs.rmSync(ignoreStopSignalsPath, { force: true });
+    }
+    assert.ok(getCharness().output.includes('was still running'), 'the stop really lasted its kill wait');
+  });
+
+  it('a tap read while the process is live, delivered after the idle stop is over: the conversation is woken and gets it', async () => {
+    await tapBeforeTheIdleStopOvertakesIt('WARM-5', 'REASK-5', toastHoldAfterStopMs);
   });
 });
