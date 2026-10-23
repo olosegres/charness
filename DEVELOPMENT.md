@@ -104,8 +104,8 @@ keep when touching the restart path:
   sends `SIGUSR2` — only when pid and start token match. The supervisor stops `tsc -w` and nodemon, leaves the OpenCode
   server and the speech sidecar alone and `execve`s `cli.js hot`. A supervisor that predates this has no record and is
   never signalled (an unhandled `SIGUSR2` kills a process).
-- **`update-pending.json` is written BEFORE the switch**; every boot counts itself in (`cli/bot.ts`, before the bot module is
-  imported), the boot after two unconfirmed ones rolls back, the running bot confirms 60 s after launch.
+- **`update-pending.json` is written BEFORE the switch**; every boot counts itself in (`cli/bot.ts`, once the instance lock is held and before the bot
+  module is imported), the boot after two unconfirmed ones rolls back, the running bot confirms 60 s after launch.
 
 The flows run it for real: `selfUpdateNpmE2e` (a loopback registry — `e2e/fakeNpmRegistry.ts` — and a real global install into
 a temp prefix), `selfUpdateCheckoutE2e` (a checkout copy, a bare remote and a second clone — `e2e/checkoutFixture.ts`),

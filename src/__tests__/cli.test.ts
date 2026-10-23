@@ -20,6 +20,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { readUpdatePending, writeUpdatePending } from '../selfUpdate/updatePending';
 
 let tmpRoot: string;
 let claudeShim: string;
@@ -365,6 +366,46 @@ test('runBot refuses to start when a foreign lockfile holds the data dir', () =>
   // Foreign lock must survive — we don't delete other holders' files.
   const stillThere = fs.existsSync(path.join(dataDir, 'instance.lock'));
   assert.equal(stillThere, true);
+});
+
+test('a start that loses the instance lock does not count as a boot of a pending update', () => {
+  // Two stray starts while a healthy new version runs must not reach the boot limit and roll it back from underneath it.
+  const dataDir = path.join(tmpRoot, 'data-pending-conflict');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dataDir, 'instance.lock'),
+    JSON.stringify({ pid: 1, cwd: '/somewhere-else', startedAt: '2026-01-01T00:00:00.000Z', tokenHash: 'aaaaaaaaaaaa' }),
+  );
+  writeUpdatePending(dataDir, {
+    kind: 'npm',
+    status: 'pending',
+    from: { version: '3.4.0', commit: null },
+    to: { version: '3.5.0', commit: null },
+    attempts: 2,
+    isUserRequested: false,
+  });
+
+  const r = spawnSync(process.execPath, [cliPath], {
+    env: {
+      ...process.env,
+      CLAUDE_BIN: claudeShim,
+      HOME: tmpRoot,
+      DATA_DIR: dataDir,
+      TELEGRAM_BOT_TOKEN: 'fake-token-' + Date.now(),
+      ALLOWED_GROUP_ID: '-100',
+      WORK_ROOT: tmpRoot,
+    },
+    cwd: tmpRoot,
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /charness is already running/);
+  assert.doesNotMatch(r.stderr, /did not start/, 'no rollback was decided');
+  const marker = readUpdatePending(dataDir);
+  assert.equal(marker?.status, 'pending');
+  assert.equal(marker?.attempts, 2, 'the losing start did not count itself in');
 });
 
 test('runBot accepts an empty ALLOWED_GROUP_ID and boots into pairing mode', () => {

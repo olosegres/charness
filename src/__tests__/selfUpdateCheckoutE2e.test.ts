@@ -38,6 +38,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
+import { readUpdatePending, writeUpdatePending } from '../selfUpdate/updatePending';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -74,10 +75,10 @@ function removeInstanceSync(): void {
 }
 
 /** Start charness FROM THE CHECKOUT's build and wait for its first poll to reach the fake Bot API. */
-async function startCharness(): Promise<void> {
+async function startCharness(timeoutMs: number = bootTimeoutMs): Promise<void> {
   charness = new IsolatedCharness(getLayout(), { cliPath: fixture.cliPath });
   const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
-  await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+  await charness.start(timeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
 }
 
 function addChangelogEntry(headline: string): (previous: string) => string {
@@ -203,5 +204,26 @@ describe('Automatic updates, git checkout (plain mode): a checkout, a bare remot
     assert.equal(getCharness().pid, runningPid, 'the same process');
     const updated = await flow.waitForGeneralMessage('the "Updated" message', replyTimeoutMs, (message) => message.text.includes(`→ ${guideCommit}`));
     assert.match(updated.text, /^🔄 Charness updated: [0-9a-f]{7} → [0-9a-f]{7} \(\d+ commits\)\n• The fix that follows\.$/);
+  });
+  it('a version that was booted twice without being confirmed is rolled back by its own next boot: the checkout goes back, the SAME process restarts onto it and takes the lock again, one line says so', async () => {
+    const rolledBackFrom = fixture.getHead();
+    await charness?.stop();
+    // What two unconfirmed boots of the pulled range leave behind (each boot counts itself in before the bot module loads).
+    writeUpdatePending(getLayout().dataDir, {
+      kind: 'git',
+      status: 'pending',
+      from: { version: 'flow', commit: secondCommit },
+      to: { version: 'flow', commit: rolledBackFrom },
+      attempts: 2,
+      isUserRequested: false,
+    });
+    await startCharness(updateTimeoutMs);
+
+    assert.ok(getCharness().output.includes(`[update] flow did not start 2 times — going back to flow`), 'the boot decided the rollback');
+    assert.equal(fixture.getHead(), secondCommit, 'the checkout is back on the commit that ran');
+    const failure = await flow.waitForGeneralMessage('the failure line of the rolled-back version', replyTimeoutMs, (message) => message.text.includes(`failed: the new version kept failing to boot. Still running ${secondCommit}`));
+    assert.match(failure.text, new RegExp(`^⚠️ Automatic update to ${rolledBackFrom} failed`));
+    assert.equal(readUpdatePending(getLayout().dataDir), null, 'the marker is settled and gone');
+    await flow.openScreen(`· git @ ${secondCommit}`);
   });
 });

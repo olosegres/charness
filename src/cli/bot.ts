@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadEnvWithConnectorGuards } from './connectorGuards';
-import { acquireLock, installLockCleanupHandlers } from '../instanceLock';
+import { acquireLock, installLockCleanupHandlers, releaseLock } from '../instanceLock';
 import { resolveDataDir } from '../state';
 import { installConsoleFileTap } from '../utils/consoleFileTap';
 import { warnLegacyNamesAtBoot } from '../legacyNames';
@@ -27,9 +27,11 @@ import { runBootUpdateCheck } from '../selfUpdate/updatePending';
  *      the projects/topics you want to bind.
  *   3. Validate `WORK_ROOT` resolves to an existing directory — fail fast
  *      with a clear message if not.
- *   4. Count this boot against a pending update (`update-pending.json`): a new version that has failed to start twice
+ *   4. Acquire the single-instance lock and wire cleanup handlers.
+ *   5. Count this boot against a pending update (`update-pending.json`): a new version that has failed to start twice
  *      is rolled back here — before the bot module can break the boot — and the process restarts onto the old one.
- *   5. Acquire the single-instance lock and wire cleanup handlers.
+ *      After the lock, never before: a start that loses the lock is not a boot, and counting it would let two stray
+ *      starts roll a healthy running version back from underneath it.
  *   6. Dynamically import `../bot` (which reads env at module scope) and
  *      call `startBot()`.
  *
@@ -72,10 +74,10 @@ export async function runBot(options: { isHotWorker?: boolean } = {}): Promise<v
     process.exit(1);
   }
 
-  await handleUpdateRollbackAtBoot(options.isHotWorker === true);
-
   await acquireLock();
   installLockCleanupHandlers();
+
+  await handleUpdateRollbackAtBoot(options.isHotWorker === true);
 
   // The pre-rename config / data dirs and keys move to the Charness names here: a COLD start, under the
   // lock, before the bot module (and its state) loads. A hot worker's reload never migrates. What it
@@ -91,8 +93,9 @@ export async function runBot(options: { isHotWorker?: boolean } = {}): Promise<v
 
 /**
  * @description The boot-time half of a safe update: a version that cannot start is put back by the process that failed to
- * start it. A plain process then restarts onto the restored install (`process.execve`, nothing held yet — the lock is not
- * taken); a hot worker exits cleanly instead, and its watcher rebuilds the reset checkout and starts a new worker.
+ * start it, holding the instance lock. A plain process then releases the lock and restarts onto the restored install
+ * (`process.execve` keeps the pid, and the new image takes the lock afresh); a hot worker exits cleanly instead (the exit
+ * handler releases the lock), and its watcher rebuilds the reset checkout and starts a new worker.
  */
 async function handleUpdateRollbackAtBoot(isHotWorker: boolean): Promise<void> {
   const packageRoot = path.resolve(__dirname, '..', '..');
@@ -106,5 +109,6 @@ async function handleUpdateRollbackAtBoot(isHotWorker: boolean): Promise<void> {
     process.exit(0);
     return;
   }
+  releaseLock();
   reexecProcess(getReexecTarget({ execPath: process.execPath, packageRoot, argv: process.argv }), getLaunchEnvironment(), createDefaultReexecDeps());
 }
