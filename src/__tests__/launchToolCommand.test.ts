@@ -44,6 +44,12 @@ const npmNodeShim = [
   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\opencode-ai\\bin\\opencode" %*',
   '',
 ].join('\r\n');
+/** npm's cmd-shim for a bin whose shebang is `#!/bin/sh`: the same `"%_prog%"` form, but the program is `sh`. */
+const npmShShim = npmNodeShim
+  .replace('IF EXIST "%dp0%\\node.exe" (', 'IF EXIST "%dp0%\\sh.exe" (')
+  .replace('SET "_prog=%dp0%\\node.exe"', 'SET "_prog=%dp0%\\sh.exe"')
+  .replace('SET "_prog=node"', 'SET "_prog=sh"')
+  .replace('node_modules\\opencode-ai\\bin\\opencode', 'node_modules\\fork\\bin\\fork.sh');
 /** npm's cmd-shim for a bin that is a native executable: it runs the target itself. */
 const npmNativeShim = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '"%dp0%\\node_modules\\tool\\bin\\tool.exe"   %*', ''].join('\r\n');
 
@@ -80,6 +86,16 @@ test('Windows, npm\'s shim of a native binary: the binary runs directly', () => 
     command: 'C:\\npm\\node_modules\\tool\\bin\\tool.exe',
     args: ['--version'],
     windowsVerbatimArguments: false,
+  });
+});
+
+test('Windows, npm\'s shim of a script for another interpreter (sh): run as npm wrote it, through cmd.exe — never on Node', () => {
+  const shimPath = 'C:\\npm\\fork.cmd';
+  assert.ok(npmShShim.includes('SET "_prog=sh"') && !/_prog=[^"]*node/i.test(npmShShim), 'precondition: the shim\'s program is sh, not node');
+  assert.deepEqual(getToolLaunch(shimPath, ['serve'], createWindowsHost({ [shimPath]: npmShShim })), {
+    command: 'C:\\Windows\\system32\\cmd.exe',
+    args: ['/d', '/s', '/c', '""C:\\npm\\fork.cmd" "serve""'],
+    windowsVerbatimArguments: true,
   });
 });
 

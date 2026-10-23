@@ -177,20 +177,23 @@ function getProcessToolLaunchHost(): ToolLaunchHost {
 const windowsBatchExtensionRe = /\.(?:cmd|bat)$/i;
 /**
  * The target an npm `.cmd` shim runs (npm's cmd-shim: `"%dp0%\node_modules\…\bin\opencode" %*`, older ones `%~dp0`),
- * relative to the shim's folder. A shim for a Node script runs it with `"%_prog%"` (node); one for a native binary runs
- * the target itself.
+ * relative to the shim's folder. A shim for a native binary runs the target itself; one for a script runs it with
+ * `"%_prog%"`, the program its shebang names — `node` for a Node script, but `sh`, `python`, … for others.
  */
 const npmCmdShimTargetRe = /"%(?:dp0%|~dp0)\\([^"]+)"\s*%\*/i;
-const npmCmdShimNodeMarker = '%_prog%';
+const npmCmdShimProgramMarker = '%_prog%';
+/** The program assignment of a shim whose script is Node's: `SET "_prog=node"`, `SET "_prog=%dp0%\node.exe"`. */
+const npmCmdShimNodeProgramRe = /SET\s+"_prog=(?:%dp0%\\)?node(?:\.exe)?"/i;
 /** What `cmd.exe` would read as an operator or an expansion: never put into a command line it parses. */
 const cmdUnsafeCharsRe = /[&|<>^%!"\r\n]/;
 
 /**
  * @description How to launch the tool at `toolPath` with `toolArgs`. A plain executable runs as it is. A Windows `.cmd`
  * / `.bat` — what npm installs (`opencode.cmd`) — cannot be spawned without a shell: npm's own shim is read and the
- * script it wraps runs on this Node (or the native binary it names runs directly), no shell at all; any other batch
- * file runs through `cmd.exe /d /s /c` with a command line quoted here, refused when a part holds a character `cmd.exe`
- * would interpret (the bot's own arguments never do).
+ * Node script it wraps runs on this Node (or the native binary it names runs directly), no shell at all; any other
+ * batch file — npm's shim of a script for another interpreter (`sh`, `python`) included — runs through `cmd.exe /d /s
+ * /c` with a command line quoted here, refused when a part holds a character `cmd.exe` would interpret (the bot's own
+ * arguments never do).
  */
 export function getToolLaunch(toolPath: string, toolArgs: readonly string[], host: ToolLaunchHost = getProcessToolLaunchHost()): ToolLaunch {
   if (host.platform !== 'win32' || !windowsBatchExtensionRe.test(toolPath)) {
@@ -203,12 +206,14 @@ export function getToolLaunch(toolPath: string, toolArgs: readonly string[], hos
     // Unreadable: the shell path below still runs it.
   }
   const shimTarget = npmCmdShimTargetRe.exec(shimText)?.[1];
-  if (shimTarget !== undefined) {
+  const isScriptShim = shimText.includes(npmCmdShimProgramMarker);
+  if (shimTarget !== undefined && (!isScriptShim || npmCmdShimNodeProgramRe.test(shimText))) {
     const targetPath = path.win32.join(path.win32.dirname(toolPath), shimTarget);
-    return shimText.includes(npmCmdShimNodeMarker)
+    return isScriptShim
       ? { command: host.nodePath, args: [targetPath, ...toolArgs], windowsVerbatimArguments: false }
       : { command: targetPath, args: [...toolArgs], windowsVerbatimArguments: false };
   }
+  // A shim of another interpreter's script (`sh`, `python`, …) runs as npm wrote it: through cmd.exe, below.
   const parts = [toolPath, ...toolArgs];
   const unsafePart = parts.find((part) => cmdUnsafeCharsRe.test(part));
   if (unsafePart !== undefined) throw new Error(`cannot run ${toolPath} through cmd.exe: ${JSON.stringify(unsafePart)} holds a character cmd.exe interprets`);
