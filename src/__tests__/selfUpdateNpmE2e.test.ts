@@ -25,7 +25,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { FakeNpmRegistry } from './e2e/fakeNpmRegistry';
 import {
@@ -44,6 +44,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { getInstalledPackageRoot, installCharnessGlobally, packCharnessVersion, readInstalledVersion, type NpmEnvironment } from './e2e/updateFlowKit';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -52,7 +53,6 @@ const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
-const launchLine = 'Launching Telegraf bot (long polling';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -99,7 +99,7 @@ let registry: FakeNpmRegistry;
 let npmEnvironment: NpmEnvironment;
 let prefix = '';
 let defaultTmuxSessionsBefore: string[] = [];
-let screen: FakeTelegramMessage;
+let flow: UpdateFlowDriver;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -119,50 +119,11 @@ function getInstalledCliPath(): string {
   return path.join(getInstalledPackageRoot(prefix), 'dist', 'cli.js');
 }
 
-function countBoots(): number {
-  return getCharness().output.split(launchLine).length - 1;
-}
-
 /** Start charness FROM THE PREFIX'S INSTALL and wait for its first poll to reach the fake Bot API. */
 async function startCharness(): Promise<void> {
   charness = new IsolatedCharness(getLayout(), { cliPath: getInstalledCliPath() });
   const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
   await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
-}
-
-/** The bot's own process replaced itself: one more boot, a new poll — and it is still the process we started. */
-async function waitForRestartInPlace(description: string, timeoutMs: number): Promise<void> {
-  const bootsBefore = countBoots();
-  const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
-  await getCharness().waitFor(description, timeoutMs, () => countBoots() > bootsBefore && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
-}
-
-/** Open `/update` in General as a NEW message and keep it as the screen the next taps use. */
-async function openScreen(expectedText: string): Promise<void> {
-  screen = await general.sendAndAwaitReply('/update', expectedText);
-}
-
-async function checkNow(expectedText: string): Promise<void> {
-  const answer = await general.tapAndAwaitAnswer(screen, 'upd_check');
-  assert.equal(answer, 'Checked.');
-  await general.waitForMessageText(`the screen to read "${expectedText}"`, screen, (text) => text.includes(expectedText));
-}
-
-/** A message of General that takes longer than a command's reply (it comes after an install and a restart). */
-async function waitForGeneralMessage(description: string, timeoutMs: number, check: (message: FakeTelegramMessage) => boolean): Promise<FakeTelegramMessage> {
-  let found: FakeTelegramMessage | undefined;
-  await getCharness().waitFor(description, timeoutMs, () => {
-    found = general.listMessages().find(check);
-    return found !== undefined;
-  });
-  if (!found) throw new Error(`no message for ${description}`);
-  return found;
-}
-
-function getInstalledPid(): number {
-  const pid = getCharness().pid;
-  assert.ok(pid, 'charness has a pid');
-  return pid;
 }
 
 describe('Automatic updates, npm: a global install, the fake registry, the fake Bot API', () => {
@@ -205,6 +166,7 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
 
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
+    flow = new UpdateFlowDriver(fakeTelegram, getCharness, general);
     otherTopic = new TopicDriver(fakeTelegram, getCharness, otherTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(getLayout(), {
@@ -243,20 +205,20 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
   it('boots from the install and `/update` says what runs, that updates are off in this instance, and that nothing was checked yet', async () => {
     const requestsBeforeBoot = registry.requests.length;
     await startCharness();
-    runningPid = getInstalledPid();
+    runningPid = flow.getPid();
     runningStartTicks = getProcessStartTicks(runningPid);
-    await openScreen(`Charness ${runningVersion} · npm (${prefix})`);
-    assert.match(screen.text, /Automatic updates: OFF/);
-    assert.match(screen.text, /Not checked yet\./);
-    assert.deepEqual(general.getKeyboardData(screen).flat(), ['upd_mode_on', 'upd_mode_notify', 'upd_mode_off', 'upd_notes_off', 'upd_check']);
+    await flow.openScreen(`Charness ${runningVersion} · npm (${prefix})`);
+    assert.match(flow.getScreen().text, /Automatic updates: OFF/);
+    assert.match(flow.getScreen().text, /Not checked yet\./);
+    assert.deepEqual(flow.getButtons(), ['upd_mode_on', 'upd_mode_notify', 'upd_mode_off', 'upd_notes_off', 'upd_check']);
     assert.equal(registry.requests.length, requestsBeforeBoot, 'with the mode off the bot has not asked the registry anything');
   });
 
   it('«Check now» asks the registry, finds the new version and offers its install; another topic sees the same screen without buttons', async () => {
     registry.setLatest(goodVersion);
-    await checkNow(`${goodVersion} is out`);
+    await flow.checkNow(`${goodVersion} is out`);
     assert.ok(registry.requests.includes('/charness'));
-    assert.ok(general.getKeyboardData(screen).flat().includes(`upd_go_${goodVersion}`), 'the install button is there');
+    assert.ok(flow.getButtons().includes(`upd_go_${goodVersion}`), 'the install button is there');
 
     const other = await otherTopic.sendAndAwaitReply('/update', `Charness ${runningVersion}`);
     assert.deepEqual(otherTopic.getKeyboardData(other), []);
@@ -270,9 +232,9 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
     const env = fs.readFileSync(getLayout().envFile, 'utf8').replace(`WORK_ROOT=${getLayout().workRoot}`, `WORK_ROOT=${newWorkRoot}`);
     fs.writeFileSync(getLayout().envFile, env);
 
-    const answer = await general.tapAndAwaitAnswer(screen, `upd_go_${goodVersion}`);
+    const answer = await flow.tap(`upd_go_${goodVersion}`);
     assert.equal(answer, `⬆️ Updating to ${goodVersion} — installing as soon as no agent is working.`);
-    await waitForRestartInPlace('the bot to restart onto the new version', updateTimeoutMs);
+    await flow.waitForRestartInPlace('the bot to restart onto the new version', updateTimeoutMs);
 
     assert.equal(readInstalledVersion(prefix), goodVersion, 'npm installed it into the same prefix');
     assert.equal(getCharness().pid, runningPid, 'the same process');
@@ -284,7 +246,7 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
     }
     assert.ok(getCharness().output.includes(`Work root:        ${newWorkRoot}`), 'the edited .env was read afresh by the new image');
 
-    const updated = await waitForGeneralMessage('the "Updated" message', replyTimeoutMs, (message) => message.text.startsWith(`🔄 Charness updated: ${runningVersion} → ${goodVersion}`));
+    const updated = await flow.waitForGeneralMessage('the "Updated" message', replyTimeoutMs, (message) => message.text.startsWith(`🔄 Charness updated: ${runningVersion} → ${goodVersion}`));
     assert.equal(
       updated.text,
       [
@@ -308,37 +270,37 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
 
   it('a version that cannot start is installed, fails its self-check and is rolled back to the one that runs: one line, the same process, never offered again', async () => {
     registry.setLatest(brokenVersion);
-    await openScreen(`Charness ${goodVersion}`);
-    await checkNow(`${brokenVersion} is out`);
-    const bootsBefore = countBoots();
-    await general.tapAndAwaitAnswer(screen, `upd_go_${brokenVersion}`);
-    const failure = await waitForGeneralMessage('the failure line', updateTimeoutMs, (message) => message.text.startsWith(`⚠️ Automatic update to ${brokenVersion} failed`));
+    await flow.openScreen(`Charness ${goodVersion}`);
+    await flow.checkNow(`${brokenVersion} is out`);
+    const bootsBefore = flow.countBoots();
+    await flow.tap(`upd_go_${brokenVersion}`);
+    const failure = await flow.waitForGeneralMessage('the failure line', updateTimeoutMs, (message) => message.text.startsWith(`⚠️ Automatic update to ${brokenVersion} failed`));
     assert.equal(
       failure.text,
       [`⚠️ Automatic update to ${brokenVersion} failed: the new version did not start. Still running ${goodVersion}.`, 'Update by hand: npm install -g charness@latest'].join('\n'),
     );
     assert.ok(!fakeTelegram.listPinnedMessageIds().includes(failure.message_id), 'a rollback that worked needs no pin');
     assert.equal(readInstalledVersion(prefix), goodVersion, 'the previous version was put back');
-    assert.equal(countBoots(), bootsBefore, 'the bot never restarted');
+    assert.equal(flow.countBoots(), bootsBefore, 'the bot never restarted');
     assert.equal(getCharness().pid, runningPid);
 
-    await checkNow('up to date');
-    assert.equal(general.getKeyboardData(screen).flat().some((data) => data.startsWith('upd_go_')), false, 'a version that failed is not offered again');
+    await flow.checkNow('up to date');
+    assert.equal(flow.getButtons().some((data) => data.startsWith('upd_go_')), false, 'a version that failed is not offered again');
   });
 
   it('a deprecated version is not offered; a major is offered with its tap and not installed by itself; a version that needs a newer Node is named and has no tap', async () => {
     registry.deprecate(deprecatedVersion, 'use a newer one');
     registry.setLatest(deprecatedVersion);
-    await checkNow('up to date');
+    await flow.checkNow('up to date');
 
     registry.setLatest(majorVersion);
-    await checkNow(`${majorVersion} is a major version — not installed by itself`);
-    assert.ok(general.getKeyboardData(screen).flat().includes(`upd_go_${majorVersion}`));
+    await flow.checkNow(`${majorVersion} is a major version — not installed by itself`);
+    assert.ok(flow.getButtons().includes(`upd_go_${majorVersion}`));
 
     registry.setLatest(needsNewNodeVersion);
-    await checkNow(`${needsNewNodeVersion} needs Node >=99`);
-    assert.match(screen.text, /\(this one runs \d+\.\d+\.\d+\)/);
-    assert.equal(general.getKeyboardData(screen).flat().some((data) => data.startsWith('upd_go_')), false);
+    await flow.checkNow(`${needsNewNodeVersion} needs Node >=99`);
+    assert.match(flow.getScreen().text, /\(this one runs \d+\.\d+\.\d+\)/);
+    assert.equal(flow.getButtons().some((data) => data.startsWith('upd_go_')), false);
     assert.equal(readInstalledVersion(prefix), goodVersion, 'none of these touched the install');
   });
 
@@ -347,13 +309,13 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
     assert.equal(readInstalledVersion(prefix), manualVersion);
     registry.setLatest(manualVersion);
     const registryRequestsBefore = registry.requests.filter((request) => request.endsWith('.tgz')).length;
-    await checkNow(`${manualVersion} is out`);
-    await general.tapAndAwaitAnswer(screen, `upd_go_${manualVersion}`);
-    await waitForRestartInPlace('the bot to restart onto the version installed by hand', updateTimeoutMs);
+    await flow.checkNow(`${manualVersion} is out`);
+    await flow.tap(`upd_go_${manualVersion}`);
+    await flow.waitForRestartInPlace('the bot to restart onto the version installed by hand', updateTimeoutMs);
     assert.equal(getCharness().pid, runningPid, 'the same process');
     assert.equal(registry.requests.filter((request) => request.endsWith('.tgz')).length, registryRequestsBefore, 'the bot did not download the version again');
 
-    const updated = await waitForGeneralMessage('the "Updated" line', replyTimeoutMs, (message) => message.text.startsWith(`🔄 Charness updated: ${goodVersion} → ${manualVersion}`));
+    const updated = await flow.waitForGeneralMessage('the "Updated" line', replyTimeoutMs, (message) => message.text.startsWith(`🔄 Charness updated: ${goodVersion} → ${manualVersion}`));
     assert.match(updated.text, new RegExp(`• A new board arrived in ${manualVersion}\\.`));
   });
 
@@ -365,11 +327,11 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
     try {
       await startCharness();
       registry.setLatest(readOnlyOfferVersion);
-      await openScreen(`Charness ${manualVersion} · npm, read-only folder — can only notify`);
-      assert.match(screen.text, /Automatic updates: OFF/);
-      await checkNow(`${readOnlyOfferVersion} is out — I will say so ~`);
-      assert.match(screen.text, /Update by hand: npm install -g charness@latest$/);
-      assert.equal(general.getKeyboardData(screen).flat().some((data) => data.startsWith('upd_go_')), false, 'nothing it could install');
+      await flow.openScreen(`Charness ${manualVersion} · npm, read-only folder — can only notify`);
+      assert.match(flow.getScreen().text, /Automatic updates: OFF/);
+      await flow.checkNow(`${readOnlyOfferVersion} is out — I will say so ~`);
+      assert.match(flow.getScreen().text, /Update by hand: npm install -g charness@latest$/);
+      assert.equal(flow.getButtons().some((data) => data.startsWith('upd_go_')), false, 'nothing it could install');
 
       const refused = await general.sendAndAwaitReply('/update now', 'cannot update itself');
       assert.match(refused.text, /update by hand/);
