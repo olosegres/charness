@@ -721,7 +721,7 @@ export const zhDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ 服务商拒绝了上一步 — 继续中…',
   'apiRetry.limitResetResuming': '✅ 限额窗口已重置——我继续本话题的工作。',
   'apiRetry.giveUp':
-    '⚠️ {attempts} 次尝试后无法恢复。需要继续时给我发消息。',
+    '⚠️ 无法恢复（尝试次数：{attempts}）。需要继续时给我发消息。',
   'apiRetry.continueNudge': '从你停下的地方继续。',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude 已登出 — 运行 /login 继续。',

@@ -733,7 +733,7 @@ export const ukDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ Провайдер відхилив останній крок — продовжую…',
   'apiRetry.limitResetResuming': '✅ Вікно ліміту скинуто — продовжую роботу в цій темі.',
   'apiRetry.giveUp':
-    '⚠️ Не вдалося відновити після {attempts} спроб. Напиши, коли продовжити.',
+    '⚠️ Не вдалося відновити (спроб: {attempts}). Напиши, коли продовжити.',
   'apiRetry.continueNudge': 'Продовжуй з того місця, де ти зупинився.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude вийшов із системи — виконай /login, щоб продовжити.',

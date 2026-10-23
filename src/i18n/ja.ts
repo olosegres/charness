@@ -721,7 +721,7 @@ export const jaDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ プロバイダーが直前のステップを拒否しました — 続行します…',
   'apiRetry.limitResetResuming': '✅ 制限のウィンドウがリセットされました — このトピックの作業を再開します。',
   'apiRetry.giveUp':
-    '⚠️ {attempts} 回の試行後に再開できませんでした。続行する時にメッセージを送ってください。',
+    '⚠️ 再開できませんでした（試行回数: {attempts}）。続行する時にメッセージを送ってください。',
   'apiRetry.continueNudge': '止まったところから続けてください。',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude がログアウトしています — 続行するには /login を実行してください。',

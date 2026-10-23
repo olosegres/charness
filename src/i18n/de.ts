@@ -727,7 +727,7 @@ export const deDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ Der Anbieter hat den letzten Schritt abgelehnt — es geht weiter…',
   'apiRetry.limitResetResuming': '✅ Das Limit-Fenster wurde zurückgesetzt — ich setze die Arbeit in diesem Thema fort.',
   'apiRetry.giveUp':
-    '⚠️ Konnte nach {attempts} Versuchen nicht fortsetzen. Schreibe mir, wann ich weitermachen soll.',
+    '⚠️ Konnte nicht fortsetzen (Versuche: {attempts}). Schreibe mir, wann ich weitermachen soll.',
   'apiRetry.continueNudge': 'Fahre von dort fort, wo du aufgehört hast.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude ist abgemeldet — führe /login aus, um fortzufahren.',

@@ -728,7 +728,7 @@ export const ptDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ O fornecedor recusou o último passo — a continuar…',
   'apiRetry.limitResetResuming': '✅ A janela do limite foi reiniciada — retomo o trabalho neste tópico.',
   'apiRetry.giveUp':
-    '⚠️ Não foi possível retomar após {attempts} tentativas. Escreve-me quando continuar.',
+    '⚠️ Não foi possível retomar (tentativas: {attempts}). Escreve-me quando continuar.',
   'apiRetry.continueNudge': 'Continua de onde paraste.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude está desconectado — executa /login para continuar.',

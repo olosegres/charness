@@ -727,7 +727,7 @@ export const esDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ El proveedor rechazó el último paso — continuando…',
   'apiRetry.limitResetResuming': '✅ La ventana del límite se ha restablecido: retomo el trabajo en este tema.',
   'apiRetry.giveUp':
-    '⚠️ No se pudo reanudar tras {attempts} intentos. Escríbeme cuándo continuar.',
+    '⚠️ No se pudo reanudar (intentos: {attempts}). Escríbeme cuándo continuar.',
   'apiRetry.continueNudge': 'Continúa desde donde te detuviste.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude está desconectado — ejecuta /login para continuar.',

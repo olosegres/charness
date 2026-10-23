@@ -731,7 +731,7 @@ export const ruDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ Провайдер отклонил последний шаг — продолжаю…',
   'apiRetry.limitResetResuming': '✅ Окно лимита сброшено — продолжаю работу в этом топике.',
   'apiRetry.giveUp':
-    '⚠️ Не смог возобновить после {attempts} попыток. Напиши, когда продолжить.',
+    '⚠️ Не смог возобновить (попыток: {attempts}). Напиши, когда продолжить.',
   'apiRetry.continueNudge': 'Продолжай с того места, где ты остановился.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude разлогинен — отправь /login, чтобы продолжить.',

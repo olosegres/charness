@@ -727,7 +727,7 @@ export const frDict: Record<string, string> = {
   'apiRetry.conversationTailNotice': '↻ Le fournisseur a refusé la dernière étape — on continue…',
   'apiRetry.limitResetResuming': '✅ La fenêtre de limite est réinitialisée — je reprends le travail dans ce sujet.',
   'apiRetry.giveUp':
-    '⚠️ Impossible de reprendre après {attempts} tentatives. Écrivez-moi quand continuer.',
+    '⚠️ Impossible de reprendre (tentatives : {attempts}). Écrivez-moi quand continuer.',
   'apiRetry.continueNudge': 'Continuez là où vous vous êtes arrêté.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude est déconnecté — lancez /login pour continuer.',
