@@ -39,6 +39,10 @@ const fakeClaudeTuiPath = path.join(__dirname, '..', 'tmuxE2e', 'fakeClaudeTui.t
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
 
+/** The instance settings file a layout starts with (`settings.json`, beside the env file) and what it holds. */
+export const isolatedSettingsFileName = 'settings.json';
+export const isolatedBaselineSettings = { autoUpdate: 'off' };
+
 /** The file in a layout's root naming the test process that owns it. */
 export const isolatedInstanceOwnerFileName = 'owner.json';
 
@@ -407,6 +411,10 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
     fs.mkdirSync(dir, { recursive: true });
   }
   fs.mkdirSync(layout.tmuxTmpDir, { mode: 0o700 });
+  // An instance under test must never update the checkout it runs from (a test run from a dev clone would pull it, and a
+  // flow longer than the updater's first check would reach the registry or the remote): settings.json — beside the env file
+  // — starts with automatic updates off. The update flows write their own; a flow that checks the file starts from this.
+  fs.writeFileSync(path.join(layout.testRoot, isolatedSettingsFileName), `${JSON.stringify(isolatedBaselineSettings)}\n`);
   // The running node under its own name, so the instance's PATH needs no other folder that could hold an agent binary.
   fs.symlinkSync(process.execPath, path.join(layout.binDir, 'node'));
   const owner: IsolatedInstanceOwner = { pid: process.pid, startTicks: getProcessStartTicks(process.pid), tmuxTmpDir: layout.tmuxTmpDir, tmuxSocketName: layout.tmuxSocketName };
@@ -472,12 +480,22 @@ export function getInstanceEnvNames(layout: IsolatedInstanceLayout): string[] {
  * started: `run-isolated.sh` with only its env file. Everything it prints
  * (stdout and stderr, across restarts) accumulates in `output`.
  */
+export interface IsolatedCharnessOptions {
+  /** Run THIS `cli.js` (an install other than the checkout's, e.g. an npm global one) instead of the checkout's through `run-isolated.sh`. */
+  cliPath?: string;
+  /** Arguments after the command (`['hot']` starts the hot supervisor). */
+  cliArgs?: readonly string[];
+}
+
 export class IsolatedCharness {
   private child: ChildProcess | null = null;
   /** Everything every run printed, stdout and stderr together. */
   output = '';
 
-  constructor(private readonly layout: IsolatedInstanceLayout) {}
+  constructor(
+    private readonly layout: IsolatedInstanceLayout,
+    private readonly options: IsolatedCharnessOptions = {},
+  ) {}
 
   get pid(): number | undefined {
     return this.child?.pid;
@@ -491,20 +509,21 @@ export class IsolatedCharness {
    */
   async start(timeoutMs: number, checkIsReady: (runOutput: string) => boolean): Promise<void> {
     const outputStart = this.output.length;
-    const child = spawn(runIsolatedPath, [this.layout.envFile], {
-      // run-isolated.sh passes on only these; HOME is the instance's own temp home.
-      env: {
-        HOME: this.layout.instanceHome,
-        PATH: getIsolatedPath(this.layout),
-        USER: process.env.USER ?? '',
-        SHELL: '/bin/sh',
-        LANG: 'C.UTF-8',
-        TERM: 'dumb',
-        ...isolatedSandboxEnv,
-      },
-      cwd: this.layout.testRoot,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    // run-isolated.sh passes on only these; HOME is the instance's own temp home.
+    const instanceEnv = {
+      HOME: this.layout.instanceHome,
+      PATH: getIsolatedPath(this.layout),
+      USER: process.env.USER ?? '',
+      SHELL: '/bin/sh',
+      LANG: 'C.UTF-8',
+      TERM: 'dumb',
+      ...isolatedSandboxEnv,
+    };
+    const cliArgs = this.options.cliArgs ?? [];
+    // Another install than the checkout's gets exactly what run-isolated.sh gives the checkout's: `node <cli.js>` with ENV_FILE.
+    const child = this.options.cliPath
+      ? spawn(process.execPath, [this.options.cliPath, ...cliArgs], { env: { ...instanceEnv, ENV_FILE: this.layout.envFile }, cwd: this.layout.testRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+      : spawn(runIsolatedPath, [this.layout.envFile, ...cliArgs], { env: instanceEnv, cwd: this.layout.testRoot, stdio: ['ignore', 'pipe', 'pipe'] });
     this.child = child;
     child.stdout?.on('data', (chunk: Buffer) => { this.output += chunk.toString('utf8'); });
     child.stderr?.on('data', (chunk: Buffer) => { this.output += chunk.toString('utf8'); });

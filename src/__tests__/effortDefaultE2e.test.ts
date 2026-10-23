@@ -37,6 +37,7 @@ import {
   getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
+  isolatedBaselineSettings,
   IsolatedCharness,
   listTmuxSessions,
   readJsonLines,
@@ -96,7 +97,7 @@ function getSettingsFilePath(): string {
   return path.join(path.dirname(getLayout().envFile), 'settings.json');
 }
 
-function readSettingsFile(): { defaultEffort?: string } {
+function readSettingsFile(): { defaultEffort?: string; autoUpdate?: string } {
   return JSON.parse(fs.readFileSync(getSettingsFilePath(), 'utf8'));
 }
 
@@ -210,7 +211,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
       ['effort_ultracode'],
     ]);
     assert.deepEqual(general.getKeyboardLabels(generalPicker).flat().filter((label) => label.includes('✓')), ['medium ✓']);
-    assert.equal(fs.existsSync(getSettingsFilePath()), false, 'viewing the default changes nothing');
+    assert.deepEqual(readSettingsFile(), isolatedBaselineSettings, 'viewing the default changes nothing: the file is still the one the harness wrote');
   });
 
   it('/effort in a topic names the level and where it comes from, and offers «As in General» with the value it would give', async () => {
@@ -223,7 +224,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
   it('a tap in General writes settings.json beside the env file, answers what it means, and the picker follows', async () => {
     const answer = await general.tapAndAwaitAnswer(generalPicker, 'effort_high');
     assert.equal(answer, 'Effort: high');
-    assert.deepEqual(readSettingsFile(), { defaultEffort: 'high' });
+    assert.deepEqual(readSettingsFile(), { ...isolatedBaselineSettings, defaultEffort: 'high' }, 'the tap keeps the other fields of the file');
     const confirmation = await general.waitForMessage('the confirmation', (message) => message.text.startsWith('✅ Default effort for all topics: high'));
     assert.match(confirmation.text, /Topics with their own effort keep it\. It applies from each topic's next session start or wake-up — running sessions are not restarted\./);
     await general.waitForMessageText('the picker re-rendered', generalPicker, (text) => text.startsWith('⚙️ Default effort for all topics: high'));
@@ -256,7 +257,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
 
     const launchesBefore = getSessionLaunches().length;
     await general.tapAndAwaitAnswer(generalPicker, 'effort_low');
-    assert.deepEqual(readSettingsFile(), { defaultEffort: 'low' });
+    assert.deepEqual(readSettingsFile(), { ...isolatedBaselineSettings, defaultEffort: 'low' });
     await general.waitForMessageText('the picker follows', generalPicker, (text) => text.startsWith('⚙️ Default effort for all topics: low'));
     await picker.sendAndAwaitReply('/effort', 'Effort in this topic: max — set for this topic');
     // The follower's process was started on high: that is what it runs, and the screens say so — with the level the
