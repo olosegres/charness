@@ -1102,3 +1102,29 @@ test('answerPins: leaving the folder drops the record of the pinned answer; the 
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
   assert.equal('answerPins' in raw, false, 'an empty map leaves a clean state file');
 });
+
+test('the update engine record and the last-run version survive a restart; an old state file reads as empty', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  assert.deepEqual(store.getSelfUpdateRecord(), {});
+  assert.equal(store.getLastRunVersion(), undefined);
+
+  store.setSelfUpdateRecord({
+    lastCheckAt: 1_700_000_000_000,
+    firstSeenAt: { '3.5.0': 1_700_000_000_000 },
+    failedTargets: ['3.4.1'],
+    notifiedTargets: ['3.5.0'],
+    lastResult: { at: 1_700_000_000_000, observation: { kind: 'npm', latestVersion: '3.5.0', engines: '>=22.12', isDeprecated: false } },
+    isCheckFailing: false,
+    isFeatureAnnounced: true,
+  });
+  await store.setLastRunVersion({ version: '3.4.0', commit: null });
+  await store.flush();
+
+  const reopened = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await reopened.init();
+  assert.deepEqual(reopened.getLastRunVersion(), { version: '3.4.0', commit: null });
+  assert.deepEqual(reopened.getSelfUpdateRecord().firstSeenAt, { '3.5.0': 1_700_000_000_000 });
+  assert.deepEqual(reopened.getSelfUpdateRecord().failedTargets, ['3.4.1']);
+  assert.equal(reopened.getSelfUpdateRecord().isFeatureAnnounced, true);
+});

@@ -8,12 +8,13 @@ import {
   type ConfigValidation,
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
+import { autoUpdateModes, type AutoUpdateMode } from './selfUpdate/updateModes';
 
 /**
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory
  * (beside the instance's real `.env`, like `stt.json`). `/effort` in the General topic writes it; an operator may
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
- * settings will move here later; today it holds `defaultEffort`.
+ * settings will move here later; today it holds `defaultEffort`, `autoUpdate` and `whatsNew`.
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -30,15 +31,21 @@ const settingsFileMode = 0o644;
 export interface InstanceSettings {
   /** The reasoning effort of every topic that has no `/effort` pick of its own (see `getInstanceDefaultEffort`). */
   defaultEffort: ClaudeEffortLevel | null;
+  /** Whether the bot updates itself (`on`), only says a new version is out (`notify`) or never looks (`off`); `null` = `on`. */
+  autoUpdate: AutoUpdateMode | null;
+  /** Whether the list of changes is posted after a version change; `null` = yes. */
+  whatsNew: boolean | null;
 }
 
 const rawSettingsSchema = z.strictObject({
   defaultEffort: z.enum(claudeEffortLevels).optional(),
+  autoUpdate: z.enum(autoUpdateModes).optional(),
+  whatsNew: z.boolean().optional(),
 });
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null };
 }
 
 /**
@@ -53,7 +60,14 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       errors: parsed.error.issues.map((issue) => `${instanceSettingsFileName} ${issue.path.join('.') || '(root)'}: ${issue.message}`),
     };
   }
-  return { ok: true, config: { defaultEffort: parsed.data.defaultEffort ?? null } };
+  return {
+    ok: true,
+    config: {
+      defaultEffort: parsed.data.defaultEffort ?? null,
+      autoUpdate: parsed.data.autoUpdate ?? null,
+      whatsNew: parsed.data.whatsNew ?? null,
+    },
+  };
 }
 
 /** @description Where `settings.json` lives: the config directory of the instance's REAL env file (`getConfigDirFilePath`). */
@@ -81,7 +95,12 @@ export const resetInstanceSettingsCache = instanceSettingsLoader.resetCache;
 
 /** @description Write `settings` to `filePath`: validated first, then through a temp file and a rename. */
 export function saveInstanceSettings(filePath: string, settings: InstanceSettings): void {
-  const body = settings.defaultEffort === null ? {} : { defaultEffort: settings.defaultEffort };
+  // A field that is not set is left out of the file, so the file says only what the operator chose.
+  const body = {
+    ...(settings.defaultEffort === null ? {} : { defaultEffort: settings.defaultEffort }),
+    ...(settings.autoUpdate === null ? {} : { autoUpdate: settings.autoUpdate }),
+    ...(settings.whatsNew === null ? {} : { whatsNew: settings.whatsNew }),
+  };
   const validation = validateInstanceSettings(body);
   if (!validation.ok) throw new Error(`refusing to write an invalid ${instanceSettingsFileName}: ${validation.errors.join('; ')}`);
   writeJsonFileAtomically(filePath, body, settingsFileMode);

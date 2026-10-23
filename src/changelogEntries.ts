@@ -3,12 +3,13 @@
  *
  * `subsection` is the `###` heading in force (`Upgrading`, `Added`, …), `null` before the first one.
  * `text` is the entry's lines joined by a space, list marker removed; `leadLine` is its first line as
- * written, for quoting it in a message.
+ * written, for quoting it in a message, and `leadLineIndex` its 0-based position in the text it came from.
  */
 export type ChangelogEntry = {
   subsection: string | null;
   text: string;
   leadLine: string;
+  leadLineIndex: number;
 };
 
 const headingPattern = /^(#{1,6})\s+(.*)$/;
@@ -31,7 +32,7 @@ export function getChangelogEntries(sectionText: string): ChangelogEntry[] {
   let current: ChangelogEntry | null = null;
   let isInFence = false;
 
-  for (const line of sectionText.split('\n')) {
+  for (const [lineIndex, line] of sectionText.split('\n').entries()) {
     if (fencePattern.test(line)) {
       isInFence = !isInFence;
       current = null;
@@ -46,7 +47,8 @@ export function getChangelogEntries(sectionText: string): ChangelogEntry[] {
 
     const heading = headingPattern.exec(line);
     if (heading) {
-      if (heading[1].length >= subsectionHeadingLevel) subsection = heading[2].trim();
+      // A `###` names the subsection; a `##` (the next version's section) ends it.
+      subsection = heading[1].length >= subsectionHeadingLevel ? heading[2].trim() : null;
       current = null;
       continue;
     }
@@ -58,7 +60,7 @@ export function getChangelogEntries(sectionText: string): ChangelogEntry[] {
 
     const marker = listMarkerPattern.exec(line);
     if (marker) {
-      current = { subsection, text: line.slice(marker[0].length).trim(), leadLine: line };
+      current = { subsection, text: line.slice(marker[0].length).trim(), leadLine: line, leadLineIndex: lineIndex };
       entries.push(current);
       continue;
     }
@@ -67,7 +69,7 @@ export function getChangelogEntries(sectionText: string): ChangelogEntry[] {
       current.text = `${current.text} ${line.trim()}`;
       continue;
     }
-    current = { subsection, text: line.trim(), leadLine: line };
+    current = { subsection, text: line.trim(), leadLine: line, leadLineIndex: lineIndex };
     entries.push(current);
   }
   return entries;

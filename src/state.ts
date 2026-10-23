@@ -28,6 +28,7 @@ import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types'
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
 import type { Locale } from './i18n';
 import type { LimitHeldPrompt } from './utils/limitHeldPrompts';
+import type { LastRunVersion, SelfUpdateRecord } from './selfUpdate/types';
 
 /**
  * @description On-disk state for the multi-thread telegram bot.
@@ -471,6 +472,10 @@ export interface StateV1 {
    */
   openCodeProviderUsage?: Record<string, OpenCodeProviderUsageRecord>;
   parkedSessions?: Record<string, ParkedSession>;
+  /** The update engine's bookkeeping (`selfUpdate/updateEngine.ts`): check times, first-seen times, failed and announced targets. */
+  selfUpdate?: SelfUpdateRecord;
+  /** The version (commit) of the previous boot; a difference at boot is a version change to announce. */
+  lastRunVersion?: LastRunVersion;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -2003,6 +2008,29 @@ export class StateStore {
   async setSttInstallProgressMessage(message: SttInstallProgressMessage | null): Promise<void> {
     if (message === null) delete this.state.sttInstallProgress;
     else this.state.sttInstallProgress = message;
+    await this.flush();
+  }
+
+  // ── automatic updates (`selfUpdate/`) ──
+
+  /** The engine's record; an empty one when nothing was recorded yet. */
+  getSelfUpdateRecord(): SelfUpdateRecord {
+    return this.state.selfUpdate ?? {};
+  }
+
+  /** Replace the engine's record. Debounced; the engine flushes where a restart right after must not lose it. */
+  setSelfUpdateRecord(record: SelfUpdateRecord): void {
+    this.state.selfUpdate = record;
+    this.scheduleSave();
+  }
+
+  getLastRunVersion(): LastRunVersion | undefined {
+    return this.state.lastRunVersion;
+  }
+
+  /** Record the version this boot runs. Flushed at once: the next boot compares against it. */
+  async setLastRunVersion(lastRun: LastRunVersion): Promise<void> {
+    this.state.lastRunVersion = lastRun;
     await this.flush();
   }
 

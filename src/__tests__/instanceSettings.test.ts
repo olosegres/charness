@@ -19,11 +19,17 @@ import {
   resetInstanceSettingsCache,
   saveInstanceSettings,
   validateInstanceSettings,
+  type InstanceSettings,
 } from '../instanceSettings';
 import { claudeEffortLevels, defaultEffortLevel, getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 
 let configDir = '';
 let settingsPath = '';
+
+/** The settings of a file that sets only these fields. */
+function createSettings(overrides: Partial<InstanceSettings>): InstanceSettings {
+  return { ...createEmptyInstanceSettings(), ...overrides };
+}
 
 beforeEach(() => {
   configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-settings-'));
@@ -53,7 +59,7 @@ test('the path: next to the real env file — the same directory stt.json uses',
 
 test('every Claude level is a valid default; the empty object and the missing field mean "not set"', () => {
   for (const level of claudeEffortLevels) {
-    assert.deepEqual(validateInstanceSettings({ defaultEffort: level }), { ok: true, config: { defaultEffort: level } });
+    assert.deepEqual(validateInstanceSettings({ defaultEffort: level }), { ok: true, config: createSettings({ defaultEffort: level }) });
   }
   assert.deepEqual(validateInstanceSettings({}), { ok: true, config: createEmptyInstanceSettings() });
   assert.equal(createEmptyInstanceSettings().defaultEffort, null);
@@ -73,15 +79,15 @@ test('errors name the file and the field: an unknown level, a wrong type, a typo
 });
 
 test('save writes the field through a rename and leaves no temp file; load reads it back', () => {
-  saveInstanceSettings(settingsPath, { defaultEffort: 'high' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'high' }));
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high' });
   assert.deepEqual(fs.readdirSync(configDir), [instanceSettingsFileName]);
-  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: { defaultEffort: 'high' } });
+  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ defaultEffort: 'high' }) });
 });
 
 test('save creates the config dir; a "not set" default is an empty object, not a null the next reader refuses', () => {
   const nestedPath = path.join(configDir, 'nested', 'dir', instanceSettingsFileName);
-  saveInstanceSettings(nestedPath, { defaultEffort: null });
+  saveInstanceSettings(nestedPath, createSettings({ defaultEffort: null }));
   assert.deepEqual(JSON.parse(fs.readFileSync(nestedPath, 'utf8')), {});
   assert.equal(loadInstanceSettings(nestedPath).status, 'ok');
 });
@@ -91,18 +97,18 @@ test('no file → missing with nothing set', () => {
 });
 
 test('a hand edit is picked up by the next load (stamp cache), an untouched file is served from the cache', () => {
-  saveInstanceSettings(settingsPath, { defaultEffort: 'low' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'low' }));
   const first = loadInstanceSettings(settingsPath);
   assert.strictEqual(loadInstanceSettings(settingsPath), first);
 
   writeRaw('{ "defaultEffort": "max" }');
-  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: { defaultEffort: 'max' } });
+  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ defaultEffort: 'max' }) });
 });
 
 test('loadForUpdate: the file\'s own settings when valid, empty ones for a missing or broken file', () => {
   assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath), createEmptyInstanceSettings());
-  saveInstanceSettings(settingsPath, { defaultEffort: 'high' });
-  assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath), { defaultEffort: 'high' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'high' }));
+  assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath), createSettings({ defaultEffort: 'high' }));
   writeRaw('{ "defaultEffort": "mid" }');
   assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath), createEmptyInstanceSettings(), 'a pick made over a broken file replaces it');
 });
@@ -111,7 +117,7 @@ test('the effort reader: the file\'s level; null when the file is missing or lea
   const logged: string[] = [];
   const readDefault = createInstanceDefaultEffortReader(() => settingsPath, (line) => logged.push(line));
   assert.equal(readDefault(), null, 'no file');
-  saveInstanceSettings(settingsPath, { defaultEffort: 'xhigh' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'xhigh' }));
   assert.equal(readDefault(), 'xhigh');
   writeRaw('{}');
   assert.equal(readDefault(), null, 'the field removed by hand');
@@ -121,7 +127,7 @@ test('the effort reader: the file\'s level; null when the file is missing or lea
 test('the effort reader: an unknown level or invalid JSON → null (the code fallback) and ONE named error per broken state; a fix then a new break is reported again', () => {
   const logged: string[] = [];
   const readDefault = createInstanceDefaultEffortReader(() => settingsPath, (line) => logged.push(line));
-  saveInstanceSettings(settingsPath, { defaultEffort: 'high' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'high' }));
   assert.equal(readDefault(), 'high');
 
   writeRaw('{ "defaultEffort": "mid" }');
@@ -148,7 +154,7 @@ test('registered as the instance default: the code fallback is medium, the file 
   assert.equal(getInstanceDefaultEffort(), defaultEffortLevel);
   assert.equal(defaultEffortLevel, 'medium');
 
-  saveInstanceSettings(settingsPath, { defaultEffort: 'high' });
+  saveInstanceSettings(settingsPath, createSettings({ defaultEffort: 'high' }));
   assert.equal(getInstanceDefaultEffort(), 'high');
   writeRaw('{ "defaultEffort": "low" }');
   assert.equal(getInstanceDefaultEffort(), 'low');
@@ -156,4 +162,38 @@ test('registered as the instance default: the code fallback is medium, the file 
   assert.equal(getInstanceDefaultEffort(), 'medium');
   fs.rmSync(settingsPath);
   assert.equal(getInstanceDefaultEffort(), 'medium');
+});
+
+test('autoUpdate takes on / notify / off and whatsNew a boolean; both are "not set" in an empty file', () => {
+  for (const mode of ['on', 'notify', 'off'] as const) {
+    assert.deepEqual(validateInstanceSettings({ autoUpdate: mode }), { ok: true, config: createSettings({ autoUpdate: mode }) });
+  }
+  assert.deepEqual(validateInstanceSettings({ whatsNew: false }), { ok: true, config: createSettings({ whatsNew: false }) });
+  assert.equal(createEmptyInstanceSettings().autoUpdate, null);
+  assert.equal(createEmptyInstanceSettings().whatsNew, null);
+});
+
+test('a wrong autoUpdate or whatsNew value is an error naming its field', () => {
+  const badMode = validateInstanceSettings({ autoUpdate: 'sometimes' });
+  assert.equal(badMode.ok, false);
+  assert.match(badMode.ok ? '' : badMode.errors.join('\n'), /^settings\.json autoUpdate: /);
+  const badFlag = validateInstanceSettings({ whatsNew: 'yes' });
+  assert.equal(badFlag.ok, false);
+  assert.match(badFlag.ok ? '' : badFlag.errors.join('\n'), /^settings\.json whatsNew: /);
+});
+
+test('the file holds only the fields that are set; a change keeps the others', () => {
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'notify', whatsNew: false }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'notify', whatsNew: false });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high', autoUpdate: 'notify', whatsNew: false });
+  saveInstanceSettings(settingsPath, createEmptyInstanceSettings());
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), {});
+});
+
+test('a hand edit of autoUpdate shows on the next read', () => {
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'on' }));
+  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ autoUpdate: 'on' }) });
+  writeRaw('{"autoUpdate":"off","whatsNew":true}');
+  assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ autoUpdate: 'off', whatsNew: true }) });
 });

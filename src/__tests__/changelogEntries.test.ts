@@ -45,6 +45,14 @@ test('every entry carries the ### subsection in force, null before the first hea
   );
 });
 
+test('a ## heading (the next version) ends the subsection too', () => {
+  const entries = getChangelogEntries(['### Fixed', '- **Fix.** One.', '## 3.2.0', '**Intro.** Of the older section.'].join('\n'));
+  assert.deepEqual(
+    entries.map((entry) => entry.subsection),
+    ['Fixed', null],
+  );
+});
+
 test('a heading ends the entry above it and a fenced block at column 0 holds no entry', () => {
   const entries = getChangelogEntries(
     ['**Before.** Text.', '```', 'not an entry', '- not a bullet either', '```', '**After.** Text.', '### Fixed', 'Plain line.'].join('\n'),
@@ -63,6 +71,14 @@ test('numbered and starred list items are entries; the lead line is kept as writ
       ['1. **One.** First.', '**One.** First.'],
       ['* **Two.** Second.', '**Two.** Second.'],
     ],
+  );
+});
+
+test('every entry knows the line it starts on', () => {
+  const entries = getChangelogEntries(['**One.** First', 'wrapped.', '', '### Added', '- **Two.** Second.', '', '**Three.** Third.'].join('\n'));
+  assert.deepEqual(
+    entries.map((entry) => entry.leadLineIndex),
+    [0, 4, 6],
   );
 });
 
