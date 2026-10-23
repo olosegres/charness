@@ -70,3 +70,22 @@ export async function deliverPromptOrBuffer(
   }
   return 'buffered';
 }
+
+/**
+ * @name LatePromptRoute
+ * @description How a prompt decided on when it ARRIVED is delivered once its handler is ready to forward it:
+ * `buffer` — a start or the idle stop is under way (its window is open: the prompt waits there, and the stop resumes the
+ * session for it); `wake` — the process is gone meanwhile (the conversation sleeps: wake it, then forward); `forward`.
+ */
+export type LatePromptRoute = 'buffer' | 'wake' | 'forward';
+
+/**
+ * @description The {@link LatePromptRoute} of a prompt, read at the moment it is forwarded. The idle stop posts a
+ * re-asked question just before it stops the process, and a handler awaits between reading the session's state and the
+ * forward (the tap's toast, the request it opens): written into a process being stopped the prompt was lost, and
+ * into one already gone it was dropped.
+ */
+export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActive: boolean }): LatePromptRoute {
+  if (input.isWindowOpen) return 'buffer';
+  return input.isSessionActive ? 'forward' : 'wake';
+}

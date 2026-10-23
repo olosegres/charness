@@ -165,7 +165,7 @@ import { getPersistedConversations, getUnservedStateError } from './platform/uns
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
-import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { deliverPromptOrBuffer as deliverPromptWithDeps, getLatePromptRoute, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { JiraConnector } from './connectors/jira/connector';
@@ -9839,7 +9839,14 @@ async function deliverActivePrompt(
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
   const opening = await openTopicRequest(key, text, intake);
-  await forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader: opening.header });
+  // Read now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
+  const route = getLatePromptRoute({ isWindowOpen: startupPromptBuffer.checkIsStarting(keyToString(key)), isSessionActive: adapter.checkIsActive(key) });
+  if (route === 'buffer') {
+    await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
+  } else {
+    if (route === 'wake') await resumeSleepingSessionForPrompt(key);
+    await forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header });
+  }
   trackTopicRequestTurn(key, opening);
 }
 

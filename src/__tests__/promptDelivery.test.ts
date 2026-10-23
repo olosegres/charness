@@ -18,7 +18,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
-import { deliverPromptOrBuffer, type PromptDeliveryDeps } from '../utils/promptDelivery';
+import { deliverPromptOrBuffer, getLatePromptRoute, type PromptDeliveryDeps } from '../utils/promptDelivery';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
@@ -153,5 +153,26 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.match(botSource, /await bufferPromptDuringStartup\(key, text, \{ source: 'text'/);
     assert.match(botSource, /await bufferPromptDuringStartup\(key, transcript, \{ source: 'voice'/);
     assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true\);/);
+  });
+
+  it('a prompt for an active session is routed again right before its forward: the idle stop may have begun or ended since it arrived', () => {
+    // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
+    // was forwarded to a session that was gone — dropped.
+    const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
+    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n\s*\/\/[^\n]*\n\s*const route = getLatePromptRoute\(\{ isWindowOpen: startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\), isSessionActive: adapter\.checkIsActive\(key\) \}\);/, 'read after the last await before the forward');
+    assert.ok(deliver.includes("await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);"), 'buffered like a prompt typed mid-startup');
+    assert.ok(deliver.includes("if (route === 'wake') await resumeSleepingSessionForPrompt(key);\n    await forwardPromptToAgent(key, getThreadAdapter(key), text"), 'woken, then forwarded to the session it woke');
+  });
+});
+
+describe('getLatePromptRoute: how a prompt decided on at arrival is delivered at forward time', () => {
+  it('a start or a stop under way (its window open) → buffer, whatever the process reads as', () => {
+    assert.equal(getLatePromptRoute({ isWindowOpen: true, isSessionActive: true }), 'buffer', 'a process being stopped still reads as active');
+    assert.equal(getLatePromptRoute({ isWindowOpen: true, isSessionActive: false }), 'buffer');
+  });
+
+  it('no window, the process gone → wake the conversation; a live process → forward', () => {
+    assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: false }), 'wake');
+    assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: true }), 'forward');
   });
 });
