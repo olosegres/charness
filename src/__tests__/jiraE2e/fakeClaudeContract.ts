@@ -84,6 +84,12 @@ export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
  * provider wording a flow needs — and is removed by that turn.
  */
 export const fakeClaudeApiErrorOnceFileName = 'api-error-once';
+/** The file the fake's `auth login` writes into `CLAUDE_CONFIG_DIR` (`{ method: 'console' | 'claudeai' }`) — its stand-in for a stored login. */
+export const fakeClaudeLoginFileName = 'fake-login.json';
+/** The link the fake's `auth login` prints (the bot relays it into the topic). */
+export const fakeClaudeLoginUrl = 'https://platform.example.test/oauth/authorize?client=fake';
+/** Who a Console login of the fake signs in as. */
+export const fakeConsoleLogin = { email: 'ops@example.com', orgName: 'Example Org' } as const;
 /**
  * A file in the fake's state dir whose content is how many milliseconds that {@link fakeClaudeApiErrorOnceFileName} turn
  * works before it ends on its error — long enough for a test to restart the bot in between (the turn was taken in by

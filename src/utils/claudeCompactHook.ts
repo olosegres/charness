@@ -28,6 +28,8 @@ import {
   compactionSummaryGuidance,
 } from './compactOnIdle';
 import { shellSingleQuote } from './tmuxExec';
+import { checkHasClaudeProfileApiKey, claudeProfileLaunchSettingsFileName } from './claudeProfiles';
+import { buildClaudeApiKeyHelperSettings } from './claudeApiKeyHelper';
 
 /**
  * Name of the hook settings file inside `DATA_DIR`. ONE file shared by every
@@ -72,27 +74,43 @@ export function buildClaudeCompactHookSettings(command: string): {
 }
 
 /**
- * @description Write the hook settings file and return the `--settings <path>`
- * argument pair for a Claude launch. Rewritten on every launch (atomic rename, so
- * a concurrently starting session never reads a half-written file) so a changed
- * guidance reaches the next session. A write failure returns `[]` and only logs:
- * the hook improves a summary, it must never stop an agent from starting.
+ * @description Write the launch settings file and return the `--settings <path>` argument pair for a Claude
+ * launch under `configDir` (the account profile's directory, `null` = `~/.claude`). Rewritten on every launch
+ * (atomic rename, so a concurrently starting session never reads a half-written file) so a changed guidance
+ * reaches the next session.
+ *
+ * Only the LAST `--settings` a launch carries counts (probed on 2.1.304), so a profile that holds a pasted API key
+ * (`utils/claudeProfiles.ts`) gets ONE file of its own, in its directory: the hook plus the `apiKeyHelper` that
+ * reads the key. Every other launch shares the hook file in `dataDir`. A write failure of the shared file returns
+ * `[]` and only logs (the hook improves a summary, it must never stop an agent from starting); for a key profile
+ * the same settings go inline instead, so the account never loses its key to a full disk.
  */
-export function prepareClaudeCompactHookFlags(dataDir: string): string[] {
-  const settingsPath = path.join(dataDir, claudeCompactHookSettingsFileName);
+export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string | null = null): string[] {
   const command = buildPreCompactHookCommand({
     instruction: getHookCompactionInstruction(),
     alreadySentMarker: compactionSkillsGuidance,
   });
+  const hookSettings = buildClaudeCompactHookSettings(command);
+  if (configDir !== null && checkHasClaudeProfileApiKey(configDir)) {
+    const settings = { ...hookSettings, ...buildClaudeApiKeyHelperSettings(configDir) };
+    const written = writeLaunchSettingsFile(configDir, path.join(configDir, claudeProfileLaunchSettingsFileName), settings);
+    return ['--settings', written ?? JSON.stringify(settings)];
+  }
+  const written = writeLaunchSettingsFile(dataDir, path.join(dataDir, claudeCompactHookSettingsFileName), hookSettings);
+  return written === null ? [] : ['--settings', written];
+}
+
+/** Write `settings` to `settingsPath` atomically (`0600`); the path, or `null` when the write failed (logged). */
+function writeLaunchSettingsFile(dir: string, settingsPath: string, settings: object): string | null {
   const tmpPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify(buildClaudeCompactHookSettings(command)));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tmpPath, JSON.stringify(settings), { mode: 0o600 });
     fs.renameSync(tmpPath, settingsPath);
   } catch (e) {
     console.warn(`[compact-hook] cannot write ${settingsPath}:`, e);
     try { fs.unlinkSync(tmpPath); } catch { /* never written */ }
-    return [];
+    return null;
   }
-  return ['--settings', settingsPath];
+  return settingsPath;
 }

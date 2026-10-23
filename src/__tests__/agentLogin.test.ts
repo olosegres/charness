@@ -40,6 +40,7 @@ const fs = require('fs');
 const dir = process.env.FAKE_LOGIN_DIR;
 fs.writeFileSync(dir + '/claude.pid', String(process.pid));
 fs.writeFileSync(dir + '/claude.configdir', process.env.CLAUDE_CONFIG_DIR || '');
+fs.writeFileSync(dir + '/claude.argv', JSON.stringify(process.argv.slice(2)));
 process.stdout.write('If the browser did not open, visit: ${claudeLoginUrl}\\n\\nPaste code here if prompted > ');
 process.stdin.setEncoding('utf8');
 process.stdin.once('data', (line) => { fs.writeFileSync(dir + '/claude.code', line.trim()); process.exit(0); });
@@ -237,9 +238,92 @@ describe('agentLogin: the sign-in drivers', () => {
     assert.deepEqual(recorded.statusProbeConfigDirs, [profileDir], 'the status probe reads the same directory');
     assert.deepEqual(recorded.profileReports, [{
       profile: { name: 'work', configDir: profileDir },
-      status: { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org' },
+      status: { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org', authMethod: null, apiKeySource: null, billing: null },
     }]);
     assert.equal(recorded.clearedAuthNoticeKeys.length, 0, 'a profile sign-in is not the ~/.claude login: the logged-out notice stays');
+  });
+
+  it('a subscription sign-in runs `claude auth login --claudeai`', async () => {
+    const recorded = createRecordedPorts('{"loggedIn":true}');
+    const login = createAgentLogin(recorded.ports);
+    await login.startClaudeAuthLogin(key, { name: 'work', configDir: path.join(workDir, 'claude-profiles', 'work') });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.deepEqual(JSON.parse(readFakeFile('claude.argv')), ['auth', 'login', '--claudeai']);
+    login.cancelClaudeAuthLogin(key);
+  });
+
+  it('an API account signs in to the Claude Console (`--console`), offers a pasted key in its link message and names the organization', async () => {
+    const profileDir = path.join(workDir, 'claude-profiles', 'console');
+    fs.mkdirSync(profileDir, { recursive: true });
+    const recorded = createRecordedPorts(JSON.stringify({
+      loggedIn: true, authMethod: 'api_key', apiKeySource: '/login managed key', email: 'ops@example.com', orgName: 'Example Org',
+    }));
+    const login = createAgentLogin(recorded.ports);
+
+    await login.startClaudeAuthLogin(key, { name: 'console', configDir: profileDir, billing: 'api' });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.deepEqual(JSON.parse(readFakeFile('claude.argv')), ['auth', 'login', '--console'], 'the Console login, never the subscription');
+    assert.equal(readFakeFile('claude.configdir'), profileDir, 'into the account\'s own directory');
+    assert.match(recorded.replies[0], /Claude Console for API account console/);
+    assert.match(recorded.replies[0], /sk-ant-api/, 'the link message offers pasting a key instead');
+
+    await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId);
+    await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('ops@example.com')));
+    assert.match(recorded.replies.at(-1) ?? '', /API account console signed in: ops@example\.com — Claude Console organization Example Org/);
+    assert.equal(recorded.profileReports[0]?.status?.billing, 'api');
+  });
+
+  it('a key pasted into an API account\'s sign-in is deleted, never typed into the CLI, stops the Console login and goes to the bot', async () => {
+    const profileDir = path.join(workDir, 'claude-profiles', 'keyed');
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.rmSync(path.join(workDir, 'claude.code'), { force: true });
+    const recorded = createRecordedPorts('{"loggedIn":false}');
+    const handedKeys: Array<{ profile: string; apiKey: string }> = [];
+    const login = createAgentLogin({
+      ...recorded.ports,
+      onClaudeProfileApiKey: async (_key, profile, apiKey) => {
+        handedKeys.push({ profile: profile.name, apiKey });
+        return 'stored by the bot';
+      },
+    });
+    await login.startClaudeAuthLogin(key, { name: 'keyed', configDir: profileDir, billing: 'api' });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    const pid = Number(readFakeFile('claude.pid'));
+
+    // An admin key is a secret too, but it cannot run Claude Code: deleted, refused, the flow stays armed.
+    assert.equal(await login.submitClaudeAuthLoginCode(key, 'sk-ant-admin01-AAAAAAAAAAAAAAAAAAAAAAAAAAAA', strayMessageId), true);
+    assert.deepEqual(recorded.deletedMessageIds, [strayMessageId]);
+    assert.match(recorded.replies.at(-1) ?? '', /not a Claude API key/);
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), true);
+    assert.deepEqual(handedKeys, []);
+
+    const apiKey = `sk-ant-api03-${'k'.repeat(40)}`;
+    assert.equal(await login.submitClaudeAuthLoginCode(key, ` ${apiKey} `, secretMessageId), true);
+    assert.deepEqual(recorded.deletedMessageIds, [strayMessageId, secretMessageId], 'the key message is deleted');
+    assert.deepEqual(handedKeys, [{ profile: 'keyed', apiKey }], 'the trimmed key goes to the bot');
+    assert.equal(recorded.replies.at(-1), 'stored by the bot');
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), false, 'the flow is over');
+    await waitUntil('the Console login to end', () => !checkIsProcessAlive(pid));
+    assert.equal(fs.existsSync(path.join(workDir, 'claude.code')), false, 'the key never reached the CLI');
+    assert.ok(recorded.replies.every((reply) => !reply.includes(apiKey)), 'the key is never echoed');
+    assert.deepEqual(recorded.profileReports, [], 'the stopped login reports nothing');
+  });
+
+  it('a key pasted into a SUBSCRIPTION sign-in is deleted and refused — the flow keeps waiting for its code', async () => {
+    fs.rmSync(path.join(workDir, 'claude.code'), { force: true });
+    const recorded = createRecordedPorts('{"loggedIn":true}');
+    const handedKeys: string[] = [];
+    const login = createAgentLogin({ ...recorded.ports, onClaudeProfileApiKey: async (_key, _profile, apiKey) => { handedKeys.push(apiKey); return ''; } });
+    await login.startClaudeAuthLogin(key, { name: 'work', configDir: path.join(workDir, 'claude-profiles', 'work') });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+
+    assert.equal(await login.submitClaudeAuthLoginCode(key, `sk-ant-api03-${'k'.repeat(40)}`, secretMessageId), true);
+    assert.deepEqual(recorded.deletedMessageIds, [secretMessageId]);
+    assert.match(recorded.replies.at(-1) ?? '', /add an API account/);
+    assert.deepEqual(handedKeys, []);
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), true, 'still waiting for the code');
+    assert.equal(fs.existsSync(path.join(workDir, 'claude.code')), false);
+    login.cancelClaudeAuthLogin(key);
   });
 
   it('the default login still runs with no CLAUDE_CONFIG_DIR of its own', async () => {

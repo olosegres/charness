@@ -62,6 +62,14 @@ and `npx` still worked, the package itself carried them).
 
 ## 3.3.0 — 2026-10-23
 
+**A Claude account can bill the API credits of a Claude Console organization.** `/accounts` → «➕ Claude API account
+(Console credits)» (or `/accounts add <name> api`) signs it in with `claude auth login --console`, which creates an API
+key in that organization and keeps it in the account's own directory; or paste an existing API key while the sign-in
+waits — the message is deleted, the key is checked with the API and kept for that account only, never in `state.json`
+or in an environment variable. `/accounts` shows such an account as `💳 API · pay per use`, `/status` marks it
+`💳 API`, and picking it says every request is billed. Your subscription accounts are unchanged: they still never
+see an `ANTHROPIC_API_KEY`. Any `sk-ant-…` text is redacted from the output trace.
+
 **A usage limit waits until the exact reset when the provider sends one, instead of a guessed hour.** Claude reports the
 reset of the window that refused the request, but the bot read it only from the message text. A wording that names no
 time, such as «This request would exceed your account's rate limit», fell back to a retry every hour once the limit was

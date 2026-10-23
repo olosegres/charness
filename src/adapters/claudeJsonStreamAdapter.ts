@@ -549,14 +549,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (opts.model) args.push(claudeModelFlag, opts.model);
     if (opts.effort) args.push(claudeEffortFlag, opts.effort);
     args.push(...mcpFlags);
-    // Overflow-triggered compaction gets the bot's summary guidance (see the module).
-    args.push(...prepareClaudeCompactHookFlags(resolveDataDir()));
+    // Overflow-triggered compaction gets the bot's summary guidance (see the module); a profile that holds a
+    // pasted API key gets it in its own settings file, beside the `apiKeyHelper` that reads the key.
+    args.push(...prepareClaudeCompactHookFlags(resolveDataDir(), opts.configDir));
 
     // Subscription billing: the wrapper runs `env -u ANTHROPIC_API_KEY` (a set
     // key would meter the API); a tracker conversation's wrapper starts claude
     // with `env -i` and the agent allowlist instead (R32) — no key either. The CLI
     // reads the OAuth login from ~/.claude — `apiKeySource:"none"` (probe-verified
-    // under the wrapper).
+    // under the wrapper). An API account (`utils/claudeProfiles.ts`) is metered on
+    // purpose, yet never through that variable: its key is the console login's in
+    // its own directory, or a pasted key the `apiKeyHelper` of its settings reads.
     const sessionDir = resolveJsonStreamSessionDir(resolveDataDir(), key);
     const paths = getJsonStreamSessionPaths(sessionDir);
     const tmuxName = buildJsonStreamTmuxSessionName(key);

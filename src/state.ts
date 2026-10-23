@@ -18,7 +18,7 @@ import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './ut
 import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
-import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection } from './utils/claudeProfiles';
+import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
@@ -191,6 +191,12 @@ export interface ClaudeProfileRecord {
   /** `pro` / `max` / `team` / `enterprise` — whatever the CLI reports. */
   subscriptionType?: string;
   orgName?: string;
+  /**
+   * How the account pays (`utils/claudeProfiles.ts` `ClaudeProfileBilling`): `api` when the operator added it as an API
+   * account (Claude Console login or a pasted key), then whatever a signed-in probe reports (the CLI's truth wins both
+   * ways). Absent = a subscription account added before billing was recorded.
+   */
+  billing?: ClaudeProfileBilling;
   /** ISO instant of that read. */
   statusCheckedAt?: string;
   /**

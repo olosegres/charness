@@ -54,10 +54,19 @@ export interface FakeLaunch {
   overlapsPid?: number | null;
   /** The `CLAUDE_CONFIG_DIR` the process was started with: a second account's directory; `null` for the first. */
   claudeConfigDir: string | null;
+  /** The NAMES of the variables the process was started with (never a value). */
+  envNames?: string[];
+  /** Whether the `apiKeyHelper` of its `--settings` printed a plausible API key; `null` without a helper. */
+  isHelperKeyPlausible?: boolean | null;
+}
+
+/** Every launch the fake logged: the sessions and the one-shot calls (`auth status`, `--version`). */
+export function getAllLaunches(layout: IsolatedInstanceLayout): FakeLaunch[] {
+  return readJsonLines<FakeLaunch>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches));
 }
 
 export function getSessionLaunches(layout: IsolatedInstanceLayout): FakeLaunch[] {
-  return readJsonLines<FakeLaunch>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches)).filter((launch) => launch.isSessionLaunch);
+  return getAllLaunches(layout).filter((launch) => launch.isSessionLaunch);
 }
 
 /** Every turn the fake agents ran, whatever it was labelled (a «continue» nudge carries no request, so no label). */

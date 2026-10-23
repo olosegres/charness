@@ -1,6 +1,8 @@
 /**
- * @description Claude ACCOUNT PROFILES — several Claude subscription logins kept side by side, one picked per
- * topic (`/account`). A profile is a Claude Code config directory of its own under
+ * @description Claude ACCOUNT PROFILES — several Claude logins kept side by side, one picked per topic
+ * (`/account`): subscriptions, and accounts billed to a Claude Console organization's API credits (`billing: 'api'` —
+ * a console login's key in the profile's own `.claude.json`, or a pasted key the profile's `apiKeyHelper` reads; see
+ * the «pasted API key» helpers below). Nothing of an API account ever goes through `ANTHROPIC_API_KEY`. A profile is a Claude Code config directory of its own under
  * `DATA_DIR/claude-profiles/<name>/`, handed to the CLI through `CLAUDE_CONFIG_DIR`: the CLI keeps its
  * login (`.credentials.json`, `.claude.json`) there, while the entries that must stay ONE across accounts —
  * the transcripts (`projects/`), settings, skills, plugins and the user memory — are symlinks back into
@@ -175,6 +177,13 @@ export function resolveClaudeProfileName(input: {
 
 // ── `claude auth status --json` ──
 
+/**
+ * How an account pays for its requests: a Claude `subscription` (claude.ai login: usage windows, no bill per request)
+ * or the `api` balance of a Claude Console organization (a console login's API key, or a pasted key: billed per token,
+ * no windows — the limit is the balance).
+ */
+export type ClaudeProfileBilling = 'subscription' | 'api';
+
 /** What the account picker shows per profile, as the CLI reports it (`claude auth status --json`). */
 export interface ClaudeAuthStatus {
   loggedIn: boolean;
@@ -182,6 +191,23 @@ export interface ClaudeAuthStatus {
   /** `pro` / `max` (personal), `team` / `enterprise` (corporate), or whatever newer CLIs add. */
   subscriptionType: string | null;
   orgName: string | null;
+  /** The CLI's `authMethod`: `claude.ai`, `api_key`, `api_key_helper`, `oauth_token`, `third_party`, `none`; `null` on an older CLI. */
+  authMethod: string | null;
+  /** Where an API key comes from: `/login managed key` (a console login), `apiKeyHelper`, `ANTHROPIC_API_KEY`. */
+  apiKeySource: string | null;
+  /** {@link getClaudeAuthBilling} of the two above; `null` when the method says nothing about it (signed out, unknown). */
+  billing: ClaudeProfileBilling | null;
+}
+
+/**
+ * @description The billing an auth method means: an API key in any form (`api_key` — a console login or the
+ * variable — and `api_key_helper`) bills the Console balance; `claude.ai` is the subscription. Anything else (signed
+ * out, a cloud provider, a long-lived OAuth token) is `null`: the caller keeps what it knew.
+ */
+export function getClaudeAuthBilling(authMethod: string | null): ClaudeProfileBilling | null {
+  if (authMethod === 'api_key' || authMethod === 'api_key_helper') return 'api';
+  if (authMethod === 'claude.ai') return 'subscription';
+  return null;
 }
 
 /**
@@ -199,12 +225,81 @@ export function parseClaudeAuthStatus(statusJson: string): ClaudeAuthStatus | nu
   const record = parsed as Record<string, unknown>;
   if (typeof record.loggedIn !== 'boolean') return null;
   const readString = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value : null);
+  const authMethod = readString(record.authMethod);
   return {
     loggedIn: record.loggedIn,
     email: readString(record.email),
     subscriptionType: readString(record.subscriptionType),
     orgName: readString(record.orgName),
+    authMethod,
+    apiKeySource: readString(record.apiKeySource),
+    billing: record.loggedIn ? getClaudeAuthBilling(authMethod) : null,
   };
+}
+
+/** The `apiKeySource` of a key a `claude auth login --console` created and stored in the profile's own `.claude.json`. */
+export const claudeConsoleLoginKeySource = '/login managed key';
+
+// ── a pasted API key (`apiKeyHelper`) ──
+
+/**
+ * The file a pasted Anthropic API key is kept in, inside the profile's own directory (`0600`): never in `state.json`,
+ * never in the environment. The CLI reads it through `apiKeyHelper` (`utils/claudeApiKeyHelper.ts`), which rides
+ * the profile's `--settings` only.
+ */
+export const claudeProfileApiKeyFileName = 'charness-api-key';
+
+/** The launch settings of a profile that holds a pasted key: the PreCompact hook AND the `apiKeyHelper` (one file — only the last `--settings` counts). */
+export const claudeProfileLaunchSettingsFileName = 'charness-settings.json';
+
+/** An Anthropic API key: `sk-ant-api03-…` (an admin key `sk-ant-admin…` or an OAuth token `sk-ant-oat…` cannot run Claude Code). */
+const anthropicApiKeyRe = /^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,250}$/;
+/** Anything that starts like an Anthropic credential — deleted from the topic as a secret even when it is not a usable key. */
+const anthropicSecretPrefixRe = /^sk-ant-/;
+/** An Anthropic credential anywhere in a text (the trace preview redacts it). */
+export const anthropicSecretInTextRe = /sk-ant-[A-Za-z0-9_-]{8,}/g;
+
+/** Whether `text` (trimmed) is an Anthropic API key that can run Claude Code. */
+export function checkIsPlausibleAnthropicApiKey(text: string): boolean {
+  return anthropicApiKeyRe.test(text.trim());
+}
+
+/** Whether `text` (trimmed) starts like an Anthropic credential of any kind: it is a secret, whatever else it is. */
+export function checkIsAnthropicSecretLike(text: string): boolean {
+  return anthropicSecretPrefixRe.test(text.trim());
+}
+
+/** The key file of a profile directory. */
+export function resolveClaudeProfileApiKeyFile(configDir: string): string {
+  return path.join(configDir, claudeProfileApiKeyFileName);
+}
+
+/** Whether the profile directory holds a pasted key (`null` = `~/.claude`, which never does: the bot writes none there). */
+export function checkHasClaudeProfileApiKey(configDir: string | null): boolean {
+  if (configDir === null) return false;
+  try {
+    return fs.statSync(resolveClaudeProfileApiKeyFile(configDir)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @description Store a pasted key in the profile's directory: `0600`, written through a temp file and renamed, so a
+ * process reading it through the helper never sees half a key. The key is never logged.
+ */
+export function writeClaudeProfileApiKey(configDir: string, apiKey: string): void {
+  const file = resolveClaudeProfileApiKeyFile(configDir);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${apiKey.trim()}\n`, { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, file);
+}
+
+/** Drop a profile's pasted key (and the launch settings that point at it); a missing file is fine. */
+export function removeClaudeProfileApiKey(configDir: string): void {
+  fs.rmSync(resolveClaudeProfileApiKeyFile(configDir), { force: true });
+  fs.rmSync(path.join(configDir, claudeProfileLaunchSettingsFileName), { force: true });
 }
 
 /**

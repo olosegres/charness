@@ -3448,7 +3448,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...claudePermissionArgs,
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
-      ...prepareClaudeCompactHookFlags(resolveDataDir()),
+      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
       ...(args ? [args] : []),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
@@ -4106,7 +4106,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...claudePermissionArgs,
       '--resume', sessionId,
       ...mcpFlagsArr,
-      ...prepareClaudeCompactHookFlags(resolveDataDir()),
+      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
 

@@ -1,4 +1,5 @@
 import { stripCommandBotMention } from '../utils';
+import { anthropicSecretInTextRe } from './claudeProfiles';
 
 /** Recorded instead of a pasted provider API key while `/connect` is pending. */
 export const redactedConnectKeyPreview = '[redacted: provider API key]';
@@ -14,6 +15,12 @@ export const redactedSttAddressPreview = '[redacted: speech engine address]';
 
 /** What `/stt` waits for as plain text: the next non-command message of the topic IS that secret-bearing input. */
 export type SttAwaitedInputStep = 'url' | 'key';
+
+/**
+ * Recorded in place of every Anthropic credential (`sk-ant-…`) a text carries, wherever it was typed: the key an API
+ * account's sign-in takes is pasted as a plain message, and one pasted by mistake elsewhere is no less a secret.
+ */
+export const redactedAnthropicSecretPreview = '[redacted: Anthropic key]';
 
 /** Recorded instead of a `/connect …` invocation — its arguments may carry the key inline. */
 export const redactedConnectCommandPreview = '/connect <redacted>';
@@ -37,8 +44,8 @@ export function checkIsConnectCommandText(rawText: string): boolean {
  * key → the preview is fully redacted (a command text cancels the flow instead,
  * so it is not a secret). The same holds while `/stt` waits for a speech-engine
  * key or for a custom server's address (it may carry a login). Independently of the pending state, an inline `/connect <key>` carries
- * the key in its arguments → only a fixed command marker is recorded.
- * Everything else records unchanged.
+ * the key in its arguments → only a fixed command marker is recorded, and any Anthropic credential (`sk-ant-…`) in
+ * the text is replaced by {@link redactedAnthropicSecretPreview}. Everything else records unchanged.
  */
 export function getRecvTracePreview(
   messageText: string,
@@ -50,5 +57,5 @@ export function getRecvTracePreview(
   if (isThreadPendingProviderConnect && isPlainText) return redactedConnectKeyPreview;
   if (awaitedSttStep === 'key' && isPlainText) return redactedSttKeyPreview;
   if (awaitedSttStep === 'url' && isPlainText) return redactedSttAddressPreview;
-  return messageText;
+  return messageText.replace(anthropicSecretInTextRe, redactedAnthropicSecretPreview);
 }

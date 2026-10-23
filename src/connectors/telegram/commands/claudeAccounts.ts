@@ -21,18 +21,24 @@ import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import {
   checkIsValidClaudeProfileName,
+  claudeConsoleLoginKeySource,
   claudeProfileNameMaxLength,
   createClaudeProfileLayout,
   defaultClaudeProfileName,
   normaliseClaudeProfileName,
+  removeClaudeProfileApiKey,
   removeClaudeProfileLayout,
   signOutDefaultClaudeLogin,
   resolveClaudeProfileDir,
+  writeClaudeProfileApiKey,
   type ClaudeAuthStatus,
+  type ClaudeProfileBilling,
 } from '../../../utils/claudeProfiles';
+import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
 import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
 import {
+  accountAddApiCallback,
   accountAddCallback,
   accountAddProviderCallback,
   accountAutoSwitchOffCallback,
@@ -124,6 +130,8 @@ export interface ClaudeAccountsPorts
   applyAutoSwitch: (key: SessionKey, isGeneral: boolean, enabled: boolean) => Promise<string>;
   /** `~/.claude`, where the default login lives; injectable so a test signs out a temp directory, never the real one. */
   getHomeClaudeDir?: () => string;
+  /** Whether the API accepts a pasted key (`utils/anthropicApiKeyCheck.ts`); injectable so a test never reaches the network. */
+  verifyAnthropicApiKey: (apiKey: string) => Promise<AnthropicApiKeyCheck>;
 }
 
 /** Screens whose provider snapshot is kept (the newest); an older keyboard is refused as expired. */
@@ -139,15 +147,16 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
+    verifyAnthropicApiKey,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
-   * Topics whose next plain message is an answer to «➕»: the name of a new Claude profile, or the id of the
-   * OpenCode provider to connect. One capture per topic; armed by the buttons / `add`, disarmed by a slash
-   * command or `/esc`.
+   * Topics whose next plain message is an answer to «➕»: the name of a new Claude profile (a subscription one, or one
+   * billed to the API), or the id of the OpenCode provider to connect. One capture per topic; armed by the buttons /
+   * `add`, disarmed by a slash command or `/esc`.
    */
-  const awaitingProfileName = new Map<string, 'claudeName' | 'providerId'>();
+  const awaitingProfileName = new Map<string, 'claudeName' | 'claudeApiName' | 'providerId'>();
   /** The OpenCode providers each screen MESSAGE listed — its disconnect buttons carry an index into this. */
   /** Per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat. */
   const providerSnapshots = new Map<string, string[]>();
@@ -204,6 +213,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return name === defaultClaudeProfileName || getState().getClaudeProfileRecord(name) !== undefined;
   }
 
+  /** How a known profile pays, as last recorded (`default` from its hidden record); `null` when never recorded. */
+  function readBilling(name: string): ClaudeProfileBilling | null {
+    return getState().getClaudeProfileInfo(name)?.billing ?? null;
+  }
+
   /**
    * @description Re-read every added profile's auth status (and the default's) and persist what changed, so the
    * picker shows the CLI's truth, not the state of the last sign-in. One short `claude auth status` per profile,
@@ -232,6 +246,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await getState().upsertClaudeProfileRecord(name, {
       // A removed `default` comes back by itself the moment it is signed in again.
       ...(name === defaultClaudeProfileName && status.loggedIn ? { isRemoved: undefined } : {}),
+      // The CLI's word on how the account pays wins over the kind it was added as, both ways.
+      ...(status.billing !== null ? { billing: status.billing } : {}),
       loggedIn: status.loggedIn,
       email: status.email ?? undefined,
       subscriptionType: status.subscriptionType ?? undefined,
@@ -240,19 +256,54 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     });
   }
 
-  /** The sign-in driver's report at the end of a profile sign-in: record it, then move live sessions onto it. */
+  /**
+   * The sign-in driver's report at the end of a profile sign-in: record it, then move live sessions onto it. A Console
+   * sign-in that created its key replaces an older pasted key of the same account (the latest sign-in wins); the record
+   * then takes the probe the sessions see — a failed Console sign-in over a working pasted key leaves the account
+   * signed in.
+   */
   async function onClaudeProfileAuthStatus(_key: SessionKey, profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null): Promise<void> {
-    await recordProfileStatus(profile.name, status);
+    let recorded = status;
+    if (profile.billing === 'api' && profile.configDir !== null) {
+      if (status?.loggedIn && status.apiKeySource === claudeConsoleLoginKeySource) removeClaudeProfileApiKey(profile.configDir);
+      recorded = await readClaudeAuthStatus(profile.configDir) ?? status;
+    }
+    await recordProfileStatus(profile.name, recorded);
     // A topic may already have picked the profile before its sign-in: its sleeping session resumes under it by
     // itself, and a live one is re-spawned now that the account exists.
+    if (recorded?.loggedIn) await applyClaudeProfileEverywhere();
+  }
+
+  /**
+   * @description An API key pasted into an API account's sign-in (the driver already deleted the message and stopped
+   * the Console login): asked of the API first — a key it refuses is not stored — then kept in the profile's own
+   * directory (`0600`, read by the `apiKeyHelper` of that profile's launches only), the account probed and recorded,
+   * and live topics moved onto it. Returns the line to post; the key itself is never logged or echoed.
+   */
+  async function onClaudeProfileApiKey(_key: SessionKey, profile: ClaudeLoginProfile, apiKey: string): Promise<string> {
+    if (profile.configDir === null || !checkIsKnownProfile(profile.name)) return t('account.apiKeyNoDirectory', { name: profile.name });
+    const check = await verifyAnthropicApiKey(apiKey);
+    if (check === 'invalid') return t('account.apiKeyRejected', { name: profile.name });
+    try {
+      createClaudeProfileLayout({ dataDir: getDataDir(), name: profile.name });
+      writeClaudeProfileApiKey(profile.configDir, apiKey);
+    } catch (e) {
+      console.error(`[account] storing the API key of ${profile.name} failed:`, e instanceof Error ? e.message : e);
+      return t('account.createFailed', { name: profile.name });
+    }
+    const status = await readClaudeAuthStatus(profile.configDir);
+    await getState().upsertClaudeProfileRecord(profile.name, { billing: 'api' });
+    await recordProfileStatus(profile.name, status);
     if (status?.loggedIn) await applyClaudeProfileEverywhere();
+    console.log(`[account] ${profile.name}: an API key was stored (${check === 'valid' ? 'accepted by the API' : 'not verified'})`);
+    return t(check === 'valid' ? 'account.apiKeySaved' : 'account.apiKeySavedUnverified', { name: profile.name });
   }
 
   function formatRow(row: AccountPickerRow): string {
     const marker = row.isActive ? '✓ ' : '• ';
-    const account = row.loggedIn === false || (row.loggedIn === undefined && row.email === null)
+    const account = row.loggedIn === false || (row.loggedIn === undefined && row.email === null && row.billing !== 'api')
       ? t('account.row.loggedOut')
-      : `${row.email ?? '?'}, ${t(`account.kind.${row.kind}`, { plan: row.subscriptionType ?? '?' })}`;
+      : formatAccountDetail(row);
     const users = row.topicCount > 0 ? t('account.row.topics', { count: row.topicCount }) : '';
     return `${marker}${row.name} — ${account}${users}${formatUsageLines(row.name)}`;
   }
@@ -266,12 +317,21 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return lines.map((line) => `\n${line}`).join('');
   }
 
+  /**
+   * What a signed-in account is: `ops@example.com, personal max`; billed to the API `ops@example.com, 💳 API · pay per
+   * use`, or `💳 API key · pay per use` for a pasted key (no email to show).
+   */
+  function formatAccountDetail(row: AccountPickerRow): string {
+    if (row.billing === 'api') return row.email === null ? t('account.kind.apiKey') : `${row.email}, ${t('account.kind.api')}`;
+    return `${row.email ?? '?'}, ${t(`account.kind.${row.kind}`, { plan: row.subscriptionType ?? '?' })}`;
+  }
+
   function formatRowButton(row: AccountPickerRow): string {
     const marker = row.isActive ? '✓ ' : '';
-    const detail = row.loggedIn === false || (row.loggedIn === undefined && row.email === null)
+    const detail = row.loggedIn === false || (row.loggedIn === undefined && row.email === null && row.billing !== 'api')
       ? t('account.row.loggedOut')
       : row.email ?? row.name;
-    return `${marker}${row.name} · ${detail}`;
+    return `${marker}${row.name} · ${detail}${row.billing === 'api' ? ' 💳' : ''}`;
   }
 
   async function buildPickerRows(key: SessionKey, isGeneral: boolean): Promise<AccountPickerRow[]> {
@@ -286,6 +346,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
         loggedIn: defaultStatus?.loggedIn,
         email: defaultStatus?.email ?? null,
         subscriptionType: defaultStatus?.subscriptionType ?? null,
+        billing: defaultStatus?.billing ?? readBilling(defaultClaudeProfileName),
       },
       activeName: resolveActiveName(key, isGeneral),
       topicCounts,
@@ -355,6 +416,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       Markup.button.callback(t('accounts.addClaudeButton'), accountAddCallback),
       Markup.button.callback(t('accounts.addProviderButton'), accountAddProviderCallback),
     ]);
+    keyboardRows.push([Markup.button.callback(t('accounts.addClaudeApiButton'), accountAddApiCallback)]);
     if (!isGeneral && getState().getClaudeProfileOverride(key) !== undefined) {
       keyboardRows.push([
         Markup.button.callback(t('account.followButton', { name: getState().getClaudeProfileGlobalDefault() }), accountFollowDefaultCallback),
@@ -406,13 +468,16 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       await recordProfileStatus(name, status);
       if (status !== null && !status.loggedIn) return t('account.notLoggedIn', { name });
     }
+    // An account billed to the API says so whenever it is picked: from now on that topic (or every topic following General) costs money per request.
+    const meteredNote = readBilling(name) === 'api' ? `\n${t(isGeneral ? 'account.pickedApiGeneral' : 'account.pickedApi')}` : '';
     if (isGeneral) {
       await getState().setClaudeProfileGlobalDefault(name);
       await applyClaudeProfileEverywhere();
-      return t('account.setGlobal', { name });
+      return `${t('account.setGlobal', { name })}${meteredNote}`;
     }
     const outcome = await switchTopicByOperator(key, { backend: 'claude', profile: name, model: null });
-    return outcome.kind === 'asked' ? null : outcome.text;
+    if (outcome.kind === 'asked') return null;
+    return outcome.kind === 'switched' ? `${outcome.text}${meteredNote}` : outcome.text;
   }
 
   /** A topic drops its own pick; its session follows the instance default from now on. */
@@ -426,9 +491,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   /**
    * @description Create a profile and start its sign-in: the directory with its shared links, the registry
    * record (flushed before the sign-in, so a crash never leaves a signed-in directory the picker cannot see),
-   * then the relay posts the link. Returns the message to post BEFORE the link, or the refusal.
+   * then the relay posts the link. An API account (`billing: 'api'`) is recorded as such and signs in to the Claude
+   * Console (`--console`), or takes a pasted API key. Returns the message to post BEFORE the link, or the refusal.
    */
-  async function addProfile(key: SessionKey, rawName: string): Promise<string> {
+  async function addProfile(key: SessionKey, rawName: string, billing: ClaudeProfileBilling = 'subscription'): Promise<string> {
     const name = normaliseClaudeProfileName(rawName);
     if (!checkIsValidClaudeProfileName(name)) return t('account.invalidName', { max: claudeProfileNameMaxLength });
     if (getState().getClaudeProfileRecord(name) !== undefined) return t('account.exists', { name });
@@ -439,9 +505,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       console.error(`[account] profile layout for ${name} failed:`, e instanceof Error ? e.message : e);
       return t('account.createFailed', { name });
     }
-    await getState().upsertClaudeProfileRecord(name, { createdAt: new Date().toISOString(), loggedIn: false });
-    await replyToThread(key, t('account.created', { name }));
-    await startClaudeProfileLogin(key, { name, configDir });
+    await getState().upsertClaudeProfileRecord(name, { createdAt: new Date().toISOString(), loggedIn: false, ...(billing === 'api' ? { billing } : {}) });
+    await replyToThread(key, t(billing === 'api' ? 'account.createdApi' : 'account.created', { name }));
+    await startClaudeProfileLogin(key, { name, configDir, ...(billing === 'api' ? { billing } : {}) });
     return '';
   }
 
@@ -452,7 +518,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       // The directory may be gone (a hand-cleaned DATA_DIR): recreate the layout so the login has a home.
       createClaudeProfileLayout({ dataDir: getDataDir(), name });
     }
-    await startClaudeProfileLogin(key, { name, configDir: resolveDir(name) });
+    // An API account signs in to the Claude Console again (or takes a pasted key), never the subscription.
+    const billing = readBilling(name);
+    await startClaudeProfileLogin(key, { name, configDir: resolveDir(name), ...(billing === 'api' ? { billing } : {}) });
     return '';
   }
 
@@ -540,9 +608,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await startOpenCodeConnect(key, providerId);
   }
 
-  /** The captured answer of «➕»: a Claude profile name, or an OpenCode provider id, by what was asked. */
+  /** The captured answer of «➕»: a Claude profile name (a subscription or an API account), or an OpenCode provider id, by what was asked. */
   async function submitProfileName(key: SessionKey, text: string): Promise<void> {
-    if (awaitingProfileName.get(keyToString(key)) === 'providerId') {
+    const asked = awaitingProfileName.get(keyToString(key));
+    if (asked === 'providerId') {
       await submitProviderId(key, text);
       return;
     }
@@ -552,7 +621,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       return;
     }
     awaitingProfileName.delete(keyToString(key));
-    const message = await addProfile(key, name);
+    const message = await addProfile(key, name, asked === 'claudeApiName' ? 'api' : 'subscription');
     if (message) await replyToThread(key, message);
   }
 
@@ -597,25 +666,31 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   // ── the command ──
 
   function registerClaudeAccountCommands(): void {
-    // `/accounts` (hidden alias `/account`) — bare: the screen. `add <name>` creates a profile and signs it in; `use <name>` switches
+    // `/accounts` (hidden alias `/account`) — bare: the screen. `add <name>` creates a profile and signs it in (`add <name> api`:
+    // an account billed to a Claude Console organization's API balance); `use <name>` switches
     // this topic (General: the instance default); `login <name>` signs a profile in again; `remove <name>`
     // deletes one. Not gated on a session: the pick is read at the next spawn, so it must be settable first.
     command(['account', 'accounts'], async (_ctx, key, parsed: InboundCommand) => {
       const isGeneral = checkIsGeneral(key);
       const [verb = '', ...rest] = parsed.args;
       const name = normaliseClaudeProfileName(rest.join(' '));
+      // `add <name> api`: the last word names the billing; the name is what precedes it.
+      const isApiAdd = verb.toLowerCase() === 'add' && rest.length >= 2 && rest.at(-1)?.toLowerCase() === 'api';
       switch (verb.toLowerCase()) {
         case '': {
           await postPicker(key, isGeneral);
           return;
         }
         case 'add': {
-          if (!name) {
-            awaitingProfileName.set(keyToString(key), 'claudeName');
-            await replyToThread(key, `${t('account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
+          if (!name || name === 'api') {
+            const asked = name === 'api' ? 'claudeApiName' : 'claudeName';
+            awaitingProfileName.set(keyToString(key), asked);
+            await replyToThread(key, `${t(asked === 'claudeApiName' ? 'account.askNameApi' : 'account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
             return;
           }
-          const message = await addProfile(key, name);
+          const message = isApiAdd
+            ? await addProfile(key, normaliseClaudeProfileName(rest.slice(0, -1).join(' ')), 'api')
+            : await addProfile(key, name);
           if (message) await replyToThread(key, message);
           return;
         }
@@ -675,6 +750,12 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       awaitingProfileName.set(keyToString(key), 'claudeName');
       await answerCallbackQuerySafely(ctx);
       await replyToThread(key, `${t('account.askName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
+    }));
+
+    bot.action(accountAddApiCallback, (ctx) => handleTap(ctx, async (key) => {
+      awaitingProfileName.set(keyToString(key), 'claudeApiName');
+      await answerCallbackQuerySafely(ctx);
+      await replyToThread(key, `${t('account.askNameApi', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
     }));
 
     bot.action(accountAddProviderCallback, (ctx) => handleTap(ctx, async (key) => {
@@ -828,5 +909,6 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     submitProfileName,
     pickClaudeAccount: applyPick,
     onClaudeProfileAuthStatus,
+    onClaudeProfileApiKey,
   };
 }

@@ -16,7 +16,15 @@ import {
   parseClaudeAuthLoginUrl,
   checkIsAuthLoginSucceeded,
 } from '../utils/claudeAuthLogin';
-import { claudeConfigDirVariableName, parseClaudeAuthStatus, readProcessErrorStdout, type ClaudeAuthStatus } from '../utils/claudeProfiles';
+import {
+  checkIsAnthropicSecretLike,
+  checkIsPlausibleAnthropicApiKey,
+  claudeConfigDirVariableName,
+  parseClaudeAuthStatus,
+  readProcessErrorStdout,
+  type ClaudeAuthStatus,
+  type ClaudeProfileBilling,
+} from '../utils/claudeProfiles';
 import {
   getOpenCodeAuthFilePath,
   checkProviderAuthed,
@@ -49,7 +57,11 @@ function appendEscToCancelHint(text: string): string {
 // The json-stream Claude backend has no TUI to host Claude's interactive `/login`,
 // so the bot drives `claude auth login --claudeai` in a pty and relays it through
 // the topic: sign-in URL out → pasted code in (the code message is deleted, with
-// the 🔐 ack — same secret-handling as the tmux login-paste + /connect flows). On
+// the 🔐 ack — same secret-handling as the tmux login-paste + /connect flows). An
+// API account (`billing: 'api'`) runs `--console` instead — the Claude Console
+// login that creates an API key in the profile's own directory — and its paste
+// may be an existing API key instead of the code (handed to the bot, never typed
+// into the pty). On
 // success the pinned logged-out notice clears (the normal recovery path). Pure
 // parse/decision helpers live in `utils/claudeAuthLogin.ts`; this is the impure
 // pty driver + per-thread state (mirrors the apiErrorRetry pure-layer / manager
@@ -143,6 +155,21 @@ async function readOpenCodeProviderAuthed(providerId: string): Promise<boolean |
 export interface ClaudeLoginProfile {
   name: string;
   configDir: string | null;
+  /**
+   * `api`: an account billed to a Claude Console organization's API balance — the sign-in is `claude auth login
+   * --console` (it creates an API key and keeps it in `configDir`), and a pasted API key is accepted in place of the
+   * code. Absent: the subscription login (`--claudeai`).
+   */
+  billing?: ClaudeProfileBilling;
+}
+
+/**
+ * @description The `claude auth login` arguments of a sign-in: `--console` for an API account, the subscription
+ * otherwise. Never the keyless Console sign-in — that one lives outside `CLAUDE_CONFIG_DIR` (machine-wide) and signs
+ * the claude.ai logins out; the subcommand never offers it.
+ */
+export function buildClaudeAuthLoginArgs(profile: ClaudeLoginProfile | null): string[] {
+  return ['auth', 'login', profile?.billing === 'api' ? '--console' : '--claudeai'];
 }
 
 /**
@@ -161,6 +188,11 @@ export interface AgentLoginPorts {
     options: { timeout: number; env?: NodeJS.ProcessEnv },
   ) => Promise<{ stdout: string }>;
   onClaudeProfileAuthStatus?: (key: SessionKey, profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null) => Promise<void>;
+  /**
+   * An API key pasted into an API account's sign-in (the pty is already stopped, the message deleted): the bot
+   * verifies and stores it for that profile only, and returns the line to post. Absent: a pasted key is refused.
+   */
+  onClaudeProfileApiKey?: (key: SessionKey, profile: ClaudeLoginProfile, apiKey: string) => Promise<string>;
 }
 
 /**
@@ -168,7 +200,7 @@ export interface AgentLoginPorts {
  * thread, per sign-in kind) are state of the returned instance, not of the module.
  */
 export function createAgentLogin(ports: AgentLoginPorts) {
-  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync, onClaudeProfileAuthStatus } = ports;
+  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync, onClaudeProfileAuthStatus, onClaudeProfileApiKey } = ports;
 
   /** Per-thread in-flight `claude auth login` flows, keyed by `keyToString(key)`. */
   const pendingAuthLogins = new Map<string, PendingAuthLogin>();
@@ -233,7 +265,9 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    * pty as the code). Re-running `/login` while a flow is pending restarts it. With a
    * `profile` the CLI signs THAT account profile in (`CLAUDE_CONFIG_DIR` set on the
    * pty), the link message tells the operator to open it as the other account, and
-   * the confirmation names the account; the default login is unchanged.
+   * the confirmation names the account; the default login is unchanged. An API
+   * account's sign-in is `--console` ({@link buildClaudeAuthLoginArgs}) and its link
+   * message offers pasting an existing API key instead.
    */
   async function startClaudeAuthLogin(key: SessionKey, profile: ClaudeLoginProfile | null = null): Promise<void> {
     const k = keyToString(key);
@@ -241,11 +275,11 @@ export function createAgentLogin(ports: AgentLoginPorts) {
 
     let child: IPty;
     try {
-      // Force subscription login (never metered): `--claudeai` picks the Claude
-      // subscription and dropping ANTHROPIC_API_KEY keeps the metered console path
-      // out of the way. cwd is irrelevant — login writes to the config directory
-      // (`~/.claude`, or the profile's own).
-      child = spawnPty(resolveClaudeBinary(), ['auth', 'login', '--claudeai'], {
+      // A subscription login unless the profile is an API account (`--console`, metered by
+      // design): `--claudeai` picks the Claude subscription, and dropping ANTHROPIC_API_KEY
+      // keeps a stray key out of either login. cwd is irrelevant — login writes to the
+      // config directory (`~/.claude`, or the profile's own).
+      child = spawnPty(resolveClaudeBinary(), buildClaudeAuthLoginArgs(profile), {
         name: 'xterm-256color',
         cols: authLoginPtyCols,
         rows: authLoginPtyRows,
@@ -281,7 +315,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
           current.urlRelayed = true;
           clearTimeout(current.timeoutTimer);
           const linkText = current.profile
-            ? t('account.login_url', { name: current.profile.name, url })
+            ? t(current.profile.billing === 'api' ? 'account.login_url_api' : 'account.login_url', { name: current.profile.name, url })
             : t('agent.login_url', { url });
           void replyToThread(key, appendEscToCancelHint(linkText));
         }
@@ -299,9 +333,11 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    * the 🔐 ack. The final success/failure notice comes from {@link onAuthLoginExit}.
    * A message that is not a plausible code (an ordinary sentence) is NOT consumed:
    * the flow stays armed and the topic is told it is still waiting, with `/esc` as
-   * the way out — a pending login must never silently swallow the topic.
-   * @returns `true` when the message was consumed as the code, `false` when it was
-   *   answered with the waiting hint instead.
+   * the way out — a pending login must never silently swallow the topic. Anything
+   * that starts like an Anthropic credential (`sk-ant-…`) is a secret: deleted at
+   * once and never typed into the pty — see {@link submitClaudeApiKey}.
+   * @returns `true` when the message was consumed (as the code, or as a key),
+   *   `false` when it was answered with the waiting hint instead.
    */
   async function submitClaudeAuthLoginCode(
     key: SessionKey,
@@ -310,6 +346,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
   ): Promise<boolean> {
     const pending = pendingAuthLogins.get(keyToString(key));
     if (!pending) return false;
+    if (checkIsAnthropicSecretLike(code)) return submitClaudeApiKey(key, pending, code, messageId);
     if (!checkIsPlausibleOAuthCode(code)) {
       await replyToThread(key, appendEscToCancelHint(t('login.waiting_code')));
       return false;
@@ -317,6 +354,30 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     pending.pty.write(`${code.trim()}\r`);
     await deleteThreadMessage(key, messageId);
     await replyToThread(key, t('agent.login_code_relayed'));
+    return true;
+  }
+
+  /**
+   * @description A pasted `sk-ant-…` text in a pending Claude sign-in. It is a secret whatever it is: the message is
+   * deleted first. An API account takes a usable API key in place of the code: the console login is stopped and the
+   * key goes to the bot ({@link AgentLoginPorts.onClaudeProfileApiKey}), which verifies and stores it for that profile
+   * only. A subscription sign-in, or a credential that is not an API key (an admin key, an OAuth token), is refused
+   * and the flow stays armed.
+   */
+  async function submitClaudeApiKey(key: SessionKey, pending: PendingAuthLogin, text: string, messageId: number): Promise<boolean> {
+    await deleteThreadMessage(key, messageId);
+    const profile = pending.profile;
+    if (!profile || profile.billing !== 'api' || !onClaudeProfileApiKey) {
+      await replyToThread(key, appendEscToCancelHint(t('account.apiKeyNotApiAccount')));
+      return true;
+    }
+    if (!checkIsPlausibleAnthropicApiKey(text)) {
+      await replyToThread(key, appendEscToCancelHint(t('account.apiKeyInvalidShape')));
+      return true;
+    }
+    cancelClaudeAuthLogin(key); // the key replaces the console login: its pty must not report a failure later
+    await replyToThread(key, t('agent.login_code_relayed'));
+    await replyToThread(key, await onClaudeProfileApiKey(key, profile, text.trim()));
     return true;
   }
 
@@ -353,16 +414,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
       await onClaudeProfileAuthStatus?.(key, pending.profile, status);
       // The `default` profile IS the `~/.claude` login: a success retires the pinned logged-out notice, as `/login` does.
       if (isSucceeded && pending.profile.configDir === null) clearAuthNotice(key);
-      await replyToThread(
-        key,
-        isSucceeded
-          ? t('account.login_success', {
-              name: pending.profile.name,
-              email: status?.email ?? '?',
-              plan: status?.subscriptionType ?? '?',
-            })
-          : t('account.login_failed', { name: pending.profile.name }),
-      );
+      await replyToThread(key, isSucceeded ? formatProfileLoginSuccess(pending.profile, status) : t('account.login_failed', { name: pending.profile.name }));
       return;
     }
     if (isSucceeded) {
@@ -371,6 +423,14 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     } else {
       await replyToThread(key, t('agent.login_failed'));
     }
+  }
+
+  /** The confirmation of a profile sign-in: the email and plan, or — billed to the API — the email and Console organization. */
+  function formatProfileLoginSuccess(profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null): string {
+    if (status?.billing === 'api') {
+      return t('account.login_success_api', { name: profile.name, email: status.email ?? '?', org: status.orgName ?? '?' });
+    }
+    return t('account.login_success', { name: profile.name, email: status?.email ?? '?', plan: status?.subscriptionType ?? '?' });
   }
 
   /** Per-thread in-flight `opencode auth login` OAuth flows, keyed by `keyToString(key)`. */

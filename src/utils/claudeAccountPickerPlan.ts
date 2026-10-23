@@ -12,6 +12,7 @@ import {
   defaultClaudeProfileName,
   getClaudeAccountKind,
   type ClaudeAccountKind,
+  type ClaudeProfileBilling,
 } from './claudeProfiles';
 
 const nameGroup = '([a-z0-9][a-z0-9_-]{0,31})';
@@ -28,6 +29,8 @@ export const accountRemoveCallbackRe = new RegExp(`^acct_rm_${nameGroup}$`);
 export const accountRemoveConfirmCallbackRe = new RegExp(`^acct_rmok_${nameGroup}$`);
 /** Ask for a new profile's name. */
 export const accountAddCallback = 'acct_add';
+/** Ask for the name of a new account billed to a Claude Console organization's API balance. */
+export const accountAddApiCallback = 'acct_addapi';
 /** A topic drops its own pick and follows the instance default again. */
 export const accountFollowDefaultCallback = 'acct_follow';
 /** Arm the OpenCode provider-id capture (the next plain message names the provider to connect). */
@@ -115,6 +118,8 @@ export interface AccountPickerRow {
   email: string | null;
   subscriptionType: string | null;
   kind: ClaudeAccountKind;
+  /** How the account pays; `null` when never recorded (a subscription account added before billing was). */
+  billing: ClaudeProfileBilling | null;
   /** How many bound topics resolve to this profile. */
   topicCount: number;
 }
@@ -126,7 +131,7 @@ export interface AccountPickerRow {
  */
 export function buildAccountPickerRows(input: {
   records: Readonly<Record<string, ClaudeProfileRecord>>;
-  defaultStatus: { loggedIn: boolean | undefined; email: string | null; subscriptionType: string | null };
+  defaultStatus: { loggedIn: boolean | undefined; email: string | null; subscriptionType: string | null; billing?: ClaudeProfileBilling | null };
   /** The account the ✓ sits on; `null` for none (the topic runs OpenCode). */
   activeName: string | null;
   topicCounts: ReadonlyMap<string, number>;
@@ -140,6 +145,7 @@ export function buildAccountPickerRows(input: {
     email: input.defaultStatus.email,
     subscriptionType: input.defaultStatus.subscriptionType,
     kind: getClaudeAccountKind(input.defaultStatus.subscriptionType),
+    billing: input.defaultStatus.billing ?? null,
     topicCount: input.topicCounts.get(defaultClaudeProfileName) ?? 0,
   }];
   const added = Object.entries(input.records)
@@ -152,6 +158,7 @@ export function buildAccountPickerRows(input: {
       email: record.email ?? null,
       subscriptionType: record.subscriptionType ?? null,
       kind: getClaudeAccountKind(record.subscriptionType ?? null),
+      billing: record.billing ?? null,
       topicCount: input.topicCounts.get(name) ?? 0,
     });
   }

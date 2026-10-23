@@ -392,6 +392,8 @@ import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
+import { verifyAnthropicApiKey } from './utils/anthropicApiKeyCheck';
+import { buildClaudeAuthProbeSettingsArgs } from './utils/claudeApiKeyHelper';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
 import {
@@ -2312,6 +2314,8 @@ function clearLimitResumeNotice(key: SessionKey): void {
  * sign-in driver built here), so the driver reaches it through this late-bound slot.
  */
 let claudeProfileAuthStatusSink: ((key: SessionKey, profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null) => Promise<void>) | null = null;
+/** Where an API key pasted into an API account's sign-in goes: the `/account` module too, through the same late-bound idiom. */
+let claudeProfileApiKeySink: ((key: SessionKey, profile: ClaudeLoginProfile, apiKey: string) => Promise<string>) | null = null;
 
 // Out-of-band sign-in drivers (`/login`, `/connect` OAuth): `agentLogin/README.md`.
 const {
@@ -2331,6 +2335,7 @@ const {
   clearAuthNotice,
   execFileAsync,
   onClaudeProfileAuthStatus: (key, profile, status) => claudeProfileAuthStatusSink?.(key, profile, status) ?? Promise.resolve(),
+  onClaudeProfileApiKey: (key, profile, apiKey) => claudeProfileApiKeySink?.(key, profile, apiKey) ?? Promise.resolve(t('account.apiKeyNoDirectory', { name: profile.name })),
 });
 
 /**
@@ -6896,13 +6901,18 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
   return dir;
 }
 
-/** `claude auth status --json` under `configDir` (`null` = `~/.claude`), the subscription login only; `null` when the probe fails. */
+/**
+ * `claude auth status --json` under `configDir` (`null` = `~/.claude`) as its sessions see it: never through an
+ * `ANTHROPIC_API_KEY` of the bot's own, with the `apiKeyHelper` of a profile that holds a pasted API key; `null` when
+ * the probe fails.
+ */
 async function readClaudeAuthStatusUnder(configDir: string | null): Promise<ClaudeAuthStatus | null> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
   if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
   try {
-    const { stdout } = await execFileAsync(resolveClaudeBinary(), ['auth', 'status', '--json'], { timeout: claudeAuthStatusProbeTimeoutMs, env });
+    const args = [...buildClaudeAuthProbeSettingsArgs(configDir), 'auth', 'status', '--json'];
+    const { stdout } = await execFileAsync(resolveClaudeBinary(), args, { timeout: claudeAuthStatusProbeTimeoutMs, env });
     return parseClaudeAuthStatus(stdout);
   } catch (e) {
     // A logged-out directory makes the CLI exit non-zero WITH its JSON on stdout: that is the answer.
@@ -7007,7 +7017,7 @@ function getThreadClaudeModel(key: SessionKey): string | null {
 /** What `/status` names of a Claude profile: its last probed sign-in and email, and its limit mark (none until probed). */
 function readStatusAccountSource(name: string): ThreadStatusAccountSource {
   const info = state.getClaudeProfileInfo(name);
-  return { name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null };
+  return { name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null, billing: info?.billing ?? null };
 }
 
 /** Whether the topic's agent is a Claude backend (a usage limit there is a limit of its account profile). */
@@ -7560,6 +7570,7 @@ const {
   submitProfileName,
   pickClaudeAccount,
   onClaudeProfileAuthStatus: recordClaudeProfileAuthStatus,
+  onClaudeProfileApiKey: storeClaudeProfileApiKey,
 } = createClaudeAccounts({
   ...botCore,
   getDataDir: resolveDataDir,
@@ -7576,8 +7587,10 @@ const {
   disconnectOpenCodeProvider: applyProviderDisconnect,
   startOpenCodeConnect: showConnectMethodPicker,
   applyAutoSwitch,
+  verifyAnthropicApiKey: (apiKey) => verifyAnthropicApiKey(apiKey),
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
+claudeProfileApiKeySink = storeClaudeProfileApiKey;
 
 const {
   registerSttCommands,

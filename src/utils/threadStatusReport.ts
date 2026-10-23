@@ -1,6 +1,7 @@
 import { t } from '../i18n';
 import type { AgentRuntimeInfo } from '../types';
 import { formatClaudeUsageResetAt } from './claudeUsage';
+import type { ClaudeProfileBilling } from './claudeProfiles';
 
 /** One Claude account profile as `/status` names it. */
 export interface ThreadStatusAccountSource {
@@ -11,6 +12,8 @@ export interface ThreadStatusAccountSource {
   loggedIn: boolean | undefined;
   /** Raw ISO limit mark of the profile record; a mark in the past reads as no limit. */
   limitedUntil: string | null;
+  /** How the account pays; `api` is marked on the row (every request costs money). Absent / `null`: a subscription. */
+  billing?: ClaudeProfileBilling | null;
 }
 
 export interface ThreadStatusAccount {
@@ -107,14 +110,16 @@ export function getThreadStatusReport({
 
 /**
  * @description `name · email` like an `/accounts` row (`name · not signed in` once a probe said so, the name
- * alone when never probed), plus the `/accounts` limit mark while it lies in the future, reset in the instance zone.
+ * alone when never probed), `· 💳 API` for an account billed to the API, plus the `/accounts` limit mark while it lies
+ * in the future, reset in the instance zone.
  */
-function formatAccount({ name, email, loggedIn, limitedUntil }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
+function formatAccount({ name, email, loggedIn, limitedUntil, billing }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
   const detail = loggedIn === false ? t('account.row.loggedOut') : email;
+  const metered = billing === 'api' ? t('status.thread_account_api') : '';
   const limited = limitedUntil !== null && Date.parse(limitedUntil) > nowMs
     ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(limitedUntil, timezone, nowMs) })
     : '';
-  return `${detail ? `${name} · ${detail}` : name}${limited}`;
+  return `${detail ? `${name} · ${detail}` : name}${metered}${limited}`;
 }
 
 /** @description The `Account:` row (plus a pending-switch row) of the `/status` report. */

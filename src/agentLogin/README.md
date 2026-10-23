@@ -1,8 +1,8 @@
 # `src/agentLogin/` — out-of-band sign-in drivers
 
-`createAgentLogin(ports)` returns the drivers behind the json-stream `/login` (`claude auth login --claudeai`)
-and the OpenCode `/connect` OAuth (`opencode auth login`). Each runs its CLI in a pty owned by the bot and relays
-it through the topic. `bot.ts` wires the ports (`replyToThread`, `deleteThreadMessage`, `clearAuthNotice`,
+`createAgentLogin(ports)` returns the drivers behind the json-stream `/login` (`claude auth login --claudeai`, or
+`--console` for an API account) and the OpenCode `/connect` OAuth (`opencode auth login`). Each runs its CLI in a pty
+owned by the bot and relays it through the topic. `bot.ts` wires the ports (`replyToThread`, `deleteThreadMessage`, `clearAuthNotice`,
 `execFileAsync`); nothing here imports `bot.ts` or the Telegram library.
 
 - **The link goes out only once the CLI's "paste the code" prompt (or a device code / wait line) is on screen** —
@@ -25,4 +25,13 @@ it through the topic. `bot.ts` wires the ports (`replyToThread`, `deleteThreadMe
   message tells the operator to open it as the other account, the confirmation names the account (email, plan),
   and the parsed status goes to the bot through the optional `onClaudeProfileAuthStatus` port. Only the
   `default` profile (no directory of its own) retires the pinned logged-out notice — it IS the `~/.claude` login.
+- **An API account** (`{ billing: 'api' }`, billed to a Claude Console organization's API credits) signs in with
+  `claude auth login --console` (`buildClaudeAuthLoginArgs`) — the subcommand always CREATES an API key and keeps it
+  in the profile's own `.claude.json`; it never takes the keyless Console sign-in, which lives outside
+  `CLAUDE_CONFIG_DIR` and signs the subscriptions out. Its paste may be an existing API key instead of the code.
+- **Anything that starts like an Anthropic credential (`sk-ant-…`) is a secret in EVERY Claude sign-in:** the message
+  is deleted before anything else and never typed into the pty. An API account hands a usable key
+  (`sk-ant-api…`) to the bot through the optional `onClaudeProfileApiKey` port (which verifies and stores it for that
+  profile only) and the Console login is stopped; any other credential, or a key in a subscription sign-in, is refused
+  and the flow stays armed.
 - The parse and decision helpers are `../utils/claudeAuthLogin.ts` and `../utils/openCodeAuthLogin.ts`.

@@ -19,6 +19,9 @@ import {
   fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
+  fakeClaudeLoginFileName,
+  fakeClaudeLoginUrl,
+  fakeConsoleLogin,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
   fakeCompactionModelUsage,
@@ -106,6 +109,15 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
+ *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
+ *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
+ *    session report `apiKeySource: "apiKeyHelper"` in its init frames (else `"none"`, the subscription login) and a
+ *    non-session `auth status --json` answer `api_key_helper`; the launch log says whether the helper produced a key
+ *    (`isHelperKeyPlausible`) — never the key;
+ *  - `auth login [--console|--claudeai]` behaves like the real subcommand in the bot's pty: it prints the sign-in link
+ *    and the paste prompt, takes ONE code line, records the login in `CLAUDE_CONFIG_DIR` (`fakeClaudeLoginFileName`) and
+ *    exits 0; `auth status --json` then answers for that login — a Console one as the CLI does (`api_key`, `/login
+ *    managed key`, the email and organization of `fakeConsoleLogin`), a subscription one as `claude.ai`;
  *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
  *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells, after the delay in
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
@@ -156,6 +168,69 @@ const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output 
 const supersededRequestsLineRe = /It replaces the same requester's earlier requests? ((?:req_[A-Za-z0-9_-]+(?:, )?)+)\. If you already answered/;
 /** How much of a stdin line that is not JSON the error message quotes. */
 const skippedLinePreviewChars = 200;
+
+/** An Anthropic API key, as the helper of a launch's settings must print it. */
+const plausibleApiKeyRe = /^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,}$/;
+
+/** Where this launch takes its API key from, as the real CLI would decide it (see the module's modes): set by `main`. */
+let launchApiKeySource: 'apiKeyHelper' | 'none' = 'none';
+
+/**
+ * @description The API key source of a launch: the `apiKeyHelper` of its LAST `--settings` (a JSON string or a file), run
+ * through `/bin/sh`; `isHelperKeyPlausible` is `null` without a helper. The key itself never leaves this function.
+ */
+function readLaunchApiKeySource(argv: readonly string[]): { source: 'apiKeyHelper' | 'none'; isHelperKeyPlausible: boolean | null } {
+  const settingsArg = getFlagValues(argv, '--settings').at(-1);
+  if (settingsArg === undefined) return { source: 'none', isHelperKeyPlausible: null };
+  let settings: unknown;
+  try {
+    settings = JSON.parse(settingsArg.trimStart().startsWith('{') ? settingsArg : fs.readFileSync(settingsArg, 'utf8'));
+  } catch {
+    return { source: 'none', isHelperKeyPlausible: null };
+  }
+  const helper = settings && typeof settings === 'object' ? (settings as { apiKeyHelper?: unknown }).apiKeyHelper : undefined;
+  if (typeof helper !== 'string') return { source: 'none', isHelperKeyPlausible: null };
+  const output = spawnSync('/bin/sh', ['-c', helper], { encoding: 'utf8' }).stdout?.trim() ?? '';
+  const isHelperKeyPlausible = plausibleApiKeyRe.test(output);
+  return { source: isHelperKeyPlausible ? 'apiKeyHelper' : 'none', isHelperKeyPlausible };
+}
+
+/** The login `auth login` recorded in a config directory (`fakeClaudeLoginFileName`), `null` when there is none. */
+function readFakeLogin(): { method: 'console' | 'claudeai' } | null {
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  if (!configDir) return null;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(configDir, fakeClaudeLoginFileName), 'utf8')) as { method: 'console' | 'claudeai' };
+  } catch {
+    return null;
+  }
+}
+
+/** `auth status --json` the way the real CLI words it: the helper's key outranks a login's; `null` = no sign-in known. */
+function getFakeAuthStatus(apiKeySource: 'apiKeyHelper' | 'none'): Record<string, unknown> | null {
+  if (apiKeySource === 'apiKeyHelper') return { loggedIn: true, authMethod: 'api_key_helper', apiProvider: 'firstParty', apiKeySource: 'apiKeyHelper' };
+  const login = readFakeLogin();
+  if (login?.method === 'console') return { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty', apiKeySource: '/login managed key', ...fakeConsoleLogin };
+  if (login?.method === 'claudeai') return { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: fakeConsoleLogin.email, subscriptionType: 'max' };
+  return null;
+}
+
+/**
+ * @description `claude auth login` in the bot's pty: the link and the paste prompt, then ONE line — the code — recorded
+ * as the directory's login, and exit 0 (the bot reads the outcome from `auth status`). A stopped login records nothing.
+ */
+async function runFakeAuthLogin(argv: readonly string[]): Promise<void> {
+  const method = argv.includes('--console') ? 'console' : 'claudeai';
+  process.stdout.write(`Opening browser to sign in…\nIf the browser didn't open, visit: ${fakeClaudeLoginUrl}&method=${method}\nPaste code here if prompted > `);
+  const code = await new Promise<string>((resolve) => {
+    process.stdin.setEncoding('utf8');
+    process.stdin.once('data', (line: string) => resolve(line.trim()));
+  });
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  if (configDir && code !== '') fs.writeFileSync(path.join(configDir, fakeClaudeLoginFileName), JSON.stringify({ method }));
+  process.stdout.write('\nLogin successful.\n');
+  process.exit(0);
+}
 
 /** Resolved when a user message is queued on stdin while a turn runs (`answer-after-queued`). */
 let queuedUserMessageWaiters: Array<() => void> = [];
@@ -461,7 +536,7 @@ async function askUserQuestion(): Promise<string> {
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
 function runCompactionTurn(sessionId: string): void {
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
@@ -477,7 +552,7 @@ function getReportedModel(argv: readonly string[]): string {
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   recordTranscriptMessage(sessionId, content);
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: 'none', tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const apiErrorOncePath = path.join(getStateDir(), fakeClaudeApiErrorOnceFileName);
   if (fs.existsSync(apiErrorOncePath)) {
@@ -630,10 +705,22 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const isSessionLaunch = checkHasFlag(argv, ['--input-format', 'stream-json']);
   const overlapsPid = isSessionLaunch ? takeOverlappingProcessPid(getLaunchSessionId(argv)) : null;
+  const apiKey = readLaunchApiKeySource(argv);
+  launchApiKeySource = apiKey.source;
   // Variable NAMES only — the test checks what reached the agent, never a value.
-  appendJsonLine(fakeClaudeLogFileNames.launches, { argv, isSessionLaunch, pid: process.pid, overlapsPid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH, claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null });
+  appendJsonLine(fakeClaudeLogFileNames.launches, {
+    argv, isSessionLaunch, pid: process.pid, overlapsPid, envNames: Object.keys(process.env), home: process.env.HOME, path: process.env.PATH,
+    claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null, isHelperKeyPlausible: apiKey.isHelperKeyPlausible,
+  });
   if (!isSessionLaunch) {
-    process.stdout.write(`${fakeClaudeVersion}\n`);
+    if (argv.includes('auth') && argv.includes('login')) {
+      await runFakeAuthLogin(argv);
+      return;
+    }
+    // `claude auth status` of a directory with a key or a login the fake knows: what the real CLI answers (exit 0).
+    // Every other call gets the version line it always got (a status the bot cannot parse is "unknown", never "signed out").
+    const status = argv.includes('auth') && argv.includes('status') ? getFakeAuthStatus(apiKey.source) : null;
+    process.stdout.write(status === null ? `${fakeClaudeVersion}\n` : `${JSON.stringify(status)}\n`);
     return;
   }
   if (process.env[fakeClaudePlatformEnvName] === 'jira') {

@@ -139,8 +139,10 @@ describe('claude auth status', () => {
     const status = parseClaudeAuthStatus(JSON.stringify({
       loggedIn: true, authMethod: 'oauth', email: 'ops@example.com', orgId: 'o1', orgName: 'Example Org', subscriptionType: 'max',
     }));
-    assert.deepEqual(status, { loggedIn: true, email: 'ops@example.com', subscriptionType: 'max', orgName: 'Example Org' });
-    assert.deepEqual(parseClaudeAuthStatus('{"loggedIn":false,"authMethod":"none"}'), { loggedIn: false, email: null, subscriptionType: null, orgName: null });
+    assert.deepEqual(status, { loggedIn: true, email: 'ops@example.com', subscriptionType: 'max', orgName: 'Example Org', authMethod: 'oauth', apiKeySource: null, billing: null });
+    assert.deepEqual(parseClaudeAuthStatus('{"loggedIn":false,"authMethod":"none"}'), {
+      loggedIn: false, email: null, subscriptionType: null, orgName: null, authMethod: 'none', apiKeySource: null, billing: null,
+    });
     assert.equal(parseClaudeAuthStatus('not json'), null);
     assert.equal(parseClaudeAuthStatus('{"email":"x"}'), null, 'no loggedIn → unknown, never logged out');
     assert.equal(getClaudeAccountKind('pro'), 'personal');

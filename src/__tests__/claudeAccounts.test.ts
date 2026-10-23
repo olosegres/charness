@@ -32,6 +32,7 @@ import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
 import { t } from '../i18n';
 import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
+import type { AnthropicApiKeyCheck } from '../utils/anthropicApiKeyCheck';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
 /** A test sets it to make the stand-in `applyAutoSwitch` word its answer differently (a long one). */
@@ -58,6 +59,9 @@ let topicRun: { family: BackendFamily | null; rung: FallbackChainEntry | null } 
 const disconnected: Array<{ key: SessionKey; providerId: string }> = [];
 const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
+/** What the stand-in API answers for a pasted key, and the keys it was asked about. */
+let apiKeyCheck: AnthropicApiKeyCheck = 'valid';
+const checkedApiKeys: string[] = [];
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
 
@@ -71,7 +75,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     homeClaudeDir = path.join(dataDir, 'fake-home', '.claude');
     fs.mkdirSync(homeClaudeDir, { recursive: true });
     harness = await createCommandHarness();
-    setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null });
+    setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null, authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' });
     accounts = createClaudeAccounts({
       ...harness.core,
       checkIsGeneral: () => isGeneralTopic,
@@ -114,6 +118,10 @@ describe('claudeAccounts: /accounts over its ports', () => {
       },
       // The default login lives in the fixture's `.claude`, never in the real one.
       getHomeClaudeDir: () => homeClaudeDir,
+      verifyAnthropicApiKey: async (apiKey) => {
+        checkedApiKeys.push(apiKey);
+        return apiKeyCheck;
+      },
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -132,6 +140,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       String(/^acct_use_([a-z0-9][a-z0-9_-]{0,31})$/),
       'acct_follow',
       'acct_add',
+      'acct_addapi',
       'acct_ocadd',
       String(/^acct_dc_(\d{1,2})$/),
       String(/^acct_dcok_(\d{1,2})$/),
@@ -157,7 +166,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(picker), [
       ['acct_use_default', 'acct_login_default', 'acct_rm_default'],
       ['acct_add', 'acct_ocadd'],
-    ], 'one row per account (pick + re-login + remove, `default` included), then the two adders');
+      ['acct_addapi'],
+    ], 'one row per account (pick + re-login + remove, `default` included), then the two adders and the API account adder');
     assert.match(picker?.text ?? '', /OpenCode providers: none connected yet/);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
@@ -209,7 +219,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   it('the sign-in driver\'s status report lands on the record and moves the sessions that already picked it', async () => {
     const dir = path.join(dataDir, 'claude-profiles', 'work');
-    const status: ClaudeAuthStatus = { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org' };
+    const status: ClaudeAuthStatus = { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org', authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' };
     setStatus(dir, status);
     const callsBefore = applyEverywhereCalls;
     await accounts.onClaudeProfileAuthStatus(harness.key, { name: 'work', configDir: dir }, status);
@@ -243,7 +253,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   it('`use` of a logged-out profile is refused; `use work` in a topic sets the pick and reports the apply outcome', async () => {
     const teamDir = path.join(dataDir, 'claude-profiles', 'team');
-    setStatus(teamDir, { loggedIn: false, email: null, subscriptionType: null, orgName: null });
+    setStatus(teamDir, { loggedIn: false, email: null, subscriptionType: null, orgName: null, authMethod: 'none', apiKeySource: null, billing: null });
     await harness.runCommand('account', 'use team');
     assert.match(harness.replies.at(-1)?.text ?? '', /not signed in/);
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
@@ -381,7 +391,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   it('`remove` of a picked profile drops the picks (counted) and the directory, through the confirm button too', async () => {
     const teamDir = path.join(dataDir, 'claude-profiles', 'team');
-    setStatus(teamDir, { loggedIn: true, email: 'team@example.com', subscriptionType: 'pro', orgName: null });
+    setStatus(teamDir, { loggedIn: true, email: 'team@example.com', subscriptionType: 'pro', orgName: null, authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' });
     await harness.runCommand('account', 'use team');
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'team');
     await harness.runCommand('account');
@@ -447,7 +457,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const rows = harness.getKeyboardData(screen);
     assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_ocuse_')), [['acct_ocuse_0', 'acct_dcre_0', 'acct_dc_0'], ['acct_ocuse_1', 'acct_dcre_1', 'acct_dc_1']], 'a provider row mirrors an account row: pick, 🔑 connect again, 🔌 disconnect');
     assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['openrouter', '🔑', '🔌'], 'the pick names the provider; the two icons are the same as an account row\'s');
-    assert.deepEqual(rows.at(-1)?.slice(-2), ['acct_add', 'acct_ocadd']);
+    assert.deepEqual(rows.at(-2)?.slice(-2), ['acct_add', 'acct_ocadd']);
+    assert.deepEqual(rows.at(-1), ['acct_addapi']);
     await harness.tapButton(screen.messageId!, 'acct_dc_1');
     assert.match(harness.edits.at(-1)?.text ?? '', /Disconnect openrouter\?/);
     assert.deepEqual(disconnected, [], 'asking disconnects nothing');
@@ -721,6 +732,104 @@ describe('claudeAccounts: /accounts over its ports', () => {
     accounts.cancelProfileNameCapture(harness.key);
   });
 
+  it('`add <name> api` creates an API account: recorded as billed to the API, its sign-in is the Claude Console one', async () => {
+    await harness.runCommand('accounts', 'add Console api');
+    const dir = path.join(dataDir, 'claude-profiles', 'console');
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'the same layout as any account');
+    assert.equal(harness.state.getClaudeProfileRecord('console')?.billing, 'api');
+    assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'console', configDir: dir, billing: 'api' } });
+    assert.match(harness.replies.at(-1)?.text ?? '', /API account console created \(billed to a Claude Console organization's API credits\)/);
+  });
+
+  it('«➕ Claude API account» asks for the name; the answer creates an API account', async () => {
+    await harness.runCommand('accounts');
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_addapi');
+    assert.match(harness.replies.at(-1)?.text ?? '', /Name for the new API account/);
+    await accounts.submitProfileName(harness.key, 'credits');
+    assert.equal(harness.state.getClaudeProfileRecord('credits')?.billing, 'api');
+    assert.equal(startedLogins.at(-1)?.profile.billing, 'api');
+    await harness.runCommand('accounts', 'remove credits');
+  });
+
+  it('a pasted key the API refuses is not stored; an accepted one is kept 0600 in that account\'s directory, the account probed, recorded and applied', async () => {
+    const dir = path.join(dataDir, 'claude-profiles', 'console');
+    const apiKey = `sk-ant-api03-${'z'.repeat(40)}`;
+    apiKeyCheck = 'invalid';
+    const refused = await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, apiKey);
+    assert.match(refused, /The API refused that key/);
+    assert.equal(fs.existsSync(path.join(dir, 'charness-api-key')), false);
+
+    apiKeyCheck = 'valid';
+    setStatus(dir, { loggedIn: true, email: null, subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
+    const callsBefore = applyEverywhereCalls;
+    const stored = await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, apiKey);
+    assert.match(stored, /API key stored for account console \(the API accepted it\)/);
+    assert.ok(!stored.includes(apiKey), 'the key is never echoed');
+    assert.equal(fs.readFileSync(path.join(dir, 'charness-api-key'), 'utf8').trim(), apiKey);
+    assert.equal(fs.statSync(path.join(dir, 'charness-api-key')).mode & 0o777, 0o600);
+    assert.deepEqual(checkedApiKeys, [apiKey, apiKey]);
+    const record = harness.state.getClaudeProfileRecord('console');
+    assert.equal(record?.loggedIn, true);
+    assert.equal(record?.billing, 'api');
+    assert.ok(!JSON.stringify(harness.state.getAllClaudeProfileInfos()).includes(apiKey), 'never in state');
+    assert.equal(applyEverywhereCalls, callsBefore + 1);
+
+    // A key for a name that is not an added account (here: `default`, which is ~/.claude) is refused.
+    assert.match(await accounts.onClaudeProfileApiKey(harness.key, { name: 'default', configDir: null, billing: 'api' }, apiKey), /only for an added API account/);
+  });
+
+  it('an API account\'s row and button say it is billed per use; its re-login is the Console one; picking it says so', async () => {
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    assert.match(screen.text ?? '', /• console — 💳 API key · pay per use/, 'a pasted key: no email to show');
+    assert.ok(harness.getKeyboardLabels(screen).flat().some((label) => label === 'console · console 💳'));
+
+    await harness.runCommand('accounts', 'login console');
+    assert.equal(startedLogins.at(-1)?.profile.billing, 'api', 'the re-login is the Console one');
+
+    applyOutcome = 'respawned';
+    await harness.runCommand('accounts', 'use console');
+    assert.match(harness.replies.at(-1)?.text ?? '', /account for this topic: console\.[^\n]*\n💳 This account is billed per request/);
+    isGeneralTopic = true;
+    try {
+      await harness.runCommand('accounts', 'use console');
+      assert.match(harness.replies.at(-1)?.text ?? '', /ALL topics: console\.[^\n]*\n💳 [^\n]*every topic that follows the default now costs money/);
+      await harness.runCommand('accounts', 'use default');
+    } finally {
+      isGeneralTopic = false;
+    }
+    await harness.state.setClaudeProfileOverride(harness.key, null);
+  });
+
+  it('a Console sign-in that created its key replaces an older pasted key; the record takes what the sessions see', async () => {
+    const dir = path.join(dataDir, 'claude-profiles', 'console');
+    assert.equal(fs.existsSync(path.join(dir, 'charness-api-key')), true);
+    const consoleStatus: ClaudeAuthStatus = {
+      loggedIn: true, email: 'ops@example.com', subscriptionType: null, orgName: 'Example Org',
+      authMethod: 'api_key', apiKeySource: '/login managed key', billing: 'api',
+    };
+    setStatus(dir, consoleStatus);
+    await accounts.onClaudeProfileAuthStatus(harness.key, { name: 'console', configDir: dir, billing: 'api' }, consoleStatus);
+    assert.equal(fs.existsSync(path.join(dir, 'charness-api-key')), false, 'the latest sign-in wins');
+    assert.equal(harness.state.getClaudeProfileRecord('console')?.email, 'ops@example.com');
+    await harness.runCommand('accounts');
+    assert.match(harness.replies.at(-1)?.text ?? '', /• console — ops@example\.com, 💳 API · pay per use/);
+  });
+
+  it('a FAILED Console sign-in over a working pasted key leaves the account signed in (the record takes the sessions\' probe)', async () => {
+    const dir = path.join(dataDir, 'claude-profiles', 'console');
+    fs.writeFileSync(path.join(dir, 'charness-api-key'), `sk-ant-api03-${'y'.repeat(40)}\n`, { mode: 0o600 });
+    setStatus(dir, { loggedIn: true, email: null, subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
+    await accounts.onClaudeProfileAuthStatus(harness.key, { name: 'console', configDir: dir, billing: 'api' }, {
+      loggedIn: false, email: null, subscriptionType: null, orgName: null, authMethod: 'none', apiKeySource: null, billing: null,
+    });
+    assert.equal(fs.existsSync(path.join(dir, 'charness-api-key')), true, 'a failed sign-in removes nothing');
+    assert.equal(harness.state.getClaudeProfileRecord('console')?.loggedIn, true);
+    await harness.runCommand('accounts', 'remove console');
+    assert.equal(harness.state.getClaudeProfileRecord('console'), undefined);
+    assert.equal(fs.existsSync(dir), false, 'the key goes with the account\'s directory');
+  });
+
   it('a provider list that cannot be read leaves the Claude half of the screen intact', async () => {
     openCodeProviders = [];
     await harness.runCommand('accounts');
@@ -765,7 +874,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(ask), [['acct_rmok_default'], ['acct_back']]);
     assert.equal(fs.existsSync(credentials), true, 'asking removes nothing');
 
-    setStatus(null, { loggedIn: false, email: null, subscriptionType: null, orgName: null }); // what the CLI reports afterwards
+    setStatus(null, { loggedIn: false, email: null, subscriptionType: null, orgName: null, authMethod: 'none', apiKeySource: null, billing: null }); // what the CLI reports afterwards
     await harness.tapButton(picker.messageId!, 'acct_rmok_default');
     const left = JSON.parse(fs.readFileSync(credentials, 'utf8'));
     assert.deepEqual(left, { mcpOAuth: { server: { token: 'keep' } } }, 'only the subscription login is gone');
@@ -783,7 +892,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(views.some((view) => view.name === 'default'), false, 'and from the fallback ranking');
 
     // Signed in again (here: the status probe says so) — the account is back.
-    setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null });
+    setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null, authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' });
     await harness.runCommand('account');
     assert.match(harness.replies.at(-1)?.text ?? '', /default — me@example\.com/);
     assert.equal(harness.state.getClaudeProfileInfo('default')?.isRemoved, undefined);
