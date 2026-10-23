@@ -2,12 +2,13 @@
  * @description `/topic` at PROCESS level: the BUILT charness started the way an isolated instance is
  * (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), which creates forum topics, gives
  * them an id from the one message sequence and — here — also delivers the bot the `forum_topic_created` service message of
- * a topic it created itself (whether Telegram does is not documented). One flow, in order:
+ * a topic it created itself (whether Telegram does is not documented), ahead of the creation's own answer. One flow, in order:
  *
  *   boot → a topic bound to a folder
  *   → `/topic`: the name is asked; the name goes in, and the folder question («as here» / «other») follows; «as here»
  *     creates the topic, which is bound to the same folder (name kept on the binding), greeted with the usual welcome — once,
- *     without a warning about the folder's other topic, without the folder picker the service message might bring — and the
+ *     without a warning about the folder's other topic, without the folder picker the service message might bring, without
+ *     a `[security]` line about a non-admin's topic — and the
  *     question message becomes the answer with a link to the new topic; no agent starts
  *   → a tap on the answered question's old button makes no second topic
  *   → `/topic <name>` skips the name question; «other folder» opens the same picker `/bind` has, a pick binds the new topic there
@@ -126,6 +127,19 @@ async function waitForTopicCount(count: number): Promise<{ threadId: number; nam
 }
 
 /**
+ * Resolves once the bot has polled twice since its `count`-th topic was created: the poll that carried the topic's own
+ * `forum_topic_created` (the fake pushes it at the creation) has returned and the bot came back for more, so the service
+ * message sits in the new topic's queue. Held on this, the creation's answer reaches the bot only after that, and the topic
+ * is not bound yet when its service message is handled — the order a real group showed, where the bot logged its own topic
+ * as a non-admin's.
+ */
+async function waitForOwnTopicEventTaken(count: number): Promise<void> {
+  await waitForTopicCount(count);
+  const pollsAtCreation = fakeTelegram.listCalls('getUpdates').length;
+  await getCharness().waitFor('two polls after the topic was created', replyTimeoutMs, () => fakeTelegram.listCalls('getUpdates').length >= pollsAtCreation + 2);
+}
+
+/**
  * The operator types `text` in the origin topic and the bot has handled it AND everything sent before it: a command that
  * answers is its own barrier (`/bind` with no argument always answers).
  */
@@ -193,8 +207,12 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     answeredQuestion = question;
     answeredQuestionData = getButtonData(originTopic, question, sameFolderLabel);
 
+    const ownTopicEventTaken = waitForOwnTopicEventTaken(1);
+    // A timeout surfaces at the `await` below; the hold itself only waits for it to settle.
+    fakeTelegram.holdNextResponse('createForumTopic', ownTopicEventTaken.catch(() => undefined));
     const toast = await originTopic.tapAndAwaitAnswer(question, answeredQuestionData);
     assert.equal(toast, enDict['topic.creatingToast']);
+    await ownTopicEventTaken;
     const created = await waitForTopicCount(1);
     assert.equal(created.name, 'Release notes', 'the name arrives trimmed and with its spaces collapsed');
 
@@ -214,6 +232,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     assert.equal(newTopic.listMessages().filter((message) => message.text.includes(enDict['binding.welcome.start_prompt'])).length, 1, 'one welcome');
     assert.ok(!newTopic.listMessages().some((message) => message.text.includes('already used by threads')), 'no warning about the folder\'s other topic: the person asked for it');
     assert.ok(!newTopic.listMessages().some((message) => message.text === enDict['thread.welcome_pick']), 'no folder picker in the new topic');
+    assert.ok(!getCharness().output.includes('[security] forum_topic_created'), 'the bot\'s own topic is no foreign creation to warn about');
     assert.equal(getSessionLaunches(getLayout()).length, 0, 'no agent was started');
   });
 

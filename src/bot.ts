@@ -126,6 +126,7 @@ import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompu
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
 import { createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
+import { getForumTopicCreatedAction } from './connectors/telegram/forumTopicCreated';
 import {
   getDisconnectPickerKeysForThread,
 } from './utils/providerDisconnectPlan';
@@ -9397,7 +9398,10 @@ bot.on(message('forum_topic_created'), async (ctx) => {
   // attacker-chosen folder. Stash the topic name so a later authorised-user
   // message in the same thread can still benefit from fuzzy auto-bind.
   const userId = ctx.from?.id;
-  if (!userId || !(await checkIsAllowedUser(ctx))) {
+  const action = await getForumTopicCreatedAction({ creatorId: userId, botUserId: bot.botInfo?.id, checkIsCreatorAllowed: () => checkIsAllowedUser(ctx) });
+  // `/topic` binds and greets the topic it created itself; its own service message needs nothing more.
+  if (action === 'ignoreOwn') return;
+  if (action === 'cacheNameOnly') {
     if (topicName) {
       pendingTopicNames.set(keyToString(key), { name: topicName, ts: Date.now() });
     }
