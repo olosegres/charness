@@ -23,6 +23,10 @@ reply and carry on.
 **On Windows the bot finds the agent CLI installed on PATH.** It looked the tool up with `which`, which Windows lacks,
 so an installed `opencode` read as missing.
 
+**A Claude CLI that dies as it starts is reported as a failed start.** The topic used to be told the session was
+«ready», then that it «ended» — once per attempt — after waiting out a 15-second handshake each time. It now gets one
+line with the CLI's own error, at once.
+
 **Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
 sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
 topic now gets one short line and the bot continues the work at once; if the same refusal comes right back, it says it

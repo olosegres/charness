@@ -68,6 +68,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     childEmittedLength: 0,
     childOutputTimer: null,
     pendingInitResolve: null,
+    startExitDetail: null,
     initRequestId: null,
     pendingControlRequests: new Map(),
     compactionInProgress: false,

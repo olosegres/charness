@@ -4875,12 +4875,12 @@ async function ensureAgentSessionNow(
       if (failureAction === 'fail') {
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
-      // The previous conversation is lost to this topic: say so in one line, then start fresh.
+      // The previous conversation is lost to this topic: say so in one line, then start fresh. A fresh start that
+      // fails too says only why: "a fresh session was started" would be false.
       const startMessage = await startAgentSession(key, options.args);
+      if (!getThreadAdapter(key).checkIsActive(key)) return { ok: false, reason: 'start-failed', message: startMessage };
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
-      return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message, isFresh: true }
-        : { ok: false, reason: 'start-failed', message };
+      return { ok: true, message, isFresh: true };
     }
     case 'start': {
       await switchThreadAdapter(key, plan.adapterName);

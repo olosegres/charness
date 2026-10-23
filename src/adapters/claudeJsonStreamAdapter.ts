@@ -261,6 +261,8 @@ export interface StreamSession {
   childOutputTimer: NodeJS.Timeout | null;
   // — control channel —
   pendingInitResolve: (() => void) | null;
+  /** Why a process that exited before its initialize handshake did (its stderr): the start fails with it. */
+  startExitDetail: string | null;
   initRequestId: string | null;
   /** Control requests the BOT wrote that are awaiting their `control_response`,
    *  keyed by `request_id` (the `initialize` handshake keeps its own resolver
@@ -601,7 +603,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
-      pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
+      pendingInitResolve: null, startExitDetail: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
@@ -620,6 +622,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // handshake hiccup never blocks a plain-output session. The response arrives
     // through the tail poller started above.
     await this.performInitialize(session);
+    // A CLI that exited before its handshake never started: the start fails with the CLI's own words — reported as a
+    // "ready" session that then "ended", the topic was told both, and a wake waited out a handshake nobody would send.
+    if (!session.isActive && !session.isStopping) {
+      throw new Error(`Failed to start Claude stream session: the CLI exited at start${session.startExitDetail ? `: ${session.startExitDetail}` : ''}`);
+    }
 
     this.emit('started', key);
     // A live re-spawn that found the conversation gone began a new one under the same id: the bot says so.
@@ -783,6 +790,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     try { fs.rmSync(session.paths.dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     cleanupMcpTempFiles({ key, dataDir: resolveDataDir() });
+    if (session.pendingInitResolve !== null && !session.isStopping) {
+      // Gone before its initialize handshake: a start that failed, which the start reports by throwing — not a session
+      // that ended. End the handshake wait now: nothing will answer it.
+      console.warn(`[ClaudeJson] ${keyToString(key)}: the CLI exited before its initialize handshake (code=${exitCode})${stderrTail ? ` stderr: ${stderrTail}` : ''}`);
+      session.startExitDetail = stderrTail || null;
+      session.pendingInitResolve();
+      return;
+    }
     if (session.isSuspending) {
       // The session id stays persisted: the next trigger resumes the conversation (L3).
       console.log(`[ClaudeJson] session ${keyToString(key)} suspended (code=${exitCode})`);
@@ -912,7 +927,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
-      pendingInitResolve: null, initRequestId: null, pendingControlRequests: new Map(),
+      pendingInitResolve: null, startExitDetail: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: this.readQuestionSidecar(paths),
       apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
