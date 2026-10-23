@@ -2,8 +2,8 @@
 
 ## 3.3.1 — 2026-10-23
 
-**The `charness` command is back.** The 3.3.0 package was published without its `charness` / `telegramcode`
-commands, so a fresh install of 3.3.0 could not start the bot. Install 3.3.1 instead.
+**The npm listing names the `charness` command again.** The 3.3.0 listing on npm showed no commands (installs
+and `npx` still worked, the package itself carried them).
 
 ## 3.3.0 — 2026-10-23
 
