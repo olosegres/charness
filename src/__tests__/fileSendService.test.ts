@@ -133,7 +133,10 @@ function getRootDescriptor(pinnedRoot: PinnedFileSendRoot): number {
 }
 
 function createTempFileSendFixture(): TempFileSendFixture {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendService-'));
+  // Canonical, as a bound folder is (the bot resolves it with realpath): macOS's temp dir is `/var/folders/…`, a symlink
+  // into `/private/var`, and the service works on canonical paths — a test that compares the paths it is handed (the
+  // swap mocks) or hands a path to the snapshot itself would otherwise speak of another spelling of the same file.
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendService-')));
   const workDir = path.join(tempRoot, 'bound');
   fs.mkdirSync(workDir);
   return {
