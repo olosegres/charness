@@ -74,6 +74,14 @@ export const retryRecurrenceGraceMs = 2 * msPerMinute;
  */
 export const resetBufferMs = 60_000;
 
+/**
+ * A reset relayed in MACHINE form — an exact epoch in seconds, read before any prose: `"resets_at":1781085600` in the
+ * ChatGPT subscription's `usage_limit_reached` 429 body (codex-rs `UsageErrorBody`), which OpenCode relays verbatim as
+ * the response body, and an older Claude Code's `Claude AI usage limit reached|1781085600`.
+ */
+const structuredResetEpochRegex = /"resets_at"\s*:\s*(\d{10})(?![\d.])|\blimit reached\|(\d{10})(?![\d.])/i;
+/** The same body's wait until that reset in seconds, `"resets_in_seconds":9000` — what an older body carries instead. */
+const structuredResetWaitRegex = /"resets_in_seconds"\s*:\s*(\d+)(?![\d.])/i;
 /** One part of a relative reset — `2 hours`, `30m`, `1 day`, `3s`, `40.15s` — closed by a non-letter (`1h30m` has no word break). */
 const relativeResetPartSource = String.raw`(\d+(?:\.\d+)?)\s*(d|days?|h|hours?|m|mins?|minutes?|s|secs?|seconds?)(?![a-z])`;
 /**
@@ -340,7 +348,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   // window's end: Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken
   // as the reset it set the wait at ~100 s and spent the attempts in minutes. What a "reset(s) in / after" or a clock
   // states is the window's own end, however close.
-  const limitResetAt = isShortStatedReset && checkIsRetryHintReset(text) ? undefined : statedResetAt;
+  const limitResetAt = isShortStatedReset && checkIsRetryHintReset(text, now) ? undefined : statedResetAt;
   if (exhaustedQuotaCodesRe.test(text)) {
     return { kind: 'usageLimit', resetAt: limitResetAt };
   }
@@ -363,10 +371,12 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
 const retryVerbBeforeResetRe = /\b(?:retry|try again)\s*$/i;
 
 /**
- * @description Whether the relative reset {@link parseResetAt} reads in `text` (it reads the relative shape first) is a
- * retry hint — stated by a retry verb — rather than a reset ("Your quota will reset after 4m30s", "resets in 2 minutes").
+ * @description Whether the reset {@link parseResetAt} reads in `text` is a retry hint — a relative one stated by a retry
+ * verb — rather than a reset ("Your quota will reset after 4m30s", "resets in 2 minutes"). A machine-form reset is read
+ * ahead of the relative shape and is the window's own end, whatever retry wording rides beside it.
  */
-function checkIsRetryHintReset(text: string): boolean {
+function checkIsRetryHintReset(text: string, now: number): boolean {
+  if (parseStructuredResetAt(text, now) !== undefined) return false;
   const match = relativeResetRegex.exec(text);
   return match !== null && retryVerbBeforeResetRe.test(text.slice(0, match.index));
 }
@@ -400,7 +410,10 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
 /**
  * @description Best-effort parse of a "reset time" out of a usage-limit message.
  * Never throws: any unparseable / absent time yields `undefined`, which the
- * caller treats as "use the fixed delay". Handles four shapes, in order:
+ * caller treats as "use the fixed delay". Handles five shapes, in order:
+ *  - machine form: an epoch (`"resets_at":…` in a relayed ChatGPT body, Claude's
+ *    `limit reached|<epoch>`) or that body's `"resets_in_seconds":…` — exact, so
+ *    first ({@link parseStructuredResetAt}).
  *  - relative: "resets in 2h" / "in 45m" / "in 2 hours 30 minutes" → `now` + the
  *    sum of the parts.
  *  - dated: "resets Oct 25, 3pm (Europe/Moscow)" — a weekly window, more than a
@@ -422,6 +435,9 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
  *   the next occurrence of an absolute clock time.
  */
 export function parseResetAt(text: string, now: number): number | undefined {
+  const structuredResetAt = parseStructuredResetAt(text, now);
+  if (structuredResetAt !== undefined) return structuredResetAt;
+
   const relativeMatch = relativeResetRegex.exec(text);
   if (relativeMatch) {
     let durationMs = 0;
@@ -449,6 +465,20 @@ export function parseResetAt(text: string, now: number): number | undefined {
   if (isoMatch) return resolveIsoResetTime(isoMatch, text);
 
   return undefined;
+}
+
+/**
+ * The machine-form reset ({@link structuredResetEpochRegex}, {@link structuredResetWaitRegex}) as epoch ms, or
+ * `undefined` when there is none. An epoch not ahead of `now` is no reset, nor is a zero wait: a stale `|<epoch>` line or
+ * a clock ahead of the provider's would arm a zero delay and spend every attempt in seconds. (The boot recovery reads
+ * against the time the error was written, so the reset it judges over is still read.)
+ */
+function parseStructuredResetAt(text: string, now: number): number | undefined {
+  const epochMatch = structuredResetEpochRegex.exec(text);
+  const epochMs = epochMatch ? Number.parseInt(epochMatch[1] ?? epochMatch[2], 10) * msPerSecond : 0;
+  if (epochMs > now) return epochMs;
+  const waitSeconds = Number.parseInt(structuredResetWaitRegex.exec(text)?.[1] ?? '', 10);
+  return waitSeconds > 0 ? now + waitSeconds * msPerSecond : undefined;
 }
 
 /**

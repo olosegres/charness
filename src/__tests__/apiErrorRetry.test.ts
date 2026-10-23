@@ -671,3 +671,47 @@ test('parseResetAt: "after <duration>" and seconds are read', () => {
   assert.equal(parseResetAt('quota resets in 90s', fixedNow), fixedNow + 90_000);
   assert.equal(parseResetAt('Please retry in 40.15s.', fixedNow), fixedNow + 40_150);
 });
+
+/** The ChatGPT subscription's 429 body that OpenCode relays as the response body (codex-rs `UsageErrorBody` fields). */
+function chatGptUsageLimitBody(resetField: string): string {
+  return `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus",${resetField}}}`;
+}
+
+test('classify: the ChatGPT usage_limit_reached body → a usage limit until its resets_at epoch (or its resets_in_seconds)', () => {
+  const resetsAtSeconds = Math.floor(fixedNow / 1000) + 4 * 24 * 3600;
+  assert.deepEqual(
+    classifyAgentApiError(chatGptUsageLimitBody(`"resets_at":${resetsAtSeconds},"limit_window_minutes":10080`), fixedNow),
+    { kind: 'usageLimit', resetAt: resetsAtSeconds * 1000 },
+  );
+  assert.deepEqual(
+    classifyAgentApiError(chatGptUsageLimitBody('"resets_in_seconds":9000'), fixedNow),
+    { kind: 'usageLimit', resetAt: fixedNow + 9000 * 1000 },
+  );
+  // A zero wait is no reset (it would arm an instant retry).
+  assert.equal(parseResetAt(chatGptUsageLimitBody('"resets_in_seconds":0'), fixedNow), undefined);
+});
+
+test('classify: a machine-form epoch already behind now is no reset — the limit waits the default, not a zero-delay retry', () => {
+  const pastSeconds = Math.floor(fixedNow / 1000) - 3600;
+  for (const text of [chatGptUsageLimitBody(`"resets_at":${pastSeconds}`), `Claude AI usage limit reached|${pastSeconds}`]) {
+    const cls = classifyAgentApiError(text, fixedNow);
+    assert.deepEqual(cls, { kind: 'usageLimit', resetAt: undefined }, text);
+    assert.deepEqual(decideRetryAction({ kind: 'usageLimit', resetAt: cls?.kind === 'usageLimit' ? cls.resetAt : undefined, now: fixedNow, prev: null }),
+      { action: 'arm', attempt: 1, delayMs: usageLimitDefaultMs, fireAt: fixedNow + usageLimitDefaultMs }, text);
+  }
+  // The boot recovery reads a parked error against the time it was written: that reset is kept, and over by now.
+  const writtenAtMs = fixedNow - 2 * 3600_000;
+  const recovered = classifyAgentApiError(chatGptUsageLimitBody(`"resets_at":${pastSeconds}`), writtenAtMs);
+  assert.deepEqual(recovered, { kind: 'usageLimit', resetAt: pastSeconds * 1000 });
+  assert.equal(recovered !== null && checkIsUsageLimitWindowOver(recovered, fixedNow), true);
+});
+
+test('classify: the body\'s machine-form reset is the window\'s end, never a retry hint — even a short one beside "try again in"', () => {
+  const text = chatGptUsageLimitBody('"resets_in_seconds":120').replace('has been reached', 'has been reached. Please try again in 2 minutes');
+  assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 120_000 });
+});
+
+test('classify: an older Claude Code\'s "usage limit reached|<epoch>" → a usage limit until that epoch', () => {
+  const resetsAtSeconds = Math.floor(fixedNow / 1000) + 3 * 3600;
+  assert.deepEqual(classifyAgentApiError(`Claude AI usage limit reached|${resetsAtSeconds}`, fixedNow), { kind: 'usageLimit', resetAt: resetsAtSeconds * 1000 });
+});
