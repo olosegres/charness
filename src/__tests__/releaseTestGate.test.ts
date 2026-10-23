@@ -9,6 +9,7 @@ import { describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   decideTestGate,
+  decideTestGateThroughParent,
   getReleaseDeltaProblems,
   getTestGateVerdict,
   type TestGateVerdict,
@@ -119,6 +120,26 @@ describe('decideTestGate', () => {
       const runningDecision = decideTestGate(running, event);
       assert.equal(runningDecision.isRefusal, true, event);
       assert.match(runningDecision.message, /wait for it to finish, then run the release again\.$/);
+    }
+  });
+});
+
+describe('decideTestGateThroughParent', () => {
+  const passedParent: TestGateVerdict = { state: 'passed', reason: 'the Tests run for a1b2c3d passed (url)' };
+
+  test('a green parent and a tag that is only a version bump: go on without waiting for the tag\'s own run and without the suite', () => {
+    const decision = decideTestGateThroughParent(passedParent, []);
+    assert.deepEqual([decision?.proceed, decision?.runSuite, decision?.isRefusal], [true, false, false]);
+    assert.match(decision?.message ?? '', /^the Tests run for a1b2c3d passed \(url\), and the tagged commit differs from it only in the version and the CHANGELOG/);
+  });
+
+  test('a tag that carries more than the version bump does not ride on its parent: the tagged commit\'s own run decides', () => {
+    assert.equal(decideTestGateThroughParent(passedParent, ['src/bot.ts differs from the tested commit']), null);
+  });
+
+  test('a parent that is not green — red, still running, never run — is no basis either', () => {
+    for (const state of ['failed', 'running', 'none'] as const) {
+      assert.equal(decideTestGateThroughParent({ state, reason: 'x' }, []), null, state);
     }
   });
 });

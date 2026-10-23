@@ -9,7 +9,9 @@
  *   notes <version>                                             print the version's CHANGELOG section
  *   check-pack [--version X.Y.Z] [--skip-install]               package contents + bin paths + install smoke test
  *   check-publish                                               `npm publish --dry-run`: refuses what npm would drop from package.json
- *   test-gate [--sha <commit>] [--event <name>]                 the Tests workflow's result for the exact commit; exits 1 on a refusal
+ *   test-gate [--sha <commit>] [--event <name>] [--through-parent]
+ *                                                               the Tests workflow's result for the exact commit (a hand-pushed tag
+ *                                                               also tries its parent); exits 1 on a refusal
  *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
  *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
  */
@@ -38,9 +40,12 @@ import {
 } from './releasePlan';
 import {
   decideTestGate,
+  decideTestGateThroughParent,
   getReleaseDeltaProblems,
   getTestGateVerdict,
   testWorkflowFile,
+  type TestGateDecision,
+  type TestGateState,
   type WorkflowRun,
 } from './testGate';
 
@@ -350,14 +355,27 @@ async function fetchTestWorkflowRuns(sha: string, workflowFile: string): Promise
  * run the suite; no run → it runs it; red or still running → the daily run ends green with the reason, any other entry fails.
  */
 async function runTestGate(args: string[]): Promise<number> {
-  const { values } = parseArgs({ args, options: { sha: { type: 'string' }, event: { type: 'string' } } });
+  const { values } = parseArgs({ args, options: { sha: { type: 'string' }, event: { type: 'string' }, 'through-parent': { type: 'boolean' } } });
   const sha = values.sha ?? git('rev-parse', 'HEAD').trim();
   if (!fullShaPattern.test(sha)) throw new ReleaseError(`--sha must be a full 40-character commit SHA, got "${sha}".`);
   const event = values.event ?? process.env.GITHUB_EVENT_NAME ?? '';
+
+  // A hand-pushed tag: its commit was pushed this very moment, its parent usually was tested long ago.
+  const parentSha = values['through-parent'] ? tryGit('rev-parse', `${sha}^`)?.trim() : undefined;
+  if (parentSha && fullShaPattern.test(parentSha)) {
+    const parentVerdict = getTestGateVerdict(await fetchTestWorkflowRuns(parentSha, testWorkflowFile), parentSha);
+    const throughParent = decideTestGateThroughParent(parentVerdict, getParentDeltaProblems(parentSha, sha));
+    if (throughParent) return reportTestGate({ sha: parentSha, state: 'passed', decision: throughParent });
+  }
+
   const verdict = getTestGateVerdict(await fetchTestWorkflowRuns(sha, testWorkflowFile), sha);
-  const decision = decideTestGate(verdict, event);
+  return reportTestGate({ sha, state: verdict.state, decision: decideTestGate(verdict, event) });
+}
+
+/** Writes what the gate decided — to the step's outputs and summary, and to the log — and fails the step on a refusal. */
+function reportTestGate({ sha, state, decision }: { sha: string; state: TestGateState; decision: TestGateDecision }): number {
   writeGithubOutput('sha', sha);
-  writeGithubOutput('state', verdict.state);
+  writeGithubOutput('state', state);
   writeGithubOutput('proceed', String(decision.proceed));
   writeGithubOutput('runSuite', String(decision.runSuite));
   writeGithubOutput('message', decision.message);
@@ -368,6 +386,24 @@ async function runTestGate(args: string[]): Promise<number> {
   return 0;
 }
 
+/** What differs between `base` and `head` (the working tree when omitted) beyond package.json's version line and CHANGELOG.md. */
+function getDeltaProblems(base: string, head?: string): string[] {
+  const revisions = head ? [base, head] : [base];
+  return getReleaseDeltaProblems({
+    changedPaths: splitPaths(git('diff', '--name-only', '--no-renames', ...revisions)),
+    manifestDiff: git('diff', '-U0', '--no-color', '--no-renames', ...revisions, '--', manifestFileName),
+  });
+}
+
+/** {@link getDeltaProblems} for the gate's parent shortcut: a parent that cannot be compared (a shallow checkout) is a problem, not a crash. */
+function getParentDeltaProblems(parentSha: string, sha: string): string[] {
+  try {
+    return getDeltaProblems(parentSha, sha);
+  } catch (error) {
+    return [`the tagged commit cannot be compared with its parent (${error instanceof Error ? error.message.split('\n')[0] : String(error)})`];
+  }
+}
+
 /**
  * The release commit may differ from the commit the tests passed on ONLY in package.json's version line and CHANGELOG.md. `--head`
  * a revision, or none for the working tree (the applied release before it is committed).
@@ -375,11 +411,7 @@ async function runTestGate(args: string[]): Promise<number> {
 function runVerifyDelta(args: string[]): number {
   const { values } = parseArgs({ args, options: { base: { type: 'string' }, head: { type: 'string' } } });
   if (!values.base) throw new ReleaseError('verify-delta needs --base <the tested commit>.');
-  const revisions = values.head ? [values.base, values.head] : [values.base];
-  const problems = getReleaseDeltaProblems({
-    changedPaths: splitPaths(git('diff', '--name-only', '--no-renames', ...revisions)),
-    manifestDiff: git('diff', '-U0', '--no-color', '--no-renames', ...revisions, '--', manifestFileName),
-  });
+  const problems = getDeltaProblems(values.base, values.head);
   if (problems.length > 0) {
     throw new ReleaseError(
       `The release is not the tested commit ${values.base.slice(0, shortShaLength)} plus its version bump; nothing is published:\n${problems.map((line) => `  ${line}`).join('\n')}`,

@@ -14,6 +14,7 @@ name: Release to npm
 # release looks that run up by the commit's SHA. Passed → go on; no run at all → run the suite here; red or still running → the
 # daily run releases nothing that day (green, with the reason), a dispatch or a hand-pushed tag fails. The release commit itself may
 # differ from the tested one only in package.json's version line and CHANGELOG.md — checked before the tag and before the publish.
+# A hand-pushed tag is gated through its PARENT's run when the tag is only that bump (its own run is usually still going).
 on:
   schedule:
     # 09:17 Tbilisi, off the top of the hour: GitHub delays scheduled runs at :00.
@@ -164,6 +165,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ env.TAG }}
+          # The tagged commit and its parent: a hand-pushed tag is gated through the parent's Tests run (below).
+          fetch-depth: 2
           persist-credentials: false
       - run: corepack enable
       - uses: actions/setup-node@v7
@@ -193,13 +196,15 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "${TESTED}"
           yarn tsx src/release/cli.ts verify-delta --base "${TESTED}" --head HEAD
-      # A hand-pushed tag has not been gated: the Tests workflow's result for the tagged commit decides (no run → the suite here).
-      - name: Tests of the tagged commit (the Tests workflow's result)
+      # A hand-pushed tag has not been gated. Its commit was pushed this very moment, so its own Tests run is usually still going: when
+      # its PARENT passed and the tag differs from it only in the version and the CHANGELOG, the parent's run is the gate. Otherwise
+      # the tagged commit's own run decides (no run → the suite here; running or red → refused).
+      - name: Tests of the tagged commit (the Tests workflow's result, through its parent when the tag is only a version bump)
         id: gate
         if: github.event_name == 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: yarn tsx src/release/cli.ts test-gate
+        run: yarn tsx src/release/cli.ts test-gate --through-parent
       - name: Install tmux
         if: steps.gate.outputs.runSuite == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux

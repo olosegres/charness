@@ -480,8 +480,10 @@ describe('test-gate', () => {
     apiRuns = [];
     apiServer = http.createServer((request, response) => {
       requests.push({ url: request.url ?? '', authorization: request.headers.authorization });
+      const askedSha = new URL(request.url ?? '', 'http://localhost').searchParams.get('head_sha');
       response.writeHead(apiStatus, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ workflow_runs: apiRuns }));
+      // Like GitHub: only the runs of the commit that was asked for.
+      response.end(JSON.stringify({ workflow_runs: apiRuns.filter((run) => run.head_sha === askedSha) }));
     });
     await new Promise<void>((resolve) => apiServer.listen(0, '127.0.0.1', resolve));
     const address = apiServer.address();
@@ -560,6 +562,75 @@ describe('test-gate', () => {
     assert.equal(cancelled.status, 1);
     assert.match(cancelled.stderr, /did not pass: cancelled/);
     assert.equal(readGithubOutput().proceed, 'false');
+  });
+
+  describe('a hand-pushed tag (--through-parent)', () => {
+    /** The tested commit and, on top of it, what `npm version` makes: the version bump and the moved CHANGELOG heading. */
+    function commitVersionBump(extraFile?: { path: string; content: string }): { parent: string; tagged: string } {
+      const parent = runGit('rev-parse', 'HEAD');
+      writeRepoFile('package.json', fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8').replace('"version": "3.2.0"', '"version": "3.3.0"'));
+      writeRepoFile('CHANGELOG.md', initialChangelog.replace('## Unreleased', '## Unreleased\n\n## 3.3.0 — 2026-10-23'));
+      if (extraFile) writeRepoFile(extraFile.path, extraFile.content);
+      runGit('add', '-A');
+      runGit('commit', '-q', '-m', 'chore(release): 3.3.0');
+      return { parent, tagged: runGit('rev-parse', 'HEAD') };
+    }
+
+    test('a green parent and a tag that is only the version bump: the release goes on at once — the tag\'s own run (still going) is not waited for', async () => {
+      const { parent, tagged } = commitVersionBump();
+      apiRuns = [createFakeRun({ head_sha: parent }), createFakeRun({ id: 2, head_sha: tagged, status: 'in_progress', conclusion: null })];
+      const result = await runGateCli('--event', 'push', '--through-parent');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(
+        [readGithubOutput().state, readGithubOutput().proceed, readGithubOutput().runSuite, readGithubOutput().sha],
+        ['passed', 'true', 'false', parent],
+      );
+      assert.match(result.stdout, /differs from it only in the version and the CHANGELOG/);
+      assert.equal(requests.length, 1, 'only the parent was looked up');
+    });
+
+    test('a tag that carries another change too does not ride on its parent: its own run decides — still running refuses', async () => {
+      const { parent, tagged } = commitVersionBump({ path: 'src/bot.ts', content: 'export const bot = 2;\n' });
+      apiRuns = [createFakeRun({ head_sha: parent }), createFakeRun({ id: 2, head_sha: tagged, status: 'in_progress', conclusion: null })];
+      const result = await runGateCli('--event', 'push', '--through-parent');
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Refusing to release: the Tests run for [0-9a-f]{7} is still in progress/);
+      assert.equal(readGithubOutput().sha, tagged);
+      assert.equal(requests.length, 2, 'the parent first, then the tagged commit');
+    });
+
+    test('a parent that is red or still running falls back to the tagged commit\'s own run, which may be green', async () => {
+      const { parent, tagged } = commitVersionBump();
+      apiRuns = [createFakeRun({ head_sha: parent, conclusion: 'failure' }), createFakeRun({ id: 2, head_sha: tagged })];
+      const result = await runGateCli('--event', 'push', '--through-parent');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual([readGithubOutput().state, readGithubOutput().sha], ['passed', tagged]);
+    });
+
+    test('no run for the parent and none for the tag: the suite runs here, as for any commit nobody tested', async () => {
+      const { tagged } = commitVersionBump();
+      const result = await runGateCli('--event', 'push', '--through-parent');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual([readGithubOutput().state, readGithubOutput().runSuite, readGithubOutput().sha], ['none', 'true', tagged]);
+    });
+
+    test('a commit with no parent (nothing to ride on) is gated on itself', async () => {
+      const root = runGit('rev-list', '--max-parents=0', 'HEAD');
+      runGit('checkout', '-q', root);
+      apiRuns = [createFakeRun({ head_sha: root })];
+      const result = await runGateCli('--event', 'push', '--through-parent');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual([readGithubOutput().state, readGithubOutput().sha], ['passed', root]);
+    });
+
+    test('without the flag the parent is never looked at (a dispatch or the daily run gates the head itself)', async () => {
+      const { parent, tagged } = commitVersionBump();
+      apiRuns = [createFakeRun({ head_sha: parent }), createFakeRun({ id: 2, head_sha: tagged, status: 'in_progress', conclusion: null })];
+      const result = await runGateCli('--event', 'push');
+      assert.equal(result.status, 1);
+      assert.equal(readGithubOutput().sha, tagged);
+      assert.equal(requests.length, 1);
+    });
   });
 
   test('a --sha that is not a full commit SHA is refused before any request', async () => {

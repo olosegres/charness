@@ -171,8 +171,10 @@ again by itself. The logic is in `src/release/` (pure `releasePlan.ts` and `test
   releases nothing that day and ends green with the reason (a red head is not skipped over to an older green commit), a
   manual dispatch or a hand-pushed tag fails with it. The release commit may differ from the tested one ONLY in
   `package.json`'s `"version"` line and `CHANGELOG.md`: `verify-delta` checks the diff before the tag and again in the publish
-  job (the tag against the tested SHA) and refuses otherwise. A hand-pushed tag is gated on the tagged commit itself — pushing
-  `main` and the tag together finds `Tests` still running: re-run the release once it is green.
+  job (the tag against the tested SHA) and refuses otherwise. A hand-pushed tag (`npm version`, then push `main` with the tag) is gated through its
+  PARENT: when the commit before the tag has a green `Tests` run and the tag differs from it only in the version and the CHANGELOG,
+  that run is the gate — the tag's own run, started by the same push, is not waited for. When the parent is not green or the tag
+  carries more than the bump, the tagged commit's own run decides (still running → refused: re-run the release once it is green).
 - **Version** (Conventional Commits since the last `v*` tag): a `feat` that changes shipped code → minor; any other
   shipped change (`fix`, `perf`, `refactor`, `revert`, `chore`, …) → patch; `chore(release)` commits never count. A `!`
   after the type or a `BREAKING CHANGE:` footer in ANY commit makes the automatic run **fail**, naming the commits: a

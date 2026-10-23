@@ -74,6 +74,22 @@ export function decideTestGate(verdict: TestGateVerdict, event: string): TestGat
   return { proceed: false, runSuite: false, isRefusal: true, message: `Refusing to release: ${verdict.reason}; ${reasonToWait}.` };
 }
 
+/**
+ * @description The gate of a hand-pushed tag, race-free: the tagged commit is the commit someone just pushed, so its own `Tests` run
+ * is usually still going — but when the tagged commit's PARENT already passed and the tag differs from it only in the version and the
+ * CHANGELOG (`deltaProblems` empty), the tested tree is the one that ships and the release goes on without waiting. `null` when that
+ * does not hold: the parent's run is not green, or the tag carries more than a version bump — the tagged commit's own run decides.
+ */
+export function decideTestGateThroughParent(parentVerdict: TestGateVerdict, deltaProblems: string[]): TestGateDecision | null {
+  if (parentVerdict.state !== 'passed' || deltaProblems.length > 0) return null;
+  return {
+    proceed: true,
+    runSuite: false,
+    isRefusal: false,
+    message: `${parentVerdict.reason}, and the tagged commit differs from it only in the version and the CHANGELOG: the release goes through the parent's run and does not run the suite again.`,
+  };
+}
+
 /** What differs between the tested commit and the release commit. */
 export type ReleaseDelta = {
   /** `git diff --name-only` between the two. */
