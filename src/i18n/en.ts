@@ -853,10 +853,11 @@ export const enDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Usage limit reached — will auto-resume after reset (~{time}).',
   'apiRetry.resuming': '↻ Resuming…',
+  'apiRetry.conversationTailNotice': '↻ The provider rejected the last step — continuing…',
   'apiRetry.limitResetResuming':
     '✅ The limit window has reset — resuming work in this topic.',
   'apiRetry.giveUp':
-    "⚠️ Couldn't resume after {attempts} attempts. Message me when to continue.",
+    "⚠️ Couldn't resume (attempts: {attempts}). Message me when to continue.",
   'apiRetry.continueNudge': 'Continue from where you left off.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude is logged out — run /login to continue.',

@@ -309,7 +309,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     try {
       const giveUpRequestId = fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-giveup every resume hits it`);
       // Six resumes, each with its paced notice, before the give-up.
-      await getCharness().waitFor('the give-up', giveUpTimeoutMs, () => topic.listMessages().some((message) => message.message_id > giveUpRequestId && message.text.includes("Couldn't resume after")));
+      await getCharness().waitFor('the give-up', giveUpTimeoutMs, () => topic.listMessages().some((message) => message.message_id > giveUpRequestId && message.text.startsWith("⚠️ Couldn't resume")));
     } finally {
       fs.rmSync(alwaysLimitPath, { force: true });
     }

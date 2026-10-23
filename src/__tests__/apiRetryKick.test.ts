@@ -326,7 +326,7 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
         await runDueTimers();
 
         // The nudge waits; the next error arms attempt 2 — a NEW entry and its own saved record.
-        const newer: ApiRetryTimerEntry = { timer: setTimeout(() => {}, 60_000), attempt: 2, kind: 'usageLimit', firedAt: null, fireAt: clockMs + 60_000 };
+        const newer: ApiRetryTimerEntry = { timer: setTimeout(() => {}, 60_000), attempt: 2, attemptsByKind: { usageLimit: 2 }, kind: 'usageLimit', firedAt: null, fireAt: clockMs + 60_000 };
         world.entries.set(keyString, newer);
         world.saved[keyString] = { kind: 'usageLimit', attempt: 2, fireAt: newer.fireAt };
 
@@ -411,7 +411,7 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       boot();
       world.duringDelivery = () => {
         // The agent answered the nudge with the limit again: the bot armed attempt 2 — a NEW entry and a saved record.
-        const newer: ApiRetryTimerEntry = { timer: setTimeout(() => {}, 60_000), attempt: 2, kind: 'usageLimit', firedAt: null, fireAt: clockMs + 60_000 };
+        const newer: ApiRetryTimerEntry = { timer: setTimeout(() => {}, 60_000), attempt: 2, attemptsByKind: { usageLimit: 2 }, kind: 'usageLimit', firedAt: null, fireAt: clockMs + 60_000 };
         world.entries.set(keyString, newer);
         world.saved[keyString] = { kind: 'usageLimit', attempt: 2, fireAt: newer.fireAt };
       };
@@ -496,6 +496,16 @@ describe('restoring the saved retries at boot', () => {
   });
 });
 
+describe('a conversation-tail retry (the provider refused a history ending on the model\'s turn)', () => {
+  it('sends the "continue" nudge and posts no "resuming" line: its "continuing…" notice went out a moment before', async () => {
+    saveRetry(topicKey, { kind: 'conversationTail' });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.nudges, [{ key: keyToString(topicKey), text: continueNudge }]);
+    assert.deepEqual(world.notices, []);
+  });
+});
+
 describe('a limit probe that fired is remembered across a restart', () => {
   const graceMs = 2 * 60_000;
   /** What the bot does at boot BEFORE the sessions reattach: put back the probes that fired just before it. */
@@ -522,7 +532,7 @@ describe('a limit probe that fired is remembered across a restart', () => {
   it('a probe that fired within the grace window comes back as the kick left it: fired, no timer, still a probe', () => {
     world.firedProbes[keyToString(topicKey)] = clockMs - graceMs;
     assert.deepEqual(restoreFiredProbes(), { restored: 1, dropped: [] });
-    assert.deepEqual(world.entries.get(keyToString(topicKey)), { timer: null, attempt: 1, kind: 'transient', firedAt: clockMs - graceMs, fireAt: clockMs - graceMs, isLimitProbe: true });
+    assert.deepEqual(world.entries.get(keyToString(topicKey)), { timer: null, attempt: 1, attemptsByKind: { transient: 1 }, kind: 'transient', firedAt: clockMs - graceMs, fireAt: clockMs - graceMs, isLimitProbe: true });
   });
 
   it('an older one, a future one or a malformed one is dropped, not restored', () => {
@@ -538,7 +548,7 @@ describe('a limit probe that fired is remembered across a restart', () => {
   it('a thread with an entry already keeps it; another platform\'s probe is neither restored nor dropped; a corrupt key is skipped', () => {
     world.firedProbes = { [keyToString(topicKey)]: clockMs, [keyToString(otherTopicKey)]: clockMs, [keyToString(issueKey)]: clockMs, 'not a key': clockMs };
     world.entries = new Map();
-    const existing: ApiRetryTimerEntry = { timer: null, attempt: 2, kind: 'usageLimit', firedAt: null, fireAt: clockMs };
+    const existing: ApiRetryTimerEntry = { timer: null, attempt: 2, attemptsByKind: { usageLimit: 2 }, kind: 'usageLimit', firedAt: null, fireAt: clockMs };
     world.entries.set(keyToString(otherTopicKey), existing);
     const dropped: string[] = [];
     const restored = restoreFiredLimitProbes(

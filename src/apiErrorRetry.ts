@@ -45,6 +45,14 @@ export function checkIsShortStatedReset(resetAt: number, now: number): boolean {
 }
 
 /**
+ * The retry of a request the provider refused because the conversation ended on the model's turn
+ * ({@link conversationTailRe}): the "continue" nudge is a user turn, which is all the provider asks for — so it goes at
+ * once (a moment, to let the failed turn settle), and only once: the same refusal right after it ends with the give-up.
+ */
+export const conversationTailRetryDelayMs = 2_000;
+export const conversationTailMaxAttempts = 1;
+
+/**
  * Fixed delay for a usage-limit error whose text exposed no reset time (the
  * common case for Claude's "blocked" message): 60 minutes, re-armed on each
  * repeat until {@link usageLimitMaxAttempts}.
@@ -66,6 +74,14 @@ export const retryRecurrenceGraceMs = 2 * msPerMinute;
  */
 export const resetBufferMs = 60_000;
 
+/**
+ * A reset relayed in MACHINE form — an exact epoch in seconds, read before any prose: `"resets_at":1781085600` in the
+ * ChatGPT subscription's `usage_limit_reached` 429 body (codex-rs `UsageErrorBody`), which OpenCode relays verbatim as
+ * the response body, and an older Claude Code's `Claude AI usage limit reached|1781085600`.
+ */
+const structuredResetEpochRegex = /"resets_at"\s*:\s*(\d{10})(?![\d.])|\blimit reached\|(\d{10})(?![\d.])/i;
+/** The same body's wait until that reset in seconds, `"resets_in_seconds":9000` — what an older body carries instead. */
+const structuredResetWaitRegex = /"resets_in_seconds"\s*:\s*(\d+)(?![\d.])/i;
 /** One part of a relative reset — `2 hours`, `30m`, `1 day`, `3s`, `40.15s` — closed by a non-letter (`1h30m` has no word break). */
 const relativeResetPartSource = String.raw`(\d+(?:\.\d+)?)\s*(d|days?|h|hours?|m|mins?|minutes?|s|secs?|seconds?)(?![a-z])`;
 /**
@@ -182,6 +198,13 @@ const longWindowRe =
  */
 const limitHitRe = /\b(?:exceeded|exhausted|reached|hit your|too many|throttl\w*|retry|try again)\b/i;
 
+/**
+ * Gemini's refusal of a request whose `contents` end on a `model` turn (a 400 INVALID_ARGUMENT with no code of its
+ * own). OpenCode v1's agent loop sends one after a step that finished `unknown` or on its max-steps prompt (upstream
+ * fixed it in v2 only); the bot's prompts are always user turns, and its "continue" is one.
+ */
+const conversationTailRe = /requests ending with a model turn are not supported/i;
+
 /** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
 const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;
 
@@ -278,11 +301,12 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
+ *  1a. the refusal of a history that ends on the model's turn ({@link conversationTailRe}) → `conversationTail`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
  *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
- *     a longer one keeps 1c from calling the limit short. A short RELATIVE one that reaches the usage-limit branches
- *     below (a long window named beside it) is a retry hint: their `resetAt` drops it.
+ *     a longer one keeps 1c from calling the limit short. A short one a RETRY verb states ("retry in 40s") that reaches
+ *     the usage-limit branches below (a long window named beside it) is a retry hint: their `resetAt` drops it.
  *  1c. a SHORT-window throttle ({@link shortWindowThrottleRe}, reported as hit —
  *     {@link limitHitRe}) that names no long
  *     window ({@link longWindowRe}) → `transient`: per-minute quotas, concurrency,
@@ -307,6 +331,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   if (authErrorPhrasesRe.test(text)) {
     return { kind: 'auth' };
   }
+  if (conversationTailRe.test(text)) return { kind: 'conversationTail' };
   if (checkIsUsageLimitWarningText(text)) return null;
   // The reset the provider states decides a limit's length when it names one: within the first transient retry it is a
   // throttle, beyond it a window — whatever short-window code (RESOURCE_EXHAUSTED) or quota words ride along. A NAMED
@@ -319,11 +344,11 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   const isLongWindowNamed = longWindowRe.test(text);
   if (isShortStatedReset && limitHitRe.test(text) && !isLongWindowNamed) return { kind: 'transient' };
   if (shortWindowThrottleRe.test(text) && limitHitRe.test(text) && !isLongWindowNamed && !isLongStatedReset) return { kind: 'transient' };
-  // Past this point it is a usage limit, and a SHORT relative reset beside one is a retry hint, not the window's end:
-  // Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken as the reset
-  // it set the wait at ~100 s and spent the attempts in minutes. A clock reset is the window's own end however close.
-  // `parseResetAt` reads the relative shape first, so a relative match is the reset it stated.
-  const limitResetAt = isShortStatedReset && relativeResetRegex.test(text) ? undefined : statedResetAt;
+  // Past this point it is a usage limit, and a SHORT reset a RETRY verb states beside one is a retry hint, not the
+  // window's end: Google sends a spent daily quota with the same "Please retry in 40.15s" as a per-minute one, and taken
+  // as the reset it set the wait at ~100 s and spent the attempts in minutes. What a "reset(s) in / after" or a clock
+  // states is the window's own end, however close.
+  const limitResetAt = isShortStatedReset && checkIsRetryHintReset(text, now) ? undefined : statedResetAt;
   if (exhaustedQuotaCodesRe.test(text)) {
     return { kind: 'usageLimit', resetAt: limitResetAt };
   }
@@ -340,6 +365,23 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
     return { kind: 'usageLimit', resetAt: limitResetAt };
   }
   return null;
+}
+
+/**
+ * A retry verb before a relative reset, a few words apart at most and in the same sentence: "Please retry in 40s",
+ * "try again after 30s", "retry your request in 30s", "try again later, in 30s".
+ */
+const retryVerbBeforeResetRe = /\b(?:retry|try again)\b[^.]{0,30}$/i;
+
+/**
+ * @description Whether the reset {@link parseResetAt} reads in `text` is a retry hint — a relative one stated by a retry
+ * verb — rather than a reset ("Your quota will reset after 4m30s", "resets in 2 minutes"). A machine-form reset is read
+ * ahead of the relative shape and is the window's own end, whatever retry wording rides beside it.
+ */
+function checkIsRetryHintReset(text: string, now: number): boolean {
+  if (parseStructuredResetAt(text, now) !== undefined) return false;
+  const match = relativeResetRegex.exec(text);
+  return match !== null && retryVerbBeforeResetRe.test(text.slice(0, match.index));
 }
 
 /**
@@ -371,7 +413,10 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
 /**
  * @description Best-effort parse of a "reset time" out of a usage-limit message.
  * Never throws: any unparseable / absent time yields `undefined`, which the
- * caller treats as "use the fixed delay". Handles four shapes, in order:
+ * caller treats as "use the fixed delay". Handles five shapes, in order:
+ *  - machine form: an epoch (`"resets_at":…` in a relayed ChatGPT body, Claude's
+ *    `limit reached|<epoch>`) or that body's `"resets_in_seconds":…` — exact, so
+ *    first ({@link parseStructuredResetAt}).
  *  - relative: "resets in 2h" / "in 45m" / "in 2 hours 30 minutes" → `now` + the
  *    sum of the parts.
  *  - dated: "resets Oct 25, 3pm (Europe/Moscow)" — a weekly window, more than a
@@ -393,6 +438,9 @@ export function checkIsUsageLimitWindowOver(cls: AgentApiErrorClass, now: number
  *   the next occurrence of an absolute clock time.
  */
 export function parseResetAt(text: string, now: number): number | undefined {
+  const structuredResetAt = parseStructuredResetAt(text, now);
+  if (structuredResetAt !== undefined) return structuredResetAt;
+
   const relativeMatch = relativeResetRegex.exec(text);
   if (relativeMatch) {
     let durationMs = 0;
@@ -420,6 +468,20 @@ export function parseResetAt(text: string, now: number): number | undefined {
   if (isoMatch) return resolveIsoResetTime(isoMatch, text);
 
   return undefined;
+}
+
+/**
+ * The machine-form reset ({@link structuredResetEpochRegex}, {@link structuredResetWaitRegex}) as epoch ms, or
+ * `undefined` when there is none. An epoch not ahead of `now` is no reset, nor is a zero wait: a stale `|<epoch>` line or
+ * a clock ahead of the provider's would arm a zero delay and spend every attempt in seconds. (The boot recovery reads
+ * against the time the error was written, so the reset it judges over is still read.)
+ */
+function parseStructuredResetAt(text: string, now: number): number | undefined {
+  const epochMatch = structuredResetEpochRegex.exec(text);
+  const epochMs = epochMatch ? Number.parseInt(epochMatch[1] ?? epochMatch[2], 10) * msPerSecond : 0;
+  if (epochMs > now) return epochMs;
+  const waitSeconds = Number.parseInt(structuredResetWaitRegex.exec(text)?.[1] ?? '', 10);
+  return waitSeconds > 0 ? now + waitSeconds * msPerSecond : undefined;
 }
 
 /**
@@ -571,6 +633,8 @@ export type RetryPlan = { delayMs: number } | { giveUp: true };
  * time never overflows the timer.
  *  - transient: {@link transientBackoffMinutes}[attempt-1]; giveUp once attempt
  *    exceeds {@link transientMaxAttempts}.
+ *  - conversationTail: {@link conversationTailRetryDelayMs}; giveUp once attempt exceeds
+ *    {@link conversationTailMaxAttempts}.
  *  - usageLimit: `resetAt` present → `resetAt - now + resetBufferMs`; else
  *    {@link usageLimitDefaultMs}; giveUp once attempt exceeds
  *    {@link usageLimitMaxAttempts}.
@@ -579,6 +643,10 @@ export function getRetryPlan(args: RetryPlanArgs): RetryPlan {
   // auth is never retried (it is surfaced by `decideRetryAction` before this is
   // reached); guard so it can never fall through into the usageLimit branch.
   if (args.kind === 'auth') return { giveUp: true };
+
+  if (args.kind === 'conversationTail') {
+    return args.attempt > conversationTailMaxAttempts ? { giveUp: true } : { delayMs: conversationTailRetryDelayMs };
+  }
 
   if (args.kind === 'transient') {
     if (args.attempt > transientMaxAttempts) return { giveUp: true };
@@ -602,9 +670,12 @@ function clampDelay(delayMs: number): number {
  * into {@link decideRetryAction}. The bot owns the live `Map`; this snapshot is
  * the only state the pure decision needs.
  */
+/** Attempts armed per class inside one retry episode: the classes can alternate within it. */
+export type RetryAttemptsByKind = Partial<Record<AgentApiErrorClass['kind'], number>>;
+
 export interface RetryEntrySnapshot {
-  /** 1-based attempt of the currently / last armed retry. */
-  attempt: number;
+  /** The attempts already armed per class in the thread's current episode. */
+  attemptsByKind: RetryAttemptsByKind;
   /** Epoch ms when the last armed retry actually fired, or `null` if still pending. */
   firedAt: number | null;
   /** True while a retry timer is armed and has not fired yet. */
@@ -626,7 +697,7 @@ export interface RetryEntrySnapshot {
 export type RetryAction =
   | { action: 'surface' }
   | { action: 'ignore' }
-  | { action: 'arm'; attempt: number; delayMs: number; fireAt: number }
+  | { action: 'arm'; attempt: number; delayMs: number; fireAt: number; attemptsByKind: RetryAttemptsByKind }
   | { action: 'giveUp'; attempts: number };
 
 export interface DecideRetryActionArgs {
@@ -650,8 +721,11 @@ export interface DecideRetryActionArgs {
  *  1. `prev.pending` → `ignore` (a retry is already armed — dedup the episode;
  *     this is what stops Claude's repeated scrape frames AND any duplicate
  *     `session.error` from re-arming).
- *  2. same episode (a `prev` that fired within {@link retryRecurrenceGraceMs}) →
- *     escalate to `prev.attempt + 1`; otherwise a fresh episode → attempt 1.
+ *  2. same episode (a `prev` that fired within {@link retryRecurrenceGraceMs}) → escalate THIS class from its own
+ *     count in the episode (`prev.attemptsByKind`); a class new to the episode starts at 1, and so does a fresh
+ *     episode. A model-turn refusal on the "continue" of a short throttle retry still gets its one retry, and two
+ *     classes that alternate cannot reset each other: each still reaches its own cap. The `arm` action carries the
+ *     episode's updated counts for the caller to keep.
  *  3. ask {@link getRetryPlan}: `giveUp` → `giveUp` with `attempts` already made
  *     (= attempt − 1); else `arm` at `now + delayMs`.
  */
@@ -660,10 +734,11 @@ export function decideRetryAction(args: DecideRetryActionArgs): RetryAction {
   if (kind === 'auth') return { action: 'surface' };
   if (prev?.pending) return { action: 'ignore' };
 
-  const sameEpisode = !!prev && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
-  const attempt = sameEpisode ? prev.attempt + 1 : 1;
+  const isSameEpisode = !!prev && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
+  const episodeAttempts: RetryAttemptsByKind = isSameEpisode ? prev.attemptsByKind : {};
+  const attempt = (episodeAttempts[kind] ?? 0) + 1;
 
   const plan = getRetryPlan({ kind, attempt, resetAt, now });
   if ('giveUp' in plan) return { action: 'giveUp', attempts: attempt - 1 };
-  return { action: 'arm', attempt, delayMs: plan.delayMs, fireAt: now + plan.delayMs };
+  return { action: 'arm', attempt, delayMs: plan.delayMs, fireAt: now + plan.delayMs, attemptsByKind: { ...episodeAttempts, [kind]: attempt } };
 }

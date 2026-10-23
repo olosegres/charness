@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
-import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import { sleep } from '../utils';
@@ -55,7 +55,7 @@ import {
   type OpenCodeAuthMethod,
 } from '../utils/openCodeAuthLogin';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Persist per-thread model selection so it survives bot restarts.
@@ -332,6 +332,13 @@ export interface OpenCodeSession {
    * send; a healthy turn always sets it. Its absence at idle is the wedge signal.
    */
   sawTurnActivity: boolean;
+  /**
+   * The failures of the current turn already handled, by their surfaced text. OpenCode reports most failures twice —
+   * `session.error` AND the failed assistant message's `info.error`, in either order — and may update that message
+   * more than once: each is posted (or handed to the auto-retry) once. Cleared by each prompt sent and at the session's
+   * own idle → busy edge (a turn started otherwise: `/compact`, a client outside the bot).
+   */
+  handledTurnErrorTexts: Set<string>;
   /**
    * Signature of the current provider-managed `session.status=retry`, or null.
    * Doubles as the one-notice-per-retry dedup key and the signal that the next
@@ -925,6 +932,10 @@ export function checkIsOpenCodeAbortError(errorMsg: string): boolean {
 }
 
 const genericOpenCodeErrorMessage = 'OpenCode request failed';
+
+/** The two channels OpenCode reports a turn's failure on, and the line each one posts. */
+const openCodeFailurePrefixes = { 'session.error': 'OpenCode error: ', 'message.error': 'Error: ' } as const;
+type OpenCodeFailureChannel = keyof typeof openCodeFailurePrefixes;
 /** Placeholder written over every redacted credential. */
 const openCodeErrorRedactedMarker = '[redacted]';
 /**
@@ -968,18 +979,45 @@ const openCodeErrorCredentialValueRe = /\bsk-[A-Za-z0-9_-]+|\bghp_[A-Za-z0-9]+|\
  */
 const openCodeErrorUrlUserInfoRe = /(\w+:\/\/)[^\s/@]+@/g;
 
-/**
- * @description Redact the credentials a surfaced error string is known to carry
- * and cap it. Redaction runs BEFORE the cap: capping first could cut a secret
- * assignment in half and leave the head of the credential visible.
- */
-function redactOpenCodeErrorMessage(message: string): string {
+/** @description Redact the credentials an error string is known to carry (see the rules above). */
+function redactOpenCodeErrorCredentials(message: string): string {
   return message
     .replace(openCodeErrorSecretAssignmentRe, `$1$2${openCodeErrorRedactedMarker}`)
     .replace(openCodeErrorAuthSchemeRe, `$1 ${openCodeErrorRedactedMarker}`)
     .replace(openCodeErrorCredentialValueRe, openCodeErrorRedactedMarker)
-    .replace(openCodeErrorUrlUserInfoRe, `$1${openCodeErrorRedactedMarker}@`)
-    .slice(0, openCodeErrorMessageMaxLength);
+    .replace(openCodeErrorUrlUserInfoRe, `$1${openCodeErrorRedactedMarker}@`);
+}
+
+/**
+ * The start of the diagnostics block an auth plugin appends to every provider error it relays
+ * (opencode-antigravity-auth: `\n\n[Debug Info]\nRequested Model: …\nProject: …\nEndpoint: …\nTool Debug Payload: …`): the
+ * user's Google project id and part of the tool schema — nothing the person in the topic can act on, and it pushed the
+ * provider's own reason out of the capped line. Cut before the text is surfaced; the bot log keeps it
+ * ({@link getOpenCodeErrorLogText}).
+ */
+const openCodePluginDiagnosticsMarker = '\n\n[Debug Info]';
+
+/**
+ * @description The surfaced form of an error string: the plugin diagnostics cut ({@link openCodePluginDiagnosticsMarker}),
+ * the credentials redacted, the length capped. Redaction runs BEFORE the cap: capping first could cut a secret
+ * assignment in half and leave the head of the credential visible.
+ */
+function redactOpenCodeErrorMessage(message: string): string {
+  const diagnosticsStart = message.indexOf(openCodePluginDiagnosticsMarker);
+  const reason = diagnosticsStart >= 0 ? message.slice(0, diagnosticsStart) : message;
+  return redactOpenCodeErrorCredentials(reason).slice(0, openCodeErrorMessageMaxLength);
+}
+
+/** @description The message string of OpenCode's known error shapes (`{ data: { message } }`, `{ message }`, a string), else `null`. */
+function readOpenCodeErrorString(error: unknown): string | null {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object') return null;
+  const errorRecord = error as Record<string, unknown>;
+  if (errorRecord.data && typeof errorRecord.data === 'object') {
+    const errorData = errorRecord.data as Record<string, unknown>;
+    if (typeof errorData.message === 'string') return errorData.message;
+  }
+  return typeof errorRecord.message === 'string' ? errorRecord.message : null;
 }
 
 /**
@@ -993,17 +1031,17 @@ function redactOpenCodeErrorMessage(message: string): string {
  * The retry classifier reads {@link getOpenCodeErrorClassificationText} instead.
  */
 export function getOpenCodeErrorMessage(error: unknown): string {
-  if (typeof error === 'string') return redactOpenCodeErrorMessage(error);
-  if (!error || typeof error !== 'object') return genericOpenCodeErrorMessage;
+  const errorString = readOpenCodeErrorString(error);
+  return errorString === null ? genericOpenCodeErrorMessage : redactOpenCodeErrorMessage(errorString);
+}
 
-  const errorRecord = error as Record<string, unknown>;
-  if (errorRecord.data && typeof errorRecord.data === 'object') {
-    const errorData = errorRecord.data as Record<string, unknown>;
-    if (typeof errorData.message === 'string') return redactOpenCodeErrorMessage(errorData.message);
-  }
-  if (typeof errorRecord.message === 'string') return redactOpenCodeErrorMessage(errorRecord.message);
-
-  return genericOpenCodeErrorMessage;
+/**
+ * @description The bot-log form of an error: the whole message string, plugin diagnostics included, credentials
+ * redacted — what {@link getOpenCodeErrorMessage} cuts for the topic stays findable in the log.
+ */
+export function getOpenCodeErrorLogText(error: unknown): string {
+  const errorString = readOpenCodeErrorString(error);
+  return errorString === null ? genericOpenCodeErrorMessage : redactOpenCodeErrorCredentials(errorString);
 }
 
 /**
@@ -1532,10 +1570,12 @@ async function fetchAvailableModels(): Promise<string[]> {
   }
   
   try {
-    const opencodeCmd = getToolCommand('opencode');
-    const { stdout } = await execAsync(`${opencodeCmd} models`, {
+    // No shell: a path with spaces (Windows' `C:\\Program Files\\…`) stays one argument; a `.cmd` shim is launched as such.
+    const modelsLaunch = getToolLaunch(getToolCommand('opencode'), ['models']);
+    const { stdout } = await execFileAsync(modelsLaunch.command, modelsLaunch.args, {
       timeout: 10000,
       env: getOpenCodeChildEnv(),
+      windowsVerbatimArguments: modelsLaunch.windowsVerbatimArguments,
     });
     const models = stdout.trim().split('\n').filter(line => line.includes('/'));
     if (models.length > 0) {
@@ -2151,6 +2191,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           isBusy: false,
           awaitingTurnResponse: false,
           sawTurnActivity: false,
+          handledTurnErrorTexts: new Set(),
           unconsumedInputCount: 0,
           seenUserMessageIds: new Set(),
           providerRetrySignature: null,
@@ -2356,6 +2397,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // New turn → previous turn's tool-result dedup ids can no longer matter
     // (see the field's JSDoc for why the turn flush is too early to clear).
     session.emittedToolResultPartIds.clear();
+    session.handledTurnErrorTexts.clear();
     // Mark busy optimistically so an immediately-following message correctly
     // sees a turn in flight; the `session.status` stream corrects/confirms it.
     session.isBusy = true;
@@ -3378,6 +3420,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         isBusy: false,
         awaitingTurnResponse: false,
         sawTurnActivity: false,
+        handledTurnErrorTexts: new Set(),
         unconsumedInputCount: 0,
         seenUserMessageIds: new Set(),
         providerRetrySignature: null,
@@ -5071,11 +5114,58 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       const errorMsg = getOpenCodeErrorMessage(info.error);
       if (checkIsOpenCodeAbortError(errorMsg)) {
         console.log(`[OpenCode] Swallowed bot-issued abort (message.error "Aborted") for ${keyToString(key)}`);
+      } else if (info.sessionID && info.sessionID !== session.sessionId) {
+        // A sub-agent's failed step reaches the parent as a failed tool call; it is not the topic's failure.
+        console.log(`[OpenCode] ${keyToString(key)}: message error of session ${info.sessionID}, not the topic's own:`, getOpenCodeErrorLogText(info.error));
       } else {
-        console.error(`[OpenCode] Message error:`, errorMsg);
-        this.emit('output', key, `Error: ${errorMsg}`);
+        this.handleOwnTurnFailure(key, info.error, 'message.error');
       }
     }
+  }
+
+  /**
+   * @description One failure of the topic's OWN turn, from either channel OpenCode reports it on: `session.error` and the
+   * failed assistant message (`message.updated` with `info.error`). OpenCode publishes most failures on both, in either
+   * order, and may update the message more than once — so a failure is handled ONCE per turn
+   * ({@link OpenCodeSession.handledTurnErrorTexts}); one that comes only on the message (a compaction, a structured-output
+   * step) is handled all the same. Handled = posted (`OpenCode error: …` / `Error: …` by the channel that came first)
+   * and, when the classifier knows it, handed to the
+   * bot's auto-retry (`apiError`). A conversation-tail refusal is not posted: the retry's own notice is its one line.
+   *
+   * Classified from the RAW payload, not from the surfaced text: that collapses an unrecognised shape to a constant
+   * that carries no marker to classify. The raw text stops here — the classifier returns only a class.
+   */
+  private handleOwnTurnFailure(key: SessionKey, error: unknown, channel: OpenCodeFailureChannel): void {
+    const errorMsg = getOpenCodeErrorMessage(error);
+    const session = this.sessions.get(keyToString(key));
+    if (session?.handledTurnErrorTexts.has(errorMsg)) {
+      console.log(`[OpenCode] ${keyToString(key)}: the turn's failure came again on ${channel} — already handled, not posted again`);
+      return;
+    }
+    session?.handledTurnErrorTexts.add(errorMsg);
+    console.error(`[OpenCode] ${keyToString(key)}: turn failure (${channel}):`, getOpenCodeErrorLogText(error));
+
+    // A PARENT-session error aborts the current turn/generation, so the
+    // delegation the dedicated sub-agent status describes is no longer running:
+    // close it defensively (mirrors the parent-idle / parent-finish closes) so
+    // an error that never reaches a clean idle can't leave the "working" frame
+    // and its self-re-arming tick wedged, flooding the topic (live 2026-08-03).
+    // If an auto-retry re-delegates, a fresh `subagentStatus{active:true}` re-opens it.
+    if (session?.isActive) this.closeSubagentStatusOnParentTurnEnd(key);
+
+    // Provider-side API error at the proxy boundary → emit `apiError`. transient / usageLimit / conversationTail arm
+    // the auto-retry (the session stays active after the error, so the kick reuses it); `auth` (logged out / bad
+    // credentials) is SURFACED as a pinned notice by the bot, never retried. Unrecognised errors classify to `null`.
+    const now = Date.now();
+    const apiError: AgentApiErrorClass | null = classifyAgentApiError(getOpenCodeErrorClassificationText(error), now);
+    if (apiError?.kind !== 'conversationTail') this.emit('output', key, `${openCodeFailurePrefixes[channel]}${errorMsg}`);
+    if (!apiError) return;
+    // A usage limit whose text names no reset takes the provider's Retry-After, read as a field — unless it is a
+    // short retry hint (a daily quota comes with Google's 40-second one), which is not the window's reset.
+    const retryAfterAt = apiError.kind === 'usageLimit' && apiError.resetAt === undefined ? getOpenCodeErrorRetryAfterAt(error, now) : undefined;
+    const limitRetryAfterAt = retryAfterAt !== undefined && !checkIsShortStatedReset(retryAfterAt, now) ? retryAfterAt : undefined;
+    const resetAt = apiError.kind === 'usageLimit' ? apiError.resetAt ?? limitRetryAfterAt : undefined;
+    this.emit('apiError', key, apiError.kind === 'usageLimit' ? { ...apiError, resetAt } : apiError);
   }
 
   /**
@@ -5199,6 +5289,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     const status = properties.status as OpenCodeSessionStatus | undefined;
     const isProviderRetry = status?.type === 'retry';
+    const wasBusy = session.isBusy;
     const wasForeignBusyIgnored = applyOpenCodeStatusEvent(
       session,
       session.sessionId,
@@ -5228,6 +5319,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       return;
     }
     if (!isOwnSession) return;
+    // A turn the bot did not start with a prompt (`/compact`'s summarize, one started outside the bot) begins here:
+    // the previous turn's handled failures must not silence its own.
+    if (status?.type === 'busy' && !wasBusy) session.handledTurnErrorTexts.clear();
     if (status?.type === 'busy' && session.isAwaitingProviderRetryReplacementStart) {
       // `busy` is the observable boundary for the replacement request. Older
       // retry termination events can no longer consume this new turn's idle, and
@@ -5376,51 +5470,18 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       return;
     }
 
-    console.error(`[OpenCode] Session error:`, errorMsg);
-    this.emit('output', key, `OpenCode error: ${errorMsg}`);
-
-    // A PARENT-session error aborts the current turn/generation, so the
-    // delegation the dedicated sub-agent status describes is no longer running:
-    // close it defensively (mirrors the parent-idle / parent-finish closes) so
-    // an error that never reaches a clean idle can't leave the "working" frame
-    // and its self-re-arming tick wedged, flooding the topic (live 2026-08-03).
-    // A CHILD (sub-agent) error must NOT close it — the parent delegation is
-    // still in flight (guarded the same way as `handleSessionIdle`). If an
-    // auto-retry re-delegates, a fresh `subagentStatus{active:true}` re-opens it.
-    if (session?.isActive && isOwnSession) {
-      this.closeSubagentStatusOnParentTurnEnd(key);
-    }
-
-    // Provider-side API error of the OWN session at the proxy boundary → emit `apiError`. transient
-    // / usageLimit arm the auto-retry (the session stays active after
-    // `session.error`, so the kick reuses it); `auth` (logged out / bad
-    // credentials) is SURFACED as a pinned notice by the bot, never retried.
-    // Unrecognised errors classify to `null` and emit nothing.
-    //
-    // Classified from the RAW payload, not from `errorMsg`: the surfaced text
-    // collapses an unrecognised shape to a constant that carries no marker to
-    // classify. The raw text stops here — the classifier returns only a class.
     // Only the topic's OWN session's error is the topic's: a sub-agent's child session (often on another model or
     // provider) and a foreign session routed here by the folder report limits that are not this conversation's —
     // armed, they held a parent that was still working and marked its model limited. A child's real limit reaches the
-    // parent as a failed tool call; if it is the parent's too, the parent's own retry or error says so.
+    // parent as a failed tool call; if it is the parent's too, the parent's own retry or error says so. Such an error is
+    // still shown, but never closes the parent's sub-agent status (its delegation is still in flight).
     if (!isOwnSession) {
+      console.error(`[OpenCode] Session error:`, getOpenCodeErrorLogText(properties.error));
+      this.emit('output', key, `${openCodeFailurePrefixes['session.error']}${errorMsg}`);
       console.log(`[OpenCode] ${keyToString(key)}: session.error of session ${eventSessionId}, not the topic's own — no retry armed`);
       return;
     }
-    const now = Date.now();
-    const apiError: AgentApiErrorClass | null = classifyAgentApiError(
-      getOpenCodeErrorClassificationText(properties.error),
-      now,
-    );
-    if (apiError) {
-      // A usage limit whose text names no reset takes the provider's Retry-After, read as a field — unless it is a
-      // short retry hint (a daily quota comes with Google's 40-second one), which is not the window's reset.
-      const retryAfterAt = apiError.kind === 'usageLimit' && apiError.resetAt === undefined ? getOpenCodeErrorRetryAfterAt(properties.error, now) : undefined;
-      const limitRetryAfterAt = retryAfterAt !== undefined && !checkIsShortStatedReset(retryAfterAt, now) ? retryAfterAt : undefined;
-      const resetAt = apiError.kind === 'usageLimit' ? apiError.resetAt ?? limitRetryAfterAt : undefined;
-      this.emit('apiError', key, apiError.kind === 'usageLimit' ? { ...apiError, resetAt } : apiError);
-    }
+    this.handleOwnTurnFailure(key, properties.error, 'session.error');
   }
 
   private handlePermissionAsked(_key: SessionKey, properties: Record<string, unknown>, directory?: string): void {

@@ -20,6 +20,8 @@ import {
   resetBufferMs,
   checkIsUsageLimitWindowOver,
   getUnconfirmedLimitAction,
+  conversationTailRetryDelayMs,
+  type RetryAttemptsByKind,
 } from '../apiErrorRetry';
 import { maxTimeoutMs } from '../scheduler/engine';
 
@@ -133,12 +135,23 @@ test('classify: a quota or window that names a LONG window stays a usage limit, 
   }
 });
 
-test('classify: inside a usage limit a short relative retry hint is not the reset — a clock reset a few minutes ahead is', () => {
+test('classify: inside a usage limit a short retry hint ("retry in Ns") is not the reset — a stated reset or a clock a few minutes ahead is', () => {
   // Google sends a used-up DAILY quota with the same "Please retry in 40.15s" as a per-minute one. Read as the reset,
   // it put the usage-limit wait at ~100 s and spent the attempts in minutes; the wait is the usual usage-limit delay.
   for (const text of [googleDailyQuotaBody, 'You exceeded your current quota (requests per day). Please retry in 30s.']) {
     assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: undefined }, text);
   }
+  // A reset the text states as one — "reset(s) in / after" — is the window's own end, however close it is.
+  assert.deepEqual(classifyAgentApiError('Daily usage limit reached. Your quota will reset after 4m30s.', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 4.5 * minuteMs });
+  assert.deepEqual(classifyAgentApiError('Session limit reached, resets in 2 minutes', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 2 * minuteMs });
+  // "try again in" is a retry verb as well.
+  assert.deepEqual(classifyAgentApiError('Daily quota exceeded. Please try again in 30s.', fixedNow), { kind: 'usageLimit', resetAt: undefined });
+  // A few words between the verb and the delay are still the hint.
+  for (const text of ['Daily quota exceeded. Please retry your request in 30s.', 'Daily quota exceeded. Please try again later, in 30s.']) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: undefined }, text);
+  }
+  // A retry verb in an earlier sentence does not turn a stated reset into a hint.
+  assert.deepEqual(classifyAgentApiError('Daily usage limit reached, retry later. Your quota will reset after 4m30s.', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 4.5 * minuteMs });
   // A window's own end, written as a clock time, stays the reset however close it is.
   const closeClockReset = new Date(fixedNow + 3 * minuteMs);
   const clockText = `You've hit your session limit · resets ${closeClockReset.getHours()}:${closeClockReset.getMinutes().toString().padStart(2, '0')}`;
@@ -209,6 +222,77 @@ test('parseResetAt: message with no time → undefined', () => {
   assert.equal(parseResetAt('Claude usage limit reached', fixedNow), undefined);
 });
 
+// Gemini refuses a request whose history ends on the model's turn (OpenCode v1's agent loop sends one): a user turn is
+// all it asks for, so the bot sends its "continue" at once, once.
+const modelTurnRefusal = 'Requests ending with a model turn are not supported.';
+
+test('classify: Gemini\'s "Requests ending with a model turn are not supported" → conversationTail, whatever rides along', () => {
+  for (const text of [
+    modelTurnRefusal,
+    `${modelTurnRefusal}\n\n[Debug Info]\nRequested Model: gemini-3-pro\nProject: example-project-123`,
+    JSON.stringify({ error: { code: 400, message: modelTurnRefusal, status: 'INVALID_ARGUMENT' } }),
+    `400 ${modelTurnRefusal}\nHTTP 400`,
+  ]) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'conversationTail' }, text);
+  }
+});
+
+test('classify: other 400s stay unclassified — the class is for that one refusal', () => {
+  for (const text of [
+    "Unsupported parameter: 'reasoning.summary'",
+    JSON.stringify({ error: { code: 400, message: 'Invalid JSON payload received. Unknown name "foo"', status: 'INVALID_ARGUMENT' } }),
+    'Please ensure that multiturn requests alternate between user and model.',
+    'Requests ending with a user turn are fine.',
+  ]) {
+    assert.equal(classifyAgentApiError(text, fixedNow), null, text);
+  }
+});
+
+test('getRetryPlan / decideRetryAction: a conversation-tail refusal is retried once, at once; again within the grace window → give up', () => {
+  assert.deepEqual(getRetryPlan({ kind: 'conversationTail', attempt: 1, now: fixedNow }), { delayMs: conversationTailRetryDelayMs });
+  assert.ok(conversationTailRetryDelayMs <= 5_000, 'a moment, not the transient minutes');
+  assert.deepEqual(getRetryPlan({ kind: 'conversationTail', attempt: 2, now: fixedNow }), { giveUp: true });
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: null }),
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs, attemptsByKind: { conversationTail: 1 } },
+  );
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { conversationTail: 1 }, firedAt: fixedNow - minuteMs, pending: false } }),
+    { action: 'giveUp', attempts: 1 },
+  );
+  // A class new to the episode starts at 1: a refusal on the "continue" of a short throttle retry still gets its one
+  // retry — and the episode keeps the throttle's count beside it.
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { transient: 1 }, firedAt: fixedNow - minuteMs, pending: false } }),
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs, attemptsByKind: { transient: 1, conversationTail: 1 } },
+  );
+  // A refusal long after the last retry is a fresh episode.
+  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { conversationTail: 1 }, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
+});
+
+test('decideRetryAction: two classes alternating inside one episode cannot reset each other — each reaches its own cap', () => {
+  // Google's "capacity … reset after 2s" (transient), its "continue" refused as a model turn (conversationTail), the
+  // capacity error again, …: each class counts from its own last attempt in the episode.
+  const firedJustNow = (attemptsByKind: RetryAttemptsByKind) => ({ attemptsByKind, firedAt: fixedNow - minuteMs, pending: false });
+  const transientAgain = decideRetryAction({ kind: 'transient', now: fixedNow, prev: firedJustNow({ transient: 1, conversationTail: 1 }) });
+  assert.deepEqual(transientAgain, { action: 'arm', attempt: 2, delayMs: 10 * minuteMs, fireAt: fixedNow + 10 * minuteMs, attemptsByKind: { transient: 2, conversationTail: 1 } }, 'transient → tail → transient: transient attempt 2');
+
+  // Walk the alternation to the end: it must stop.
+  let attemptsByKind: RetryAttemptsByKind = {};
+  const actions: string[] = [];
+  for (const kind of ['transient', 'conversationTail', 'transient', 'conversationTail', 'transient', 'conversationTail', 'transient'] as const) {
+    const action = decideRetryAction({ kind, now: fixedNow, prev: firedJustNow(attemptsByKind) });
+    actions.push(action.action === 'arm' ? `${kind} ${action.attempt}` : action.action === 'giveUp' ? `${kind} giveUp` : action.action);
+    if (action.action !== 'arm') break;
+    attemptsByKind = action.attemptsByKind;
+  }
+  assert.deepEqual(actions, ['transient 1', 'conversationTail 1', 'transient 2', 'conversationTail giveUp'], 'the tail\'s one retry is spent: its second refusal gives up');
+  // And the throttle alone, with a refusal between each of its retries, still stops at its cap.
+  assert.deepEqual(decideRetryAction({ kind: 'transient', now: fixedNow, prev: firedJustNow({ transient: 3, conversationTail: 1 }) }), { action: 'giveUp', attempts: 3 });
+  // usageLimit ↔ conversationTail likewise keeps the usage-limit cap.
+  assert.equal(decideRetryAction({ kind: 'usageLimit', now: fixedNow, prev: firedJustNow({ usageLimit: 6, conversationTail: 1 }) }).action, 'giveUp');
+});
+
 test('getRetryPlan: transient attempts 1/2/3 → 5/10/20 min', () => {
   assert.deepEqual(getRetryPlan({ kind: 'transient', attempt: 1, now: fixedNow }), {
     delayMs: 5 * minuteMs,
@@ -268,6 +352,7 @@ test('decideRetryAction: no prior record → arm attempt 1 at the first transien
     attempt: 1,
     delayMs: 5 * minuteMs,
     fireAt: fixedNow + 5 * minuteMs,
+    attemptsByKind: { transient: 1 },
   });
 });
 
@@ -275,7 +360,7 @@ test('decideRetryAction: a retry already pending → ignore (dedup the same erro
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 1, firedAt: null, pending: true },
+    prev: { attemptsByKind: { transient: 1 }, firedAt: null, pending: true },
   });
   assert.deepEqual(result, { action: 'ignore' });
 });
@@ -284,13 +369,14 @@ test('decideRetryAction: a prior fire WITHIN the grace window → escalate to at
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
+    prev: { attemptsByKind: { transient: 1 }, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
     attempt: 2,
     delayMs: 10 * minuteMs,
     fireAt: fixedNow + 10 * minuteMs,
+    attemptsByKind: { transient: 2 },
   });
 });
 
@@ -298,13 +384,14 @@ test('decideRetryAction: a prior fire BEYOND the grace window → fresh episode,
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { attempt: 3, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
+    prev: { attemptsByKind: { transient: 3 }, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
     attempt: 1,
     delayMs: 5 * minuteMs,
     fireAt: fixedNow + 5 * minuteMs,
+    attemptsByKind: { transient: 1 },
   });
 });
 
@@ -313,7 +400,7 @@ test('decideRetryAction: transient escalation past the cap → giveUp with attem
     kind: 'transient',
     now: fixedNow,
     // attempt 3 fired inside grace → next attempt is 4 → over the cap of 3.
-    prev: { attempt: 3, firedAt: fixedNow - 1, pending: false },
+    prev: { attemptsByKind: { transient: 3 }, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 3 });
 });
@@ -323,7 +410,7 @@ test('decideRetryAction: usageLimit escalation past the cap → giveUp with atte
     kind: 'usageLimit',
     now: fixedNow,
     // attempt 6 fired inside grace → next attempt is 7 → over the cap of 6.
-    prev: { attempt: 6, firedAt: fixedNow - 1, pending: false },
+    prev: { attemptsByKind: { usageLimit: 6 }, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 6 });
 });
@@ -339,7 +426,7 @@ test('decideRetryAction: auth → surface (never arms a timer, ignores prior rec
     decideRetryAction({
       kind: 'auth',
       now: fixedNow,
-      prev: { attempt: 2, firedAt: fixedNow - 1, pending: true },
+      prev: { attemptsByKind: { auth: 2 }, firedAt: fixedNow - 1, pending: true },
     }),
     { action: 'surface' },
   );
@@ -622,4 +709,51 @@ test('parseResetAt: "after <duration>" and seconds are read', () => {
   assert.equal(parseResetAt('Your quota will reset after 8h27m3s.', fixedNow), fixedNow + 8 * hourMs + 27 * 60_000 + 3_000);
   assert.equal(parseResetAt('quota resets in 90s', fixedNow), fixedNow + 90_000);
   assert.equal(parseResetAt('Please retry in 40.15s.', fixedNow), fixedNow + 40_150);
+});
+
+/** The ChatGPT subscription's 429 body that OpenCode relays as the response body (codex-rs `UsageErrorBody` fields). */
+function chatGptUsageLimitBody(resetField: string): string {
+  return `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus",${resetField}}}`;
+}
+
+test('classify: the ChatGPT usage_limit_reached body → a usage limit until its resets_at epoch (or its resets_in_seconds)', () => {
+  const resetsAtSeconds = Math.floor(fixedNow / 1000) + 4 * 24 * 3600;
+  assert.deepEqual(
+    classifyAgentApiError(chatGptUsageLimitBody(`"resets_at":${resetsAtSeconds},"limit_window_minutes":10080`), fixedNow),
+    { kind: 'usageLimit', resetAt: resetsAtSeconds * 1000 },
+  );
+  assert.deepEqual(
+    classifyAgentApiError(chatGptUsageLimitBody('"resets_in_seconds":9000'), fixedNow),
+    { kind: 'usageLimit', resetAt: fixedNow + 9000 * 1000 },
+  );
+  // A zero wait is no reset (it would arm an instant retry).
+  assert.equal(parseResetAt(chatGptUsageLimitBody('"resets_in_seconds":0'), fixedNow), undefined);
+});
+
+test('classify: a machine-form epoch already behind now is no reset — the limit waits the default, not a zero-delay retry', () => {
+  const pastSeconds = Math.floor(fixedNow / 1000) - 3600;
+  for (const text of [chatGptUsageLimitBody(`"resets_at":${pastSeconds}`), `Claude AI usage limit reached|${pastSeconds}`]) {
+    const cls = classifyAgentApiError(text, fixedNow);
+    assert.deepEqual(cls, { kind: 'usageLimit', resetAt: undefined }, text);
+    assert.deepEqual(decideRetryAction({ kind: 'usageLimit', resetAt: cls?.kind === 'usageLimit' ? cls.resetAt : undefined, now: fixedNow, prev: null }),
+      { action: 'arm', attempt: 1, delayMs: usageLimitDefaultMs, fireAt: fixedNow + usageLimitDefaultMs, attemptsByKind: { usageLimit: 1 } }, text);
+  }
+  // The boot recovery reads a parked error against the time it was written: that reset is kept, and over by now.
+  const writtenAtMs = fixedNow - 2 * 3600_000;
+  const recovered = classifyAgentApiError(chatGptUsageLimitBody(`"resets_at":${pastSeconds}`), writtenAtMs);
+  assert.deepEqual(recovered, { kind: 'usageLimit', resetAt: pastSeconds * 1000 });
+  assert.equal(recovered !== null && checkIsUsageLimitWindowOver(recovered, fixedNow), true);
+});
+
+test('classify: the body\'s machine-form reset is the window\'s end, never a retry hint — even a short one beside "try again in"', () => {
+  const text = chatGptUsageLimitBody('"resets_in_seconds":120').replace('has been reached', 'has been reached. Please try again in 2 minutes');
+  assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 120_000 });
+  // And beside a hint a few words from its verb — the wording the hint rule recognises too.
+  const spacedHint = chatGptUsageLimitBody('"resets_in_seconds":120').replace('has been reached', 'has been reached. Please retry your request in 30s');
+  assert.deepEqual(classifyAgentApiError(spacedHint, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 120_000 });
+});
+
+test('classify: an older Claude Code\'s "usage limit reached|<epoch>" → a usage limit until that epoch', () => {
+  const resetsAtSeconds = Math.floor(fixedNow / 1000) + 3 * 3600;
+  assert.deepEqual(classifyAgentApiError(`Claude AI usage limit reached|${resetsAtSeconds}`, fixedNow), { kind: 'usageLimit', resetAt: resetsAtSeconds * 1000 });
 });

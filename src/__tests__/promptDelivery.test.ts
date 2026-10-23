@@ -18,7 +18,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
-import { deliverPromptOrBuffer, getLatePromptRoute, type PromptDeliveryDeps } from '../utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer, getLatePromptRoute, type LatePromptDeliveryPorts, type PromptDeliveryDeps } from '../utils/promptDelivery';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
@@ -155,13 +155,61 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true\);/);
   });
 
-  it('a prompt for an active session is routed again right before its forward: the idle stop may have begun or ended since it arrived', () => {
+  it('a prompt for an active session is delivered through the late route, read after the last await before the forward', () => {
     // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
-    // was forwarded to a session that was gone — dropped.
+    // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
     const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
-    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n\s*\/\/[^\n]*\n\s*const route = getLatePromptRoute\(\{ isWindowOpen: startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\), isSessionActive: adapter\.checkIsActive\(key\) \}\);/, 'read after the last await before the forward');
-    assert.ok(deliver.includes("await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);"), 'buffered like a prompt typed mid-startup');
-    assert.ok(deliver.includes("if (route === 'wake') await resumeSleepingSessionForPrompt(key);\n    await forwardPromptToAgent(key, getThreadAdapter(key), text"), 'woken, then forwarded to the session it woke');
+    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n\s*\/\/[^\n]*\n\s*const outcome = await deliverLatePrompt\(\{/);
+    assert.ok(deliver.includes("if (outcome !== 'noSession') trackTopicRequestTurn(key, opening);"), 'a prompt that reached nothing opens no tracked turn');
+    assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(opening\.requestId !== null\) await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\);\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);/, 'the request it opened is closed and the topic told, as the re-ask handler tells it — once');
+    assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
+  });
+});
+
+describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+    const steps: string[] = [];
+    return {
+      steps,
+      ports: {
+        checkIsWindowOpen: () => state.isWindowOpen,
+        checkIsSessionActive: () => state.isSessionActive,
+        buffer: async () => { steps.push('buffer'); },
+        wake: async () => { steps.push('wake'); return { isAwake: state.isWakeOk ?? true, isNoticePosted: state.isWakeNoticePosted ?? false }; },
+        forward: async () => { steps.push('forward'); },
+        reportNoSession: async (isAlreadyTold) => { steps.push(isAlreadyTold ? 'reportNoSession(alreadyTold)' : 'reportNoSession'); },
+      },
+    };
+  }
+
+  it('the idle stop under way (its window open, the process still reads active): buffered, never written to the process', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: true, isSessionActive: true });
+    assert.equal(await deliverLatePrompt(ports), 'buffered');
+    assert.deepEqual(steps, ['buffer']);
+  });
+
+  it('the process gone meanwhile: the conversation is woken, then the prompt forwarded to it', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false });
+    assert.equal(await deliverLatePrompt(ports), 'forwarded');
+    assert.deepEqual(steps, ['wake', 'forward']);
+  });
+
+  it('a wake that finds nothing to resume: the person is told, and nothing is forwarded (no "working" topic over a dropped text)', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false });
+    assert.equal(await deliverLatePrompt(ports), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportNoSession']);
+  });
+
+  it('a wake whose start failed and said why: reported without a second, generic line', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false, isWakeNoticePosted: true });
+    assert.equal(await deliverLatePrompt(ports), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportNoSession(alreadyTold)']);
+  });
+
+  it('a live process: forwarded at once', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: true });
+    assert.equal(await deliverLatePrompt(ports), 'forwarded');
+    assert.deepEqual(steps, ['forward']);
   });
 });
 

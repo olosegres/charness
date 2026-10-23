@@ -810,9 +810,10 @@ export const uzDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Foydalanish chegarasiga yetdi — reset dan keyin avtomatik davom etish (~{time}).',
   'apiRetry.resuming': '↻ Davom etilmoqda…',
+  'apiRetry.conversationTailNotice': '↻ Provayder oxirgi qadamni rad etdi — davom etyapman…',
   'apiRetry.limitResetResuming': '✅ Limit oynasi qayta tiklandi — bu mavzudagi ishni davom ettiraman.',
   'apiRetry.giveUp':
-    '⚠️ {attempts} urinishdan keyin davom etib bo‘lmadi. Davom ettirishda xabar yuboring.',
+    '⚠️ Davom etib bo‘lmadi (urinishlar: {attempts}). Davom ettirishda xabar yuboring.',
   'apiRetry.continueNudge': "To'xtagan joyingizdan davom eting.",
   'apiRetry.loggedOutClaude':
     '⚠️ Claude tizimdan chiqdi — davom etish uchun /login ni ishga tushiring.',

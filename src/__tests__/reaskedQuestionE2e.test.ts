@@ -13,6 +13,13 @@
  *     as ONE message, and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
+ *   → a tap read while the process is live, whose delivery the idle stop overtakes (the fake Bot API holds the
+ *     re-asked question's and the toast's responses to put the stop between the two): the stop still under way when the
+ *     label is delivered — it is held and reaches the resumed process; the stop already over — the conversation is
+ *     woken and gets it. Both used to be lost: written to the process being stopped, or dropped for a gone one. Each
+ *     hold is let go at a state the test observed (the tap read, the stop begun or ended), never after a fixed time
+ *   → the same, with the conversation unable to start again: one line says why, no "No agent running" beside it, no
+ *     typing loader, the label reaches no agent — and the question's button still delivers it once the agent can start
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -24,9 +31,10 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeAskQuestion, fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeClaudeIgnoreStopSignalsFileName, fakeClaudeLogFileNames, fakeClaudeRefuseLaunchFileName, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { enDict } from '../i18n/en';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -86,13 +94,30 @@ function getAgentPrompts(label: string): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes(label));
 }
 
+/** The line the bot logs as the idle fire begins to stop the agent's process (its startup window is open from here). */
+const idleStopStartLine = 'stopping the idle process';
 /** The line the bot logs once the idle fire has stopped the agent's process (the conversation then sleeps). */
 const idleStopLine = 'process stopped; the session sleeps';
+/** A wake whose resume and the fresh start after it both fail: two launches, each refused at once. */
+const failedStartTimeoutMs = agentStartTimeoutMs;
+/** A command whose reply is fixed and changes nothing: a barrier — sends are paced first come, first served. */
+const barrierCommand = '/timezone Not/AZone';
 /** The text the fake agent streams for a prompt naming no label (`Working on <label>.`): a re-asked question's answer is one. */
 const unlabelledTurnText = 'Working on unknown.';
 
 function countIdleStops(): number {
   return getCharness().output.split(idleStopLine).length - 1;
+}
+
+function countIdleStopStarts(): number {
+  return getCharness().output.split(idleStopStartLine).length - 1;
+}
+
+/** A promise the test settles itself: the moment a held Bot API response is let go. */
+function createRelease(): { promise: Promise<void>; release: () => void } {
+  let release: () => void = () => {};
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
 }
 
 /**
@@ -208,5 +233,111 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     await getCharness().waitFor('the label to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > promptsBefore);
     // A process being stopped may still read the prompt; only a live one ANSWERS it.
     await waitingTopic.waitForMessage('the agent to answer the label', (message) => message.message_id > reasked.message_id && message.text.includes(unlabelledTurnText));
+  });
+
+  /**
+   * A tap read while the process is live, delivered only after the idle stop began. The fake Bot API holds two
+   * responses, each let go at a state the test observed: the re-asked question's send (the idle stop follows it) until
+   * the tap was read — so the tap sees a live process and no stop under way — and the tap's toast (its label is
+   * delivered after it) until the stop has started (`whileTheStopRuns`) or ended (`afterTheStop`). `beforeTheToast` runs
+   * just before the toast is let go.
+   */
+  async function holdATapUntilTheIdleStop(
+    warmUpLabel: string,
+    promptLabel: string,
+    toastRelease: 'whileTheStopRuns' | 'afterTheStop',
+    beforeTheToast: () => void = () => {},
+  ): Promise<{ reasked: FakeTelegramMessage; askingPid: number; labelPromptsBefore: number; callsAtToast: number }> {
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${warmUpLabel} [fake:answer] one more turn to compress`);
+    await getCharness().waitFor(`the warm-up turn ${warmUpLabel} to reach the agent`, agentStartTimeoutMs, () => getAgentPrompts(warmUpLabel).length > 0);
+    const labelPromptsBefore = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+    const stopStartsBefore = countIdleStopStarts();
+    const idleStopsBefore = countIdleStops();
+    const questionHold = createRelease();
+    const toastHold = createRelease();
+    fakeTelegram.holdNextResponse('sendMessage', questionHold.promise, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('reask_'));
+    fakeTelegram.holdNextResponse('answerCallbackQuery', toastHold.promise);
+    try {
+      const reasked = await waitForReaskedQuestion(promptLabel, { isIdleStopAwaited: false });
+      const askingPid = getAgentPrompts(promptLabel)[0]?.pid;
+      assert.ok(askingPid !== undefined, 'the process that put the question');
+      // The toast reaches the Bot API once the handler has read the session: the tap was read.
+      const toast = await topic.tapAndAwaitAnswer(reasked, 'reask_0');
+      assert.equal(toast, fakeAskQuestion.shortOptionLabel);
+      assert.equal(countIdleStopStarts(), stopStartsBefore, 'precondition: the tap was read before the stop began');
+
+      questionHold.release();
+      if (toastRelease === 'whileTheStopRuns') {
+        await getCharness().waitFor('the idle stop to begin', agentStartTimeoutMs, () => countIdleStopStarts() > stopStartsBefore);
+      } else {
+        await getCharness().waitFor('the idle stop to end', agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
+      }
+      beforeTheToast();
+      const callsAtToast = fakeTelegram.calls.length;
+      return { reasked, askingPid, labelPromptsBefore, callsAtToast };
+    } finally {
+      questionHold.release();
+      toastHold.release();
+    }
+  }
+
+  /** The label must reach a process started AFTER the one that put the question: the one being stopped may still read it. */
+  async function assertTheLabelReachedAResumedProcess(tap: { reasked: FakeTelegramMessage; askingPid: number; labelPromptsBefore: number }): Promise<void> {
+    await getCharness().waitFor('the label to reach a resumed process', agentStartTimeoutMs, () =>
+      getAgentPrompts(fakeAskQuestion.shortOptionLabel).slice(tap.labelPromptsBefore).some((prompt) => prompt.pid !== tap.askingPid));
+    await waitingTopic.waitForMessage('the agent to answer the label', (message) => message.message_id > tap.reasked.message_id && message.text.includes(unlabelledTurnText));
+  }
+
+  it('a tap read while the process is live, delivered while the idle stop is still under way: held, and the resumed process gets it', async () => {
+    // The process ignores the stop signals, so the stop lasts its kill wait: the label is delivered inside the stop window.
+    const ignoreStopSignalsPath = path.join(getLayout().fakeStateDir, fakeClaudeIgnoreStopSignalsFileName);
+    fs.writeFileSync(ignoreStopSignalsPath, '');
+    try {
+      const tap = await holdATapUntilTheIdleStop('WARM-4', 'REASK-4', 'whileTheStopRuns');
+      await assertTheLabelReachedAResumedProcess(tap);
+    } finally {
+      fs.rmSync(ignoreStopSignalsPath, { force: true });
+    }
+    assert.ok(getCharness().output.includes('was still running'), 'the stop really lasted its kill wait');
+  });
+
+  it('a tap read while the process is live, delivered after the idle stop is over: the conversation is woken and gets it', async () => {
+    const tap = await holdATapUntilTheIdleStop('WARM-5', 'REASK-5', 'afterTheStop');
+    await assertTheLabelReachedAResumedProcess(tap);
+  });
+
+  it('the same, but the conversation cannot be started again: one line says why, nothing pretends to work, the buttons stay', async () => {
+    const refuseLaunchPath = path.join(getLayout().fakeStateDir, fakeClaudeRefuseLaunchFileName);
+    try {
+      const tap = await holdATapUntilTheIdleStop('WARM-6', 'REASK-6', 'afterTheStop', () => fs.writeFileSync(refuseLaunchPath, ''));
+      const isNewTopicSend = (call: FakeTelegramCall): boolean => call.method === 'sendMessage' && call.payload.message_thread_id === topicThreadId;
+      await getCharness().waitFor('the start failure to be told', failedStartTimeoutMs, () => fakeTelegram.calls.slice(tap.callsAtToast).some(isNewTopicSend));
+      // The barrier is read only once the tap's handler is done: the next updates wait for it.
+      await new TopicDriver(fakeTelegram, getCharness, topicThreadId, failedStartTimeoutMs).sendAndAwaitReply(barrierCommand, 'Not/AZone');
+      const callsAfter = fakeTelegram.calls.slice(tap.callsAtToast);
+      const lines = callsAfter.filter(isNewTopicSend).map((call) => String(call.payload.text ?? '')).filter((text) => !text.includes('Not/AZone'));
+      assert.equal(lines.length, 1, `one line for the failed start, got: ${JSON.stringify(lines)}`);
+      assert.ok(!lines.includes(enDict['agent.no_session']), 'no generic "No agent running" beside the reason');
+      assert.ok(!lines[0].includes(enDict['agent.resume_failed_fresh']), `no "a fresh session was started" for a start that failed: ${lines[0]}`);
+      assert.match(lines[0], /refused to start/, 'the CLI\'s own words');
+      assert.deepEqual(getAgentPrompts(fakeAskQuestion.shortOptionLabel).slice(tap.labelPromptsBefore), [], 'the label reached no agent');
+      // The start attempts show their own loader and switch it off when they fail; a forward after the failure would
+      // set the topic to "working" (a typing action right after the line) for text the adapter then drops.
+      const failureLineIndex = callsAfter.findIndex(isNewTopicSend);
+      assert.deepEqual(
+        callsAfter.slice(failureLineIndex + 1).filter((call) => call.method === 'sendChatAction' && call.payload.message_thread_id === topicThreadId),
+        [],
+        'no typing loader after the failure line',
+      );
+      assert.ok(!getCharness().output.includes('sendInput to inactive session'), 'nothing was forwarded to a session that is not there');
+
+      // The question is still open: once the agent can start, its button delivers the label.
+      fs.rmSync(refuseLaunchPath, { force: true });
+      const labelPromptsBeforeRetap = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+      assert.equal(await topic.tapAndAwaitAnswer(tap.reasked, 'reask_0'), fakeAskQuestion.shortOptionLabel, 'the button still knows its label');
+      await getCharness().waitFor('the label to reach the started agent', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > labelPromptsBeforeRetap);
+    } finally {
+      fs.rmSync(refuseLaunchPath, { force: true });
+    }
   });
 });

@@ -880,7 +880,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const ensure = botSource.slice(botSource.indexOf('async function ensureAgentSessionNow('), botSource.indexOf('function getResumableSessionId('));
     assert.match(ensure, /case 'ready':\s*return \{ ok: true, message: '', isFresh: false \};/);
     assert.match(ensure, /const resumeFailure = await resumeSleepingSession\(key, plan\.sessionId\);\s*if \(resumeFailure === null\) return \{ ok: true, message: '', isFresh: false \};/);
-    assert.equal((ensure.match(/\? \{ ok: true, message, isFresh: true \}/g) ?? []).length, 2, 'both starts are fresh');
+    assert.equal((ensure.match(/\{ ok: true, message, isFresh: true \}/g) ?? []).length, 2, 'both starts are fresh');
     assert.match(botSource, /if \(result\.ok\) return \{ ok: true, isFresh: result\.isFresh \};/);
   });
 

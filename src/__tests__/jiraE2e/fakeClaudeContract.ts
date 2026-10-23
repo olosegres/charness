@@ -46,6 +46,11 @@ export const fakeClaudeExitFlushDelayFileName = 'exit-flush-delay-ms';
  * not leave when it is asked to (only SIGKILL ends it). A test of a launch that must never run beside the process it replaces.
  */
 export const fakeClaudeIgnoreStopSignalsFileName = 'ignore-stop-signals';
+/**
+ * A file in the fake's state dir that, while it exists, makes every SESSION launch exit at once with an error, before it
+ * reads anything: a CLI that cannot start (broken install, refused account) — the bot's start of the conversation fails.
+ */
+export const fakeClaudeRefuseLaunchFileName = 'refuse-launch';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;

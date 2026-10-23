@@ -1009,7 +1009,7 @@ function registerFileSendTool(
         '2..10 paths use sendMediaGroup: eligible photos and MP4 videos stay native in ' +
         'all-video and mixed photo/video groups; as_file:true, any animation/document, or an over-cap photo makes ' +
         'the whole album documents — which turns its MP4s into GIFs, so send videos in their own call. ' +
-        'Secure outbound traversal currently requires Linux; other platforms fail closed. ' +
+        'If a send fails, say so and give the file\'s path in your reply, then go on with the work — never stop over it. ' +
         'Caption is optional (trimmed to 1024 chars; on the first album item).',
       inputSchema: sendFileShape,
     },

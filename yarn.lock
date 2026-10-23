@@ -520,9 +520,9 @@ __metadata:
     typescript: "npm:^5.7.0"
     zod: "npm:^4.4.3"
   bin:
-    charness: ./dist/cli.js
-    telegramCode: ./dist/cli.js
-    telegramcode: ./dist/cli.js
+    charness: dist/cli.js
+    telegramCode: dist/cli.js
+    telegramcode: dist/cli.js
   languageName: unknown
   linkType: soft
 

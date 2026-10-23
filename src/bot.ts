@@ -165,7 +165,7 @@ import { getPersistedConversations, getUnservedStateError } from './platform/uns
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
-import { deliverPromptOrBuffer as deliverPromptWithDeps, getLatePromptRoute, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { JiraConnector } from './connectors/jira/connector';
@@ -353,7 +353,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
+import { decideRetryAction, type RetryAttemptsByKind, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -1694,7 +1694,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   }
   const entry = apiRetryTimers.get(k);
   const prev = entry
-    ? { attempt: entry.attempt, firedAt: entry.firedAt, pending: entry.timer !== null }
+    ? { attemptsByKind: entry.attemptsByKind, firedAt: entry.firedAt, pending: entry.timer !== null }
     : null;
 
   const now = Date.now();
@@ -1751,6 +1751,9 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     } else {
       void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
     }
+  } else if (cls.kind === 'conversationTail') {
+    // The topic's one line for it: the retry follows in a moment, and its raw provider text was not posted.
+    void replyToThread(key, t('apiRetry.conversationTailNotice'));
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),
@@ -1758,7 +1761,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     }));
   }
 
-  armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, delayMs: action.delayMs, limitWait });
+  armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, delayMs: action.delayMs, attemptsByKind: action.attemptsByKind, limitWait });
 }
 
 /** @description What {@link armApiRetryTimer} arms: the retry's class, attempt and instant, and its extras. */
@@ -1767,6 +1770,8 @@ interface ApiRetryArming {
   attempt: number;
   fireAt: number;
   delayMs: number;
+  /** The episode's attempts per class after this one (`decideRetryAction`); absent = this class's attempt alone. */
+  attemptsByKind?: RetryAttemptsByKind;
   limitWait?: UsageLimitWait;
   isLimitProbe?: boolean;
 }
@@ -1796,6 +1801,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   apiRetryTimers.set(keyToString(key), {
     timer,
     attempt: arming.attempt,
+    attemptsByKind: arming.attemptsByKind ?? { [arming.kind]: arming.attempt },
     kind: arming.kind,
     firedAt: null,
     fireAt: arming.fireAt,
@@ -4894,12 +4900,12 @@ async function ensureAgentSessionNow(
       if (failureAction === 'fail') {
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
-      // The previous conversation is lost to this topic: say so in one line, then start fresh.
+      // The previous conversation is lost to this topic: say so in one line, then start fresh. A fresh start that
+      // fails too says only why: "a fresh session was started" would be false.
       const startMessage = await startAgentSession(key, options.args);
+      if (!getThreadAdapter(key).checkIsActive(key)) return { ok: false, reason: 'start-failed', message: startMessage };
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
-      return getThreadAdapter(key).checkIsActive(key)
-        ? { ok: true, message, isFresh: true }
-        : { ok: false, reason: 'start-failed', message };
+      return { ok: true, message, isFresh: true };
     }
     case 'start': {
       await switchThreadAdapter(key, plan.adapterName);
@@ -4994,6 +5000,7 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
   await sessionTransitions.run(kStr, async () => {
     if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
     startupPromptBuffer.markStarting(kStr);
+    console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
     try {
       await adapter.suspendSession!(key);
       console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
@@ -5037,10 +5044,18 @@ async function resumeSleepingSessionForPrompt(
   key: SessionKey,
   sendNotice: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
 ): Promise<boolean> {
-  if (checkIsGeneral(key) || !state.getBinding(key) || getResumableSessionId(key) === null) return false;
+  return (await wakeSleepingSessionForPrompt(key, sendNotice)).isAwake;
+}
+
+/** @description {@link resumeSleepingSessionForPrompt}, also saying whether it posted a notice (a start that failed says why). */
+async function wakeSleepingSessionForPrompt(
+  key: SessionKey,
+  sendNotice: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
+): Promise<LateWakeResult> {
+  if (checkIsGeneral(key) || !state.getBinding(key) || getResumableSessionId(key) === null) return { isAwake: false, isNoticePosted: false };
   const ensured = await ensureAgentSession(key);
   if (ensured.message) await sendNotice(ensured.message);
-  return ensured.ok && getThreadAdapter(key).checkIsActive(key);
+  return { isAwake: ensured.ok && getThreadAdapter(key).checkIsActive(key), isNoticePosted: Boolean(ensured.message) };
 }
 
 /**
@@ -9636,7 +9651,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
     await withThreadLocale(key, () => deliverPromptOrBuffer(key, label, true));
     return;
   }
-  await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
+  const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
+  // The label reached no session (the topic was told why): the question is still open, so are its buttons.
+  if (outcome === 'noSession' && labels && !reAskedQuestionOptions.has(keyToString(key))) reAskedQuestionOptions.set(keyToString(key), labels);
 });
 
 registerReminderCallbacks();
@@ -9822,7 +9839,7 @@ async function deliverActivePrompt(
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
   replyContext?: string,
-): Promise<void> {
+): Promise<LatePromptOutcome | null> {
   // A genuine USER message (text or voice) — clear the compact-on-idle latch so
   // the next idle period can compact again (D2), whether it answers a pending
   // question or is a fresh prompt.
@@ -9836,13 +9853,13 @@ async function deliverActivePrompt(
       // the quote — the reply context is deliberately dropped here. Not a request
       // either: the turn it unblocks continues under the open one.
       await applyQuestionAnswer(key, route.labels);
-      return;
+      return null;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
     const opening = await openTopicRequest(key, text, intake);
     await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header);
     trackTopicRequestTurn(key, opening);
-    return;
+    return null;
   }
 
   // A bare `/clear` forwarded to the agent wipes its context (Claude TUI), so
@@ -9873,15 +9890,23 @@ async function deliverActivePrompt(
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
   const opening = await openTopicRequest(key, text, intake);
-  // Read now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
-  const route = getLatePromptRoute({ isWindowOpen: startupPromptBuffer.checkIsStarting(keyToString(key)), isSessionActive: adapter.checkIsActive(key) });
-  if (route === 'buffer') {
-    await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
-  } else {
-    if (route === 'wake') await resumeSleepingSessionForPrompt(key);
-    await forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header });
-  }
-  trackTopicRequestTurn(key, opening);
+  // Routed now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
+  const outcome = await deliverLatePrompt({
+    checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
+    checkIsSessionActive: () => adapter.checkIsActive(key),
+    buffer: async () => {
+      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
+    },
+    wake: () => wakeSleepingSessionForPrompt(key),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),
+    reportNoSession: async (isAlreadyTold) => {
+      // The prompt reaches no agent: the request it opened would only wait for a turn that never comes.
+      if (opening.requestId !== null) await topicRequestLedger?.closeRequest(opening.requestId, 'cancelled');
+      if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
+    },
+  });
+  if (outcome !== 'noSession') trackTopicRequestTurn(key, opening);
+  return outcome;
 }
 
 /**

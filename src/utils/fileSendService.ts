@@ -1,8 +1,10 @@
 /**
  * @description Reusable agent→Telegram file-send pipeline. The factory owns the
  * impure path resolution/snapshot work and executes the pure plan/request through
- * an injected typed gateway. Each canonical file is opened component-by-component
- * beneath a pinned root descriptor, identity-checked, and owned through delivery bookkeeping.
+ * an injected typed gateway. Each canonical file is opened by one of two strategies
+ * ({@link FileSendOpenStrategy}) — on Linux component-by-component beneath a pinned
+ * root descriptor, elsewhere by its verified canonical path — identity-checked, and
+ * owned through delivery bookkeeping.
  * Bot-specific stream creation and routing stay in the gateway; pacing/retry is
  * injected through `executeDelivery`. The service imports neither MCP nor Telegraf.
  */
@@ -103,13 +105,27 @@ export interface SendFilesToThreadDeps<TTarget> {
     signal?: AbortSignal,
   ) => Promise<TResult>;
   readFileSnapshot?: typeof readTelegramFileSnapshot;
+  /** How files are opened; the platform's own ({@link getFileSendOpenStrategy}) unless a test forces one. */
+  openStrategy?: FileSendOpenStrategy;
 }
 
-/** Canonical send root pinned to one open directory descriptor. */
-export interface PinnedFileSendRoot {
-  rootPath: string;
-  fd: number;
-}
+/**
+ * @name FileSendOpenStrategy
+ * @description How a validated file is opened without reaching outside the bound folder through a swapped path:
+ *  - `descriptorWalk` (Linux) — every component opened beneath the pinned root directory descriptor through
+ *    `/proc/self/fd/<fd>/<name>` with `O_NOFOLLOW`: a component swapped to a symlink after validation is refused;
+ *  - `verifiedPath` (Windows, macOS: no `/proc`, and Node exposes no `openat`) — the canonical path opened read-only, the
+ *    opened object's bigint `{dev, ino}` held to the one validated inside the root, then the path resolved again: still
+ *    inside the root and still that object. A swapped junction or symlink yields another object or another place. What
+ *    it gives up against the walk: a root folder replaced at the same path is used as the root — no reach beyond what
+ *    the agent, running with the user's rights in that folder, has anyway.
+ */
+export type FileSendOpenStrategy = 'descriptorWalk' | 'verifiedPath';
+
+/** Canonical send root: pinned to one open directory descriptor, or (the portable strategy) its canonical path. */
+export type PinnedFileSendRoot =
+  | { strategy: 'descriptorWalk'; rootPath: string; fd: number }
+  | { strategy: 'verifiedPath'; rootPath: string };
 
 /** Bound descriptor-owning operations while Telegram's own queues are occupied. */
 export const fileSendSnapshotConcurrency = 4;
@@ -119,12 +135,18 @@ export type TelegramFileSnapshotResult =
   | { ok: false; kind: 'read'; error: string }
   | { ok: false; kind: 'oversize'; error: string };
 
-/** Linux exposes descriptor-relative child lookup; other platforms fail closed. */
+/** Linux exposes descriptor-relative child lookup; other platforms have none. */
 export function getFileDescriptorPathRoot(platform: NodeJS.Platform): string | null {
   return platform === 'linux' ? '/proc/self/fd' : null;
 }
 
+/** The descriptor walk where the platform has descriptor-relative lookup, the verified path elsewhere. */
+export function getFileSendOpenStrategy(platform: NodeJS.Platform): FileSendOpenStrategy {
+  return getFileDescriptorPathRoot(platform) === null ? 'verifiedPath' : 'descriptorWalk';
+}
+
 const fileDescriptorPathRoot = getFileDescriptorPathRoot(process.platform);
+const platformOpenStrategy = getFileSendOpenStrategy(process.platform);
 
 const directoryOpenFlags =
   fs.constants.O_RDONLY |
@@ -137,16 +159,31 @@ const fileOpenFlags =
   fs.constants.O_NOFOLLOW |
   fs.constants.O_NONBLOCK;
 
+/**
+ * The portable strategy's flags: read-only, and non-blocking where the platform has it (a FIFO raced into place must
+ * not block the bot; Windows defines no `O_NONBLOCK` — and has no FIFOs a path can name).
+ */
+const verifiedPathOpenFlags = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
+
 /** Canonicalize and pin the operation root before resolving any send item. */
-function openPinnedFileSendRoot(workDir: string): PinnedFileSendRoot {
-  if (fileDescriptorPathRoot === null) {
-    throw new Error(`secure file sending is unsupported on ${process.platform}`);
-  }
+function openPinnedFileSendRoot(workDir: string, strategy: FileSendOpenStrategy): PinnedFileSendRoot {
   const rootPath = fs.realpathSync(workDir);
-  return {
-    rootPath,
-    fd: fs.openSync(rootPath, directoryOpenFlags),
-  };
+  if (strategy === 'verifiedPath') return { strategy, rootPath };
+  return { strategy, rootPath, fd: fs.openSync(rootPath, directoryOpenFlags) };
+}
+
+/** `absPath` relative to `rootPath` when it lies strictly inside it, else `null`. */
+function getPathWithinRoot(rootPath: string, absPath: string): string | null {
+  const relativePath = path.relative(rootPath, absPath);
+  if (
+    relativePath.length === 0 ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return null;
+  }
+  return relativePath;
 }
 
 /** Close one descriptor and return a readable failure instead of throwing. */
@@ -163,7 +200,7 @@ function closeFileDescriptor(fileDescriptor: number): string | null {
 /** Address one child through its already-open parent directory descriptor. */
 function getDescriptorChildPath(parentDescriptor: number, childName: string): string {
   if (fileDescriptorPathRoot === null) {
-    throw new Error(`secure file sending is unsupported on ${process.platform}`);
+    throw new Error(`descriptor-relative lookup is unavailable on ${process.platform}`);
   }
   return path.posix.join(fileDescriptorPathRoot, parentDescriptor.toString(), childName);
 }
@@ -173,18 +210,10 @@ function getDescriptorChildPath(parentDescriptor: number, childName: string): st
  * caller-controlled parent component twice. Each directory descriptor pins the
  * next lookup, and O_NOFOLLOW rejects a component swapped to a symlink.
  */
-function openFileBeneathRoot(pinnedRoot: PinnedFileSendRoot, absPath: string): number {
-  const relativePath = path.relative(pinnedRoot.rootPath, absPath);
-  if (
-    relativePath.length === 0 ||
-    relativePath === '..' ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
+function openFileBeneathRoot(pinnedRoot: PinnedFileSendRoot & { strategy: 'descriptorWalk' }, absPath: string): number {
+  const relativePath = getPathWithinRoot(pinnedRoot.rootPath, absPath);
+  if (relativePath === null) {
     throw new Error(`file is outside its validated root: ${absPath}`);
-  }
-  if (fileDescriptorPathRoot === null) {
-    throw new Error(`secure file sending is unsupported on ${process.platform}`);
   }
 
   const pathComponents = relativePath.split(path.sep);
@@ -236,10 +265,39 @@ function openFileBeneathRoot(pinnedRoot: PinnedFileSendRoot, absPath: string): n
 }
 
 /**
- * @description Open one already-canonical path beneath its pinned canonical root
- * without following swapped parent/final symlinks, validate the opened object's
- * bigint device/inode identity and size, then transfer ownership of the still-open
- * descriptor to the caller. Every failure closes the descriptor before returning.
+ * @description The portable strategy's open: the canonical path, checked to lie inside the root, opened read-only.
+ * The identity check and {@link getVerifiedPathChangeError} that follow are what pin it to the validated object.
+ */
+function openVerifiedPath(rootPath: string, absPath: string): number {
+  if (getPathWithinRoot(rootPath, absPath) === null) {
+    throw new Error(`file is outside its validated root: ${absPath}`);
+  }
+  return fs.openSync(absPath, verifiedPathOpenFlags);
+}
+
+/**
+ * @description After the portable open: the path, resolved again, must still lie inside the root and still name the
+ * object that was opened — a parent swapped to an outside folder before the identity was captured passes the identity
+ * check (the captured identity is the outside file's), and fails here. `null` when it holds.
+ */
+function getVerifiedPathChangeError(rootPath: string, absPath: string, openedIdentity: FileIdentity): string | null {
+  const changedError = `file changed after validation: ${absPath}`;
+  try {
+    const currentPath = fs.realpathSync(absPath);
+    if (getPathWithinRoot(rootPath, currentPath) === null) return changedError;
+    const currentStat = fs.statSync(currentPath, { bigint: true });
+    return currentStat.dev === openedIdentity.dev && currentStat.ino === openedIdentity.ino ? null : changedError;
+  } catch {
+    return changedError;
+  }
+}
+
+/**
+ * @description Open one already-canonical path beneath its canonical root by the root's strategy — the descriptor walk
+ * without following swapped parent/final symlinks, or the verified path — validate the opened object's bigint
+ * device/inode identity and size (and, for the verified path, that the path still resolves to it inside the root),
+ * then transfer ownership of the still-open descriptor to the caller. Every failure closes the descriptor before
+ * returning.
  */
 export function readTelegramFileSnapshot(
   absPath: string,
@@ -249,12 +307,19 @@ export function readTelegramFileSnapshot(
   let fileDescriptor: number | null = null;
   let result: TelegramFileSnapshotResult;
   try {
-    fileDescriptor = openFileBeneathRoot(pinnedRoot, absPath);
+    fileDescriptor = pinnedRoot.strategy === 'descriptorWalk'
+      ? openFileBeneathRoot(pinnedRoot, absPath)
+      : openVerifiedPath(pinnedRoot.rootPath, absPath);
     const fileStat = fs.fstatSync(fileDescriptor, { bigint: true });
+    const pathChangeError = pinnedRoot.strategy === 'verifiedPath' && fileStat.isFile()
+      ? getVerifiedPathChangeError(pinnedRoot.rootPath, absPath, { dev: fileStat.dev, ino: fileStat.ino })
+      : null;
     if (!fileStat.isFile()) {
       result = { ok: false, kind: 'read', error: `not a regular file: ${absPath}` };
     } else if (fileStat.dev !== expectedIdentity.dev || fileStat.ino !== expectedIdentity.ino) {
       result = { ok: false, kind: 'read', error: `file changed after validation: ${absPath}` };
+    } else if (pathChangeError !== null) {
+      result = { ok: false, kind: 'read', error: pathChangeError };
     } else if (fileStat.size > BigInt(telegramSendMaxBytes)) {
       result = {
         ok: false,
@@ -356,7 +421,7 @@ export function createSendFilesToThread<TTarget>(
         const countError = getFileSendCountError(options.paths.length);
         if (countError !== null) return { ok: false, error: countError };
 
-        const pinnedRoot = openPinnedFileSendRoot(workDir);
+        const pinnedRoot = openPinnedFileSendRoot(workDir, deps.openStrategy ?? platformOpenStrategy);
         ownedRoot.pinnedRoot = pinnedRoot;
         const items: FileSendItem[] = [];
         const readFileSnapshot = deps.readFileSnapshot ?? readTelegramFileSnapshot;
@@ -488,7 +553,7 @@ export function createSendFilesToThread<TTarget>(
           closeError = descriptorCloseError;
         }
       }
-      if (ownedRoot.pinnedRoot !== null) {
+      if (ownedRoot.pinnedRoot?.strategy === 'descriptorWalk') {
         const descriptorCloseError = closeFileDescriptor(ownedRoot.pinnedRoot.fd);
         if (closeError === null && descriptorCloseError !== null) {
           closeError = descriptorCloseError;

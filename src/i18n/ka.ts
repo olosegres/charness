@@ -810,9 +810,10 @@ export const kaDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 გამოყენების ზღვარს მიაღწია — ავტომატური გაგრძელება გადატვირთვის შემდეგ (~{time}).',
   'apiRetry.resuming': '↻ გაგრძელება…',
+  'apiRetry.conversationTailNotice': '↻ პროვაიდერმა ბოლო ნაბიჯი უარყო — ვაგრძელებ…',
   'apiRetry.limitResetResuming': '✅ ლიმიტის ფანႻარა განულდა — ამ თემაში მუშაობას განვაგრჯობ.',
   'apiRetry.giveUp':
-    '⚠️ {attempts} ცდის შემდეგ ვერ გაგრძელდა. როცა გაგრძელება გსურთ გამოგვიგზავნეთ შეტყობინება.',
+    '⚠️ ვერ გაგრძელდა (ცდები: {attempts}). როცა გაგრძელება გსურთ გამოგვიგზავნეთ შეტყობინება.',
   'apiRetry.continueNudge': 'გააგრძელე იმ ადგილიდან, სადაც გაჩერდი.',
   'apiRetry.loggedOutClaude':
     '⚠️ Claude გამოსულია — გასაგრძელებლად გაუშვით /login.',

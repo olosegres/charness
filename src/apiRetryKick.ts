@@ -5,6 +5,7 @@ import type { UsageLimitWait } from './requests/limitWaitAnswer';
 import type { BufferedPromptSettled } from './startupPromptBuffer';
 import type { PromptDelivery } from './utils/promptDelivery';
 import type { AgentApiErrorClass, ApiRetryState } from './types';
+import type { RetryAttemptsByKind } from './apiErrorRetry';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 
 /**
@@ -35,6 +36,11 @@ export interface ApiRetryTimerEntry {
   timer: NodeJS.Timeout | null;
   /** 1-based attempt the current/last timer was armed for. */
   attempt: number;
+  /**
+   * The attempts armed per class in this episode (`decideRetryAction`): the classes can alternate inside one, and each
+   * keeps its own count to its own cap. Not persisted: a retry restored at boot knows only its own class's count.
+   */
+  attemptsByKind: RetryAttemptsByKind;
   /** Error class that armed it. */
   kind: AgentApiErrorClass['kind'];
   /** Epoch ms when the timer fired, or `null` while still pending. */
@@ -164,7 +170,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // Announced only once there is a session to resume: a pinned "resuming" over a start that failed would
     // read as work under way. The notices are topic messages (a pin among them): a tracker issue hears about
     // the wait from the request's own answer, and has no topic for the rest (R6).
-    if (checkIsTelegramKey(key)) deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+    // A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
+    if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.
@@ -238,6 +245,7 @@ export function restoreApiRetryTimers(deps: ApiRetryRestoreDeps, records: Readon
     deps.entries.set(keyStr, {
       timer,
       attempt: record.attempt,
+      attemptsByKind: { [record.kind]: record.attempt },
       kind: record.kind,
       firedAt: null,
       fireAt: record.fireAt,
@@ -285,7 +293,7 @@ export function restoreFiredLimitProbes(deps: FiredLimitProbeRestoreDeps, record
       continue;
     }
     if (deps.entries.has(keyStr)) continue;
-    deps.entries.set(keyStr, { timer: null, attempt: 1, kind: 'transient', firedAt, fireAt: firedAt, isLimitProbe: true });
+    deps.entries.set(keyStr, { timer: null, attempt: 1, attemptsByKind: { transient: 1 }, kind: 'transient', firedAt, fireAt: firedAt, isLimitProbe: true });
     restored += 1;
   }
   return restored;

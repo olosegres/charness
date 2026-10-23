@@ -11,6 +11,66 @@ that adds a migration guide is offered with a button instead of installed, and a
 back. `/update` in General switches it between Automatic (the default), Notify only and Off, switches the «what's new»
 list and shows what the last check saw; `/version` says when an update is available.
 
+## 3.3.2 — 2026-10-23
+
+**On Windows the bot can start an `opencode` that npm installed.** 3.3.0 found npm's `opencode.cmd` on PATH but still
+started the bare `opencode`, which Windows cannot run that way, so the OpenCode server did not come up. The bot now runs
+the script npm's shim wraps (another batch file through `cmd.exe`), and installing a missing CLI works on Windows too.
+
+**A Claude CLI that dies as it starts is reported as a failed start.** The topic used to be told the session was
+«ready», then that it «ended» — once per attempt — after waiting out a 15-second handshake each time. It now gets one
+line with the CLI's own error, at once.
+
+**When the agent cannot be started again for a message, the topic gets one line saying why.** A message or a button tap
+that had to wake a sleeping conversation added «No agent running» under the start's own reason. And a re-asked
+question's buttons stopped working when its answer reached no session — they keep working now.
+
+**Gemini's «Requests ending with a model turn are not supported» recovers even right after another retry.** It was
+counted as a repeat of any retry in the two minutes before — Google's short «reset after 2s» retry, for one — and the
+bot gave up without continuing the work. Each kind of retry still stops at its own limit when they alternate.
+
+**A `/compact` that fails the way the turn before it did is shown.** The failure was taken for the previous turn's,
+already posted, and dropped: neither shown nor retried.
+
+**A daily quota's «retry your request in 30s» keeps the usual usage-limit wait.** Only a retry hint placed right after
+«retry» was recognised; with a few words in between, the bot waited 30 seconds and marked the model limited for that long.
+
+**The give-up line reads right for one attempt.** «Couldn't resume after 1 attempts» is now «Couldn't resume (attempts:
+1)», in every language.
+
+## 3.3.1 — 2026-10-23
+
+**The npm listing names the `charness` command again.** The 3.3.0 listing on npm showed no commands (installs
+and `npx` still worked, the package itself carried them).
+
+## 3.3.0 — 2026-10-23
+
+**A usage limit waits until the exact reset when the provider sends one, instead of a guessed hour.** Claude reports the
+reset of the window that refused the request, but the bot read it only from the message text. A wording that names no
+time, such as «This request would exceed your account's rate limit», fell back to a retry every hour once the limit was
+confirmed. On the default Claude backend the wait now ends at the reset Claude reported. A ChatGPT subscription limit on
+OpenCode now waits until the reset in the provider's response (`resets_at`, or `resets_in_seconds`), not the hourly retry.
+An older Claude Code's `Claude AI usage limit reached|<epoch>` is read the same way.
+
+**The agent can send files to the topic on Windows and macOS.** `send_file_to_user`, and `send_messages_to_user` with a
+file, refused with «secure file sending is unsupported on win32», and an agent could stop its work over it. Files are now
+opened by their checked path on those systems, held to the file that was checked inside the bound folder, so a path
+swapped meanwhile still cannot reach outside it. If a send does fail, the agent is told to give the file's path in its
+reply and carry on.
+
+**On Windows the bot finds the agent CLI installed on PATH.** It looked the tool up with `which`, which Windows lacks,
+so an installed `opencode` read as missing.
+
+**Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
+sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
+topic now gets one short line and the bot continues the work at once; if the same refusal comes right back, it says it
+could not resume, as for other errors.
+
+**An OpenCode failure is posted once, without an auth plugin's debug block.** OpenCode reports most failures twice, and
+both were posted, each as the provider's whole message cut at 500 characters — with opencode-antigravity-auth that
+included a «[Debug Info]» block naming your Google project. One line is posted now, and the block stays in the bot log.
+A sub-agent's failed step is posted once too: only its session error shows.
+
 **Google's «You have exhausted your capacity on this model. Your quota will reset after …» is read by its duration.** The
 Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan
 («after 146h52m11s»). The seconds-long one was announced as «🚧 Usage limit reached» with an hour's wait, and an hours-long
@@ -204,17 +264,16 @@ conversation the same way.
   controls and their key or address. Memory: about 0.5 GB while it runs, up to about 0.9 GB on a long voice.
 
 ### Fixed
-- **A voice note whose Telegram `duration` is 0 is treated as of unknown length, not as a 0-second voice.** A sender
-  that gave no length gets the same time budget as a voice without a length, so a long one no longer falls back to the
+- A voice note whose Telegram `duration` is 0 (a sender that gave no length) is treated as of unknown length, not as a
+  0-second voice: it gets the same time budget as a voice without a length, so a long one no longer falls back to the
   next engine at the bare base timeout.
-- **Going from Claude to OpenCode and back resumes the Claude conversation the topic left.** This holds for `/opencode`
-  then `/claude` and for a usage-limit switch to an OpenCode model and back; it used to come back to a fresh one,
-  because leaving OpenCode overwrote the parked Claude conversation id with the OpenCode session's. The same holds the
-  other way round.
-- **A Claude json-stream session re-attached after a bot restart keeps its model.** A `/model` pick, or Jira's
-  configured one, survives a re-spawn for an effort or account change; it used to restart on Claude's default model.
-- **An OpenCode model that has no effort levels shows none.** `/status`, the pinned banner and the ready notice no
-  longer name General's default for a session that runs without any level (`/effort` already said «not available»).
+- Going from Claude to OpenCode and back (`/opencode` then `/claude`, a usage-limit switch to an OpenCode model and back) resumes
+  the Claude conversation the topic left; it used to come back to a fresh one, because leaving OpenCode overwrote the
+  parked Claude conversation id with the OpenCode session's. The same holds the other way round.
+- A Claude json-stream session re-attached after a bot restart keeps its model (a `/model` pick, or Jira's configured
+  one) when it is re-spawned for an effort or account change; it used to restart on Claude's default model.
+- An OpenCode model that has no effort levels shows none: `/status`, the pinned banner and the ready notice no longer
+  name General's default for a session that runs without any level (`/effort` already said «not available»).
 
 ## 3.2.0 — 2026-10-16
 

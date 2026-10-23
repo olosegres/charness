@@ -71,7 +71,7 @@ your chosen providers need them.
 | `OPENCODE_USERNAME` | `opencode` | `OPENCODE_PASSWORD` is set for a protected OpenCode server |
 | `OPENCODE_PASSWORD` | — | Connecting to a protected OpenCode server |
 | `OPENCODE_ALLOW_REMOTE` | — | `OPENCODE_URL` intentionally points outside loopback |
-| `OPENCODE_BIN` | (auto) | The `opencode` binary is not on PATH or you use a fork |
+| `OPENCODE_BIN` | (auto) | The `opencode` binary is not on PATH or you use a fork. Auto: the first `opencode` on PATH (on Windows with each `PATHEXT` extension — npm's `opencode.cmd` shim is run as the Node script it wraps, another `.cmd` / `.bat` through `cmd.exe`), else the copy the bot installed in `~/.npm-global` |
 | `CLAUDE_BIN` | (auto) | The `claude` binary is not on PATH due to nvm/asdf/systemd PATH differences |
 | `ANTHROPIC_API_KEY` | — | A custom MCP/OpenCode plugin/auth resolver explicitly reads it; not needed for normal Claude CLI auth. The json-stream Claude backend strips it from the agent's env (subscription billing) |
 | `SCHEDULER_MCP_PORT` | an OS-chosen free loopback port | You need a stable, explicitly chosen port; it must differ from this instance's `OPENCODE_URL` port |

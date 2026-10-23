@@ -542,9 +542,12 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 - `send_file_to_user` — lets the agent push files from the bound folder into the
   topic. A single MP4 uses Bot API `sendVideo`; eligible all-video and mixed
   photo/video albums use `sendMediaGroup`, with each MP4 represented by an
-  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. Secure
-  outbound file traversal currently requires Linux; on macOS this tool
-  fails closed until a native descriptor-relative bridge is available. Existing
+  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. A file is
+  opened so that a path swapped after validation cannot reach outside the bound
+  folder: on Linux component by component beneath a pinned folder descriptor
+  (`/proc/self/fd`); on Windows and macOS by its canonical path, held to the
+  validated file's device/inode identity and resolved again inside the folder
+  after the open. Existing
   path, count, caption, and size caps apply; canonical upload basenames have
   control characters and quoted-string metacharacters replaced before they enter multipart headers. Cancelling
   the MCP call removes queued work. While any upload stream is still being
@@ -608,6 +611,14 @@ reply was in progress is told it was lost, and a message sent meanwhile is held
 and delivered once the server is back. Only if every attempt fails does a topic
 get one short line saying the next message will try again (the error itself goes
 to the bot log).
+A turn's failure is posted once, although OpenCode reports most failures twice
+(the session error and the failed message); a provider plugin's `[Debug Info]`
+block (opencode-antigravity-auth appends one with your Google project id) is kept
+out of the topic and stays in the bot log. Gemini's "Requests ending with a model
+turn are not supported" — OpenCode v1's agent loop sends a history that ends on
+the model's own turn, fixed upstream only in v2 — gets one short line and the
+bot's "continue" at once, which is a user turn; the same refusal right after it
+ends with the usual give-up line.
 The supervisor reads the same checkout `.env` as the worker before the initial
 start. Hot mode supports Linux and macOS; it refuses to start on Windows because
 nodemon cannot gracefully drain its worker tree there.

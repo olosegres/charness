@@ -116,6 +116,31 @@ describe('json-stream external transport — exit detection', () => {
     assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] }]);
   });
 
+  it('an exit before the initialize handshake is a start that failed: the wait ends, no closed, the CLI\'s words kept', () => {
+    // A CLI that dies at start used to be reported "ready" and then "session ended", after a 15 s handshake wait.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-startexit-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    let isHandshakeWaitEnded = false;
+    session.pendingInitResolve = () => { isHandshakeWaitEnded = true; };
+    fs.writeFileSync(session.paths.stderrFile, 'fake claude: refused to start\n');
+    fs.writeFileSync(session.paths.exitCodeFile, '1\n');
+    const closedKeys: SessionKey[] = [];
+    adapter.on('closed', (k: SessionKey) => closedKeys.push(k));
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      adapter['pollTailTick'](session);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(isHandshakeWaitEnded, true, 'nothing will answer the handshake: the wait ends at once');
+    assert.deepEqual(closedKeys, [], 'not a session that ended: the start reports it');
+    assert.match(session.startExitDetail ?? '', /refused to start/);
+    assert.equal(session.isActive, false);
+  });
+
   it('an explicit stop converges through the same finalize but emits stopped', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-stop-'));
     const adapter = new ClaudeJsonStreamAdapter();

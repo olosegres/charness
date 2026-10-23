@@ -1,6 +1,6 @@
 {
   "name": "charness",
-  "version": "3.2.0",
+  "version": "3.3.2",
   "license": "MIT",
   "author": "Sergei Solo",
   "description": "Charness (formerly TelegramCode): Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
@@ -45,9 +45,9 @@
   },
   "main": "dist/cli.js",
   "bin": {
-    "charness": "./dist/cli.js",
-    "telegramCode": "./dist/cli.js",
-    "telegramcode": "./dist/cli.js"
+    "charness": "dist/cli.js",
+    "telegramCode": "dist/cli.js",
+    "telegramcode": "dist/cli.js"
   },
   "engines": {
     "node": ">=22.12"
