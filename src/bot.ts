@@ -11892,32 +11892,6 @@ function restoreApiRetries(): void {
 }
 
 /**
- * @description Recover a usage/session-limit episode that ENDED BEFORE this boot
- * and left no armed retry behind — the case {@link restoreApiRetries} cannot help
- * with, because there is nothing persisted to re-arm. It happens whenever the
- * limit wording was not yet recognised when the error landed: the topic is parked
- * on a limit error and a bot update alone would never resume it.
- *
- * JSON-STREAM CLAUDE ONLY (see `utils/limitEpisodeRecovery.ts`): that backend is
- * the one whose evidence outlives the bot — its terminal `result` frame sits at the
- * end of the session's append-only `stdout.jsonl`. Only the TAIL is read
- * ({@link limitEpisodeTailMaxBytes}), never the whole log. A recovered episode goes
- * through {@link handleApiError}, so the notice, the timer, the persistence and the
- * «wait for the reset» gate (`/limits_autoswitch`) behave exactly as for a live error — there is no second
- * arming path to keep in sync.
- *
- * MUST run AFTER {@link restoreApiRetries} so an already-armed thread is visible
- * and skipped. A re-armed episode whose reset time has passed (read against the
- * error's own time) resumes at once: the retry plan clamps the negative delay to
- * zero, and {@link handleApiError} announces no limit for a window that is over.
- *
- * Each arming STAMPS the log's identity (`state.json` `limitEpisodesRecovered`), so
- * an episode is recovered at most once: «⏭ Skip once», a user takeover and a
- * give-up all clear the armed record while leaving the same trailing error in the
- * log, and hot mode reloads the bot on every code change — without the stamp each
- * reload resurrected the settled wait.
- */
-/**
  * @description Record a json-stream conversation's stdout log, as it is now, as a limit episode already handled
  * (`limitEpisodesRecovered`, the stamp {@link recoverLimitEpisodesFromDisk} checks). A live wait that ends without
  * its resume — «⏭ Skip once», a give-up, a takeover — leaves the error it waited on as the log's last terminal frame,
@@ -11958,6 +11932,32 @@ function readParkedErrorWrittenAtMs(key: SessionKey, claudeSessionId: string, er
   }
 }
 
+/**
+ * @description Recover a usage/session-limit episode that ENDED BEFORE this boot
+ * and left no armed retry behind — the case {@link restoreApiRetries} cannot help
+ * with, because there is nothing persisted to re-arm. It happens whenever the
+ * limit wording was not yet recognised when the error landed: the topic is parked
+ * on a limit error and a bot update alone would never resume it.
+ *
+ * JSON-STREAM CLAUDE ONLY (see `utils/limitEpisodeRecovery.ts`): that backend is
+ * the one whose evidence outlives the bot — its terminal `result` frame sits at the
+ * end of the session's append-only `stdout.jsonl`. Only the TAIL is read
+ * ({@link limitEpisodeTailMaxBytes}), never the whole log. A recovered episode goes
+ * through {@link handleApiError}, so the notice, the timer, the persistence and the
+ * «wait for the reset» gate (`/limits_autoswitch`) behave exactly as for a live error — there is no second
+ * arming path to keep in sync.
+ *
+ * MUST run AFTER {@link restoreApiRetries} so an already-armed thread is visible
+ * and skipped. A re-armed episode whose reset time has passed (read against the
+ * error's own time) resumes at once: the retry plan clamps the negative delay to
+ * zero, and {@link handleApiError} announces no limit for a window that is over.
+ *
+ * Each arming STAMPS the log's identity (`state.json` `limitEpisodesRecovered`), so
+ * an episode is recovered at most once: «⏭ Skip once», a user takeover and a
+ * give-up all clear the armed record while leaving the same trailing error in the
+ * log, and hot mode reloads the bot on every code change — without the stamp each
+ * reload resurrected the settled wait.
+ */
 function recoverLimitEpisodesFromDisk(): void {
   const now = Date.now();
   let recovered = 0;

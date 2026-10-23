@@ -296,7 +296,6 @@ export class RequestLedger {
     if (!this.isLoaded) throw new RequestLedgerNotLoadedError();
   }
 
-  /** Open entries whose group key still decodes (a key of an unregistered platform is left alone), oldest first. */
   /**
    * @description The `createdAt` of a request created now in `conversationKey`: the clock, but after every request that
    * stays open beside it — another requester's in the same conversation. A conversation's open requests are ordered by
@@ -315,6 +314,7 @@ export class RequestLedger {
     return Math.max(this.now(), newestBesideCreatedAt + 1);
   }
 
+  /** Open entries whose group key still decodes (a key of an unregistered platform is left alone), oldest first. */
   private getOpenEntries(): OpenRequestEntry[] {
     const entries: OpenRequestEntry[] = [];
     for (const [groupString, request] of Object.entries(this.store.getOpenRequests())) {
