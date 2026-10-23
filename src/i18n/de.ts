@@ -108,6 +108,7 @@ export const deDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot ist Gruppen-Admin',
   'doctor.can_manage_topics': '`can_manage_topics` gewährt',
   'doctor.can_delete_messages': '`can_delete_messages` gewährt',
@@ -157,6 +158,9 @@ export const deDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Pinned-Thread-Status (Stage 7) wird nicht verfügbar sein',
+
+  'nativeWindows.limitedNotice':
+    'Natives Windows ist eingeschränkt: Claude (braucht tmux), Selbst-Update, Hot-Modus und lokale Spracherkennung funktionieren hier nicht. Starte Charness in WSL2, dann geht alles: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

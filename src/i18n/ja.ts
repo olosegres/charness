@@ -108,6 +108,7 @@ export const jaDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot がグループ管理者です',
   'doctor.can_manage_topics': '`can_manage_topics` が付与されました',
   'doctor.can_delete_messages': '`can_delete_messages` が付与されました',
@@ -157,6 +158,9 @@ export const jaDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'スレッドのピン留め状態（Stage 7）は利用できません',
+
+  'nativeWindows.limitedNotice':
+    'ネイティブ Windows には制限があります。Claude（tmux が必要）、自動更新、hot モード、ローカル音声認識はここでは使えません。すべての機能を使うには、WSL2 内で Charness を実行してください：{setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

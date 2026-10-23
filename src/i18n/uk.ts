@@ -114,6 +114,7 @@ export const ukDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Бот — адміністратор групи',
   'doctor.can_manage_topics': 'Право `can_manage_topics` надано',
   'doctor.can_delete_messages': 'Право `can_delete_messages` надано',
@@ -163,6 +164,9 @@ export const ukDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Закріплений статус треда (Етап 7) буде недоступний',
+
+  'nativeWindows.limitedNotice':
+    'Нативний Windows обмежений: Claude (потрібен tmux), самооновлення, hot-режим і локальне розпізнавання голосу тут не працюють. Запусти Charness всередині WSL2 — там працює все: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

@@ -108,6 +108,7 @@ export const kaDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot არის ჯგუფის ადმინი',
   'doctor.can_manage_topics': '`can_manage_topics` მინიჭებულია',
   'doctor.can_delete_messages': '`can_delete_messages` მინიჭებულია',
@@ -157,6 +158,9 @@ export const kaDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'თემის მიმაგრებული სტატუსი (Stage 7) მიუწვდომელი იქნება',
+
+  'nativeWindows.limitedNotice':
+    'პირდაპირ Windows-ზე შესაძლებლობები შეზღუდულია: Claude (საჭიროა tmux), თვითგანახლება, hot რეჟიმი და ლოკალური ხმის ამოცნობა აქ არ მუშაობს. ყველაფრის გამოსაყენებლად გაუშვით Charness WSL2-ის შიგნით: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

@@ -108,6 +108,7 @@ export const esDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'El bot es admin del grupo',
   'doctor.can_manage_topics': '`can_manage_topics` concedido',
   'doctor.can_delete_messages': '`can_delete_messages` concedido',
@@ -157,6 +158,9 @@ export const esDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'El estado fijado del hilo (Stage 7) no estará disponible',
+
+  'nativeWindows.limitedNotice':
+    'Windows nativo tiene limitaciones: Claude (necesita tmux), la actualización automática, el modo hot y el reconocimiento de voz local no funcionan aquí. Ejecuta Charness dentro de WSL2 para tenerlo todo: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

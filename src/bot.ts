@@ -92,6 +92,12 @@ import {
   type ReadinessFacts,
   type StartupTarget,
 } from './utils/startupReadiness';
+import { formatDoctorLine, type DoctorLine } from './utils/doctorLine';
+import {
+  getNativeWindowsConsoleLine,
+  getNativeWindowsDoctorLine,
+  getNativeWindowsGeneralNotice,
+} from './utils/nativeWindows';
 import { getStateStore, KeyLock, resolveDataDir, type StateStore } from './state';
 import { releaseLock } from './instanceLock';
 import { gracefulShutdown } from './shutdown';
@@ -6536,18 +6542,6 @@ bot.action('open_sessions', async (ctx) => {
 //  /doctor — self-diagnostics (plan §20.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface DoctorLine {
-  status: 'ok' | 'warn' | 'fail';
-  label: string;
-  hint?: string;
-}
-
-function formatDoctorLine(line: DoctorLine): string {
-  if (line.status === 'ok')  return t('doctor.ok',   { label: line.label });
-  if (line.status === 'warn') return t('doctor.warn', { label: line.label, hint: line.hint ?? '' });
-  return                       t('doctor.fail', { label: line.label, hint: line.hint ?? '' });
-}
-
 async function checkCliPresent(cmd: string): Promise<boolean> {
   try {
     await execFileAsync(cmd, ['--version'], { timeout: 1500 });
@@ -6557,6 +6551,10 @@ async function checkCliPresent(cmd: string): Promise<boolean> {
 
 async function runDoctor(): Promise<DoctorLine[]> {
   const lines: DoctorLine[] = [];
+
+  // 0. Native Windows runs with limits (no tmux, no self-update restart, no hot mode, no local speech install).
+  const nativeWindowsLine = getNativeWindowsDoctorLine(process.platform, t);
+  if (nativeWindowsLine) lines.push(nativeWindowsLine);
 
   // 1. Bot admin permissions in the configured group.
   const groupId = getAllowedGroupId();
@@ -6661,7 +6659,7 @@ command('doctor', async (_ctx, key) => {
   // Single big edit-in-place would be nicer, but doctor is rarely run and
   // gathering the report in series keeps it dead simple.
   const lines = await runDoctor();
-  const body = lines.map(formatDoctorLine).join('\n');
+  const body = lines.map((line) => formatDoctorLine(line, t)).join('\n');
   await replyToThread(
     key,
     `${t('doctor.header')}\n\n${body}`,
@@ -12779,10 +12777,11 @@ async function resolveBotAdminRights(
 }
 
 /**
- * @description The General topic the updater talks in: the paired group's General when a group is paired, else the owner's DM
- * General (`null` when neither exists — a Jira-only instance has no Telegram to say anything in).
+ * @description The General topic the bot speaks to the operator in (the updater, the native-Windows notice): the paired group's
+ * General when a group is paired, else the owner's DM General (`null` when neither exists — a Jira-only instance has no
+ * Telegram to say anything in).
  */
-function getUpdateGeneralKey(): SessionKey | null {
+function getOperatorGeneralKey(): SessionKey | null {
   const groupId = getAllowedGroupId();
   if (groupId !== null) return makeTelegramKey(groupId, GENERAL_THREAD_ID);
   const ownerUserId = getOwnerUserId();
@@ -12796,7 +12795,7 @@ function getUpdateGeneralKey(): SessionKey | null {
  */
 async function postUpdateMessageToGeneral(message: UpdateMessage): Promise<void> {
   if (!ENV.isTelegramServed) return;
-  const generalKey = getUpdateGeneralKey();
+  const generalKey = getOperatorGeneralKey();
   if (generalKey === null) {
     console.log(`[update] no General topic to post "${message.kind}" in`);
     return;
@@ -12937,6 +12936,19 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
     if (target === 'owner') console.log('[startup-status] owner DM unreachable');
   }
   console.warn('[startup-status] no reachable target — status not delivered');
+}
+
+/**
+ * @description On native Windows, say once per cold start in General which features do not work there and point to WSL2,
+ * worded in that chat's language. Best-effort like the readiness status: no General topic to speak in is not an error (the
+ * console line already said it), and a failed send is logged by the send path.
+ */
+async function postNativeWindowsNoticeToGeneral(isHotReload: boolean): Promise<void> {
+  const generalKey = getOperatorGeneralKey();
+  if (generalKey === null) return;
+  const text = withThreadLocale(generalKey, () => getNativeWindowsGeneralNotice({ platform: process.platform, isHotReload }, t));
+  if (text === null) return;
+  await replyToThread(generalKey, text);
 }
 
 /**
@@ -13118,6 +13130,8 @@ export async function startBot(): Promise<void> {
     `Boot mode:        ${bootMode.isHotReload ? 'HOT RELOAD' : 'COLD START'} ` +
       `(downtime=${downtimeMs === null ? 'unknown' : `${downtimeMs}ms`})`,
   );
+  const nativeWindowsConsoleLine = getNativeWindowsConsoleLine(process.platform, t);
+  if (nativeWindowsConsoleLine) console.warn(nativeWindowsConsoleLine);
   console.log(`Chat mode:        ${getChatMode()}`);
   // In `both`, the DM surface only lights up when an OWNER_USER_ID is set;
   // otherwise the instance serves the group only. Surface that explicitly so an
@@ -13635,6 +13649,11 @@ export async function startBot(): Promise<void> {
     await sendStartupStatus(bootMode.isHotReload);
   } catch (e) {
     console.warn('[startup-status] failed:', e instanceof Error ? e.message : e);
+  }
+  try {
+    await postNativeWindowsNoticeToGeneral(bootMode.isHotReload);
+  } catch (e) {
+    console.warn('[platform] native Windows notice failed:', e instanceof Error ? e.message : e);
   }
   await startUpdates();
   // The local speech engine: clean up after an earlier run, re-attach to / start its install. Starts no process.

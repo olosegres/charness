@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**On native Windows the bot now says which features do not work there and points to WSL2.** Claude and `/terminal` need
+tmux, a self-update cannot restart the bot in place, hot mode refuses to start and the local speech engine cannot be
+installed; at a cold start the bot prints one console line, posts one short notice in General (in the chat's language) and
+shows the same line in `/doctor`, with a link to the new SETUP.md section «Windows (WSL2)»: install WSL, the config and
+projects inside Linux, Windows programs from WSL, and a recipe for a PC with no monitor that starts the bot at Windows boot
+without anyone logged in. A `/doctor` warning that has no hint no longer ends in a dangling dash.
+
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
 counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
 under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a

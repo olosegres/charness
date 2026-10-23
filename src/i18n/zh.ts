@@ -108,6 +108,7 @@ export const zhDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot 是群组管理员',
   'doctor.can_manage_topics': '`can_manage_topics` 已授予',
   'doctor.can_delete_messages': '`can_delete_messages` 已授予',
@@ -157,6 +158,9 @@ export const zhDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': '话题的置顶状态（Stage 7）将不可用',
+
+  'nativeWindows.limitedNotice':
+    '原生 Windows 功能受限：Claude（需要 tmux）、自动更新、hot 模式和本地语音识别在这里都无法使用。请在 WSL2 中运行 Charness 以使用全部功能：{setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

@@ -108,6 +108,7 @@ export const uzDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot guruh admini',
   'doctor.can_manage_topics': '`can_manage_topics` berilgan',
   'doctor.can_delete_messages': '`can_delete_messages` berilgan',
@@ -157,6 +158,9 @@ export const uzDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Mavzuning belgilangan holati (Stage 7) mavjud bo‘lmaydi',
+
+  'nativeWindows.limitedNotice':
+    'Native Windows cheklangan: Claude (tmux kerak), o‘z-o‘zini yangilash, hot rejimi va lokal ovoz aniqlash bu yerda ishlamaydi. Hammasidan foydalanish uchun Charness’ni WSL2 ichida ishga tushiring: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +
