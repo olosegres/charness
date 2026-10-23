@@ -2055,14 +2055,24 @@ function formatBalanceOwner(from: FallbackChainEntry | null): string {
  * account out: switching ON moves the topic at once; OFF puts «switch to …» buttons on the notice. With no rung free
  * now, the topic waits only for a rung that comes back at a KNOWN time (the earliest reset, and only with «wait for
  * reset» on) and resumes there; otherwise the notice is all, and an open request is answered and no longer woken. A
- * repeat of the same episode (another frame, another scrape of the line) says nothing again.
+ * repeat of the same episode (another frame, another scrape of the line, a scheduled run into the same balance) says
+ * nothing in the topic again; a request opened since — a scheduled run's — is still answered and no longer woken, unless
+ * a wait for another rung's reset is armed.
  */
 async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass): Promise<void> {
   const k = keyToString(key);
   markLimitEpisodeSettled(key);
   const position = getTopicFallbackPosition(key);
   if (position?.backend === 'claude') state.setClaudeProfileCreditExhausted(position.profile, new Date().toISOString());
-  if (balanceExhaustedNoticedThreads.has(k)) return;
+  const notice = `${t('apiRetry.balanceExhaustedNotice', { name: formatBalanceOwner(position) })}${getBalanceSpentLine(position)}`;
+  const texts: LimitWaitTexts = { plainNotice: notice, answerBody: t('requests.limit.answerBalanceExhaustedNotice') };
+  const stopped: UsageLimitWait = { kind: 'autoResumeOff' };
+  if (balanceExhaustedNoticedThreads.has(k)) {
+    // Like the «wait for reset» OFF repeat: without it the wake-up engine re-prods that request into the same refused
+    // balance and ends in an alert.
+    if (getArmedApiRetry(key) === null) await announceLimitWait(key, stopped, texts, false);
+    return;
+  }
   balanceExhaustedNoticedThreads.add(k);
   const episodeId = Date.now();
   let plan: Awaited<ReturnType<typeof planFallbackSwitch>> = { action: 'none', from: position, earliest: null };
@@ -2071,9 +2081,6 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   } catch (e) {
     console.warn(`[fallback] ${k}: the switch plan after a used-up balance failed:`, e instanceof Error ? e.message : e);
   }
-  const notice = `${t('apiRetry.balanceExhaustedNotice', { name: formatBalanceOwner(plan.from) })}${getBalanceSpentLine(plan.from)}`;
-  const texts: LimitWaitTexts = { plainNotice: notice, answerBody: t('requests.limit.answerBalanceExhaustedNotice') };
-  const stopped: UsageLimitWait = { kind: 'autoResumeOff' };
   if (plan.action === 'auto') {
     const to = plan.to;
     await replyToThread(key, notice);

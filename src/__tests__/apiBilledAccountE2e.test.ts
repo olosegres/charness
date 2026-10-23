@@ -26,6 +26,8 @@
  *     nothing that comes back at a known time: the notice alone — no wait, no hourly retry; `/status` says 💸
  *   → with the subscription limited until a known instant, the credits run out again: the topic waits for THAT reset
  *     and resumes on the subscription (the armed wait names it), never on the exhausted account
+ *   → requests on, the credits run out on the operator's request, then a scheduled run hits the same balance: no second
+ *     notice in the topic, and the run's request is answered too and no longer woken
  *
  * What the unit tests cover instead: the key paste in the sign-in (`agentLogin.test.ts`), its check and storage
  * (`claudeAccounts.test.ts`, `claudeApiAccount.test.ts`), the trace redaction (`claudeApiAccount.test.ts`).
@@ -71,6 +73,8 @@ import {
   type PersistedState,
 } from './e2e/fallbackFlowKit';
 import { claudeCompactHookSettingsFileName } from '../utils/claudeCompactHook';
+import type { OpenRequestState } from '../requests/types';
+import type { ScheduleRecord } from '../scheduler/types';
 import { claudeProfileLaunchSettingsFileName, createClaudeProfileLayout, writeClaudeProfileApiKey } from '../utils/claudeProfiles';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -94,6 +98,8 @@ const creditBalanceError = 'Credit balance is too low';
 const topicKey = `${group.id}:${topicThreadId}`;
 
 const replyTimeoutMs = 20 * 1000;
+/** How long after the restart the seeded scheduled run fires: room for the restart and the first refused turn. */
+const seededRunDelayMs = 45 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -119,6 +125,12 @@ function runOutOfCredits(label: string): void {
 /** The bot's «credits used up» notices in the topic. */
 function listBalanceNotices(): string[] {
   return topic.listMessages().map((message) => message.text).filter((text) => text.startsWith('💸'));
+}
+
+/** The topic's open request of `originKind` (`message`: the operator's, `scheduledRun`: the scheduler's). */
+function findOpenRequest(originKind: OpenRequestState['origin']['kind']): OpenRequestState | undefined {
+  const requests = Object.values((readPersistedState(getLayout()).openRequests ?? {}) as Record<string, OpenRequestState>);
+  return requests.find((request) => request.origin.kind === originKind);
 }
 
 function getCharness(): IsolatedCharness {
@@ -372,5 +384,40 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.deepEqual(retry?.resumeOn, { backend: 'claude', profile: 'default', model: null }, 'the wait ends on the subscription');
     assert.ok(Math.abs((retry?.fireAt ?? 0) - (subscriptionResetMs + 60_000)) < 2_000, 'at its reset, not an hour from now');
     assert.match(listBalanceNotices().at(-1) ?? '', /\n\n.*default/, 'the notice says where and when the work resumes');
+  });
+
+  it('a scheduled run into the same used-up balance: nothing new in the topic, and its request is answered and no longer woken', async () => {
+    let dueAt = 0;
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: keyAccount, model: null }];
+      delete persisted.apiRetries?.[topicKey];
+      // Requests on: the operator's message and the scheduled run each open one.
+      const displayPrefs = (persisted.displayPrefs ?? {}) as Record<string, Record<string, string>>;
+      persisted.displayPrefs = { ...displayPrefs, [topicKey]: { ...displayPrefs[topicKey], view: 'answers' } };
+      dueAt = Date.now() + seededRunDelayMs;
+      const seeded: ScheduleRecord = {
+        id: 'run-bal-5-seeded',
+        threadKey: topicKey,
+        name: 'Run BAL-5',
+        spec: { kind: 'once', onceAtIso: new Date(dueAt).toISOString() },
+        prompt: 'BAL-5 scheduled check',
+        createdBy: 'user',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nextRunAt: dueAt,
+      };
+      persisted.schedules = { ...(persisted.schedules ?? {}) as Record<string, ScheduleRecord>, [seeded.id]: seeded };
+    });
+    runOutOfCredits('BAL-4');
+    await getCharness().waitFor('the operator\'s request answered: the work stopped', replyTimeoutMs, () => findOpenRequest('message')?.limitWaitAnsweredFor === 'autoResumeOff');
+    const countNotices = (): number => listBalanceNotices().filter((text) => text.startsWith(`💸 «${keyAccount}»`)).length;
+    const noticesBefore = countNotices();
+    assert.ok(Date.now() < dueAt - 1_000, 'the first refused turn was handled before the scheduled run fires');
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), creditBalanceError);
+
+    await getCharness().waitFor('the scheduled run\'s fire announcement', dueAt - Date.now() + replyTimeoutMs, () => topic.listMessages().some((message) => message.text.includes('Schedule "Run BAL-5"')));
+    await getCharness().waitFor('the scheduled run\'s request answered: the work stopped', replyTimeoutMs, () => findOpenRequest('scheduledRun')?.limitWaitAnsweredFor === 'autoResumeOff');
+    assert.equal(findOpenRequest('scheduledRun')?.isLimitStopped, true, 'nothing wakes it into the same refused balance');
+    assert.equal(countNotices(), noticesBefore, 'no second notice in the topic');
   });
 });
