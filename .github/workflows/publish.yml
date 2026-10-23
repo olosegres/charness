@@ -1,28 +1,187 @@
-name: Publish to npm
+name: Release to npm
 
-# Manual trigger. Publishing uses npm trusted publishing (OIDC provenance).
-# To enable it, add a Trusted Publisher for this package on npmjs.com pointing at
-# this repo, this workflow, and the `release` environment, then run this workflow
-# from the Actions tab. Until trusted publishing is configured, releases are
-# published from the maintainer host, so a tag push intentionally does NOT auto-run
-# this (which would otherwise fail before the publisher exists).
+# One workflow, three ways in (see DEVELOPMENT.md § Releases):
+#   - the daily schedule: decides by itself whether anything shipped changed, tests, bumps, tags, publishes;
+#   - a manual dispatch (bump / force / dryRun inputs);
+#   - a `v*` tag pushed by hand (`npm version <level>` locally, then push main with the tag).
+# Publishing uses npm trusted publishing (OIDC, provenance, no npm token anywhere): the package's Trusted
+# Publisher on npmjs.com names this repository, this file name and the `release` environment.
+#
+# prepare and publish are two jobs of ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start
+# another workflow run, so the bot's own tag push cannot publish twice.
 on:
+  schedule:
+    # 09:17 Tbilisi, off the top of the hour: GitHub delays scheduled runs at :00.
+    - cron: '17 9 * * *'
+      timezone: Asia/Tbilisi
   workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump. auto = from the commits since the last release; a major is released only here, with bump=major.'
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      force:
+        description: 'Release even when the skip rules say there is nothing to release (never past the breaking-change guard of auto).'
+        type: boolean
+        default: false
+      dryRun:
+        description: 'Everything except the push, the npm publish and the GitHub Release; prints the plan, the CHANGELOG diff, the notes and the package check.'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
-  publish:
+  prepare:
+    # Decide, gate, version commit + tag on main. A tag pushed by hand skips this job: its commit is already tagged.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    environment: release
+    timeout-minutes: 150
     permissions:
-      contents: read
-      id-token: write
+      contents: write
+    outputs:
+      tag: ${{ steps.push.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Release only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are cut from main only; this run is on ${GITHUB_REF}."
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # corepack BEFORE setup-node: the repo pins Yarn 4 in `packageManager`, the runner's global Yarn is 1.x.
+      - run: corepack enable
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: 'yarn'
+          cache: yarn
       - run: yarn install --immutable
-      - run: yarn build
-      - run: yarn test
-      - run: npm publish --provenance --access public
+      - name: Plan the release
+        id: plan
+        env:
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: yarn tsx src/release/cli.ts plan --bump "${INPUT_BUMP:-auto}" --force "${INPUT_FORCE:-false}"
+      - name: Install tmux
+        if: steps.plan.outputs.kind == 'release'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Typecheck
+        if: steps.plan.outputs.kind == 'release'
+        run: yarn typecheck
+      - name: Build
+        if: steps.plan.outputs.kind == 'release'
+        run: yarn build
+      - name: Test (unit and flows)
+        if: steps.plan.outputs.kind == 'release'
+        run: yarn test
+      - name: Apply the version (package.json, CHANGELOG.md)
+        if: steps.plan.outputs.kind == 'release'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: yarn tsx src/release/cli.ts apply "$VERSION"
+      - name: Package check
+        if: steps.plan.outputs.kind == 'release'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
+      - name: What the release changes
+        if: steps.plan.outputs.kind == 'release'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          BUMP: ${{ steps.plan.outputs.bump }}
+        run: |
+          {
+            echo "### Release ${VERSION} (${BUMP})"
+            echo
+            echo '#### Release notes'
+            echo
+            yarn tsx src/release/cli.ts notes "$VERSION"
+            echo
+            echo '#### Version files'
+            echo
+            echo '```diff'
+            git diff -- package.json CHANGELOG.md
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit, tag and push (not in a dry run)
+        id: push
+        if: steps.plan.outputs.kind == 'release' && inputs.dryRun != true
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: yarn tsx src/release/cli.ts commit-release "$VERSION"
+
+  publish:
+    # After prepare pushed a tag, or for a tag pushed by hand. Never in a dry run (no tag output), never after a red prepare.
+    needs: prepare
+    if: ${{ !cancelled() && (github.event_name == 'push' || (needs.prepare.result == 'success' && needs.prepare.outputs.tag != '')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: write # the GitHub Release
+      id-token: write # npm trusted publishing (OIDC)
+    env:
+      TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - run: corepack enable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          # This job holds the OIDC publish right: nothing restored from a cache runs in it.
+          package-manager-cache: false
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; ^11 stays on a major that supports Node 22.
+      - run: npm install -g 'npm@^11.5.1'
+      - run: yarn install --immutable
+      - name: The tag is the version in package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${TAG}" != "v${version}" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${version}."
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+      - name: Build
+        run: yarn build
+      # prepare already gated the exact commit of a scheduled / dispatched release; a hand-pushed tag has not been.
+      - name: Gate for a hand-pushed tag (typecheck, unit and flows)
+        if: github.event_name == 'push'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+          yarn typecheck
+          yarn test
+      - name: Release notes (read before publishing, so a missing section fails early)
+        run: yarn tsx src/release/cli.ts notes "$VERSION" > "${RUNNER_TEMP}/release-notes.md"
+      - name: Package check
+        run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
+      - name: Publish to npm
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          if npm view "${name}@${VERSION}" version > /dev/null 2>&1; then
+            echo "${name}@${VERSION} is already on npm; not publishing it again (a re-run after a later step failed)."
+          else
+            npm publish --provenance --access public
+          fi
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release edit "${TAG}" --notes-file "${RUNNER_TEMP}/release-notes.md"
+          else
+            gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/release-notes.md"
+          fi

@@ -49,24 +49,32 @@ let repoDir: string;
 let homeDir: string;
 let githubOutputPath: string;
 
+/** The environment of the CLI under test: no git identity, so the identity the CLI itself sets is what a commit shows. */
 function createChildEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     HOME: homeDir,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
-    GIT_AUTHOR_NAME: 'Release Test',
-    GIT_AUTHOR_EMAIL: 'release-test@example.invalid',
-    GIT_COMMITTER_NAME: 'Release Test',
-    GIT_COMMITTER_EMAIL: 'release-test@example.invalid',
     npm_config_cache: path.join(homeDir, '.npm'),
     npm_config_update_notifier: 'false',
     GITHUB_OUTPUT: githubOutputPath,
   };
 }
 
+/** The test's own git calls and the `npm version` path: they need an identity the CLI does not provide. */
+function createGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...createChildEnv(),
+    GIT_AUTHOR_NAME: 'Release Test',
+    GIT_AUTHOR_EMAIL: 'release-test@example.invalid',
+    GIT_COMMITTER_NAME: 'Release Test',
+    GIT_COMMITTER_EMAIL: 'release-test@example.invalid',
+  };
+}
+
 function runGit(...args: string[]): string {
-  const result = spawnSync('git', args, { cwd: repoDir, env: createChildEnv(), encoding: 'utf8' });
+  const result = spawnSync('git', args, { cwd: repoDir, env: createGitEnv(), encoding: 'utf8' });
   assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
   return result.stdout.trim();
 }
@@ -361,12 +369,169 @@ describe('the manual `npm version` path', () => {
     runGit('add', '-A');
     runGit('commit', '-q', '-m', 'chore: the version script');
 
-    const result = spawnSync('npm', ['version', 'minor'], { cwd: repoDir, env: createChildEnv(), encoding: 'utf8', timeout: cliTimeoutMs });
+    const result = spawnSync('npm', ['version', 'minor'], { cwd: repoDir, env: createGitEnv(), encoding: 'utf8', timeout: cliTimeoutMs });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
     assert.equal(runGit('log', '-1', '--format=%s'), 'chore(release): 3.3.0');
     assert.equal(runGit('tag', '--points-at', 'HEAD'), 'v3.3.0');
     assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'package.json']);
     assert.match(runGit('show', 'HEAD:CHANGELOG.md'), /## Unreleased\n\n## 3\.3\.0 — \d{4}-\d{2}-\d{2}\n\n\*\*A change users see\./);
+  });
+});
+
+describe('commit-release', () => {
+  let remoteDir: string;
+  let otherDir: string;
+
+  function runGitIn(cwd: string, ...args: string[]): string {
+    const result = spawnSync('git', args, { cwd, env: createGitEnv(), encoding: 'utf8' });
+    assert.equal(result.status, 0, `git ${args.join(' ')} (${cwd}): ${result.stderr}`);
+    return result.stdout.trim();
+  }
+
+  /** Another clone of the remote: where "someone else pushes to main while the release runs". */
+  function pushFromOtherClone(fileName: string, content: string, message: string): void {
+    runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
+    fs.writeFileSync(path.join(otherDir, fileName), content);
+    runGitIn(otherDir, 'add', '-A');
+    runGitIn(otherDir, 'commit', '-q', '-m', message);
+    runGitIn(otherDir, 'push', '-q', 'origin', 'main');
+  }
+
+  /** A pre-push hook that moves the remote's main before each of the first `times` pushes go out. */
+  function installMovingMainHook(times: number): void {
+    const counterFile = path.join(sandboxDir, 'push-count');
+    const hook = [
+      '#!/bin/sh',
+      'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE',
+      'export GIT_AUTHOR_NAME=Other GIT_AUTHOR_EMAIL=other@example.invalid GIT_COMMITTER_NAME=Other GIT_COMMITTER_EMAIL=other@example.invalid',
+      `n=$(cat "${counterFile}" 2>/dev/null || echo 0)`,
+      'n=$((n + 1))',
+      `echo $n > "${counterFile}"`,
+      `if [ "$n" -le ${times} ]; then`,
+      `  cd "${otherDir}" && git pull -q --rebase origin main && echo "$n" > "moved-$n.txt" && git add -A && git commit -q -m "chore: moved $n" && git push -q origin main`,
+      'fi',
+      'exit 0',
+    ].join('\n');
+    const hookPath = path.join(repoDir, '.git', 'hooks', 'pre-push');
+    fs.writeFileSync(hookPath, `${hook}\n`, { mode: 0o755 });
+  }
+
+  function applyRelease(version: string): void {
+    commitFile('src/bot.ts', 'export const bot = 2;\n', 'fix: a');
+    const result = runCli('apply', version);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  beforeEach(() => {
+    remoteDir = path.join(sandboxDir, 'remote.git');
+    otherDir = path.join(sandboxDir, 'other');
+    runGitIn(sandboxDir, 'init', '-q', '--bare', '-b', 'main', remoteDir);
+    runGit('remote', 'add', 'origin', remoteDir);
+    runGit('push', '-q', 'origin', 'main', lastTag);
+    runGitIn(sandboxDir, 'clone', '-q', remoteDir, otherDir);
+  });
+
+  test('commits only package.json and CHANGELOG.md as the bot, tags that commit, pushes branch and tag', () => {
+    applyRelease('3.3.0');
+    writeRepoFile('stray.txt', 'not part of the release\n');
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const released = runGit('rev-parse', 'HEAD');
+    assert.equal(runGit('log', '-1', '--format=%s|%an|%ae'), 'chore(release): 3.3.0|github-actions[bot]|41898282+github-actions[bot]@users.noreply.github.com');
+    assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'package.json']);
+    assert.equal(runGitIn(remoteDir, 'rev-parse', 'refs/heads/main'), released);
+    assert.equal(runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}'), released);
+    assert.equal(runGitIn(remoteDir, 'cat-file', '-t', 'v3.3.0'), 'tag');
+    assert.equal(readGithubOutput().tag, 'v3.3.0');
+    assert.ok(fs.existsSync(path.join(repoDir, 'stray.txt')));
+    assert.match(runGit('status', '--porcelain'), /\?\? stray\.txt/);
+  });
+
+  test('the next plan starts from the new tag: HEAD tagged → skip; a later fix → 3.3.1', () => {
+    applyRelease('3.3.0');
+    assert.equal(runCli('commit-release', '3.3.0').status, 0);
+    fs.rmSync(githubOutputPath);
+    assert.equal(runCli('plan').status, 0);
+    assert.match(readGithubOutput().message, /HEAD already carries a release tag \(v3\.3\.0\)/);
+
+    fs.rmSync(githubOutputPath);
+    commitFile('src/bot.ts', 'export const bot = 3;\n', 'fix: b');
+    commitFile('README.md', '# changed\n', 'docs: c');
+    assert.equal(runCli('plan').status, 0);
+    assert.deepEqual([readGithubOutput().kind, readGithubOutput().version], ['release', '3.3.1']);
+  });
+
+  test('main moved during the run: a merge commit lands on main, the tag stays on the release commit', () => {
+    applyRelease('3.3.0');
+    pushFromOtherClone('notes.txt', 'someone else\n', 'docs: notes');
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const releaseCommit = runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}');
+    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%s', releaseCommit), 'chore(release): 3.3.0');
+    const mainHead = runGitIn(remoteDir, 'rev-parse', 'refs/heads/main');
+    assert.notEqual(mainHead, releaseCommit);
+    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%P', mainHead).split(' ').length, 2, 'main is a merge commit');
+    runGitIn(remoteDir, 'merge-base', '--is-ancestor', releaseCommit, mainHead);
+    assert.equal(runGitIn(remoteDir, 'show', `${mainHead}:notes.txt`), 'someone else');
+    assert.match(runGitIn(remoteDir, 'show', `${mainHead}:package.json`), /"version": "3\.3\.0"/);
+    assert.equal(runGitIn(remoteDir, 'show', `${releaseCommit}:README.md`), '# demo');
+  });
+
+  test('main moves twice in a row: the third push goes through', () => {
+    applyRelease('3.3.0');
+    installMovingMainHook(2);
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(fs.readFileSync(path.join(sandboxDir, 'push-count'), 'utf8').trim(), '3');
+    const mainHead = runGitIn(remoteDir, 'rev-parse', 'refs/heads/main');
+    assert.equal(runGitIn(remoteDir, 'show', `${mainHead}:moved-1.txt`), '1');
+    assert.equal(runGitIn(remoteDir, 'show', `${mainHead}:moved-2.txt`), '2');
+    runGitIn(remoteDir, 'merge-base', '--is-ancestor', runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}'), mainHead);
+  });
+
+  test('main that keeps moving fails after three attempts and publishes no tag', () => {
+    applyRelease('3.3.0');
+    installMovingMainHook(99);
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /failed 3 times because main kept moving; nothing was published/);
+    assert.equal(spawnSync('git', ['rev-parse', '-q', '--verify', 'refs/tags/v3.3.0'], { cwd: remoteDir, encoding: 'utf8' }).status, 1);
+  });
+
+  test('a merge conflict fails the run, leaves no merge in progress and no tag on the remote', () => {
+    applyRelease('3.3.0');
+    // Someone adds an entry at the very spot the release rewrites.
+    const changelogPath = path.join(otherDir, 'CHANGELOG.md');
+    runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
+    fs.writeFileSync(changelogPath, fs.readFileSync(changelogPath, 'utf8').replace('## Unreleased\n', '## Unreleased\n\n**A newer entry.** Lands first.\n'));
+    runGitIn(otherDir, 'add', '-A');
+    runGitIn(otherDir, 'commit', '-q', '-m', 'docs(changelog): a newer entry');
+    runGitIn(otherDir, 'push', '-q', 'origin', 'main');
+
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /merging it into the release v3\.3\.0 conflicts; nothing was published/);
+    assert.equal(fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD')), false);
+    assert.equal(spawnSync('git', ['rev-parse', '-q', '--verify', 'refs/tags/v3.3.0'], { cwd: remoteDir, encoding: 'utf8' }).status, 1);
+    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%s', 'refs/heads/main'), 'docs(changelog): a newer entry');
+  });
+
+  test('a push refused for another reason (nothing to merge) fails at once with the git message', () => {
+    applyRelease('3.3.0');
+    const hookPath = path.join(remoteDir, 'hooks', 'pre-receive');
+    fs.writeFileSync(hookPath, '#!/bin/sh\necho "protected branch" >&2\nexit 1\n', { mode: 0o755 });
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /has nothing new to merge; nothing was published/);
+    assert.match(result.stderr, /protected branch/);
+  });
+
+  test('refuses a version that is not X.Y.Z', () => {
+    const result = runCli('commit-release', 'next');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Expected a version X\.Y\.Z/);
   });
 });

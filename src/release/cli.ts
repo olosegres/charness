@@ -8,6 +8,7 @@
  *   changelog                                                   CHANGELOG only, version from package.json
  *   notes <version>                                             print the version's CHANGELOG section
  *   check-pack [--version X.Y.Z] [--skip-install]               package contents + install smoke test
+ *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
  */
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -32,6 +33,7 @@ import {
 } from './releasePlan';
 
 const gitTimeoutMs = 60_000;
+const gitPushTimeoutMs = 5 * 60_000;
 const npmPackTimeoutMs = 3 * 60_000;
 const npmInstallTimeoutMs = 10 * 60_000;
 const smokeTestTimeoutMs = 60_000;
@@ -40,6 +42,15 @@ const recordSeparator = '\x1e';
 const fieldSeparator = '\x1f';
 const releaseTagGlob = `${releaseTagPrefix}[0-9]*`;
 const bumpInputs: ReleaseBumpInput[] = ['auto', 'patch', 'minor', 'major'];
+const defaultRemote = 'origin';
+const defaultBranch = 'main';
+const pushAttemptLimit = 3;
+const releaseBotIdentity = [
+  '-c',
+  'user.name=github-actions[bot]',
+  '-c',
+  'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+];
 const manifestFileName = 'package.json';
 const changelogFileName = 'CHANGELOG.md';
 const releaseVersionPattern = /^\d+\.\d+\.\d+$/;
@@ -57,6 +68,10 @@ function runCommand(command: string, args: string[], timeoutMs: number, cwd?: st
 
 function git(...args: string[]): string {
   return runCommand('git', args, gitTimeoutMs);
+}
+
+function gitPush(...args: string[]): string {
+  return runCommand('git', ['push', ...args], gitPushTimeoutMs);
 }
 
 function tryGit(...args: string[]): string | null {
@@ -270,6 +285,57 @@ function runCheckPack(args: string[]): number {
   return 0;
 }
 
+/**
+ * Pushes the release commit (or, after a merge, the merge) to the branch and the tag in ONE atomic push. A
+ * refused push means the branch moved during the run: `<remote>/<branch>` is merged into the release commit —
+ * the tag stays on the tested release commit, reachable from the branch through the merge — and the push is
+ * retried, up to {@link pushAttemptLimit} times. A merge conflict, or a refusal with nothing to merge (not a
+ * race: permissions, protection), fails the run; nothing is published then.
+ */
+function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string): void {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      gitPush('--atomic', remote, `HEAD:refs/heads/${branch}`, `refs/tags/${tag}`);
+      return;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (attempt >= pushAttemptLimit) {
+        throw new ReleaseError(`Pushing ${tag} failed ${attempt} times because ${branch} kept moving; nothing was published.\n${reason}`);
+      }
+      git('fetch', '--quiet', remote, branch);
+      if (git('rev-list', '--count', `HEAD..${remote}/${branch}`).trim() === '0') {
+        throw new ReleaseError(`The push of ${tag} was refused and ${remote}/${branch} has nothing new to merge; nothing was published.\n${reason}`);
+      }
+      try {
+        git(...releaseBotIdentity, 'merge', '--no-edit', `${remote}/${branch}`);
+      } catch {
+        git('merge', '--abort');
+        throw new ReleaseError(
+          `${branch} moved during the run and merging it into the release ${tag} conflicts; nothing was published.\n` +
+            'Resolve it by hand (the next daily run releases the new commits), or re-run the workflow.',
+        );
+      }
+    }
+  }
+}
+
+function runCommitRelease(args: string[]): number {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { remote: { type: 'string' }, branch: { type: 'string' } },
+  });
+  const version = requireVersionArgument(positionals);
+  const tag = `${releaseTagPrefix}${version}`;
+  git('add', manifestFileName, changelogFileName);
+  git(...releaseBotIdentity, 'commit', '--quiet', '-m', `chore(release): ${version}`);
+  git(...releaseBotIdentity, 'tag', '-a', tag, '-m', tag);
+  pushReleaseWithMergeRetry(values.remote ?? defaultRemote, values.branch ?? defaultBranch, tag);
+  writeGithubOutput('tag', tag);
+  process.stdout.write(`Pushed ${tag}.\n`);
+  return 0;
+}
+
 function main(argv: string[]): number {
   const [subcommand, ...args] = argv;
   switch (subcommand) {
@@ -283,8 +349,10 @@ function main(argv: string[]): number {
       return runNotes(args);
     case 'check-pack':
       return runCheckPack(args);
+    case 'commit-release':
+      return runCommitRelease(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | commit-release.`);
   }
 }
 
