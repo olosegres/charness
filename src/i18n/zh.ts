@@ -80,7 +80,8 @@ export const zhDict: Record<string, string> = {
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
+    '/interrupt (/esc) — 中断正在进行的任务；下一条消息会改变其方向\n' +
+    '/c /y /n /enter /up /down /tab — TUI 按键（Claude）\n' +
     '/bind — 管理绑定',
 
   'doctor.header': '🔍 *Charness Doctor*',

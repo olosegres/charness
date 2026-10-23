@@ -80,7 +80,8 @@ export const frDict: Record<string, string> = {
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +
     '/clear — supprimer les messages du fil\n' +
-    '/c /y /n /enter /up /down /tab /esc — touches TUI (Claude)\n' +
+    '/interrupt (/esc) — interrompre le travail en cours ; le message suivant réoriente l\'agent\n' +
+    '/c /y /n /enter /up /down /tab — touches TUI (Claude)\n' +
     '/bind — gérer la liaison',
 
   'doctor.header': '🔍 *Charness Doctor*',

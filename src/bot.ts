@@ -7945,7 +7945,7 @@ command('tab', async (_ctx, key) => {
   else await replyToThread(key, `Not supported for ${adapter.label}`);
 });
 
-command(['esc', 'escape'], async (_ctx, key) => {
+command(['esc', 'escape', 'interrupt'], async (_ctx, key) => {
   // A pending «Add account» name prompt, then a pending sign-in (`/login`, `/connect` OAuth) take
   // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
   if (cancelProfileNameCapture(key)) {
@@ -7961,6 +7961,10 @@ command(['esc', 'escape'], async (_ctx, key) => {
     // The operator interrupted the turn: its open request closes silently.
     cancelConversationRequest(key);
     markNeedsNewMessage(key);
+    // An OpenCode turn blocked on a question ends with it: the question is closed on the server before the abort
+    // (an open one is re-found at every reattach) and its buttons are retired, as when a prompt walks away from it.
+    if (pendingQuestions.has(keyToString(key))) await retirePendingQuestion(key);
+    adapter.rejectQuestion?.(key);
     adapter.sendEscape(key);
   } else {
     await replyToThread(key, `Not supported for ${adapter.label}`);
@@ -8257,7 +8261,7 @@ command('clear_messages', async (ctx, key) => {
 // agent.
 const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
-  'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'output', 'clear_messages',
+  'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',
@@ -9876,17 +9880,35 @@ async function deliverActivePrompt(
 }
 
 /**
+ * @description Retire the on-screen state of a pending OpenCode question the user walked away from: clear the bot's
+ * pending-question state and neutralize the stale buttons message (edit it to a "cancelled" label so a late tap can't
+ * re-answer an aborted question). Closing the question on the server is the caller's, before it aborts the turn.
+ * Returns whether the buttons message itself was relabelled — it IS the cancellation notice then.
+ *
+ * The edit runs through `runQuestionLifecycleOp` (same serializer as the answer path) so it can't race a concurrent
+ * re-post-to-bottom. The `messageId` + header are captured BEFORE clearing, since `clearPendingQuestion` drops the state.
+ */
+async function retirePendingQuestion(key: SessionKey): Promise<boolean> {
+  const pending = pendingQuestions.get(keyToString(key));
+  const cancelledMessageId = pending?.messageId ?? null;
+  const cancelledQuestion = pending?.data.questions[pending.currentIndex];
+
+  clearPendingQuestion(key);
+
+  if (cancelledMessageId === null || !cancelledQuestion) return false;
+  const header = cancelledQuestion.header || cancelledQuestion.question;
+  await runQuestionLifecycleOp(key, () =>
+    editThreadMessage(key, cancelledMessageId, t('agent.question_cancelled_msg_label', { header })),
+  );
+  return true;
+}
+
+/**
  * @description Cancel a pending OpenCode question because the user sent free-form
  * input instead of answering it, then deliver that input as a fresh prompt. In
- * order: clear the bot's pending-question state, neutralize the stale buttons
- * message (edit it to a "cancelled" label so a late tap can't re-answer an
- * aborted question), abort the wedged OpenCode turn (`SIGINT` → `/session/:id/
+ * order: retire the question's on-screen state ({@link retirePendingQuestion}),
+ * close it on the server, abort the wedged OpenCode turn (`SIGINT` → `/session/:id/
  * abort`), post the "previous question cancelled" notice, then forward.
- *
- * The buttons-message edit runs through `runQuestionLifecycleOp` (same serializer
- * as the answer path) so it can't race a concurrent re-post-to-bottom. The
- * `messageId` + header are captured BEFORE clearing, since `clearPendingQuestion`
- * drops the state.
  */
 async function cancelPendingQuestionAndForward(
   key: SessionKey,
@@ -9896,23 +9918,11 @@ async function cancelPendingQuestionAndForward(
   replyContext?: string,
   requestHeader?: string,
 ): Promise<void> {
-  const pending = pendingQuestions.get(keyToString(key));
-  const cancelledMessageId = pending?.messageId ?? null;
-  const cancelledQuestion = pending?.data.questions[pending.currentIndex];
-  // Whether we relabel the on-screen question bubble itself to "❌ … cancelled"
-  // below. When we do, that IS the cancellation notice — a second standalone
-  // "previous question cancelled" line is pure noise (the reported triple
-  // message). The standalone notice is kept only for the no-bubble case.
-  const didLabelQuestionMessage = cancelledMessageId !== null && cancelledQuestion !== undefined;
-
-  clearPendingQuestion(key);
-
-  if (cancelledMessageId !== null && cancelledQuestion) {
-    const header = cancelledQuestion.header || cancelledQuestion.question;
-    await runQuestionLifecycleOp(key, () =>
-      editThreadMessage(key, cancelledMessageId, t('agent.question_cancelled_msg_label', { header })),
-    );
-  }
+  // When the question bubble itself was relabelled to "❌ … cancelled", that IS the
+  // cancellation notice — a second standalone "previous question cancelled" line is
+  // pure noise (the reported triple message). The standalone notice is kept only
+  // for the no-bubble case.
+  const didLabelQuestionMessage = await retirePendingQuestion(key);
 
   // Close the question on the OpenCode server too (not just the bot-local +
   // Telegram state above): an abandoned-but-still-open question keeps getting
@@ -11392,7 +11402,8 @@ export const COMMANDS_MENU = [
   { command: 'up', description: '⬆️ Arrow Up' },
   { command: 'down', description: '⬇️ Arrow Down' },
   { command: 'tab', description: '⇥ Tab' },
-  { command: 'esc', description: '⎋ Escape (interrupt / dismiss / cancel a pending login)' },
+  { command: 'interrupt', description: '⏹ Interrupt the running turn — the next message steers it (alias /esc)' },
+  { command: 'esc', description: '⎋ Escape (interrupt / dismiss / cancel a pending login; alias /interrupt)' },
   { command: 'y', description: '✅ Send "y"' },
   { command: 'n', description: '❌ Send "n"' },
   { command: 'c', description: '🛑 Ctrl+C' },

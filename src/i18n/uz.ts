@@ -80,7 +80,8 @@ export const uzDict: Record<string, string> = {
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI tugmalar (Claude)\n' +
+    '/interrupt (/esc) — davom etayotgan ishni to\'xtatish; keyingi xabar uni yo\'naltiradi\n' +
+    '/c /y /n /enter /up /down /tab — TUI tugmalar (Claude)\n' +
     '/bind — bog‘lanishni boshqarish',
 
   'doctor.header': '🔍 *Charness Doctor*',

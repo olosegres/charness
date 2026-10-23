@@ -84,7 +84,8 @@ export const enDict: Record<string, string> = {
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
+    '/interrupt (/esc) — stop the running turn; the next message steers it\n' +
+    '/c /y /n /enter /up /down /tab — TUI keys (Claude)\n' +
     '/bind — manage binding',
 
   'doctor.header': '🔍 *Charness Doctor*',

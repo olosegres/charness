@@ -86,7 +86,8 @@ export const ukDict: Record<string, string> = {
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
     '/accounts — акаунти Claude та провайдери OpenCode (перемкнути, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/clear — видалити повідомлення треда\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI-клавіші (Claude)\n' +
+    '/interrupt (/esc) — перервати роботу агента; наступне повідомлення його спрямує\n' +
+    '/c /y /n /enter /up /down /tab — TUI-клавіші (Claude)\n' +
     '/bind — керування прив\'язкою',
 
   'doctor.header': '🔍 *Charness Doctor*',

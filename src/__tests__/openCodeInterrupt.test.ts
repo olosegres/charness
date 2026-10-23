@@ -780,3 +780,76 @@ test('an auth retry never inherits a quota reset from the server deadline', asyn
   assert.deepEqual(apiErrors, [{ kind: 'auth', resetAt: undefined }]);
   assert.deepEqual(requests.map(r => r.path), [`/session/${own}/abort`]);
 });
+
+/**
+ * @description `/esc` / `/interrupt` on OpenCode: `sendEscape` is the operator's double Esc — one abort of the running
+ * generation, through the path every interrupt shares (`sendSignal('SIGINT')` too). Load-bearing: a turn aborted
+ * before its first assistant output idles without any, which the wedged-turn detector would read as a session that
+ * never ran the prompt and "recover" by replaying it — so the abort must clear that watch.
+ */
+describe('sendEscape — the operator interrupts the running OpenCode turn', () => {
+  const sessionKey = makeTelegramKey(-100123, 42);
+
+  function createWorkingAdapter(): {
+    adapter: OpenCodeAdapter;
+    requests: { method: string; path: string }[];
+    noResponses: number[];
+  } {
+    const adapter = new OpenCodeAdapter();
+    adapter['sessions'].set('-100123:42', createOpenCodeSessionFixture({ key: sessionKey, sessionId: own, isBusy: true, awaitingTurnResponse: true }));
+    const requests: { method: string; path: string }[] = [];
+    adapter['apiRequest'] = (async (method: string, path: string) => {
+      requests.push({ method, path });
+    }) as OpenCodeAdapter['apiRequest'];
+    const noResponses: number[] = [];
+    adapter.on('noResponse', () => noResponses.push(Date.now()));
+    return { adapter, requests, noResponses };
+  }
+
+  it('is implemented, so the bot does not answer «Not supported for OpenCode»', () => {
+    assert.equal(typeof OpenCodeAdapter.prototype.sendEscape, 'function');
+  });
+
+  it('aborts the generation once, with nothing else sent', () => {
+    const { adapter, requests } = createWorkingAdapter();
+    adapter.sendEscape(sessionKey);
+    assert.deepEqual(requests, [{ method: 'POST', path: `/session/${own}/abort` }]);
+  });
+
+  it('sends nothing for a topic without a live session', () => {
+    const { adapter, requests } = createWorkingAdapter();
+    getOpenCodeSession(adapter, '-100123:42').isActive = false;
+    adapter.sendEscape(sessionKey);
+    adapter.sendEscape(makeTelegramKey(-100123, 99));
+    assert.deepEqual(requests, []);
+  });
+
+  it('shares the abort path with SIGINT (`/c`, a cancelled question)', () => {
+    const { adapter, requests } = createWorkingAdapter();
+    adapter.sendSignal(sessionKey, 'SIGINT');
+    assert.deepEqual(requests, [{ method: 'POST', path: `/session/${own}/abort` }]);
+  });
+
+  it('an abort before any assistant output is not a wedged session: its idle triggers no recovery', () => {
+    const { adapter, noResponses } = createWorkingAdapter();
+    adapter.sendEscape(sessionKey);
+    adapter['handleSessionIdle'](sessionKey, { sessionID: own });
+    assert.equal(noResponses.length, 0);
+  });
+
+  it('control: the same idle without the abort IS reported as a wedged turn', () => {
+    const { adapter, noResponses } = createWorkingAdapter();
+    adapter['handleSessionIdle'](sessionKey, { sessionID: own });
+    assert.equal(noResponses.length, 1);
+  });
+
+  it('a prompt sent after the abort arms the wedge watch again', () => {
+    const { adapter, noResponses } = createWorkingAdapter();
+    adapter.sendEscape(sessionKey);
+    adapter['handleSessionIdle'](sessionKey, { sessionID: own });
+    adapter.sendInput(sessionKey, 'do this instead');
+    adapter['handleSessionStatus'](sessionKey, own, { status: { type: 'busy' } });
+    adapter['handleSessionIdle'](sessionKey, { sessionID: own });
+    assert.equal(noResponses.length, 1, 'the new prompt that produced nothing is still a wedge');
+  });
+});

@@ -84,7 +84,8 @@ export const ruDict: Record<string, string> = {
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
     '/accounts — аккаунты Claude и провайдеры OpenCode (переключить, добавить, войти заново, удалить, подключить, отключить)\n' +
     '/clear — удалить сообщения треда\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI-команды (Claude)\n' +
+    '/interrupt (/esc) — прервать работу агента; следующее сообщение его перенаправит\n' +
+    '/c /y /n /enter /up /down /tab — TUI-команды (Claude)\n' +
     '/bind — управление binding',
 
   'doctor.header': '🔍 *Charness Doctor*',

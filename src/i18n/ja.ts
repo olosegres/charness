@@ -80,7 +80,8 @@ export const jaDict: Record<string, string> = {
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
+    '/interrupt (/esc) — 実行中の作業を中断（次のメッセージで進む方向を修正）\n' +
+    '/c /y /n /enter /up /down /tab — TUI キー（Claude）\n' +
     '/bind — バインドを管理',
 
   'doctor.header': '🔍 *Charness Doctor*',

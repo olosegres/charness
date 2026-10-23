@@ -80,7 +80,8 @@ export const esDict: Record<string, string> = {
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
     '/accounts — cuentas de Claude y proveedores de OpenCode (cambiar, añadir, reiniciar sesión, quitar, conectar, desconectar)\n' +
     '/clear — eliminar mensajes del hilo\n' +
-    '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
+    '/interrupt (/esc) — interrumpir el trabajo en curso; el siguiente mensaje lo reorienta\n' +
+    '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
     '/bind — gestionar vínculo',
 
   'doctor.header': '🔍 *Charness Doctor*',

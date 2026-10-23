@@ -80,7 +80,8 @@ export const ptDict: Record<string, string> = {
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
     '/accounts — contas Claude e fornecedores OpenCode (trocar, adicionar, reiniciar sessão, remover, ligar, desligar)\n' +
     '/clear — apagar mensagens do tópico\n' +
-    '/c /y /n /enter /up /down /tab /esc — teclas TUI (Claude)\n' +
+    '/interrupt (/esc) — interromper o trabalho em curso; a próxima mensagem redireciona o agente\n' +
+    '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
     '/bind — gerir vínculo',
 
   'doctor.header': '🔍 *Charness Doctor*',

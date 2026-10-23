@@ -13,8 +13,9 @@
  *
  * This guard locks the fix for (2): `cancelPendingQuestionAndForward` must post
  * the standalone notice ONLY when there was no question bubble to relabel
- * (`didLabelQuestionMessage`). When the bubble WAS relabelled, that relabel is
- * the single notice — a second standalone line is the reported noise.
+ * (`didLabelQuestionMessage`, what `retirePendingQuestion` — the relabel that `/esc`
+ * shares — reports). When the bubble WAS relabelled, that relabel is the single
+ * notice — a second standalone line is the reported noise.
  *
  * Structural (not behavioural): the function lives in the side-effecting
  * `bot.ts` and depends on Telegram I/O, so — like `voiceQuestionCancelWiring` —
@@ -32,23 +33,25 @@ import * as path from 'node:path';
 
 const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
 
-/** Isolate `cancelPendingQuestionAndForward`'s body so the assertions can't be
- *  satisfied by an unrelated call elsewhere in `bot.ts`. */
-function getCancelFunctionBody(): string {
-  const startIdx = botSource.indexOf('async function cancelPendingQuestionAndForward');
-  assert.notEqual(startIdx, -1, 'cancelPendingQuestionAndForward must exist in bot.ts');
+/** Isolate one function's body so the assertions can't be satisfied by an
+ *  unrelated call elsewhere in `bot.ts`. */
+function getFunctionBody(declaration: string): string {
+  const startIdx = botSource.indexOf(declaration);
+  assert.notEqual(startIdx, -1, `${declaration} must exist in bot.ts`);
   const after = botSource.slice(startIdx + 1);
   const nextDeclMatch = after.search(/\n(?:async function|function) /);
   return after.slice(0, nextDeclMatch === -1 ? undefined : nextDeclMatch);
 }
 
+const getCancelFunctionBody = (): string => getFunctionBody('async function cancelPendingQuestionAndForward');
+
 test('the standalone cancel notice is gated behind the no-bubble case (not unconditional)', () => {
   const body = getCancelFunctionBody();
 
-  // The decision variable must exist and be derived from the bubble presence.
+  // The decision variable must exist and come from the relabel itself.
   assert.match(
     body,
-    /const\s+didLabelQuestionMessage\s*=\s*cancelledMessageId\s*!==\s*null\s*&&\s*cancelledQuestion\s*!==\s*undefined/,
+    /const\s+didLabelQuestionMessage\s*=\s*await\s+retirePendingQuestion\(key\)/,
     'didLabelQuestionMessage must reflect whether a question bubble was relabelled',
   );
 
@@ -71,4 +74,10 @@ test('the cancel path never posts the standalone notice unconditionally', () => 
     1,
     'exactly one (guarded) standalone-notice reference belongs in the cancel function',
   );
+});
+
+test('retirePendingQuestion says «relabelled» only when there was a bubble and a question to name on it', () => {
+  const body = getFunctionBody('async function retirePendingQuestion');
+  assert.match(body, /if\s*\(\s*cancelledMessageId\s*===\s*null\s*\|\|\s*!cancelledQuestion\s*\)\s*return\s+false/, 'no bubble, no relabel');
+  assert.match(body, /agent\.question_cancelled_msg_label[\s\S]*return\s+true/, 'the relabel is followed by `true`');
 });

@@ -80,7 +80,8 @@ export const deDict: Record<string, string> = {
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
+    '/interrupt (/esc) — laufende Arbeit des Agenten stoppen; die nächste Nachricht steuert ihn um\n' +
+    '/c /y /n /enter /up /down /tab — TUI-Tasten (Claude)\n' +
     '/bind — Verknüpfung verwalten',
 
   'doctor.header': '🔍 *Charness Doctor*',

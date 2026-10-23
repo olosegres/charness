@@ -80,7 +80,8 @@ export const hiDict: Record<string, string> = {
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
     '/accounts — Claude खाते और OpenCode प्रदाता (स्विच, जोड़ें, फिर साइन इन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI कुंजी (Claude)\n' +
+    '/interrupt (/esc) — चल रहे काम को रोकें; अगला संदेश उसे नई दिशा देता है\n' +
+    '/c /y /n /enter /up /down /tab — TUI कुंजी (Claude)\n' +
     '/bind — बाइंडिंग प्रबंधित करें',
 
   'doctor.header': '🔍 *Charness Doctor*',

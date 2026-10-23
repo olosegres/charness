@@ -1148,6 +1148,10 @@ export interface AgentAdapter extends EventEmitter {
   sendEnter?(key: SessionKey): void;
   sendArrow?(key: SessionKey, direction: 'Up' | 'Down'): void;
   sendTab?(key: SessionKey): void;
+  /**
+   * @description `/esc` / `/interrupt`: stop the running turn, keeping the conversation. Claude presses Escape (or sends
+   * the stream-json interrupt); OpenCode aborts the generation. Terminal has none ("Not supported").
+   */
   sendEscape?(key: SessionKey): void;
 
   /**

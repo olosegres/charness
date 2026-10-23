@@ -80,7 +80,8 @@ export const kaDict: Record<string, string> = {
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
     '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (გადართვა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI ღილაკები (Claude)\n' +
+    '/interrupt (/esc) — მიმდინარე სამუშაოს შეწყვეტა; შემდეგი შეტყობინება მას ახალ მიმართულებას მისცემს\n' +
+    '/c /y /n /enter /up /down /tab — TUI ღილაკები (Claude)\n' +
     '/bind — კავშირის მართვა',
 
   'doctor.header': '🔍 *Charness Doctor*',
