@@ -52,6 +52,7 @@ import {
 import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import type { BindingData } from '../state';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 /** The id the group has in `t.me/c/<id>/…` links: the Bot API id without its `-100`. */
@@ -176,6 +177,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -224,6 +226,8 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     const newTopic = new TopicDriver(fakeTelegram, getCharness, created.threadId, replyTimeoutMs);
     await newTopic.waitForMessage('the welcome', (message) => message.text.includes(enDict['binding.welcome.start_prompt']));
     await newTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', folders.current));
+    // The bot writes state.json a moment after it bound the topic.
+    await getCharness().waitFor('the binding persisted', replyTimeoutMs, () => readBinding(created.threadId) !== undefined);
     assert.equal(readBinding(created.threadId)?.subdir, folders.current);
     assert.equal(readBinding(created.threadId)?.topicName, 'Release notes');
     // The bot also got the service message of its own topic; it must not have been answered with the folder picker or a

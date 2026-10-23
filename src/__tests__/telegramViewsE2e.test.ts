@@ -68,6 +68,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -220,6 +221,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: schedulerMcpPort.toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -359,6 +361,8 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.equal(getTurns('TOPIC-3')[0].requestId, null, 'no request header');
     await waitForTopicMessage('the agent\'s stream text', (message) => message.text.includes('Working on TOPIC-3'));
     assert.deepEqual(getAnswers('TOPIC-3'), [], 'nothing to answer');
+    // The request the step before closed leaves state.json a moment after it closed.
+    await getCharness().waitFor('no open request on disk', replyTimeoutMs, () => listPersistedOpenTopicRequests().length === 0);
     assert.deepEqual(listPersistedOpenTopicRequests(), [], 'no request is open for the topic');
   });
 

@@ -47,6 +47,7 @@ import {
 } from './e2e/isolatedCharness';
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { defaultLocale, runWithLocale, t } from '../i18n';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -162,6 +163,7 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

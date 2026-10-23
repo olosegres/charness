@@ -47,6 +47,7 @@ import {
 } from './e2e/isolatedCharness';
 import { openLimitsBoard, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -175,6 +176,7 @@ describe('/interrupt on an OpenCode topic end to end: built charness, fake Bot A
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

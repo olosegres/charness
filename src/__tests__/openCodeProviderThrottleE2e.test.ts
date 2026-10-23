@@ -61,6 +61,7 @@ import {
 } from './e2e/isolatedCharness';
 import { openLimitsBoard, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { skipArmedRetryCallbackPrefix as skipOnceCallbackPrefix } from '../utils/autoContinueOnLimit';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -170,6 +171,7 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -263,6 +265,8 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
 
     await getCharness().waitFor('the transient retry notice', replyTimeoutMs, () => listSentTexts().some((text) => text.startsWith(transientNoticeStart)));
     assert.deepEqual(listSentTexts().filter((text) => text.startsWith(limitNoticeMark)), [], 'neither the wording nor a header makes it a usage limit');
+    // The bot writes state.json a moment after it armed the retry.
+    await getCharness().waitFor('the retry persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey()] !== undefined);
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey()]?.kind, 'transient', 'a short retry is armed, not a limit wait');
   });
 
@@ -292,6 +296,7 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
 
     await getCharness().waitFor('the probe notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(transientNoticeStart) && text.includes('2 min')));
     assert.deepEqual(listSentTexts(anthropicTopic.threadId).filter((text) => text.startsWith(limitNoticeMark)), [], 'not announced as a usage limit on the wording alone');
+    await getCharness().waitFor('the probe persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey(anthropicTopic.threadId)] !== undefined);
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey(anthropicTopic.threadId)]?.kind, 'transient', 'a short probe is armed, not a limit wait');
   });
 
@@ -399,6 +404,7 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(dailyQuotaTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
     const notice = listSentTexts(dailyQuotaTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
     assert.match(notice, /retrying in 60 min/, `the usual usage-limit wait, not the 40-second hint, got: ${notice}`);
+    await getCharness().waitFor('the wait persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey(dailyQuotaTopic.threadId)] !== undefined);
     const retry = readPersistedState(getLayout()).apiRetries?.[getTopicKey(dailyQuotaTopic.threadId)];
     assert.equal(retry?.kind, 'usageLimit');
     assert.ok((retry?.fireAt ?? 0) >= sentAt + usageLimitWaitMinMs, `the wait is set an hour ahead, got ${new Date(retry?.fireAt ?? 0).toISOString()}`);

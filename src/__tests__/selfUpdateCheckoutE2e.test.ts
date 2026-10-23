@@ -39,6 +39,7 @@ import {
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { readUpdatePending, writeUpdatePending } from '../selfUpdate/updatePending';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -118,6 +119,7 @@ describe('Automatic updates, git checkout (plain mode): a checkout, a bare remot
       CLAUDE_BIN: writeFakeClaudeLauncher(getLayout(), null),
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

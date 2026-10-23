@@ -65,6 +65,7 @@ import { fakeClaudeAlwaysUsageLimitFileName, fakeClaudeApiErrorDelayFileName, fa
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 121;
@@ -201,6 +202,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -234,6 +236,8 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const limitNoticesBefore = listSentLimitNotices().length;
     const key = makeTelegramKey(group.id, topicThreadId);
     const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, key));
+    // The bot writes state.json a moment after it changed it: wait for the conversation to be on disk.
+    await getCharness().waitFor('the topic\'s Claude conversation persisted', replyTimeoutMs, () => Boolean(readPersistedState(getLayout()).agents?.[keyToString(key)]?.claudeSessionId));
     const sessionId = readPersistedState(getLayout()).agents?.[keyToString(key)]?.claudeSessionId ?? '';
     assert.ok(sessionId, 'the topic ran a Claude conversation');
     const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, topicFolder), sessionId });
@@ -278,6 +282,8 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     const notice = listSentLimitNotices()[limitNoticesBefore];
     assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the dated reset, got: ${notice}`);
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    await getCharness().waitFor('the wait until that date persisted', replyTimeoutMs, () => (readPersistedState(getLayout()).apiRetries?.[key]?.fireAt ?? 0) >= resetAtMs);
   });
 
   it('a wait dismissed with «Skip once» is not armed again by the next restart', async () => {

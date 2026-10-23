@@ -73,6 +73,7 @@ import {
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { readClaudeTranscriptContent } from '../utils/claudeTranscriptContent';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -185,6 +186,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

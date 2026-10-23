@@ -78,6 +78,7 @@ import { claudeCompactHookSettingsFileName } from '../utils/claudeCompactHook';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 import { claudeProfileLaunchSettingsFileName, createClaudeProfileLayout, writeClaudeProfileApiKey } from '../utils/claudeProfiles';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 121;
@@ -187,6 +188,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

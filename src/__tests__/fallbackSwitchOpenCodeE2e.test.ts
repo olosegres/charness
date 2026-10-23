@@ -75,6 +75,7 @@ import {
 } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -230,6 +231,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

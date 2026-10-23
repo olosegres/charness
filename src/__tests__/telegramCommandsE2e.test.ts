@@ -80,6 +80,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -371,6 +372,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -422,6 +424,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the created screen', screen, (text) => text.includes('✅ Reminder created'));
     assert.match(screen.text, /Text: "drink water"/);
 
+    // The bot writes state.json a moment after it changed it.
+    await getCharness().waitFor('the reminder persisted', replyTimeoutMs, () => Object.keys(readPersistedState().schedules ?? {}).length > 0);
     const schedules = Object.values(readPersistedState().schedules ?? {});
     assert.equal(schedules.length, 1);
     assert.equal(schedules[0].deliveryKind, 'reminder', 'a bot-local reminder, never an agent-prompt job');
@@ -1164,6 +1168,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await getCharness().waitFor('the process stopped right after its result', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
     assert.ok(getCharness().output.includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`), 'the per-turn stop is the idle stop\'s teardown');
     assert.ok(!getCharness().output.slice(outputBefore).includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
+    await getCharness().waitFor('the session id persisted', replyTimeoutMs, () => Boolean(readPersistedState().agents?.[threadKeyString]?.claudeSessionId));
     assert.ok(readPersistedState().agents?.[threadKeyString]?.claudeSessionId, 'the session id is kept: the conversation sleeps');
   });
 
