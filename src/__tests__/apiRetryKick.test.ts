@@ -636,7 +636,8 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     const handle = getFunction('function handleApiError(');
     // Arm: one helper (the limit / transient path and the unconfirmed-limit probe use it), saved before the timer and the entry exist.
     const arm = getFunction('function armApiRetryTimer(');
-    const save = arm.indexOf('.setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}) })');
+    // A wait aimed at another rung (a used-up balance waiting for a subscription's reset) carries that rung in the same save.
+    const save = arm.indexOf('.setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}), ...(arming.resumeOn ? { resumeOn: arming.resumeOn } : {}) })');
     const entry = arm.indexOf('apiRetryTimers.set(keyToString(key), {');
     assert.ok(save > 0 && entry > save, 'arm: the saved twin is written with the entry');
     assert.ok(handle.includes('armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt'), 'the error path arms through it');

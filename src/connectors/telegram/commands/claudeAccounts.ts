@@ -269,6 +269,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       recorded = await readClaudeAuthStatus(profile.configDir) ?? status;
     }
     await recordProfileStatus(profile.name, recorded);
+    // A sign-in is the operator acting on the account: a used-up-credits mark ends with it.
+    if (recorded?.loggedIn) getState().setClaudeProfileCreditExhausted(profile.name, null);
     // A topic may already have picked the profile before its sign-in: its sleeping session resumes under it by
     // itself, and a live one is re-spawned now that the account exists.
     if (recorded?.loggedIn) await applyClaudeProfileEverywhere();
@@ -294,6 +296,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const status = await readClaudeAuthStatus(profile.configDir);
     await getState().upsertClaudeProfileRecord(profile.name, { billing: 'api' });
     await recordProfileStatus(profile.name, status);
+    getState().setClaudeProfileCreditExhausted(profile.name, null);
     if (status?.loggedIn) await applyClaudeProfileEverywhere();
     console.log(`[account] ${profile.name}: an API key was stored (${check === 'valid' ? 'accepted by the API' : 'not verified'})`);
     return t(check === 'valid' ? 'account.apiKeySaved' : 'account.apiKeySavedUnverified', { name: profile.name });
@@ -471,6 +474,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // An account billed to the API says so whenever it is picked: from now on that topic (or every topic following General) costs money per request.
     const meteredNote = readBilling(name) === 'api' ? `\n${t(isGeneral ? 'account.pickedApiGeneral' : 'account.pickedApi')}` : '';
     if (isGeneral) {
+      // The operator's pick is the act that ends a used-up-credits mark (in a topic the switch path clears it).
+      getState().setClaudeProfileCreditExhausted(name, null);
       await getState().setClaudeProfileGlobalDefault(name);
       await applyClaudeProfileEverywhere();
       return `${t('account.setGlobal', { name })}${meteredNote}`;

@@ -124,7 +124,7 @@ describe('the ranking (claude_profiles)', () => {
     ],
   });
   const view = (name: string, usage: ClaudeUsageSnapshot | undefined, extra: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView => ({
-    name, configDir: name === 'default' ? null : `/data/profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage, limitedUntil: null, ...extra,
+    name, configDir: name === 'default' ? null : `/data/profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage, limitedUntil: null, billing: null, creditExhaustedAt: null, ...extra,
   });
 
   it('the session and shared weekly windows bound EVERY model; Fable additionally drains its own weekly window', () => {
@@ -312,7 +312,7 @@ describe('the claude-profiles CLI line', () => {
         { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
         { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
       ],
-      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 60, isRecommended: true,
+      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, isEligible: true, headroomPercent: 60, isRecommended: true,
     } as const;
     const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
     assert.match(line, /5h 12% 🔄 in 2d 1h · week 40% 🔄 in 2d 1h$/, 'an account with no Fable window says nothing about Fable');

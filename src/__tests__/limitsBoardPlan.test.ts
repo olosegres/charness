@@ -29,7 +29,7 @@ const snapshot = (buckets: ClaudeUsageBucket[], isStale = false): ClaudeUsageSna
 const usageOf = (session: number, weekly: number): ClaudeUsageSnapshot => snapshot([bucket('session', session, 3), bucket('weekly_all', weekly, 6 * 24)]);
 
 function profile(name: string, overrides: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView {
-  return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, ...overrides };
+  return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, billing: null, creditExhaustedAt: null, ...overrides };
 }
 
 function detectionOf(claudeProfiles: ClaudeProfileUsageView[], openCodeModels: string[] = [], openCodeLimits: Record<string, string> = {}): FallbackDetection {

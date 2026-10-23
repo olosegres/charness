@@ -134,6 +134,9 @@ per-backend controls are optional methods the bot checks before calling.
   LIMIT on a Claude topic (`utils/claudeLimitSwitch.ts`, wired in `handleApiError` →
   `announceUsageLimitOrSwitch`): the limited profile gets `limitedUntil`, the ranking names the other
   signed-in profiles with fresh usage and room — the implicit chain when the `/limits_autoswitch` chain is empty.
+  An account billed to API credits (`billing: 'api'`; its key is in its own directory or read by its `apiKeyHelper`,
+  never `ANTHROPIC_API_KEY`) must never spend money unasked: never `recommended`, never in the implicit chain, drafted
+  last and 🚫; «Credit balance is too low» marks it `creditExhaustedAt` and arms no reset wait (`handleBalanceExhausted`).
 - **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog

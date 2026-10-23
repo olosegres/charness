@@ -44,7 +44,7 @@ const usageRefreshes: Array<{ maxAgeMs?: number }> = [];
 let runUsageRefresh: () => Promise<void> = async () => {};
 
 function buildProfile(name: string, loggedIn: boolean | undefined = true): ClaudeProfileUsageView {
-  return { name, configDir: null, loggedIn, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null };
+  return { name, configDir: null, loggedIn, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, billing: null, creditExhaustedAt: null };
 }
 
 let detection: FallbackDetection = {

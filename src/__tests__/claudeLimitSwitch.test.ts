@@ -43,6 +43,8 @@ function buildProfile(name: string, patch: Partial<ClaudeProfileUsageView> = {})
     subscriptionType: 'max',
     usage: buildUsage({ session: 20, weekly: 30, fable: 40 }),
     limitedUntil: null,
+    billing: null,
+    creditExhaustedAt: null,
     ...patch,
   };
 }

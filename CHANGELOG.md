@@ -62,6 +62,15 @@ and `npx` still worked, the package itself carried them).
 
 ## 3.3.0 — 2026-10-23
 
+**An account billed to API credits never spends money unasked, and «Credit balance is too low» no longer waits for a
+reset that never comes.** The `claude_profiles` recommendation and `charness claude-profiles --best` never name such an
+account, the switch to another Claude account never offers it, and «🔄 Fill from connected» puts it last in the
+fallback list and left out of automatic switching — tap it on the `/limits` board (`Claude · console 💳`), or include it.
+When its credits run out, the topic gets one `💸` notice instead of hourly retries, the account is marked as out of
+credits (`💸` in `/limits_autoswitch`, `/accounts`, `/limits`, `/status`) until you pick it or sign it in again, and the
+fallback list takes over as for a limit: an available entry, a «Switch to …» button, or a wait for an entry that comes
+back at a known time. An API rate limit (429) is still a short retry.
+
 **A Claude account can bill the API credits of a Claude Console organization.** `/accounts` → «➕ Claude API account
 (Console credits)» (or `/accounts add <name> api`) signs it in with `claude auth login --console`, which creates an API
 key in that organization and keeps it in the account's own directory; or paste an existing API key while the sign-in

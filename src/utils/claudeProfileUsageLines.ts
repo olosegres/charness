@@ -3,6 +3,7 @@
  * prints at the top of its screen. ONE renderer for both, so the two screens can never word a window differently.
  */
 import { t } from '../i18n';
+import type { ClaudeProfileBilling } from './claudeProfiles';
 import {
   formatClaudeUsageBucket,
   formatClaudeUsageResetAt,
@@ -12,10 +13,15 @@ import {
   type ClaudeUsageSnapshot,
 } from './claudeUsage';
 
-/** What the lines read of a profile: its usage snapshot and limit mark (a state record and a usage view both fit). */
+/**
+ * What the lines read of a profile: its usage snapshot, limit mark, billing and used-up-credits mark (a state record and
+ * a usage view both fit).
+ */
 export interface ClaudeProfileUsageSource {
   usage?: ClaudeUsageSnapshot;
   limitedUntil?: string | null;
+  billing?: ClaudeProfileBilling | null;
+  creditExhaustedAt?: string | null;
 }
 
 /** The localised words of a relative reset («🔄 in 2h»). */
@@ -27,10 +33,12 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
  * @description The profile's usage as display lines: the windows as `used% 🔄 reset` — 5h and weekly always (`—`
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
  * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
- * reset instant in `timezone`. The lines carry the locale's own indentation (they hang under a row); empty for a
- * profile never polled and not limited.
+ * reset instant in `timezone`. An account billed to API credits has no windows (its row already says it pays per
+ * use): only the used-up mark while it holds. The lines carry the locale's own indentation (they hang under a row);
+ * empty for an account with nothing to show.
  */
 export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource | undefined, timezone: string, nowMs: number): string[] {
+  if (source?.billing === 'api') return formatApiBillingLines(source);
   const lines: string[] = [];
   const usage = source?.usage;
   if (usage && usage.buckets.length > 0) {
@@ -50,4 +58,9 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
     lines.push(t('account.row.limited', { until: formatClaudeUsageResetAt(source.limitedUntil, timezone, nowMs) }));
   }
   return lines;
+}
+
+/** The lines of an account billed to API credits: the used-up mark while it holds. */
+function formatApiBillingLines(source: ClaudeProfileUsageSource): string[] {
+  return source.creditExhaustedAt ? [t('account.row.creditExhausted')] : [];
 }

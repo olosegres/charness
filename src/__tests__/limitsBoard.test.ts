@@ -58,7 +58,7 @@ const snapshot = (session: number, weekly: number, isStale = false): ClaudeUsage
 });
 
 function buildProfile(name: string, overrides: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView {
-  return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, ...overrides };
+  return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, billing: null, creditExhaustedAt: null, ...overrides };
 }
 
 const manyModels = Array.from({ length: 12 }, (_, index) => `openrouter/model-${index + 1}`);

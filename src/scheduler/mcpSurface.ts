@@ -1461,7 +1461,9 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         'The Claude account profiles signed in on this host, each with its usage windows — session (5 h), weekly ' +
         '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the profile with the most ' +
         'headroom for the model you pass (the session window and the shared weekly window bound every model, Fable ' +
-        'included; Fable also drains its own weekly window; signed-out and limited profiles are skipped). Call it BEFORE ' +
+        'included; Fable also drains its own weekly window; signed-out and limited profiles are skipped). An account with ' +
+        '`billing: "api"` pays per request from a Claude Console balance: it has no windows and is NEVER recommended — do ' +
+        'not launch a child on it unless the operator asked you to. Call it BEFORE ' +
         'launching a child `claude` and start the child with CLAUDE_CONFIG_DIR=<configDir> in its environment — ' +
         'configDir null means the default profile: set nothing. Without the variable the child inherits the account ' +
         'of this very session.',
@@ -1476,7 +1478,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
     async (args) => {
       const report = await listClaudeProfiles(args.model?.trim() || null);
       const verdict = report.recommended === null
-        ? 'No eligible profile: every signed-in account is limited or at 100 % on a relevant window.'
+        ? 'No eligible subscription profile: every signed-in one is limited or at 100 % on a relevant window (an account billed to API credits is never recommended).'
         : (() => {
             const entry = report.profiles.find((profile) => profile.name === report.recommended);
             const dir = entry?.configDir ?? null;

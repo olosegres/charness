@@ -16,6 +16,13 @@
  *     its `apiKeyHelper` and launched with ONE settings file of its own — the PreCompact hook and the helper — whose
  *     helper really yields the key; the key is in no settings file, no wrapper script and not in `state.json`;
  *     `/status` marks the account `💳 API`
+ *   → its credits run out («Credit balance is too low») with switching ON and a subscription in the chain: one
+ *     notice says the credits are used up, the topic moves to the subscription at once, the account is marked out of
+ *     credits (💸 in `/limits_autoswitch`), and NO wait for a reset is armed
+ *   → the operator picks the account again (that ends the mark) and its credits run out with nothing to switch to and
+ *     nothing that comes back at a known time: the notice alone — no wait, no hourly retry; `/status` says 💸
+ *   → with the subscription limited until a known instant, the credits run out again: the topic waits for THAT reset
+ *     and resumes on the subscription (the armed wait names it), never on the exhausted account
  *
  * What the unit tests cover instead: the key paste in the sign-in (`agentLogin.test.ts`), its check and storage
  * (`claudeAccounts.test.ts`, `claudeApiAccount.test.ts`), the trace redaction (`claudeApiAccount.test.ts`).
@@ -32,7 +39,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLoginUrl, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeApiErrorOnceFileName, fakeClaudeLoginUrl, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -76,6 +83,10 @@ const botEnvApiKey = `sk-ant-api03-${'b'.repeat(40)}`;
 /** The key the seeded account holds. Never a real key. */
 const pastedApiKey = `sk-ant-api03-${'p'.repeat(40)}`;
 const pastedCode = 'fake-console-code-4711';
+/** What Claude Code says when a request is refused for a used-up balance. */
+const creditBalanceError = 'Credit balance is too low';
+/** The topic's key in `state.json`. */
+const topicKey = `${group.id}:${topicThreadId}`;
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
@@ -92,6 +103,17 @@ let sessionId = '';
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
   return layout;
+}
+
+/** The fake ends the NEXT turn on «Credit balance is too low»; the labelled message starts that turn. */
+function runOutOfCredits(label: string): void {
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), creditBalanceError);
+  fakeTelegram.pushOperatorMessage(topicThreadId, `${label} please carry on`);
+}
+
+/** The bot's «credits used up» notices in the topic. */
+function listBalanceNotices(): string[] {
+  return topic.listMessages().map((message) => message.text).filter((text) => text.startsWith('💸'));
 }
 
 function getCharness(): IsolatedCharness {
@@ -248,5 +270,68 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
 
     const status = await topic.sendAndAwaitReply('/status', 'Account:');
     assert.match(status.text, new RegExp(`Account: ${keyAccount} · 💳 API`));
+  });
+
+  it('credits used up with switching ON and a subscription in the chain: one notice, the topic moves at once, the account is marked, and no wait is armed', async () => {
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: keyAccount, model: null }, { backend: 'claude', profile: 'default', model: null }];
+      persisted.claudeAutoSwitchOnLimitEnabled = true;
+    });
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    runOutOfCredits('BAL-1');
+    await topic.waitForMessage('the credits notice', (message) => message.text.startsWith('💸'));
+    assert.match(listBalanceNotices()[0], new RegExp(`^💸 «${keyAccount}»: the API credits are used up \\(«Credit balance is too low»\\)\\. Waiting does not refill them`));
+    const switched = await topic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+    assert.match(switched.text, new RegExp(`«${keyAccount}» .*continues on «default»`));
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation to continue on the subscription', null, sessionId, launchesBefore);
+
+    const persisted = readPersistedState(getLayout());
+    assert.ok(persisted.claudeProfiles?.[keyAccount]?.creditExhaustedAt, 'the account is marked out of credits');
+    assert.equal(persisted.claudeProfiles?.[keyAccount]?.limitedUntil, undefined, 'no reset is invented for a balance');
+    assert.equal(persisted.apiRetries?.[topicKey], undefined, 'no wait for a reset');
+    assert.ok(!topic.listMessages().some((message) => /Usage limit reached|will auto-resume/.test(message.text)), 'no wait notice');
+
+    const chain = await topic.sendAndAwaitReply('/limits_autoswitch', 'Fallback models, top first');
+    assert.ok(topic.getKeyboardLabels(chain).flat().some((label) => label === `1. Claude · ${keyAccount} 💸`), 'the rung says its credits are used up');
+  });
+
+  it('picked again (the mark ends) and out of credits with nothing to switch to and nothing that comes back at a known time: the notice alone — no wait, no retry', async () => {
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: keyAccount, model: null }];
+    });
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    await topic.sendAndAwaitReply(`/accounts use ${keyAccount}`, `Claude account for this topic: ${keyAccount}`);
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the session back on the API account', getAccountConfigDir(getLayout(), keyAccount), sessionId, launchesBefore);
+    await getCharness().waitFor('the pick to end the mark', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[keyAccount]?.creditExhaustedAt === undefined);
+
+    const noticesBefore = listBalanceNotices().length;
+    runOutOfCredits('BAL-2');
+    await getCharness().waitFor('the second credits notice', replyTimeoutMs, () => listBalanceNotices().length === noticesBefore + 1);
+    assert.match(listBalanceNotices().at(-1) ?? '', /Top up the balance .* then pick the account again: \/limits$/);
+    // Settle: an armed wait would be persisted right after the notice.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const persisted = readPersistedState(getLayout());
+    assert.equal(persisted.apiRetries?.[topicKey], undefined, 'no wait, no hourly retry');
+    assert.ok(persisted.claudeProfiles?.[keyAccount]?.creditExhaustedAt);
+    const status = await topic.sendAndAwaitReply('/status', 'Account:');
+    assert.match(status.text, new RegExp(`Account: ${keyAccount} · 💳 API · 💸 credits used up`));
+  });
+
+  it('with the subscription limited until a known instant, credits used up again: the topic waits for THAT reset and resumes on the subscription', async () => {
+    const subscriptionResetMs = Date.now() + 26 * 3_600_000;
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: 'default', model: null }, { backend: 'claude', profile: keyAccount, model: null }];
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, default: { createdAt: new Date().toISOString(), limitedUntil: new Date(subscriptionResetMs).toISOString() } };
+      delete persisted.claudeProfiles[keyAccount]?.creditExhaustedAt;
+    });
+    const noticesBefore = listBalanceNotices().length;
+    runOutOfCredits('BAL-3');
+    await getCharness().waitFor('the third credits notice', replyTimeoutMs, () => listBalanceNotices().length === noticesBefore + 1);
+    await getCharness().waitFor('the wait to be armed', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[topicKey] !== undefined);
+    const retry = readPersistedState(getLayout()).apiRetries?.[topicKey] as { kind: string; fireAt: number; resumeOn?: unknown } | undefined;
+    assert.equal(retry?.kind, 'usageLimit');
+    assert.deepEqual(retry?.resumeOn, { backend: 'claude', profile: 'default', model: null }, 'the wait ends on the subscription');
+    assert.ok(Math.abs((retry?.fireAt ?? 0) - (subscriptionResetMs + 60_000)) < 2_000, 'at its reset, not an hour from now');
+    assert.match(listBalanceNotices().at(-1) ?? '', /\n\n.*default/, 'the notice says where and when the work resumes');
   });
 });

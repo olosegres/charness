@@ -10,6 +10,7 @@
  * injected, so the unit test drives it without the network, the file system or a `StateStore`.
  */
 
+import type { ClaudeProfileBilling } from './claudeProfiles';
 import {
   buildBucketsFromRateLimitWindows,
   checkClaudeUsageBucketsChanged,
@@ -32,6 +33,11 @@ export interface ClaudeUsageRefresherProfile {
   configDir: string | null;
   /** The last auth probe; a profile known to be signed out is skipped. */
   loggedIn: boolean | undefined;
+  /**
+   * An account billed to API credits (`api`) is never polled: it has no subscription windows, and a console login's
+   * own token would only be refused by the usage endpoint and mark it stale for nothing.
+   */
+  billing?: ClaudeProfileBilling | null;
 }
 
 export interface ClaudeUsageRefresherDeps {
@@ -90,7 +96,7 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
   }
 
   function checkNeedsPoll(profile: ClaudeUsageRefresherProfile, maxAgeMs: number | undefined): boolean {
-    if (profile.loggedIn === false) return false;
+    if (profile.loggedIn === false || profile.billing === 'api') return false;
     if (maxAgeMs === undefined) return true;
     const snapshot = deps.getSnapshot(profile.name);
     if (!snapshot || snapshot.isStale) return true;
@@ -115,7 +121,7 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
 
   async function refreshOne(name: string): Promise<void> {
     const profile = deps.listProfiles().find((candidate) => candidate.name === name);
-    if (profile) await pollProfile(profile);
+    if (profile && profile.billing !== 'api') await pollProfile(profile);
   }
 
   function noteStreamWindows(name: string, windows: readonly ClaudeRateLimitWindow[]): void {

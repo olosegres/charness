@@ -250,6 +250,12 @@ export interface AgentApiErrorClass {
    * waits for the reset only when it repeats right after the probe or the account's usage reading is at 100 %.
    */
   isUnconfirmed?: boolean;
+  /**
+   * The account's prepaid API credit balance is used up («Credit balance is too low» — an account billed to a Claude
+   * Console organization's API credits, or an API-key provider). No window resets it, so it never arms a
+   * wait-for-reset: the bot marks the account exhausted until the operator acts and moves along the fallback chain.
+   */
+  isBalanceExhausted?: boolean;
 }
 
 /**

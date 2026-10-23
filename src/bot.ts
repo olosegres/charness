@@ -1376,6 +1376,12 @@ const limitResumeNoticePinnedMessageId = new Map<string, number>();
  */
 const autoContinueOffNoticedThreads = new Set<string>();
 /**
+ * @description Threads that already got the «API credits used up» notice for the CURRENT episode
+ * ({@link handleBalanceExhausted}): that flow arms no retry either, so — like the OFF notice above — a repeated frame
+ * of the same error needs its own guard. Cleared by {@link cancelApiRetry} (the user took over / the session went away).
+ */
+const balanceExhaustedNoticedThreads = new Set<string>();
+/**
  * The OPEN «switch» offer per thread (`utils/fallbackChain.ts`): the limit episode the buttons on the notice
  * were posted for, the rung the topic was on and the candidate list the buttons index into. A tap is honoured
  * only while the thread's open offer is the button's episode; retired with the episode in {@link cancelApiRetry}.
@@ -1685,6 +1691,11 @@ interface HandleApiErrorOptions {
  */
 function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: HandleApiErrorOptions = {}): void {
   const k = keyToString(key);
+  // A used-up API credit balance: no wait refills it — the account is marked, and the chain or the operator takes over.
+  if (cls.kind === 'usageLimit' && cls.isBalanceExhausted === true) {
+    void handleBalanceExhausted(key, cls);
+    return;
+  }
   // An unconfirmed usage limit is probed first; it reaches the wait below only once confirmed.
   if (cls.kind === 'usageLimit' && cls.isUnconfirmed === true && handleUnconfirmedLimit(key)) return;
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
@@ -1778,6 +1789,8 @@ interface ApiRetryArming {
   attemptsByKind?: RetryAttemptsByKind;
   limitWait?: UsageLimitWait;
   isLimitProbe?: boolean;
+  /** A usage-limit wait that ends on another rung of the chain: the resume moves the topic there first. */
+  resumeOn?: FallbackChainEntry;
 }
 
 /**
@@ -1794,7 +1807,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   onThreadActivityWhileQuestionPending(key);
 
   void state
-    .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}) })
+    .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}), ...(arming.resumeOn ? { resumeOn: arming.resumeOn } : {}) })
     .catch(e => console.error('[apiRetry] persist failed:', e));
   clearSavedFiredLimitProbe(key);
 
@@ -1811,6 +1824,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
     fireAt: arming.fireAt,
     limitWait: arming.limitWait,
     isLimitProbe: arming.isLimitProbe,
+    resumeOn: arming.resumeOn,
   });
 }
 
@@ -2012,13 +2026,78 @@ async function announceUsageLimitOrSwitch(
     }
   }
   const texts = getLimitWaitTexts(key, wait, attempt, resumeOn);
-  const keyboard = plan.action === 'offer'
-    ? Markup.inlineKeyboard(plan.candidates.map((entry, index) => [
-      Markup.button.callback(t('fallback.switchButton', { label: formatFallbackEntry(entry) }), buildFallbackSwitchCallbackData(episodeId, index)),
-    ]))
-    : undefined;
+  const keyboard = plan.action === 'offer' ? buildFallbackSwitchKeyboard(episodeId, plan.candidates) : undefined;
   const { isPlainNoticePosted } = await announceLimitWait(key, wait, texts, isPlainNoticeDue, keyboard);
   if (keyboard && !isPlainNoticePosted) await replyToThread(key, t('fallback.switchOffer'), keyboard);
+}
+
+/** The «🔁 Switch to …» buttons of a limit episode's notice, one per candidate (best first; the index is into that episode's list). */
+function buildFallbackSwitchKeyboard(episodeId: number, candidates: readonly FallbackChainEntry[]): ReturnType<typeof Markup.inlineKeyboard> {
+  return Markup.inlineKeyboard(candidates.map((entry, index) => [
+    Markup.button.callback(t('fallback.switchButton', { label: formatFallbackEntry(entry) }), buildFallbackSwitchCallbackData(episodeId, index)),
+  ]));
+}
+
+/** Whose API credits a balance notice names: a Claude account `«console»`, an OpenCode `provider/model`. */
+function formatBalanceOwner(from: FallbackChainEntry | null): string {
+  if (from === null) return t('fallback.backendClaude');
+  return from.backend === 'claude' ? `«${from.profile}»` : buildOpenCodeModelLabel(from);
+}
+
+/**
+ * @description A used-up API credit balance on `key` («Credit balance is too low», `isBalanceExhausted`): nothing resets
+ * it, so no wait for a reset is armed and no hourly retry runs. The Claude account is marked out of credits
+ * (`creditExhaustedAt`, until the operator picks it or signs it in again), the parked
+ * episode is settled (a restart does not run this again), and the fallback chain decides as for a limit, with that
+ * account out: switching ON moves the topic at once; OFF puts «switch to …» buttons on the notice. With no rung free
+ * now, the topic waits only for a rung that comes back at a KNOWN time (the earliest reset, and only with «wait for
+ * reset» on) and resumes there; otherwise the notice is all, and an open request is answered and no longer woken. A
+ * repeat of the same episode (another frame, another scrape of the line) says nothing again.
+ */
+async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass): Promise<void> {
+  const k = keyToString(key);
+  markLimitEpisodeSettled(key);
+  const position = getTopicFallbackPosition(key);
+  if (position?.backend === 'claude') state.setClaudeProfileCreditExhausted(position.profile, new Date().toISOString());
+  if (balanceExhaustedNoticedThreads.has(k)) return;
+  balanceExhaustedNoticedThreads.add(k);
+  const episodeId = Date.now();
+  let plan: Awaited<ReturnType<typeof planFallbackSwitch>> = { action: 'none', from: position, earliest: null };
+  try {
+    plan = await planFallbackSwitch(key, cls, episodeId);
+  } catch (e) {
+    console.warn(`[fallback] ${k}: the switch plan after a used-up balance failed:`, e instanceof Error ? e.message : e);
+  }
+  const notice = t('apiRetry.balanceExhaustedNotice', { name: formatBalanceOwner(plan.from) });
+  const texts: LimitWaitTexts = { plainNotice: notice, answerBody: t('requests.limit.answerBalanceExhaustedNotice') };
+  const stopped: UsageLimitWait = { kind: 'autoResumeOff' };
+  if (plan.action === 'auto') {
+    const to = plan.to;
+    await replyToThread(key, notice);
+    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true }).catch((e) => {
+      console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+      return { isSwitched: false };
+    });
+    // The notice is already in the topic; an open request still hears that the work stopped.
+    if (!outcome.isSwitched) await announceLimitWait(key, stopped, texts, false);
+    return;
+  }
+  if (plan.action === 'offer') {
+    const keyboard = buildFallbackSwitchKeyboard(episodeId, plan.candidates);
+    const { isPlainNoticePosted } = await announceLimitWait(key, stopped, texts, true, keyboard);
+    if (!isPlainNoticePosted) await replyToThread(key, t('fallback.switchOffer'), keyboard);
+    return;
+  }
+  if (plan.earliest && state.checkIsAutoContinueOnLimitEnabled(key)) {
+    const fireAt = plan.earliest.untilMs + resetBufferMs;
+    const wait: UsageLimitWait = { kind: 'afterReset', resetAt: plan.earliest.untilMs, fireAt };
+    clearLimitResumeNotice(key);
+    armApiRetryTimer(key, { kind: 'usageLimit', attempt: 1, fireAt, delayMs: Math.max(fireAt - Date.now(), 0), limitWait: wait, resumeOn: plan.earliest.entry });
+    const waitTexts = getLimitWaitTexts(key, wait, 1, plan.earliest.entry);
+    await announceLimitWait(key, wait, { plainNotice: `${notice}\n\n${waitTexts.plainNotice}`, answerBody: waitTexts.answerBody }, true);
+    return;
+  }
+  await announceLimitWait(key, stopped, texts, true);
 }
 
 /**
@@ -2126,6 +2205,7 @@ function cancelApiRetry(key: SessionKey): void {
   // error — so neither can re-notify per message.
   clearLimitResumeNotice(key);
   autoContinueOffNoticedThreads.delete(k);
+  balanceExhaustedNoticedThreads.delete(k);
   fallbackSwitchOffers.delete(k);
   // NOTE: intentionally does NOT touch the logged-out notice. `cancelApiRetry`
   // fires on EVERY inbound message (user takeover); clearing the auth notice here
@@ -6972,9 +7052,12 @@ const openCodeUsagePoller = createOpenCodeUsagePoller({
  */
 const claudeUsageRefresher = createClaudeUsageRefresher({
   listProfiles: () => [
-    { name: defaultClaudeProfileName, configDir: null, loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.loggedIn },
+    {
+      name: defaultClaudeProfileName, configDir: null,
+      loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.loggedIn, billing: state.getClaudeProfileInfo(defaultClaudeProfileName)?.billing,
+    },
     ...Object.entries(state.getClaudeProfileRecords()).map(([name, record]) => ({
-      name, configDir: resolveClaudeProfileDir(resolveDataDir(), name), loggedIn: record.loggedIn,
+      name, configDir: resolveClaudeProfileDir(resolveDataDir(), name), loggedIn: record.loggedIn, billing: record.billing,
     })),
   ],
   getSnapshot: (name) => state.getClaudeProfileInfo(name)?.usage,
@@ -7017,7 +7100,10 @@ function getThreadClaudeModel(key: SessionKey): string | null {
 /** What `/status` names of a Claude profile: its last probed sign-in and email, and its limit mark (none until probed). */
 function readStatusAccountSource(name: string): ThreadStatusAccountSource {
   const info = state.getClaudeProfileInfo(name);
-  return { name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null, billing: info?.billing ?? null };
+  return {
+    name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null,
+    billing: info?.billing ?? null, creditExhaustedAt: info?.creditExhaustedAt ?? null,
+  };
 }
 
 /** Whether the topic's agent is a Claude backend (a usage limit there is a limit of its account profile). */
@@ -7119,7 +7205,8 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   const nowMs = Date.now();
   const resetAtMs = cls.kind === 'usageLimit' ? cls.resetAt : undefined;
   if (from.backend === 'claude') {
-    state.setClaudeProfileLimitedUntil(from.profile, resolveClaudeLimitedUntil({
+    // A used-up balance has no reset: its own flow marks the account (`creditExhaustedAt`) instead.
+    if (cls.isBalanceExhausted !== true) state.setClaudeProfileLimitedUntil(from.profile, resolveClaudeLimitedUntil({
       resetAtMs,
       usage: state.getClaudeProfileInfo(from.profile)?.usage,
       existingLimitedUntil: state.getClaudeProfileInfo(from.profile)?.limitedUntil ?? null,
@@ -7152,8 +7239,11 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   let earliest: { entry: FallbackChainEntry; untilMs: number } | null = null;
   if (plan.action === 'none') {
     const explicit = state.getFallbackChain();
+    // Without a chain the implicit one is the signed-in SUBSCRIPTIONS: an account billed to API credits never ends a wait by itself.
     const rungs: FallbackChainEntry[] = explicit.length > 0 ? explicit : from.backend === 'claude'
-      ? detection.claudeProfiles.filter((profile) => profile.loggedIn !== false).map((profile): FallbackChainEntry => ({ backend: 'claude', profile: profile.name, model: null }))
+      ? detection.claudeProfiles
+        .filter((profile) => profile.loggedIn !== false && profile.billing !== 'api')
+        .map((profile): FallbackChainEntry => ({ backend: 'claude', profile: profile.name, model: null }))
       : [];
     const found = pickEarliestResetRung({ chain: rungs, current: from, detection, nowMs: Date.now() });
     if (found && !found.isCurrent) earliest = { entry: found.entry, untilMs: found.untilMs };
@@ -7455,6 +7545,9 @@ function buildBackendSwitchTargetOfRung(to: FallbackChainEntry): BackendSwitchTa
  * The outcome tells the screen what to say; the question and the limit move's notice are already posted.
  */
 async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): Promise<OperatorSwitchOutcome> {
+  // The operator's own pick of an account whose API credits were used up is the act that ends that mark (topped up, or
+  // trying anyway): a failing request marks it again.
+  if (to.backend === 'claude') state.setClaudeProfileCreditExhausted(to.profile, null);
   const currentFamily = getTopicBackendFamily(key);
   const from = getTopicFallbackPosition(key);
   const isUsageLimitWaitArmed = getArmedApiRetry(key)?.kind === 'usageLimit';

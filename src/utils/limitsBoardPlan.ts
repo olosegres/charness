@@ -3,10 +3,12 @@
  *
  *   - the ROWS — one per signed-in Claude account (in `/accounts` order), then one per connected OpenCode provider (in
  *     catalog order), each labelled `[✓ ]<program> · <account or provider>` and nothing else: the buttons carry no usage,
- *     no reset and no model (the figures do not fit a phone's button). The `✓` marks the active row only — where the
+ *     no reset and no model (the figures do not fit a phone's button) — only an account billed to API credits ends in
+ *     ` 💳` (a tap on it spends money). The `✓` marks the active row only — where the
  *     topic runs now, in General the default Claude account. A signed-out account is not listed.
  *   - the USAGE BLOCK of the message above them — `Usage (% used)` and one line per signed-in Claude account that has
- *     a figure or a limit, then per connected OpenCode provider that reports usage (the ChatGPT subscription), each
+ *     a figure or a limit (an account billed to API credits always: `console — 💳 API · pay per use`), then per
+ *     connected OpenCode provider that reports usage (the ChatGPT subscription), each
  *     `<name> — <first usage line>` in exactly the wording `/accounts` prints under a row
  *     (`formatClaudeProfileUsageLines`, the one renderer both screens share).
  *
@@ -45,9 +47,12 @@ export interface LimitsBoardInput {
   words: { claude: string; openCode: string };
 }
 
-function buildRow(row: Omit<LimitsBoardRow, 'label'> & { program: string }): LimitsBoardRow {
-  const { program, ...rest } = row;
-  return { ...rest, label: `${row.isActive ? activeMark : ''}${program} · ${row.id}` };
+/** The mark after an account billed to API credits: every request on it costs money. */
+const meteredMark = ' 💳';
+
+function buildRow(row: Omit<LimitsBoardRow, 'label'> & { program: string; isMetered?: boolean }): LimitsBoardRow {
+  const { program, isMetered, ...rest } = row;
+  return { ...rest, label: `${row.isActive ? activeMark : ''}${program} · ${row.id}${isMetered ? meteredMark : ''}` };
 }
 
 /** @description The board's rows: signed-in Claude accounts, then connected OpenCode providers. */
@@ -61,6 +66,7 @@ export function buildLimitsBoardRows(input: LimitsBoardInput): LimitsBoardRow[] 
       id: profile.name,
       program: input.words.claude,
       isActive: current?.backend === 'claude' && current.profile === profile.name,
+      isMetered: profile.billing === 'api',
     }));
   }
   for (const providerId of listOpenCodeProviders(input.detection.openCodeModels)) {
@@ -107,7 +113,9 @@ export function formatLimitsUsageBlock(input: LimitsUsageBlockInput): string {
   const entries: string[] = [];
   for (const profile of input.detection.claudeProfiles) {
     if (profile.loggedIn === false) continue;
-    const entry = formatUsageEntry(profile.name, formatClaudeProfileUsageLines(profile, input.timezone, input.nowMs));
+    const usageLines = formatClaudeProfileUsageLines(profile, input.timezone, input.nowMs);
+    // An account billed to API credits has no windows: its entry says how it pays, the used-up mark hangs under it.
+    const entry = formatUsageEntry(profile.name, profile.billing === 'api' ? [t('account.kind.api'), ...usageLines] : usageLines);
     if (entry !== null) entries.push(entry);
   }
   for (const providerId of listOpenCodeProviders(input.detection.openCodeModels)) {

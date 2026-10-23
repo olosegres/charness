@@ -205,6 +205,12 @@ const limitHitRe = /\b(?:exceeded|exhausted|reached|hit your|too many|throttl\w*
  */
 const conversationTailRe = /requests ending with a model turn are not supported/i;
 
+/**
+ * An exhausted prepaid API credit balance: Claude Code's «Credit balance is too low», the API's «Your credit balance is
+ * too low to access the Anthropic API». Waiting never refills it ({@link AgentApiErrorClass.isBalanceExhausted}).
+ */
+const creditBalanceExhaustedRe = /credit balance (?:is )?too low/i;
+
 /** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
 const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;
 
@@ -303,7 +309,9 @@ export function checkIsUsageLimitText(text: string): boolean {
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
  *  1a. the refusal of a history that ends on the model's turn ({@link conversationTailRe}) → `conversationTail`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
- *     request went through; it names a window and a reset like the block does.
+ *     request went through; it names a window and a reset like the block does. Right after it, a used-up
+ *     prepaid credit balance ({@link creditBalanceExhaustedRe}) → `usageLimit` with `isBalanceExhausted` and no
+ *     `resetAt`: ahead of every throttle branch, since no wait refills it.
  *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
  *     a longer one keeps 1c from calling the limit short. A short one a RETRY verb states ("retry in 40s") that reaches
  *     the usage-limit branches below (a long window named beside it) is a retry hint: their `resetAt` drops it.
@@ -333,6 +341,8 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   }
   if (conversationTailRe.test(text)) return { kind: 'conversationTail' };
   if (checkIsUsageLimitWarningText(text)) return null;
+  // A used-up balance is no window and no hiccup: whatever status code or retry hint rides along, no wait refills it.
+  if (creditBalanceExhaustedRe.test(text)) return { kind: 'usageLimit', isBalanceExhausted: true };
   // The reset the provider states decides a limit's length when it names one: within the first transient retry it is a
   // throttle, beyond it a window — whatever short-window code (RESOURCE_EXHAUSTED) or quota words ride along. A NAMED
   // long window (a daily quota id beside Google's "retry in 40s") still wins, and a reset already behind `now` decides

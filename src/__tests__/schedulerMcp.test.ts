@@ -947,8 +947,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           relevantBuckets: ['session', model === 'fable' ? 'weekly_scoped' : 'weekly_all'],
           recommended: model === 'fable' ? 'work' : 'default',
           profiles: [
-            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 19, isRecommended: model !== 'fable' },
-            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, isEligible: true, headroomPercent: 90, isRecommended: model === 'fable' },
+            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 19, isRecommended: model !== 'fable' },
+            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 90, isRecommended: model === 'fable' },
           ],
         };
       },

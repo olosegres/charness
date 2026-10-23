@@ -21,7 +21,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
-import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind } from './claudeProfiles';
+import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -332,6 +332,10 @@ export interface ClaudeProfileUsageView {
   subscriptionType: string | null;
   usage: ClaudeUsageSnapshot | undefined;
   limitedUntil: string | null;
+  /** How the account pays; `null` when never recorded (a subscription account added before billing was). */
+  billing: ClaudeProfileBilling | null;
+  /** When its prepaid API credits were found used up; `null` while they are not (or the operator acted since). */
+  creditExhaustedAt: string | null;
 }
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
@@ -342,13 +346,20 @@ export interface ClaudeProfileReportEntry {
   email: string | null;
   kind: ClaudeAccountKind;
   subscriptionType: string | null;
+  /**
+   * `api`: billed per request to a Claude Console organization's API credits — no windows, so no headroom figure, and
+   * NEVER `isRecommended` (it would look inexhaustible and spend money). `null`: a subscription not recorded as such.
+   */
+  billing: ClaudeProfileBilling | null;
   /** `null` when never probed. */
   loggedIn: boolean | null;
   buckets: ClaudeUsageBucket[];
   usageFetchedAt: string | null;
   isUsageStale: boolean;
   limitedUntil: string | null;
-  /** Signed in, not limited, and not at 100 % on a window the model drains. */
+  /** When its prepaid API credits were found used up (`null`: not marked). */
+  creditExhaustedAt: string | null;
+  /** Signed in, not limited, its API credits not used up, and not at 100 % on a window the model drains. */
   isEligible: boolean;
   /** `100 − max(relevant percent)`; `null` when the usage is unknown. */
   headroomPercent: number | null;
@@ -359,16 +370,18 @@ export interface ClaudeProfilesReport {
   model: string | null;
   /** The windows the ranking looked at for `model`. */
   relevantBuckets: ClaudeUsageBucketKind[];
-  /** The profile a new process of `model` should run on; `null` when none is eligible. */
+  /** The SUBSCRIPTION profile a new process of `model` should run on; `null` when none is eligible. */
   recommended: string | null;
   profiles: ClaudeProfileReportEntry[];
 }
 
 /**
  * @description Rank the profiles for a launch of `model`: a profile that is signed out, marked limited
- * (`limitedUntil` in the future) or at 100 % on a relevant window is out; the rest are ordered by headroom on
- * the relevant windows (most first; unknown usage ranks after any known one; a tie goes to the lower total of
- * the relevant percentages). The first in that order is `recommended`. The entries keep the input order.
+ * (`limitedUntil` in the future), out of API credits or at 100 % on a relevant window is out; the rest are ordered by
+ * headroom on the relevant windows (most first; unknown usage ranks after any known one; a tie goes to the lower
+ * total of the relevant percentages). The first SUBSCRIPTION in that order is `recommended`: an account billed to API
+ * credits has no windows — it would rank as unknown headroom forever — and a child launched on it spends money, so
+ * it is listed (eligible or not) but never recommended. The entries keep the input order.
  */
 export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number): ClaudeProfilesReport {
   const relevantBuckets = getRelevantClaudeUsageKinds(model);
@@ -378,25 +391,27 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       .filter((bucket): bucket is ClaudeUsageBucket => bucket !== null);
     const maxPercent = relevant.length === 0 ? null : Math.max(...relevant.map((bucket) => bucket.percent));
     const isLimited = profile.limitedUntil !== null && Date.parse(profile.limitedUntil) > nowMs;
-    const isEligible = profile.loggedIn !== false && !isLimited && (maxPercent === null || maxPercent < 100);
+    const isEligible = profile.loggedIn !== false && !isLimited && profile.creditExhaustedAt === null && (maxPercent === null || maxPercent < 100);
     return {
       name: profile.name,
       configDir: profile.configDir,
       email: profile.email,
       kind: getClaudeAccountKind(profile.subscriptionType),
       subscriptionType: profile.subscriptionType,
+      billing: profile.billing,
       loggedIn: profile.loggedIn ?? null,
       buckets: profile.usage?.buckets ?? [],
       usageFetchedAt: profile.usage?.fetchedAt ?? null,
       isUsageStale: profile.usage?.isStale === true,
       limitedUntil: profile.limitedUntil,
+      creditExhaustedAt: profile.creditExhaustedAt,
       isEligible,
       headroomPercent: maxPercent === null ? null : 100 - maxPercent,
       isRecommended: false,
     };
   });
   const ranked = entries
-    .filter((entry) => entry.isEligible)
+    .filter((entry) => entry.isEligible && entry.billing !== 'api')
     .sort((a, b) => {
       if (a.headroomPercent === null || b.headroomPercent === null) {
         return (a.headroomPercent === null ? 1 : 0) - (b.headroomPercent === null ? 1 : 0);
@@ -433,6 +448,8 @@ export function buildClaudeProfileUsageViews(input: {
     subscriptionType: record?.subscriptionType ?? null,
     usage: record?.usage,
     limitedUntil: record?.limitedUntil ?? null,
+    billing: record?.billing ?? null,
+    creditExhaustedAt: record?.creditExhaustedAt ?? null,
   });
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')

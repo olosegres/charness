@@ -19,7 +19,8 @@ export { resolveClaudeAutoSwitchOnLimitEnabled } from './autoContinueOnLimit';
  * @description The profiles that may take a topic's work over, best first: signed in, not marked limited, with
  * KNOWN and fresh usage that leaves headroom on the windows `model` drains, and not the profile that just hit
  * the limit. A profile whose usage is unknown or stale is left out on purpose — the switch is sold as "this
- * one has room", and a guess could land the topic in a second limit.
+ * one has room", and a guess could land the topic in a second limit. An account billed to API credits is never
+ * one of them: it has no windows to have room on, and only the operator decides to spend money (the chain's rung).
  */
 export function pickClaudeLimitSwitchCandidates(input: {
   profiles: readonly ClaudeProfileUsageView[];
@@ -30,7 +31,7 @@ export function pickClaudeLimitSwitchCandidates(input: {
 }): string[] {
   const report = buildClaudeProfilesReport(input.profiles, input.model, input.nowMs);
   return report.profiles
-    .filter((entry) => entry.name !== input.currentName)
+    .filter((entry) => entry.name !== input.currentName && entry.billing !== 'api')
     .filter((entry) => entry.isEligible && entry.loggedIn === true && !entry.isUsageStale)
     .filter((entry) => entry.headroomPercent !== null && entry.headroomPercent > 0)
     .sort((a, b) => (b.headroomPercent ?? 0) - (a.headroomPercent ?? 0))

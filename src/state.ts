@@ -205,6 +205,12 @@ export interface ClaudeProfileRecord {
    * auto-switch phase will act on it; nothing else writes it.
    */
   limitedUntil?: string;
+  /**
+   * ISO instant the account's prepaid API credit balance was found used up («Credit balance is too low», an account
+   * billed to API credits). No window resets it: it holds until the operator acts — picks the account again or signs it
+   * in again — and keeps the account out of the fallback chain and the ranking till then.
+   */
+  creditExhaustedAt?: string;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
   /**
@@ -2139,6 +2145,19 @@ export class StateStore {
     if (!record) return;
     if (limitedUntil === null) delete record.limitedUntil;
     else record.limitedUntil = limitedUntil;
+    this.scheduleSave();
+  }
+
+  /** The used-up-balance mark (`null` clears it); same record rules as the usage. Debounced. */
+  setClaudeProfileCreditExhausted(name: string, exhaustedAt: string | null): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    if (exhaustedAt === null) {
+      if (record.creditExhaustedAt === undefined) return;
+      delete record.creditExhaustedAt;
+    } else {
+      record.creditExhaustedAt = exhaustedAt;
+    }
     this.scheduleSave();
   }
 

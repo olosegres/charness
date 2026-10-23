@@ -296,10 +296,12 @@ export function pickPreferredOpenCodeModel(models: readonly string[], providerId
 }
 
 /**
- * @description The draft the bot PROPOSES from what it detected: the signed-in Claude profiles in their
+ * @description The draft the bot PROPOSES from what it detected: the signed-in subscription Claude profiles in their
  * registry order (each keeping the topic's model), then OpenCode — the recently picked models that are still
- * in the catalog, then every other provider's preferred model. Only what is actually available is proposed; a
- * profile never probed counts as signed in (the CLI reports a signed-out one as `false`).
+ * in the catalog, then every other provider's preferred model — and LAST the Claude accounts billed to API credits,
+ * left out of automatic switching (🚫): with no windows they never look exhausted, so an automatic switch onto one
+ * would spend money unasked; the operator moves a topic there by hand, or includes the rung. Only what is actually
+ * available is proposed; a profile never probed counts as signed in (the CLI reports a signed-out one as `false`).
  */
 export function proposeFallbackChain(detection: FallbackDetection, previous: readonly FallbackChainEntry[] = []): FallbackChainEntry[] {
   let chain: FallbackChainEntry[] = [];
@@ -307,9 +309,9 @@ export function proposeFallbackChain(detection: FallbackDetection, previous: rea
     const added = addFallbackEntry(chain, entry);
     if (added.ok) chain = added.chain;
   };
-  for (const profile of detection.claudeProfiles) {
-    if (profile.loggedIn === false) continue;
-    push({ backend: 'claude', profile: profile.name, model: null });
+  const signedIn = detection.claudeProfiles.filter((profile) => profile.loggedIn !== false);
+  for (const profile of signedIn) {
+    if (profile.billing !== 'api') push({ backend: 'claude', profile: profile.name, model: null });
   }
   const catalog = new Set(detection.openCodeModels);
   for (const label of detection.recentOpenCodeModels) {
@@ -320,7 +322,19 @@ export function proposeFallbackChain(detection: FallbackDetection, previous: rea
     const modelId = pickPreferredOpenCodeModel(detection.openCodeModels, providerId);
     if (modelId !== null) push({ backend: 'opencode', providerId, modelId });
   }
-  return chain.map((entry) => (checkIsExcludedByPrevious(entry, previous) ? { ...entry, disabled: true } : entry));
+  const apiProfiles = new Set(signedIn.filter((profile) => profile.billing === 'api').map((profile) => profile.name));
+  for (const name of apiProfiles) push({ backend: 'claude', profile: name, model: null });
+  return chain.map((entry) => {
+    const isApiRung = entry.backend === 'claude' && apiProfiles.has(entry.profile);
+    // An API rung is left out unless the chain being replaced had it IN automatic switching (the operator's choice).
+    const isExcluded = isApiRung ? !checkIsIncludedByPrevious(entry, previous) : checkIsExcludedByPrevious(entry, previous);
+    return isExcluded ? { ...entry, disabled: true } : entry;
+  });
+}
+
+/** Whether the chain being replaced had a rung of this Claude account in automatic switching (any model). */
+function checkIsIncludedByPrevious(entry: FallbackChainEntry, previous: readonly FallbackChainEntry[]): boolean {
+  return previous.some((other) => entry.backend === 'claude' && other.backend === 'claude' && other.profile === entry.profile && !checkIsFallbackEntryDisabled(other));
 }
 
 /**
@@ -344,19 +358,22 @@ export type FallbackEntryAvailability =
   | { status: 'limited'; until: string }
   /** A Claude profile that is not signed in (or removed), or an OpenCode model the server no longer offers. */
   | { status: 'signedOut' }
-  | { status: 'missing' };
+  | { status: 'missing' }
+  /** A Claude account billed to API credits whose balance is used up: no reset — it holds until the operator acts. */
+  | { status: 'exhausted' };
 
 /**
- * @description Whether a rung can take work over NOW. A Claude profile is available when it is known, signed in
- * and eligible by the usage report (not marked limited, not at 100 % on the windows its model drains — stale
- * usage is allowed: the chain is the operator's explicit order, not a headroom race). An OpenCode model is
- * available when the live catalog lists it and its limit mark, if any, lies in the past.
+ * @description Whether a rung can take work over NOW. A Claude profile is available when it is known, signed in,
+ * not out of API credits, and eligible by the usage report (not marked limited, not at 100 % on the windows its model
+ * drains — stale usage is allowed: the chain is the operator's explicit order, not a headroom race). An OpenCode
+ * model is available when the live catalog lists it and its limit mark, if any, lies in the past.
  */
 export function getFallbackEntryAvailability(entry: FallbackChainEntry, detection: FallbackDetection, nowMs: number): FallbackEntryAvailability {
   if (entry.backend === 'claude') {
     const profile = detection.claudeProfiles.find((candidate) => candidate.name === entry.profile);
     if (!profile) return { status: 'missing' };
     if (profile.loggedIn === false) return { status: 'signedOut' };
+    if (profile.creditExhaustedAt !== null) return { status: 'exhausted' };
     if (profile.limitedUntil !== null && Date.parse(profile.limitedUntil) > nowMs) return { status: 'limited', until: profile.limitedUntil };
     const report = buildClaudeProfilesReport([profile], entry.model, nowMs);
     if (!report.profiles[0]?.isEligible) return { status: 'limited', until: getExhaustedWindowReset(profile, entry.model, nowMs) ?? new Date(nowMs).toISOString() };
@@ -399,7 +416,8 @@ export const fallbackEarliestResetToleranceMs = 60_000;
  * `chain` and the rung the topic is on (`current`), the one whose limit resets EARLIEST. `null` when some rung
  * is still available (the normal switch plan applies) or none names a future reset. `isCurrent` says the topic's
  * own rung resets first (or within {@link fallbackEarliestResetToleranceMs} of the first): the wait stays as it
- * is. Signed-out and missing rungs are skipped; rungs of the current account count as the current rung.
+ * is. Signed-out, missing and out-of-credit rungs are skipped (none of them comes back at a known time); rungs of the
+ * current account count as the current rung.
  */
 export function pickEarliestResetRung(input: {
   chain: readonly FallbackChainEntry[];

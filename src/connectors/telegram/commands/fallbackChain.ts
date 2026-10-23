@@ -171,8 +171,8 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   /**
    * A rung on its label button: `✓ 1. Claude · work · opus` / `3. OpenCode · openai · gpt-6.1 🚫` — the program, then
    * the account or provider and the model when the rung names one (Telegram sizes and truncates the button as it sees
-   * fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not signed in, ❓ not offered any more, 🚫 left out
-   * of switching) and ✓ at the start marks where the topic runs now. The one place the label is built: a two-row
+   * fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not signed in, ❓ not offered any more, 💸 API
+   * credits used up, 🚫 left out of switching) and ✓ at the start marks where the topic runs now. The one place the label is built: a two-row
    * layout (label on its own row) only changes how `buildPicker` assembles the row.
    */
   function formatRowButtonLabel(index: number, entry: FallbackChainEntry, detection: FallbackDetection, current: FallbackChainEntry | null, nowMs: number): string {
@@ -185,6 +185,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     if (availability.status === 'limited') suffix += ` ⛔ ${formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs)}`;
     else if (availability.status === 'signedOut') suffix += ' 🔒';
     else if (availability.status === 'missing') suffix += ' ❓';
+    else if (availability.status === 'exhausted') suffix += ' 💸';
     if (checkIsFallbackEntryDisabled(entry)) suffix += ' 🚫';
     const here = current && checkIsSameFallbackAccount(entry, current) ? '✓ ' : '';
     return `${here}${index + 1}. ${base}${suffix}`;
@@ -208,6 +209,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     if (availability.status === 'limited') lines.push(t('limits.rungLimited', { until: formatClaudeUsageResetAt(availability.until, getInstanceTimezone(), nowMs) }));
     else if (availability.status === 'signedOut') lines.push(t('limits.rungSignedOut'));
     else if (availability.status === 'missing') lines.push(t('limits.rungMissing'));
+    else if (availability.status === 'exhausted') lines.push(t('limits.rungExhausted'));
     else lines.push(t('limits.rungReady'));
     if (checkIsFallbackEntryDisabled(entry)) lines.push(t('limits.rungDisabled'));
     if (current && checkIsSameFallbackAccount(entry, current)) lines.push(t('limits.rungHere'));

@@ -51,24 +51,29 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
   return { ok: true, args };
 }
 
-/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window). */
+/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
 export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
   const weeklyReset = find('weekly_all')?.resetsAt ?? null;
   const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(find(kind), nowMs, { fallbackResetsAt: kind === 'session' ? weeklyReset : null });
   const marker = entry.isRecommended ? '✓' : entry.isEligible ? '•' : '✗';
+  const isApi = entry.billing === 'api';
   const account = entry.loggedIn === false
     ? 'not signed in'
-    : entry.loggedIn === null && entry.email === null
-      ? 'not probed yet (open /account once)'
-      : `${entry.email ?? '?'} ${entry.kind} ${entry.subscriptionType ?? '?'}`;
-  const usage = entry.buckets.length === 0
+    : isApi
+      ? `${entry.email ?? 'API key'} API billing (pay per use, never recommended)`
+      : entry.loggedIn === null && entry.email === null
+        ? 'not probed yet (open /account once)'
+        : `${entry.email ?? '?'} ${entry.kind} ${entry.subscriptionType ?? '?'}`;
+  const formatWindows = (): string => (entry.buckets.length === 0
     ? 'usage not read yet'
     : `${[
       `5h ${read('session')}`,
       `week ${read('weekly_all')}`,
       ...(find('weekly_scoped') === null ? [] : [`Fable ${read('weekly_scoped')}`]),
-    ].join(' · ')}${entry.isUsageStale ? ' (stale)' : ''}`;
+    ].join(' · ')}${entry.isUsageStale ? ' (stale)' : ''}`);
+  // An account billed to API credits has no windows; its limit is the balance.
+  const usage = isApi ? `no windows${entry.creditExhaustedAt === null ? '' : '  CREDITS USED UP'}` : formatWindows();
   const limited = entry.limitedUntil && Date.parse(entry.limitedUntil) > nowMs ? `  LIMITED until ${entry.limitedUntil}` : '';
   return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}`;
 }

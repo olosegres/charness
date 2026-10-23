@@ -14,6 +14,8 @@ export interface ThreadStatusAccountSource {
   limitedUntil: string | null;
   /** How the account pays; `api` is marked on the row (every request costs money). Absent / `null`: a subscription. */
   billing?: ClaudeProfileBilling | null;
+  /** When its API credits were found used up (marked on the row while it holds); absent / `null`: not marked. */
+  creditExhaustedAt?: string | null;
 }
 
 export interface ThreadStatusAccount {
@@ -113,9 +115,9 @@ export function getThreadStatusReport({
  * alone when never probed), `· 💳 API` for an account billed to the API, plus the `/accounts` limit mark while it lies
  * in the future, reset in the instance zone.
  */
-function formatAccount({ name, email, loggedIn, limitedUntil, billing }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
+function formatAccount({ name, email, loggedIn, limitedUntil, billing, creditExhaustedAt }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
   const detail = loggedIn === false ? t('account.row.loggedOut') : email;
-  const metered = billing === 'api' ? t('status.thread_account_api') : '';
+  const metered = billing === 'api' ? `${t('status.thread_account_api')}${creditExhaustedAt ? t('status.thread_account_exhausted') : ''}` : '';
   const limited = limitedUntil !== null && Date.parse(limitedUntil) > nowMs
     ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(limitedUntil, timezone, nowMs) })
     : '';
