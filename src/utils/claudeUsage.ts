@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
 import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
+import type { ClaudeApiSpend } from './claudeApiSpend';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -336,6 +337,8 @@ export interface ClaudeProfileUsageView {
   billing: ClaudeProfileBilling | null;
   /** When its prepaid API credits were found used up; `null` while they are not (or the operator acted since). */
   creditExhaustedAt: string | null;
+  /** What an account billed to API credits spent through the bot; absent before its first counted turn. */
+  apiSpend?: ClaudeApiSpend;
 }
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
@@ -450,6 +453,7 @@ export function buildClaudeProfileUsageViews(input: {
     limitedUntil: record?.limitedUntil ?? null,
     billing: record?.billing ?? null,
     creditExhaustedAt: record?.creditExhaustedAt ?? null,
+    ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
   });
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')

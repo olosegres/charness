@@ -2,6 +2,8 @@ import { t } from '../i18n';
 import type { AgentRuntimeInfo } from '../types';
 import { formatClaudeUsageResetAt } from './claudeUsage';
 import type { ClaudeProfileBilling } from './claudeProfiles';
+import type { ClaudeApiSpend } from './claudeApiSpend';
+import { formatClaudeApiSpendWords } from './claudeProfileUsageLines';
 
 /** One Claude account profile as `/status` names it. */
 export interface ThreadStatusAccountSource {
@@ -16,6 +18,8 @@ export interface ThreadStatusAccountSource {
   billing?: ClaudeProfileBilling | null;
   /** When its API credits were found used up (marked on the row while it holds); absent / `null`: not marked. */
   creditExhaustedAt?: string | null;
+  /** What an account billed to API credits spent through the bot (a line of its own under the row). */
+  apiSpend?: ClaudeApiSpend;
 }
 
 export interface ThreadStatusAccount {
@@ -124,9 +128,15 @@ function formatAccount({ name, email, loggedIn, limitedUntil, billing, creditExh
   return `${detail ? `${name} · ${detail}` : name}${metered}${limited}`;
 }
 
-/** @description The `Account:` row (plus a pending-switch row) of the `/status` report. */
+/**
+ * @description The `Account:` row of the `/status` report, the spend line of an account billed to API credits, and a
+ * pending-switch row.
+ */
 export function formatThreadStatusAccountLines({ current, pending, nowMs }: ThreadStatusAccount, timezone: string): string[] {
   const lines = [t('status.thread_account', { account: formatAccount(current, timezone, nowMs) })];
+  if (current.billing === 'api' && current.apiSpend) {
+    lines.push(t('status.thread_api_spend', { name: current.name, ...formatClaudeApiSpendWords(current.apiSpend, timezone, nowMs) }));
+  }
   if (pending !== null) lines.push(t('status.thread_account_pending', { account: formatAccount(pending, timezone, nowMs) }));
   return lines;
 }

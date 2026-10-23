@@ -9,7 +9,7 @@ import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsClaudeBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
-import type { ClaudeConfigDirReader, ClaudeRateLimitSink } from './claudeConfigDir';
+import type { ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
 
 // The predicate lives with the names (a reader of a name should not load a backend); callers keep importing it here.
 export { checkIsClaudeBackend };
@@ -216,6 +216,20 @@ export function registerClaudeRateLimitSink(sink: ClaudeRateLimitSink): void {
   }
 }
 
+/** Where the json-stream adapter reports every turn's cost (an API account's spend) — same idiom. */
+let claudeTurnCostSink: ClaudeTurnCostSink | null = null;
+
+function checkAdapterTakesClaudeTurnCostSink(adapter: AgentAdapter): adapter is AgentAdapter & { setClaudeTurnCostSink(sink: ClaudeTurnCostSink): void } {
+  return typeof (adapter as { setClaudeTurnCostSink?: unknown }).setClaudeTurnCostSink === 'function';
+}
+
+export function registerClaudeTurnCostSink(sink: ClaudeTurnCostSink): void {
+  claudeTurnCostSink = sink;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesClaudeTurnCostSink(adapter)) adapter.setClaudeTurnCostSink(sink);
+  }
+}
+
 function wireAdapterEvents(adapter: AgentAdapter): void {
   if (onOutput) adapter.on('output', onOutput);
   if (onStatus) adapter.on('status', onStatus);
@@ -320,6 +334,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (claudeRateLimitSink && checkAdapterTakesClaudeRateLimitSink(adapter)) {
       adapter.setClaudeRateLimitSink(claudeRateLimitSink);
+    }
+    if (claudeTurnCostSink && checkAdapterTakesClaudeTurnCostSink(adapter)) {
+      adapter.setClaudeTurnCostSink(claudeTurnCostSink);
     }
   }
   return adapter;

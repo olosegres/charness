@@ -183,6 +183,7 @@ export const kaDict: Record<string, string> = {
   'status.global_empty': '📊 ჯერ თემები არ არის.',
   'status.thread_report': 'სტატუსი:\n\nაგენტი: {agent}\nსაქაღალდე: {subdir}\nსესია: {session}',
   'status.thread_view': 'ხედი: {view}',
+  'status.thread_api_spend': '💳 API ხარჯი {name}-ზე: {since}-დან {total} (ბოლო სვლა {last})',
   'status.thread_account_exhausted': ' · 💸 კრედიტი ამოიწურა',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'ანგარიში: {account}',
@@ -830,6 +831,7 @@ export const kaDict: Record<string, string> = {
     '⏳ პროვაიდერის შეცდომა — OpenCode ხელახლა სცდის {minutes} წუთში (მცდელობა {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 გამოყენების ზღვარს მიაღწია — ხელახლე ცდა {minutes} წუთში (მცდელობა {attempt}).',
+  'apiRetry.balanceSpent': '💳 ამ ანგარიშზე ბოტით დახარჯულია: {since}-დან {total}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API კრედიტი ამოიწურა («Credit balance is too low»). ლოდინი მას არ შეავსებს, ამიტომ ბოტი არ ელოდება. შეავსე ბალანსი (Claude ანგარიშისთვის: Claude Console → Billing), შემდეგ ისევ აირჩიე ანგარიში: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 გამოყენების ზღვარს მიაღწია — ავტომატური გაგრძელება გადატვირთვის შემდეგ (~{time}).',
@@ -933,6 +935,7 @@ export const kaDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (მოძველებული)',
   'account.row.limited': '    ⛔ ლიმიტზეა {until}-მდე',
+  'account.row.apiSpend': '    💳 {since}-დან დახარჯულია {total} · ბოლო სვლა {last}',
   'account.row.creditExhausted': '    💸 API კრედიტი ამოიწურა — შეავსე, შემდეგ ისევ აირჩიე',
   'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში).',
   'account.autoSwitchHint': 'რა ხდება გამოყენების ლიმიტზე — /limits-ში მიეთითება.',
@@ -960,6 +963,7 @@ export const kaDict: Record<string, string> = {
   'fallback.switchExpired': 'ეს ლიმიტი დასრულდა — გადასართავი არაფერია.',
   'fallback.switchButton': '🔁 გადართვა: {label}',
   'fallback.switchOffer': '🪜 სარეზერვო მოდელს მარაგი აქვს — დააჭირეთ, რომ თემა მასზე გადავიდეს და ახლავე გაგრძელდეს.',
+  'fallback.switchedToApi': '💳 «{name}» ყოველ მოთხოვნაზე იხდის Claude Console-ის API კრედიტიდან (ბოტით აქამდე დახარჯულია {spent}).',
   'fallback.switched': '🔁 ანგარიშმა {from} გამოყენების ლიმიტს მიაღწია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
   'fallback.switchedModel': '🔁 მოდელმა {from} გამოყენების ლიმიტს მიაღწია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
   'fallback.switchedUnknownSource': '🔁 გამოყენების ლიმიტს მიაღწია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',

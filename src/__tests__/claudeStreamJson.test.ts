@@ -186,7 +186,7 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
 
   it('result success → turnEnd with final text, no error', () => {
     const msg = { type: 'result', subtype: 'success', is_error: false, api_error_status: null, result: 'Got it—you prefer tabs.' };
-    assert.deepEqual(classify(msg), [{ kind: 'turnEnd', isError: false, errorText: null, resultText: 'Got it—you prefer tabs.', usage: null }]);
+    assert.deepEqual(classify(msg), [{ kind: 'turnEnd', isError: false, errorText: null, resultText: 'Got it—you prefer tabs.', usage: null, totalCostUsd: null }]);
   });
 
   it('result usage → turnEnd.usage with input / cache read / cache write / output (L-D11; shape from the 2026-10-04 probe)', () => {

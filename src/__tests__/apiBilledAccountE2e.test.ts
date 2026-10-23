@@ -16,6 +16,9 @@
  *     its `apiKeyHelper` and launched with ONE settings file of its own — the PreCompact hook and the helper — whose
  *     helper really yields the key; the key is in no settings file, no wrapper script and not in `state.json`;
  *     `/status` marks the account `💳 API`
+ *   → spend: a turn on the subscription (its figure is notional and never counted), then a limit there moves the topic
+ *     to the API account INCLUDED in the chain with switching ON — the «switched» notice says it bills per request —
+ *     and its next turn counts only its own cost, not the conversation's total; `/status` and `/accounts` show it
  *   → its credits run out («Credit balance is too low») with switching ON and a subscription in the chain: one
  *     notice says the credits are used up, the topic moves to the subscription at once, the account is marked out of
  *     credits (💸 in `/limits_autoswitch`), and NO wait for a reset is armed
@@ -39,7 +42,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeApiErrorOnceFileName, fakeClaudeLoginUrl, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeApiErrorOnceFileName, fakeClaudeLoginUrl, fakeTurnCostUsd, getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -55,7 +58,9 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import {
+  computeResetsAtIso,
   getAccountConfigDir,
+  getAgentTurns,
   getAllLaunches,
   getSessionLaunches,
   getStatePath,
@@ -272,16 +277,50 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.match(status.text, new RegExp(`Account: ${keyAccount} · 💳 API`));
   });
 
+  it('spend: a subscription turn is not counted; a limit moves the topic onto the included API account, whose notice says it bills, and its turn counts only itself', async () => {
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: 'default', model: null }, { backend: 'claude', profile: keyAccount, model: null }];
+      persisted.claudeAutoSwitchOnLimitEnabled = true;
+    });
+    let launchesBefore = getSessionLaunches(getLayout()).length;
+    await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: default');
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the session back on the subscription', null, sessionId, launchesBefore);
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'SPEND-1 please carry on');
+    await getCharness().waitFor('the subscription turn to set the baseline', agentStartTimeoutMs, () =>
+      readPersistedState(getLayout()).claudeCostBaselines?.[topicKey]?.totalCostUsd === fakeTurnCostUsd);
+
+    launchesBefore = getSessionLaunches(getLayout()).length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `SPEND-2 [fake:usage-limit-once] [limit-resets:${computeResetsAtIso(2)}] please carry on`);
+    const switched = await topic.waitForMessage('the switch onto the API account', (message) => message.text.startsWith('🔁') && message.text.includes(keyAccount));
+    assert.match(switched.text, new RegExp(`\\n💳 «${keyAccount}» is billed per request to the Claude Console API credits \\(\\$0\\.00 spent through the bot so far\\)\\.$`));
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation to continue on the API account', getAccountConfigDir(getLayout(), keyAccount), sessionId, launchesBefore);
+    await getCharness().waitFor('the API turn to be counted', agentStartTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[keyAccount]?.apiSpend !== undefined);
+    const persisted = readPersistedState(getLayout());
+    assert.equal(persisted.claudeProfiles?.[keyAccount]?.apiSpend?.totalUsd, fakeTurnCostUsd, 'its own turn only — the conversation\'s total is twice that');
+    assert.equal(persisted.claudeCostBaselines?.[topicKey]?.totalCostUsd, 2 * fakeTurnCostUsd);
+    assert.equal(persisted.claudeProfiles?.default?.apiSpend, undefined, 'a subscription never has spend');
+    assert.ok(getAgentTurns(getLayout(), 'SPEND-1').length === 1);
+
+    const status = await topic.sendAndAwaitReply('/status', 'Account:');
+    assert.match(status.text, new RegExp(`💳 API spend on ${keyAccount}: \\$0\\.25 since \\d{2}\\.\\d{2} \\(last turn \\$0\\.25\\)`));
+    const screen = await topic.sendAndAwaitReply('/accounts', 'This topic runs on');
+    assert.match(screen.text, new RegExp(`${keyAccount} — [^\\n]*\\n {4}💳 \\$0\\.25 spent since \\d{2}\\.\\d{2} · last turn \\$0\\.25`));
+  });
+
   it('credits used up with switching ON and a subscription in the chain: one notice, the topic moves at once, the account is marked, and no wait is armed', async () => {
     await restartWithState((persisted) => {
       persisted.fallbackChain = [{ backend: 'claude', profile: keyAccount, model: null }, { backend: 'claude', profile: 'default', model: null }];
       persisted.claudeAutoSwitchOnLimitEnabled = true;
+      // The subscription's limit of the spend step is over: it can take the work over.
+      delete persisted.claudeProfiles?.default?.limitedUntil;
     });
     const launchesBefore = getSessionLaunches(getLayout()).length;
+    const lastMessageId = topic.listMessages().at(-1)?.message_id ?? 0;
     runOutOfCredits('BAL-1');
     await topic.waitForMessage('the credits notice', (message) => message.text.startsWith('💸'));
     assert.match(listBalanceNotices()[0], new RegExp(`^💸 «${keyAccount}»: the API credits are used up \\(«Credit balance is too low»\\)\\. Waiting does not refill them`));
-    const switched = await topic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+    assert.match(listBalanceNotices()[0], /\n💳 Spent through the bot on this account: \$0\.25 since \d{2}\.\d{2}\.$/, 'and what it spent');
+    const switched = await topic.waitForMessage('the switch notice', (message) => message.message_id > lastMessageId && message.text.startsWith('🔁'));
     assert.match(switched.text, new RegExp(`«${keyAccount}» .*continues on «default»`));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation to continue on the subscription', null, sessionId, launchesBefore);
 
@@ -307,7 +346,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     const noticesBefore = listBalanceNotices().length;
     runOutOfCredits('BAL-2');
     await getCharness().waitFor('the second credits notice', replyTimeoutMs, () => listBalanceNotices().length === noticesBefore + 1);
-    assert.match(listBalanceNotices().at(-1) ?? '', /Top up the balance .* then pick the account again: \/limits$/);
+    assert.match(listBalanceNotices().at(-1) ?? '', /Top up the balance .* then pick the account again: \/limits\n💳 Spent through the bot on this account: \$0\.25 since \d{2}\.\d{2}\.$/);
     // Settle: an armed wait would be persisted right after the notice.
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     const persisted = readPersistedState(getLayout());
@@ -328,7 +367,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     runOutOfCredits('BAL-3');
     await getCharness().waitFor('the third credits notice', replyTimeoutMs, () => listBalanceNotices().length === noticesBefore + 1);
     await getCharness().waitFor('the wait to be armed', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[topicKey] !== undefined);
-    const retry = readPersistedState(getLayout()).apiRetries?.[topicKey] as { kind: string; fireAt: number; resumeOn?: unknown } | undefined;
+    const retry = readPersistedState(getLayout()).apiRetries?.[topicKey];
     assert.equal(retry?.kind, 'usageLimit');
     assert.deepEqual(retry?.resumeOn, { backend: 'claude', profile: 'default', model: null }, 'the wait ends on the subscription');
     assert.ok(Math.abs((retry?.fireAt ?? 0) - (subscriptionResetMs + 60_000)) < 2_000, 'at its reset, not an hour from now');

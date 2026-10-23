@@ -105,7 +105,7 @@ actually start an agent or terminal in the folder.
 | `/rename_session` | Rename the current live session (OpenCode; Claude transcripts have no title) |
 | `/quit`, `/q` | End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way |
 | `/new`, `/clear_session` | End the current session and start a fresh one (same adapter) |
-| `/status` | This thread's status: agent, bound folder, the Claude account it runs on and the resolved workdir; a live session also shows the model it is actually running, the effort it runs (when the default moved on under it: «xhigh (medium from the next start)»), start time, runtime version and context use (anything the backend cannot report renders as unknown). On a Claude topic the account is its profile (name · email as in `/accounts`, `· 💳 API` for an account billed to API credits, marked ⛔ while it is at its limit, with a second row for a switch still pending); an OpenCode topic's model already names its provider |
+| `/status` | This thread's status: agent, bound folder, the Claude account it runs on and the resolved workdir; a live session also shows the model it is actually running, the effort it runs (when the default moved on under it: «xhigh (medium from the next start)»), start time, runtime version and context use (anything the backend cannot report renders as unknown). On a Claude topic the account is its profile (name · email as in `/accounts`, `· 💳 API` for an account billed to API credits — with a line of what it spent through the bot — marked ⛔ while it is at its limit, with a second row for a switch still pending); an OpenCode topic's model already names its provider |
 | `/output` | Last 500 lines of agent output (sent as at most 5 chunks; the overflow is reported as omitted) |
 | `/c`, `/y`, `/n` | Ctrl+C / "y" / "n" |
 | `/enter`, `/up`, `/down`, `/tab` | tmux key passthrough |
@@ -357,8 +357,17 @@ balance), so the bot never uses it without you choosing it.
   another entry comes back at a known time (a subscription's weekly reset), the
   topic waits for that and continues there; otherwise the notice is all. The
   mark lasts until you act: pick the account again (after topping the balance
-  up), or sign it in again. A rate limit of the API (429) is still a short
-  retry.
+  up), or sign it in again — or until a request on it goes through again. A
+  rate limit of the API (429) is still a short retry.
+- **What it spent.** On the default (stream) backend every turn reports the
+  conversation's running cost; the bot counts the part each turn on the API
+  account added (a subscription turn of the same conversation is never
+  counted) and shows the total under the account in `/accounts` and `/limits`
+  (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, in the line a
+  limit switch onto the account adds («billed per request … $X spent through
+  the bot so far») and in its «credits used up» notice. It is what the bot
+  saw, not the organization's balance — that one is on the Console's Billing
+  page. The tmux backend reports no cost.
 
 ### Usage limits and the fallback models (`/limits` and `/limits_autoswitch`)
 

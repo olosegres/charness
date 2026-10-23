@@ -4,6 +4,7 @@
  */
 import { t } from '../i18n';
 import type { ClaudeProfileBilling } from './claudeProfiles';
+import { formatSpendSinceDay, formatUsd, type ClaudeApiSpend } from './claudeApiSpend';
 import {
   formatClaudeUsageBucket,
   formatClaudeUsageResetAt,
@@ -22,6 +23,7 @@ export interface ClaudeProfileUsageSource {
   limitedUntil?: string | null;
   billing?: ClaudeProfileBilling | null;
   creditExhaustedAt?: string | null;
+  apiSpend?: ClaudeApiSpend;
 }
 
 /** The localised words of a relative reset («🔄 in 2h»). */
@@ -34,11 +36,11 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
  * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
  * reset instant in `timezone`. An account billed to API credits has no windows (its row already says it pays per
- * use): only the used-up mark while it holds. The lines carry the locale's own indentation (they hang under a row);
- * empty for an account with nothing to show.
+ * use): what it spent through the bot, and the used-up mark while it holds. The lines carry the locale's own
+ * indentation (they hang under a row); empty for an account with nothing to show.
  */
 export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource | undefined, timezone: string, nowMs: number): string[] {
-  if (source?.billing === 'api') return formatApiBillingLines(source);
+  if (source?.billing === 'api') return formatApiBillingLines(source, timezone, nowMs);
   const lines: string[] = [];
   const usage = source?.usage;
   if (usage && usage.buckets.length > 0) {
@@ -60,7 +62,15 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
   return lines;
 }
 
-/** The lines of an account billed to API credits: the used-up mark while it holds. */
-function formatApiBillingLines(source: ClaudeProfileUsageSource): string[] {
-  return source.creditExhaustedAt ? [t('account.row.creditExhausted')] : [];
+/** The lines of an account billed to API credits: its spend through the bot, and the used-up mark while it holds. */
+function formatApiBillingLines(source: ClaudeProfileUsageSource, timezone: string, nowMs: number): string[] {
+  const lines: string[] = [];
+  if (source.apiSpend) lines.push(t('account.row.apiSpend', formatClaudeApiSpendWords(source.apiSpend, timezone, nowMs)));
+  if (source.creditExhaustedAt) lines.push(t('account.row.creditExhausted'));
+  return lines;
+}
+
+/** The placeholders every spend text fills: `total`, `since` (the day, in `timezone`), `last` (the last turn's). */
+export function formatClaudeApiSpendWords(spend: ClaudeApiSpend, timezone: string, nowMs: number): { total: string; since: string; last: string } {
+  return { total: formatUsd(spend.totalUsd), since: formatSpendSinceDay(spend.since, timezone, nowMs), last: formatUsd(spend.lastTurnUsd) };
 }

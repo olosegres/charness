@@ -27,7 +27,7 @@ import { classifyAgentApiError } from '../apiErrorRetry';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
-import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader, ClaudeRateLimitSink } from './claudeConfigDir';
+import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
 import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
@@ -238,6 +238,9 @@ export interface StreamSession {
   /** The `CLAUDE_CONFIG_DIR` this process runs with (its account profile, `utils/claudeProfiles.ts`); `null` =
    *  the default profile. Set at spawn from the reader, recovered from the wrapper script at adopt. */
   configDir: string | null;
+  /** This process STARTED its conversation (`--session-id`, no transcript), so the conversation's running cost began
+   *  at zero; `false` for a resume and for an adopted process (whose start the bot did not see). */
+  isNewConversation: boolean;
   /** The topic's profile changed while the process worked: re-spawn under the reader's directory at turn end. */
   isConfigDirSwitchPending: boolean;
   // — answer accumulation —
@@ -434,9 +437,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   private claudeRateLimitSink: ClaudeRateLimitSink | null = null;
+  private claudeTurnCostSink: ClaudeTurnCostSink | null = null;
+
   /** Where a session's `rate_limit_event` frames go (the bot's per-profile usage cache). */
   setClaudeRateLimitSink(sink: ClaudeRateLimitSink): void {
     this.claudeRateLimitSink = sink;
+  }
+
+  /** Where every turn's `total_cost_usd` goes (an API account's spend, `utils/claudeApiSpend.ts`). */
+  setClaudeTurnCostSink(sink: ClaudeTurnCostSink): void {
+    this.claudeTurnCostSink = sink;
   }
 
   /** The config directory the conversation's next process must start with (its account profile). */
@@ -601,7 +611,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
-      configDir: opts.configDir, isConfigDirSwitchPending: false,
+      configDir: opts.configDir, isConfigDirSwitchPending: false, isNewConversation: !isResumable,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -925,7 +935,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // the topic resolves to now, and a later re-spawn passes them on.
       model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
-      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false,
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false, isNewConversation: false,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1687,6 +1697,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   /** Every terminal `result` — a normal turn, a compaction turn, an error — ends with the `turnEnded` event. */
   private handleTurnEnd(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'turnEnd' }>): void {
+    // Every turn's cost, the compaction turn's too: what an account billed to API credits spends (the bot keeps the baseline).
+    if (action.totalCostUsd !== null) {
+      this.claudeTurnCostSink?.(session.key, session.configDir, {
+        sessionId: session.sessionId, totalCostUsd: action.totalCostUsd, isNewConversation: session.isNewConversation, isError: action.isError,
+      });
+    }
     this.applyTurnEnd(session, action);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
     this.emit('turnEnded', session.key);

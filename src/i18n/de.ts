@@ -183,6 +183,7 @@ export const deDict: Record<string, string> = {
   'status.global_empty': '📊 Noch keine Threads.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nOrdner: {subdir}\nSitzung: {session}',
   'status.thread_view': 'Ansicht: {view}',
+  'status.thread_api_spend': '💳 API-Ausgaben auf {name}: {total} seit {since} (letzte Runde {last})',
   'status.thread_account_exhausted': ' · 💸 Guthaben aufgebraucht',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Konto: {account}',
@@ -830,6 +831,7 @@ export const deDict: Record<string, string> = {
     '⏳ Anbieterfehler — OpenCode versucht es in {minutes} Min erneut (Versuch {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Nutzungslimit erreicht — Wiederholung in {minutes} Min (Versuch {attempt}).',
+  'apiRetry.balanceSpent': '💳 Über den Bot auf diesem Konto ausgegeben: {total} seit {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: Das API-Guthaben ist aufgebraucht («Credit balance is too low»). Warten füllt es nicht auf, daher wartet der Bot nicht. Lade das Guthaben auf (bei einem Claude-Konto: Claude Console → Billing) und wähle das Konto dann erneut: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Nutzungslimit erreicht — automatisches Fortsetzen nach Reset (~{time}).',
@@ -933,6 +935,7 @@ export const deDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (veraltet)',
   'account.row.limited': '    ⛔ am Limit bis {until}',
+  'account.row.apiSpend': '    💳 {total} ausgegeben seit {since} · letzte Runde {last}',
   'account.row.creditExhausted': '    💸 API-Guthaben aufgebraucht — aufladen, dann erneut wählen',
   'account.usageHint': 'Nutzung: % jedes Fensters verbraucht, dann wann es zurückgesetzt wird (🔄 in 2h = in zwei Stunden).',
   'account.autoSwitchHint': 'Was bei einem Nutzungslimit geschieht, wird in /limits eingestellt.',
@@ -960,6 +963,7 @@ export const deDict: Record<string, string> = {
   'fallback.switchExpired': 'Dieses Limit ist vorbei — nichts zu wechseln.',
   'fallback.switchButton': '🔁 Wechseln zu {label}',
   'fallback.switchOffer': '🪜 Ein Ersatzmodell hat Reserve — tippen, um dieses Thema dorthin zu verschieben und jetzt fortzusetzen.',
+  'fallback.switchedToApi': '💳 «{name}» wird pro Anfrage über das API-Guthaben der Claude Console abgerechnet (bisher {spent} über den Bot ausgegeben).',
   'fallback.switched': '🔁 Konto {from} hat sein Nutzungslimit erreicht — dieses Thema macht mit {to} weiter.{tail}',
   'fallback.switchedModel': '🔁 Modell {from} hat sein Nutzungslimit erreicht — dieses Thema macht mit {to} weiter.{tail}',
   'fallback.switchedUnknownSource': '🔁 Ein Nutzungslimit wurde erreicht — dieses Thema macht mit {to} weiter.{tail}',

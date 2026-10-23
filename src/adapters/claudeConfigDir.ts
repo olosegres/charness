@@ -27,6 +27,25 @@ export interface ClaudeRateLimitEvent {
  */
 export type ClaudeRateLimitSink = (configDir: string | null, event: ClaudeRateLimitEvent) => void;
 
+/** A json-stream turn's cost report (`result.total_cost_usd`), for the spend of an account billed to API credits. */
+export interface ClaudeTurnCostReport {
+  /** The conversation the process runs (`--session-id` / `--resume`). */
+  sessionId: string;
+  /** `total_cost_usd`: the CONVERSATION's running cost (Claude Code restores it on `--resume`). */
+  totalCostUsd: number;
+  /** The process started this conversation (`--session-id`, no transcript): its running cost began at zero. */
+  isNewConversation: boolean;
+  /** The turn ended on an error (a refused request, a used-up balance). */
+  isError: boolean;
+}
+
+/**
+ * @description Where the json-stream adapter reports every turn's cost, attributed to the topic and to the config
+ * directory the process runs under (`null` = the default profile) — the bot turns it into an API account's spend
+ * (`utils/claudeApiSpend.ts`). Registered at boot through `registerClaudeTurnCostSink`.
+ */
+export type ClaudeTurnCostSink = (key: SessionKey, configDir: string | null, report: ClaudeTurnCostReport) => void;
+
 /** What a live Claude session reports about the account it runs on and whether it matches the topic's pick. */
 export type ClaudeConfigDirApplyResult =
   /** No live process for the key: the next resume reads the reader by itself. */

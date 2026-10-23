@@ -62,6 +62,13 @@ and `npx` still worked, the package itself carried them).
 
 ## 3.3.0 — 2026-10-23
 
+**You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
+counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
+under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a
+limit switches a topic onto it («billed per request … spent through the bot so far») and in its «credits used up»
+notice. It is what the bot saw, not the Console's balance. A request on the account that goes through again also ends
+its «credits used up» mark.
+
 **An account billed to API credits never spends money unasked, and «Credit balance is too low» no longer waits for a
 reset that never comes.** The `claude_profiles` recommendation and `charness claude-profiles --best` never name such an
 account, the switch to another Claude account never offers it, and «🔄 Fill from connected» puts it last in the

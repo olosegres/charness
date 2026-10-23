@@ -13,6 +13,7 @@ import type { FakeTelegram, FakeTelegramMessage } from '../telegramE2e/fakeTeleg
 import type { TopicDriver } from '../telegramE2e/topicDriver';
 import type { AgentData, BindingData, ClaudeProfileRecord, ParkedSession } from '../../state';
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
+import type { ClaudeCostBaseline } from '../../utils/claudeApiSpend';
 
 /** The line the bot prints once its long polling is up. */
 const launchLine = 'Launching Telegraf bot (long polling';
@@ -33,7 +34,9 @@ export interface PersistedState {
   bindings?: Record<string, BindingData>;
   parkedSessions?: Record<string, ParkedSession>;
   /** The armed API-error retries (a usage-limit wait among them), keyed by the topic. */
-  apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number; isLimitProbe?: boolean }>;
+  apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number; isLimitProbe?: boolean; resumeOn?: FallbackChainEntry }>;
+  /** The last conversation cost each topic's Claude session reported (`utils/claudeApiSpend.ts`), keyed by the topic. */
+  claudeCostBaselines?: Record<string, ClaudeCostBaseline>;
   [field: string]: unknown;
 }
 

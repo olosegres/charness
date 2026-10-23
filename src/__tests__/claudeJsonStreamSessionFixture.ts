@@ -53,6 +53,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     reportedModel: null,
     configDir: null,
     isConfigDirSwitchPending: false,
+    isNewConversation: false,
     effort: null,
     currentResponseText: '',
     emittedLength: 0,

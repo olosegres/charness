@@ -46,7 +46,13 @@ claude -p --input-format stream-json --output-format stream-json \
   on the **subscription**. Proof in the stream: `system/init` carries
   `apiKeySource:"none"` and a `rate_limit_event` with `rateLimitType:"seven_day"`
   (a subscription concept — the metered API has no such event). `total_cost_usd`
-  in `result` is a NOTIONAL figure, not a charge.
+  in `result` is a NOTIONAL figure, not a charge. The one deliberate exception is
+  an account billed to API credits (`utils/claudeProfiles.ts`, `billing: 'api'`):
+  its key is a console login's in its own `CLAUDE_CONFIG_DIR`, or a pasted key its
+  launch settings' `apiKeyHelper` reads (`prepareClaudeCompactHookFlags(dataDir,
+  configDir)` — only the LAST `--settings` counts, so hook and helper share one
+  file) — still never `ANTHROPIC_API_KEY` (`apiKeySource` then reads
+  `/login managed key` or `apiKeyHelper`), and only there `total_cost_usd` is money.
 
 ### Output events (documented, stable)
 
@@ -301,6 +307,12 @@ The json-stream adapter also reports every `rate_limit_event` frame to the
 the `configDir` the session runs under: the bot folds the frame's `unifiedWindows` into
 that profile's usage snapshot and marks the profile limited on a `rejected` status
 (`utils/claudeUsageRefresher.ts`). Nothing is rendered into the topic (parity).
+Every `result` frame's `total_cost_usd` goes the same way to the `ClaudeTurnCostSink`
+(`registerClaudeTurnCostSink`), with the conversation id and whether this process
+STARTED the conversation (`--session-id`; an adopted or resumed one did not): the figure
+is the conversation's running cost — the CLI restores it on `--resume` — so the bot
+counts a turn's spend as the delta against the last total it saw for that topic
+(`utils/claudeApiSpend.ts`), for an account billed to API credits only.
 
 ## Shared session store
 

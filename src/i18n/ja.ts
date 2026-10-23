@@ -183,6 +183,7 @@ export const jaDict: Record<string, string> = {
   'status.global_empty': '📊 まだスレッドがありません。',
   'status.thread_report': 'ステータス:\n\nエージェント: {agent}\nフォルダ: {subdir}\nセッション: {session}',
   'status.thread_view': '表示: {view}',
+  'status.thread_api_spend': '💳 {name} の API 使用額: {since} から {total}（直近のターン {last}）',
   'status.thread_account_exhausted': ' · 💸 クレジット切れ',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'アカウント: {account}',
@@ -824,6 +825,7 @@ export const jaDict: Record<string, string> = {
     '⏳ プロバイダーエラー — OpenCode が {minutes} 分後に再試行します（試行 {attempt}）{detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 利用量制限に到達 — {minutes} 分後に再試行します（試行 {attempt}）。',
+  'apiRetry.balanceSpent': '💳 このアカウントでボット経由の使用額: {since} から {total}。',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API クレジットを使い切りました（「Credit balance is too low」）。待っても補充されないため、ボットは待機しません。残高をチャージし（Claude アカウントなら Claude Console → Billing）、アカウントを選び直してください: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 利用量制限に到達 — リセット後に自動再開します（~{time}）。',
@@ -927,6 +929,7 @@ export const jaDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': '（古い）',
   'account.row.limited': '    ⛔ 上限中、{until} まで',
+  'account.row.apiSpend': '    💳 {since} から {total} 使用 · 直近のターン {last}',
   'account.row.creditExhausted': '    💸 API クレジット切れ — チャージしてから選び直してください',
   'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。',
   'account.autoSwitchHint': '使用量制限時の動作は /limits で設定します。',
@@ -954,6 +957,7 @@ export const jaDict: Record<string, string> = {
   'fallback.switchExpired': 'この上限は終了しています — 切り替えるものはありません。',
   'fallback.switchButton': '🔁 {label} に切替',
   'fallback.switchOffer': '🪜 余裕のある予備モデルがあります — タップするとこのトピックをそこへ移して今すぐ続行します。',
+  'fallback.switchedToApi': '💳 «{name}» はリクエストごとに Claude Console の API クレジットに課金されます（これまでにボット経由で {spent} 使用）。',
   'fallback.switched': '🔁 アカウント {from} が利用上限に達しました — このトピックは {to} で続行します。{tail}',
   'fallback.switchedModel': '🔁 モデル {from} が利用上限に達しました — このトピックは {to} で続行します。{tail}',
   'fallback.switchedUnknownSource': '🔁 利用上限に達しました — このトピックは {to} で続行します。{tail}',

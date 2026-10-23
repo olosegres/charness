@@ -183,6 +183,7 @@ export const hiDict: Record<string, string> = {
   'status.global_empty': '📊 अभी तक कोई थ्रेड नहीं।',
   'status.thread_report': 'स्थिति:\n\nएजेंट: {agent}\nफ़ोल्डर: {subdir}\nसत्र: {session}',
   'status.thread_view': 'व्यू: {view}',
+  'status.thread_api_spend': '💳 {name} पर API खर्च: {since} से {total} (पिछला टर्न {last})',
   'status.thread_account_exhausted': ' · 💸 क्रेडिट खत्म',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'खाता: {account}',
@@ -829,6 +830,7 @@ export const hiDict: Record<string, string> = {
     '⏳ प्रदाता त्रुटि — OpenCode {minutes} मिनट में पुनः प्रयास करेगा (प्रयास {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 उपयोग सीमा पहुँची — {minutes} मिनट में पुनः प्रयास (प्रयास {attempt})।',
+  'apiRetry.balanceSpent': '💳 इस खाते पर बॉट के ज़रिए खर्च: {since} से {total}।',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API क्रेडिट खत्म हो गए («Credit balance is too low»)। इंतज़ार करने से ये फिर नहीं भरते, इसलिए बॉट इंतज़ार नहीं करता। बैलेंस भरें (Claude खाते के लिए Claude Console → Billing), फिर खाता दोबारा चुनें: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 उपयोग सीमा पहुँची — रीसेट के बाद स्वतः पुनः ( ~{time})।',
@@ -932,6 +934,7 @@ export const hiDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (पुराना)',
   'account.row.limited': '    ⛔ सीमा पर, {until} तक',
+  'account.row.apiSpend': '    💳 {since} से {total} खर्च · पिछला टर्न {last}',
   'account.row.creditExhausted': '    💸 API क्रेडिट खत्म — भरें, फिर दोबारा चुनें',
   'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)।',
   'account.autoSwitchHint': 'उपयोग-सीमा पर क्या हो, यह /limits में तय होता है।',
@@ -959,6 +962,7 @@ export const hiDict: Record<string, string> = {
   'fallback.switchExpired': 'यह सीमा समाप्त हो चुकी है — स्विच करने को कुछ नहीं।',
   'fallback.switchButton': '🔁 {label} पर स्विच करें',
   'fallback.switchOffer': '🪜 एक बैकअप मॉडल में गुंजाइश है — इस टॉपिक को उस पर ले जाकर अभी जारी रखने के लिए दबाएँ।',
+  'fallback.switchedToApi': '💳 «{name}» का बिल हर अनुरोध पर Claude Console के API क्रेडिट से बनता है (अब तक बॉट के ज़रिए {spent} खर्च)।',
   'fallback.switched': '🔁 खाता {from} की उपयोग सीमा पूरी हो गई — यह टॉपिक {to} पर जारी है।{tail}',
   'fallback.switchedModel': '🔁 मॉडल {from} की उपयोग सीमा पूरी हो गई — यह टॉपिक {to} पर जारी है।{tail}',
   'fallback.switchedUnknownSource': '🔁 उपयोग सीमा पूरी हो गई — यह टॉपिक {to} पर जारी है।{tail}',

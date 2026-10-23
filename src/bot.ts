@@ -24,6 +24,7 @@ import {
   registerSessionLaunchDefaultsReader,
   registerClaudeConfigDirReader,
   registerClaudeRateLimitSink,
+  registerClaudeTurnCostSink,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -421,7 +422,9 @@ import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operat
 import { checkNeedsBackendSwitchConfirmation, getBackendFamily, getBackendSwitchModelToPin, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
 import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
-import type { ClaudeRateLimitEvent } from './adapters/claudeConfigDir';
+import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
+import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
+import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2047,7 +2050,7 @@ function formatBalanceOwner(from: FallbackChainEntry | null): string {
 /**
  * @description A used-up API credit balance on `key` («Credit balance is too low», `isBalanceExhausted`): nothing resets
  * it, so no wait for a reset is armed and no hourly retry runs. The Claude account is marked out of credits
- * (`creditExhaustedAt`, until the operator picks it or signs it in again), the parked
+ * (`creditExhaustedAt`, until the operator picks it or signs it in again, or a turn on it goes through), the parked
  * episode is settled (a restart does not run this again), and the fallback chain decides as for a limit, with that
  * account out: switching ON moves the topic at once; OFF puts «switch to …» buttons on the notice. With no rung free
  * now, the topic waits only for a rung that comes back at a KNOWN time (the earliest reset, and only with «wait for
@@ -2068,7 +2071,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   } catch (e) {
     console.warn(`[fallback] ${k}: the switch plan after a used-up balance failed:`, e instanceof Error ? e.message : e);
   }
-  const notice = t('apiRetry.balanceExhaustedNotice', { name: formatBalanceOwner(plan.from) });
+  const notice = `${t('apiRetry.balanceExhaustedNotice', { name: formatBalanceOwner(plan.from) })}${getBalanceSpentLine(plan.from)}`;
   const texts: LimitWaitTexts = { plainNotice: notice, answerBody: t('requests.limit.answerBalanceExhaustedNotice') };
   const stopped: UsageLimitWait = { kind: 'autoResumeOff' };
   if (plan.action === 'auto') {
@@ -7092,6 +7095,25 @@ function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimit
   }
 }
 
+/**
+ * A json-stream turn's cost (`utils/claudeApiSpend.ts`): the topic's conversation baseline moves on for EVERY account
+ * (a later API turn of the same conversation must count only itself), and the turn's spend adds to the account's only
+ * when it is billed to API credits. A turn on such an account that went through ends a used-up-credits mark: the
+ * balance is back.
+ */
+function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: ClaudeTurnCostReport): void {
+  const turnCostUsd = computeClaudeTurnCostUsd({ previous: state.getClaudeCostBaseline(key), ...report });
+  state.setClaudeCostBaseline(key, { sessionId: report.sessionId, totalCostUsd: report.totalCostUsd });
+  const name = resolveClaudeProfileNameForDir(configDir);
+  if (name === null) return;
+  const info = state.getClaudeProfileInfo(name);
+  const outcome = getClaudeTurnCostOutcome({
+    billing: info?.billing ?? null, isCreditExhausted: info?.creditExhaustedAt !== undefined, isError: report.isError, turnCostUsd,
+  });
+  if (outcome.isCreditMarkCleared) state.setClaudeProfileCreditExhausted(name, null);
+  if (outcome.spendUsd !== null) state.setClaudeProfileApiSpend(name, addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, new Date().toISOString()));
+}
+
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
 function getThreadClaudeModel(key: SessionKey): string | null {
   return getThreadAdapter(key).getCurrentModel?.(key) ?? state.getAgent(key)?.model ?? null;
@@ -7102,7 +7124,7 @@ function readStatusAccountSource(name: string): ThreadStatusAccountSource {
   const info = state.getClaudeProfileInfo(name);
   return {
     name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null,
-    billing: info?.billing ?? null, creditExhaustedAt: info?.creditExhaustedAt ?? null,
+    billing: info?.billing ?? null, creditExhaustedAt: info?.creditExhaustedAt ?? null, ...(info?.apiSpend ? { apiSpend: info.apiSpend } : {}),
   };
 }
 
@@ -7263,9 +7285,22 @@ function getFallbackResetTime(from: FallbackChainEntry | null): string | null {
   return formatLocalClockWithDateIfNotToday(untilMs, Date.now());
 }
 
-/** The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known. */
+/**
+ * The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known — and, onto
+ * an account billed to API credits, the line that it costs money per request and what it has spent so far.
+ */
 function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry, runningModel: string | null): string {
-  return buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel });
+  const notice = buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel });
+  const info = to.backend === 'claude' ? state.getClaudeProfileInfo(to.profile) : undefined;
+  if (to.backend !== 'claude' || info?.billing !== 'api') return notice;
+  return `${notice}\n${t('fallback.switchedToApi', { name: to.profile, spent: formatUsd(info.apiSpend?.totalUsd ?? 0) })}`;
+}
+
+/** The spend line a «credits used up» notice ends with (what the account spent through the bot); `''` before any spend. */
+function getBalanceSpentLine(from: FallbackChainEntry | null): string {
+  const spend = from?.backend === 'claude' ? state.getClaudeProfileInfo(from.profile)?.apiSpend : undefined;
+  if (!spend) return '';
+  return `\n${t('apiRetry.balanceSpent', formatClaudeApiSpendWords(spend, getCurrentTimezone(), Date.now()))}`;
 }
 
 /**
@@ -12992,6 +13027,7 @@ export async function startBot(): Promise<void> {
   // Every Claude spawn from here on reads the conversation's account profile (`/account`).
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
+  registerClaudeTurnCostSink(onClaudeTurnCost);
   // The usage cache: a first poll now (off the boot path), then the timer.
   claudeUsageRefresher.start();
   void claudeUsageRefresher.refreshAll();

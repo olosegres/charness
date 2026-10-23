@@ -183,6 +183,7 @@ export const zhDict: Record<string, string> = {
   'status.global_empty': '📊 暂无话题。',
   'status.thread_report': '状态：\n\n代理：{agent}\n文件夹：{subdir}\n会话：{session}',
   'status.thread_view': '视图：{view}',
+  'status.thread_api_spend': '💳 {name} 的 API 花费：自 {since} 起 {total}（上一轮 {last}）',
   'status.thread_account_exhausted': ' · 💸 额度已用完',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': '账号：{account}',
@@ -824,6 +825,7 @@ export const zhDict: Record<string, string> = {
     '⏳ 提供方错误 — OpenCode 将在 {minutes} 分钟后重试（第 {attempt} 次）{detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 用量限制已达到 — {minutes} 分钟后重试（第 {attempt} 次）。',
+  'apiRetry.balanceSpent': '💳 此账号通过机器人的花费：自 {since} 起 {total}。',
   'apiRetry.balanceExhaustedNotice': '💸 {name}：API 额度已用完（“Credit balance is too low”）。等待不会补充额度，所以机器人不会等待。请充值余额（Claude 账号：Claude Console → Billing），然后重新选择该账号：/limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 用量限制已达到 — 重置后自动恢复（~{time}）。',
@@ -927,6 +929,7 @@ export const zhDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': '（已过时）',
   'account.row.limited': '    ⛔ 已达上限，直到 {until}',
+  'account.row.apiSpend': '    💳 自 {since} 起已花费 {total} · 上一轮 {last}',
   'account.row.creditExhausted': '    💸 API 额度已用完 — 充值后重新选择',
   'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。',
   'account.autoSwitchHint': '遇到用量上限时怎么办，请在 /limits 中设置。',
@@ -954,6 +957,7 @@ export const zhDict: Record<string, string> = {
   'fallback.switchExpired': '此上限已结束 — 无需切换。',
   'fallback.switchButton': '🔁 切换到 {label}',
   'fallback.switchOffer': '🪜 有一个余量充足的备用模型 — 点按即可把此话题移过去并立即继续。',
+  'fallback.switchedToApi': '💳 «{name}» 按请求从 Claude Console 的 API 额度中扣费（迄今通过机器人花费 {spent}）。',
   'fallback.switched': '🔁 账号 {from} 已达用量上限 — 此话题已切换到 {to} 并继续。{tail}',
   'fallback.switchedModel': '🔁 模型 {from} 已达用量上限 — 此话题已切换到 {to} 并继续。{tail}',
   'fallback.switchedUnknownSource': '🔁 已达用量上限 — 此话题已切换到 {to} 并继续。{tail}',

@@ -187,6 +187,7 @@ export const enDict: Record<string, string> = {
   'status.global_empty': '📊 No threads yet.',
   'status.thread_report': 'Status:\n\nAgent: {agent}\nFolder: {subdir}\nSession: {session}',
   'status.thread_view': 'View: {view}',
+  'status.thread_api_spend': '💳 API spend on {name}: {total} since {since} (last turn {last})',
   'status.thread_account_exhausted': ' · 💸 credits used up',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Account: {account}',
@@ -873,6 +874,7 @@ export const enDict: Record<string, string> = {
     '⏳ Provider error — OpenCode retries in {minutes} min (attempt {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Usage limit reached — retrying in {minutes} min (attempt {attempt}).',
+  'apiRetry.balanceSpent': '💳 Spent through the bot on this account: {total} since {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: the API credits are used up («Credit balance is too low»). Waiting does not refill them, so the bot does not wait. Top up the balance (Claude Console → Billing for a Claude account), then pick the account again: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Usage limit reached — will auto-resume after reset (~{time}).',
@@ -977,6 +979,7 @@ export const enDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (stale)',
   'account.row.limited': '    ⛔ at its limit until {until}',
+  'account.row.apiSpend': '    💳 {total} spent since {since} · last turn {last}',
   'account.row.creditExhausted': '    💸 API credits used up — top them up, then pick it again',
   'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours).',
   'account.autoSwitchHint': 'What happens on a usage limit is set in /limits.',
@@ -1004,6 +1007,7 @@ export const enDict: Record<string, string> = {
   'fallback.switchExpired': 'This limit is over — nothing to switch.',
   'fallback.switchButton': '🔁 Switch to {label}',
   'fallback.switchOffer': '🪜 A fallback model has room — tap to move this topic to it and continue now.',
+  'fallback.switchedToApi': '💳 «{name}» is billed per request to the Claude Console API credits ({spent} spent through the bot so far).',
   'fallback.switched': '🔁 Account {from} hit its usage limit — this topic continues on {to}.{tail}',
   'fallback.switchedModel': '🔁 Model {from} hit its usage limit — this topic continues on {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 A usage limit was reached — this topic continues on {to}.{tail}',

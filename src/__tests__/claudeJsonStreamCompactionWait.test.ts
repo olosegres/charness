@@ -249,7 +249,7 @@ describe('json-stream compaction wait', () => {
       const turnEndEvents = recordCompacted(first.adapter);
       const byTurnEnd = first.adapter.compactContext(key);
       await settleTicks();
-      first.adapter['handleTurnEnd'](first.session, { kind: 'turnEnd', isError: false, errorText: null, resultText: null, usage: null });
+      first.adapter['handleTurnEnd'](first.session, { kind: 'turnEnd', isError: false, errorText: null, resultText: null, usage: null, totalCostUsd: null });
       assert.deepEqual(await byTurnEnd, { ok: true, preTokens: null, postTokens: null });
       assert.deepEqual(turnEndEvents, [`${keyToString(key)} null`]);
       first.adapter['clearTimers'](first.session);

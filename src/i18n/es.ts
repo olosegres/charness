@@ -183,6 +183,7 @@ export const esDict: Record<string, string> = {
   'status.global_empty': '📊 Aún no hay hilos.',
   'status.thread_report': 'Estado:\n\nAgente: {agent}\nCarpeta: {subdir}\nSesión: {session}',
   'status.thread_view': 'Vista: {view}',
+  'status.thread_api_spend': '💳 Gasto de API en {name}: {total} desde el {since} (último turno {last})',
   'status.thread_account_exhausted': ' · 💸 crédito agotado',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Cuenta: {account}',
@@ -830,6 +831,7 @@ export const esDict: Record<string, string> = {
     '⏳ Error del proveedor — OpenCode reintenta en {minutes} min (intento {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Límite de uso alcanzado — reintentando en {minutes} min (intento {attempt}).',
+  'apiRetry.balanceSpent': '💳 Gastado a través del bot en esta cuenta: {total} desde el {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: el crédito de API se ha agotado («Credit balance is too low»). Esperar no lo recarga, así que el bot no espera. Recarga el saldo (Claude Console → Billing para una cuenta de Claude) y vuelve a elegir la cuenta: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Límite de uso alcanzado — reanudación automática tras reset (~{time}).',
@@ -933,6 +935,7 @@ export const esDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (desactualizado)',
   'account.row.limited': '    ⛔ en el límite hasta {until}',
+  'account.row.apiSpend': '    💳 {total} gastados desde el {since} · último turno {last}',
   'account.row.creditExhausted': '    💸 crédito de API agotado: recárgalo y vuelve a elegirla',
   'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas).',
   'account.autoSwitchHint': 'Qué ocurre ante un límite de uso se configura en /limits.',
@@ -960,6 +963,7 @@ export const esDict: Record<string, string> = {
   'fallback.switchExpired': 'Este límite ya pasó — nada que cambiar.',
   'fallback.switchButton': '🔁 Cambiar a {label}',
   'fallback.switchOffer': '🪜 Un modelo de respaldo tiene margen — pulsa para pasar este tema a él y continuar ahora.',
+  'fallback.switchedToApi': '💳 «{name}» se cobra por petición del crédito de API de Claude Console ({spent} gastados a través del bot hasta ahora).',
   'fallback.switched': '🔁 La cuenta {from} alcanzó su límite de uso — este tema continúa en {to}.{tail}',
   'fallback.switchedModel': '🔁 El modelo {from} alcanzó su límite de uso — este tema continúa en {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Se alcanzó un límite de uso — este tema continúa en {to}.{tail}',

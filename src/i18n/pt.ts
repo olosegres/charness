@@ -183,6 +183,7 @@ export const ptDict: Record<string, string> = {
   'status.global_empty': '📊 Ainda sem tópicos.',
   'status.thread_report': 'Status:\n\nAgente: {agent}\nPasta: {subdir}\nSessão: {session}',
   'status.thread_view': 'Vista: {view}',
+  'status.thread_api_spend': '💳 Gasto de API em {name}: {total} desde {since} (último turno {last})',
   'status.thread_account_exhausted': ' · 💸 créditos esgotados',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Conta: {account}',
@@ -831,6 +832,7 @@ export const ptDict: Record<string, string> = {
     '⏳ Erro do provedor — o OpenCode tenta de novo em {minutes} min (tentativa {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Limite de uso atingido — nova tentativa em {minutes} min (tentativa {attempt}).',
+  'apiRetry.balanceSpent': '💳 Gasto pelo bot nesta conta: {total} desde {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: os créditos de API acabaram («Credit balance is too low»). Esperar não os repõe, então o bot não espera. Recarregue o saldo (Claude Console → Billing para uma conta Claude) e escolha a conta de novo: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Limite de uso atingido — retoma automática após reset (~{time}).',
@@ -934,6 +936,7 @@ export const ptDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (desatualizado)',
   'account.row.limited': '    ⛔ no limite até {until}',
+  'account.row.apiSpend': '    💳 {total} gastos desde {since} · último turno {last}',
   'account.row.creditExhausted': '    💸 créditos de API esgotados — recarregue e escolha de novo',
   'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas).',
   'account.autoSwitchHint': 'O que acontece num limite de uso define-se em /limits.',
@@ -961,6 +964,7 @@ export const ptDict: Record<string, string> = {
   'fallback.switchExpired': 'Este limite já passou — nada a trocar.',
   'fallback.switchButton': '🔁 Trocar para {label}',
   'fallback.switchOffer': '🪜 Um modelo de reserva tem folga — toque para passar este tópico para ele e continuar agora.',
+  'fallback.switchedToApi': '💳 «{name}» é cobrada por requisição dos créditos de API do Claude Console ({spent} gastos pelo bot até agora).',
   'fallback.switched': '🔁 A conta {from} atingiu o limite de uso — este tópico continua em {to}.{tail}',
   'fallback.switchedModel': '🔁 O modelo {from} atingiu o limite de uso — este tópico continua em {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Um limite de uso foi atingido — este tópico continua em {to}.{tail}',

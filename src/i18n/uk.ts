@@ -189,6 +189,7 @@ export const ukDict: Record<string, string> = {
   'status.global_empty': '📊 Тредів поки немає.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nТека: {subdir}\nСесія: {session}',
   'status.thread_view': 'Вигляд: {view}',
+  'status.thread_api_spend': '💳 Витрати API на {name}: {total} з {since} (останній хід {last})',
   'status.thread_account_exhausted': ' · 💸 кредити закінчилися',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Обліковий запис: {account}',
@@ -836,6 +837,7 @@ export const ukDict: Record<string, string> = {
     '⏳ Помилка провайдера — OpenCode повторить через {minutes} хв (спроба {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Ліміт вичерпано — повторю через {minutes} хв (спроба {attempt}).',
+  'apiRetry.balanceSpent': '💳 Витрачено через бота на цьому обліковому записі: {total} з {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API-кредити закінчилися («Credit balance is too low»). Очікування їх не поповнить, тому бот не чекає. Поповни баланс (для облікового запису Claude: Claude Console → Billing), потім знову обери обліковий запис: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Ліміт вичерпано — продовжу автоматично після скидання (~{time}).',
@@ -939,6 +941,7 @@ export const ukDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (застаріло)',
   'account.row.limited': '    ⛔ на ліміті до {until}',
+  'account.row.apiSpend': '    💳 витрачено {total} з {since} · останній хід {last}',
   'account.row.creditExhausted': '    💸 API-кредити закінчилися — поповни й обери знову',
   'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години).',
   'account.autoSwitchHint': 'Що робити при ліміті використання — налаштовується в /limits.',
@@ -966,6 +969,7 @@ export const ukDict: Record<string, string> = {
   'fallback.switchExpired': 'Цей ліміт уже минув — перемикати нічого.',
   'fallback.switchButton': '🔁 Перемкнути на {label}',
   'fallback.switchOffer': '🪜 Є запасна модель із запасом — натисніть, щоб перевести топік на неї й продовжити зараз.',
+  'fallback.switchedToApi': '💳 «{name}» оплачує кожен запит з API-кредитів Claude Console (через бота витрачено {spent}).',
   'fallback.switched': '🔁 Обліковий запис {from} досяг ліміту — топік продовжує роботу на {to}.{tail}',
   'fallback.switchedModel': '🔁 Модель {from} досягла ліміту — топік продовжує роботу на {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Досягнуто ліміту — топік продовжує роботу на {to}.{tail}',

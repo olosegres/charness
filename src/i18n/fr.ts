@@ -183,6 +183,7 @@ export const frDict: Record<string, string> = {
   'status.global_empty': '📊 Aucun fil pour l\'instant.',
   'status.thread_report': 'Statut :\n\nAgent : {agent}\nDossier : {subdir}\nSession : {session}',
   'status.thread_view': 'Vue : {view}',
+  'status.thread_api_spend': '💳 Dépenses API sur {name} : {total} depuis le {since} (dernier tour {last})',
   'status.thread_account_exhausted': ' · 💸 crédits épuisés',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Compte : {account}',
@@ -830,6 +831,7 @@ export const frDict: Record<string, string> = {
     '⏳ Erreur du fournisseur — OpenCode réessaie dans {minutes} min (tentative {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Limite d\'utilisation atteinte — nouvelle tentative dans {minutes} min (tentative {attempt}).',
+  'apiRetry.balanceSpent': '💳 Dépensé via le bot sur ce compte : {total} depuis le {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name} : les crédits API sont épuisés (« Credit balance is too low »). Attendre ne les recharge pas, le bot n\'attend donc pas. Recharge le solde (Claude Console → Billing pour un compte Claude), puis choisis à nouveau le compte : /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Limite d\'utilisation atteinte — reprise automatique après reset (~{time}).',
@@ -933,6 +935,7 @@ export const frDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (périmé)',
   'account.row.limited': '    ⛔ à la limite jusqu’à {until}',
+  'account.row.apiSpend': '    💳 {total} dépensés depuis le {since} · dernier tour {last}',
   'account.row.creditExhausted': '    💸 crédits API épuisés — recharge-les, puis choisis-le à nouveau',
   'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures).',
   'account.autoSwitchHint': 'Que faire à une limite d’usage se règle dans /limits.',
@@ -960,6 +963,7 @@ export const frDict: Record<string, string> = {
   'fallback.switchExpired': 'Cette limite est passée — rien à basculer.',
   'fallback.switchButton': '🔁 Basculer vers {label}',
   'fallback.switchOffer': '🪜 Un modèle de secours a de la marge — touchez pour y passer ce sujet et continuer maintenant.',
+  'fallback.switchedToApi': '💳 «{name}» est facturé à la requête sur les crédits API de la Claude Console ({spent} dépensés via le bot jusqu\'ici).',
   'fallback.switched': '🔁 Le compte {from} a atteint sa limite d\'usage — ce sujet continue sur {to}.{tail}',
   'fallback.switchedModel': '🔁 Le modèle {from} a atteint sa limite d\'usage — ce sujet continue sur {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Une limite d\'usage a été atteinte — ce sujet continue sur {to}.{tail}',

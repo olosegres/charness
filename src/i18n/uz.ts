@@ -183,6 +183,7 @@ export const uzDict: Record<string, string> = {
   'status.global_empty': '📊 Hali mavzular yo‘q.',
   'status.thread_report': 'Holat:\n\nAgent: {agent}\nJild: {subdir}\nSessiya: {session}',
   'status.thread_view': "Ko'rinish: {view}",
+  'status.thread_api_spend': '💳 {name} dagi API xarajati: {since} dan beri {total} (oxirgi navbat {last})',
   'status.thread_account_exhausted': ' · 💸 kredit tugadi',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Hisob: {account}',
@@ -830,6 +831,7 @@ export const uzDict: Record<string, string> = {
     '⏳ Provayder xatosi — OpenCode {minutes} daqiqadan keyin qayta urinadi (urinish {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Foydalanish chegarasiga yetdi — {minutes} daqiqadan keyin qayta urinish (urinish {attempt}).',
+  'apiRetry.balanceSpent': '💳 Bu hisobda bot orqali sarflandi: {since} dan beri {total}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API krediti tugadi («Credit balance is too low»). Kutish uni to\'ldirmaydi, shuning uchun bot kutmaydi. Balansni to\'ldir (Claude hisobi uchun: Claude Console → Billing), so\'ng hisobni qayta tanla: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Foydalanish chegarasiga yetdi — reset dan keyin avtomatik davom etish (~{time}).',
@@ -933,6 +935,7 @@ export const uzDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (eskirgan)',
   'account.row.limited': '    ⛔ limitda, {until} gacha',
+  'account.row.apiSpend': '    💳 {since} dan beri {total} sarflandi · oxirgi navbat {last}',
   'account.row.creditExhausted': '    💸 API krediti tugadi — to\'ldir, so\'ng qayta tanla',
   'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin).',
   'account.autoSwitchHint': 'Foydalanish limitida nima bo‘lishi /limits da belgilanadi.',
@@ -960,6 +963,7 @@ export const uzDict: Record<string, string> = {
   'fallback.switchExpired': 'Bu limit tugagan — almashtiradigan narsa yo\'q.',
   'fallback.switchButton': '🔁 {label} ga o\'tish',
   'fallback.switchOffer': '🪜 Zaxirasi bor zaxira model mavjud — mavzuni unga o‘tkazib, hozir davom etish uchun bosing.',
+  'fallback.switchedToApi': '💳 «{name}» har bir so\'rov uchun Claude Console API kreditidan to\'laydi (hozirgacha bot orqali {spent} sarflandi).',
   'fallback.switched': '🔁 {from} hisobi foydalanish limitiga yetdi — bu mavzu {to} da davom etmoqda.{tail}',
   'fallback.switchedModel': '🔁 {from} modeli foydalanish limitiga yetdi — bu mavzu {to} da davom etmoqda.{tail}',
   'fallback.switchedUnknownSource': '🔁 Foydalanish limitiga yetildi — bu mavzu {to} da davom etmoqda.{tail}',

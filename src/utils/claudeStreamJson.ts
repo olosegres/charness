@@ -86,8 +86,10 @@ export type ClaudeStreamAction =
   /** A `tool_result` fed back in a `user` message → the `toolResult` event. */
   | { kind: 'toolResult'; toolUseId: string; output: string; isSubagent: boolean }
   /** The turn ended (`result`); `resultText` is the final answer text; `usage`
-   *  is the turn's token accounting (`null` when the frame carries none). */
-  | { kind: 'turnEnd'; isError: boolean; errorText: string | null; resultText: string | null; usage: ClaudeTurnUsage | null }
+   *  is the turn's token accounting (`null` when the frame carries none);
+   *  `totalCostUsd` is the CLI's `total_cost_usd` — the CONVERSATION's running
+   *  cost (restored from the transcript on `--resume`), `null` when absent. */
+  | { kind: 'turnEnd'; isError: boolean; errorText: string | null; resultText: string | null; usage: ClaudeTurnUsage | null; totalCostUsd: number | null }
   /**
    * `system/background_tasks_changed` — the CLI's CURRENT list of background
    * tasks (a background Bash / Monitor = `local_bash`, a background sub-agent =
@@ -235,6 +237,12 @@ function readBackgroundTaskIds(tasks: unknown): string[] {
   return taskIds;
 }
 
+/** Read a non-negative finite dollar amount, or null (absent or malformed — no figure beats a wrong one). */
+function readCostUsd(rec: Record<string, unknown>, key: string): number | null {
+  const value = rec[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 /** Read a string field, or null. */
 function readString(rec: Record<string, unknown>, key: string): string | null {
   const value = rec[key];
@@ -377,6 +385,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       errorText: readString(msg, 'api_error_status') ?? (msg.is_error === true ? (readString(msg, 'result') ?? 'API error') : null),
       resultText: readString(msg, 'result'),
       usage: readTurnUsage(msg.usage, msg.modelUsage),
+      totalCostUsd: readCostUsd(msg, 'total_cost_usd'),
     }];
   }
 

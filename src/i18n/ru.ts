@@ -187,6 +187,7 @@ export const ruDict: Record<string, string> = {
   'status.global_empty': '📊 Тредов пока нет.',
   'status.thread_report': 'Статус:\n\nАгент: {agent}\nПапка: {subdir}\nСессия: {session}',
   'status.thread_view': 'Вид: {view}',
+  'status.thread_api_spend': '💳 Расход API на {name}: {total} с {since} (последний ход {last})',
   'status.thread_account_exhausted': ' · 💸 кредиты закончились',
   'status.thread_account_api': ' · 💳 API',
   'status.thread_account': 'Аккаунт: {account}',
@@ -834,6 +835,7 @@ export const ruDict: Record<string, string> = {
     '⏳ Ошибка провайдера — OpenCode повторит через {minutes} мин (попытка {attempt}){detail}',
   'apiRetry.usageLimitDelayNotice':
     '🚧 Лимит исчерпан — повторю через {minutes} мин (попытка {attempt}).',
+  'apiRetry.balanceSpent': '💳 Потрачено через бота на этом аккаунте: {total} с {since}.',
   'apiRetry.balanceExhaustedNotice': '💸 {name}: API-кредиты закончились («Credit balance is too low»). Ожидание их не пополнит, поэтому бот не ждёт. Пополни баланс (для аккаунта Claude: Claude Console → Billing), затем снова выбери аккаунт: /limits',
   'apiRetry.usageLimitResetNotice':
     '🚧 Лимит исчерпан — продолжу автоматически после сброса (~{time}).',
@@ -937,6 +939,7 @@ export const ruDict: Record<string, string> = {
   'account.row.usageFable': ' · Fable {fable}',
   'account.row.usageStale': ' (устарело)',
   'account.row.limited': '    ⛔ на лимите до {until}',
+  'account.row.apiSpend': '    💳 потрачено {total} с {since} · последний ход {last}',
   'account.row.creditExhausted': '    💸 API-кредиты закончились — пополни и выбери снова',
   'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа).',
   'account.autoSwitchHint': 'Что делать при лимите использования — настраивается в /limits.',
@@ -964,6 +967,7 @@ export const ruDict: Record<string, string> = {
   'fallback.switchExpired': 'Этот лимит уже прошёл — переключать нечего.',
   'fallback.switchButton': '🔁 Переключить на {label}',
   'fallback.switchOffer': '🪜 Есть запасная модель с запасом — нажмите, чтобы перевести топик на неё и продолжить сейчас.',
+  'fallback.switchedToApi': '💳 «{name}» оплачивает каждый запрос из API-кредитов Claude Console (через бота потрачено {spent}).',
   'fallback.switched': '🔁 Аккаунт {from} достиг лимита — топик продолжает работу на {to}.{tail}',
   'fallback.switchedModel': '🔁 Модель {from} достигла лимита — топик продолжает работу на {to}.{tail}',
   'fallback.switchedUnknownSource': '🔁 Достигнут лимит — топик продолжает работу на {to}.{tail}',

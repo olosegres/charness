@@ -20,6 +20,7 @@ import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './uti
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
+import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
@@ -208,9 +209,12 @@ export interface ClaudeProfileRecord {
   /**
    * ISO instant the account's prepaid API credit balance was found used up («Credit balance is too low», an account
    * billed to API credits). No window resets it: it holds until the operator acts — picks the account again or signs it
-   * in again — and keeps the account out of the fallback chain and the ranking till then.
+   * in again — or a turn on it goes through (the balance is back), and keeps the account out of the fallback chain and
+   * the ranking till then.
    */
   creditExhaustedAt?: string;
+  /** What an account billed to API credits spent through the bot (`utils/claudeApiSpend.ts`); absent before its first counted turn. */
+  apiSpend?: ClaudeApiSpend;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
   /**
@@ -488,6 +492,12 @@ export interface StateV1 {
   selfUpdate?: SelfUpdateRecord;
   /** The version (commit) of the previous boot; a difference at boot is a version change to announce. */
   lastRunVersion?: LastRunVersion;
+  /**
+   * Per thread, the last `total_cost_usd` its Claude conversation reported (`utils/claudeApiSpend.ts`): the baseline a
+   * turn's spend is the delta against. Kept for every account — a conversation that moves from a subscription to an
+   * API account must count only the API turns — and persisted, so a restart never counts a conversation twice.
+   */
+  claudeCostBaselines?: Record<string, ClaudeCostBaseline>;
   /**
    * Persisted scheduled jobs, keyed by {@link ScheduleRecord.id}. Optional so
    * older state files (created before the scheduler feature) stay valid —
@@ -2145,6 +2155,28 @@ export class StateStore {
     if (!record) return;
     if (limitedUntil === null) delete record.limitedUntil;
     else record.limitedUntil = limitedUntil;
+    this.scheduleSave();
+  }
+
+  /** Store an API account's spend (`utils/claudeApiSpend.ts` computes it); same record rules as the usage. Debounced. */
+  setClaudeProfileApiSpend(name: string, spend: ClaudeApiSpend): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    record.apiSpend = spend;
+    this.scheduleSave();
+  }
+
+  /** The last conversation cost the thread's Claude session reported, `undefined` when none was seen. */
+  getClaudeCostBaseline(key: SessionKey): ClaudeCostBaseline | undefined {
+    return this.state.claudeCostBaselines?.[keyToString(key)];
+  }
+
+  /** Remember the thread's conversation cost (written on every Claude turn end — debounced). */
+  setClaudeCostBaseline(key: SessionKey, baseline: ClaudeCostBaseline): void {
+    const k = keyToString(key);
+    const previous = this.state.claudeCostBaselines?.[k];
+    if (previous?.sessionId === baseline.sessionId && previous.totalCostUsd === baseline.totalCostUsd) return;
+    (this.state.claudeCostBaselines ??= {})[k] = baseline;
     this.scheduleSave();
   }
 
