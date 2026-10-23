@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**The agent can send files to the topic on Windows and macOS.** `send_file_to_user`, and `send_messages_to_user` with a
+file, refused with «secure file sending is unsupported on win32», and an agent could stop its work over it. Files are now
+opened by their checked path on those systems, held to the file that was checked inside the bound folder, so a path
+swapped meanwhile still cannot reach outside it. If a send does fail, the agent is told to give the file's path in its
+reply and carry on.
+
 **Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
 sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
 topic now gets one short line and the bot continues the work at once; if the same refusal comes right back, it says it

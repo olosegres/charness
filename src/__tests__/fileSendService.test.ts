@@ -2,8 +2,10 @@
  * @description Service-level coverage for the agent-to-Telegram file-send
  * pipeline. Real temp files prove identity-checked descriptor snapshots, all
  * five gateway routes, message-id recording, descriptor cleanup, size
- * enforcement, bounded concurrent descriptor ownership, Linux-only secure
- * traversal, and root/final/parent/FIFO path-swap defenses.
+ * enforcement, bounded concurrent descriptor ownership, the platform's open
+ * strategy, and root/final/parent/FIFO path-swap defenses. The shared contract
+ * runs under BOTH strategies on Linux — the descriptor walk, and the verified
+ * path Windows and macOS use (forced here) — plus each strategy's own defenses.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -19,7 +21,9 @@ import {
   FileSendDeliveryUnknownError,
   fileSendSnapshotConcurrency,
   getFileDescriptorPathRoot,
+  getFileSendOpenStrategy,
   readTelegramFileSnapshot,
+  type FileSendOpenStrategy,
   type FileSendGateway,
   type PinnedFileSendRoot,
   type SendFilesToThreadResult,
@@ -78,7 +82,34 @@ const singleGatewayMessageIds: Record<TelegramSingleFileSendMethod, number> = {
 const albumMessageIds = [201, 202];
 const fifoSnapshotChildTimeoutMs = 5_000;
 const linuxTest = process.platform === 'linux' ? test : test.skip;
-const nonLinuxTest = process.platform === 'linux' ? test.skip : test;
+
+/**
+ * Both open strategies run on Linux: the descriptor walk is the platform's own, the verified path (the Windows / macOS
+ * strategy) is forced. Each must hold the same contract — the portable path is exercised here, on the CI host.
+ */
+const fileSendOpenStrategies: readonly FileSendOpenStrategy[] = ['descriptorWalk', 'verifiedPath'];
+/** The strategy `createService` builds with while a {@link sharedTest} runs (the tests of one file run one at a time). */
+let serviceOpenStrategy: FileSendOpenStrategy = getFileSendOpenStrategy(process.platform);
+
+/** Register a test once per open strategy. */
+function sharedTest(name: string, body: () => Promise<void>): void {
+  for (const strategy of fileSendOpenStrategies) {
+    linuxTest(`[${strategy}] ${name}`, async () => {
+      serviceOpenStrategy = strategy;
+      try {
+        await body();
+      } finally {
+        serviceOpenStrategy = getFileSendOpenStrategy(process.platform);
+      }
+    });
+  }
+}
+
+/** The root descriptor of a descriptor-walk root (the tests that watch it run that strategy only). */
+function getRootDescriptor(pinnedRoot: PinnedFileSendRoot): number {
+  assert.equal(pinnedRoot.strategy, 'descriptorWalk', 'a descriptor-walk root');
+  return pinnedRoot.strategy === 'descriptorWalk' ? pinnedRoot.fd : -1;
+}
 
 function createTempFileSendFixture(): TempFileSendFixture {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendService-'));
@@ -133,6 +164,7 @@ function createService(
     ...(options.readFileSnapshot !== undefined
       ? { readFileSnapshot: options.readFileSnapshot }
       : {}),
+    openStrategy: serviceOpenStrategy,
   });
 }
 
@@ -168,7 +200,7 @@ const singleGatewayCases: SingleGatewayCase[] = [
 ];
 
 for (const gatewayCase of singleGatewayCases) {
-  linuxTest(`createSendFilesToThread routes ${gatewayCase.fileName} through ${gatewayCase.expectedMethod}, records its message id, and closes its descriptor`, async () => {
+  sharedTest(`createSendFilesToThread routes ${gatewayCase.fileName} through ${gatewayCase.expectedMethod}, records its message id, and closes its descriptor`, async () => {
     const fixture = createTempFileSendFixture();
     const recorder = createServiceRecorder();
     try {
@@ -202,7 +234,7 @@ for (const gatewayCase of singleGatewayCases) {
   });
 }
 
-linuxTest('createSendFilesToThread routes a photo/video album, records every id, and closes every descriptor', async () => {
+sharedTest('createSendFilesToThread routes a photo/video album, records every id, and closes every descriptor', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   try {
@@ -295,7 +327,7 @@ test('createSendFilesToThread converts a resolver throw into a typed failure', a
   }
 });
 
-linuxTest('createSendFilesToThread converts a gateway rejection into a typed failure and closes its descriptor', async () => {
+sharedTest('createSendFilesToThread converts a gateway rejection into a typed failure and closes its descriptor', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   try {
@@ -317,7 +349,7 @@ linuxTest('createSendFilesToThread converts a gateway rejection into a typed fai
   }
 });
 
-linuxTest('createSendFilesToThread waits for message-id recording before reporting success', async () => {
+sharedTest('createSendFilesToThread waits for message-id recording before reporting success', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   let releaseMessageIdRecording = () => {};
@@ -359,7 +391,7 @@ linuxTest('createSendFilesToThread waits for message-id recording before reporti
   }
 });
 
-linuxTest('createSendFilesToThread keeps the target delivery executor occupied until message IDs are recorded', async () => {
+sharedTest('createSendFilesToThread keeps the target delivery executor occupied until message IDs are recorded', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   let releaseFirstRecording = () => {};
@@ -412,7 +444,7 @@ linuxTest('createSendFilesToThread keeps the target delivery executor occupied u
   }
 });
 
-linuxTest('createSendFilesToThread reports delivery-unknown without retrying or recording message IDs', async () => {
+sharedTest('createSendFilesToThread reports delivery-unknown without retrying or recording message IDs', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const recordingGateway = createRecordingGateway(recorder);
@@ -444,7 +476,7 @@ linuxTest('createSendFilesToThread reports delivery-unknown without retrying or 
   }
 });
 
-linuxTest('createSendFilesToThread keeps delivery successful when message-id recording rejects', async () => {
+sharedTest('createSendFilesToThread keeps delivery successful when message-id recording rejects', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const attemptedRecordings: RecordedMessageIds[] = [];
@@ -497,7 +529,7 @@ linuxTest('createSendFilesToThread keeps delivery successful when root-descripto
     fs.writeFileSync(path.join(fixture.workDir, 'clip.mp4'), 'delivered-video');
     const sendFilesToThread = createService(fixture.workDir, recorder, {
       readFileSnapshot: (canonicalPath, expectedIdentity, pinnedRoot) => {
-        rootDescriptor = pinnedRoot.fd;
+        rootDescriptor = getRootDescriptor(pinnedRoot);
         return readTelegramFileSnapshot(canonicalPath, expectedIdentity, pinnedRoot);
       },
     });
@@ -525,7 +557,7 @@ linuxTest('createSendFilesToThread keeps delivery successful when root-descripto
   }
 });
 
-linuxTest('createSendFilesToThread closes an earlier descriptor when a later snapshot fails', async () => {
+sharedTest('createSendFilesToThread closes an earlier descriptor when a later snapshot fails', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const openedFileDescriptors: number[] = [];
@@ -556,7 +588,7 @@ linuxTest('createSendFilesToThread closes an earlier descriptor when a later sna
   }
 });
 
-linuxTest('createSendFilesToThread rejects an oversize file before gateway dispatch', async () => {
+sharedTest('createSendFilesToThread rejects an oversize file before gateway dispatch', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   try {
@@ -576,7 +608,7 @@ linuxTest('createSendFilesToThread rejects an oversize file before gateway dispa
   }
 });
 
-linuxTest('createSendFilesToThread bounds descriptor ownership while later sends wait', async () => {
+sharedTest('createSendFilesToThread bounds descriptor ownership while later sends wait', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   let snapshotCallCount = 0;
@@ -642,7 +674,7 @@ linuxTest('createSendFilesToThread bounds descriptor ownership while later sends
   }
 });
 
-linuxTest('createSendFilesToThread removes an aborted snapshot waiter without delaying the next waiter', async () => {
+sharedTest('createSendFilesToThread removes an aborted snapshot waiter without delaying the next waiter', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const initialTargets = Array.from(
@@ -717,7 +749,7 @@ linuxTest('createSendFilesToThread removes an aborted snapshot waiter without de
   }
 });
 
-linuxTest('createSendFilesToThread refuses a queued directory-scoped send after the thread is rebound', async () => {
+sharedTest('createSendFilesToThread refuses a queued directory-scoped send after the thread is rebound', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const replacementWorkDir = path.join(fixture.tempRoot, 'replacement');
@@ -788,7 +820,7 @@ linuxTest('createSendFilesToThread refuses a queued directory-scoped send after 
   }
 });
 
-linuxTest('createSendFilesToThread revalidates a directory-scoped binding inside the delivery queue', async () => {
+sharedTest('createSendFilesToThread revalidates a directory-scoped binding inside the delivery queue', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const replacementWorkDir = path.join(fixture.tempRoot, 'replacement');
@@ -839,7 +871,7 @@ linuxTest('createSendFilesToThread revalidates a directory-scoped binding inside
   }
 });
 
-linuxTest('createSendFilesToThread sanitizes unsafe multipart filename characters reached through a safe symlink', async () => {
+sharedTest('createSendFilesToThread sanitizes unsafe multipart filename characters reached through a safe symlink', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const unsafeFileName = 'unsafe\r\n\x7f"\\name.txt';
@@ -860,35 +892,16 @@ linuxTest('createSendFilesToThread sanitizes unsafe multipart filename character
   }
 });
 
-test('getFileDescriptorPathRoot fails closed outside Linux descriptor traversal', () => {
+test('the descriptor walk is Linux\'s strategy; Windows and macOS send through the verified path', () => {
   assert.equal(getFileDescriptorPathRoot('linux'), '/proc/self/fd');
   assert.equal(getFileDescriptorPathRoot('darwin'), null);
   assert.equal(getFileDescriptorPathRoot('win32'), null);
+  assert.equal(getFileSendOpenStrategy('linux'), 'descriptorWalk');
+  assert.equal(getFileSendOpenStrategy('darwin'), 'verifiedPath');
+  assert.equal(getFileSendOpenStrategy('win32'), 'verifiedPath');
 });
 
-nonLinuxTest('createSendFilesToThread returns an unsupported-platform failure without delivery side effects', async () => {
-  const recorder = createServiceRecorder();
-  const sendFilesToThread = createSendFilesToThread({
-    resolveTargetAndWorkDir: () => ({
-      ok: true,
-      target: 'telegram-target',
-      workDir: process.cwd(),
-    }),
-    gateway: createRecordingGateway(recorder),
-    recordMessageIds: async (target, messageIds) => {
-      recorder.messageIdCalls.push({ target, messageIds: [...messageIds] });
-    },
-  });
-
-  const result = await sendFilesToThread('thread-key', { paths: ['unused.txt'] });
-
-  assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.error, /secure file sending is unsupported/i);
-  assert.deepEqual(recorder.gatewayCalls, []);
-  assert.deepEqual(recorder.messageIdCalls, []);
-});
-
-linuxTest('createSendFilesToThread admits queued sends in FIFO order and releases a rejected slot', async () => {
+sharedTest('createSendFilesToThread admits queued sends in FIFO order and releases a rejected slot', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const initialTargets = Array.from(
@@ -1001,7 +1014,7 @@ linuxTest('createSendFilesToThread admits queued sends in FIFO order and release
   }
 });
 
-linuxTest('createSendFilesToThread refuses a validated final component replaced before descriptor open', async () => {
+sharedTest('createSendFilesToThread refuses a validated final component replaced before descriptor open', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const insidePath = path.join(fixture.workDir, 'payload.txt');
@@ -1044,7 +1057,7 @@ linuxTest('createSendFilesToThread reuses one pinned root descriptor across ever
     const sendFilesToThread = createService(fixture.workDir, recorder, {
       readFileSnapshot: (canonicalPath, expectedIdentity, pinnedRoot) => {
         capturedPinnedRoots.push(pinnedRoot);
-        capturedRootDescriptors.push(pinnedRoot.fd);
+        capturedRootDescriptors.push(getRootDescriptor(pinnedRoot));
         const snapshot = readTelegramFileSnapshot(canonicalPath, expectedIdentity, pinnedRoot);
         if (snapshot.ok) openedFileDescriptors.push(snapshot.source.fd);
         snapshotCallCount += 1;
@@ -1106,7 +1119,7 @@ linuxTest('createSendFilesToThread refuses a final-component symlink to the vali
   }
 });
 
-linuxTest('createSendFilesToThread refuses a nested parent swapped to an outside directory before descriptor open', async () => {
+sharedTest('createSendFilesToThread refuses a nested parent swapped to an outside directory before descriptor open', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const nestedDir = path.join(fixture.workDir, 'nested');
@@ -1131,7 +1144,8 @@ linuxTest('createSendFilesToThread refuses a nested parent swapped to an outside
 
     assert.equal(didSwapParent, true, 'the nested parent was swapped only after validation');
     assert.equal(result.ok, false);
-    if (!result.ok) assert.match(result.error, /not a directory|symlink|ELOOP|ENOTDIR/i);
+    // The walk refuses the symlinked component; the verified path opens the outside file and refuses its identity.
+    if (!result.ok) assert.match(result.error, serviceOpenStrategy === 'descriptorWalk' ? /not a directory|symlink|ELOOP|ENOTDIR/i : /changed after validation/i);
     assert.deepEqual(recorder.gatewayCalls, [], 'outside bytes must never reach a Telegram gateway');
     assert.deepEqual(recorder.messageIdCalls, []);
   } finally {
@@ -1139,7 +1153,7 @@ linuxTest('createSendFilesToThread refuses a nested parent swapped to an outside
   }
 });
 
-linuxTest('createSendFilesToThread refuses a nested parent swapped between canonicalization and identity capture', async () => {
+sharedTest('createSendFilesToThread refuses a nested parent swapped between canonicalization and identity capture', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const nestedDir = path.join(fixture.workDir, 'nested');
@@ -1180,7 +1194,7 @@ linuxTest('createSendFilesToThread refuses a nested parent swapped between canon
   }
 });
 
-linuxTest('readTelegramFileSnapshot rejects a raced FIFO without blocking the bot process', () => {
+for (const strategy of fileSendOpenStrategies) linuxTest(`[${strategy}] readTelegramFileSnapshot rejects a raced FIFO without blocking the bot process`, () => {
   const fixture = createTempFileSendFixture();
   const fifoPath = path.join(fixture.workDir, 'payload.bin');
   try {
@@ -1193,9 +1207,12 @@ linuxTest('readTelegramFileSnapshot rejects a raced FIFO without blocking the bo
       "const fs = require('fs');",
       `const { readTelegramFileSnapshot } = require(${JSON.stringify(serviceModulePath)});`,
       `const rootPath = fs.realpathSync(${JSON.stringify(fixture.workDir)});`,
-      'const rootFd = fs.openSync(rootPath, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);',
-      `const result = readTelegramFileSnapshot(${JSON.stringify(fifoPath)}, { dev: BigInt('${validatedStat.dev.toString()}'), ino: BigInt('${validatedStat.ino.toString()}') }, { rootPath, fd: rootFd });`,
-      'fs.closeSync(rootFd);',
+      strategy === 'descriptorWalk'
+        ? 'const rootFd = fs.openSync(rootPath, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);'
+        : 'const rootFd = null;',
+      `const pinnedRoot = rootFd === null ? { strategy: 'verifiedPath', rootPath } : { strategy: 'descriptorWalk', rootPath, fd: rootFd };`,
+      `const result = readTelegramFileSnapshot(${JSON.stringify(fifoPath)}, { dev: BigInt('${validatedStat.dev.toString()}'), ino: BigInt('${validatedStat.ino.toString()}') }, pinnedRoot);`,
+      'if (rootFd !== null) fs.closeSync(rootFd);',
       "process.stdout.write(result.ok ? 'unexpected success' : result.error);",
     ].join(' ');
 
@@ -1213,6 +1230,99 @@ linuxTest('readTelegramFileSnapshot rejects a raced FIFO without blocking the bo
     assert.equal(child.status, 0, child.stderr);
     assert.match(child.stdout, /not a regular file/i);
   } finally {
+    fixture.cleanup();
+  }
+});
+
+sharedTest('createSendFilesToThread refuses a path that resolves outside the bound folder', async () => {
+  const fixture = createTempFileSendFixture();
+  const recorder = createServiceRecorder();
+  const outsideDir = path.join(fixture.tempRoot, 'outside');
+  fs.mkdirSync(outsideDir);
+  fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside-secret-bytes');
+  fs.symlinkSync(outsideDir, path.join(fixture.workDir, 'link-out'), 'dir');
+  try {
+    const sendFilesToThread = createService(fixture.workDir, recorder);
+    for (const rawPath of ['../outside/secret.txt', 'link-out/secret.txt', path.join(outsideDir, 'secret.txt')]) {
+      const result = await sendFilesToThread('thread-key', { paths: [rawPath] });
+      assert.equal(result.ok, false, rawPath);
+      if (!result.ok) assert.match(result.error, /outside the bound folder/i, rawPath);
+    }
+    assert.deepEqual(recorder.gatewayCalls, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+linuxTest('[verifiedPath] refuses an opened file the path no longer resolves to: a parent swapped back after the open', async () => {
+  // The identity check alone holds the opened object to the validated one; the second resolve holds it to the PATH
+  // inside the root. Here the parent points outside while the identity is captured and the file opened (so both agree
+  // on the outside file), and is swapped back before the second resolve: only that resolve sees the difference.
+  const fixture = createTempFileSendFixture();
+  const recorder = createServiceRecorder();
+  const nestedDir = path.join(fixture.workDir, 'nested');
+  const validatedNestedDir = path.join(fixture.tempRoot, 'validated-nested');
+  const outsideDir = path.join(fixture.tempRoot, 'outside');
+  const nestedPayloadPath = path.join(nestedDir, 'payload.txt');
+  fs.mkdirSync(nestedDir);
+  fs.mkdirSync(outsideDir);
+  fs.writeFileSync(nestedPayloadPath, 'inside-bytes');
+  fs.writeFileSync(path.join(outsideDir, 'payload.txt'), 'outside-secret-bytes');
+  const mutableFs: typeof fs = require('fs');
+  const originalStatSync = fs.statSync;
+  const originalOpenSync = fs.openSync;
+  let isParentOutside = false;
+  let hasSwappedOut = false;
+  const swapParentOut = (): void => {
+    hasSwappedOut = true;
+    fs.renameSync(nestedDir, validatedNestedDir);
+    fs.symlinkSync(outsideDir, nestedDir, 'dir');
+    isParentOutside = true;
+  };
+  const swapParentBack = (): void => {
+    fs.rmSync(nestedDir);
+    fs.renameSync(validatedNestedDir, nestedDir);
+    isParentOutside = false;
+  };
+  const statSyncMock = mock.method(mutableFs, 'statSync', (target: fs.PathLike, options: { bigint: true }) => {
+    if (!hasSwappedOut && target === nestedPayloadPath) swapParentOut();
+    return originalStatSync(target, options);
+  });
+  const openSyncMock = mock.method(mutableFs, 'openSync', (target: fs.PathLike, flags: number) => {
+    const fileDescriptor = originalOpenSync(target, flags);
+    if (isParentOutside && target === nestedPayloadPath) swapParentBack();
+    return fileDescriptor;
+  });
+  try {
+    serviceOpenStrategy = 'verifiedPath';
+    const sendFilesToThread = createService(fixture.workDir, recorder);
+    const result = await sendFilesToThread('thread-key', { paths: ['nested/payload.txt'] });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error, /changed after validation/i);
+    assert.deepEqual(recorder.gatewayCalls, [], 'outside bytes must never reach a Telegram gateway');
+  } finally {
+    serviceOpenStrategy = getFileSendOpenStrategy(process.platform);
+    openSyncMock.mock.restore();
+    statSyncMock.mock.restore();
+    fixture.cleanup();
+  }
+});
+
+for (const strategy of fileSendOpenStrategies) linuxTest(`[${strategy}] readTelegramFileSnapshot refuses a path outside its root, whatever identity it is handed`, () => {
+  const fixture = createTempFileSendFixture();
+  const outsidePath = path.join(fixture.tempRoot, 'outside.txt');
+  fs.writeFileSync(outsidePath, 'outside-secret-bytes');
+  const outsideStat = fs.statSync(outsidePath, { bigint: true });
+  const rootPath = fs.realpathSync(fixture.workDir);
+  const rootFd = strategy === 'descriptorWalk' ? fs.openSync(rootPath, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY) : null;
+  try {
+    const pinnedRoot: PinnedFileSendRoot = rootFd === null ? { strategy: 'verifiedPath', rootPath } : { strategy: 'descriptorWalk', rootPath, fd: rootFd };
+    const result = readTelegramFileSnapshot(fs.realpathSync(outsidePath), { dev: outsideStat.dev, ino: outsideStat.ino }, pinnedRoot);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error, /outside its validated root/i);
+  } finally {
+    if (rootFd !== null) fs.closeSync(rootFd);
     fixture.cleanup();
   }
 });

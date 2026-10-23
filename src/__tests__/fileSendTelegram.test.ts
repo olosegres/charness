@@ -28,6 +28,7 @@ import {
 import {
   createSendFilesToThread,
   FileSendDeliveryUnknownError,
+  type FileSendOpenStrategy,
   type SendFilesToThreadDeps,
 } from '../utils/fileSendService';
 import {
@@ -43,6 +44,8 @@ import type {
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const linuxTest = process.platform === 'linux' ? test : test.skip;
+/** Both open strategies on Linux: the platform's descriptor walk, and the Windows / macOS verified path forced. */
+const fileSendOpenStrategies: readonly FileSendOpenStrategy[] = ['descriptorWalk', 'verifiedPath'];
 
 interface FakeDeadlineEntry {
   callback: () => void;
@@ -1006,7 +1009,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
   }
 });
 
-linuxTest('real service and Telegram gateway settle an unread rejected single attempt before retrying from byte zero', async () => {
+for (const openStrategy of fileSendOpenStrategies) linuxTest(`[${openStrategy}] real service and Telegram gateway settle an unread rejected single attempt before retrying from byte zero`, async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendTelegram-service-'));
   const workDir = path.join(tempRoot, 'bound');
   fs.mkdirSync(workDir);
@@ -1056,6 +1059,7 @@ linuxTest('real service and Telegram gateway settle an unread rejected single at
         recordedMessageIds.push(...messageIds);
       },
       executeDelivery,
+      openStrategy,
     });
 
     const result = await sendFilesToThread('thread-key', { paths: ['clip.mp4'] });
@@ -1070,7 +1074,7 @@ linuxTest('real service and Telegram gateway settle an unread rejected single at
   }
 });
 
-linuxTest('real service and Telegram gateway settle every unread album stream before retrying all items from byte zero', async () => {
+for (const openStrategy of fileSendOpenStrategies) linuxTest(`[${openStrategy}] real service and Telegram gateway settle every unread album stream before retrying all items from byte zero`, async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendTelegram-album-'));
   const workDir = path.join(tempRoot, 'bound');
   fs.mkdirSync(workDir);
@@ -1122,6 +1126,7 @@ linuxTest('real service and Telegram gateway settle every unread album stream be
         recordedMessageIds.push(...messageIds);
       },
       executeDelivery,
+      openStrategy,
     });
 
     const result = await sendFilesToThread('thread-key', {

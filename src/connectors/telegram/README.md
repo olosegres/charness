@@ -51,7 +51,11 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 
 - The service pins ONE canonical root for the whole operation and, on Linux, traverses from a root descriptor
   with per-component `O_NOFOLLOW`; it checks the opened file's device/inode identity and size and keeps every
-  descriptor open until the gateway returns. macOS fails closed — there is no descriptor-relative bridge.
+  descriptor open until the gateway returns. Windows and macOS have no descriptor-relative lookup: there the
+  `verifiedPath` strategy opens the canonical path, holds the opened file to the validated identity and resolves
+  the path again (still inside the root, still that file) before it is used. `fileSendService.test.ts` runs the
+  shared contract under both strategies on Linux — keep a new file-send test in `sharedTest` unless it watches
+  the root descriptor itself.
 - Each gateway attempt builds a FRESH bounded stream. Telegram API errors are retried; any other failure after
   the upload began is `deliveryUnknown` and is NEVER retried automatically (Telegram may already have
   accepted it).

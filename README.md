@@ -540,9 +540,12 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 - `send_file_to_user` — lets the agent push files from the bound folder into the
   topic. A single MP4 uses Bot API `sendVideo`; eligible all-video and mixed
   photo/video albums use `sendMediaGroup`, with each MP4 represented by an
-  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. Secure
-  outbound file traversal currently requires Linux; on macOS this tool
-  fails closed until a native descriptor-relative bridge is available. Existing
+  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. A file is
+  opened so that a path swapped after validation cannot reach outside the bound
+  folder: on Linux component by component beneath a pinned folder descriptor
+  (`/proc/self/fd`); on Windows and macOS by its canonical path, held to the
+  validated file's device/inode identity and resolved again inside the folder
+  after the open. Existing
   path, count, caption, and size caps apply; canonical upload basenames have
   control characters and quoted-string metacharacters replaced before they enter multipart headers. Cancelling
   the MCP call removes queued work. While any upload stream is still being
