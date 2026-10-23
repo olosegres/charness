@@ -1,6 +1,6 @@
 import type { GitSkipReason } from '../selfUpdate/types';
 import type { UpdateOffer, UpdateStatus } from '../selfUpdate/updateEngine';
-import { updateInstallCallbackPrefix, type Translate } from '../selfUpdate/updateMessages';
+import { updateAnnouncementInstallCallbackPrefix, updateInstallCallbackPrefix, type Translate } from '../selfUpdate/updateMessages';
 import type { AutoUpdateMode } from '../selfUpdate/updateModes';
 
 /**
@@ -13,8 +13,10 @@ import type { AutoUpdateMode } from '../selfUpdate/updateModes';
 export const updateModeCallbackPrefix = 'upd_mode_';
 export const updateWhatsNewCallbackPrefix = 'upd_notes_';
 export const updateCheckCallback = 'upd_check';
-/** Matches the install tap: `upd_go_<version or commit>`. */
+/** Matches the install tap on the screen: `upd_go_<version or commit>`. */
 export const updateInstallCallbackRe = new RegExp(`^${updateInstallCallbackPrefix}(.+)$`);
+/** Matches the install tap under an announcement in General: `upd_ann_<version or commit>`. */
+export const updateAnnouncementInstallCallbackRe = new RegExp(`^${updateAnnouncementInstallCallbackPrefix}(.+)$`);
 
 const minuteMs = 60 * 1000;
 const hourMs = 60 * minuteMs;

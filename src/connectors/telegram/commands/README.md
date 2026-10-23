@@ -321,6 +321,6 @@ comes without buttons and with «Change it in General», and a write tap there i
 (`saveInstanceSettings` — a failed write is said whole, with the path and the errno, never swallowed); the typed forms (`/update on|
 notify|off`, `/update whatsnew on|off`, `/update check`, `/update now`) do the same, a bare `/update` opens the screen. Engine
 actions go through the `getUpdateEngine` port (the engine exists only after boot built it: `/update` typed before that says the
-updater is still starting). «Update now» bakes the target into the callback data (`upd_go_<version or commit>`), so an old keyboard never
+updater is still starting). «Update now» bakes the target into the callback data (`upd_go_<version or commit>` on the screen, `upd_ann_<…>` under an announcement in General — that tap answers and leaves the announcement alone instead of overwriting it with the screen), so an old keyboard never
 installs another version than the one on its button; the handler answers after the work with `answerCallbackQuerySafely`. Logic that
 decides WHAT updates is in `src/selfUpdate/`, never here.

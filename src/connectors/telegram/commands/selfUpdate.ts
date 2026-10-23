@@ -13,6 +13,7 @@ import type { InstallRequestResult, UpdateEngine } from '../../../selfUpdate/upd
 import type { SessionKey } from '../../../sessionKey';
 import {
   buildUpdateScreen,
+  updateAnnouncementInstallCallbackRe,
   updateCheckCallback,
   updateInstallCallbackRe,
   updateModeCallbackPrefix,
@@ -184,6 +185,15 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
     await rerenderScreen(ctx, key);
   }
 
+  /** «Update to X» — on the `/update` screen (which then re-renders) or under an announcement (which stays what it was). */
+  async function handleInstallTap(ctx: Context, target: string, options: { isOnScreen: boolean }): Promise<void> {
+    const key = await authoriseTap(ctx, { isWrite: true });
+    if (key === null) return;
+    const result = (await getUpdateEngine()?.requestInstall(target)) ?? 'alreadyUpToDate';
+    await answerCallbackQuerySafely(ctx, getInstallResultText(key, result, target));
+    if (options.isOnScreen) await rerenderScreen(ctx, key);
+  }
+
   function registerSelfUpdateCommands(): void {
     command('update', async (ctx, key) => {
       await handleCommand(key, ctx.message.text.split(/\s+/).slice(1).filter((argument) => argument !== ''));
@@ -214,12 +224,12 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
 
     // The version printed on the button is the version it installs: a keyboard that has gone stale answers "already up to date".
     bot.action(updateInstallCallbackRe, async (ctx) => {
-      const key = await authoriseTap(ctx, { isWrite: true });
-      if (key === null) return;
-      const target = ctx.match[1];
-      const result = (await getUpdateEngine()?.requestInstall(target)) ?? 'alreadyUpToDate';
-      await answerCallbackQuerySafely(ctx, getInstallResultText(key, result, target));
-      await rerenderScreen(ctx, key);
+      await handleInstallTap(ctx, ctx.match[1], { isOnScreen: true });
+    });
+
+    // The same tap under an announcement in General: it answers and leaves the announcement as it is.
+    bot.action(updateAnnouncementInstallCallbackRe, async (ctx) => {
+      await handleInstallTap(ctx, ctx.match[1], { isOnScreen: false });
     });
   }
 

@@ -72,7 +72,7 @@ describe('the offers', () => {
     assert.deepEqual(render({ kind: 'notify', version: '3.5.0', running: '3.4.0', canInstall: true, manualCommand: 'x' }), {
       text: '⬆️ Charness 3.5.0 is out (you run 3.4.0).',
       pin: false,
-      buttons: [{ label: '⬆️ Update to 3.5.0', callbackData: 'upd_go_3.5.0' }],
+      buttons: [{ label: '⬆️ Update to 3.5.0', callbackData: 'upd_ann_3.5.0' }],
     });
     assert.deepEqual(render({ kind: 'notify', version: '3.5.0', running: '3.4.0', canInstall: false, manualCommand: 'npm install -g charness@latest' }), {
       text: '⬆️ Charness 3.5.0 is out (you run 3.4.0).\nUpdate by hand: npm install -g charness@latest',
@@ -84,13 +84,13 @@ describe('the offers', () => {
   test('a major links its GitHub release notes and carries the tap', () => {
     const rendered = render({ kind: 'offerMajor', version: '4.0.0', running: '3.4.0' });
     assert.equal(rendered.text, '⚠️ Charness 4.0.0 is a major version — not installed by itself. Read the release notes first: https://github.com/olosegres/charness/releases/tag/v4.0.0');
-    assert.deepEqual(rendered.buttons, [{ label: '⬆️ Update to 4.0.0', callbackData: 'upd_go_4.0.0' }]);
+    assert.deepEqual(rendered.buttons, [{ label: '⬆️ Update to 4.0.0', callbackData: 'upd_ann_4.0.0' }]);
   });
 
   test('a checkout\'s migration guide is linked by name; the tap carries the target commit', () => {
     const rendered = render({ kind: 'offerBreaking', from: 'a1b2c3d', to: 'd4e5f6a', migrationGuides: ['MIGRATION_3_TO_4.md', 'MIGRATION_X.md'] });
     assert.match(rendered.text, /adds a migration guide .* https:\/\/github\.com\/olosegres\/charness\/blob\/main\/MIGRATION_3_TO_4\.md https:\/\/github\.com\/olosegres\/charness\/blob\/main\/MIGRATION_X\.md$/);
-    assert.deepEqual(rendered.buttons, [{ label: '⬆️ Update to d4e5f6a', callbackData: 'upd_go_d4e5f6a' }]);
+    assert.deepEqual(rendered.buttons, [{ label: '⬆️ Update to d4e5f6a', callbackData: 'upd_ann_d4e5f6a' }]);
   });
 
   test('a Node that is too old says what is needed and what runs', () => {

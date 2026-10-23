@@ -346,6 +346,26 @@ describe('the buttons', () => {
     assert.equal(edits.length, 1);
   });
 
+  test('the same tap under an announcement in General installs the version and answers, but leaves the announcement as it is', async () => {
+    createFeature();
+    const { answers } = await tap('upd_ann_4.0.0');
+    assert.deepEqual(engineCalls, ['requestInstall 4.0.0']);
+    assert.deepEqual(answers, ['⬆️ Updating to 4.0.0 — installing as soon as no agent is working.']);
+    assert.deepEqual(edits, [], 'the announcement keeps its text and its button — it is not overwritten with the /update screen');
+    assert.deepEqual(sent, []);
+  });
+
+  test('an announcement\'s tap is the same install as the screen\'s: General only, stale answers "already up to date"', async () => {
+    createFeature();
+    installResult = 'alreadyUpToDate';
+    assert.deepEqual((await tap('upd_ann_3.4.9')).answers, ['ℹ️ Already up to date.']);
+    engineCalls = [];
+    currentKey = topicKey;
+    assert.deepEqual((await tap('upd_ann_3.5.0')).answers, ['ℹ️ Change it in General.']);
+    assert.deepEqual(engineCalls, []);
+    assert.deepEqual(edits, []);
+  });
+
   test('a keyboard gone stale answers "already up to date"; a tap outside General installs nothing', async () => {
     createFeature();
     installResult = 'alreadyUpToDate';

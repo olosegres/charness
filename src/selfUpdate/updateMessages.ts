@@ -13,6 +13,12 @@ const releaseUrlPrefix = 'https://github.com/olosegres/charness/releases/tag/v';
 const migrationGuideUrlPrefix = 'https://github.com/olosegres/charness/blob/main/';
 /** The tap that installs the version printed on the button — its identity is baked in, so an old keyboard never installs another. */
 export const updateInstallCallbackPrefix = 'upd_go_';
+/**
+ * The same tap under an ANNOUNCEMENT in General (a new version is out, a major or a migration guide is offered). A separate prefix on
+ * purpose: a tap on the `/update` screen re-renders the screen, a tap on an announcement must leave the announcement as it is — it
+ * would otherwise be overwritten with the generic screen, the major's «read the notes first» included.
+ */
+export const updateAnnouncementInstallCallbackPrefix = 'upd_ann_';
 
 /** Why an automatic update did not finish, worded by the renderer. */
 export type UpdateFailureReason = 'install' | 'start' | 'build' | 'boot';
@@ -66,7 +72,7 @@ function withSummary(heading: string, summary: WhatsNewSummary | null, translate
 }
 
 function getUpdateButton(version: string, translate: Translate): UpdateMessageButton {
-  return { label: translate('update.updateButton', { version }), callbackData: `${updateInstallCallbackPrefix}${version}` };
+  return { label: translate('update.updateButton', { version }), callbackData: `${updateAnnouncementInstallCallbackPrefix}${version}` };
 }
 
 /** @description Word an update message: its text, whether to pin it, and its buttons. */

@@ -73,7 +73,7 @@ The engine and what the operator sees:
   chat's language. The what's-new entries stay English (the CHANGELOG's own words); a message the operator must act on is pinned.
 - `updateRuntime.ts` — the process-bound half of the ports: install kind, sources, host lock, the marker, the supervisor record.
   `bot.ts` passes in the rest (settings, state, idle verdict, General, the shutdown sequence) when it builds the engine.
-- The screen: `utils/updateScreenPlan.ts` (pure text + buttons, callbacks `upd_mode_*`, `upd_notes_*`, `upd_check`, `upd_go_<target>`)
+- The screen: `utils/updateScreenPlan.ts` (pure text + buttons, callbacks `upd_mode_*`, `upd_notes_*`, `upd_check`, `upd_go_<target>`; an announcement's own install button is `upd_ann_<target>`)
   rendered by `connectors/telegram/commands/selfUpdate.ts`; controls are General's, writes go to `settings.json` only.
 
 Verified by hand with a real `opencode serve` spawned the way the supervisor spawns it (a direct child with piped stdio) and then
