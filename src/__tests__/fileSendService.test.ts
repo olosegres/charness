@@ -82,19 +82,29 @@ const singleGatewayMessageIds: Record<TelegramSingleFileSendMethod, number> = {
 const albumMessageIds = [201, 202];
 const fifoSnapshotChildTimeoutMs = 5_000;
 const linuxTest = process.platform === 'linux' ? test : test.skip;
+const isWindows = process.platform === 'win32';
 
 /**
- * Both open strategies run on Linux: the descriptor walk is the platform's own, the verified path (the Windows / macOS
- * strategy) is forced. Each must hold the same contract — the portable path is exercised here, on the CI host.
+ * The open strategies, each registered where it can run: the descriptor walk needs Linux's `/proc/self/fd`; the verified
+ * path — the Windows / macOS strategy — runs on EVERY platform, so the Windows and macOS CI jobs
+ * (`.github/workflows/file-send-cross-platform.yml`) exercise it where it ships, and Linux checks it against the same
+ * contract.
  */
 const fileSendOpenStrategies: readonly FileSendOpenStrategy[] = ['descriptorWalk', 'verifiedPath'];
+/** Registers a named test; a skipped variant registers it as skipped. */
+type RegisterTest = (name: string, body: () => void | Promise<void>) => unknown;
+const strategyTests: Record<FileSendOpenStrategy, RegisterTest> = { descriptorWalk: linuxTest, verifiedPath: test };
 /** The strategy `createService` builds with while a {@link sharedTest} runs (the tests of one file run one at a time). */
 let serviceOpenStrategy: FileSendOpenStrategy = getFileSendOpenStrategy(process.platform);
 
-/** Register a test once per open strategy. */
-function sharedTest(name: string, body: () => Promise<void>): void {
+/**
+ * Register a test once per open strategy, each where it can run. `windowsIncompatibility` names why a test cannot run
+ * on Windows at all (a file name Windows forbids): it is skipped there, with that reason.
+ */
+function sharedTest(name: string, body: () => Promise<void>, windowsIncompatibility?: string): void {
   for (const strategy of fileSendOpenStrategies) {
-    linuxTest(`[${strategy}] ${name}`, async () => {
+    const strategyTest = isWindows && windowsIncompatibility !== undefined ? test.skip : strategyTests[strategy];
+    strategyTest(`[${strategy}] ${name}${isWindows && windowsIncompatibility !== undefined ? ` (skipped on Windows: ${windowsIncompatibility})` : ''}`, async () => {
       serviceOpenStrategy = strategy;
       try {
         await body();
@@ -103,6 +113,17 @@ function sharedTest(name: string, body: () => Promise<void>): void {
       }
     });
   }
+}
+
+/** A directory link a path swap uses: a symlink on POSIX, a junction on Windows (no privilege needed). */
+function linkDirectory(targetDir: string, linkPath: string): void {
+  fs.symlinkSync(targetDir, linkPath, isWindows ? 'junction' : 'dir');
+}
+
+/** Remove a {@link linkDirectory} link, never its target. */
+function removeDirectoryLink(linkPath: string): void {
+  if (isWindows) fs.rmdirSync(linkPath);
+  else fs.unlinkSync(linkPath);
 }
 
 /** The root descriptor of a descriptor-walk root (the tests that watch it run that strategy only). */
@@ -890,7 +911,7 @@ sharedTest('createSendFilesToThread sanitizes unsafe multipart filename characte
   } finally {
     fixture.cleanup();
   }
-});
+}, 'Windows forbids control characters, quotes and backslashes in a file name');
 
 test('the descriptor walk is Linux\'s strategy; Windows and macOS send through the verified path', () => {
   assert.equal(getFileDescriptorPathRoot('linux'), '/proc/self/fd');
@@ -1134,7 +1155,7 @@ sharedTest('createSendFilesToThread refuses a nested parent swapped to an outsid
     const sendFilesToThread = createService(fixture.workDir, recorder, {
       readFileSnapshot: (canonicalPath, expectedIdentity, pinnedRoot) => {
         fs.renameSync(nestedDir, validatedNestedDir);
-        fs.symlinkSync(outsideDir, nestedDir, 'dir');
+        linkDirectory(outsideDir, nestedDir);
         didSwapParent = true;
         return readTelegramFileSnapshot(canonicalPath, expectedIdentity, pinnedRoot);
       },
@@ -1173,7 +1194,7 @@ sharedTest('createSendFilesToThread refuses a nested parent swapped between cano
     (target: fs.PathLike, options: { bigint: true }) => {
       if (!didSwapParent && target === nestedPayloadPath) {
         fs.renameSync(nestedDir, validatedNestedDir);
-        fs.symlinkSync(outsideDir, nestedDir, 'dir');
+        linkDirectory(outsideDir, nestedDir);
         didSwapParent = true;
       }
       return originalStatSync(target, options);
@@ -1240,7 +1261,7 @@ sharedTest('createSendFilesToThread refuses a path that resolves outside the bou
   const outsideDir = path.join(fixture.tempRoot, 'outside');
   fs.mkdirSync(outsideDir);
   fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside-secret-bytes');
-  fs.symlinkSync(outsideDir, path.join(fixture.workDir, 'link-out'), 'dir');
+  linkDirectory(outsideDir, path.join(fixture.workDir, 'link-out'));
   try {
     const sendFilesToThread = createService(fixture.workDir, recorder);
     for (const rawPath of ['../outside/secret.txt', 'link-out/secret.txt', path.join(outsideDir, 'secret.txt')]) {
@@ -1254,7 +1275,7 @@ sharedTest('createSendFilesToThread refuses a path that resolves outside the bou
   }
 });
 
-linuxTest('[verifiedPath] refuses an opened file the path no longer resolves to: a parent swapped back after the open', async () => {
+test('[verifiedPath] refuses an opened file the path no longer resolves to: a parent swapped back after the open', async () => {
   // The identity check alone holds the opened object to the validated one; the second resolve holds it to the PATH
   // inside the root. Here the parent points outside while the identity is captured and the file opened (so both agree
   // on the outside file), and is swapped back before the second resolve: only that resolve sees the difference.
@@ -1276,11 +1297,11 @@ linuxTest('[verifiedPath] refuses an opened file the path no longer resolves to:
   const swapParentOut = (): void => {
     hasSwappedOut = true;
     fs.renameSync(nestedDir, validatedNestedDir);
-    fs.symlinkSync(outsideDir, nestedDir, 'dir');
+    linkDirectory(outsideDir, nestedDir);
     isParentOutside = true;
   };
   const swapParentBack = (): void => {
-    fs.rmSync(nestedDir);
+    removeDirectoryLink(nestedDir);
     fs.renameSync(validatedNestedDir, nestedDir);
     isParentOutside = false;
   };
@@ -1309,7 +1330,7 @@ linuxTest('[verifiedPath] refuses an opened file the path no longer resolves to:
   }
 });
 
-for (const strategy of fileSendOpenStrategies) linuxTest(`[${strategy}] readTelegramFileSnapshot refuses a path outside its root, whatever identity it is handed`, () => {
+for (const strategy of fileSendOpenStrategies) strategyTests[strategy](`[${strategy}] readTelegramFileSnapshot refuses a path outside its root, whatever identity it is handed`, () => {
   const fixture = createTempFileSendFixture();
   const outsidePath = path.join(fixture.tempRoot, 'outside.txt');
   fs.writeFileSync(outsidePath, 'outside-secret-bytes');

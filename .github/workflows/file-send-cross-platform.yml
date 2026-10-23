@@ -1,0 +1,37 @@
+name: File send and PATH lookup on Windows and macOS
+
+# The agent's file sending opens files by the portable `verifiedPath` strategy on Windows and macOS, and the installed-CLI
+# check reads PATH (with PATHEXT on Windows) itself. Both differ from Linux exactly where Node's file system does
+# (realpath, junctions, inode values, PATHEXT), so their suites run on those systems here. The Linux run is the main
+# test suite.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  file-send:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      # Native builds (node-pty) are not needed by these suites.
+      - run: yarn install --immutable --mode=skip-build
+      - run: >-
+          node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=120000
+          src/__tests__/fileSendService.test.ts
+          src/__tests__/fileSendTelegram.test.ts
+          src/__tests__/findToolOnPath.test.ts
+          src/__tests__/launchToolCommand.test.ts

@@ -33,7 +33,10 @@ function writeFile(directory: string, name: string, mode: number): string {
   return filePath;
 }
 
-test('POSIX: the first executable of that name on PATH; a non-executable one or a directory does not count', () => {
+// The executable bit is a POSIX file-system property: on Windows every file passes `X_OK`, so the POSIX case runs elsewhere.
+const posixHostTest = process.platform === 'win32' ? test.skip : test;
+
+posixHostTest('POSIX: the first executable of that name on PATH; a non-executable one or a directory does not count', () => {
   writeFile(firstDir, 'posix-tool', plainMode);
   const executable = writeFile(secondDir, 'posix-tool', executableMode);
   fs.mkdirSync(path.join(firstDir, 'dir-tool'));
