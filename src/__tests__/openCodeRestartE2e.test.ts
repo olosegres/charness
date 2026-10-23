@@ -10,10 +10,13 @@
  *     `~/.npm-global/bin`, spawns `opencode serve` (the fake), and the server is up again
  *   → while the bot retries, topic A sends a message: it is held, not posted to the dead server
  *   → the agreed outcome: topic A sees NOTHING (no error, no "restarting", no "restored"), its held message reaches
- *     the SAME session once the server is back; topic B sees exactly one line — its in-flight reply was lost.
+ *     the SAME session once the server is back; topic B sees exactly one line — its in-flight reply was lost
+ *   → the server goes down again and the binary can NOT be installed (every npm call fails): after the retries each
+ *     topic gets exactly one short localized line — never the raw error — and once the install works again, the
+ *     next message brings the server back up and reaches the same session.
  *
- * What the unit tests cover instead (`openCodeCrashResume.test.ts`): every attempt failing (one localized line), a
- * session gone on the new server, the forced restart of a credential reload, start/resume through the same retries.
+ * What the unit tests cover instead (`openCodeCrashResume.test.ts`): a session gone on the new server, the forced
+ * restart of a credential reload, start/resume through the same retries.
  *
  * Nothing leaves the machine: the Bot API and the OpenCode server are on loopback, `npm` is a fake. Everything the
  * test starts is stopped in `after`.
@@ -61,6 +64,9 @@ const inFlightPromptLabel = 'RST-B';
 
 const replyTimeoutMs = 20 * 1000;
 const restartTimeoutMs = 60 * 1000;
+/** The retries' 60 s budget, plus the attempts that wait out a spawn and the install calls. */
+const allAttemptsFailTimeoutMs = 3 * 60 * 1000;
+const afterFailurePromptLabel = 'RST-C';
 /** The log line of a failed attempt to bring the server up (`openCodeAdapter.ts`). */
 const failedAttemptLogLine = 'Attempt 1 to bring the server up failed';
 
@@ -74,6 +80,8 @@ let busyDriver: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let servePidFile = '';
 let npmCallLogFile = '';
+/** While it exists the fake npm cannot install opencode. */
+let npmFailFile = '';
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -133,6 +141,7 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
 
     servePidFile = path.join(layout.fakeLogDir, 'opencode-serve.pids');
     npmCallLogFile = path.join(layout.fakeLogDir, 'npm-calls.log');
+    npmFailFile = path.join(layout.fakeStateDir, 'npm-cannot-install');
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: openCodeModels, defaultModel: defaultOpenCodeModel });
     openCodePort = await getFreePort();
     const openCodeUrl = await fakeOpenCode.start(openCodePort);
@@ -141,7 +150,7 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     // What the fake npm installs: the same fake binary, kept outside the PATH.
     const templateDir = path.join(layout.fakeStateDir, 'opencode-package');
     fs.mkdirSync(templateDir, { recursive: true });
-    writeFakeNpm(layout.binDir, { callLogFile: npmCallLogFile, failingCalls: 1, installedBinaryTemplate: writeFakeOpenCodeBinary(templateDir, binaryOptions) });
+    writeFakeNpm(layout.binDir, { callLogFile: npmCallLogFile, failingCalls: 1, installedBinaryTemplate: writeFakeOpenCodeBinary(templateDir, binaryOptions), failWhileFile: npmFailFile });
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
@@ -209,5 +218,31 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     assert.deepEqual(listSentTexts(busyTopic.threadId, callsBefore), [restoredNotice], 'the busy topic hears exactly one line');
     assert.ok(fakeOpenCode.listRequests('GET', `/session/${busySessionId}`).length > 0, 'the busy session was restored by its id');
     assert.equal(fakeOpenCode.sessions.size, 2, 'no session was created anew');
+  });
+
+  it('the server goes down and the binary cannot be installed: one localized line per topic, no raw error; the next message brings it back', async () => {
+    const callsBefore = fakeTelegram.listCalls('sendMessage').length;
+    const idleSessionId = getSessionIdOf(idleTopic.folder);
+    const unavailableNotice = runWithLocale(defaultLocale, () => t('agent.serverUnavailableNotice', { label: 'OpenCode' }));
+    fs.writeFileSync(npmFailFile, '');
+    fs.rmSync(path.join(getLayout().instanceHome, '.npm-global', 'bin', 'opencode'), { force: true });
+    await fakeOpenCode.stop();
+
+    await getCharness().waitFor('every attempt to have failed', allAttemptsFailTimeoutMs, () => getCharness().output.includes('The server could not be brought up after'));
+    await getCharness().waitFor('the notice in both topics', replyTimeoutMs, () => listSentTexts(idleTopic.threadId, callsBefore).length > 0 && listSentTexts(busyTopic.threadId, callsBefore).length > 0);
+    assert.deepEqual(listSentTexts(idleTopic.threadId, callsBefore), [unavailableNotice], 'exactly the localized line');
+    assert.deepEqual(listSentTexts(busyTopic.threadId, callsBefore), [unavailableNotice], 'exactly the localized line');
+    for (const text of [...listSentTexts(idleTopic.threadId, callsBefore), ...listSentTexts(busyTopic.threadId, callsBefore)]) {
+      assert.doesNotMatch(text, /ENOENT|spawn|npm ERR|E404/, 'the raw error stays in the log');
+    }
+
+    // The install works again: the next message resumes the conversation and brings the server up.
+    fs.rmSync(npmFailFile);
+    const servesBefore = listServePids().length;
+    fakeTelegram.pushOperatorMessage(idleTopic.threadId, `${afterFailurePromptLabel} the server is back?`);
+    await getCharness().waitFor('a new `opencode serve`', restartTimeoutMs, () => listServePids().length > servesBefore);
+    await fakeOpenCode.start(openCodePort);
+    await getCharness().waitFor('the message to reach the SAME session', restartTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes(afterFailurePromptLabel)));
+    assert.equal(fakeOpenCode.prompts.find((prompt) => prompt.text.includes(afterFailurePromptLabel))?.sessionId, idleSessionId, 'the conversation is intact, not a fresh one');
   });
 });

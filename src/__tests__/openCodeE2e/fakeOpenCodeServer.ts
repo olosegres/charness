@@ -325,6 +325,8 @@ export interface FakeNpmOptions {
   failingCalls: number;
   /** The executable a successful install puts in `$NPM_CONFIG_PREFIX/bin/opencode`, as real npm would. */
   installedBinaryTemplate: string;
+  /** While this file exists every install call fails, whatever {@link failingCalls} says (an install that cannot succeed). */
+  failWhileFile?: string;
 }
 
 /**
@@ -337,6 +339,7 @@ export function writeFakeNpm(binDir: string, options: FakeNpmOptions): string {
   fs.writeFileSync(npmPath, [
     '#!/bin/sh',
     `echo "$*" >> '${options.callLogFile}'`,
+    ...(options.failWhileFile ? [`if [ -e '${options.failWhileFile}' ]; then echo 'npm ERR! code E404 (fake: the package cannot be installed)' >&2; exit 1; fi`] : []),
     `calls=$(wc -l < '${options.callLogFile}')`,
     `if [ "$calls" -le ${options.failingCalls} ]; then echo 'npm ERR! code ENOTEMPTY (fake: another install is running)' >&2; exit 1; fi`,
     'mkdir -p "$NPM_CONFIG_PREFIX/bin"',
