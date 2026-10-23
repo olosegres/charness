@@ -88,6 +88,8 @@ export interface ApiRetryKickDeps {
   resumeOnRung?: (key: SessionKey, rung: FallbackChainEntry) => Promise<boolean>;
   /** Drop the retry's saved twin (`state.json`). */
   clearSavedRetry: (key: SessionKey) => void;
+  /** Save when a limit probe ({@link ApiRetryTimerEntry.isLimitProbe}) fired: its saved twin goes, the memory must not. */
+  saveFiredLimitProbe: (key: SessionKey, firedAt: number) => void;
 }
 
 /**
@@ -118,7 +120,8 @@ export interface ApiRetryKickDeps {
  * newer entry and its own saved record) or a cancel / give-up (entry gone, record
  * already cleared) must not be undone by an older kick. The in-memory entry itself is
  * intentionally KEPT after firing (timer nulled, `firedAt` stamped): a recurrence
- * within the grace window re-arms at attempt+1 — that memory is not persisted.
+ * within the grace window re-arms at attempt+1 — that memory is not persisted, except
+ * for a limit probe's, which decides whether its limit is confirmed.
  */
 export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): Promise<void> {
   const k = keyToString(key);
@@ -128,6 +131,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
   deps.kicksInFlight.add(k);
   entry.timer = null;
   entry.firedAt = deps.now();
+  // The same error on the probe's resume confirms the limit — across a restart too (`restoreFiredLimitProbes`).
+  if (entry.isLimitProbe) deps.saveFiredLimitProbe(key, entry.firedAt);
 
   const clearSavedRetryIfLive = (): void => {
     if (deps.entries.get(k) === entry) deps.clearSavedRetry(key);
@@ -239,6 +244,48 @@ export function restoreApiRetryTimers(deps: ApiRetryRestoreDeps, records: Readon
       ...(record.resumeOn ? readResumeOn(record.resumeOn) : {}),
       ...(record.isLimitProbe === true ? { isLimitProbe: true } : {}),
     });
+    restored += 1;
+  }
+  return restored;
+}
+
+/**
+ * @name FiredLimitProbeRestoreDeps
+ * @description The ports of {@link restoreFiredLimitProbes}: the bot's retry map, a clock, the served-platform filter,
+ * and how a saved fire time that is no use any more is dropped.
+ */
+export interface FiredLimitProbeRestoreDeps {
+  entries: Map<string, ApiRetryTimerEntry>;
+  now: () => number;
+  isServed: (key: SessionKey) => boolean;
+  dropRecord: (key: SessionKey) => void;
+}
+
+/**
+ * @description Put back the memory of limit probes that fired shortly before this boot ({@link runApiRetryKick} saves
+ * it): an in-memory entry with no timer, as the kick leaves it, so the same error on the probe's resume — read by this
+ * bot — confirms the limit instead of being probed again. Only a probe that fired within `graceMs` (the window in which
+ * a repeat counts) comes back; an older one, or a malformed one, is dropped. A thread that already has an entry keeps
+ * it. Runs BEFORE the sessions reattach: an adopted session replays the error it wrote while the bot was down. Returns
+ * how many came back.
+ */
+export function restoreFiredLimitProbes(deps: FiredLimitProbeRestoreDeps, records: Readonly<Record<string, number>>, graceMs: number): number {
+  let restored = 0;
+  for (const [keyStr, firedAt] of Object.entries(records)) {
+    let key: SessionKey;
+    try {
+      key = keyFromString(keyStr);
+    } catch {
+      continue;
+    }
+    if (!deps.isServed(key)) continue;
+    const isRecent = Number.isFinite(firedAt) && firedAt <= deps.now() && deps.now() - firedAt <= graceMs;
+    if (!isRecent) {
+      deps.dropRecord(key);
+      continue;
+    }
+    if (deps.entries.has(keyStr)) continue;
+    deps.entries.set(keyStr, { timer: null, attempt: 1, kind: 'transient', firedAt, fireAt: firedAt, isLimitProbe: true });
     restored += 1;
   }
   return restored;

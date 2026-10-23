@@ -527,6 +527,13 @@ export interface StateV1 {
    */
   apiRetries?: Record<string, ApiRetryState>;
   /**
+   * When the probe retry of an UNCONFIRMED usage limit last FIRED, per {@link SessionKey} string (epoch ms). Its record
+   * leaves `apiRetries` as it fires (a record means ARMED), but the same error on the probe's resume confirms the
+   * limit — and a restart in between used to forget the probe and probe again. Boot puts a recent one back into the
+   * bot's retry map; arming another retry or cancelling drops it. Optional — absent when empty.
+   */
+  limitProbesFired?: Record<string, number>;
+  /**
    * Prompts held during an armed usage-limit wait (Jira plan R23), keyed by
    * {@link SessionKey} string, oldest first. Kept apart from `apiRetries`: the
    * wait can end without its resume (the operator writes, skips or disables it,
@@ -618,7 +625,7 @@ const schedulerMcpSecretByteLength = 32;
  * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
  * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
  */
-type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'openRequests';
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'openRequests';
 
 /**
  * @description Promise-chain per-key lock. The map holds the tail of each
@@ -2522,6 +2529,26 @@ export class StateStore {
         delete this.state.apiRetries;
       }
       this.scheduleSave();
+    });
+  }
+
+  /** @description Every saved fire time of a limit probe ({@link StateV1.limitProbesFired}); a copy. */
+  getLimitProbesFired(): Record<string, number> {
+    return { ...(this.state.limitProbesFired ?? {}) };
+  }
+
+  /** @description Record that `key`'s limit probe fired at `firedAt`. Debounced, like the retry record it follows. */
+  async setLimitProbeFired(key: SessionKey, firedAt: number): Promise<void> {
+    await this.withLock(key, async () => {
+      (this.state.limitProbesFired ??= {})[keyToString(key)] = firedAt;
+      this.scheduleSave();
+    });
+  }
+
+  /** @description Drop `key`'s fired limit probe (and the map once empty). No-op (no save) when absent. */
+  async clearLimitProbeFired(key: SessionKey): Promise<void> {
+    await this.withLock(key, async () => {
+      if (this.dropOptionalMapEntry('limitProbesFired', keyToString(key))) this.scheduleSave();
     });
   }
 

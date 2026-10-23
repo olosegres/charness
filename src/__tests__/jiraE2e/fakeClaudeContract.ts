@@ -80,6 +80,12 @@ export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
  */
 export const fakeClaudeApiErrorOnceFileName = 'api-error-once';
 /**
+ * A file in the fake's state dir whose content is how many milliseconds that {@link fakeClaudeApiErrorOnceFileName} turn
+ * works before it ends on its error — long enough for a test to restart the bot in between (the turn was taken in by
+ * one bot, its error is read by the next).
+ */
+export const fakeClaudeApiErrorDelayFileName = 'api-error-delay-ms';
+/**
  * The question the fake's `ask` mode puts to the user (an `AskUserQuestion`, the real CLI's tool): one short option,
  * one whose label is longer than a Telegram toast holds (200 characters).
  */

@@ -166,7 +166,7 @@ import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { deliverPromptOrBuffer as deliverPromptWithDeps, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
-import { restoreApiRetryTimers, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
+import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { JiraConnector } from './connectors/jira/connector';
 import {
@@ -1564,6 +1564,10 @@ const apiRetryTimers = new Map<string, ApiRetryTimerEntry>();
 function clearSavedApiRetry(key: SessionKey): void {
   void state.clearApiRetry(key).catch(e => console.error('[apiRetry] clear failed:', e));
 }
+/** Drop the saved fire time of `key`'s limit probe: a retry armed, cancelled or given up after it ends what it decided. */
+function clearSavedFiredLimitProbe(key: SessionKey): void {
+  void state.clearLimitProbeFired(key).catch(e => console.error('[apiRetry] fired-probe clear failed:', e));
+}
 /**
  * Threads whose retry timer FIRED and whose "continue" nudge is not forwarded
  * yet ({@link fireApiRetry}). The retry is no longer armed then, but the idle
@@ -1693,6 +1697,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     void replyToThread(key, t('apiRetry.giveUp', { attempts: action.attempts }));
     clearSavedApiRetry(key);
     apiRetryTimers.delete(k);
+    clearSavedFiredLimitProbe(key);
     // Nothing resumes this limit any more: a reminder would hit it and arm a fresh episode, endlessly.
     if (cls.kind === 'usageLimit') {
       void requestWakeUpEngine?.stopWakingForLimitWait(key);
@@ -1761,6 +1766,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   void state
     .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}) })
     .catch(e => console.error('[apiRetry] persist failed:', e));
+  clearSavedFiredLimitProbe(key);
 
   const timer = setTimeout(() => {
     void fireApiRetry(key);
@@ -1902,6 +1908,9 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
     return outcome.isSwitched;
   },
   clearSavedRetry: clearSavedApiRetry,
+  saveFiredLimitProbe: (key, firedAt) => {
+    void state.setLimitProbeFired(key, firedAt).catch(e => console.error('[apiRetry] fired-probe persist failed:', e));
+  },
 };
 
 /**
@@ -2078,6 +2087,7 @@ function cancelApiRetry(key: SessionKey): void {
   // wait — or go to the next session on their own (`limitHeldPrompts`).
   apiRetryTimers.delete(k);
   clearSavedApiRetry(key);
+  clearSavedFiredLimitProbe(key);
   // The limit episode is over for this thread → retire its two one-shot markers.
   // Unlike the logged-out notice below, BOTH are safe to drop here: the pinned
   // "work resumed" message announces a PAST event (nothing re-posts it), and the
@@ -11876,6 +11886,25 @@ function restorePendingQuestions(): void {
  * dropped (Jira plan J3b, R10): its kick would start that conversation's session
  * here, under this instance's environment and tmux server.
  */
+/**
+ * @description Put back the limit probes that fired shortly before this boot (`restoreFiredLimitProbes`,
+ * `apiRetryKick.ts`), so the same error on a probe's resume confirms its limit even when this bot reads it. MUST run
+ * BEFORE {@link reattachExistingSessions}: an adopted json-stream session replays the error it wrote meanwhile.
+ */
+function restoreFiredLimitProbesAtBoot(): void {
+  const restored = restoreFiredLimitProbes(
+    {
+      entries: apiRetryTimers,
+      now: () => Date.now(),
+      isServed: (key) => checkIsServedConversation(key, ENV.servedPlatforms),
+      dropRecord: clearSavedFiredLimitProbe,
+    },
+    state.getLimitProbesFired(),
+    retryRecurrenceGraceMs,
+  );
+  console.log(`[reattach] fired limit probes: restored ${restored}`);
+}
+
 function restoreApiRetries(): void {
   const restored = restoreApiRetryTimers(
     {
@@ -12992,7 +13021,10 @@ export async function startBot(): Promise<void> {
     // A successful re-adopt is silent; `quietReattach` only suppresses the
     // reattach ERROR notice (workDir vanished) during a hot reload, surfaced on
     // a real cold start.
-    reattachSessions: () => reattachExistingSessions({ quietReattach: bootMode.isHotReload }),
+    reattachSessions: () => {
+      restoreFiredLimitProbesAtBoot();
+      return reattachExistingSessions({ quietReattach: bootMode.isHotReload });
+    },
     restoreAfterReattach: () => {
       // Re-arm pending interactive questions that survived the restart, so the
       // existing option buttons keep working. A question is restored only for a

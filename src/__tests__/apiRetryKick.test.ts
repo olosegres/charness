@@ -33,6 +33,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   apiRetryCatchUpDelayMs,
   restoreApiRetryTimers,
+  restoreFiredLimitProbes,
   runApiRetryKick,
   type ApiRetryEnsureOutcome,
   type ApiRetryKickDeps,
@@ -74,6 +75,8 @@ interface World {
   /** The rungs the kick moved a topic onto (`resumeOnRung`), and whether that switch took (it ends the retry itself). */
   resumes: Array<{ key: string; rung: FallbackChainEntry }>;
   resumeResult: boolean;
+  /** The saved fire times of limit probes (`state.json` `limitProbesFired`) — survive a "restart". */
+  firedProbes: Record<string, number>;
 }
 
 let world: World;
@@ -123,6 +126,7 @@ function createKickDeps(): ApiRetryKickDeps {
       world.clears.push(keyToString(key));
       delete world.saved[keyToString(key)];
     },
+    saveFiredLimitProbe: (key, firedAt) => { world.firedProbes[keyToString(key)] = firedAt; },
   };
 }
 
@@ -176,6 +180,7 @@ beforeEach(() => {
     kicks: [],
     resumes: [],
     resumeResult: true,
+    firedProbes: {},
   };
 });
 
@@ -491,6 +496,64 @@ describe('restoring the saved retries at boot', () => {
   });
 });
 
+describe('a limit probe that fired is remembered across a restart', () => {
+  const graceMs = 2 * 60_000;
+  /** What the bot does at boot BEFORE the sessions reattach: put back the probes that fired just before it. */
+  function restoreFiredProbes(options: { isServed?: (key: SessionKey) => boolean } = {}): { restored: number; dropped: string[] } {
+    world.entries = new Map();
+    const dropped: string[] = [];
+    const restored = restoreFiredLimitProbes(
+      { entries: world.entries, now: () => clockMs, isServed: options.isServed ?? (() => true), dropRecord: (key) => { dropped.push(keyToString(key)); } },
+      { ...world.firedProbes },
+      graceMs,
+    );
+    return { restored, dropped };
+  }
+
+  it('the kick of a probe saves when it fired; the kick of any other retry saves nothing', async () => {
+    saveRetry(topicKey, { kind: 'transient', isLimitProbe: true });
+    saveRetry(otherTopicKey, { kind: 'transient' });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.firedProbes, { [keyToString(topicKey)]: clockMs });
+    assert.deepEqual(world.saved, {}, 'the saved record still goes: it means armed');
+  });
+
+  it('a probe that fired within the grace window comes back as the kick left it: fired, no timer, still a probe', () => {
+    world.firedProbes[keyToString(topicKey)] = clockMs - graceMs;
+    assert.deepEqual(restoreFiredProbes(), { restored: 1, dropped: [] });
+    assert.deepEqual(world.entries.get(keyToString(topicKey)), { timer: null, attempt: 1, kind: 'transient', firedAt: clockMs - graceMs, fireAt: clockMs - graceMs, isLimitProbe: true });
+  });
+
+  it('an older one, a future one or a malformed one is dropped, not restored', () => {
+    world.firedProbes[keyToString(topicKey)] = clockMs - graceMs - 1;
+    world.firedProbes[keyToString(otherTopicKey)] = clockMs + 1;
+    world.firedProbes[keyToString(issueKey)] = Number.NaN;
+    const { restored, dropped } = restoreFiredProbes();
+    assert.equal(restored, 0);
+    assert.deepEqual(dropped.sort(), [keyToString(topicKey), keyToString(otherTopicKey), keyToString(issueKey)].sort());
+    assert.equal(world.entries.size, 0);
+  });
+
+  it('a thread with an entry already keeps it; another platform\'s probe is neither restored nor dropped; a corrupt key is skipped', () => {
+    world.firedProbes = { [keyToString(topicKey)]: clockMs, [keyToString(otherTopicKey)]: clockMs, [keyToString(issueKey)]: clockMs, 'not a key': clockMs };
+    world.entries = new Map();
+    const existing: ApiRetryTimerEntry = { timer: null, attempt: 2, kind: 'usageLimit', firedAt: null, fireAt: clockMs };
+    world.entries.set(keyToString(otherTopicKey), existing);
+    const dropped: string[] = [];
+    const restored = restoreFiredLimitProbes(
+      { entries: world.entries, now: () => clockMs, isServed: (key) => key.platform === 'telegram', dropRecord: (key) => { dropped.push(keyToString(key)); } },
+      { ...world.firedProbes },
+      graceMs,
+    );
+    assert.equal(restored, 1);
+    assert.equal(world.entries.get(keyToString(topicKey))?.isLimitProbe, true);
+    assert.equal(world.entries.get(keyToString(otherTopicKey)), existing, 'not overwritten');
+    assert.equal(world.entries.has(keyToString(issueKey)), false);
+    assert.deepEqual(dropped, []);
+  });
+});
+
 describe('the bot wires the kick and the restore, and keeps the saved record meaning "armed"', () => {
   const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
   const kickSource = fs.readFileSync(path.join(__dirname, '..', 'apiRetryKick.ts'), 'utf8');
@@ -580,6 +643,16 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     // Two writers: the arm, and the re-target of a wait onto the rung that resets first (which keeps the target in the record).
     assert.equal(botSource.match(/state\s*\.setApiRetry\(/g)?.length, 2, 'the saves of the saved record');
     assert.ok(/function retargetLimitWait\([\s\S]*?\.setApiRetry\(key, \{[^}]*resumeOn: earliest\.entry/.test(botSource), 'the re-target persists the target rung');
+  });
+
+  it('a fired probe is saved by the kick, put back BEFORE the sessions reattach, and dropped by whatever ends what it decided', () => {
+    assert.ok(kickPorts.includes('saveFiredLimitProbe: (key, firedAt) => {\n    void state.setLimitProbeFired(key, firedAt)'), 'the kick\'s port saves it');
+    const restore = getFunction('function restoreFiredLimitProbesAtBoot(');
+    assert.ok(restore.includes('entries: apiRetryTimers,') && restore.includes('state.getLimitProbesFired(),') && restore.includes('retryRecurrenceGraceMs,'));
+    assert.match(botSource, /reattachSessions: \(\) => \{\n\s*restoreFiredLimitProbesAtBoot\(\);\n\s*return reattachExistingSessions\(/, 'before the reattach replays an adopted session\'s error');
+    assert.ok(getFunction('function armApiRetryTimer(').includes('clearSavedFiredLimitProbe(key);'), 'a newer retry ends it');
+    assert.ok(getFunction('function cancelApiRetry(').includes('clearSavedFiredLimitProbe(key);'), 'a cancel ends it');
+    assert.ok(getFunction('function handleApiError(').includes('apiRetryTimers.delete(k);\n    clearSavedFiredLimitProbe(key);'), 'a give-up ends it');
   });
 
   it('the boot restore re-arms what the state file holds, on the same map, and a due timer runs the kick', () => {

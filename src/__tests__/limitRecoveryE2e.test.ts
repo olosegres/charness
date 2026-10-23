@@ -27,7 +27,9 @@
  *   → the same with that 100 % window's reset already past: an out-of-date reading proves nothing — the probe first
  *   → and with a 100 % window still ahead but the snapshot stale (the refresher could not re-read it): the probe too
  *   → a restart while that probe is armed: the probe it re-arms is still one, so the same error on its resume
- *     confirms the limit (the wait), instead of a second probe.
+ *     confirms the limit (the wait), instead of a second probe
+ *   → a restart AFTER the probe fired, while its resume turn still works: the error that turn ends on reaches the next
+ *     bot, and it confirms the limit too — the fired probe used to live only in memory, so it was probed again.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -59,7 +61,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
-import { fakeClaudeAlwaysUsageLimitFileName, fakeClaudeApiErrorOnceFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeAlwaysUsageLimitFileName, fakeClaudeApiErrorDelayFileName, fakeClaudeApiErrorOnceFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
@@ -78,6 +80,8 @@ const agentStartTimeoutMs = 60 * 1000;
 const giveUpTimeoutMs = 3 * 60 * 1000;
 /** The probe's two minutes, the restart and the resume's round trip. */
 const probeResumeTimeoutMs = 4 * 60 * 1000;
+/** How long the probe's resume turn works before its error: past the restart the step makes in between, within the 2-minute grace. */
+const resumeTurnErrorDelayMs = 45 * 1000;
 const msPerMinute = 60 * 1000;
 /** How long before the restart the window reset, and how long before that the error was written. */
 const resetAgoMs = 30 * msPerMinute;
@@ -414,5 +418,36 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     await getCharness().waitFor('the limit notice after the restored probe\'s resume', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
     assert.equal(fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')), false, 'no second probe');
+  });
+
+  it('a restart AFTER the probe fired, while its resume turn works: the error it ends on confirms the limit — no second probe', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const unconfirmedError = "API Error: 429 This request would exceed your account's rate limit. Please try again later.";
+    const callsBefore = fakeTelegram.listCalls('sendMessage').length;
+    // The probe's "continue" turn takes the wording again, and only after the restart below.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), unconfirmedError);
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), resumeTurnErrorDelayMs.toString());
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      // The wait the step before confirmed is gone, and so is the account's limit mark: the boot recovery hands its
+      // parked error — the unconfirmed wording — to the probe again.
+      delete persisted.apiRetries?.[key];
+      const { limitedUntil: _confirmedMark, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, default: defaultProfile };
+    });
+    const listProbeNotices = (fromCall: number): string[] => fakeTelegram.listCalls('sendMessage').slice(fromCall)
+      .map((call) => (typeof call.payload.text === 'string' ? call.payload.text : ''))
+      .filter((text) => text.includes('auto-retrying in 2 min'));
+    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => listProbeNotices(callsBefore).length > 0);
+    const turnsBefore = getAllAgentTurns(getLayout()).length;
+    await getCharness().waitFor('the probe to fire and its resume turn to start', probeResumeTimeoutMs, () => getAllAgentTurns(getLayout()).length > turnsBefore);
+    await getCharness().waitFor('the fired probe\'s record to leave the state file', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[key] === undefined);
+
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const callsBeforeRestart = fakeTelegram.listCalls('sendMessage').length;
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    await getCharness().waitFor('the resume turn\'s error to be decided', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore || listProbeNotices(callsBeforeRestart).length > 0);
+    fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), { force: true });
+    assert.deepEqual(listProbeNotices(callsBeforeRestart), [], 'no second probe');
+    assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
   });
 });

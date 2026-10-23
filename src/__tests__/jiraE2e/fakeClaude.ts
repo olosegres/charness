@@ -17,6 +17,7 @@ import {
   fakeAskToolName,
   fakeClaudeCrashOnPromptFileName,
   fakeClaudeAlwaysUsageLimitFileName,
+  fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
   fakeClaudePlatformEnvName,
   fakeClaudeVersion,
@@ -105,7 +106,8 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
  *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
- *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells);
+ *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells, after the delay in
+ *    `fakeClaudeApiErrorDelayFileName` while that exists);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -481,6 +483,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const errorText = fs.readFileSync(apiErrorOncePath, 'utf8').trim();
     fs.rmSync(apiErrorOncePath, { force: true });
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    const apiErrorDelayPath = path.join(getStateDir(), fakeClaudeApiErrorDelayFileName);
+    if (fs.existsSync(apiErrorDelayPath)) await new Promise((resolve) => setTimeout(resolve, Number(fs.readFileSync(apiErrorDelayPath, 'utf8').trim())));
     writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage });
     return;
   }
