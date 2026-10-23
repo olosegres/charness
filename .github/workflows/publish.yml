@@ -31,4 +31,9 @@ jobs:
       - run: yarn test
       # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.
       - run: npm install -g 'npm@^11.5.1'
+      # npm >= 11.10 silently drops a `bin` entry written as "./dist/…" at publish (3.3.0 shipped with no
+      # `charness` command). Refuse to publish when a dry run reports anything dropped from package.json.
+      - run: |
+          npm publish --dry-run --ignore-scripts 2>&1 | tee publish-dry-run.log
+          ! grep -q 'was invalid and removed' publish-dry-run.log
       - run: npm publish --provenance --access public
