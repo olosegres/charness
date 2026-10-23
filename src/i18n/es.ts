@@ -918,6 +918,7 @@ export const esDict: Record<string, string> = {
   'account.login_success_api': '✅ Cuenta de API {name} conectada: {email} — organización de Claude Console {org}. Cada petición se cobra del crédito de API de esa organización.',
   'account.apiKeyNotApiAccount': '🔐 Parecía una clave de Anthropic, así que el mensaje se borró. Este inicio de sesión es para una suscripción de Claude; para usar una clave de API, añade una cuenta de API: /accounts add <nombre> api.',
   'account.apiKeyInvalidShape': '🔐 Borrado: no es una clave de API de Claude (empieza por sk-ant-api…). Pega el código de la página de inicio de sesión o una clave de API.',
+  'account.apiKeyAsName': '🔐 Parecía una clave de Anthropic, así que el mensaje se borró. Envía primero un nombre para la cuenta — minúsculas, dígitos, - y _, hasta {max} caracteres; pega la clave cuando llegue su enlace de inicio de sesión.',
   'account.apiKeyRejected': '❌ La API rechazó esa clave (revocada, mal escrita o no es una clave de API), así que no se guardó. Usa /accounts login {name} para reintentar.',
   'account.apiKeySaved': '✅ Clave de API guardada para la cuenta {name} (la API la aceptó). Se guarda en el directorio propio de esa cuenta y solo la usan sus sesiones; cada petición se cobra.',
   'account.apiKeySavedUnverified': '✅ Clave de API guardada para la cuenta {name}, pero no se pudo contactar con la API para comprobarla: lo dirá la primera petición. Solo la usan las sesiones de esa cuenta; cada petición se cobra.',

@@ -918,6 +918,7 @@ export const frDict: Record<string, string> = {
   'account.login_success_api': '✅ Compte API {name} connecté : {email} — organisation Claude Console {org}. Chaque requête est facturée sur les crédits API de cette organisation.',
   'account.apiKeyNotApiAccount': '🔐 Cela ressemblait à une clé Anthropic, le message a donc été supprimé. Cette connexion est pour un abonnement Claude — pour utiliser une clé d\'API, ajoute un compte API : /accounts add <nom> api.',
   'account.apiKeyInvalidShape': '🔐 Supprimé : ce n\'est pas une clé d\'API Claude (elle commence par sk-ant-api…). Colle le code de la page de connexion, ou une clé d\'API.',
+  'account.apiKeyAsName': '🔐 Cela ressemblait à une clé Anthropic, le message a donc été supprimé. Envoie d\'abord un nom pour le compte — minuscules, chiffres, - et _, jusqu\'à {max} caractères ; colle la clé une fois le lien de connexion arrivé.',
   'account.apiKeyRejected': '❌ L\'API a refusé cette clé (révoquée, mal saisie ou pas une clé d\'API) : elle n\'a pas été enregistrée. Lance /accounts login {name} pour réessayer.',
   'account.apiKeySaved': '✅ Clé d\'API enregistrée pour le compte {name} (l\'API l\'a acceptée). Elle est gardée dans le répertoire propre de ce compte et utilisée par ses sessions seulement ; chaque requête est facturée.',
   'account.apiKeySavedUnverified': '✅ Clé d\'API enregistrée pour le compte {name}, mais l\'API était injoignable pour la vérifier — la première requête le dira. Seules les sessions de ce compte l\'utilisent ; chaque requête est facturée.',

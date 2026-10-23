@@ -917,6 +917,7 @@ export const hiDict: Record<string, string> = {
   'account.login_success_api': '✅ API खाता {name} साइन इन हुआ: {email} — Claude Console संगठन {org}। हर अनुरोध उस संगठन के API क्रेडिट से बिल होता है।',
   'account.apiKeyNotApiAccount': '🔐 यह Anthropic कुंजी जैसा दिखा, इसलिए संदेश हटा दिया गया। यह साइन इन Claude सदस्यता के लिए है — API कुंजी के लिए API खाता जोड़ें: /accounts add <name> api।',
   'account.apiKeyInvalidShape': '🔐 हटा दिया गया: यह Claude API कुंजी नहीं है (वह sk-ant-api… से शुरू होती है)। साइन इन पेज का कोड या API कुंजी पेस्ट करें।',
+  'account.apiKeyAsName': '🔐 यह Anthropic कुंजी जैसा लगा, इसलिए संदेश हटा दिया गया। पहले खाते का नाम भेजें — छोटे अक्षर, अंक, - और _, अधिकतम {max} अक्षर; साइन इन लिंक आने पर कुंजी पेस्ट करें।',
   'account.apiKeyRejected': '❌ API ने वह कुंजी अस्वीकार कर दी (रद्द, गलत टाइप, या API कुंजी नहीं), इसलिए वह सहेजी नहीं गई। दोबारा कोशिश के लिए /accounts login {name} चलाएँ।',
   'account.apiKeySaved': '✅ खाते {name} के लिए API कुंजी सहेजी गई (API ने स्वीकार की)। यह उस खाते की अपनी डायरेक्टरी में रहती है और सिर्फ़ उसके सत्र इसका इस्तेमाल करते हैं; हर अनुरोध का बिल बनता है।',
   'account.apiKeySavedUnverified': '✅ खाते {name} के लिए API कुंजी सहेजी गई, पर जाँचने के लिए API तक पहुँच नहीं हुई — पहला अनुरोध बताएगा। सिर्फ़ उस खाते के सत्र इसका इस्तेमाल करते हैं; हर अनुरोध का बिल बनता है।',

@@ -745,6 +745,16 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.runCommand('accounts');
     await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_addapi');
     assert.match(harness.replies.at(-1)?.text ?? '', /Name for the new API account/);
+    // A key pasted where the name was asked is a secret: deleted, never echoed, the name asked again.
+    const pastedKey = `sk-ant-api03-${'n'.repeat(40)}`;
+    const keyMessageId = 9_001;
+    const startedBefore = startedLogins.length;
+    await accounts.submitProfileName(harness.key, pastedKey, keyMessageId);
+    assert.ok(harness.deletedMessageIds.includes(keyMessageId), 'the key message is deleted');
+    assert.match(harness.replies.at(-1)?.text ?? '', /looked like an Anthropic key/);
+    assert.ok(harness.replies.every((reply) => !(reply.text ?? '').includes(pastedKey)), 'the key is never echoed');
+    assert.equal(startedLogins.length, startedBefore, 'no account was created from it');
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true, 'the name is still asked');
     await accounts.submitProfileName(harness.key, 'credits');
     assert.equal(harness.state.getClaudeProfileRecord('credits')?.billing, 'api');
     assert.equal(startedLogins.at(-1)?.profile.billing, 'api');

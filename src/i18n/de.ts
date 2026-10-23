@@ -918,6 +918,7 @@ export const deDict: Record<string, string> = {
   'account.login_success_api': '✅ API-Konto {name} angemeldet: {email} — Claude-Console-Organisation {org}. Jede Anfrage wird über deren API-Guthaben abgerechnet.',
   'account.apiKeyNotApiAccount': '🔐 Das sah nach einem Anthropic-Schlüssel aus, daher wurde die Nachricht gelöscht. Diese Anmeldung ist für ein Claude-Abo — für einen API-Schlüssel lege ein API-Konto an: /accounts add <name> api.',
   'account.apiKeyInvalidShape': '🔐 Gelöscht: Das ist kein Claude-API-Schlüssel (der beginnt mit sk-ant-api…). Füge den Code von der Anmeldeseite oder einen API-Schlüssel ein.',
+  'account.apiKeyAsName': '🔐 Das sah aus wie ein Anthropic-Schlüssel, daher wurde die Nachricht gelöscht. Sende zuerst einen Namen für das Konto — Kleinbuchstaben, Ziffern, - und _, bis zu {max} Zeichen; füge den Schlüssel ein, sobald der Anmeldelink kommt.',
   'account.apiKeyRejected': '❌ Die API hat den Schlüssel abgelehnt (widerrufen, vertippt oder kein API-Schlüssel), er wurde nicht gespeichert. /accounts login {name} versucht es erneut.',
   'account.apiKeySaved': '✅ API-Schlüssel für das Konto {name} gespeichert (die API hat ihn akzeptiert). Er liegt im eigenen Verzeichnis des Kontos und wird nur von dessen Sitzungen genutzt; jede Anfrage wird abgerechnet.',
   'account.apiKeySavedUnverified': '✅ API-Schlüssel für das Konto {name} gespeichert, die API war zur Prüfung aber nicht erreichbar — die erste Anfrage zeigt es. Er wird nur von den Sitzungen dieses Kontos genutzt; jede Anfrage wird abgerechnet.',

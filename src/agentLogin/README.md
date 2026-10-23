@@ -29,8 +29,9 @@ owned by the bot and relays it through the topic. `bot.ts` wires the ports (`rep
   `claude auth login --console` (`buildClaudeAuthLoginArgs`) — the subcommand always CREATES an API key and keeps it
   in the profile's own `.claude.json`; it never takes the keyless Console sign-in, which lives outside
   `CLAUDE_CONFIG_DIR` and signs the subscriptions out. Its paste may be an existing API key instead of the code.
-- **Anything that starts like an Anthropic credential (`sk-ant-…`) is a secret in EVERY Claude sign-in:** the message
-  is deleted before anything else and never typed into the pty. An API account hands a usable key
+- **Any text that carries an Anthropic credential (`sk-ant-…`, also inside `ANTHROPIC_API_KEY=…` or a sentence — such
+  a text would otherwise pass as a code or be left in the topic) is a secret in EVERY Claude sign-in:** the message
+  is deleted before anything else and never typed into the pty. An API account hands the one usable key it carries
   (`sk-ant-api…`) to the bot through the optional `onClaudeProfileApiKey` port (which verifies and stores it for that
   profile only) and the Console login is stopped; any other credential, or a key in a subscription sign-in, is refused
   and the flow stays armed.

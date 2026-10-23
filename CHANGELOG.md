@@ -81,8 +81,9 @@ back at a known time. An API rate limit (429) is still a short retry.
 **A Claude account can bill the API credits of a Claude Console organization.** `/accounts` → «➕ Claude API account
 (Console credits)» (or `/accounts add <name> api`) signs it in with `claude auth login --console`, which creates an API
 key in that organization and keeps it in the account's own directory; or paste an existing API key while the sign-in
-waits — the message is deleted, the key is checked with the API and kept for that account only, never in `state.json`
-or in an environment variable. `/accounts` shows such an account as `💳 API · pay per use`, `/status` marks it
+waits (on its own or as an `ANTHROPIC_API_KEY=…` line) — the message is deleted, the key is checked with the API and kept
+for that account only, never in `state.json` or in an environment variable. A key pasted where the name is asked is
+deleted too. `/accounts` shows such an account as `💳 API · pay per use`, `/status` marks it
 `💳 API`, and picking it says every request is billed. Your subscription accounts are unchanged: they still never
 see an `ANTHROPIC_API_KEY`. Any `sk-ant-…` text is redacted from the output trace.
 

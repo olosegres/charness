@@ -18,8 +18,8 @@ import {
 } from '../utils/claudeAuthLogin';
 import {
   checkIsAnthropicSecretLike,
-  checkIsPlausibleAnthropicApiKey,
   claudeConfigDirVariableName,
+  extractAnthropicApiKey,
   parseClaudeAuthStatus,
   readProcessErrorStdout,
   type ClaudeAuthStatus,
@@ -334,8 +334,8 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    * A message that is not a plausible code (an ordinary sentence) is NOT consumed:
    * the flow stays armed and the topic is told it is still waiting, with `/esc` as
    * the way out — a pending login must never silently swallow the topic. Anything
-   * that starts like an Anthropic credential (`sk-ant-…`) is a secret: deleted at
-   * once and never typed into the pty — see {@link submitClaudeApiKey}.
+   * that carries an Anthropic credential (`sk-ant-…`, also inside other text) is a
+   * secret: deleted at once and never typed into the pty — see {@link submitClaudeApiKey}.
    * @returns `true` when the message was consumed (as the code, or as a key),
    *   `false` when it was answered with the waiting hint instead.
    */
@@ -358,8 +358,9 @@ export function createAgentLogin(ports: AgentLoginPorts) {
   }
 
   /**
-   * @description A pasted `sk-ant-…` text in a pending Claude sign-in. It is a secret whatever it is: the message is
-   * deleted first. An API account takes a usable API key in place of the code: the console login is stopped and the
+   * @description A pasted text carrying `sk-ant-…` in a pending Claude sign-in. It is a secret whatever it is: the
+   * message is deleted first. An API account takes the one usable API key it carries (bare, or inside
+   * `ANTHROPIC_API_KEY=…` and the like) in place of the code: the console login is stopped and the
    * key goes to the bot ({@link AgentLoginPorts.onClaudeProfileApiKey}), which verifies and stores it for that profile
    * only. A subscription sign-in, or a credential that is not an API key (an admin key, an OAuth token), is refused
    * and the flow stays armed.
@@ -371,13 +372,14 @@ export function createAgentLogin(ports: AgentLoginPorts) {
       await replyToThread(key, appendEscToCancelHint(t('account.apiKeyNotApiAccount')));
       return true;
     }
-    if (!checkIsPlausibleAnthropicApiKey(text)) {
+    const apiKey = extractAnthropicApiKey(text);
+    if (apiKey === null) {
       await replyToThread(key, appendEscToCancelHint(t('account.apiKeyInvalidShape')));
       return true;
     }
     cancelClaudeAuthLogin(key); // the key replaces the console login: its pty must not report a failure later
     await replyToThread(key, t('agent.login_code_relayed'));
-    await replyToThread(key, await onClaudeProfileApiKey(key, profile, text.trim()));
+    await replyToThread(key, await onClaudeProfileApiKey(key, profile, apiKey));
     return true;
   }
 

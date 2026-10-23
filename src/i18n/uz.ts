@@ -918,6 +918,7 @@ export const uzDict: Record<string, string> = {
   'account.login_success_api': '✅ {name} API hisobi kirdi: {email} — Claude Console tashkiloti {org}. Har bir so\'rov shu tashkilotning API kreditidan to\'lanadi.',
   'account.apiKeyNotApiAccount': '🔐 Bu Anthropic kalitiga o\'xshadi, shuning uchun xabar o\'chirildi. Bu kirish Claude obunasi uchun — API kalitidan foydalanish uchun API hisobini qo\'sh: /accounts add <nom> api.',
   'account.apiKeyInvalidShape': '🔐 O\'chirildi: bu Claude API kaliti emas (u sk-ant-api… bilan boshlanadi). Kirish sahifasidagi kodni yoki API kalitini yubor.',
+  'account.apiKeyAsName': '🔐 Bu Anthropic kalitiga o\'xshadi, shuning uchun xabar o\'chirildi. Avval akkaunt nomini yubor — kichik harflar, raqamlar, - va _, {max} belgigacha; kalitni kirish havolasi kelgach joylashtir.',
   'account.apiKeyRejected': '❌ API bu kalitni rad etdi (bekor qilingan, xato yozilgan yoki API kaliti emas), shuning uchun saqlanmadi. Qayta urinish: /accounts login {name}.',
   'account.apiKeySaved': '✅ {name} hisobi uchun API kaliti saqlandi (API qabul qildi). U hisobning o\'z papkasida saqlanadi va faqat uning sessiyalari ishlatadi; har bir so\'rov uchun to\'lov olinadi.',
   'account.apiKeySavedUnverified': '✅ {name} hisobi uchun API kaliti saqlandi, lekin tekshirish uchun API\'ga ulanib bo\'lmadi — birinchi so\'rov ko\'rsatadi. Uni faqat shu hisob sessiyalari ishlatadi; har bir so\'rov uchun to\'lov olinadi.',

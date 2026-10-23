@@ -29,6 +29,7 @@ import {
   checkIsPlausibleAnthropicApiKey,
   claudeProfileApiKeyFileName,
   claudeProfileLaunchSettingsFileName,
+  extractAnthropicApiKey,
   getClaudeAuthBilling,
   parseClaudeAuthStatus,
   removeClaudeProfileApiKey,
@@ -95,6 +96,17 @@ describe('a pasted API key', () => {
     assert.equal(checkIsAnthropicSecretLike('sk-ant-admin01-x'), true);
     assert.equal(checkIsAnthropicSecretLike(' sk-ant-whatever'), true);
     assert.equal(checkIsAnthropicSecretLike('the key starts with sk-ant-'), false);
+    assert.equal(checkIsAnthropicSecretLike(`ANTHROPIC_API_KEY=${apiKey}`), true, 'copied from an env file');
+    assert.equal(checkIsAnthropicSecretLike(`my key: ${apiKey}`), true, 'inside a sentence');
+  });
+
+  it('the one API key a pasted text carries is taken out of it; no key or several give nothing', () => {
+    assert.equal(extractAnthropicApiKey(` ${apiKey}\n`), apiKey);
+    assert.equal(extractAnthropicApiKey(`ANTHROPIC_API_KEY=${apiKey}`), apiKey);
+    assert.equal(extractAnthropicApiKey(`export ANTHROPIC_API_KEY="${apiKey}"`), apiKey);
+    assert.equal(extractAnthropicApiKey('sk-ant-admin01-AAAAAAAAAAAAAAAAAAAAAAAAAAAA'), null, 'an admin key cannot run Claude Code');
+    assert.equal(extractAnthropicApiKey(`${apiKey} ${apiKey.replace('a1B2', 'z9Y8')}`), null, 'two keys: which one?');
+    assert.equal(extractAnthropicApiKey('fake-oauth-code-4711'), null);
   });
 
   it('is kept 0600 in the profile\'s own directory, read back by the helper exactly as the CLI runs it, and removed with its settings', () => {

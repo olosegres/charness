@@ -20,6 +20,7 @@ import { chatGptProviderId } from '../../../utils/openCodeUsage';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import type { OperatorSwitchOutcome } from '../../../utils/operatorSwitchPlan';
 import {
+  checkIsAnthropicSecretLike,
   checkIsValidClaudeProfileName,
   claudeConsoleLoginKeySource,
   claudeProfileNameMaxLength,
@@ -91,7 +92,7 @@ export type ClaudeProfileApplyOutcome = ClaudeConfigDirApplyResult | 'restartReq
 export interface ClaudeAccountsPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'
   > {
   getDataDir: () => string;
   /** The instance zone (`/timezone`) the reset instants are shown in. */
@@ -144,7 +145,7 @@ const providerSnapshotLimit = 50;
  */
 export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
-    bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
+    bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
     verifyAnthropicApiKey,
@@ -613,11 +614,20 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await startOpenCodeConnect(key, providerId);
   }
 
-  /** The captured answer of «➕»: a Claude profile name (a subscription or an API account), or an OpenCode provider id, by what was asked. */
-  async function submitProfileName(key: SessionKey, text: string): Promise<void> {
+  /**
+   * The captured answer of «➕»: a Claude profile name (a subscription or an API account), or an OpenCode provider id,
+   * by what was asked. An API key pasted where the name was asked is a secret: deleted at once (`messageId`), never
+   * echoed, and the name is asked again — the key belongs to the sign-in that follows.
+   */
+  async function submitProfileName(key: SessionKey, text: string, messageId?: number): Promise<void> {
     const asked = awaitingProfileName.get(keyToString(key));
     if (asked === 'providerId') {
       await submitProviderId(key, text);
+      return;
+    }
+    if (checkIsAnthropicSecretLike(text)) {
+      if (messageId !== undefined) await deleteThreadMessage(key, messageId);
+      await replyToThread(key, `${t('account.apiKeyAsName', { max: claudeProfileNameMaxLength })}\n${t('login.esc_hint')}`);
       return;
     }
     const name = normaliseClaudeProfileName(text);

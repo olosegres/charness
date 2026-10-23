@@ -326,6 +326,34 @@ describe('agentLogin: the sign-in drivers', () => {
     login.cancelClaudeAuthLogin(key);
   });
 
+  it('a key inside other text (an env line, a sentence) is a secret too: deleted, never typed into the CLI, the key alone goes to the bot', async () => {
+    const profileDir = path.join(workDir, 'claude-profiles', 'envline');
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.rmSync(path.join(workDir, 'claude.code'), { force: true });
+    const apiKey = `sk-ant-api03-${'e'.repeat(40)}`;
+    const recorded = createRecordedPorts('{"loggedIn":false}');
+    const handedKeys: string[] = [];
+    const login = createAgentLogin({ ...recorded.ports, onClaudeProfileApiKey: async (_key, _profile, handed) => { handedKeys.push(handed); return 'stored by the bot'; } });
+
+    // A subscription sign-in: `key: sk-ant-…` would read as no code at all and stay in the topic.
+    await login.startClaudeAuthLogin(key, { name: 'work', configDir: path.join(workDir, 'claude-profiles', 'work') });
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.equal(await login.submitClaudeAuthLoginCode(key, `my key: ${apiKey}`, strayMessageId), true);
+    assert.deepEqual(recorded.deletedMessageIds, [strayMessageId], 'a key inside a sentence is deleted');
+    assert.match(recorded.replies.at(-1) ?? '', /add an API account/);
+    assert.equal(login.checkIsAuthLoginAwaitingCode(key), true);
+    login.cancelClaudeAuthLogin(key);
+
+    // An API account: `ANTHROPIC_API_KEY=sk-ant-…` is shaped like an OAuth code, yet must never reach the CLI.
+    await login.startClaudeAuthLogin(key, { name: 'envline', configDir: profileDir, billing: 'api' });
+    await waitUntil('the second sign-in link', () => recorded.replies.filter((reply) => reply.includes(claudeLoginUrl)).length === 2);
+    assert.equal(await login.submitClaudeAuthLoginCode(key, `ANTHROPIC_API_KEY=${apiKey}`, secretMessageId), true);
+    assert.deepEqual(recorded.deletedMessageIds, [strayMessageId, secretMessageId]);
+    assert.deepEqual(handedKeys, [apiKey], 'the key alone, without the variable name');
+    assert.equal(fs.existsSync(path.join(workDir, 'claude.code')), false, 'nothing was typed into the CLI');
+    assert.ok(recorded.replies.every((reply) => !reply.includes(apiKey)), 'the key is never echoed');
+  });
+
   it('the default login still runs with no CLAUDE_CONFIG_DIR of its own', async () => {
     const recorded = createRecordedPorts('{"loggedIn":true}');
     const login = createAgentLogin(recorded.ports);

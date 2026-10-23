@@ -8515,7 +8515,7 @@ bot.on(message('text'), async (ctx) => {
   // `/account` «Add» asked for the new profile's name → this message is it (a bad name keeps the prompt
   // armed and says so; a slash command above already disarmed it).
   if (checkIsAwaitingProfileName(key) && !text.startsWith('/')) {
-    await submitProfileName(key, text);
+    await submitProfileName(key, text, ctx.message.message_id);
     return;
   }
 

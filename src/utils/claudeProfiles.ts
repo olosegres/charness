@@ -264,9 +264,21 @@ export function checkIsPlausibleAnthropicApiKey(text: string): boolean {
   return anthropicApiKeyRe.test(text.trim());
 }
 
-/** Whether `text` (trimmed) starts like an Anthropic credential of any kind: it is a secret, whatever else it is. */
+/**
+ * Whether `text` carries an Anthropic credential of any kind — it starts like one, or holds one anywhere
+ * (`ANTHROPIC_API_KEY=sk-ant-…` copied from an env file, a key inside a sentence): it is a secret, whatever else it is.
+ */
 export function checkIsAnthropicSecretLike(text: string): boolean {
-  return anthropicSecretPrefixRe.test(text.trim());
+  return anthropicSecretPrefixRe.test(text.trim()) || (text.match(anthropicSecretInTextRe)?.length ?? 0) > 0;
+}
+
+/**
+ * The one API key a pasted text carries — the bare key, or the key inside `ANTHROPIC_API_KEY=…`, quotes or a
+ * sentence; `null` when it carries no API key (an admin key, an OAuth token) or more than one credential.
+ */
+export function extractAnthropicApiKey(text: string): string | null {
+  const credentials = text.match(anthropicSecretInTextRe) ?? [];
+  return credentials.length === 1 && checkIsPlausibleAnthropicApiKey(credentials[0]) ? credentials[0] : null;
 }
 
 /** The key file of a profile directory. */

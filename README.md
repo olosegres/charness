@@ -320,7 +320,9 @@ balance), so the bot never uses it without you choosing it.
   that account's sessions read it. Your Console role must allow creating a key
   («Claude Code» or «Developer»).
 - **Or paste a key:** while that sign-in waits, paste an existing API key
-  (`sk-ant-api…`) instead of the code. The message is deleted at once, the key
+  (`sk-ant-api…`, on its own or as an `ANTHROPIC_API_KEY=…` line) instead of the
+  code. The message is deleted at once (so is a key pasted where the name is
+  asked), the key
   is checked with the API (a refused key is not stored), then kept in the
   account's directory (`0600`) and handed to its sessions only, through an
   `apiKeyHelper` in that account's launch settings — never in `state.json`, never
