@@ -53,9 +53,27 @@ Restart and rollback:
 - `updatePending.ts` + `bootRollback.ts` — `DATA_DIR/update-pending.json` is written BEFORE the switch. Each boot of an unconfirmed
   version counts itself in (in `cli/bot.ts`, before the bot module is imported) — except a boot that asks the hot supervisor to
   re-execute, which hands its count back (that end is deliberate, and without it a healthy supervisor update would leave one boot
-  of the budget); the boot after two unconfirmed ones puts the previous version back (npm: reinstall from the cache; checkout: `git reset --keep` + rebuild) and restarts onto it — a plain
-  process by `execve`, a hot worker by exiting cleanly so its watcher rebuilds. The marker stays as `rolledBack` /
-  `rollbackFailed` for the restored version to report; the running bot deletes it once the new version is confirmed.
+  of the budget); the boot after two unconfirmed ones puts the previous version back (npm: reinstall from the cache; checkout:
+  `git reset --keep` + rebuild) and restarts onto it — a plain process by `execve`, a hot worker by exiting cleanly so its watcher
+  rebuilds. The marker stays as `rolledBack` / `rollbackFailed` for the restored version to report; the running bot deletes it once
+  the new version is confirmed. Not covered: a supervisor that crashes before it starts a worker counts no boots — an update whose
+  new `cli/hot.ts` cannot even load is not rolled back by this.
+
+The engine and what the operator sees:
+
+- `updateEngine.ts` — one engine per process over ports (clock, settings, state, sources, idle verdict, posting, restart, marker,
+  supervisor): nothing in it touches the world, so its whole flow runs in a test against fakes with a fake clock. `runBootStep`
+  settles the last update (confirms it after 60 s, announces a version change, reports a rollback, notices a newer install on disk
+  or a stale supervisor); `start` arms the hourly check; the idle loop installs, restarts or signals the supervisor at the first
+  idle moment (`getIdleVerdict`); `requestInstall` is the tap's entry (`isUserRequested` skips only the quiet period); `getStatus` /
+  `getOffer` feed the `/update` screen. Targets already announced or failed are remembered in the `selfUpdate` record in
+  `state.json` (`notifiedTargets`, `failedTargets`) so a restart never repeats a message or retries a failure.
+- `updateMessages.ts` — what the engine says in General, as DATA (`UpdateMessage`); `renderUpdateMessage` words it with `t()` in the
+  chat's language. The what's-new entries stay English (the CHANGELOG's own words); a message the operator must act on is pinned.
+- `updateRuntime.ts` — the process-bound half of the ports: install kind, sources, host lock, the marker, the supervisor record.
+  `bot.ts` passes in the rest (settings, state, idle verdict, General, the shutdown sequence) when it builds the engine.
+- The screen: `utils/updateScreenPlan.ts` (pure text + buttons, callbacks `upd_mode_*`, `upd_notes_*`, `upd_check`, `upd_go_<target>`)
+  rendered by `connectors/telegram/commands/selfUpdate.ts`; controls are General's, writes go to `settings.json` only.
 
 Verified by hand with a real `opencode serve` spawned the way the supervisor spawns it (a direct child with piped stdio) and then
 `process.execve`d: the server keeps answering after its stdout pipe is closed. An inherited child that EXITS later stays defunct

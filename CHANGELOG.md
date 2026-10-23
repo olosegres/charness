@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Charness now updates itself.** Every hour the bot checks for a new version; when nobody is using it — no agent working,
+no input waiting, nobody has written for 10 minutes — it installs it and restarts in place, the same process, so every agent
+keeps running, and General gets «Updated a → b» with what the new version brought. An npm install takes a version 4 hours
+after it appeared; a git checkout takes a pull (in hot mode the supervisor re-executes itself when one of its own files
+changed — in Docker the entrypoint sees no exit); a major version, a version that needs a newer Node or a checkout range
+that adds a migration guide is offered with a button instead of installed, and a version that does not start is rolled
+back. `/update` in General switches it between Automatic (the default), Notify only and Off, switches the «what's new»
+list and shows what the last check saw; `/version` says when an update is available.
+
 **Google's «You have exhausted your capacity on this model. Your quota will reset after …» is read by its duration.** The
 Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan
 («after 146h52m11s»). The seconds-long one was announced as «🚧 Usage limit reached» with an hour's wait, and an hours-long

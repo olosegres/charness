@@ -89,6 +89,30 @@ owner = the `charness hot` supervisor (a worker reload keeps the sidecar) or the
 the sidecar polls its owner and exits within ~2 s of its death, even after a SIGKILL.
 ```
 
+### Self-update (the bot updates itself)
+
+`src/selfUpdate/` (its README has the contracts) is an engine over ports: `updatePolicy.ts` decides, `updateEngine.ts` runs
+the hourly check, the idle loop and the boot step against fakes in tests, `updateRuntime.ts` binds it to this process
+(install kind, npm / git sources, host lock), `bot.ts` supplies the settings, the idle verdict and General. Three facts to
+keep when touching the restart path:
+
+- **A restart in place is `process.execve`** (the same pid) of `node <packageRoot>/dist/cli.js <original arguments>` with
+  the environment as it was at launch — `cli.ts`'s FIRST import snapshots it, so an edited `.env` is read afresh. Nothing
+  may be imported before `launchEnvironment`.
+- **The hot supervisor re-executes itself** when a file it loaded changed: at start it writes `DATA_DIR/hot-supervisor.json`
+  (pid, start token, hash of every loaded `dist/` module); a new worker compares it with `dist/` and, at its idle point,
+  sends `SIGUSR2` — only when pid and start token match. The supervisor stops `tsc -w` and nodemon, leaves the OpenCode
+  server and the speech sidecar alone and `execve`s `cli.js hot`. A supervisor that predates this has no record and is
+  never signalled (an unhandled `SIGUSR2` kills a process).
+- **`update-pending.json` is written BEFORE the switch**; every boot counts itself in (`cli/bot.ts`, before the bot module is
+  imported), the boot after two unconfirmed ones rolls back, the running bot confirms 60 s after launch.
+
+The flows run it for real: `selfUpdateNpmE2e` (a loopback registry — `e2e/fakeNpmRegistry.ts` — and a real global install into
+a temp prefix), `selfUpdateCheckoutE2e` (a checkout copy, a bare remote and a second clone — `e2e/checkoutFixture.ts`),
+`selfUpdateHotE2e` (the real `charness hot`), `selfUpdateEntrypointE2e` (the image's own `docker/entrypoint.sh` and
+`restart-bot.sh` with their paths pointed into a temp folder — the one thing it cannot run is the container itself). The
+harness writes `settings.json` with `autoUpdate: off` for every instance, so no flow updates the checkout it runs from.
+
 ## Local development
 
 ```bash

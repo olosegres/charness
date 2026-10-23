@@ -27,6 +27,7 @@ These hold whichever surface you drive it from — the same core serves all of t
 - **Sleeping agents** — a Claude json-stream topic's process is stopped when idle (or after every turn in per-turn mode) and the next message resumes the same conversation by itself, prompt cache still warm
 - **Several Claude accounts** — keep more than one Claude subscription signed in side by side and choose per topic which one a session runs on (`/accounts`); every account's usage windows are shown next to it, and `/limits` is a one-tap switch board over all of them and over the OpenCode providers. See [Several accounts](#several-accounts-accounts)
 - **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes; a mere warning such as `Approaching session limit · resets …` or the switch onto extra usage is not a limit), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/limits_autoswitch` turns waiting off per topic and `/limits` skips a single resume. With a **fallback chain** (`/limits_autoswitch`: other Claude accounts, OpenCode providers and models, in your order of preference) the limit notice offers «🔁 Switch to …» buttons to move the topic to the next entry with room and continue at once — or the bot does it by itself when you turn switching on; across backends the new agent gets a context bridge with the previous one's last turns
+- **Updates itself** — checks for a new version hourly, installs it when no agent is working, restarts in place (same process, agents keep running) and says in General what changed; npm installs and git checkouts, hot mode and Docker included. Off with `/update` in General. See [Updating](SETUP.md#updating)
 - **Restart-safe** — agents run as external processes (tmux, `opencode serve`) that the bot re-adopts after a restart instead of killing them; a prompt sent while a session boots is buffered and replayed. See [Restart behaviour](#restart-behaviour)
 
 ### Telegram
@@ -132,7 +133,8 @@ actually start an agent or terminal in the folder.
 | `/list` | List existing topics and their bindings |
 | `/status` | This topic's status; in General — a global view of all topics + active agents. A non-General topic also reports the account it runs on (Claude profile · email, ⛔ at its limit) and the resolved workdir; a live one the model actually running, runtime version and context use (unknown when the backend cannot report it) |
 | `/doctor` | Self-diagnose: admin rights, privacy mode, paths, CLIs |
-| `/version` | Versions: bot, claude, opencode, node, tmux |
+| `/version` | Versions: bot, claude, opencode, node, tmux; a line when an update is available |
+| `/update` | Self-update screen: what this instance runs (npm / git, hot), automatic updates `Automatic` · `Notify only` · `Off` (default automatic), the «what's new» switch, Check now, Update now. Controls in General, read-only elsewhere; typed forms `/update on\|notify\|off`, `/update whatsnew on\|off`, `/update check`, `/update now` — see [Updating](SETUP.md#updating) |
 | `/whoami` | Show userId, chatId, threadId, isAllowed, binding |
 | `/trace` | Output-trace recorder (`on`/`off`, `on all`/`off all`; bare = status) — see [Observability](#observability) |
 | `/timestamps` | Prepend the send time to prompts forwarded to the agent (`on`/`off`; bare = status) |

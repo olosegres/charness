@@ -310,3 +310,17 @@ error, the log tail and `Retry`; the message is forgotten last. `resumeSttInstal
 boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). On the local
 card «🗑 Remove model files» asks first (Cancel returns to the card), stops the sidecar, deletes the install and drops the engine
 from the list (refused while an install runs — the card is shown again); «Remove from list» keeps the files.
+
+## `selfUpdate.ts`
+
+`/update` and its buttons `upd_mode_<on|notify|off>`, `upd_notes_<on|off>`, `upd_check`, `upd_go_<target>`: the self-update screen of
+the instance (what it runs, the automatic-update mode, the what's-new switch, what the last check saw, check now, update now). The text
+and the buttons are ONE pure plan, `utils/updateScreenPlan.ts`, so the first render and the re-render after a tap cannot drift; the
+module renders it, edits its own message in place and runs the effects. The controls are General's: in any other topic the same text
+comes without buttons and with «Change it in General», and a write tap there is refused. A mode or switch tap writes `settings.json`
+(`saveInstanceSettings` — a failed write is said whole, with the path and the errno, never swallowed); the typed forms (`/update on|
+notify|off`, `/update whatsnew on|off`, `/update check`, `/update now`) do the same, a bare `/update` opens the screen. Engine
+actions go through the `getUpdateEngine` port (the engine exists only after boot built it: `/update` typed before that says the
+updater is still starting). «Update now» bakes the target into the callback data (`upd_go_<version or commit>`), so an old keyboard never
+installs another version than the one on its button; the handler answers after the work with `answerCallbackQuerySafely`. Logic that
+decides WHAT updates is in `src/selfUpdate/`, never here.

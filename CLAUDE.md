@@ -191,7 +191,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `threadContextPreamble.ts`, `resumeContext.ts`, `pinnedStatus.ts`, `pendingQuestionRepost.ts`, `progressLine.ts` | Thread-context preamble; recent-turns block on resume; pinned status banner; keep a pending question last in its topic; collapse Claude's transient progress shapes into one edited message |
 | `openCode*.ts`, `sessionPick.ts`, `effortLevels.ts` | Pure OpenCode helpers (event→session routing, question flow/recovery, titles); the `/sessions` pick; effort catalogs |
 | `installManager.ts` | Locate/install agent binaries; OpenCode server generations (launched outside nodemon's tree) |
-| `instanceSettings.ts` | `settings.json` (instance-wide settings, first field `defaultEffort`, set by `/effort` in General) on `configDirFile.ts`; `effortLevels.ts` holds the resolver (`getInstanceDefaultEffort`: file → code fallback `medium`) the adapters call |
+| `instanceSettings.ts` | `settings.json` (instance-wide settings: `defaultEffort` set by `/effort` in General, `autoUpdate` + `whatsNew` set by `/update` in General) on `configDirFile.ts`; `effortLevels.ts` holds the resolver (`getInstanceDefaultEffort`: file → code fallback `medium`) the adapters call |
 | `configDirFile.ts` | The shared mechanics of the JSON files in the config dir (`stt.json`, `settings.json`): location beside the REAL `.env`, stamp-cached load, atomic save, the unwritable / container-disk checks |
 | `outputTrace.ts`, `diagLog.ts`, `instanceLock.ts`, `shutdown.ts`, `bootClassifier.ts` | Always-on trace (`/trace`) + diagnostic log; single-instance lock; ordered graceful shutdown; hot-reload vs cold-start decision |
 | `stt/` | Voice recognition: `stt.json` settings (UI-first, one source of truth), the engine chain with fallback and a timeout proportional to the voice, the local GigaAM engine's installer; its Python sidecar is `stt/gigaam_sidecar.py` at the package root (shipped in `files`). README: contracts and the sidecar protocol |
@@ -201,6 +201,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `connectors/jira/` | Jira Cloud connector: config, REST client, poller, trigger rules, prompt, answer sink, ADF |
 | `connectors/test/` | Capability-configurable test double; TESTS ONLY, no production import |
 | `platform/` | Core-side seam contracts: inbound/outbound/answer sink, command router, capability fallback, `CONNECTORS` filter, unserved-state guard |
+| `selfUpdate/` | The bot updates itself: pure policy (`updatePolicy.ts`), the engine over ports (`updateEngine.ts`: hourly check, idle loop, boot step), npm / git sources, in-place `execve` restart, the hot supervisor's re-exec, the `update-pending.json` boot rollback, `charness self-check`. `/update` is `connectors/telegram/commands/selfUpdate.ts` over `utils/updateScreenPlan.ts`. README: contracts |
 | `requests/` | Request ledger, `answer_request`, wake-up engine + rules, session turn probe, limit-wait answers |
 | `scheduler/` | Schedule store/engine/recurrence/delivery/run ledger; the bot-owned MCP server (`mcpSurface.ts`), its injection and boot order |
 | `utils/` | ~85 mostly pure helpers behind `bot.ts` and the adapters: Claude scrape pipeline, tmux primitives, json-stream host, picker/render plans, reminders, timezone, limit/compaction rules, file send |
@@ -239,6 +240,9 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
   never `attach` (it resizes the window and tmux re-wraps the scrollback). The end-of-turn feedback survey is
   dismissed by a CLOSED list of known header wordings; an unrecognised one strands the next prompt in the
   input box and the topic looks hung — add the wording.
+- **Restart in place:** `src/cli.ts` imports `selfUpdate/launchEnvironment` FIRST — it snapshots `process.env` before any `.env`
+  is read, and every `execve` restart (an update, the hot supervisor's re-exec) hands that snapshot to the new image. Nothing may
+  be imported ahead of it, and a settings value is never a new env var.
 - **Secrets:** never log or echo a token/key; a pasted secret (`/login` code, `/connect` key) is deleted from
   the topic and redacted from the trace preview.
 
@@ -279,6 +283,10 @@ History was scrubbed of real operator identifiers — keep it that way:
 - **Tests and agents run with a private `TMUX_TMPDIR`** — the default tmux server may host a live bot's sessions.
 - **A guard that protects real state** (processes, tmux servers, files, accounts) is proven load-bearing only against
   a decoy the test itself creates — never by disabling it while the guarded action can reach the real thing.
+- **The self-update flows** (`selfUpdate{Npm,Checkout,Hot,Entrypoint}E2e.test.ts`, minutes each, part of `yarn test`) run the real
+  updater at process level: a loopback npm registry and a global install into a temp prefix, a checkout copy with a bare remote,
+  the real `charness hot`, the image's own `docker/entrypoint.sh` with its paths in a temp folder (no container). Every instance
+  of the harness starts with `autoUpdate: off`, so a flow never updates the tree it runs from; they need `yarn build` first.
 - `jiraConnectorE2e.test.ts` (~7 min, part of `yarn test`) boots a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on

@@ -103,36 +103,76 @@ hostnames: their ports and tmux servers are their own.
 
 ### Updating
 
-An npm install updates with `npm install -g charness@latest`; then restart `charness` (what survives a restart:
-[Restart behaviour](README.md#restart-behaviour)).
+**The bot updates itself.** With `autoUpdate` on (the default) an instance checks for a new version every hour (the first
+check 10 minutes after it starts), installs it when nobody is using the bot, restarts **in place** — the same process id, so
+systemd, pm2, `nohup` or a terminal see nothing, and every agent keeps running (what survives:
+[Restart behaviour](README.md#restart-behaviour)) — and says in General what changed:
 
-**An update that renames something ships a migration guide** — read it before the restart. The names that were
-renamed from TelegramCode to Charness (environment variables, the data dir, the Docker names, …) still work for
-now and print a deprecation line at start; the steps are in
+```
+🔄 Charness updated: 3.4.0 → 3.5.0
+• Charness now updates itself.
+• A reset written in several parts is read whole.
+• …and 3 more — CHANGELOG: <link>
+```
+
+Control it from **`/update` in General** (Automatic · Notify only · Off, the «what's new» switch, Check now, Update to X
+now), or by hand in `settings.json` ([Instance settings](#instance-settings-settingsjson)). **Notify only** says that a new
+version is out and puts an «Update to X» button under it; **Off** never looks. In any other topic `/update` is the same
+status without the controls.
+
+What it does depends on how this instance is installed — `/update` names the kind:
+
+| Install | What the updater does |
+|---|---|
+| **npm global** (`npm install -g charness`, a prefix the bot's user can write) | Takes a new version from the registry **4 hours after the bot first saw it**, so a hastily fixed release never reaches you first; installs it with the `npm` beside the running `node`, runs `charness self-check` on the NEW install before switching, then restarts onto it. Never `sudo`. |
+| **git checkout** (a clone, an `npm link`, the one the Docker container mounts) | Fast-forwards through `scripts/self-update.sh`, with no hold — a checkout follows `main` — and rebuilds. In hot mode the watcher reloads the worker by itself; when a file the hot supervisor loaded changed, the worker asks the supervisor to re-execute itself (same pid; the OpenCode server and the speech engine are left alone). |
+| anything else — a read-only folder (a root-owned npm prefix), pnpm / yarn / bun, a project-local install, a Node without `process.execve` (needs 22.15+, not Windows), `npx` | Says that a new version is out and how to update by hand; `npx` gets nothing to update. |
+
+**When it installs.** Only when no agent is working, no input waits to be consumed, no sign-in or wizard is open and no
+person has written to the bot for 10 minutes. A tap on «Update to X now» skips the quiet period, never a running turn.
+**What it offers instead of installing:** a major version, a version that needs a newer Node than this one, and a
+checkout range that adds a [migration guide](MIGRATION_RENAME_TO_CHARNESS.md) — each is announced in General and waits
+for your tap. A deprecated version is skipped.
+
+**A version that does not start is put back.** The install is written to `update-pending.json` before the switch; the new
+version is confirmed 60 seconds after it launched, and one that fails to boot twice is rolled back to the previous version
+(npm reinstalls it, a checkout resets and rebuilds), the target is not retried, and General says so. In hot mode a pull
+that has not produced a working worker within 10 minutes is rolled back the same way.
+
+**After the update** General gets «Updated a → b» with the CHANGELOG entries the update brought (each opens with a bold
+sentence; `whatsNew: false` leaves the list out). **An update that renames something ships a migration guide** — it is
+named in that message; the names renamed from TelegramCode to Charness (environment variables, the data dir, the Docker
+names, …) still work for now and print a deprecation line at start; the steps are in
 [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md), the summary in the top entry of
-[CHANGELOG.md](CHANGELOG.md). `scripts/self-update.sh` names a newly added migration guide in its log.
+[CHANGELOG.md](CHANGELOG.md).
 
-#### Updating a checkout (self-update, no root)
+**By hand** nothing changed: `npm install -g charness@latest` (an instance that finds a newer version installed on disk
+restarts onto it by itself at its first idle moment), or `scripts/self-update.sh` in a checkout. Two instances of one npm
+install on a host take turns — the second finds the version the first installed and restarts onto it.
+
+#### Updating a checkout (`scripts/self-update.sh`, no root)
 
 A checkout — the one the [Docker container](#run-with-docker) runs, or a clone from
-[DEVELOPMENT.md](DEVELOPMENT.md#local-development) — updates with `scripts/self-update.sh` (not in the npm package).
-It refreshes the checkout in place, running as the checkout's owning user — no root, no cross-user copying. It is
-safe to run blindly (e.g. from cron):
+[DEVELOPMENT.md](DEVELOPMENT.md#local-development) — updates with `scripts/self-update.sh` (not in the npm package); the
+bot's own updater drives it, and it can still be run by hand or from cron (then set `autoUpdate` to `off` so the two do not
+race). It refreshes the checkout in place, running as the checkout's owning user — no root, no cross-user copying. It is
+safe to run blindly:
 
 - fast-forward only: it skips silently when the tree has tracked changes, a
   merge/rebase is in progress, or local history diverged from the upstream —
   a dev clone that is ahead of origin is never touched;
+- `--check` fetches and changes nothing, `--hold-breaking` updates unless the incoming range adds a `MIGRATION_*.md`;
 - `yarn install --immutable` runs only when `yarn.lock` / `package.json`
   changed;
 - a hot-mode instance (`charness hot`) rebuilds and restarts the worker
   by itself (after a dependency install the script touches `tsconfig.json`
   so `tsc -w` recompiles with the new modules); a non-hot instance gets
-  `yarn build` plus a restart notice — the script never kills processes;
+  `yarn build` — the script never kills processes (the bot's updater restarts it);
 - changes to the hot supervisor itself (`src/cli.ts`, `src/cli/hot.ts`,
-  `nodemon.json`) are flagged with a warning: those need a manual
-  `charness hot` restart (nodemon reloads only the worker).
+  `nodemon.json`) are flagged with a warning: with the bot's updater the supervisor
+  re-executes itself, run by hand they need a manual `charness hot` restart (nodemon reloads only the worker).
 
-For unattended updates give the deploying user read access to the repo (e.g.
+For unattended updates **without** the bot's updater give the deploying user read access to the repo (e.g.
 a read-only GitLab deploy key on a passphrase-less SSH key) and add a cron
 entry:
 
@@ -358,12 +398,14 @@ be written, the tap that needed it says so and names the path. The file is optio
 a hand edit applies to the next session start, no restart.
 
 ```json
-{ "defaultEffort": "medium" }
+{ "defaultEffort": "medium", "autoUpdate": "on", "whatsNew": true }
 ```
 
 | Field | Meaning |
 |---|---|
 | `defaultEffort` | The reasoning effort of every topic that has no `/effort` pick of its own: `low`, `medium`, `high`, `xhigh`, `max`, `auto` or `ultracode`. Set it from **`/effort` in the General topic** (a tap writes the file), or by hand. Leave it out and the built-in default, `medium`, applies |
+| `autoUpdate` | What the instance does about a new charness version: `on` installs it by itself when the bot is idle, `notify` says it is out and offers a button, `off` never looks. Set it from **`/update` in General**, or by hand. Leave it out and `on` applies ([Updating](#updating)) |
+| `whatsNew` | `true` (default): after an update General lists the CHANGELOG entries it brought; `false`: only the «Updated a → b» line. Set from `/update` in General, or by hand |
 
 What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
 (a Jira conversation: `effort` in `jira.json`, `high` when absent — Jira never reads `defaultEffort`), `defaultEffort`,
@@ -625,9 +667,11 @@ Running it:
 
 - **Restart the bot only** (agents keep running and are adopted): `docker exec charness-main
   charness-restart-bot`. A crashed bot is restarted by the container after 20 s.
-- **Update the bot**: `docker exec charness-main /opt/charness/scripts/self-update.sh` (by hand or from
-  a timer on the host); hot mode picks the change up. A change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
-  needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
+- **Update the bot**: it updates itself (`/update` in General, [Updating](#updating)): the mounted checkout is pulled when
+  no agent is working, hot mode reloads the worker, and a change to `src/cli.ts`, `src/cli/hot.ts` or `nodemon.json`
+  makes the supervisor re-execute itself — the same process, so the container's entrypoint sees no exit and no restart
+  delay. By hand: `docker exec charness-main /opt/charness/scripts/self-update.sh`; an old supervisor (one that predates
+  re-exec) says once that it needs the bot restart above. **Update Claude Code / OpenCode**: they update themselves in the agents' home, or
   `docker exec charness-main npm install -g @anthropic-ai/claude-code` / `… opencode-ai`.
 - **A container restart is a reboot**: every agent process ends; each conversation resumes with its next message.
 - **Rootless Docker** (recommended): the container's root is your user, so everything written on the mounts is
