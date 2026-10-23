@@ -293,7 +293,7 @@ History was scrubbed of real operator identifiers — keep it that way:
   updater at process level: a loopback npm registry and a global install into a temp prefix, a checkout copy with a bare remote,
   the real `charness hot`, the image's own `docker/entrypoint.sh` with its paths in a temp folder (no container). Every instance
   of the harness starts with `autoUpdate: off`, so a flow never updates the tree it runs from; they need `yarn build` first.
-- `jiraConnectorE2e.test.ts` (~7 min, part of `yarn test`) boots a real Jira-only instance through
+- The Jira flows (`jira{Connector,Prompt,Trust}E2e.test.ts`, ≤ 5 min each, part of `yarn test`; shared kit `jiraE2e/jiraFlowKit.ts`) each boot a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
   exit/signal. `live/jiraLive.test.ts` (~14 min, not part of `yarn test`) runs the same loop against a REAL Jira
