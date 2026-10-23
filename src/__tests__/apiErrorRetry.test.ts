@@ -720,6 +720,9 @@ test('classify: a machine-form epoch already behind now is no reset — the limi
 test('classify: the body\'s machine-form reset is the window\'s end, never a retry hint — even a short one beside "try again in"', () => {
   const text = chatGptUsageLimitBody('"resets_in_seconds":120').replace('has been reached', 'has been reached. Please try again in 2 minutes');
   assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 120_000 });
+  // And beside a hint a few words from its verb — the wording the hint rule recognises too.
+  const spacedHint = chatGptUsageLimitBody('"resets_in_seconds":120').replace('has been reached', 'has been reached. Please retry your request in 30s');
+  assert.deepEqual(classifyAgentApiError(spacedHint, fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 120_000 });
 });
 
 test('classify: an older Claude Code\'s "usage limit reached|<epoch>" → a usage limit until that epoch', () => {
