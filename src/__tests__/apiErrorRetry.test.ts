@@ -145,6 +145,12 @@ test('classify: inside a usage limit a short retry hint ("retry in Ns") is not t
   assert.deepEqual(classifyAgentApiError('Session limit reached, resets in 2 minutes', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 2 * minuteMs });
   // "try again in" is a retry verb as well.
   assert.deepEqual(classifyAgentApiError('Daily quota exceeded. Please try again in 30s.', fixedNow), { kind: 'usageLimit', resetAt: undefined });
+  // A few words between the verb and the delay are still the hint.
+  for (const text of ['Daily quota exceeded. Please retry your request in 30s.', 'Daily quota exceeded. Please try again later, in 30s.']) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'usageLimit', resetAt: undefined }, text);
+  }
+  // A retry verb in an earlier sentence does not turn a stated reset into a hint.
+  assert.deepEqual(classifyAgentApiError('Daily usage limit reached, retry later. Your quota will reset after 4m30s.', fixedNow), { kind: 'usageLimit', resetAt: fixedNow + 4.5 * minuteMs });
   // A window's own end, written as a clock time, stays the reset however close it is.
   const closeClockReset = new Date(fixedNow + 3 * minuteMs);
   const clockText = `You've hit your session limit · resets ${closeClockReset.getHours()}:${closeClockReset.getMinutes().toString().padStart(2, '0')}`;

@@ -367,8 +367,11 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   return null;
 }
 
-/** A retry verb right before a relative reset: "Please retry in 40s", "try again after 30s". */
-const retryVerbBeforeResetRe = /\b(?:retry|try again)\s*$/i;
+/**
+ * A retry verb before a relative reset, a few words apart at most and in the same sentence: "Please retry in 40s",
+ * "try again after 30s", "retry your request in 30s", "try again later, in 30s".
+ */
+const retryVerbBeforeResetRe = /\b(?:retry|try again)\b[^.]{0,30}$/i;
 
 /**
  * @description Whether the reset {@link parseResetAt} reads in `text` is a retry hint — a relative one stated by a retry
