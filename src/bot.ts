@@ -13020,7 +13020,7 @@ export async function startBot(): Promise<void> {
   // 1. State store. The `[startup] DATA_DIR=` shape is load-bearing: the
   // README's two-instances troubleshooting tells the operator to compare this
   // exact line across instances.
-  state = await getStateStore();
+  state = await getStateStore({ saveDebounceMs: ENV.testTimings.stateSaveDebounceMs });
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
   // R13: before anything reads, rewrites or acts on the state, it must hold only
   // conversations of the platforms this instance serves.

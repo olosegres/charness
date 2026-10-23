@@ -105,7 +105,8 @@ describe('the unserved-state guard (R13)', () => {
     const startBody = botSource.slice(botSource.indexOf('export async function startBot('));
     const check = startBody.indexOf('getUnservedStateError(getPersistedConversations(state), ENV.servedPlatforms)');
     const exit = startBody.indexOf('process.exit(1);', check);
-    assert.ok(check > startBody.indexOf('state = await getStateStore();'), 'after the store loads');
+    const storeLoad = startBody.indexOf('state = await getStateStore(');
+    assert.ok(storeLoad >= 0 && check > storeLoad, 'after the store loads');
     assert.ok(check >= 0 && exit > check && exit < startBody.indexOf('await requestLedger.load();'), 'and exits before the ledger loads');
   });
 });

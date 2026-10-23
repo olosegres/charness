@@ -19,7 +19,7 @@ describe('parseTestTimings', () => {
   });
 
   it('a valid object is read as is', () => {
-    const timings = { telegramSendIntervalMs: 200, jiraPollIntervalMs: 2000, requestSweepIntervalMs: 10_000, requestFirstPostRetryDelayMs: 10_000, limitProbeDelayMs: 30_000 };
+    const timings = { telegramSendIntervalMs: 200, jiraPollIntervalMs: 2000, requestSweepIntervalMs: 10_000, requestFirstPostRetryDelayMs: 10_000, limitProbeDelayMs: 30_000, stateSaveDebounceMs: 10 };
     assert.deepEqual(parseTestTimings(JSON.stringify(timings)), { ok: true, timings });
   });
 
