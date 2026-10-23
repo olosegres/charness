@@ -33,7 +33,10 @@ throws, a result the caller words):
 - `gitSource.ts` — drives `scripts/self-update.sh`: `--check` (fetch only → `status=behind|upToDate|skip`, `reason`, `from`,
   `to`, `behind`, `migrationGuides`), apply with `--hold-breaking` (exit 3 = held at a range that adds a `MIGRATION_*.md`), the
   whole-file diff of `CHANGELOG.md` for the notes, and the rollback (`git reset --keep <from>`, `yarn install` when the lock
-  moved, `yarn build` unless a hot watcher rebuilds).
+  moved, `yarn build` unless a hot watcher rebuilds). Hot mode: nodemon watches only `dist/` and `tsc -w` writes there only for a
+  compiled source, so a range that changed none (docs, the CHANGELOG, scripts, tests, the manifests — `checkChangesEmittedSource`)
+  gets `reloadHotWorker`, a touch of `dist/cli/botEntry.js`, from the pull and from a hot rollback; without it no worker would
+  replace the old one and the build deadline would roll a good pull back.
 - `selfCheck.ts` — `charness self-check [--expect <version>]` (hidden), run on a NEW install before the switch: the version,
   `node-pty`'s native binding, every built module importable (entry points and tests left out; `bot.js` only `node --check`ed,
   it exits without its settings), under a throwaway `DATA_DIR`.

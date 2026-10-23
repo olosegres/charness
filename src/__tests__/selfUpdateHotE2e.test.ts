@@ -9,6 +9,9 @@
  *   → a commit that touches a file the SUPERVISOR loaded: the new worker finds its supervisor's record stale and, at its idle point,
  *     asks it to re-execute: the supervisor stops its watchers and replaces itself — the SAME pid — and a worker starts again on the
  *     new code; the update is announced once
+ *   → a commit that changes no compiled source (docs, the CHANGELOG): `tsc -w` writes nothing under `dist/`, so nodemon would never
+ *     replace the worker — the update asks for the reload itself (touching the worker entry), the new worker announces it, and the
+ *     build deadline never rolls the good pull back
  *
  * The supervisor also owns an OpenCode server (a fake `opencode serve` it spawned and a fake server answering on its port): the
  * re-executed supervisor adopts that very server — no second one is spawned and the first one lives on.
@@ -118,6 +121,7 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
   let supervisorStartTicks: number | null = null;
   let firstCommit = '';
   let workerOnlyCommit = '';
+  let supervisorCommit = '';
 
   before(async () => {
     if (!fs.existsSync(path.join(__dirname, '..', '..', 'dist', 'cli.js'))) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
@@ -211,7 +215,7 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
   });
 
   it('a commit the supervisor itself loaded: the new worker asks it to re-execute; the SAME process replaces itself and a worker starts again — announced once', async () => {
-    const supervisorCommit = fixture.pushCommit(
+    supervisorCommit = fixture.pushCommit(
       { 'CHANGELOG.md': addChangelogEntry('A supervisor entry.'), 'src/cli/hot.ts': (previous) => `${previous}\n// a change in a file the supervisor loaded\n` },
       'feat: a supervisor change',
     );
@@ -237,5 +241,24 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
     assert.equal(record.pid, supervisorPid);
     assert.equal(countUpdatedMessages(), 2, 'one announcement per update — the re-executed supervisor\'s worker says nothing more');
     await flow.openScreen(`· git @ ${supervisorCommit} · hot`);
+  });
+  it('a pull that changes no compiled source (docs, the CHANGELOG): nothing is rebuilt, so the update asks the worker to reload — a new worker announces it and the checkout is NOT put back', async () => {
+    const docsCommit = fixture.pushCommit(
+      { 'CHANGELOG.md': addChangelogEntry('A docs-only entry.'), 'docs/notes.md': '# Notes\n\nNothing here is compiled.\n' },
+      'docs: a change tsc has nothing to compile in',
+    );
+    await flow.checkNow(`${docsCommit} is out`);
+    const reexecutionsBefore = getCharness().output.split('re-executing the supervisor').length - 1;
+    await flow.tap(`upd_go_${docsCommit}`);
+    await flow.waitForRestartInPlace('a new worker, asked for by the update itself (tsc -w wrote nothing under dist/)', reloadTimeoutMs);
+
+    const updated = await flow.waitForGeneralMessage('the "Updated" message', replyTimeoutMs, (message) => message.text.startsWith(`🔄 Charness updated: ${supervisorCommit} → ${docsCommit}`));
+    assert.equal(updated.text, [`🔄 Charness updated: ${supervisorCommit} → ${docsCommit} (1 commits)`, '• A docs-only entry.'].join('\n'));
+    assert.equal(fixture.getHead(), docsCommit, 'the checkout stays on the pulled commit');
+    assert.ok(getCharness().output.includes(`[update] ${docsCommit}: no compiled source changed, so no rebuild would replace the worker — asked it to reload`));
+    assert.equal(getCharness().pid, supervisorPid, 'the same supervisor');
+    assert.equal(getCharness().output.split('re-executing the supervisor').length - 1, reexecutionsBefore, 'a docs-only change never re-executes the supervisor');
+    assert.equal(general.listMessages().some((message) => message.text.startsWith('⚠️ Automatic update to')), false, 'no failure line: nothing was rolled back');
+    await flow.openScreen(`· git @ ${docsCommit} · hot`);
   });
 });

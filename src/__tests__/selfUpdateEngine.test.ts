@@ -93,6 +93,10 @@ function createHarness(options: HarnessOptions = {}) {
     gitApply: { status: 'updated', from: 'a1b2c3d', to: 'd4e5f6a', migrationGuides: [] } as GitApplyResult,
     gitRollbackError: null as Error | null,
     gitApplyError: null as Error | null,
+    /** What the pulled range changed: a compiled source by default, which `tsc -w` turns into a worker reload by itself. */
+    changedFiles: ['src/bot.ts'],
+    changedFilesError: null as Error | null,
+    reloadError: null as Error | null,
     lockHeld: false,
     checkError: null as Error | null,
     restartError: null as Error | null,
@@ -130,6 +134,15 @@ function createHarness(options: HarnessOptions = {}) {
       return control.gitApply;
     },
     getChangelogDiff: async () => control.changelogDiff,
+    getChangedFiles: async (from, to) => {
+      calls.push(`git.changedFiles ${from} ${to}`);
+      if (control.changedFilesError) throw control.changedFilesError;
+      return control.changedFiles;
+    },
+    reloadHotWorker: async () => {
+      calls.push('git.reloadHotWorker');
+      if (control.reloadError) throw control.reloadError;
+    },
     rollback: async ({ from, to, isHot }) => {
       calls.push(`git.rollback ${from} ${to}${isHot ? ' hot' : ''}`);
       if (control.gitRollbackError) throw control.gitRollbackError;
@@ -885,6 +898,51 @@ describe('a git checkout', () => {
     harness.control.changelogDiff = ['--- a/CHANGELOG.md', '+++ b/CHANGELOG.md', '@@ -1,3 +1,5 @@', ' ## Unreleased', ' ', '+**A new thing.** Details.', '+'].join('\n');
     await harness.engine.runBootStep();
     assert.deepEqual(harness.posted, [{ kind: 'updated', from: 'a1b2c3d', to: 'd4e5f6a', commitCount: 12, summary: { todo: [], groups: [{ version: null, headlines: ['A new thing.'] }], moreCount: 0 } }]);
+  });
+
+  async function pullInHotMode(configure: (control: ReturnType<typeof createHarness>['control']) => void): Promise<ReturnType<typeof createHarness>> {
+    const harness = createHarness({ installKind: checkout, running: checkoutRunning, gitCheck: behind, isHotMode: true });
+    configure(harness.control);
+    harness.state.idleVerdict = idle;
+    await startAndCheck(harness);
+    await harness.advance(idlePollIntervalMs);
+    assert.ok(harness.calls.includes('git.apply hold'));
+    return harness;
+  }
+
+  test('hot mode, a pull that changes no compiled source (docs, CHANGELOG, scripts, tests, manifests): the worker is asked to reload — the deadline is not left to take it for a failed build', async () => {
+    for (const changedFiles of [['README.md'], ['CHANGELOG.md', 'src/__tests__/bot.test.ts'], ['scripts/self-update.sh', 'docker/entrypoint.sh'], ['yarn.lock', 'package.json'], ['src/release/cli.ts', 'src/types.d.ts']]) {
+      const harness = await pullInHotMode((control) => {
+        control.changedFiles = changedFiles;
+      });
+      assert.ok(harness.calls.includes('git.changedFiles a1b2c3d d4e5f6a'), changedFiles.join());
+      assert.ok(harness.calls.includes('git.reloadHotWorker'), `nothing is rebuilt for ${changedFiles.join()}: the reload is requested`);
+      assert.equal(harness.calls.includes('restart'), false, 'nodemon replaces the worker, this process does not restart itself');
+    }
+  });
+
+  test('hot mode, a pull that changes a compiled source: tsc rebuilds and nodemon reloads by itself — no reload is requested', async () => {
+    for (const changedFiles of [['src/bot.ts'], ['README.md', 'src/selfUpdate/updateEngine.ts'], ['src/types.ts']]) {
+      const harness = await pullInHotMode((control) => {
+        control.changedFiles = changedFiles;
+      });
+      assert.equal(harness.calls.includes('git.reloadHotWorker'), false, changedFiles.join());
+    }
+  });
+
+  test('hot mode, a range that cannot be listed gets the reload too (a reload nobody needed is harmless, a rollback of a good pull is not); a reload that fails leaves the deadline as the safety net', async () => {
+    const unreadable = await pullInHotMode((control) => {
+      control.changedFilesError = new Error('git diff failed');
+    });
+    assert.ok(unreadable.calls.includes('git.reloadHotWorker'));
+
+    const failing = await pullInHotMode((control) => {
+      control.changedFiles = ['README.md'];
+      control.reloadError = new Error('dist is missing');
+    });
+    assert.ok(failing.calls.includes('git.reloadHotWorker'));
+    await failing.advance(hotBuildDeadlineMs);
+    assert.ok(failing.calls.includes('git.rollback a1b2c3d d4e5f6a hot'), 'no new worker by the deadline: the existing safety net still rolls it back');
   });
 
   test('hot mode: the pull is not followed by a restart; a worker that never replaces this one by the build deadline is rolled back', async () => {

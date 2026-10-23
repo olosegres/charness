@@ -1,5 +1,5 @@
 import { checkIntervalMs, bootConfirmMs, firstCheckDelayMs, hotBuildDeadlineMs, idlePollIntervalMs } from './constants';
-import type { GitApplyResult, GitSource } from './gitSource';
+import { checkChangesEmittedSource, type GitApplyResult, type GitSource } from './gitSource';
 import type { HostLock } from './hostLock';
 import { getReexecProblems, type ReexecTarget } from './restart';
 import type { HotSupervisorRecord, SupervisorSignalResult } from './hotSupervisor';
@@ -517,6 +517,7 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
       // The watcher rebuilds and nodemon replaces this worker by itself. If no new worker has replaced us by the deadline,
       // the build is taken as failed and the checkout goes back.
       phase = 'restartPending';
+      await requestHotWorkerReloadIfNoRebuild(deps.git, result.from, result.to);
       hotDeadlineTimer = deps.setTimer(() => {
         hotDeadlineTimer = null;
         void rollBackHotBuild(result.from, result.to);
@@ -535,6 +536,28 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
       return;
     }
     phase = 'restartPending';
+  }
+
+  /**
+   * nodemon watches only `dist/`, and `tsc -w` writes there only for a compiled source: a pull of docs, the CHANGELOG, scripts or
+   * the manifests rebuilds nothing, so no worker would replace this one — and the deadline would take that for a failed build and
+   * put the checkout back. Such a pull asks for the reload itself, so the new worker announces the update like any other. A range
+   * that cannot be read is treated the same way: a reload nobody needed is harmless, a rollback of a good pull is not.
+   */
+  async function requestHotWorkerReloadIfNoRebuild(git: GitSource, from: string, to: string): Promise<void> {
+    let isRebuildExpected = false;
+    try {
+      isRebuildExpected = checkChangesEmittedSource(await git.getChangedFiles(from, to));
+    } catch (error) {
+      deps.log(`[update] cannot list what ${to} changed (${error instanceof Error ? error.message : String(error)}): asking the worker to reload`);
+    }
+    if (isRebuildExpected) return;
+    try {
+      await git.reloadHotWorker();
+      deps.log(`[update] ${to}: no compiled source changed, so no rebuild would replace the worker — asked it to reload`);
+    } catch (error) {
+      deps.log(`[update] ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function rollBackHotBuild(from: string, to: string): Promise<void> {

@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CommandOptions, CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { hostLockStaleMs, installTimeoutMs, queryTimeoutMs } from '../selfUpdate/constants';
-import { createGitSource, parseGitCheck, parseScriptKeys } from '../selfUpdate/gitSource';
+import { checkChangesEmittedSource, checkIsEmittedSource, createGitSource, parseGitCheck, parseScriptKeys } from '../selfUpdate/gitSource';
 import { acquireHostLock, type HostLockDeps } from '../selfUpdate/hostLock';
 import { createNpmSource, getHostLockPath, getNpmBinary, parseNpmViewOutput, UpdateSourceError } from '../selfUpdate/npmSource';
 
@@ -244,6 +244,74 @@ describe('git', () => {
       calls.map((call) => [call.file, ...call.args].join(' ')),
       ['git diff --name-only a b', 'git reset --keep a'],
     );
+  });
+
+  test('which changes make `tsc -w` write under dist/ (and so make nodemon replace the worker): compiled sources only', () => {
+    for (const compiled of ['src/bot.ts', 'src/selfUpdate/updateEngine.ts', 'src/types.ts', 'src/connectors/telegram/commands/selfUpdate.ts']) {
+      assert.equal(checkIsEmittedSource(compiled), true, compiled);
+    }
+    for (const notCompiled of ['README.md', 'CHANGELOG.md', 'SETUP.md', 'package.json', 'yarn.lock', 'tsconfig.json', 'scripts/self-update.sh', 'docker/entrypoint.sh', 'stt/gigaam_sidecar.py', 'src/__tests__/bot.test.ts', 'src/release/cli.ts', 'src/types.d.ts', 'src/README.md', 'src/i18n/locale.json']) {
+      assert.equal(checkIsEmittedSource(notCompiled), false, notCompiled);
+    }
+    assert.equal(checkChangesEmittedSource(['README.md', 'src/bot.ts']), true, 'one compiled source among docs is enough');
+    assert.equal(checkChangesEmittedSource(['README.md', 'yarn.lock']), false);
+    assert.equal(checkChangesEmittedSource([]), false);
+  });
+
+  test('getChangedFiles lists the paths between two commits', async () => {
+    const { runner, calls } = createRecordingRunner(() => createResult({ stdout: 'README.md\nsrc/bot.ts\n' }));
+    assert.deepEqual(await createGitSource({ runCommand: runner, root: '/srv/c' }).getChangedFiles('a1b2c3d', 'd4e5f6a'), ['README.md', 'src/bot.ts']);
+    assert.deepEqual(calls[0].args, ['diff', '--name-only', 'a1b2c3d', 'd4e5f6a']);
+  });
+
+  describe('the hot worker reload', () => {
+    let root = '';
+    let entryPath = '';
+    const staleTime = new Date('2026-01-01T00:00:00Z');
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-hot-reload-'));
+      entryPath = path.join(root, 'dist', 'cli', 'botEntry.js');
+      fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+      fs.writeFileSync(entryPath, '// the worker entry\n');
+      fs.utimesSync(entryPath, staleTime, staleTime);
+    });
+
+    afterEach(() => {
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const getEntryMtime = (): number => fs.statSync(entryPath).mtimeMs;
+
+    test('reloadHotWorker touches the worker entry under dist/ — its content stays, only its mtime moves (what nodemon reacts to)', async () => {
+      const source = createGitSource({ runCommand: createRecordingRunner().runner, root });
+      await source.reloadHotWorker();
+      assert.ok(getEntryMtime() > staleTime.getTime());
+      assert.equal(fs.readFileSync(entryPath, 'utf8'), '// the worker entry\n');
+    });
+
+    test('with no dist/ to touch it says so, naming the path', async () => {
+      fs.rmSync(path.join(root, 'dist'), { recursive: true });
+      await assert.rejects(createGitSource({ runCommand: createRecordingRunner().runner, root }).reloadHotWorker(), /cannot ask the hot worker to reload \(.*botEntry\.js\)/);
+    });
+
+    test('a hot rollback of a range that changed no compiled source asks for the reload — otherwise the watcher has nothing to rebuild and the worker would not come back', async () => {
+      const { runner } = createRecordingRunner((call) => (call.args[0] === 'diff' ? createResult({ stdout: 'README.md\nCHANGELOG.md\n' }) : createResult()));
+      await createGitSource({ runCommand: runner, root }).rollback({ from: 'a', to: 'b', isHot: true });
+      assert.ok(getEntryMtime() > staleTime.getTime());
+    });
+
+    test('a hot rollback of a range with a compiled source leaves the rebuild to the watcher: nothing is touched', async () => {
+      const { runner } = createRecordingRunner((call) => (call.args[0] === 'diff' ? createResult({ stdout: 'README.md\nsrc/bot.ts\n' }) : createResult()));
+      await createGitSource({ runCommand: runner, root }).rollback({ from: 'a', to: 'b', isHot: true });
+      assert.equal(getEntryMtime(), staleTime.getTime());
+    });
+
+    test('a plain rollback never touches it', async () => {
+      const { runner } = createRecordingRunner((call) => (call.args[0] === 'diff' ? createResult({ stdout: 'README.md\n' }) : createResult()));
+      await createGitSource({ runCommand: runner, root }).rollback({ from: 'a', to: 'b', isHot: false });
+      assert.equal(getEntryMtime(), staleTime.getTime());
+    });
   });
 
   test('a rollback step that fails says which', async () => {

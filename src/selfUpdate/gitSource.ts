@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { getOutputTail, type CommandRunner } from './commandRunner';
 import { installTimeoutMs, queryTimeoutMs } from './constants';
@@ -8,6 +9,13 @@ import type { GitCheck } from './updatePolicy';
 const selfUpdateScriptRelativePath = path.join('scripts', 'self-update.sh');
 const changelogFileName = 'CHANGELOG.md';
 const manifestFileNames = ['yarn.lock', 'package.json'];
+/** What `tsc -w` turns into files under `dist/` — and so into a worker reload by nodemon (which watches nothing else). */
+const emittedSourceRoot = 'src/';
+const unemittedSourcePrefixes = ['src/__tests__/', 'src/release/'];
+const emittedSourceExtension = '.ts';
+const declarationFileExtension = '.d.ts';
+/** The worker's own entry under `dist/`: a file nodemon watches, whose mtime alone makes it replace the worker. */
+const hotWorkerEntryRelativePath = path.join('dist', 'cli', 'botEntry.js');
 /** Enough context lines that the diff of CHANGELOG.md holds the whole file (an entry's `###` heading included). */
 const wholeFileContext = '--unified=100000';
 const heldBreakingExitCode = 3;
@@ -32,6 +40,29 @@ export interface GitSource {
   getChangelogDiff: (from: string, to: string) => Promise<string>;
   /** Put the checkout back on `from` (after an install of `to` failed) and rebuild unless a watcher does. */
   rollback: (options: { from: string; to: string; isHot: boolean }) => Promise<void>;
+  /** The paths that differ between two commits (`git diff --name-only`). */
+  getChangedFiles: (from: string, to: string) => Promise<string[]>;
+  /** Hot mode: make nodemon replace the worker though `dist/` got no new content (it only watches `dist/`). */
+  reloadHotWorker: () => Promise<void>;
+}
+
+/**
+ * @description Whether a change to `filePath` makes `tsc -w` write a file under `dist/` — a TypeScript source it compiles (tests,
+ * the release tooling and declaration files excluded). Everything else — docs, the CHANGELOG, scripts, the manifests, a tsconfig
+ * edit that changes no output — leaves `dist/` as it is, so nothing would replace a hot worker by itself.
+ */
+export function checkIsEmittedSource(filePath: string): boolean {
+  return (
+    filePath.startsWith(emittedSourceRoot) &&
+    filePath.endsWith(emittedSourceExtension) &&
+    !filePath.endsWith(declarationFileExtension) &&
+    !unemittedSourcePrefixes.some((prefix) => filePath.startsWith(prefix))
+  );
+}
+
+/** @description Whether a pull of these paths is followed by a rebuild — and so by nodemon replacing the hot worker. */
+export function checkChangesEmittedSource(changedFiles: string[]): boolean {
+  return changedFiles.some(checkIsEmittedSource);
 }
 
 /** @description The `key=value` lines of the script's stdout (its log lines are ignored). */
@@ -46,6 +77,10 @@ export function parseScriptKeys(stdout: string): Record<string, string> {
 
 function splitGuides(text: string | undefined): string[] {
   return (text ?? '').split(' ').filter((guide) => guide !== '');
+}
+
+function splitPaths(text: string): string[] {
+  return text.split('\n').filter((line) => line !== '');
 }
 
 function toSkipReason(text: string | undefined): GitSkipReason | null {
@@ -76,6 +111,20 @@ export function createGitSource({ runCommand, root, env }: { runCommand: Command
     return result.stdout;
   }
 
+  async function getChangedFiles(from: string, to: string): Promise<string[]> {
+    return splitPaths(await runGit(['diff', '--name-only', from, to], queryTimeoutMs));
+  }
+
+  async function reloadHotWorker(): Promise<void> {
+    const entry = path.join(root, hotWorkerEntryRelativePath);
+    const now = new Date();
+    try {
+      await fs.promises.utimes(entry, now, now);
+    } catch (error) {
+      throw new UpdateSourceError(`cannot ask the hot worker to reload (${entry}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return {
     async check() {
       const result = await runCommand('bash', [script, '--check'], { cwd: root, env, timeoutMs: queryTimeoutMs });
@@ -100,8 +149,12 @@ export function createGitSource({ runCommand, root, env }: { runCommand: Command
       return runGit(['diff', wholeFileContext, `${from}..${to}`, '--', changelogFileName], queryTimeoutMs);
     },
 
+    getChangedFiles,
+
+    reloadHotWorker,
+
     async rollback({ from, to, isHot }) {
-      const changedFiles = (await runGit(['diff', '--name-only', from, to], queryTimeoutMs)).split('\n');
+      const changedFiles = await getChangedFiles(from, to);
       // `--keep`: refuses rather than overwrite a local change the update never touched.
       await runGit(['reset', '--keep', from], queryTimeoutMs);
       const isManifestChanged = changedFiles.some((file) => manifestFileNames.includes(file));
@@ -109,11 +162,14 @@ export function createGitSource({ runCommand, root, env }: { runCommand: Command
         const install = await runCommand('yarn', ['install', '--immutable'], { cwd: root, env, timeoutMs: installTimeoutMs });
         if (!install.ok) throw new UpdateSourceError(`yarn install failed on the way back: ${getOutputTail(install)}`);
       }
-      // A hot watcher rebuilds the reset checkout by itself; a second build beside it would race its writes.
-      if (!isHot) {
-        const build = await runCommand('yarn', ['build'], { cwd: root, env, timeoutMs: installTimeoutMs });
-        if (!build.ok) throw new UpdateSourceError(`yarn build failed on the way back: ${getOutputTail(build)}`);
+      // A hot watcher rebuilds the reset checkout by itself; a second build beside it would race its writes. When the range changed
+      // no compiled source there is nothing to rebuild — and nothing that would restart the worker: ask for the reload.
+      if (isHot) {
+        if (!checkChangesEmittedSource(changedFiles)) await reloadHotWorker();
+        return;
       }
+      const build = await runCommand('yarn', ['build'], { cwd: root, env, timeoutMs: installTimeoutMs });
+      if (!build.ok) throw new UpdateSourceError(`yarn build failed on the way back: ${getOutputTail(build)}`);
     },
   };
 }
