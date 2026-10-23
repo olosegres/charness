@@ -761,6 +761,18 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.runCommand('accounts', 'remove credits');
   });
 
+  it('a key typed on the /accounts command line is deleted with its message, never echoed and never taken', async () => {
+    const typedKey = `sk-ant-api03-${'c'.repeat(40)}`;
+    const commandMessageId = 9_002;
+    const startedBefore = startedLogins.length;
+    await harness.runCommand('accounts', `add inline api ${typedKey}`, commandMessageId);
+    assert.ok(harness.deletedMessageIds.includes(commandMessageId), 'the command message is deleted');
+    assert.match(harness.replies.at(-1)?.text ?? '', /That command carried an Anthropic key/);
+    assert.ok(harness.replies.every((reply) => !(reply.text ?? '').includes(typedKey)), 'the key is never echoed');
+    assert.equal(startedLogins.length, startedBefore, 'no sign-in was started');
+    assert.equal(harness.state.getClaudeProfileRecord('inline'), undefined, 'no account was created');
+  });
+
   it('a pasted key the API refuses is not stored; an accepted one is kept 0600 in that account\'s directory, the account probed, recorded and applied', async () => {
     const dir = path.join(dataDir, 'claude-profiles', 'console');
     const apiKey = `sk-ant-api03-${'z'.repeat(40)}`;

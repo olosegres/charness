@@ -685,7 +685,14 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // an account billed to a Claude Console organization's API balance); `use <name>` switches
     // this topic (General: the instance default); `login <name>` signs a profile in again; `remove <name>`
     // deletes one. Not gated on a session: the pick is read at the next spawn, so it must be settable first.
-    command(['account', 'accounts'], async (_ctx, key, parsed: InboundCommand) => {
+    command(['account', 'accounts'], async (ctx, key, parsed: InboundCommand) => {
+      // A key typed on the command line (`/accounts add console api sk-ant-…`) is a secret like a pasted one: the message
+      // is deleted, the key never echoed nor taken — it belongs to the sign-in that follows.
+      if (checkIsAnthropicSecretLike(parsed.argsText)) {
+        await deleteThreadMessage(key, ctx.message.message_id);
+        await replyToThread(key, t('account.apiKeyInCommand'));
+        return;
+      }
       const isGeneral = checkIsGeneral(key);
       const [verb = '', ...rest] = parsed.args;
       const name = normaliseClaudeProfileName(rest.join(' '));

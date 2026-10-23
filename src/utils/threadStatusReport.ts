@@ -116,12 +116,12 @@ export function getThreadStatusReport({
 
 /**
  * @description `name · email` like an `/accounts` row (`name · not signed in` once a probe said so, the name
- * alone when never probed), `· 💳 API` for an account billed to the API, plus the `/accounts` limit mark while it lies
- * in the future, reset in the instance zone.
+ * alone when never probed), `· 💳 API` for an account billed to the API, `· 💸 credits used up` while that mark holds,
+ * plus the `/accounts` limit mark while it lies in the future, reset in the instance zone.
  */
 function formatAccount({ name, email, loggedIn, limitedUntil, billing, creditExhaustedAt }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
   const detail = loggedIn === false ? t('account.row.loggedOut') : email;
-  const metered = billing === 'api' ? `${t('status.thread_account_api')}${creditExhaustedAt ? t('status.thread_account_exhausted') : ''}` : '';
+  const metered = `${billing === 'api' ? t('status.thread_account_api') : ''}${creditExhaustedAt ? t('status.thread_account_exhausted') : ''}`;
   const limited = limitedUntil !== null && Date.parse(limitedUntil) > nowMs
     ? t('status.thread_account_limited', { until: formatClaudeUsageResetAt(limitedUntil, timezone, nowMs) })
     : '';

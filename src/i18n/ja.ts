@@ -913,6 +913,7 @@ export const jaDict: Record<string, string> = {
   'account.apiKeyNotApiAccount': '🔐 Anthropic のキーのように見えたため、メッセージを削除しました。このログインは Claude サブスクリプション用です — API キーを使うには API アカウントを追加してください: /accounts add <name> api',
   'account.apiKeyInvalidShape': '🔐 削除しました: Claude の API キーではありません（API キーは sk-ant-api… で始まります）。ログインページのコードか API キーを貼り付けてください。',
   'account.apiKeyAsName': '🔐 Anthropic のキーのようだったため、メッセージを削除しました。まずアカウント名を送ってください — 小文字、数字、- と _、{max} 文字まで。キーはログインリンクが届いてから貼り付けてください。',
+  'account.apiKeyInCommand': '🔐 コマンドに Anthropic のキーが含まれていたため、メッセージを削除しました。キーはコマンドラインに書きません: /accounts add <name> api でアカウントを追加し（または /accounts login <name> で再ログイン）、キーはログインリンクが届いてから貼り付けてください。',
   'account.apiKeyRejected': '❌ API がそのキーを拒否しました（失効、入力ミス、または API キーではない）。保存していません。/accounts login {name} で再試行してください。',
   'account.apiKeySaved': '✅ アカウント {name} の API キーを保存しました（API が受け付けました）。そのアカウント専用のディレクトリに保管され、そのセッションだけが使います。リクエストごとに課金されます。',
   'account.apiKeySavedUnverified': '✅ アカウント {name} の API キーを保存しましたが、確認のために API に接続できませんでした — 最初のリクエストで分かります。そのアカウントのセッションだけが使います。リクエストごとに課金されます。',

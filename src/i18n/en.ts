@@ -963,6 +963,7 @@ export const enDict: Record<string, string> = {
   'account.apiKeyNotApiAccount': '🔐 That looked like an Anthropic key, so the message was deleted. This sign-in is for a Claude subscription — to use an API key, add an API account: /accounts add <name> api.',
   'account.apiKeyInvalidShape': '🔐 Deleted: that is not a Claude API key (one starts with sk-ant-api…). Paste the code from the sign-in page, or an API key.',
   'account.apiKeyAsName': '🔐 That looked like an Anthropic key, so the message was deleted. Send a name for the account first — lowercase letters, digits, - and _, up to {max} characters; paste the key once its sign-in link arrives.',
+  'account.apiKeyInCommand': '🔐 That command carried an Anthropic key, so the message was deleted. A key never goes on the command line: add the account with /accounts add <name> api (or sign it in again with /accounts login <name>) and paste the key once its sign-in link arrives.',
   'account.apiKeyRejected': '❌ The API refused that key (revoked, mistyped, or not an API key), so it was not stored. Run /accounts login {name} to try again.',
   'account.apiKeySaved': '✅ API key stored for account {name} (the API accepted it). It is kept in that account\'s own directory and used by its sessions only; every request is billed.',
   'account.apiKeySavedUnverified': '✅ API key stored for account {name}, but the API could not be reached to check it — the first request will tell. It is used by that account\'s sessions only; every request is billed.',

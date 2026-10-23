@@ -207,8 +207,8 @@ export interface ClaudeProfileRecord {
    */
   limitedUntil?: string;
   /**
-   * ISO instant the account's prepaid API credit balance was found used up («Credit balance is too low», an account
-   * billed to API credits). No window resets it: it holds until the operator acts — picks the account again or signs it
+   * ISO instant the account's prepaid API credit balance was found used up («Credit balance is too low» — normally an
+   * account billed to API credits, but set on whichever account the refusal came from). No window resets it: it holds until the operator acts — picks the account again or signs it
    * in again — or a billed turn on it goes through (the balance is back), and keeps the account out of the fallback chain and
    * the ranking till then.
    */

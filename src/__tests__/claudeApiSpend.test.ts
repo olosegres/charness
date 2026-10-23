@@ -65,7 +65,8 @@ describe('a turn\'s spend', () => {
     assert.deepEqual(getClaudeTurnCostOutcome({ billing: 'api', isCreditExhausted: true, isError: false, turnCostUsd: 0 }), { spendUsd: null, isCreditMarkCleared: false }, 'a result that billed nothing (nothing to compact, a local command) proves nothing');
     assert.deepEqual(getClaudeTurnCostOutcome({ billing: 'api', isCreditExhausted: true, isError: false, turnCostUsd: null }), { spendUsd: null, isCreditMarkCleared: false }, 'nor does an unknown cost');
     assert.deepEqual(getClaudeTurnCostOutcome({ billing: 'api', isCreditExhausted: false, isError: false, turnCostUsd: null }), { spendUsd: null, isCreditMarkCleared: false }, 'an unknown cost adds nothing');
-    assert.deepEqual(getClaudeTurnCostOutcome({ billing: 'subscription', isCreditExhausted: true, isError: false, turnCostUsd: 1 }), { spendUsd: null, isCreditMarkCleared: false });
+    assert.deepEqual(getClaudeTurnCostOutcome({ billing: 'subscription', isCreditExhausted: true, isError: false, turnCostUsd: 1 }), { spendUsd: null, isCreditMarkCleared: true }, 'a mark that landed on a subscription ends the same way; its notional figure is never spend');
+    assert.deepEqual(getClaudeTurnCostOutcome({ billing: null, isCreditExhausted: true, isError: true, turnCostUsd: 1 }), { spendUsd: null, isCreditMarkCleared: false });
     assert.deepEqual(getClaudeTurnCostOutcome({ billing: null, isCreditExhausted: false, isError: false, turnCostUsd: 1 }), { spendUsd: null, isCreditMarkCleared: false });
   });
 

@@ -913,6 +913,7 @@ export const zhDict: Record<string, string> = {
   'account.apiKeyNotApiAccount': '🔐 这看起来像 Anthropic 密钥，所以消息已删除。此登录用于 Claude 订阅 — 要使用 API 密钥，请添加 API 账号：/accounts add <name> api。',
   'account.apiKeyInvalidShape': '🔐 已删除：这不是 Claude API 密钥（API 密钥以 sk-ant-api… 开头）。请粘贴登录页面上的代码，或一个 API 密钥。',
   'account.apiKeyAsName': '🔐 这看起来像 Anthropic 密钥，因此消息已删除。请先发送账号名称——小写字母、数字、- 和 _，最多 {max} 个字符；登录链接到达后再粘贴密钥。',
+  'account.apiKeyInCommand': '🔐 该命令包含 Anthropic 密钥，因此消息已删除。密钥不放在命令行中：用 /accounts add <name> api 添加账号（或用 /accounts login <name> 重新登录），登录链接到达后再粘贴密钥。',
   'account.apiKeyRejected': '❌ API 拒绝了该密钥（已吊销、输错或不是 API 密钥），因此没有保存。运行 /accounts login {name} 重试。',
   'account.apiKeySaved': '✅ 已为账号 {name} 保存 API 密钥（API 已接受）。它保存在该账号自己的目录中，只供该账号的会话使用；每个请求都会计费。',
   'account.apiKeySavedUnverified': '✅ 已为账号 {name} 保存 API 密钥，但无法连接 API 进行检查 — 第一个请求会给出结果。它只供该账号的会话使用；每个请求都会计费。',

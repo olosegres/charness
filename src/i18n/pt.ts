@@ -920,6 +920,7 @@ export const ptDict: Record<string, string> = {
   'account.apiKeyNotApiAccount': '🔐 Parecia uma chave da Anthropic, então a mensagem foi apagada. Este login é para uma assinatura do Claude — para usar uma chave de API, adicione uma conta de API: /accounts add <nome> api.',
   'account.apiKeyInvalidShape': '🔐 Apagado: isso não é uma chave de API do Claude (ela começa com sk-ant-api…). Cole o código da página de login ou uma chave de API.',
   'account.apiKeyAsName': '🔐 Isso parecia uma chave da Anthropic, então a mensagem foi apagada. Envie primeiro um nome para a conta — letras minúsculas, dígitos, - e _, até {max} caracteres; cole a chave quando o link de login chegar.',
+  'account.apiKeyInCommand': '🔐 Esse comando trazia uma chave da Anthropic, então a mensagem foi apagada. Uma chave nunca vai na linha de comando: adicione a conta com /accounts add <nome> api (ou entre de novo com /accounts login <nome>) e cole a chave quando o link de login chegar.',
   'account.apiKeyRejected': '❌ A API recusou essa chave (revogada, digitada errado ou não é uma chave de API), então ela não foi salva. Use /accounts login {name} para tentar de novo.',
   'account.apiKeySaved': '✅ Chave de API salva para a conta {name} (a API a aceitou). Ela fica no diretório próprio dessa conta e só as sessões dela a usam; cada requisição é cobrada.',
   'account.apiKeySavedUnverified': '✅ Chave de API salva para a conta {name}, mas não foi possível falar com a API para verificá-la — a primeira requisição dirá. Só as sessões dessa conta a usam; cada requisição é cobrada.',

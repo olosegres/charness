@@ -7105,8 +7105,8 @@ function onClaudeRateLimitEvent(configDir: string | null, event: ClaudeRateLimit
 /**
  * A json-stream turn's cost (`utils/claudeApiSpend.ts`): the topic's conversation baseline moves on for EVERY account
  * (a later API turn of the same conversation must count only itself), and the turn's spend adds to the account's only
- * when it is billed to API credits. A billed turn on such an account that went through ends a used-up-credits mark:
- * the balance is back.
+ * when it is billed to API credits. A billed turn that went through ends a used-up-credits mark on whatever account it
+ * ran on: the balance is back.
  */
 function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: ClaudeTurnCostReport): void {
   const turnCostUsd = computeClaudeTurnCostUsd({ previous: state.getClaudeCostBaseline(key), ...report });

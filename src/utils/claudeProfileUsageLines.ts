@@ -35,9 +35,9 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
  * @description The profile's usage as display lines: the windows as `used% 🔄 reset` — 5h and weekly always (`—`
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
  * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
- * reset instant in `timezone`. An account billed to API credits has no windows (its row already says it pays per
- * use): what it spent through the bot, and the used-up mark while it holds. The lines carry the locale's own
- * indentation (they hang under a row); empty for an account with nothing to show.
+ * reset instant in `timezone`, and the used-up-credits mark while it holds. An account billed to API credits has no
+ * windows (its row already says it pays per use): what it spent through the bot, and that mark. The lines carry the
+ * locale's own indentation (they hang under a row); empty for an account with nothing to show.
  */
 export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource | undefined, timezone: string, nowMs: number): string[] {
   if (source?.billing === 'api') return formatApiBillingLines(source, timezone, nowMs);
@@ -59,6 +59,8 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
   if (source?.limitedUntil && Date.parse(source.limitedUntil) > nowMs) {
     lines.push(t('account.row.limited', { until: formatClaudeUsageResetAt(source.limitedUntil, timezone, nowMs) }));
   }
+  // The refusal can come from any account (its billing unrecorded, extra usage): the mark keeps it out of the chain.
+  if (source?.creditExhaustedAt) lines.push(t('account.row.creditExhausted'));
   return lines;
 }
 

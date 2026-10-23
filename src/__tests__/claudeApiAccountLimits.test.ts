@@ -212,6 +212,18 @@ describe('what the screens say', () => {
     assert.deepEqual(lines, ['Account: console · ops@example.com · 💳 API · 💸 credits used up']);
   });
 
+  it('a used-up mark that landed on a subscription account shows on /accounts and /status too (it keeps the account out of the chain)', () => {
+    const usage = { fetchedAt: inHours(-1), source: 'api' as const, isStale: false, buckets: [] };
+    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'subscription', usage, creditExhaustedAt: inHours(-1) }, 'UTC', nowMs), ['    💸 API credits used up — top them up, then pick it again']);
+    assert.deepEqual(formatClaudeProfileUsageLines({ billing: null, creditExhaustedAt: null }, 'UTC', nowMs), []);
+    const lines = formatThreadStatusAccountLines({
+      current: { name: 'default', email: 'me@example.com', loggedIn: true, limitedUntil: null, billing: 'subscription', creditExhaustedAt: inHours(-1) },
+      pending: null,
+      nowMs,
+    }, 'UTC');
+    assert.deepEqual(lines, ['Account: default · me@example.com · 💸 credits used up']);
+  });
+
   it('`charness claude-profiles` says the account pays per use and is never recommended', () => {
     const report = buildClaudeProfilesReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(

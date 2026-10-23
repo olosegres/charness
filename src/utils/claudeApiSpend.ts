@@ -59,15 +59,16 @@ export function computeClaudeTurnCostUsd(input: {
 export interface ClaudeTurnCostOutcome {
   /** What to add to the account's spend: the turn's cost on an account billed to API credits; `null` for nothing. */
   spendUsd: number | null;
-  /** A billed turn went through on an API account marked out of credits: the balance is back, the mark ends. */
+  /** A billed turn went through on an account marked out of credits: the balance is back, the mark ends. */
   isCreditMarkCleared: boolean;
 }
 
 /**
  * @description The effect of a turn's cost on its account: only an account billed to API credits has spend (a
- * subscription's figure is notional), and only a positive, known cost adds to it. Only a turn on it that did not end on
- * an error AND was billed proves its credits are back — a result that made no request (a compaction with nothing to
- * compact, a local command) costs nothing and proves nothing.
+ * subscription's figure is notional), and only a positive, known cost adds to it. A turn that did not end on an error
+ * AND was billed proves the account works again, so it ends a used-up-credits mark on ANY account (the refusal marks
+ * whichever account it came from) — a result that made no request (a compaction with nothing to compact, a local
+ * command) costs nothing and proves nothing.
  */
 export function getClaudeTurnCostOutcome(input: {
   billing: ClaudeProfileBilling | null;
@@ -75,9 +76,11 @@ export function getClaudeTurnCostOutcome(input: {
   isError: boolean;
   turnCostUsd: number | null;
 }): ClaudeTurnCostOutcome {
-  if (input.billing !== 'api') return { spendUsd: null, isCreditMarkCleared: false };
-  const spendUsd = input.turnCostUsd !== null && input.turnCostUsd > 0 ? input.turnCostUsd : null;
-  return { spendUsd, isCreditMarkCleared: input.isCreditExhausted && !input.isError && spendUsd !== null };
+  const billedUsd = input.turnCostUsd !== null && input.turnCostUsd > 0 ? input.turnCostUsd : null;
+  return {
+    spendUsd: input.billing === 'api' ? billedUsd : null,
+    isCreditMarkCleared: input.isCreditExhausted && !input.isError && billedUsd !== null,
+  };
 }
 
 /** The account's spend after a turn that cost `turnCostUsd` at `atIso` (the first counted turn opens `since`). */
