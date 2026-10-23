@@ -24,4 +24,4 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 
 ## Install
 
-- [Setup](https://github.com/olosegres/charness/blob/main/SETUP.md): `npm install -g charness`, put your bot token in one `.env`, launch from your projects folder, bind a topic; also Jira, and Docker as an alternative.
+- [Setup](https://github.com/olosegres/charness/blob/main/SETUP.md): `npm install -g charness`, put your bot token in one `.env`, launch from your projects folder, bind a topic; on Windows run it inside WSL2; also Jira, and Docker as an alternative.
