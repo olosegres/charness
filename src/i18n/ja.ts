@@ -317,6 +317,7 @@ export const jaDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ 設定を保存できませんでした：{path} に書き込めません（{code}）。フォルダを書き込み可能にしてください。',
   'update.cmd.installStarted': '⬆️ {version} に更新中 — どのエージェントも作業していなければすぐインストールします。',
   'update.cmd.upToDate': 'ℹ️ すでに最新です。',
+  'update.cmd.blocked': 'ℹ️ 更新されませんでした — {reason}',
   'update.cmd.busy': 'ℹ️ 更新はすでに進行中です。',
   'update.cmd.cannotInstall': 'ℹ️ このインストールは自分で更新できません — 手動で更新してください（/update 参照）。',
   'update.cmd.checking': '確認中…',

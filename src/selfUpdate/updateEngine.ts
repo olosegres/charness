@@ -113,7 +113,11 @@ export interface UpdateStatus {
   inProgressTarget: string | null;
 }
 
-export type InstallRequestResult = 'started' | 'alreadyUpToDate' | 'busy' | 'cannotInstall';
+/**
+ * `blocked`: an update exists but cannot be installed now (a checkout with local changes, a version that needs a newer Node) — the
+ * offer on the screen says why; unlike `alreadyUpToDate`, which is for nothing to install, or for a stale button.
+ */
+export type InstallRequestResult = 'started' | 'alreadyUpToDate' | 'busy' | 'cannotInstall' | 'blocked';
 
 export interface UpdateEngine {
   /** Arm the hourly check. */
@@ -782,7 +786,9 @@ export function createUpdateEngine(deps: UpdateEngineDeps): UpdateEngine {
       const offer = getOffer();
       if (phase === 'installing' || phase === 'restartPending') return 'busy';
       if (!canInstall) return 'cannotInstall';
-      if (offer === null || offer.target !== target || !offer.canInstallNow) return 'alreadyUpToDate';
+      if (offer === null) return 'alreadyUpToDate';
+      if (!offer.canInstallNow) return 'blocked';
+      if (offer.target !== target) return 'alreadyUpToDate';
       queueInstall({ target, isUserRequested: true, isBreakingAllowed: true });
       // Do not wait a poll interval for an idle bot: try at once.
       if (idleTimer !== null) {

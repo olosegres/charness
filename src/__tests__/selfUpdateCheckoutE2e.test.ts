@@ -186,6 +186,9 @@ describe('Automatic updates, git checkout (plain mode): a checkout, a bare remot
     fs.appendFileSync(licensePath, '\nlocal edit\n');
     await flow.checkNow('skipped: local changes in the checkout');
     assert.equal(flow.getButtons().some((data) => data.startsWith('upd_go_')), false);
+    const refused = await general.sendAndAwaitReply('/update now', 'Nothing was updated');
+    assert.equal(refused.text, 'ℹ️ Nothing was updated — skipped: local changes in the checkout', 'the typed «update now» names the reason instead of claiming it is up to date');
+    assert.equal(fixture.getHead(), secondCommit, 'and pulled nothing');
 
     fixture.git('checkout', '--', 'LICENSE');
     await flow.checkNow(`${fixCommit} is out`);

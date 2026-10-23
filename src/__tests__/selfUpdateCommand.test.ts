@@ -272,6 +272,19 @@ describe('the text forms', () => {
     assert.match(sent.at(-1)?.text ?? '', /cannot update itself/);
   });
 
+  test('/update now with an update that cannot be installed now says why — the screen\'s own reason — not "up to date"', async () => {
+    createFeature();
+    installResult = 'blocked';
+    engineOffer = { target: 'd4e5f6a', action: 'skipped', until: null, required: null, skipReason: 'dirty', canInstallNow: false };
+    await runCommand('/update now');
+    assert.equal(sent.at(-1)?.text, 'ℹ️ Nothing was updated — skipped: local changes in the checkout');
+    engineOffer = { target: '3.5.0', action: 'needsNode', until: null, required: '>=24', skipReason: null, canInstallNow: false };
+    await runCommand('/update now');
+    assert.equal(sent.at(-1)?.text, 'ℹ️ Nothing was updated — 3.5.0 needs Node >=24 (this one runs 22.23.3)');
+    const { answers } = await tap('upd_go_3.5.0');
+    assert.deepEqual(answers, ['ℹ️ Nothing was updated — 3.5.0 needs Node >=24 (this one runs 22.23.3)'], 'the button answers the same');
+  });
+
   test('/update now with nothing to install says it is up to date — or, for an install that cannot update itself, that it cannot', async () => {
     createFeature();
     installResult = 'alreadyUpToDate';

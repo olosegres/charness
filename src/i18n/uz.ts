@@ -317,6 +317,7 @@ export const uzDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Sozlamani saqlab bo‘lmadi: {path} ga yozib bo‘lmaydi ({code}). Uning papkasini yoziladigan qiling.',
   'update.cmd.installStarted': '⬆️ {version} ga yangilanmoqda — hech bir agent ishlamayotgan zahoti o‘rnatiladi.',
   'update.cmd.upToDate': 'ℹ️ Allaqachon eng so‘nggi versiya.',
+  'update.cmd.blocked': 'ℹ️ Hech narsa yangilanmadi — {reason}',
   'update.cmd.busy': 'ℹ️ Yangilanish allaqachon davom etmoqda.',
   'update.cmd.cannotInstall': 'ℹ️ Bu o‘rnatish o‘zini yangilay olmaydi — qo‘lda yangilang (/update ga qarang).',
   'update.cmd.checking': 'Tekshirilmoqda…',

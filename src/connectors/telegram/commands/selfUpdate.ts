@@ -13,6 +13,7 @@ import type { InstallRequestResult, UpdateEngine } from '../../../selfUpdate/upd
 import type { SessionKey } from '../../../sessionKey';
 import {
   buildUpdateScreen,
+  describeBlockedOffer,
   updateAnnouncementInstallCallbackRe,
   updateCheckCallback,
   updateInstallCallbackRe,
@@ -106,8 +107,16 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
           return t('update.cmd.cannotInstall');
         case 'alreadyUpToDate':
           return t('update.cmd.upToDate');
+        case 'blocked':
+          return t('update.cmd.blocked', { reason: getBlockedReason() });
       }
     });
+  }
+
+  /** What the screen says about the update that cannot be installed now; read where a refused install is worded (inside the locale scope). */
+  function getBlockedReason(): string {
+    const status = getUpdateEngine()?.getStatus();
+    return status?.offer ? describeBlockedOffer(status.offer, status.runningNode, t) : t('update.screen.skip.other');
   }
 
   /** The target an «update now» means: what the last check found and this install can install. */

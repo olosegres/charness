@@ -317,6 +317,7 @@ export const frDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Le réglage n\'a pas pu être enregistré : {path} n\'est pas inscriptible ({code}). Rendez son dossier inscriptible.',
   'update.cmd.installStarted': '⬆️ Mise à jour vers {version} — installation dès qu\'aucun agent ne travaille.',
   'update.cmd.upToDate': 'ℹ️ Déjà à jour.',
+  'update.cmd.blocked': 'ℹ️ Rien n’a été mis à jour — {reason}',
   'update.cmd.busy': 'ℹ️ Une mise à jour est déjà en cours.',
   'update.cmd.cannotInstall': 'ℹ️ Cette installation ne peut pas se mettre à jour seule — mettez à jour à la main (voir /update).',
   'update.cmd.checking': 'Vérification…',

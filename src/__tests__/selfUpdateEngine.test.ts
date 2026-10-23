@@ -359,7 +359,7 @@ describe('npm: versions that are not installed', () => {
     await harness.advance(npmHoldMs + checkIntervalMs * 2);
     assert.deepEqual(harness.posted, [{ kind: 'needsNode', version: '3.5.0', required: '>=24', runningNode: '22.23.3' }]);
     assert.equal(harness.engine.getStatus().offer?.canInstallNow, false);
-    assert.equal(await harness.engine.requestInstall('3.5.0'), 'alreadyUpToDate');
+    assert.equal(await harness.engine.requestInstall('3.5.0'), 'blocked', 'there is an update, it cannot be installed here: not "up to date"');
   });
 
   test('the screen says what a version is at once, not after the hold: a Node that is too old (no tap), a major (a tap, never by itself)', async () => {
@@ -863,6 +863,9 @@ describe('a git checkout', () => {
     assert.equal(harness.calls.some((call) => call.startsWith('git.apply')), false);
     assert.equal(harness.engine.getStatus().offer?.action, 'skipped');
     assert.equal(harness.engine.getStatus().offer?.skipReason, 'dirty');
+    assert.equal(await harness.engine.requestInstall(''), 'blocked', 'the checkout is behind and left alone — «update now» says that, not "up to date"');
+    assert.equal(await harness.engine.requestInstall('d4e5f6a'), 'blocked', 'a stale button too');
+    assert.equal(harness.calls.some((call) => call.startsWith('git.apply')), false, 'nothing was queued');
   });
 
   test('an unreachable remote is a failing check, not a skip', async () => {

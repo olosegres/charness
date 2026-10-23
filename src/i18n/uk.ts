@@ -323,6 +323,7 @@ export const ukDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Налаштування не вдалося зберегти: у {path} не можна писати ({code}). Зробіть її теку доступною для запису.',
   'update.cmd.installStarted': '⬆️ Оновлюю до {version} — встановлю, щойно жоден агент не працює.',
   'update.cmd.upToDate': 'ℹ️ Уже остання версія.',
+  'update.cmd.blocked': 'ℹ️ Нічого не оновлено — {reason}',
   'update.cmd.busy': 'ℹ️ Оновлення вже триває.',
   'update.cmd.cannotInstall': 'ℹ️ Це встановлення не вміє оновлюватися саме — оновіть вручну (див. /update).',
   'update.cmd.checking': 'Перевіряю…',

@@ -321,6 +321,7 @@ export const ruDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Настройку не удалось сохранить: в {path} нельзя писать ({code}). Сделайте её папку доступной для записи.',
   'update.cmd.installStarted': '⬆️ Обновляю до {version} — поставлю, как только ни один агент не работает.',
   'update.cmd.upToDate': 'ℹ️ Уже последняя версия.',
+  'update.cmd.blocked': 'ℹ️ Ничего не обновлено — {reason}',
   'update.cmd.busy': 'ℹ️ Обновление уже идёт.',
   'update.cmd.cannotInstall': 'ℹ️ Эта установка не умеет обновляться сама — обновите вручную (см. /update).',
   'update.cmd.checking': 'Проверяю…',

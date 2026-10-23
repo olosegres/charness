@@ -317,6 +317,7 @@ export const zhDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ 无法保存设置：{path} 不可写（{code}）。请使其目录可写。',
   'update.cmd.installStarted': '⬆️ 正在更新到 {version} — 没有代理在工作时立即安装。',
   'update.cmd.upToDate': 'ℹ️ 已是最新。',
+  'update.cmd.blocked': 'ℹ️ 未更新 — {reason}',
   'update.cmd.busy': 'ℹ️ 更新已在进行中。',
   'update.cmd.cannotInstall': 'ℹ️ 此安装无法自行更新 — 请手动更新（见 /update）。',
   'update.cmd.checking': '正在检查…',

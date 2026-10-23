@@ -317,6 +317,7 @@ export const ptDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Não foi possível salvar a configuração: {path} não pode ser gravado ({code}). Torne a pasta gravável.',
   'update.cmd.installStarted': '⬆️ Atualizando para {version} — instalando assim que nenhum agente estiver trabalhando.',
   'update.cmd.upToDate': 'ℹ️ Já está atualizado.',
+  'update.cmd.blocked': 'ℹ️ Nada foi atualizado — {reason}',
   'update.cmd.busy': 'ℹ️ Já há uma atualização em andamento.',
   'update.cmd.cannotInstall': 'ℹ️ Esta instalação não consegue se atualizar sozinha — atualize à mão (veja /update).',
   'update.cmd.checking': 'Verificando…',

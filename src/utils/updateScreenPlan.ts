@@ -83,6 +83,12 @@ function describeSkip(reason: GitSkipReason | string | null, translate: Translat
   }
 }
 
+/** @description Why an update that exists cannot be installed now — the line the screen shows, and what a refused «update now» says. */
+export function describeBlockedOffer(offer: UpdateOffer, runningNode: string, translate: Translate): string {
+  if (offer.action === 'needsNode') return translate('update.screen.offer.needsNode', { version: offer.target, required: offer.required ?? '', running: runningNode });
+  return translate('update.screen.skipped', { reason: describeSkip(offer.skipReason, translate) });
+}
+
 function describeOffer(offer: UpdateOffer, status: UpdateStatus, input: UpdateScreenInput, translate: Translate): string {
   const params = { version: offer.target, required: offer.required ?? '', running: status.runningNode };
   switch (offer.action) {
@@ -99,9 +105,8 @@ function describeOffer(offer: UpdateOffer, status: UpdateStatus, input: UpdateSc
     case 'offerBreaking':
       return translate('update.screen.offer.breaking', params);
     case 'needsNode':
-      return translate('update.screen.offer.needsNode', params);
     case 'skipped':
-      return translate('update.screen.skipped', { reason: describeSkip(offer.skipReason, translate) });
+      return describeBlockedOffer(offer, status.runningNode, translate);
   }
 }
 

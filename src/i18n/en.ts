@@ -321,6 +321,7 @@ export const enDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ The setting could not be saved: {path} cannot be written ({code}). Make its directory writable.',
   'update.cmd.installStarted': '⬆️ Updating to {version} — installing as soon as no agent is working.',
   'update.cmd.upToDate': 'ℹ️ Already up to date.',
+  'update.cmd.blocked': 'ℹ️ Nothing was updated — {reason}',
   'update.cmd.busy': 'ℹ️ An update is already in progress.',
   'update.cmd.cannotInstall': 'ℹ️ This install cannot update itself — update by hand (see /update).',
   'update.cmd.checking': 'Checking…',

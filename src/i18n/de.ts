@@ -317,6 +317,7 @@ export const deDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ Die Einstellung konnte nicht gespeichert werden: {path} ist nicht beschreibbar ({code}). Mach das Verzeichnis beschreibbar.',
   'update.cmd.installStarted': '⬆️ Aktualisiere auf {version} — wird installiert, sobald kein Agent arbeitet.',
   'update.cmd.upToDate': 'ℹ️ Schon auf dem neuesten Stand.',
+  'update.cmd.blocked': 'ℹ️ Nichts wurde aktualisiert — {reason}',
   'update.cmd.busy': 'ℹ️ Ein Update läuft bereits.',
   'update.cmd.cannotInstall': 'ℹ️ Diese Installation kann sich nicht selbst aktualisieren — von Hand aktualisieren (siehe /update).',
   'update.cmd.checking': 'Prüfe …',

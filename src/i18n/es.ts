@@ -317,6 +317,7 @@ export const esDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ No se pudo guardar el ajuste: {path} no se puede escribir ({code}). Haz que su carpeta sea escribible.',
   'update.cmd.installStarted': '⬆️ Actualizando a {version} — se instala en cuanto ningún agente esté trabajando.',
   'update.cmd.upToDate': 'ℹ️ Ya está al día.',
+  'update.cmd.blocked': 'ℹ️ No se actualizó nada — {reason}',
   'update.cmd.busy': 'ℹ️ Ya hay una actualización en curso.',
   'update.cmd.cannotInstall': 'ℹ️ Esta instalación no puede actualizarse sola — actualiza a mano (ver /update).',
   'update.cmd.checking': 'Comprobando…',

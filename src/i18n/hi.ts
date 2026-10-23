@@ -317,6 +317,7 @@ export const hiDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ सेटिंग सहेजी नहीं जा सकी: {path} में लिखा नहीं जा सकता ({code})। उसका फ़ोल्डर लिखने योग्य बनाएँ।',
   'update.cmd.installStarted': '⬆️ {version} पर अपडेट हो रहा है — कोई एजेंट काम न कर रहा हो तो तुरंत इंस्टॉल होगा।',
   'update.cmd.upToDate': 'ℹ️ पहले से अप-टू-डेट है।',
+  'update.cmd.blocked': 'ℹ️ कुछ भी अपडेट नहीं हुआ — {reason}',
   'update.cmd.busy': 'ℹ️ अपडेट पहले से चल रहा है।',
   'update.cmd.cannotInstall': 'ℹ️ यह इंस्टॉल खुद को अपडेट नहीं कर सकता — हाथ से अपडेट करें (देखें /update)।',
   'update.cmd.checking': 'जाँच रहा हूँ…',

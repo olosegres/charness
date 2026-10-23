@@ -317,6 +317,7 @@ export const kaDict: Record<string, string> = {
   'update.cmd.writeFailed': '⚠️ პარამეტრის შენახვა ვერ მოხერხდა: {path}-ში ჩაწერა შეუძლებელია ({code}). გახადეთ მისი საქაღალდე ჩასაწერი.',
   'update.cmd.installStarted': '⬆️ ახლდება {version}-ზე — დაინსტალირდება, როგორც კი არცერთი აგენტი არ მუშაობს.',
   'update.cmd.upToDate': 'ℹ️ უკვე უახლესია.',
+  'update.cmd.blocked': 'ℹ️ არაფერი განახლდა — {reason}',
   'update.cmd.busy': 'ℹ️ განახლება უკვე მიმდინარეობს.',
   'update.cmd.cannotInstall': 'ℹ️ ამ ინსტალაციას თავისით განახლება არ შეუძლია — განაახლეთ ხელით (იხ. /update).',
   'update.cmd.checking': 'მოწმდება…',
