@@ -43,6 +43,22 @@ export const kaDict: Record<string, string> = {
   'bind.create_exists': '📁 საქაღალდე `{subdir}` უკვე არსებობს — მიმდინარეობს დაკავშირება.',
   'bind.create_failed': '❌ საქაღალდის შექმნა ვერ მოხერხდა: {error}',
 
+  'topic.askName': '🆕 როგორ დავარქვათ ახალ თემას? გამოგვიგზავნეთ სახელი.',
+  'topic.nameTooLong': '❌ თემის სახელი შეიძლება შეიცავდეს არაუმეტეს {max} სიმბოლოს. გამოგვიგზავნეთ უფრო მოკლე.',
+  'topic.askFolder': '📁 რომელ საქაღალდეში იმუშაოს «{name}»-მა?',
+  'topic.sameFolderButton': '📁 {subdir} (როგორც აქ)',
+  'topic.otherFolderButton': '📂 სხვა საქაღალდე',
+  'topic.pickFolder': '📂 აირჩიეთ საქაღალდე «{name}»-სთვის:',
+  'topic.createFolderPrompt': '✏️ გამოგვიგზავნეთ ახალი საქაღალდის სახელი — ის შეიქმნება WORK_ROOT-ის ქვეშ და «{name}» მასში იმუშავებს.',
+  'topic.creatingToast': 'თემა იქმნება…',
+  'topic.created': '✅ თემა «{name}» მზადაა, მიბმულია {subdir}-ზე.',
+  'topic.createdNotBound': '⚠️ თემა «{name}» შეიქმნა, მაგრამ მიბმა ვერ მოხერხდა: {reason}',
+  'topic.openButton': 'თემის გახსნა →',
+  'topic.createFailed': '❌ თემის შექმნა ვერ მოხერხდა: {reason}',
+  'topic.cancelled': '✖ გაუქმდა — თემა არ შექმნილა.',
+  'topic.dmUnsupported': '🧵 თემები არსებობს ჯგუფში, სადაც თემები ჩართულია — გაუშვით /topic იქ. ამ ჩატში მათ არ აქვს.',
+  'topic.staleChoice': 'ეს არჩევანი მოძველდა — გაუშვით /topic ხელახლა.',
+
   'ls.header': '📁 `{workRoot}`-ის ქვესაქაღალდეები:',
   'ls.empty': '📁 `WORK_ROOT`-ის ქვეშ დასაკავშირებელი ქვესაქაღალდეები არ არის.',
   'list.header': '🧵 თემების კავშირები ({count}):',
@@ -59,6 +75,7 @@ export const kaDict: Record<string, string> = {
     '/status — ყველა თემის სტატუსი\n' +
     '/quitall — ყველა მომუშავე აგენტის გამორთვა\n' +
     '/stt — ხმის ამოცნობის პარამეტრები\n' +
+    '/topic — კიდევ ერთი თემის გახსნა საქაღალდეზე\n' +
     '/whoami /version — გამართვა\n\n' +
     'აგენტთან სასაუბროდ — გახსენით თემატური თემა.',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const kaDict: Record<string, string> = {
     '/clear — თემის შეტყობინებების წაშლა\n' +
     '/interrupt (/esc) — მიმდინარე სამუშაოს შეწყვეტა; შემდეგი შეტყობინება მას ახალ მიმართულებას მისცემს\n' +
     '/c /y /n /enter /up /down /tab — TUI ღილაკები (Claude)\n' +
-    '/bind — კავშირის მართვა',
+    '/bind — კავშირის მართვა\n' +
+    '/topic — კიდევ ერთი თემის გახსნა საქაღალდეზე',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

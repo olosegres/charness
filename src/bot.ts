@@ -122,7 +122,9 @@ import {
   zonePickCallbackRe,
 } from './connectors/telegram/timezonePicker';
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
-import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir, paginateBindList } from './validation';
+import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
+import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
+import { createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import {
   getDisconnectPickerKeysForThread,
 } from './utils/providerDisconnectPlan';
@@ -4260,9 +4262,6 @@ function getWorkDirStartDecision(key: SessionKey): { ok: true; workDir: string }
 // security-critical bits can be unit-tested without booting Telegraf
 // (plan §11 Этап 7, R3). The import at the top of this file pulls them in.
 
-/** Inline-keyboard page size for `/bind`. 20 fits one phone screen comfortably. */
-const BIND_PAGE_SIZE = 20;
-
 /**
  * @description List immediate subdirectories of `WORK_ROOT` for the `/bind`
  * inline-button picker and the `forum_topic_created` welcome message.
@@ -4313,82 +4312,6 @@ function listAvailableSubdirs(workRoot: string, limit = 200): string[] {
     .slice(0, limit);
   subdirCache.set(cacheKey, { value: result, ts: Date.now() });
   return result;
-}
-
-/**
- * @description Build a `subdir`-suggestion keyboard for `/bind` and friends.
- *
- * Lists are paginated at {@link BIND_PAGE_SIZE} entries: a `WORK_ROOT` with
- * many subfolders (mono-repo workspace, packages dir, etc.) would otherwise
- * push the inline keyboard past Telegram's per-message height limit and
- * lose entries below the fold.
- *
- * The nav row appears only when there's more than one page. The middle
- * `pageLabel` button is a no-op (`bind_page_noop` callback) — it exists
- * solely so the user sees "2/5" without us having to fake a divider with
- * a separate message.
- *
- * Subdirs whose callback_data exceeds 64 bytes are filtered out upstream
- * in `listAvailableSubdirs`. `page` is clamped to a valid index so a stale
- * callback (folders disappeared since the keyboard was sent) just lands
- * on the last available page.
- *
- * When `isBound` the FIRST row is a full-width «leave current dir» button
- * (`bindLeaveCurrentCallback`, the folded-in `/unbind`); the «create new folder»
- * button (`bindCreateFolderCallback`) follows. Both callbacks deliberately do
- * NOT start with `bind_`, so they can't be mistaken for a folder pick by the
- * `bind_<subdir>` action regex. They ride on every page so they're reachable
- * regardless of pagination.
- */
-const bindCreateFolderCallback = 'bindCreateFolder';
-
-/**
- * «Leave current dir» button — the folded-in `/unbind`. Like
- * `bindCreateFolderCallback`, the callback id deliberately does NOT start with
- * `bind_`, so the `bind_<subdir>` action regex can't mistake it for a folder
- * pick. Only rendered in a bound topic.
- */
-const bindLeaveCurrentCallback = 'bindLeaveCurrent';
-
-export function buildBindKeyboard(
-  subdirs: readonly string[],
-  page: number = 0,
-  pageSize: number = BIND_PAGE_SIZE,
-  isBound: boolean = false,
-) {
-  const { slice, currentPage, totalPages } = paginateBindList(subdirs, page, pageSize);
-
-  const rows = [
-    [Markup.button.callback(t('bind.create_button'), bindCreateFolderCallback)],
-  ];
-  // A bound topic gets a full-width «leave current dir» row PREPENDED above the
-  // «create new folder» row — this is the folded-in `/unbind`. Its callback
-  // deliberately avoids the `bind_` prefix so the `bind_<subdir>` action regex
-  // can't catch it. The row is omitted when unbound (nothing to leave).
-  if (isBound) {
-    rows.unshift([Markup.button.callback(t('bind.leave_button'), bindLeaveCurrentCallback)]);
-  }
-  for (let i = 0; i < slice.length; i += 2) {
-    const row = [Markup.button.callback(`📁 ${slice[i]}`, `bind_${slice[i]}`)];
-    if (slice[i + 1]) {
-      row.push(Markup.button.callback(`📁 ${slice[i + 1]}`, `bind_${slice[i + 1]}`));
-    }
-    rows.push(row);
-  }
-
-  if (totalPages > 1) {
-    const nav = [];
-    if (currentPage > 0) {
-      nav.push(Markup.button.callback('⬅️ Prev', `bind_page_${currentPage - 1}`));
-    }
-    nav.push(Markup.button.callback(`${currentPage + 1}/${totalPages}`, 'bind_page_noop'));
-    if (currentPage < totalPages - 1) {
-      nav.push(Markup.button.callback('Next ➡️', `bind_page_${currentPage + 1}`));
-    }
-    rows.push(nav);
-  }
-
-  return Markup.inlineKeyboard(rows);
 }
 
 /**
@@ -5403,6 +5326,15 @@ export function checkIsRoutedCommand(name: string): boolean {
   return commandRouter.checkIsRegistered(name);
 }
 
+/** `/esc` and its other names: the interrupt, which also cancels a pending sign-in or `/topic` prompt first. */
+const escapeCommandNames = ['esc', 'escape', 'interrupt'];
+
+/** @description Whether `messageText` is one of the {@link escapeCommandNames} (`@botmention` tolerated). */
+function checkIsEscapeCommandText(messageText: string): boolean {
+  const [commandToken = ''] = stripCommandBotMention(messageText.trim()).split(/\s+/, 1);
+  return escapeCommandNames.includes(commandToken.replace(/^\//, '').toLowerCase());
+}
+
 /**
  * @description Running ANY command exits the single-purpose input modes an
  * earlier command armed:
@@ -5411,6 +5343,7 @@ export function checkIsRoutedCommand(name: string): boolean {
  *    it afterwards via its own callback);
  *  - `/connect`'s pending provider connect — cancelled out loud, unless the
  *    command IS another `/connect` (which continues the flow);
+ *  - `/topic`'s pending name prompts (the topic's, the new folder's) — but `/esc`, which cancels them with a notice of its own;
  *  - an in-flight `/reminders` wizard, at whatever step. Unconditional rather
  *    than only during the step-4 text wait: that is what makes a repeat
  *    `/reminders` retire the previous wizard (relabelling its message) instead
@@ -5420,6 +5353,8 @@ export function checkIsRoutedCommand(name: string): boolean {
 async function exitPendingInputModes(key: SessionKey, messageText: string): Promise<void> {
   const keyString = keyToString(key);
   awaitingFolderName.delete(keyString);
+  // `/topic`'s name prompts end silently, except for `/esc`, which cancels them out loud in its own handler.
+  if (!checkIsEscapeCommandText(messageText)) cancelTopicInput(key);
   const hadPendingProviderConnect = pendingProviderConnects.delete(keyString);
   if (hadPendingProviderConnect && !checkIsConnectCommandText(messageText)) {
     await replyToThread(key, t('connect.cancelled'));
@@ -5896,6 +5831,8 @@ function armFolderCreation(key: SessionKey): void {
   const kStr = keyToString(key);
   awaitingModelSelection.delete(kStr);
   awaitingSessionSelection.delete(kStr);
+  // The `/topic` prompts are other readers of the next plain message.
+  cancelTopicInput(key);
   // A stale pending question would otherwise consume the message AFTER the
   // folder name as an answer to the old (pre-rebind) agent question.
   clearPendingQuestion(key);
@@ -5915,21 +5852,18 @@ function mapNewFolderError(reason: NewFolderNameError): string {
 }
 
 /**
- * @description Create a new folder under WORK_ROOT from a user-typed name and
- * bind the thread to it. Validates the name first (no traversal/slashes/dots),
- * then `mkdir` (recursive: an already-existing folder is fine — we just bind
- * to it and tell the user), then routes through `applyBinding` for the same
- * containment/symlink defence + welcome stack the picker uses.
- *
- * Returns `{ ok }` so the caller knows whether to disarm the await-name mode:
- * an invalid name keeps the thread armed for a retry; success or a real
- * filesystem failure disarms it.
+ * @description Create a new folder under WORK_ROOT from a user-typed name:
+ * validate the name first (no traversal/slashes/dots), then `mkdir` (recursive:
+ * an already-existing folder is fine — the caller just uses it, and the topic is
+ * told so). A refusal or a filesystem failure is reported to `key`'s topic here;
+ * the outcome says which, so the caller knows whether a retry is still wanted
+ * (`invalid`) or not (`failed`).
  */
-async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ ok: boolean }> {
+async function createWorkFolder(key: SessionKey, rawName: string): Promise<WorkFolderResult> {
   const validated = validateNewFolderName(rawName);
   if (!validated.ok) {
     await replyToThread(key, mapNewFolderError(validated.reason));
-    return { ok: false };
+    return { outcome: 'invalid' };
   }
 
   const targetPath = path.join(ENV.workRoot, validated.name);
@@ -5940,7 +5874,7 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
     await replyToThread(key, t('bind.create_failed', {
       error: e instanceof Error ? e.message : String(e),
     }));
-    return { ok: true };
+    return { outcome: 'failed' };
   }
 
   // Folder freshly on disk → the cached subdir list is stale; drop it so the
@@ -5950,10 +5884,41 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
   if (alreadyExisted) {
     await replyToThread(key, t('bind.create_exists', { subdir: validated.name }));
   }
-  const result = await applyBinding(key, validated.name);
+  return { outcome: 'ready', subdir: validated.name };
+}
+
+/**
+ * @description Create a new folder under WORK_ROOT from a user-typed name and
+ * bind the thread to it ({@link createWorkFolder}), routing through
+ * `applyBinding` for the same containment/symlink defence + welcome stack the
+ * picker uses.
+ *
+ * Returns `{ ok }` so the caller knows whether to disarm the await-name mode:
+ * an invalid name keeps the thread armed for a retry; success or a real
+ * filesystem failure disarms it.
+ */
+async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ ok: boolean }> {
+  const folder = await createWorkFolder(key, rawName);
+  if (folder.outcome === 'invalid') return { ok: false };
+  if (folder.outcome === 'failed') return { ok: true };
+
+  const result = await applyBinding(key, folder.subdir);
   await replyToThread(key, result.message);
   if (result.ok) await sendBindingWelcome(key, result.subdir);
   return { ok: true };
+}
+
+/**
+ * @description Bind a topic the bot has just created (`/topic`) to `subdir` and greet it with the usual binding welcome:
+ * the folder's stats and the start buttons. No agent starts by itself: it is started there as in any bound topic. The binding's own notice
+ * is left out: its warning about other topics on the folder would warn of what the person just asked for. The topic's name
+ * rides on the binding for the thread-context preamble. Resolves why it could not bind, `null` once it is bound.
+ */
+async function bindNewTopic(key: SessionKey, subdir: string, topicName: string): Promise<string | null> {
+  const result = await applyBinding(key, subdir, { topicName });
+  if (!result.ok) return result.message;
+  await sendBindingWelcome(key, result.subdir);
+  return null;
 }
 
 command('bind', async (_ctx, key, parsed) => {
@@ -7616,7 +7581,23 @@ const {
   },
 });
 
+const {
+  registerTopicCommand,
+  registerTopicCallbacks,
+  checkIsAwaitingTopicInput,
+  submitTopicInput,
+  cancelTopicInput,
+} = createTopicCommand({
+  ...botCore,
+  checkIsDmKey,
+  listAvailableSubdirs: () => listAvailableSubdirs(ENV.workRoot),
+  createWorkFolder,
+  bindNewTopic,
+});
+
 registerClaudeAccountCommands();
+
+registerTopicCommand();
 
 registerFallbackChainCommands();
 
@@ -7945,8 +7926,8 @@ command('tab', async (_ctx, key) => {
   else await replyToThread(key, `Not supported for ${adapter.label}`);
 });
 
-command(['esc', 'escape', 'interrupt'], async (_ctx, key) => {
-  // A pending «Add account» name prompt, then a pending sign-in (`/login`, `/connect` OAuth) take
+command(escapeCommandNames, async (_ctx, key) => {
+  // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a pending `/topic` prompt take
   // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
   if (cancelProfileNameCapture(key)) {
     await replyToThread(key, t('account.askNameCancelled'));
@@ -7954,6 +7935,10 @@ command(['esc', 'escape', 'interrupt'], async (_ctx, key) => {
   }
   if (cancelPendingLogin(key)) {
     await replyToThread(key, t('login.cancelled'));
+    return;
+  }
+  if (cancelTopicInput(key)) {
+    await replyToThread(key, t('topic.cancelled'));
     return;
   }
   const adapter = getThreadAdapter(key);
@@ -8262,7 +8247,7 @@ command('clear_messages', async (ctx, key) => {
 const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
-  'bind', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
+  'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech',
 ]);
@@ -8302,6 +8287,7 @@ bot.on(message('text'), async (ctx) => {
     const cmd = text.slice(1).split(' ')[0].split('@')[0].toLowerCase();
     // A slash command ends a pending «Add account» name prompt (the command itself runs normally).
     cancelProfileNameCapture(key);
+    cancelTopicInput(key);
     // ... and an armed `/stt` address or key step.
     await cancelSttInput(key);
     if (botCommands.has(cmd)) return;
@@ -8354,6 +8340,13 @@ bot.on(message('text'), async (ctx) => {
   // armed and says so; a slash command above already disarmed it).
   if (checkIsAwaitingProfileName(key) && !text.startsWith('/')) {
     await submitProfileName(key, text);
+    return;
+  }
+
+  // `/topic` asked for the new topic's name, or for the name of a folder to create → this message is the answer (a bad
+  // name keeps the prompt armed and says so; a slash command above already ended it).
+  if (checkIsAwaitingTopicInput(key) && !text.startsWith('/')) {
+    await submitTopicInput(key, text);
     return;
   }
 
@@ -9377,7 +9370,7 @@ bot.action(/^bind_page_(\d+)$/, async (ctx) => {
 });
 
 // Middle "N/M" pill in the nav row — pure UI, no state change.
-bot.action('bind_page_noop', async (ctx) => {
+bot.action(bindPageNoopCallback, async (ctx) => {
   await ctx.answerCbQuery();
 });
 
@@ -9410,6 +9403,9 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
   await ctx.answerCbQuery();
   await unbindThread(key);
 });
+
+// `/topic`'s buttons: patterns of their own (`topic_…`), disjoint from the `bind_<subdir>` regex below.
+registerTopicCallbacks();
 
 bot.action(/^bind_(.+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
@@ -11360,6 +11356,7 @@ export const COMMANDS_MENU = [
   { command: 'help', description: '❓ Context-aware help' },
   { command: 'doctor', description: '🔍 Self-diagnostics' },
   { command: 'bind', description: '📁 Bind thread to a subfolder' },
+  { command: 'topic', description: '🧵 New topic on a folder (name, then folder)' },
   { command: 'ls', description: '📂 List WORK_ROOT subfolders' },
   { command: 'list', description: '🧵 List all bound threads' },
   { command: 'mcp', description: '🔌 List active MCP servers' },

@@ -43,6 +43,22 @@ export const uzDict: Record<string, string> = {
   'bind.create_exists': '📁 `{subdir}` papkasi allaqachon mavjud — bog‘lanmoqda.',
   'bind.create_failed': '❌ Papkani yaratib bo‘lmadi: {error}',
 
+  'topic.askName': '🆕 Yangi mavzu qanday nomlansin? Nomini yuboring.',
+  'topic.nameTooLong': '❌ Mavzu nomi ko‘pi bilan {max} belgidan iborat bo‘ladi. Qisqaroq nom yuboring.',
+  'topic.askFolder': '📁 «{name}» qaysi papkada ishlasin?',
+  'topic.sameFolderButton': '📁 {subdir} (bu yerdagidek)',
+  'topic.otherFolderButton': '📂 Boshqa papka',
+  'topic.pickFolder': '📂 «{name}» uchun papkani tanlang:',
+  'topic.createFolderPrompt': '✏️ Yangi papka nomini yuboring — u WORK_ROOT ostida yaratiladi va «{name}» shu yerda ishlaydi.',
+  'topic.creatingToast': 'Mavzu yaratilmoqda…',
+  'topic.created': '✅ «{name}» mavzusi tayyor, {subdir} ga bog‘langan.',
+  'topic.createdNotBound': '⚠️ «{name}» mavzusi yaratildi, lekin bog‘lash muvaffaqiyatsiz bo‘ldi: {reason}',
+  'topic.openButton': 'Mavzuni ochish →',
+  'topic.createFailed': '❌ Mavzuni yaratib bo‘lmadi: {reason}',
+  'topic.cancelled': '✖ Bekor qilindi — mavzu yaratilmadi.',
+  'topic.dmUnsupported': '🧵 Mavzular mavzular yoqilgan guruhda bo‘ladi — /topic ni o‘sha yerda ishga tushiring. Bu chatda ular yo‘q.',
+  'topic.staleChoice': 'Bu tanlov eskirgan — /topic ni qaytadan ishga tushiring.',
+
   'ls.header': '📁 `{workRoot}` quyi papkalari:',
   'ls.empty': '📁 `WORK_ROOT` ostida bog‘lanadigan quyi papkalar yo‘q.',
   'list.header': '🧵 Mavzu bog‘lanishlari ({count}):',
@@ -59,6 +75,7 @@ export const uzDict: Record<string, string> = {
     '/status — barcha mavzular holati\n' +
     '/quitall — har bir ishlayotgan agentni to‘xtating\n' +
     '/stt — ovozni aniqlash sozlamalari\n' +
+    '/topic — papkada yana bitta mavzu ochish\n' +
     '/whoami /version — debugging\n\n' +
     'Agent bilan gaplashish uchun — mavzu mavzusini oching.',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const uzDict: Record<string, string> = {
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/interrupt (/esc) — davom etayotgan ishni to\'xtatish; keyingi xabar uni yo\'naltiradi\n' +
     '/c /y /n /enter /up /down /tab — TUI tugmalar (Claude)\n' +
-    '/bind — bog‘lanishni boshqarish',
+    '/bind — bog‘lanishni boshqarish\n' +
+    '/topic — papkada yana bitta mavzu ochish',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

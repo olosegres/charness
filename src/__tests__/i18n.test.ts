@@ -455,6 +455,41 @@ test('bind.create_failed substitutes the {error}', () => {
   assert.ok(!out.includes('{error}'), `placeholder not substituted: "${out}"`);
 });
 
+test('/topic keys exist in every locale and keep their placeholders', () => {
+  const placeholdersByKey: Record<string, string[]> = {
+    'topic.askName': [],
+    'topic.nameTooLong': ['{max}'],
+    'topic.askFolder': ['{name}'],
+    'topic.sameFolderButton': ['{subdir}'],
+    'topic.otherFolderButton': [],
+    'topic.pickFolder': ['{name}'],
+    'topic.createFolderPrompt': ['{name}'],
+    'topic.creatingToast': [],
+    'topic.created': ['{name}', '{subdir}'],
+    'topic.createdNotBound': ['{name}', '{reason}'],
+    'topic.openButton': [],
+    'topic.createFailed': ['{reason}'],
+    'topic.cancelled': [],
+    'topic.dmUnsupported': [],
+    'topic.staleChoice': [],
+  };
+  for (const [code, placeholders] of Object.entries(placeholdersByKey)) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+    for (const locale of localeCodes) {
+      const template = getKeyInLang(locale, code) ?? '';
+      for (const placeholder of placeholders) assert.ok(template.includes(placeholder), `${code} in ${locale} lost ${placeholder}`);
+    }
+  }
+});
+
+test('/topic is named by the help of a bound topic and of General in every locale', () => {
+  for (const locale of localeCodes) {
+    for (const code of ['help.general', 'help.thread_bound']) {
+      assert.ok(getKeyInLang(locale, code)?.includes('/topic'), `${code} in ${locale} does not name /topic`);
+    }
+  }
+});
+
 test('trace toggle keys exist in every locale', () => {
   for (const code of [
     'trace.onThisThreadReply',

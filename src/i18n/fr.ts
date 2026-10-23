@@ -43,6 +43,22 @@ export const frDict: Record<string, string> = {
   'bind.create_exists': '📁 Le dossier `{subdir}` existe déjà — liaison en cours.',
   'bind.create_failed': '❌ Échec de la création du dossier : {error}',
 
+  'topic.askName': '🆕 Comment nommer le nouveau fil ? Envoyez son nom.',
+  'topic.nameTooLong': '❌ Un nom de fil compte au plus {max} caractères. Envoyez-en un plus court.',
+  'topic.askFolder': '📁 Dans quel dossier «{name}» doit-il travailler ?',
+  'topic.sameFolderButton': '📁 {subdir} (comme ici)',
+  'topic.otherFolderButton': '📂 Autre dossier',
+  'topic.pickFolder': '📂 Choisissez le dossier pour «{name}» :',
+  'topic.createFolderPrompt': '✏️ Envoyez le nom du nouveau dossier — il sera créé sous WORK_ROOT et «{name}» y travaillera.',
+  'topic.creatingToast': 'Création du fil…',
+  'topic.created': '✅ Le fil «{name}» est prêt, lié à {subdir}.',
+  'topic.createdNotBound': '⚠️ Le fil «{name}» a été créé, mais la liaison a échoué : {reason}',
+  'topic.openButton': 'Ouvrir le fil →',
+  'topic.createFailed': '❌ Impossible de créer le fil : {reason}',
+  'topic.cancelled': '✖ Annulé — aucun fil n’a été créé.',
+  'topic.dmUnsupported': '🧵 Les fils vivent dans un groupe avec les sujets activés — lancez /topic là-bas. Ce chat n’en a pas.',
+  'topic.staleChoice': 'Ce choix est périmé — relancez /topic.',
+
   'ls.header': '📁 Sous-dossiers de `{workRoot}` :',
   'ls.empty': '📁 Aucun sous-dossier liaisable sous `WORK_ROOT`.',
   'list.header': '🧵 Liens de fils ({count}) :',
@@ -59,6 +75,7 @@ export const frDict: Record<string, string> = {
     '/status — état de tous les fils\n' +
     '/quitall — arrêter tous les agents en cours\n' +
     '/stt — réglages de la reconnaissance vocale\n' +
+    '/topic — ouvrir un autre fil sur un dossier\n' +
     '/whoami /version — débogage\n\n' +
     'Pour parler à un agent — ouvrez un fil thématique.',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const frDict: Record<string, string> = {
     '/clear — supprimer les messages du fil\n' +
     '/interrupt (/esc) — interrompre le travail en cours ; le message suivant réoriente l\'agent\n' +
     '/c /y /n /enter /up /down /tab — touches TUI (Claude)\n' +
-    '/bind — gérer la liaison',
+    '/bind — gérer la liaison\n' +
+    '/topic — ouvrir un autre fil sur un dossier',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

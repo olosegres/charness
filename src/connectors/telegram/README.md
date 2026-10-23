@@ -8,6 +8,8 @@ documented exemption). It translates telegraf updates into the core's `InboundEv
 - **Membership lookup must REJECT when it cannot answer**, never resolve `[]`: `AdminCache` stores an empty
   answer as fresh and would lock everyone out for the whole TTL. An admin-status change in the served space
   invalidates the cache at once (`checkShouldInvalidateAdminCache`).
+- **`bindPicker.ts`:** the `/bind` folder keyboard (create row, folder grid, paging), a leaf module `/topic` reuses with its
+  callbacks re-targeted (`BindPickerCallbacks`).
 - **`outbound.ts`:** ordinary turn content streams through the chat-mode transport below; content carrying
   `keepVisible` or tappable `options` finalizes in-flight output FIRST, then posts as its own message, then pins.
   `setActivity` `working` drives the typing loader, `starting` is ONE typing ping.

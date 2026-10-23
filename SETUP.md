@@ -257,7 +257,9 @@ This step is **[manual]** — it all happens inside the Telegram app.
 
 1. Open the group; in the General topic send `/ls` — the bot lists subfolders
    under the work root.
-2. Create a topic (the `+` button).
+2. Create a topic (the `+` button) — or run `/topic` in any topic of the group
+   (General included): it asks for the name and the folder, creates the topic,
+   binds it and links to it, and you can skip step 3.
 3. In the new topic: `/bind <subdir>` (auto-bound if the topic name matches a
    subdir).
 4. `/claude` or `/opencode` → talk to the agent (text or voice).

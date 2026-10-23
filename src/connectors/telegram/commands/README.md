@@ -310,3 +310,24 @@ error, the log tail and `Retry`; the message is forgotten last. `resumeSttInstal
 boot and `stt.json`-edit entries `bot.ts` calls (`getGeneralKey` names where an `stt.json`-driven install reports). On the local
 card «🗑 Remove model files» asks first (Cancel returns to the card), stops the sidecar, deletes the install and drops the engine
 from the list (refused while an install runs — the card is shown again); «Remove from list» keeps the files.
+
+## `topicCommand.ts`
+
+`/topic [name]` and its five buttons (`topic_here_` / `topic_other_` / `topic_folder_<i>` / `topic_page_<n>` / `topic_create_`, each
+with the WIZARD id baked in): open another forum topic on a folder. One in-flight wizard per `/topic` run, kept in MEMORY (a restart
+drops it and its old keyboards answer «out of date»; the newest 20 live, each for half an hour). The questions are one message that
+changes shape: the name (a plain message, `/topic <name>` skips it), the folder question («as here» in a bound topic, the picker at
+once in General or an unbound topic), the picker, and finally the answer with the «Open topic →» link — the message is edited, so a
+keyboard is always consumed. The picker is `bindPicker.ts`'s `buildBindKeyboard` — `/bind`'s own layout, create row included — with
+its buttons re-targeted (`BindPickerCallbacks`) at the wizard; its folders are indexes into the list the wizard listed, so a folder
+created meanwhile cannot shift them. The next plain message of the origin topic is the answer to a name question (the topic's, or the
+new folder's) while the wizard holds the capture: the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; `/esc`
+cancels it out loud and any other command silently (`cancelTopicInput`, called from the `/esc` handler and
+`exitPendingInputModes`). The folder work is the bot's: `createWorkFolder` (the validation and `mkdir` `/bind`'s «create new folder»
+does) and `bindNewTopic` (`applyBinding` with the topic's name, then the usual binding welcome — no agent starts, and no collision
+warning for a folder the person chose on purpose) come through ports. `createForumTopic` is the Bot API call; its refusal for want of
+`can_manage_topics` shows the existing `error.tg.perm.manage_topics` hint. The link is `t.me/c/<chat id without -100>/<topic id>` (a
+public group: `t.me/<username>/<topic id>`) — the topic id is the id of its creation service message, which a client opens as the
+topic (`buildTopicLink`). The owner's private chat has no topics: `checkIsDmKey` answers it with a line. Whether Telegram also
+delivers the bot the `forum_topic_created` service message of its own topic is not documented; the existing handler is harmless
+either way: the binding exists by then, and the admin list skips bots, so nothing is auto-bound or greeted for the bot's own topic.

@@ -61,8 +61,13 @@ export class TopicDriver {
     return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.map((button) => button.text));
   }
 
-  /** @description The button callback data of a message's keyboard, row by row. */
+  /** @description The callback data of a message's keyboard, row by row (a link button has none). */
   getKeyboardData(message: FakeTelegramMessage): string[][] {
-    return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.map((button) => button.callback_data));
+    return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.flatMap((button) => ('callback_data' in button ? [button.callback_data] : [])));
+  }
+
+  /** @description The links of a message's keyboard, in order. */
+  getKeyboardUrls(message: FakeTelegramMessage): string[] {
+    return (message.reply_markup?.inline_keyboard ?? []).flat().flatMap((button) => ('url' in button ? [button.url] : []));
   }
 }

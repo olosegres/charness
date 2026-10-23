@@ -43,6 +43,22 @@ export const ptDict: Record<string, string> = {
   'bind.create_exists': '📁 A pasta `{subdir}` já existe — a vincular.',
   'bind.create_failed': '❌ Falha ao criar a pasta: {error}',
 
+  'topic.askName': '🆕 Como se vai chamar o novo tópico? Envia o nome.',
+  'topic.nameTooLong': '❌ O nome de um tópico tem no máximo {max} caracteres. Envia um mais curto.',
+  'topic.askFolder': '📁 Em que pasta deve trabalhar «{name}»?',
+  'topic.sameFolderButton': '📁 {subdir} (como aqui)',
+  'topic.otherFolderButton': '📂 Outra pasta',
+  'topic.pickFolder': '📂 Escolhe a pasta para «{name}»:',
+  'topic.createFolderPrompt': '✏️ Envia o nome da nova pasta — será criada sob WORK_ROOT e «{name}» trabalhará nela.',
+  'topic.creatingToast': 'A criar o tópico…',
+  'topic.created': '✅ O tópico «{name}» está pronto, ligado a {subdir}.',
+  'topic.createdNotBound': '⚠️ O tópico «{name}» foi criado, mas a ligação falhou: {reason}',
+  'topic.openButton': 'Abrir o tópico →',
+  'topic.createFailed': '❌ Não foi possível criar o tópico: {reason}',
+  'topic.cancelled': '✖ Cancelado — nenhum tópico foi criado.',
+  'topic.dmUnsupported': '🧵 Os tópicos existem num grupo com tópicos ativados — executa /topic lá. Este chat não os tem.',
+  'topic.staleChoice': 'Esta escolha está desatualizada — executa /topic de novo.',
+
   'ls.header': '📁 Subpastas de `{workRoot}`:',
   'ls.empty': '📁 Sem subpastas vinculáveis sob `WORK_ROOT`.',
   'list.header': '🧵 Vínculos de tópicos ({count}):',
@@ -59,6 +75,7 @@ export const ptDict: Record<string, string> = {
     '/status — estado de todos os tópicos\n' +
     '/quitall — parar todos os agentes em execução\n' +
     '/stt — configurações de reconhecimento de voz\n' +
+    '/topic — abrir outro tópico numa pasta\n' +
     '/whoami /version — depuração\n\n' +
     'Para falar com um agente — abre um tópico temático.',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const ptDict: Record<string, string> = {
     '/clear — apagar mensagens do tópico\n' +
     '/interrupt (/esc) — interromper o trabalho em curso; a próxima mensagem redireciona o agente\n' +
     '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
-    '/bind — gerir vínculo',
+    '/bind — gerir vínculo\n' +
+    '/topic — abrir outro tópico numa pasta',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

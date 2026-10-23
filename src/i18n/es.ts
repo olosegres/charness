@@ -43,6 +43,22 @@ export const esDict: Record<string, string> = {
   'bind.create_exists': '📁 La carpeta `{subdir}` ya existe — vinculando a ella.',
   'bind.create_failed': '❌ Error al crear la carpeta: {error}',
 
+  'topic.askName': '🆕 ¿Cómo se llamará el nuevo hilo? Envía el nombre.',
+  'topic.nameTooLong': '❌ El nombre de un hilo admite como máximo {max} caracteres. Envía uno más corto.',
+  'topic.askFolder': '📁 ¿En qué carpeta debe trabajar «{name}»?',
+  'topic.sameFolderButton': '📁 {subdir} (como aquí)',
+  'topic.otherFolderButton': '📂 Otra carpeta',
+  'topic.pickFolder': '📂 Elige la carpeta para «{name}»:',
+  'topic.createFolderPrompt': '✏️ Envía el nombre de la nueva carpeta — se creará bajo WORK_ROOT y «{name}» trabajará en ella.',
+  'topic.creatingToast': 'Creando el hilo…',
+  'topic.created': '✅ El hilo «{name}» está listo, vinculado a {subdir}.',
+  'topic.createdNotBound': '⚠️ El hilo «{name}» se creó, pero no se pudo vincular: {reason}',
+  'topic.openButton': 'Abrir el hilo →',
+  'topic.createFailed': '❌ No se pudo crear el hilo: {reason}',
+  'topic.cancelled': '✖ Cancelado — no se creó ningún hilo.',
+  'topic.dmUnsupported': '🧵 Los hilos viven en un grupo con temas activados — ejecuta /topic allí. Este chat no los tiene.',
+  'topic.staleChoice': 'Esta elección está desactualizada — ejecuta /topic de nuevo.',
+
   'ls.header': '📁 Subcarpetas de `{workRoot}`:',
   'ls.empty': '📁 No hay subcarpetas vinculables bajo `WORK_ROOT`.',
   'list.header': '🧵 Vínculos de hilos ({count}):',
@@ -59,6 +75,7 @@ export const esDict: Record<string, string> = {
     '/status — estado de todos los hilos\n' +
     '/quitall — detener todos los agentes en ejecución\n' +
     '/stt — ajustes del reconocimiento de voz\n' +
+    '/topic — abrir otro hilo en una carpeta\n' +
     '/whoami /version — depuración\n\n' +
     'Para hablar con un agente — abre un hilo temático.',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const esDict: Record<string, string> = {
     '/clear — eliminar mensajes del hilo\n' +
     '/interrupt (/esc) — interrumpir el trabajo en curso; el siguiente mensaje lo reorienta\n' +
     '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
-    '/bind — gestionar vínculo',
+    '/bind — gestionar vínculo\n' +
+    '/topic — abrir otro hilo en una carpeta',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

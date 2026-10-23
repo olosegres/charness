@@ -43,6 +43,22 @@ export const hiDict: Record<string, string> = {
   'bind.create_exists': '📁 फ़ोल्डर `{subdir}` पहले से मौजूद है — बाइंड किया जा रहा है।',
   'bind.create_failed': '❌ फ़ोल्डर बनाने में विफल: {error}',
 
+  'topic.askName': '🆕 नए थ्रेड का नाम क्या हो? नाम भेजें।',
+  'topic.nameTooLong': '❌ थ्रेड के नाम में अधिकतम {max} अक्षर हो सकते हैं। छोटा नाम भेजें।',
+  'topic.askFolder': '📁 «{name}» किस फ़ोल्डर में काम करे?',
+  'topic.sameFolderButton': '📁 {subdir} (यहाँ जैसा)',
+  'topic.otherFolderButton': '📂 दूसरा फ़ोल्डर',
+  'topic.pickFolder': '📂 «{name}» के लिए फ़ोल्डर चुनें:',
+  'topic.createFolderPrompt': '✏️ नए फ़ोल्डर का नाम भेजें — वह WORK_ROOT के अंतर्गत बनेगा और «{name}» उसी में काम करेगा।',
+  'topic.creatingToast': 'थ्रेड बनाया जा रहा है…',
+  'topic.created': '✅ थ्रेड «{name}» तैयार है, {subdir} से जुड़ा है।',
+  'topic.createdNotBound': '⚠️ थ्रेड «{name}» बन गया, पर उसे जोड़ना विफल रहा: {reason}',
+  'topic.openButton': 'थ्रेड खोलें →',
+  'topic.createFailed': '❌ थ्रेड नहीं बन सका: {reason}',
+  'topic.cancelled': '✖ रद्द किया गया — कोई थ्रेड नहीं बना।',
+  'topic.dmUnsupported': '🧵 थ्रेड्स उस ग्रुप में होते हैं जिसमें टॉपिक चालू हैं — /topic वहीं चलाएँ। इस चैट में वे नहीं हैं।',
+  'topic.staleChoice': 'यह विकल्प पुराना हो गया है — /topic फिर से चलाएँ।',
+
   'ls.header': '📁 `{workRoot}` के सबफ़ोल्डर:',
   'ls.empty': '📁 `WORK_ROOT` के अंतर्गत कोई बाइंड करने योग्य सबफ़ोल्डर नहीं।',
   'list.header': '🧵 थ्रेड बाइंडिंग ({count}):',
@@ -59,6 +75,7 @@ export const hiDict: Record<string, string> = {
     '/status — सभी थ्रेड्स की स्थिति\n' +
     '/quitall — हर चल रहे एजेंट को बंद करें\n' +
     '/stt — वॉइस रिकग्निशन सेटिंग्स\n' +
+    '/topic — किसी फ़ोल्डर पर एक और थ्रेड खोलें\n' +
     '/whoami /version — डिबग\n\n' +
     'एजेंट से बात करने के लिए — एक विषय-वस्तु थ्रेड खोलें।',
   'help.thread_unbound':
@@ -82,7 +99,8 @@ export const hiDict: Record<string, string> = {
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/interrupt (/esc) — चल रहे काम को रोकें; अगला संदेश उसे नई दिशा देता है\n' +
     '/c /y /n /enter /up /down /tab — TUI कुंजी (Claude)\n' +
-    '/bind — बाइंडिंग प्रबंधित करें',
+    '/bind — बाइंडिंग प्रबंधित करें\n' +
+    '/topic — किसी फ़ोल्डर पर एक और थ्रेड खोलें',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

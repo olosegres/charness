@@ -47,6 +47,22 @@ export const ruDict: Record<string, string> = {
   'bind.create_exists': '📁 Папка `{subdir}` уже существует — привязываю к ней.',
   'bind.create_failed': '❌ Не удалось создать папку: {error}',
 
+  'topic.askName': '🆕 Как назвать новый тред? Пришли название.',
+  'topic.nameTooLong': '❌ Название треда — не больше {max} символов. Пришли покороче.',
+  'topic.askFolder': '📁 С какой папкой должен работать «{name}»?',
+  'topic.sameFolderButton': '📁 {subdir} (как здесь)',
+  'topic.otherFolderButton': '📂 Другая папка',
+  'topic.pickFolder': '📂 Выбери папку для «{name}»:',
+  'topic.createFolderPrompt': '✏️ Пришли название новой папки — она будет создана в WORK_ROOT, и «{name}» будет работать в ней.',
+  'topic.creatingToast': 'Создаю тред…',
+  'topic.created': '✅ Тред «{name}» готов, привязан к {subdir}.',
+  'topic.createdNotBound': '⚠️ Тред «{name}» создан, но привязать его не удалось: {reason}',
+  'topic.openButton': 'Открыть тред →',
+  'topic.createFailed': '❌ Не удалось создать тред: {reason}',
+  'topic.cancelled': '✖ Отменено — тред не создан.',
+  'topic.dmUnsupported': '🧵 Треды живут в группе с включёнными темами — запусти /topic там. В этом чате их нет.',
+  'topic.staleChoice': 'Этот выбор устарел — запусти /topic заново.',
+
   'ls.header': '📁 Подпапки `{workRoot}`:',
   'ls.empty': '📁 В `WORK_ROOT` нет подходящих подпапок.',
   'list.header': '🧵 Привязки тредов ({count}):',
@@ -63,6 +79,7 @@ export const ruDict: Record<string, string> = {
     '/status — статус всех тредов\n' +
     '/quitall — завершить всех агентов\n' +
     '/stt — настройки распознавания голоса\n' +
+    '/topic — открыть ещё один тред на папке\n' +
     '/whoami /version — debug\n\n' +
     'Чтобы начать диалог с агентом — открой тематический тред.',
   'help.thread_unbound':
@@ -86,7 +103,8 @@ export const ruDict: Record<string, string> = {
     '/clear — удалить сообщения треда\n' +
     '/interrupt (/esc) — прервать работу агента; следующее сообщение его перенаправит\n' +
     '/c /y /n /enter /up /down /tab — TUI-команды (Claude)\n' +
-    '/bind — управление binding',
+    '/bind — управление binding\n' +
+    '/topic — открыть ещё один тред на папке',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',
