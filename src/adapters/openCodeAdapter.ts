@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
-import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import { sleep } from '../utils';
@@ -55,7 +55,7 @@ import {
   type OpenCodeAuthMethod,
 } from '../utils/openCodeAuthLogin';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Persist per-thread model selection so it survives bot restarts.
@@ -1570,10 +1570,12 @@ async function fetchAvailableModels(): Promise<string[]> {
   }
   
   try {
-    const opencodeCmd = getToolCommand('opencode');
-    const { stdout } = await execAsync(`${opencodeCmd} models`, {
+    // No shell: a path with spaces (Windows' `C:\\Program Files\\…`) stays one argument; a `.cmd` shim is launched as such.
+    const modelsLaunch = getToolLaunch(getToolCommand('opencode'), ['models']);
+    const { stdout } = await execFileAsync(modelsLaunch.command, modelsLaunch.args, {
       timeout: 10000,
       env: getOpenCodeChildEnv(),
+      windowsVerbatimArguments: modelsLaunch.windowsVerbatimArguments,
     });
     const models = stdout.trim().split('\n').filter(line => line.includes('/'));
     if (models.length > 0) {

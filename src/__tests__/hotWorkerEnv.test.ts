@@ -146,9 +146,9 @@ test('OpenCode models uses the stripped child environment at its exec boundary',
   assert.ok(functionStart >= 0);
   assert.match(
     functionSource,
-    /execAsync\([\s\S]*?\{[\s\S]*?env:\s*getOpenCodeChildEnv\(\)[\s\S]*?\}\)/,
+    /execFileAsync\([\s\S]*?\{[\s\S]*?env:\s*getOpenCodeChildEnv\(\)[\s\S]*?\}\)/,
   );
-  assert.doesNotMatch(functionSource, /execAsync\([\s\S]*?env:\s*process\.env/);
+  assert.doesNotMatch(functionSource, /execFileAsync\([\s\S]*?env:\s*process\.env/);
 });
 
 test('injects launchCwd as WORK_ROOT when set to empty string', () => {

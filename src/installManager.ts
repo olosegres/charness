@@ -1,6 +1,7 @@
-import { execFileSync, exec, spawn } from 'child_process';
+import { execFileSync, exec, spawn, spawnSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
@@ -23,7 +24,14 @@ export function getOpenCodePort(serverUrl: URL): string {
   return serverUrl.port || defaultOpenCodePort;
 }
 
-const npmPrefix = (process.env.HOME || '/home/agent') + '/.npm-global';
+// Windows rarely sets HOME: the user's profile directory, as Node reads it.
+const npmPrefix = path.join(process.env.HOME || os.homedir(), '.npm-global');
+
+/** The PATH a tool's child process gets: the npm-global prefix's shims first (`<prefix>/bin`; on Windows `<prefix>`). */
+function getNpmGlobalSearchPath(): string {
+  const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
+  return `${binDir}${path.delimiter}${process.env.PATH ?? ''}`;
+}
 
 /** Map of tool name → npm package name */
 const toolPackages: Record<string, string> = {
@@ -50,8 +58,9 @@ function getCustomBinaryPath(toolName: string): string | null {
  * Claude binary falls back to it — so a binary that lives only there is installed, not missing.
  */
 function getNpmGlobalBinaryPath(toolName: string): string | null {
-  const binaryPath = path.join(npmPrefix, 'bin', toolName);
-  return fs.existsSync(binaryPath) ? binaryPath : null;
+  // npm puts a prefix's shims in `<prefix>/bin` on POSIX and in `<prefix>` itself on Windows (`opencode.cmd`).
+  const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
+  return findToolOnPath(toolName, { platform: process.platform, pathValue: binDir, pathExtValue: process.env.PATHEXT });
 }
 
 /** What a PATH lookup reads of its host: the process's own by default; a test hands it another platform's. */
@@ -126,8 +135,85 @@ export function getToolCommand(toolName: string): string {
   if (customPath) {
     return customPath;
   }
+  if (process.platform === 'win32') {
+    // Windows: the file itself (npm's `opencode.cmd`): `spawn` tries no PATHEXT, and a shim needs {@link getToolLaunch}.
+    return findToolOnPath(toolName) ?? getNpmGlobalBinaryPath(toolName) ?? toolName;
+  }
   if (checkIsOnPath(toolName)) return toolName;
   return getNpmGlobalBinaryPath(toolName) ?? toolName;
+}
+
+/**
+ * @name ToolLaunch
+ * @description What to spawn for a tool and its arguments. `windowsVerbatimArguments`: the arguments are a `cmd.exe`
+ * command line quoted by {@link getToolLaunch}, which Node must pass as they are.
+ */
+export interface ToolLaunch {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments: boolean;
+}
+
+/** What {@link getToolLaunch} reads of its host — the process's own by default; a test hands it Windows'. */
+export interface ToolLaunchHost {
+  platform: NodeJS.Platform;
+  /** The Node that runs an npm shim's script: the one running the bot. */
+  nodePath: string;
+  /** `%ComSpec%`, the shell a non-npm `.cmd` / `.bat` runs in. */
+  comSpec: string;
+  readFile: (filePath: string) => string;
+}
+
+function getProcessToolLaunchHost(): ToolLaunchHost {
+  return {
+    platform: process.platform,
+    nodePath: process.execPath,
+    comSpec: process.env.ComSpec || 'cmd.exe',
+    readFile: (filePath) => fs.readFileSync(filePath, 'utf8'),
+  };
+}
+
+/** Windows batch files: `spawn` cannot run one without a shell (Node refuses it since the 2024 batch-file fix). */
+const windowsBatchExtensionRe = /\.(?:cmd|bat)$/i;
+/**
+ * The target an npm `.cmd` shim runs (npm's cmd-shim: `"%dp0%\node_modules\…\bin\opencode" %*`, older ones `%~dp0`),
+ * relative to the shim's folder. A shim for a Node script runs it with `"%_prog%"` (node); one for a native binary runs
+ * the target itself.
+ */
+const npmCmdShimTargetRe = /"%(?:dp0%|~dp0)\\([^"]+)"\s*%\*/i;
+const npmCmdShimNodeMarker = '%_prog%';
+/** What `cmd.exe` would read as an operator or an expansion: never put into a command line it parses. */
+const cmdUnsafeCharsRe = /[&|<>^%!"\r\n]/;
+
+/**
+ * @description How to launch the tool at `toolPath` with `toolArgs`. A plain executable runs as it is. A Windows `.cmd`
+ * / `.bat` — what npm installs (`opencode.cmd`) — cannot be spawned without a shell: npm's own shim is read and the
+ * script it wraps runs on this Node (or the native binary it names runs directly), no shell at all; any other batch
+ * file runs through `cmd.exe /d /s /c` with a command line quoted here, refused when a part holds a character `cmd.exe`
+ * would interpret (the bot's own arguments never do).
+ */
+export function getToolLaunch(toolPath: string, toolArgs: readonly string[], host: ToolLaunchHost = getProcessToolLaunchHost()): ToolLaunch {
+  if (host.platform !== 'win32' || !windowsBatchExtensionRe.test(toolPath)) {
+    return { command: toolPath, args: [...toolArgs], windowsVerbatimArguments: false };
+  }
+  let shimText = '';
+  try {
+    shimText = host.readFile(toolPath);
+  } catch {
+    // Unreadable: the shell path below still runs it.
+  }
+  const shimTarget = npmCmdShimTargetRe.exec(shimText)?.[1];
+  if (shimTarget !== undefined) {
+    const targetPath = path.win32.join(path.win32.dirname(toolPath), shimTarget);
+    return shimText.includes(npmCmdShimNodeMarker)
+      ? { command: host.nodePath, args: [targetPath, ...toolArgs], windowsVerbatimArguments: false }
+      : { command: targetPath, args: [...toolArgs], windowsVerbatimArguments: false };
+  }
+  const parts = [toolPath, ...toolArgs];
+  const unsafePart = parts.find((part) => cmdUnsafeCharsRe.test(part));
+  if (unsafePart !== undefined) throw new Error(`cannot run ${toolPath} through cmd.exe: ${JSON.stringify(unsafePart)} holds a character cmd.exe interprets`);
+  const commandLine = parts.map((part) => `"${part}"`).join(' ');
+  return { command: host.comSpec, args: ['/d', '/s', '/c', `"${commandLine}"`], windowsVerbatimArguments: true };
 }
 
 /**
@@ -144,8 +230,9 @@ export async function installTool(toolName: string): Promise<void> {
 
   return new Promise((resolve, reject) => {
     exec(
-      `NPM_CONFIG_PREFIX=${npmPrefix} npm install -g ${packageName}`,
-      { timeout: 120000, encoding: 'utf-8' },
+      `npm install -g ${packageName}`,
+      // The prefix rides the environment: a `NAME=value command` prefix is POSIX shell syntax, which Windows' cmd lacks.
+      { timeout: 120000, encoding: 'utf-8', env: { ...process.env, NPM_CONFIG_PREFIX: npmPrefix } },
       (error, stdout, stderr) => {
         if (error) {
           console.error(`[Install] Failed to install ${toolName}:`, stderr);
@@ -742,12 +829,14 @@ function getInstalledOpenCodeVersion(): string | null {
   }
   let value: string | null = null;
   try {
-    const out = execFileSync(getToolCommand('opencode'), ['--version'], {
+    const versionLaunch = getToolLaunch(getToolCommand('opencode'), ['--version']);
+    const probe = spawnSync(versionLaunch.command, versionLaunch.args, {
       encoding: 'utf8',
       timeout: 5000,
-      env: { ...getOpenCodeChildEnv(), PATH: `${npmPrefix}/bin:${process.env.PATH}` },
+      env: { ...getOpenCodeChildEnv(), PATH: getNpmGlobalSearchPath() },
+      windowsVerbatimArguments: versionLaunch.windowsVerbatimArguments,
     });
-    value = extractOpenCodeVersion(out);
+    value = probe.status === 0 ? extractOpenCodeVersion(probe.stdout) : null;
   } catch {
     value = null;
   }
@@ -913,10 +1002,10 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
   const opencodeCmd = getToolCommand('opencode');
   console.log(`[OpenCode] Starting server on port ${port}... (${opencodeCmd})`);
 
-  const serverArgs = ['serve', '--hostname', '127.0.0.1', '--port', port];
+  const serverLaunch = getToolLaunch(opencodeCmd, ['serve', '--hostname', '127.0.0.1', '--port', port]);
   const serverEnv: NodeJS.ProcessEnv = {
     ...getOpenCodeChildEnv(),
-    PATH: `${npmPrefix}/bin:${process.env.PATH}`,
+    PATH: getNpmGlobalSearchPath(),
     // Enable OpenCode's background-subagents (experimental in 1.17.11): lets the
     // bot detach a synchronous sub-agent that is blocking a session via
     // `POST /experimental/session/:id/background` so a new message can be
@@ -944,8 +1033,8 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
 
   if (checkIsOpenCodeExternalHost()) {
     const hostedProcessIdentity = await startExternallyParentedProcess(
-      opencodeCmd,
-      serverArgs,
+      serverLaunch.command,
+      serverLaunch.args,
       serverEnv,
       {
         prepareProcessIdentity: (processIdentity) => {
@@ -970,8 +1059,9 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
       `[OpenCode] Server process ${startupHostedProcess.pid} is hosted outside the hot worker tree`,
     );
   } else {
-    const child = spawn(opencodeCmd, serverArgs, {
+    const child = spawn(serverLaunch.command, serverLaunch.args, {
       env: serverEnv,
+      windowsVerbatimArguments: serverLaunch.windowsVerbatimArguments,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });

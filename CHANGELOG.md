@@ -20,8 +20,10 @@ opened by their checked path on those systems, held to the file that was checked
 swapped meanwhile still cannot reach outside it. If a send does fail, the agent is told to give the file's path in its
 reply and carry on.
 
-**On Windows the bot finds the agent CLI installed on PATH.** It looked the tool up with `which`, which Windows lacks,
-so an installed `opencode` read as missing.
+**On Windows the bot finds and starts the agent CLI installed on PATH.** It looked the tool up with `which`, which
+Windows lacks, so an installed `opencode` read as missing; and npm installs it as `opencode.cmd`, which cannot be
+started the way a program is. The bot now finds it the way `where` does and runs the script npm's shim wraps (another
+batch file through `cmd.exe`); installing a missing CLI works on Windows too.
 
 **A Claude CLI that dies as it starts is reported as a failed start.** The topic used to be told the session was
 «ready», then that it «ended» — once per attempt — after waiting out a 15-second handshake each time. It now gets one
