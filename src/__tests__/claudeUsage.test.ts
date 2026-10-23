@@ -334,11 +334,19 @@ describe('checkIsClaudeUsageExhausted — does the reading SHOW a window at 100 
     ],
   });
 
+  const readAtMs = Date.parse('2026-10-12T10:00:00.000Z');
+
   it('a window the model drains at 100 % is exhausted; a reading below that, or none at all, is not proof', () => {
-    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet'), true);
-    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(10, 100), 'opus'), true);
-    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(84, 40), 'sonnet'), false, 'the 429 also comes at 84 % — the reading does not confirm it');
-    assert.equal(checkIsClaudeUsageExhausted(undefined, 'sonnet'), false, 'unknown is not exhausted');
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', readAtMs), true);
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(10, 100), 'opus', readAtMs), true);
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(84, 40), 'sonnet', readAtMs), false, 'the 429 also comes at 84 % — the reading does not confirm it');
+    assert.equal(checkIsClaudeUsageExhausted(undefined, 'sonnet', readAtMs), false, 'unknown is not exhausted');
+  });
+
+  it('an out-of-date reading proves nothing: a window whose reset is past, or a snapshot marked stale', () => {
+    // The session window of snapshotOf resets at 13:00Z.
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', Date.parse('2026-10-12T13:00:00.000Z')), false, 'the 100 % window has reset since');
+    assert.equal(checkIsClaudeUsageExhausted({ ...snapshotOf(100, 20), isStale: true }, 'sonnet', readAtMs), false, 'a stale snapshot is last known, not now');
   });
 });
 

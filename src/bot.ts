@@ -1795,7 +1795,7 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
   const isRepeatAfterProbe = entry?.isLimitProbe === true && entry.firedAt !== null && Date.now() - entry.firedAt <= retryRecurrenceGraceMs;
   const action = getUnconfirmedLimitAction({ isRepeatAfterProbe, isUsageExhausted: checkIsTopicAccountUsageExhausted(key) });
   if (action === 'waitForReset') {
-    console.log(`[apiRetry] ${k}: the unconfirmed usage limit is confirmed (${isRepeatAfterProbe ? 'it came again after the probe' : 'the usage reading is at 100 %'}) — waiting for the reset`);
+    console.log(`[apiRetry] ${k}: the unconfirmed usage limit is confirmed (${isRepeatAfterProbe ? 'it came again after the probe' : 'the account is marked limited or reads a window at 100 %'}) — waiting for the reset`);
     return false;
   }
   console.log(`[apiRetry] ${k}: an unconfirmed usage limit — probing with a short retry before waiting for the reset`);
@@ -1814,7 +1814,8 @@ function checkIsTopicAccountUsageExhausted(key: SessionKey): boolean {
   if (!checkIsClaudeProfileBackend(key)) return false;
   const info = state.getClaudeProfileInfo(resolveLiveClaudeProfileName(key));
   const limitedUntilMs = info?.limitedUntil ? Date.parse(info.limitedUntil) : Number.NaN;
-  return (Number.isFinite(limitedUntilMs) && limitedUntilMs > Date.now()) || checkIsClaudeUsageExhausted(info?.usage, getThreadClaudeModel(key));
+  const nowMs = Date.now();
+  return (Number.isFinite(limitedUntilMs) && limitedUntilMs > nowMs) || checkIsClaudeUsageExhausted(info?.usage, getThreadClaudeModel(key), nowMs);
 }
 
 /**

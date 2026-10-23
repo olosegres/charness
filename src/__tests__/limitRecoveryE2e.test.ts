@@ -23,7 +23,9 @@
  *     again, because only the recovery itself marked an episode as handled
  *   → a wait that gave up (every resume hit the limit again) is not armed again by the next restart either
  *   → Anthropic's unconfirmed "would exceed your account's rate limit", while the account's usage reading shows its
- *     session window at 100 %: confirmed by the reading — the limit wait is announced at once, no probe first.
+ *     session window at 100 %: confirmed by the reading — the limit wait is announced at once, no probe first
+ *   → the same with that 100 % window's reset already past: an out-of-date reading proves nothing — the probe first
+ *   → and with a 100 % window still ahead but the snapshot stale (the refresher could not re-read it): the probe too.
  *
  * What the unit tests cover instead: the decision table (`limitEpisodeRecovery.test.ts`) and the "window is over"
  * predicate (`apiErrorRetry.test.ts`).
@@ -333,7 +335,66 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-confirmed one more step`);
 
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
-    assert.ok(getCharness().output.includes('the usage reading is at 100 %'), 'confirmed by the reading, not by a repeat');
+    assert.ok(getCharness().output.includes('the account is marked limited or reads a window at 100 %'), 'confirmed by the reading, not by a repeat');
     assert.equal(topic.listMessages().some((message) => message.text.includes('auto-retrying in 2 min')), false, 'no probe first');
+  });
+
+  it('the unconfirmed wording with a 100 % reading whose window has reset since: the probe, not the wait', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const limitNoticesBefore = listSentLimitNotices().length;
+    const callsBefore = fakeTelegram.listCalls('sendMessage').length;
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      // The wait the step before armed is gone, and so is the limit mark it set on the account; the reading still says
+      // 100 %, but of a window that reset 10 minutes ago. The boot recovery hands the parked error — the same
+      // unconfirmed wording — to the same decision.
+      delete persisted.apiRetries?.[key];
+      const { limitedUntil: _settledMark, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        default: {
+          ...defaultProfile,
+          // The refresher polls no profile known to be signed out — and this instance has no sign-in, so a poll would
+          // mark the snapshot stale: kept as it is, only its reset decides.
+          loggedIn: false,
+          usage: { fetchedAt: new Date().toISOString(), source: 'api', buckets: [
+            { kind: 'session', percent: 100, resetsAt: new Date(Date.now() - 10 * msPerMinute).toISOString(), scopeModel: null },
+            { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
+          ] },
+        },
+      };
+    });
+
+    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')));
+    assert.ok(getCharness().output.includes(`${key}: an unconfirmed usage limit — probing`), 'decided by the probe rule');
+    assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'an out-of-date reading does not confirm the limit');
+  });
+
+  it('the unconfirmed wording with a 100 % window still ahead, but in a STALE snapshot: the probe, not the wait', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const limitNoticesBefore = listSentLimitNotices().length;
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      delete persisted.apiRetries?.[key];
+      // Neither the previous step's limit mark nor its "signed out" (which keeps the refresher away): this snapshot must be re-polled.
+      const { limitedUntil: _settledMark, loggedIn: _signedOut, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        default: {
+          ...defaultProfile,
+          // Read two hours ago: due again, the refresher re-polls it at boot, finds no sign-in and marks it stale.
+          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', buckets: [
+            { kind: 'session', percent: 100, resetsAt: new Date(Date.now() + 2 * 60 * msPerMinute).toISOString(), scopeModel: null },
+            { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
+          ] },
+        },
+      };
+    });
+    await getCharness().waitFor('the snapshot marked stale', agentStartTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.default?.usage?.isStale === true);
+    // The parked error was handled by the previous step's recovery: a NEW turn hits the wording.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
+    const callsBefore = fakeTelegram.listCalls('sendMessage').length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-stalesnapshot one more step`);
+
+    await getCharness().waitFor('the probe notice', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').slice(callsBefore).some((call) => typeof call.payload.text === 'string' && call.payload.text.includes('auto-retrying in 2 min')));
+    assert.deepEqual(listSentLimitNotices().slice(limitNoticesBefore), [], 'a stale reading does not confirm the limit');
   });
 });

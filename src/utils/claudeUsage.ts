@@ -292,12 +292,19 @@ export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | unde
 }
 
 /**
- * @description Whether the usage reading SHOWS a window `model` drains at 100 % — the proof an unconfirmed usage-limit
- * wording lacks. Unknown figures prove nothing (`false`), unlike {@link checkHasHeadroomForClaudeModel}, which takes an
- * unknown window as covering the model.
+ * @description Whether the usage reading SHOWS a window `model` drains at 100 % NOW (`nowMs`) — the proof an
+ * unconfirmed usage-limit wording lacks. Unknown figures prove nothing (`false`), unlike
+ * {@link checkHasHeadroomForClaudeModel}, which takes an unknown window as covering the model; neither does an
+ * out-of-date reading — a snapshot marked stale, or a 100 % window whose reset has passed since it was read.
  */
-export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefined, model: string | null): boolean {
-  return getRelevantClaudeUsageKinds(model).some((kind) => (getClaudeUsageBucket(usage, kind)?.percent ?? 0) >= 100);
+export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefined, model: string | null, nowMs: number): boolean {
+  if (!usage || usage.isStale === true) return false;
+  return getRelevantClaudeUsageKinds(model).some((kind) => {
+    const bucket = getClaudeUsageBucket(usage, kind);
+    if (!bucket || bucket.percent < 100) return false;
+    const resetsAtMs = bucket.resetsAt === null ? Number.NaN : Date.parse(bucket.resetsAt);
+    return !(Number.isFinite(resetsAtMs) && resetsAtMs <= nowMs);
+  });
 }
 
 /**
