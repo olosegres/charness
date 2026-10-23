@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.3.2 — 2026-10-23
 
 **On Windows the bot can start an `opencode` that npm installed.** 3.3.0 found npm's `opencode.cmd` on PATH but still
 started the bare `opencode`, which Windows cannot run that way, so the OpenCode server did not come up. The bot now runs
