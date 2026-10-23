@@ -161,12 +161,13 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
     assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n\s*\/\/[^\n]*\n\s*const outcome = await deliverLatePrompt\(\{/);
     assert.ok(deliver.includes("if (outcome !== 'noSession') trackTopicRequestTurn(key, opening);"), 'a prompt that reached nothing opens no tracked turn');
-    assert.match(deliver, /reportNoSession: async \(\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(opening\.requestId !== null\) await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\);\n\s*await replyToThread\(key, t\('agent\.no_session'\)\);/, 'the request it opened is closed and the topic told, as the re-ask handler tells it');
+    assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(opening\.requestId !== null\) await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\);\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);/, 'the request it opened is closed and the topic told, as the re-ask handler tells it — once');
+    assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
   });
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
-  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
     const steps: string[] = [];
     return {
       steps,
@@ -174,9 +175,9 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
         checkIsWindowOpen: () => state.isWindowOpen,
         checkIsSessionActive: () => state.isSessionActive,
         buffer: async () => { steps.push('buffer'); },
-        wake: async () => { steps.push('wake'); return state.isWakeOk ?? true; },
+        wake: async () => { steps.push('wake'); return { isAwake: state.isWakeOk ?? true, isNoticePosted: state.isWakeNoticePosted ?? false }; },
         forward: async () => { steps.push('forward'); },
-        reportNoSession: async () => { steps.push('reportNoSession'); },
+        reportNoSession: async (isAlreadyTold) => { steps.push(isAlreadyTold ? 'reportNoSession(alreadyTold)' : 'reportNoSession'); },
       },
     };
   }
@@ -197,6 +198,12 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
     const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false });
     assert.equal(await deliverLatePrompt(ports), 'noSession');
     assert.deepEqual(steps, ['wake', 'reportNoSession']);
+  });
+
+  it('a wake whose start failed and said why: reported without a second, generic line', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false, isWakeNoticePosted: true });
+    assert.equal(await deliverLatePrompt(ports), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportNoSession(alreadyTold)']);
   });
 
   it('a live process: forwarded at once', async () => {

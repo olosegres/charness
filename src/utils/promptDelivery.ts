@@ -90,20 +90,27 @@ export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActi
   return input.isSessionActive ? 'forward' : 'wake';
 }
 
+/** @description What a wake did: whether a session is up to forward to, and whether it already told the topic something. */
+export interface LateWakeResult {
+  isAwake: boolean;
+  /** The wake posted a notice of its own (a start that failed says why): the report adds none. */
+  isNoticePosted: boolean;
+}
+
 /**
  * @name LatePromptDeliveryPorts
  * @description What {@link deliverLatePrompt} acts through, for one prompt: the session's state read NOW, and the three
  * ways out. `reportNoSession` runs when the wake found nothing to resume (the ids released, the topic unbound, a start
- * that failed): it tells the person, as the arrival-time paths do, and closes what the prompt opened.
+ * that failed): it closes what the prompt opened and tells the person, as the arrival-time paths do — unless the wake
+ * already said why (`isAlreadyTold`), where a second, generic line would contradict it.
  */
 export interface LatePromptDeliveryPorts {
   checkIsWindowOpen: () => boolean;
   checkIsSessionActive: () => boolean;
   buffer: () => Promise<void>;
-  /** Resume the sleeping conversation; `true` once a session is up to forward to. */
-  wake: () => Promise<boolean>;
+  wake: () => Promise<LateWakeResult>;
   forward: () => Promise<void>;
-  reportNoSession: () => Promise<void>;
+  reportNoSession: (isAlreadyTold: boolean) => Promise<void>;
 }
 
 /** @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to. */
@@ -120,9 +127,12 @@ export async function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise
     await ports.buffer();
     return 'buffered';
   }
-  if (route === 'wake' && !(await ports.wake())) {
-    await ports.reportNoSession();
-    return 'noSession';
+  if (route === 'wake') {
+    const wake = await ports.wake();
+    if (!wake.isAwake) {
+      await ports.reportNoSession(wake.isNoticePosted);
+      return 'noSession';
+    }
   }
   await ports.forward();
   return 'forwarded';

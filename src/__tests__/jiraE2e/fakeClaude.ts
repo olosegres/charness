@@ -26,6 +26,7 @@ import {
   fakeTurnUsage,
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeIgnoreStopSignalsFileName,
+  fakeClaudeRefuseLaunchFileName,
   getFakeClaudeTranscriptPath,
   getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
@@ -651,6 +652,10 @@ async function main(): Promise<void> {
       process.stderr.write(`fake claude: ${reason}\n`);
       process.exit(argvViolationExitCode);
     }
+  }
+  if (fs.existsSync(path.join(getStateDir(), fakeClaudeRefuseLaunchFileName))) {
+    process.stderr.write('fake claude: refused to start\n');
+    process.exit(1);
   }
   const sessionViolation = await getSessionViolation(argv);
   if (sessionViolation !== null) {

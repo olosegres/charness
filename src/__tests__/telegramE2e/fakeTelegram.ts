@@ -129,7 +129,7 @@ export class FakeTelegram {
    */
   isCallbackAnswerExpired = false;
   /** The responses {@link holdNextResponse} still has to hold, in the order they were asked for. */
-  private readonly responseHolds: Array<{ method: string; delayMs: number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
+  private readonly responseHolds: Array<{ method: string; release: Promise<unknown>; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
   /** The files `getFile` knows, by file id. */
@@ -328,19 +328,19 @@ export class FakeTelegram {
     const holdIndex = this.responseHolds.findIndex((hold) => hold.method === method && hold.isMatch(payload));
     if (holdIndex >= 0) {
       const [hold] = this.responseHolds.splice(holdIndex, 1);
-      await new Promise((resolve) => setTimeout(resolve, hold.delayMs));
+      await hold.release;
     }
     response.writeHead(answer.ok ? 200 : answer.error_code, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer));
   }
 
   /**
-   * @description Hold the response to the NEXT `method` call whose payload `isMatch` for `delayMs`: the call is handled
-   * at once (a sent message is in the topic, a toast recorded), only the bot's await of it lasts that long — a slow
-   * Bot API round trip, which a test uses to put the bot's next step at a chosen moment.
+   * @description Hold the response to the NEXT `method` call whose payload `isMatch` until `release` settles: the call is
+   * handled at once (a sent message is in the topic, a toast recorded), only the bot's await of it lasts that long — a
+   * slow Bot API round trip, which a test ends at a state it observed, to put the bot's next step at a chosen moment.
    */
-  holdNextResponse(method: string, delayMs: number, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
-    this.responseHolds.push({ method, delayMs, isMatch });
+  holdNextResponse(method: string, release: Promise<unknown>, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
+    this.responseHolds.push({ method, release, isMatch });
   }
 
   private async dispatch(method: string, payload: Record<string, unknown>, socket: Socket): Promise<ApiOk | ApiError> {
