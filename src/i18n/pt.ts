@@ -319,7 +319,7 @@ export const ptDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Já está atualizado.',
   'update.cmd.busy': 'ℹ️ Já há uma atualização em andamento.',
   'update.cmd.cannotInstall': 'ℹ️ Esta instalação não consegue se atualizar sozinha — atualize à mão (veja /update).',
-  'update.cmd.checked': 'Verificado.',
+  'update.cmd.checking': 'Verificando…',
   'version.updateAvailable': '⬆️ Atualização disponível: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nUsa /effort para alterar',

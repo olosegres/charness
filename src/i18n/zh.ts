@@ -319,7 +319,7 @@ export const zhDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ 已是最新。',
   'update.cmd.busy': 'ℹ️ 更新已在进行中。',
   'update.cmd.cannotInstall': 'ℹ️ 此安装无法自行更新 — 请手动更新（见 /update）。',
-  'update.cmd.checked': '已检查。',
+  'update.cmd.checking': '正在检查…',
   'version.updateAvailable': '⬆️ 有可用更新：{version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort：{effort}\n运行 /effort 可更改',

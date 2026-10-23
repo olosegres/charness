@@ -319,7 +319,7 @@ export const uzDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Allaqachon eng so‘nggi versiya.',
   'update.cmd.busy': 'ℹ️ Yangilanish allaqachon davom etmoqda.',
   'update.cmd.cannotInstall': 'ℹ️ Bu o‘rnatish o‘zini yangilay olmaydi — qo‘lda yangilang (/update ga qarang).',
-  'update.cmd.checked': 'Tekshirildi.',
+  'update.cmd.checking': 'Tekshirilmoqda…',
   'version.updateAvailable': '⬆️ Yangilanish mavjud: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nO‘zgartirish uchun /effort',

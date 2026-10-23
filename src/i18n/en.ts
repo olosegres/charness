@@ -323,7 +323,7 @@ export const enDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Already up to date.',
   'update.cmd.busy': 'ℹ️ An update is already in progress.',
   'update.cmd.cannotInstall': 'ℹ️ This install cannot update itself — update by hand (see /update).',
-  'update.cmd.checked': 'Checked.',
+  'update.cmd.checking': 'Checking…',
   'version.updateAvailable': '⬆️ Update available: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nRun /effort to change it',

@@ -319,7 +319,7 @@ export const frDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Déjà à jour.',
   'update.cmd.busy': 'ℹ️ Une mise à jour est déjà en cours.',
   'update.cmd.cannotInstall': 'ℹ️ Cette installation ne peut pas se mettre à jour seule — mettez à jour à la main (voir /update).',
-  'update.cmd.checked': 'Vérifié.',
+  'update.cmd.checking': 'Vérification…',
   'version.updateAvailable': '⬆️ Mise à jour disponible : {version} — /update',
   'effort.set_success': '✅ Effort : {level}',
   'effort.current_hint': '⚙️ Effort : {effort}\nLancez /effort pour le changer',

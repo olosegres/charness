@@ -319,7 +319,7 @@ export const esDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Ya está al día.',
   'update.cmd.busy': 'ℹ️ Ya hay una actualización en curso.',
   'update.cmd.cannotInstall': 'ℹ️ Esta instalación no puede actualizarse sola — actualiza a mano (ver /update).',
-  'update.cmd.checked': 'Comprobado.',
+  'update.cmd.checking': 'Comprobando…',
   'version.updateAvailable': '⬆️ Actualización disponible: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nUsa /effort para cambiarlo',

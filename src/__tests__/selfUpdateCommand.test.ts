@@ -34,6 +34,8 @@ let settingsPath = '';
 let sent: SentMessage[] = [];
 let edits: Array<SentMessage & { id: number }> = [];
 let engineCalls: string[] = [];
+/** What happened, in order, across the Telegram ports and the engine (answers, engine calls, edits). */
+let eventOrder: string[] = [];
 let engineOffer: UpdateOffer | null = null;
 let installResult: InstallRequestResult = 'started';
 let currentKey: SessionKey = generalKey;
@@ -49,6 +51,7 @@ beforeEach(() => {
   sent = [];
   edits = [];
   engineCalls = [];
+  eventOrder = [];
   engineOffer = null;
   installResult = 'started';
   currentKey = generalKey;
@@ -87,6 +90,7 @@ function createFakeEngine(readSettings: () => UpdateStatus['settings']): UpdateE
     runBootStep: async () => {},
     checkNow: async () => {
       engineCalls.push('checkNow');
+      eventOrder.push('checkNow');
       return getStatus();
     },
     requestInstall: async (target) => {
@@ -114,6 +118,7 @@ function createFeature(overrides: Partial<SelfUpdatePorts> = {}) {
       return sent.length;
     },
     editThreadMessage: async (_key, id, text, extra) => {
+      eventOrder.push('edit');
       edits.push({ id, text, buttons: buttonsOf(extra) });
       return true;
     },
@@ -147,6 +152,7 @@ async function tap(data: string): Promise<TapResult> {
     match: null as RegExpExecArray | null,
     callbackQuery: { data, message: { message_id: screenMessageId } },
     answerCbQuery: async (text?: string) => {
+      eventOrder.push('answer');
       answers.push(text);
     },
   };
@@ -320,12 +326,13 @@ describe('the buttons', () => {
     assert.deepEqual(edits, []);
   });
 
-  test('"Check now" runs one check in any topic, answers, and re-renders', async () => {
+  test('"Check now" runs one check in any topic: the tap is answered FIRST (a check takes up to two minutes), the screen follows', async () => {
     createFeature();
     currentKey = topicKey;
     const { answers } = await tap('upd_check');
     assert.deepEqual(engineCalls, ['checkNow']);
-    assert.deepEqual(answers, ['Checked.']);
+    assert.deepEqual(answers, ['Checking…']);
+    assert.deepEqual(eventOrder, ['answer', 'checkNow', 'edit']);
     assert.equal(edits.length, 1);
     assert.deepEqual(lastEdit().buttons, [], 'the topic keeps its read-only screen');
   });

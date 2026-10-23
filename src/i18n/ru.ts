@@ -323,7 +323,7 @@ export const ruDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Уже последняя версия.',
   'update.cmd.busy': 'ℹ️ Обновление уже идёт.',
   'update.cmd.cannotInstall': 'ℹ️ Эта установка не умеет обновляться сама — обновите вручную (см. /update).',
-  'update.cmd.checked': 'Проверено.',
+  'update.cmd.checking': 'Проверяю…',
   'version.updateAvailable': '⬆️ Доступно обновление: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nИзменить — /effort',

@@ -319,7 +319,7 @@ export const kaDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ უკვე უახლესია.',
   'update.cmd.busy': 'ℹ️ განახლება უკვე მიმდინარეობს.',
   'update.cmd.cannotInstall': 'ℹ️ ამ ინსტალაციას თავისით განახლება არ შეუძლია — განაახლეთ ხელით (იხ. /update).',
-  'update.cmd.checked': 'შემოწმდა.',
+  'update.cmd.checking': 'მოწმდება…',
   'version.updateAvailable': '⬆️ ხელმისაწვდომია განახლება: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nშესაცვლელად გაუშვით /effort',

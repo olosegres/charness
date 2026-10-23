@@ -319,7 +319,7 @@ export const hiDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ पहले से अप-टू-डेट है।',
   'update.cmd.busy': 'ℹ️ अपडेट पहले से चल रहा है।',
   'update.cmd.cannotInstall': 'ℹ️ यह इंस्टॉल खुद को अपडेट नहीं कर सकता — हाथ से अपडेट करें (देखें /update)।',
-  'update.cmd.checked': 'जाँच हो गई।',
+  'update.cmd.checking': 'जाँच रहा हूँ…',
   'version.updateAvailable': '⬆️ अपडेट उपलब्ध: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nबदलने के लिए /effort चलाएँ',

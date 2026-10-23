@@ -325,7 +325,7 @@ export const ukDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Уже остання версія.',
   'update.cmd.busy': 'ℹ️ Оновлення вже триває.',
   'update.cmd.cannotInstall': 'ℹ️ Це встановлення не вміє оновлюватися саме — оновіть вручну (див. /update).',
-  'update.cmd.checked': 'Перевірено.',
+  'update.cmd.checking': 'Перевіряю…',
   'version.updateAvailable': '⬆️ Доступне оновлення: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nЗмінити — /effort',

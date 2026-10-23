@@ -47,7 +47,7 @@ export class UpdateFlowDriver {
   async checkNow(expectedText: string): Promise<void> {
     const screen = this.getScreen();
     const answer = await this.general.tapAndAwaitAnswer(screen, 'upd_check');
-    assert.equal(answer, 'Checked.');
+    assert.equal(answer, 'Checking…');
     await this.general.waitForMessageText(`the screen to read "${expectedText}"`, screen, (text) => text.includes(expectedText));
   }
 

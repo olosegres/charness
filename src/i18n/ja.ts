@@ -319,7 +319,7 @@ export const jaDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ すでに最新です。',
   'update.cmd.busy': 'ℹ️ 更新はすでに進行中です。',
   'update.cmd.cannotInstall': 'ℹ️ このインストールは自分で更新できません — 手動で更新してください（/update 参照）。',
-  'update.cmd.checked': '確認しました。',
+  'update.cmd.checking': '確認中…',
   'version.updateAvailable': '⬆️ 更新があります：{version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\n変更するには /effort',

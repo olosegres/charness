@@ -319,7 +319,7 @@ export const deDict: Record<string, string> = {
   'update.cmd.upToDate': 'ℹ️ Schon auf dem neuesten Stand.',
   'update.cmd.busy': 'ℹ️ Ein Update läuft bereits.',
   'update.cmd.cannotInstall': 'ℹ️ Diese Installation kann sich nicht selbst aktualisieren — von Hand aktualisieren (siehe /update).',
-  'update.cmd.checked': 'Geprüft.',
+  'update.cmd.checking': 'Prüfe …',
   'version.updateAvailable': '⬆️ Update verfügbar: {version} — /update',
   'effort.set_success': '✅ Effort: {level}',
   'effort.current_hint': '⚙️ Effort: {effort}\nMit /effort änderbar',

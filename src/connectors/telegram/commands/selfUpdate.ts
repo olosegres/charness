@@ -202,12 +202,13 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
       await handleSettingTap(ctx, { whatsNew: isOn }, (key) => withThreadLocale(key, () => t(isOn ? 'update.cmd.whatsNewSet.on' : 'update.cmd.whatsNewSet.off')));
     });
 
-    // A check changes nothing persistent and posts nothing to General: any topic may run one.
+    // A check changes nothing persistent and posts nothing to General: any topic may run one. It asks the registry or the remote
+    // (up to two minutes), so the tap is answered FIRST: Telegram drops an answer that comes after its wait; the screen follows.
     bot.action(updateCheckCallback, async (ctx) => {
       const key = await authoriseTap(ctx, { isWrite: false });
       if (key === null) return;
+      await answerCallbackQuerySafely(ctx, withThreadLocale(key, () => t('update.cmd.checking')));
       await getUpdateEngine()?.checkNow();
-      await answerCallbackQuerySafely(ctx, withThreadLocale(key, () => t('update.cmd.checked')));
       await rerenderScreen(ctx, key);
     });
 
