@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.3.0 — 2026-10-23
 
 **The agent can send files to the topic on Windows and macOS.** `send_file_to_user`, and `send_messages_to_user` with a
 file, refused with «secure file sending is unsupported on win32», and an agent could stop its work over it. Files are now
