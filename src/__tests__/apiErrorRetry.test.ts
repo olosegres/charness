@@ -21,6 +21,7 @@ import {
   checkIsUsageLimitWindowOver,
   getUnconfirmedLimitAction,
   conversationTailRetryDelayMs,
+  type RetryAttemptsByKind,
 } from '../apiErrorRetry';
 import { maxTimeoutMs } from '../scheduler/engine';
 
@@ -253,19 +254,43 @@ test('getRetryPlan / decideRetryAction: a conversation-tail refusal is retried o
   assert.deepEqual(getRetryPlan({ kind: 'conversationTail', attempt: 2, now: fixedNow }), { giveUp: true });
   assert.deepEqual(
     decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: null }),
-    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs },
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs, attemptsByKind: { conversationTail: 1 } },
   );
   assert.deepEqual(
-    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'conversationTail', attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { conversationTail: 1 }, firedAt: fixedNow - minuteMs, pending: false } }),
     { action: 'giveUp', attempts: 1 },
   );
-  // Another class is another episode: a refusal on the "continue" of a short throttle retry still gets its one retry.
+  // A class new to the episode starts at 1: a refusal on the "continue" of a short throttle retry still gets its one
+  // retry — and the episode keeps the throttle's count beside it.
   assert.deepEqual(
-    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'transient', attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
-    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs },
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { transient: 1 }, firedAt: fixedNow - minuteMs, pending: false } }),
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs, attemptsByKind: { transient: 1, conversationTail: 1 } },
   );
   // A refusal long after the last retry is a fresh episode.
-  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { kind: 'conversationTail', attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
+  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attemptsByKind: { conversationTail: 1 }, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
+});
+
+test('decideRetryAction: two classes alternating inside one episode cannot reset each other — each reaches its own cap', () => {
+  // Google's "capacity … reset after 2s" (transient), its "continue" refused as a model turn (conversationTail), the
+  // capacity error again, …: each class counts from its own last attempt in the episode.
+  const firedJustNow = (attemptsByKind: RetryAttemptsByKind) => ({ attemptsByKind, firedAt: fixedNow - minuteMs, pending: false });
+  const transientAgain = decideRetryAction({ kind: 'transient', now: fixedNow, prev: firedJustNow({ transient: 1, conversationTail: 1 }) });
+  assert.deepEqual(transientAgain, { action: 'arm', attempt: 2, delayMs: 10 * minuteMs, fireAt: fixedNow + 10 * minuteMs, attemptsByKind: { transient: 2, conversationTail: 1 } }, 'transient → tail → transient: transient attempt 2');
+
+  // Walk the alternation to the end: it must stop.
+  let attemptsByKind: RetryAttemptsByKind = {};
+  const actions: string[] = [];
+  for (const kind of ['transient', 'conversationTail', 'transient', 'conversationTail', 'transient', 'conversationTail', 'transient'] as const) {
+    const action = decideRetryAction({ kind, now: fixedNow, prev: firedJustNow(attemptsByKind) });
+    actions.push(action.action === 'arm' ? `${kind} ${action.attempt}` : action.action === 'giveUp' ? `${kind} giveUp` : action.action);
+    if (action.action !== 'arm') break;
+    attemptsByKind = action.attemptsByKind;
+  }
+  assert.deepEqual(actions, ['transient 1', 'conversationTail 1', 'transient 2', 'conversationTail giveUp'], 'the tail\'s one retry is spent: its second refusal gives up');
+  // And the throttle alone, with a refusal between each of its retries, still stops at its cap.
+  assert.deepEqual(decideRetryAction({ kind: 'transient', now: fixedNow, prev: firedJustNow({ transient: 3, conversationTail: 1 }) }), { action: 'giveUp', attempts: 3 });
+  // usageLimit ↔ conversationTail likewise keeps the usage-limit cap.
+  assert.equal(decideRetryAction({ kind: 'usageLimit', now: fixedNow, prev: firedJustNow({ usageLimit: 6, conversationTail: 1 }) }).action, 'giveUp');
 });
 
 test('getRetryPlan: transient attempts 1/2/3 → 5/10/20 min', () => {
@@ -327,6 +352,7 @@ test('decideRetryAction: no prior record → arm attempt 1 at the first transien
     attempt: 1,
     delayMs: 5 * minuteMs,
     fireAt: fixedNow + 5 * minuteMs,
+    attemptsByKind: { transient: 1 },
   });
 });
 
@@ -334,7 +360,7 @@ test('decideRetryAction: a retry already pending → ignore (dedup the same erro
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { kind: 'transient', attempt: 1, firedAt: null, pending: true },
+    prev: { attemptsByKind: { transient: 1 }, firedAt: null, pending: true },
   });
   assert.deepEqual(result, { action: 'ignore' });
 });
@@ -343,13 +369,14 @@ test('decideRetryAction: a prior fire WITHIN the grace window → escalate to at
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { kind: 'transient', attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
+    prev: { attemptsByKind: { transient: 1 }, firedAt: fixedNow - retryRecurrenceGraceMs, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
     attempt: 2,
     delayMs: 10 * minuteMs,
     fireAt: fixedNow + 10 * minuteMs,
+    attemptsByKind: { transient: 2 },
   });
 });
 
@@ -357,13 +384,14 @@ test('decideRetryAction: a prior fire BEYOND the grace window → fresh episode,
   const result = decideRetryAction({
     kind: 'transient',
     now: fixedNow,
-    prev: { kind: 'transient', attempt: 3, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
+    prev: { attemptsByKind: { transient: 3 }, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false },
   });
   assert.deepEqual(result, {
     action: 'arm',
     attempt: 1,
     delayMs: 5 * minuteMs,
     fireAt: fixedNow + 5 * minuteMs,
+    attemptsByKind: { transient: 1 },
   });
 });
 
@@ -372,7 +400,7 @@ test('decideRetryAction: transient escalation past the cap → giveUp with attem
     kind: 'transient',
     now: fixedNow,
     // attempt 3 fired inside grace → next attempt is 4 → over the cap of 3.
-    prev: { kind: 'transient', attempt: 3, firedAt: fixedNow - 1, pending: false },
+    prev: { attemptsByKind: { transient: 3 }, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 3 });
 });
@@ -382,7 +410,7 @@ test('decideRetryAction: usageLimit escalation past the cap → giveUp with atte
     kind: 'usageLimit',
     now: fixedNow,
     // attempt 6 fired inside grace → next attempt is 7 → over the cap of 6.
-    prev: { kind: 'usageLimit', attempt: 6, firedAt: fixedNow - 1, pending: false },
+    prev: { attemptsByKind: { usageLimit: 6 }, firedAt: fixedNow - 1, pending: false },
   });
   assert.deepEqual(result, { action: 'giveUp', attempts: 6 });
 });
@@ -398,7 +426,7 @@ test('decideRetryAction: auth → surface (never arms a timer, ignores prior rec
     decideRetryAction({
       kind: 'auth',
       now: fixedNow,
-      prev: { kind: 'auth', attempt: 2, firedAt: fixedNow - 1, pending: true },
+      prev: { attemptsByKind: { auth: 2 }, firedAt: fixedNow - 1, pending: true },
     }),
     { action: 'surface' },
   );
@@ -708,7 +736,7 @@ test('classify: a machine-form epoch already behind now is no reset — the limi
     const cls = classifyAgentApiError(text, fixedNow);
     assert.deepEqual(cls, { kind: 'usageLimit', resetAt: undefined }, text);
     assert.deepEqual(decideRetryAction({ kind: 'usageLimit', resetAt: cls?.kind === 'usageLimit' ? cls.resetAt : undefined, now: fixedNow, prev: null }),
-      { action: 'arm', attempt: 1, delayMs: usageLimitDefaultMs, fireAt: fixedNow + usageLimitDefaultMs }, text);
+      { action: 'arm', attempt: 1, delayMs: usageLimitDefaultMs, fireAt: fixedNow + usageLimitDefaultMs, attemptsByKind: { usageLimit: 1 } }, text);
   }
   // The boot recovery reads a parked error against the time it was written: that reset is kept, and over by now.
   const writtenAtMs = fixedNow - 2 * 3600_000;

@@ -16,7 +16,7 @@ question's buttons stopped working when its answer reached no session — they k
 
 **Gemini's «Requests ending with a model turn are not supported» recovers even right after another retry.** It was
 counted as a repeat of any retry in the two minutes before — Google's short «reset after 2s» retry, for one — and the
-bot gave up without continuing the work.
+bot gave up without continuing the work. Each kind of retry still stops at its own limit when they alternate.
 
 **A `/compact` that fails the way the turn before it did is shown.** The failure was taken for the previous turn's,
 already posted, and dropped: neither shown nor retried.

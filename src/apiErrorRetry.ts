@@ -670,11 +670,12 @@ function clampDelay(delayMs: number): number {
  * into {@link decideRetryAction}. The bot owns the live `Map`; this snapshot is
  * the only state the pure decision needs.
  */
+/** Attempts armed per class inside one retry episode: the classes can alternate within it. */
+export type RetryAttemptsByKind = Partial<Record<AgentApiErrorClass['kind'], number>>;
+
 export interface RetryEntrySnapshot {
-  /** The class of the currently / last armed retry: attempts are counted per class. */
-  kind: AgentApiErrorClass['kind'];
-  /** 1-based attempt of the currently / last armed retry. */
-  attempt: number;
+  /** The attempts already armed per class in the thread's current episode. */
+  attemptsByKind: RetryAttemptsByKind;
   /** Epoch ms when the last armed retry actually fired, or `null` if still pending. */
   firedAt: number | null;
   /** True while a retry timer is armed and has not fired yet. */
@@ -696,7 +697,7 @@ export interface RetryEntrySnapshot {
 export type RetryAction =
   | { action: 'surface' }
   | { action: 'ignore' }
-  | { action: 'arm'; attempt: number; delayMs: number; fireAt: number }
+  | { action: 'arm'; attempt: number; delayMs: number; fireAt: number; attemptsByKind: RetryAttemptsByKind }
   | { action: 'giveUp'; attempts: number };
 
 export interface DecideRetryActionArgs {
@@ -720,9 +721,11 @@ export interface DecideRetryActionArgs {
  *  1. `prev.pending` → `ignore` (a retry is already armed — dedup the episode;
  *     this is what stops Claude's repeated scrape frames AND any duplicate
  *     `session.error` from re-arming).
- *  2. same episode (a `prev` OF THE SAME CLASS that fired within {@link retryRecurrenceGraceMs}) →
- *     escalate to `prev.attempt + 1`; otherwise a fresh episode → attempt 1. Another class is another episode:
- *     a model-turn refusal on the "continue" of a short throttle retry still gets its one retry.
+ *  2. same episode (a `prev` that fired within {@link retryRecurrenceGraceMs}) → escalate THIS class from its own
+ *     count in the episode (`prev.attemptsByKind`); a class new to the episode starts at 1, and so does a fresh
+ *     episode. A model-turn refusal on the "continue" of a short throttle retry still gets its one retry, and two
+ *     classes that alternate cannot reset each other: each still reaches its own cap. The `arm` action carries the
+ *     episode's updated counts for the caller to keep.
  *  3. ask {@link getRetryPlan}: `giveUp` → `giveUp` with `attempts` already made
  *     (= attempt − 1); else `arm` at `now + delayMs`.
  */
@@ -731,10 +734,11 @@ export function decideRetryAction(args: DecideRetryActionArgs): RetryAction {
   if (kind === 'auth') return { action: 'surface' };
   if (prev?.pending) return { action: 'ignore' };
 
-  const sameEpisode = !!prev && prev.kind === kind && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
-  const attempt = sameEpisode ? prev.attempt + 1 : 1;
+  const isSameEpisode = !!prev && prev.firedAt != null && now - prev.firedAt <= retryRecurrenceGraceMs;
+  const episodeAttempts: RetryAttemptsByKind = isSameEpisode ? prev.attemptsByKind : {};
+  const attempt = (episodeAttempts[kind] ?? 0) + 1;
 
   const plan = getRetryPlan({ kind, attempt, resetAt, now });
   if ('giveUp' in plan) return { action: 'giveUp', attempts: attempt - 1 };
-  return { action: 'arm', attempt, delayMs: plan.delayMs, fireAt: now + plan.delayMs };
+  return { action: 'arm', attempt, delayMs: plan.delayMs, fireAt: now + plan.delayMs, attemptsByKind: { ...episodeAttempts, [kind]: attempt } };
 }

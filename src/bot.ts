@@ -346,7 +346,7 @@ import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
 import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
-import { decideRetryAction, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
+import { decideRetryAction, type RetryAttemptsByKind, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
 import {
   getLoginCommandRoute,
@@ -1673,7 +1673,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   }
   const entry = apiRetryTimers.get(k);
   const prev = entry
-    ? { kind: entry.kind, attempt: entry.attempt, firedAt: entry.firedAt, pending: entry.timer !== null }
+    ? { attemptsByKind: entry.attemptsByKind, firedAt: entry.firedAt, pending: entry.timer !== null }
     : null;
 
   const now = Date.now();
@@ -1740,7 +1740,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     }));
   }
 
-  armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, delayMs: action.delayMs, limitWait });
+  armApiRetryTimer(key, { kind: cls.kind, attempt: action.attempt, fireAt: action.fireAt, delayMs: action.delayMs, attemptsByKind: action.attemptsByKind, limitWait });
 }
 
 /** @description What {@link armApiRetryTimer} arms: the retry's class, attempt and instant, and its extras. */
@@ -1749,6 +1749,8 @@ interface ApiRetryArming {
   attempt: number;
   fireAt: number;
   delayMs: number;
+  /** The episode's attempts per class after this one (`decideRetryAction`); absent = this class's attempt alone. */
+  attemptsByKind?: RetryAttemptsByKind;
   limitWait?: UsageLimitWait;
   isLimitProbe?: boolean;
 }
@@ -1778,6 +1780,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   apiRetryTimers.set(keyToString(key), {
     timer,
     attempt: arming.attempt,
+    attemptsByKind: arming.attemptsByKind ?? { [arming.kind]: arming.attempt },
     kind: arming.kind,
     firedAt: null,
     fireAt: arming.fireAt,
