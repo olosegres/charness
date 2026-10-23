@@ -237,6 +237,17 @@ test('a keyboard from before a hand edit is refused: the toast says so, the main
   assert.match(lastEdit().text, /Language: ru/);
 });
 
+test('checkIsAnySttInputAwaited: true while a topic waits for a pasted key or address, false once it is given', async () => {
+  writeConfig({});
+  const feature = createFeature();
+  assert.equal(feature.checkIsAnySttInputAwaited(), false);
+  await tap('ad');
+  await tap('an', ['gq']);
+  assert.equal(feature.checkIsAnySttInputAwaited(), true);
+  await feature.submitSttInput(key, sampleKey, 801);
+  assert.equal(feature.checkIsAnySttInputAwaited(), false);
+});
+
 test('adding Groq: the key step is armed, an implausible paste stays visible and re-arms, a plausible one is deleted FIRST and saved', async () => {
   writeConfig({});
   const feature = createFeature();

@@ -620,8 +620,14 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     return hadPending;
   }
 
+  /** Whether any topic has a sign-in flow in flight — the bot must not restart under it (the updater waits). */
+  function checkIsAnyLoginInProgress(): boolean {
+    return pendingAuthLogins.size > 0 || pendingOpenCodeOAuth.size > 0;
+  }
+
   return {
     cancelPendingLogin,
+    checkIsAnyLoginInProgress,
     checkIsAuthLoginAwaitingCode,
     cancelClaudeAuthLogin,
     startClaudeAuthLogin,

@@ -12,6 +12,7 @@ import * as path from 'path';
 import {
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
+  createUpdateSettingsReader,
   getInstanceSettingsPath,
   instanceSettingsFileName,
   loadInstanceSettings,
@@ -196,4 +197,22 @@ test('a hand edit of autoUpdate shows on the next read', () => {
   assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ autoUpdate: 'on' }) });
   writeRaw('{"autoUpdate":"off","whatsNew":true}');
   assert.deepEqual(loadInstanceSettings(settingsPath), { status: 'ok', config: createSettings({ autoUpdate: 'off', whatsNew: true }) });
+});
+
+test('the update settings reader fills the defaults in (on, shown), follows a hand edit, and reports a broken file once', () => {
+  const errors: string[] = [];
+  const read = createUpdateSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.deepEqual(read(), { autoUpdate: 'on', whatsNew: true }, 'no file');
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'notify' }));
+  assert.deepEqual(read(), { autoUpdate: 'notify', whatsNew: true });
+  writeRaw('{"whatsNew":false}');
+  assert.deepEqual(read(), { autoUpdate: 'on', whatsNew: false }, 'a field that is not set falls back, the other stays');
+  writeRaw('{"autoUpdate":"sometimes"}');
+  assert.deepEqual(read(), { autoUpdate: 'on', whatsNew: true }, 'a broken file reads as the defaults');
+  read();
+  read();
+  assert.equal(errors.length, 1, 'one line per distinct broken state');
+  assert.match(errors[0], /autoUpdate/);
+  writeRaw('{"autoUpdate":"off"}');
+  assert.deepEqual(read(), { autoUpdate: 'off', whatsNew: true });
 });

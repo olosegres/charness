@@ -195,6 +195,11 @@ export function createStt(ports: SttPorts) {
     return step === 'url' || step === 'key' ? step : null;
   }
 
+  /** Whether any topic waits for a typed address or key — a restart would drop it. */
+  function checkIsAnyInputAwaited(): boolean {
+    return pendingInputs.size > 0;
+  }
+
   /** A slash command or a topic teardown ends an armed step; the prompt is retired out loud only when asked to. */
   async function cancelInput(key: SessionKey, options: { isSilent?: boolean } = {}): Promise<void> {
     const pending = clearPending(keyToString(key));
@@ -526,6 +531,7 @@ export function createStt(ports: SttPorts) {
     startSttAutoInstall: startAutoInstall,
     resumeSttInstallAtBoot: resumeInstallAtBoot,
     getAwaitedSttStep: getAwaitedStep,
+    checkIsAnySttInputAwaited: checkIsAnyInputAwaited,
     submitSttInput: submitInput,
     cancelSttInput: cancelInput,
   };

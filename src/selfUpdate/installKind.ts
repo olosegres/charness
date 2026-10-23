@@ -7,13 +7,14 @@ import * as path from 'path';
  *   - `npmGlobal`: `npm install -g`, the prefix writable → `npm install -g charness@X` into the SAME prefix.
  *   - `checkout`: a git checkout (`npm link` and a mounted checkout included), writable → `scripts/self-update.sh`.
  *   - `notifyOnly`: it cannot update itself (no write access, a package manager we do not drive, a Node without
- *     `process.execve`): it only says a new version is out and names the command to run by hand.
+ *     `process.execve`): for an npm-style install it says a new version is out and names the command to run by hand; a
+ *     checkout (`isCheckout`) is not watched at all — `/update` names the reason and the command.
  *   - `ephemeral`: `npx` — gone after the run, nothing to update.
  */
 export type InstallKind =
   | { kind: 'npmGlobal'; prefix: string }
   | { kind: 'checkout'; root: string }
-  | { kind: 'notifyOnly'; reason: NotifyOnlyReason; manualCommand: string }
+  | { kind: 'notifyOnly'; reason: NotifyOnlyReason; manualCommand: string; isCheckout: boolean }
   | { kind: 'ephemeral' };
 
 /** @name NotifyOnlyReason @description Why an install can only notify; the `/update` screen words each one. */
@@ -75,19 +76,19 @@ export function detectInstallKind({ packageRoot, fs: filesystem, platform, hasEx
 
   if (filesystem.checkExists(path.join(packageRoot, gitEntryName))) {
     const manualCommand = getCheckoutManualCommand(packageRoot);
-    if (!hasExecve) return { kind: 'notifyOnly', reason: 'noExecve', manualCommand };
+    if (!hasExecve) return { kind: 'notifyOnly', reason: 'noExecve', manualCommand, isCheckout: true };
     const canWrite = filesystem.checkIsWritable(packageRoot) && filesystem.checkExists(path.join(packageRoot, selfUpdateScriptRelativePath));
-    return canWrite ? { kind: 'checkout', root: packageRoot } : { kind: 'notifyOnly', reason: 'readOnlyCheckout', manualCommand };
+    return canWrite ? { kind: 'checkout', root: packageRoot } : { kind: 'notifyOnly', reason: 'readOnlyCheckout', manualCommand, isCheckout: true };
   }
 
   const foreign = foreignPackageManagerFragments.find(({ fragment }) => `${packageRoot}${path.sep}`.includes(fragment));
-  if (foreign) return { kind: 'notifyOnly', reason: 'packageManager', manualCommand: foreign.manualCommand };
+  if (foreign) return { kind: 'notifyOnly', reason: 'packageManager', manualCommand: foreign.manualCommand, isCheckout: false };
 
   const npmPrefix = getNpmPrefix(packageRoot, platform);
   if (npmPrefix === null || !npmPrefix.isGlobalLayout) {
-    return { kind: 'notifyOnly', reason: 'localInstall', manualCommand: 'npm install charness@latest' };
+    return { kind: 'notifyOnly', reason: 'localInstall', manualCommand: 'npm install charness@latest', isCheckout: false };
   }
-  if (!hasExecve) return { kind: 'notifyOnly', reason: 'noExecve', manualCommand: npmManualCommand };
+  if (!hasExecve) return { kind: 'notifyOnly', reason: 'noExecve', manualCommand: npmManualCommand, isCheckout: false };
 
   const nodeModulesDirectory = path.dirname(packageRoot);
   const binDirectory = path.join(npmPrefix.prefix, npmGlobalBinFolderName);
@@ -95,5 +96,5 @@ export function detectInstallKind({ packageRoot, fs: filesystem, platform, hasEx
     filesystem.checkIsWritable(nodeModulesDirectory) && (platform === 'win32' || filesystem.checkIsWritable(binDirectory));
   return canWrite
     ? { kind: 'npmGlobal', prefix: npmPrefix.prefix }
-    : { kind: 'notifyOnly', reason: 'readOnlyPrefix', manualCommand: npmManualCommand };
+    : { kind: 'notifyOnly', reason: 'readOnlyPrefix', manualCommand: npmManualCommand, isCheckout: false };
 }

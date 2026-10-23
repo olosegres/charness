@@ -223,3 +223,19 @@ test('L3: closing the window keeps its prompts for the next window — the idle 
   assert.deepEqual(forwarded, ['arrived while the process stopped']);
   assert.equal(buffer.checkHasPrompts('t'), false);
 });
+
+test('checkIsAnyPending: a thread mid-startup, or any prompt still waiting, makes the buffer pending for the whole bot', async () => {
+  const buffer = new StartupPromptBuffer();
+  assert.equal(buffer.checkIsAnyPending(), false);
+  buffer.markStarting(KEY_A);
+  assert.equal(buffer.checkIsAnyPending(), true, 'a session is booting');
+  buffer.addPrompt(KEY_A, 'held');
+  buffer.closeWindow(KEY_A);
+  assert.equal(buffer.checkIsAnyPending(), true, 'the window closed but a prompt is still held for the next one');
+  await replayTexts(buffer, KEY_A);
+  assert.equal(buffer.checkIsAnyPending(), false, 'replayed: nothing left in memory');
+  buffer.markStarting(KEY_B);
+  buffer.discardPrompts(KEY_B);
+  buffer.closeWindow(KEY_B);
+  assert.equal(buffer.checkIsAnyPending(), false);
+});

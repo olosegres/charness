@@ -11,3 +11,9 @@ export const defaultAutoUpdateMode: AutoUpdateMode = 'on';
 
 /** @description What `whatsNew` means while `settings.json` does not set it. */
 export const defaultWhatsNew = true;
+
+/** The update settings as the engine and the `/update` screen read them: `settings.json` with the defaults filled in. */
+export interface UpdateSettings {
+  autoUpdate: AutoUpdateMode;
+  whatsNew: boolean;
+}

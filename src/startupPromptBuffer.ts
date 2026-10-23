@@ -71,6 +71,11 @@ export class StartupPromptBuffer {
     return this.startingThreads.has(threadId);
   }
 
+  /** Whether any thread is mid-startup or holds prompts that wait for a session: they live in memory, a restart would lose them. */
+  checkIsAnyPending(): boolean {
+    return this.startingThreads.size > 0 || [...this.bufferedPrompts.values()].some((prompts) => prompts.length > 0);
+  }
+
   /** Whether the thread holds prompts that wait for a session. */
   checkHasPrompts(threadId: string): boolean {
     return (this.bufferedPrompts.get(threadId)?.length ?? 0) > 0;

@@ -8,7 +8,7 @@ import {
   type ConfigValidation,
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
-import { autoUpdateModes, type AutoUpdateMode } from './selfUpdate/updateModes';
+import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 
 /**
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory
@@ -137,5 +137,26 @@ export function createInstanceDefaultEffortReader(
     }
     lastReportedLoad = null;
     return load.config.defaultEffort;
+  };
+}
+
+/**
+ * @description The reader the update engine and the `/update` screen use: `settings.json`'s `autoUpdate` and `whatsNew` with the
+ * defaults (`on`, shown) filled in, re-read when the file changes — a hand edit applies at the next check. An invalid file reads
+ * as the defaults, and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createUpdateSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => UpdateSettings {
+  let lastReportedLoad: InstanceSettingsLoad | null = null;
+  return () => {
+    const load = loadInstanceSettings(getFilePath());
+    if (load.status === 'invalid') {
+      if (load !== lastReportedLoad) {
+        lastReportedLoad = load;
+        logError(`[Settings] ${load.errors.join('; ')} (the built-in defaults apply until it is fixed)`);
+      }
+      return { autoUpdate: defaultAutoUpdateMode, whatsNew: defaultWhatsNew };
+    }
+    lastReportedLoad = null;
+    return { autoUpdate: load.config.autoUpdate ?? defaultAutoUpdateMode, whatsNew: load.config.whatsNew ?? defaultWhatsNew };
   };
 }

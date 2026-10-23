@@ -35,6 +35,7 @@ test('a root-owned npm prefix can only notify, with the npm command to run by ha
     kind: 'notifyOnly',
     reason: 'readOnlyPrefix',
     manualCommand: 'npm install -g charness@latest',
+    isCheckout: false,
   });
   assert.equal(detect(globalRoot, [], ['/home/user/.npm-global/lib/node_modules']).kind, 'notifyOnly', 'bin must be writable too');
 });
@@ -56,6 +57,7 @@ test('a read-only checkout, or one without the update script, can only notify wi
     kind: 'notifyOnly',
     reason: 'readOnlyCheckout',
     manualCommand: '/opt/charness/scripts/self-update.sh',
+    isCheckout: true,
   });
   assert.equal(detect(root, [`${root}/.git`], [root]).kind, 'notifyOnly');
 });
@@ -69,12 +71,14 @@ test('pnpm, yarn and bun global installs are not driven: notify with their own c
     kind: 'notifyOnly',
     reason: 'packageManager',
     manualCommand: 'pnpm add -g charness@latest',
+    isCheckout: false,
   });
   assert.equal(detect('/home/u/.config/yarn/global/node_modules/charness', [], []).kind, 'notifyOnly');
   assert.deepEqual(detect('/home/u/.bun/install/global/node_modules/charness', [], []), {
     kind: 'notifyOnly',
     reason: 'packageManager',
     manualCommand: 'bun add -g charness@latest',
+    isCheckout: false,
   });
 });
 
@@ -83,6 +87,7 @@ test('a project-local install (not under a global lib) can only notify', () => {
     kind: 'notifyOnly',
     reason: 'localInstall',
     manualCommand: 'npm install charness@latest',
+    isCheckout: false,
   });
 });
 
@@ -91,7 +96,10 @@ test('a Node without process.execve (or Windows) notifies whatever the folder al
     kind: 'notifyOnly',
     reason: 'noExecve',
     manualCommand: 'npm install -g charness@latest',
+    isCheckout: false,
   });
   const root = '/srv/charness';
-  assert.equal(detect(root, [`${root}/.git`, `${root}/scripts/self-update.sh`], [root], { hasExecve: false }).kind, 'notifyOnly');
+  const checkoutWithoutExecve = detect(root, [`${root}/.git`, `${root}/scripts/self-update.sh`], [root], { hasExecve: false });
+  assert.equal(checkoutWithoutExecve.kind, 'notifyOnly');
+  assert.equal(checkoutWithoutExecve.kind === 'notifyOnly' && checkoutWithoutExecve.isCheckout, true);
 });

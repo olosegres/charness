@@ -273,7 +273,14 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createInstanceDefaultEffortReader, getInstanceSettingsPath } from './instanceSettings';
+import { createInstanceDefaultEffortReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { quietPeriodMs } from './selfUpdate/constants';
+import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
+import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
+import { createUpdateEngine, type UpdateEngine } from './selfUpdate/updateEngine';
+import { renderUpdateMessage, type UpdateMessage } from './selfUpdate/updateMessages';
+import { getIdleVerdict, type IdleVerdict } from './selfUpdate/updatePolicy';
+import { createUpdateRuntime } from './selfUpdate/updateRuntime';
 import {
   buildThreadContextPreamble,
   prependThreadContextPreamble,
@@ -819,6 +826,19 @@ bot.use(async (ctx, next) => {
   });
   return next();
 });
+
+/**
+ * Epoch ms of the last update a human sent (a message, a button tap), `null` since the start. The updater restarts the bot only
+ * after a quiet period (`quietPeriodMs`) — somebody typing right now is the one case it must not interrupt.
+ */
+let lastHumanInboundAt: number | null = null;
+bot.use(async (ctx, next) => {
+  if (ctx.message || ctx.callbackQuery) lastHumanInboundAt = Date.now();
+  return next();
+});
+
+/** The update engine of this process; built at boot (`startBot`), read by the `/update` command. */
+let updateEngine: UpdateEngine | null = null;
 
 // Locale is a Telegram-chat concern, not a process env knob. Every update runs
 // inside an async i18n context: explicit `/language` override for the DM/group
@@ -2295,6 +2315,7 @@ const {
   cancelOpenCodeOAuthLogin,
   startOpenCodeOAuthLogin,
   submitOpenCodeOAuthReply,
+  checkIsAnyLoginInProgress,
 } = createAgentLogin({
   replyToThread,
   deleteThreadMessage,
@@ -7585,6 +7606,7 @@ const {
   startSttAutoInstall,
   resumeSttInstallAtBoot,
   getAwaitedSttStep,
+  checkIsAnySttInputAwaited,
   submitSttInput,
   cancelSttInput,
 } = createStt({
@@ -12560,6 +12582,68 @@ async function resolveBotAdminRights(
 }
 
 /**
+ * @description The General topic the updater talks in: the paired group's General when a group is paired, else the owner's DM
+ * General (`null` when neither exists — a Jira-only instance has no Telegram to say anything in).
+ */
+function getUpdateGeneralKey(): SessionKey | null {
+  const groupId = getAllowedGroupId();
+  if (groupId !== null) return makeTelegramKey(groupId, GENERAL_THREAD_ID);
+  const ownerUserId = getOwnerUserId();
+  return Number.isFinite(ownerUserId) ? makeTelegramKey(ownerUserId, DM_GENERAL_THREAD_ID) : null;
+}
+
+/**
+ * @description Say an update message in General, worded in that chat's language: pinned when it asks the operator to act, with
+ * the install tap (the version printed on the button is the version it installs) when it offers one. A failed send or pin is
+ * logged — the updater never fails because Telegram did.
+ */
+async function postUpdateMessageToGeneral(message: UpdateMessage): Promise<void> {
+  if (!ENV.isTelegramServed) return;
+  const generalKey = getUpdateGeneralKey();
+  if (generalKey === null) {
+    console.log(`[update] no General topic to post "${message.kind}" in`);
+    return;
+  }
+  const rendered = withThreadLocale(generalKey, () => renderUpdateMessage(message, (code, vars) => t(code, vars)));
+  const extra =
+    rendered.buttons.length > 0
+      ? Markup.inlineKeyboard(rendered.buttons.map((button) => [Markup.button.callback(button.label, button.callbackData)]))
+      : {};
+  const messageId = await replyToThread(generalKey, rendered.text, extra);
+  if (messageId !== null && rendered.pin) await pinMessageQuiet(generalKey, messageId, { disableNotification: false });
+}
+
+/**
+ * @description Whether the bot may be restarted now, from what it knows: no agent working in any bound topic (`checkIsWorking`, else
+ * `checkIsBusy`), no input an adapter has not taken in, nothing held in the startup buffer, no sign-in, no in-memory wizard or pasted
+ * key, and no human message within the quiet period. A sleeping or idle-but-alive session does not count: it survives the restart.
+ */
+function getUpdateIdleVerdict(isUserRequested: boolean): IdleVerdict {
+  const keys = getServedBindings().map(({ key }) => key);
+  const isAnyAgentWorking = keys.some((key) => {
+    const adapter = getThreadAdapter(key);
+    return adapter.checkIsWorking ? adapter.checkIsWorking(key) : adapter.checkIsBusy?.(key) === true;
+  });
+  return getIdleVerdict({
+    isAnyAgentWorking,
+    hasUnconsumedInput: keys.some((key) => getThreadAdapter(key).checkHasUnconsumedInput?.(key) === true),
+    hasBufferedStartupPrompt: startupPromptBuffer.checkIsAnyPending(),
+    isSignInRunning: checkIsAnyLoginInProgress(),
+    isWizardOpen:
+      reminderWizards.size > 0 ||
+      awaitingFolderName.size > 0 ||
+      awaitingModelSelection.size > 0 ||
+      awaitingSessionSelection.size > 0 ||
+      pendingProviderConnects.size > 0 ||
+      checkIsAnySttInputAwaited(),
+    lastHumanMessageAt: lastHumanInboundAt,
+    now: Date.now(),
+    quietMs: quietPeriodMs,
+    isUserRequested,
+  });
+}
+
+/**
  * @description Boot-time readiness status (plan 2026-07-12): on startup tell the
  * owner whether the bot can process messages, or list the setup steps still
  * missing. Delivery target depends on readiness (`resolveStartupTargets`): the
@@ -13253,14 +13337,16 @@ export async function startBot(): Promise<void> {
   //    `stopOpenCodeServer()` or `adapter.stopSession()` here — tmux and
   //    opencode survive the bot process by design and are picked back up
   //    by `reattachExistingSessions` on the next boot.
-  const shutdown = (signal: string): void => {
-    void gracefulShutdown({
+  // The ordered sequence is the same for a signal and for an update's restart; only what happens AFTER it differs
+  // (`exit` ends the process, the restart replaces it with a fresh image of the same install).
+  const runShutdown = (signal: string, exit: (code: number) => void): Promise<void> =>
+    gracefulShutdown({
       signal,
       // Without Telegram there is no polling to stop, and `bot.stop` throws when it never launched.
       bot: ENV.isTelegramServed ? bot : { stop: () => {} },
       state,
       releaseLock,
-      exit: (code) => process.exit(code),
+      exit,
       drainPendingUpdates: () => updateDispatcher.drainIdle(updateDrainTimeoutMs),
       finalizePendingOutput: () => finalizePendingOutputOnShutdown(),
       clearTransientFrames: () => sweepTransientFramesOnShutdown(),
@@ -13277,11 +13363,56 @@ export async function startBot(): Promise<void> {
         requestWakeUpEngine?.stop();
         jiraConnector?.stop();
         if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
+        updateEngine?.stop();
       },
     });
+  const shutdown = (signal: string): void => {
+    void runShutdown(signal, (code) => process.exit(code));
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+  // 7b. Automatic updates (`src/selfUpdate/`): the engine finds a new version, installs it when nobody is using the bot and
+  //     restarts it in place — the same sequence as a signal, then `process.execve` with the launch environment.
+  const updateRuntime = await createUpdateRuntime({
+    dataDir: path.dirname(state.stateFilePath),
+    packageRoot: path.resolve(__dirname, '..'),
+    execPath: process.execPath,
+    platform: process.platform,
+    nodeVersion: process.versions.node,
+    argv: process.argv,
+    isHotMode: checkIsOpenCodeExternalHost(),
+  });
+  const readUpdateSettings = createUpdateSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
+  updateEngine = createUpdateEngine({
+    ...updateRuntime,
+    now: () => Date.now(),
+    setTimer: (callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref();
+      return timer;
+    },
+    clearTimer: (handle) => clearTimeout(handle),
+    log: (line) => console.log(line),
+    getSettings: readUpdateSettings,
+    state: {
+      getRecord: () => state.getSelfUpdateRecord(),
+      setRecord: (record) => state.setSelfUpdateRecord(record),
+      getLastRun: () => state.getLastRunVersion(),
+      setLastRun: (lastRun) => state.setLastRunVersion(lastRun),
+    },
+    getIdleVerdict: getUpdateIdleVerdict,
+    postToGeneral: postUpdateMessageToGeneral,
+    restartInPlace: () => runShutdown('update', () => reexecProcess(updateRuntime.reexecTarget, getLaunchEnvironment(), createDefaultReexecDeps())),
+  });
+  const startUpdates = async (): Promise<void> => {
+    try {
+      await updateEngine?.runBootStep();
+    } catch (e) {
+      console.warn('[update] boot step failed:', e instanceof Error ? e.message : e);
+    }
+    updateEngine?.start();
+  };
 
   // 8. Launch. `dropPendingUpdates` follows the boot classifier: on a hot
   //    reload we KEEP the buffered backlog so a message typed during the
@@ -13299,6 +13430,7 @@ export async function startBot(): Promise<void> {
   if (!ENV.isTelegramServed) {
     // No polling: the MCP server and the connector timers keep the process alive.
     console.log('[boot] running without Telegram (connectors: ' + [...ENV.servedPlatforms].join(', ') + ')');
+    await startUpdates();
     return;
   }
   try {
@@ -13306,6 +13438,7 @@ export async function startBot(): Promise<void> {
   } catch (e) {
     console.warn('[startup-status] failed:', e instanceof Error ? e.message : e);
   }
+  await startUpdates();
   // The local speech engine: clean up after an earlier run, re-attach to / start its install. Starts no process.
   void bootSttLocalEngine().catch((e) => console.warn('[STT] boot step failed:', e instanceof Error ? e.message : e));
 

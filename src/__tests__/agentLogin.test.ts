@@ -189,6 +189,24 @@ describe('agentLogin: the sign-in drivers', () => {
     assert.equal(login.checkIsAuthLoginAwaitingCode(key), false, 'the finished flow is forgotten');
   });
 
+  it('checkIsAnyLoginInProgress: true from the start of a sign-in to its end, however it ends — the updater never restarts under one', async () => {
+    const recorded = createRecordedPorts('{"loggedIn":true}');
+    const login = createAgentLogin(recorded.ports);
+    assert.equal(login.checkIsAnyLoginInProgress(), false);
+
+    await login.startClaudeAuthLogin(key);
+    assert.equal(login.checkIsAnyLoginInProgress(), true, 'before the link is even relayed');
+    login.cancelClaudeAuthLogin(key);
+    assert.equal(login.checkIsAnyLoginInProgress(), false, 'cancelled');
+
+    await login.startClaudeAuthLogin(key);
+    await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+    assert.equal(login.checkIsAnyLoginInProgress(), true);
+    await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId);
+    await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('Signed in to Claude')));
+    assert.equal(login.checkIsAnyLoginInProgress(), false, 'finished');
+  });
+
   it('reports a failed sign-in when the CLI says it is not logged in', async () => {
     const recorded = createRecordedPorts('{"loggedIn":false}');
     const login = createAgentLogin(recorded.ports);
