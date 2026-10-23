@@ -125,7 +125,8 @@ yarn build        # tsc → dist/ (tsconfig.json; src/__tests__ is not emitted)
 yarn test         # test:unit, then test:flows (node test runner + tsx); build
                   # first — some tests exercise the built dist/cli.js
 yarn test:unit    # every file but the flows; each file must finish in 2 min
-yarn test:flows   # the `*E2e.test.ts` flows; each file must finish in 20 min
+yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wait
+                  # on their fakes, not the CPU); each file must finish in 20 min
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
                    # `charness hot` from anywhere) — a broken edit can't
                    # take the bot down; OpenCode generations stay outside the

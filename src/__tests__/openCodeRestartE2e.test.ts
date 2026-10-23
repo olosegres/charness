@@ -37,7 +37,6 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -144,7 +143,9 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     npmCallLogFile = path.join(layout.fakeLogDir, 'npm-calls.log');
     npmFailFile = path.join(layout.fakeStateDir, 'npm-cannot-install');
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: openCodeModels, defaultModel: defaultOpenCodeModel });
-    openCodePort = await getFreePort();
+    // Below the ephemeral range: the fake server is stopped and started again on this port, and while it is down an
+    // ephemeral one could be handed to any outgoing connection on the host — another flow's, run beside this one.
+    openCodePort = await getFreeFixedPort();
     const openCodeUrl = await fakeOpenCode.start(openCodePort);
     const binaryOptions = { version: fakeOpenCodeVersion, models: openCodeModels, servePidFile };
     writeFakeOpenCodeBinary(layout.binDir, binaryOptions);
