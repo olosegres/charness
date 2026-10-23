@@ -149,8 +149,10 @@ per-backend controls are optional methods the bot checks before calling.
   leaving family's session id is PARKED (`parkedSessions`, restored on the way back, released with the ids) and
   the first prompt is the context bridge (`utils/fallbackBridge.ts`: the old adapter's `getRecentTurns`) instead
   of the continue nudge; both end in `cancelApiRetry` → `deliverPromptOrBuffer`. Never switched back by itself.
-  OpenCode quota codes (`insufficient_quota`, `RESOURCE_EXHAUSTED`, …) classify as `usageLimit` ahead of the 429
-  transient branch (`apiErrorRetry.ts`).
+  OpenCode quota codes (`insufficient_quota`, a `RESOURCE_EXHAUSTED` that names a day/week/month quota, …) classify as
+  `usageLimit` ahead of the 429 transient branch; a short-window throttle (per minute, concurrency, a stated reset within
+  ~5 min, a bare `RESOURCE_EXHAUSTED`) is `transient`, and the wording alone of Anthropic's "would exceed your account's
+  rate limit" is probed first (`apiErrorRetry.ts`).
 - **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one name-only button
   (`[✓ ]Claude · work`) per signed-in Claude account and connected OpenCode provider, the usage in the MESSAGE (`formatLimitsUsageBlock`: the `/accounts`
   wording via the one `formatClaudeProfileUsageLines`, plus the ChatGPT subscription) — no figure fits a phone's button; the limit notice ends `Switch: /limits`. EVERY operator pick —

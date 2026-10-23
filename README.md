@@ -303,8 +303,10 @@ so one account's usage limit does not stop every topic.
 ### Usage limits and the fallback models (`/limits` and `/limits_autoswitch`)
 
 When a topic's agent stops on a usage limit — a Claude account window, an
-OpenAI quota through OpenCode, a Google `RESOURCE_EXHAUSTED` — the bot can keep
-the work going somewhere else instead of waiting. Two screens split the job:
+OpenAI quota through OpenCode, a Google quota spent for the day or the plan — the
+bot can keep the work going somewhere else instead of waiting (a per-minute
+throttle, or a reset a few minutes away, is simply retried). Two screens split
+the job:
 **`/limits` is the switch board** — every signed-in Claude account and every connected
 OpenCode provider with its usage, one tap to move the topic there by hand — and
 **`/limits_autoswitch` is the setup of the automatic switching**: ONE
