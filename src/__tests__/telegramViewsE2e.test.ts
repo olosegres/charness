@@ -134,7 +134,7 @@ function getKeyboardLabels(message: FakeTelegramMessage): string[][] {
 }
 
 function getKeyboardData(message: FakeTelegramMessage): string[][] {
-  return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.map((button) => button.callback_data));
+  return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.flatMap((button) => ('callback_data' in button ? [button.callback_data] : [])));
 }
 
 /** Ready = the boot reached its launch AND this run's polling reached the fake, with the bot MCP on its fixed port. */

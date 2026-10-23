@@ -43,6 +43,23 @@ export const jaDict: Record<string, string> = {
   'bind.create_exists': '📁 フォルダ `{subdir}` は既に存在します — バインドしています。',
   'bind.create_failed': '❌ フォルダの作成に失敗しました: {error}',
 
+  'topic.askName': '🆕 新しいトピックの名前は？ 名前を送信してください。',
+  'topic.nameTooLong': '❌ トピック名は最大 {max} 文字です。もっと短い名前を送信してください。',
+  'topic.askFolder': '📁 «{name}» はどのフォルダで作業しますか？',
+  'topic.sameFolderButton': '📁 {subdir}（ここと同じ）',
+  'topic.otherFolderButton': '📂 別のフォルダ',
+  'topic.pickFolder': '📂 «{name}» のフォルダを選んでください：',
+  'topic.createFolderPrompt': '✏️ 新しいフォルダ名を送信してください — WORK_ROOT の下に作成され、«{name}» はそこで作業します。',
+  'topic.creatingToast': 'トピックを作成中…',
+  'topic.created': '✅ トピック «{name}» の準備ができました（{subdir} に紐付け済み）。',
+  'topic.createdNotBound': '⚠️ トピック «{name}» は作成されましたが、紐付けに失敗しました：{reason}',
+  'topic.openButton': 'トピックを開く →',
+  'topic.createFailed': '❌ トピックを作成できませんでした：{reason}',
+  'topic.cancelled': '✖ キャンセルしました — トピックは作成されていません。',
+  'topic.dmUnsupported': '🧵 トピックはトピック機能が有効なグループにあります。そちらで /topic を実行してください。このチャットにはありません。',
+  'topic.staleChoice': 'この選択は古くなっています — /topic をもう一度実行してください。',
+  'topic.cancelButton': '✖️ キャンセル',
+
   'ls.header': '📁 `{workRoot}` のサブフォルダ:',
   'ls.empty': '📁 `WORK_ROOT` の下にバインド可能なサブフォルダがありません。',
   'list.header': '🧵 スレッドバインド ({count}):',
@@ -60,6 +77,7 @@ export const jaDict: Record<string, string> = {
     '/quitall — 実行中の全エージェントを終了\n' +
     '/stt — 音声認識の設定\n' +
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
+    '/topic — フォルダ上に別のトピックを開く\n' +
     '/whoami /version — デバッグ\n\n' +
     'エージェントと話すには — トピックスレッドを開いてください。',
   'help.thread_unbound':
@@ -81,8 +99,10 @@ export const jaDict: Record<string, string> = {
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
     '/clear — スレッドのメッセージを削除\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI キー（Claude）\n' +
-    '/bind — バインドを管理',
+    '/interrupt (/esc) — 実行中の作業を中断（次のメッセージで進む方向を修正）\n' +
+    '/c /y /n /enter /up /down /tab — TUI キー（Claude）\n' +
+    '/bind — バインドを管理\n' +
+    '/topic — フォルダ上に別のトピックを開く',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

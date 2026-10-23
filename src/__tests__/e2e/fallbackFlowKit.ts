@@ -11,7 +11,7 @@ import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeCla
 import { IsolatedCharness, readJsonLines, type IsolatedInstanceLayout } from './isolatedCharness';
 import type { FakeTelegram, FakeTelegramMessage } from '../telegramE2e/fakeTelegram';
 import type { TopicDriver } from '../telegramE2e/topicDriver';
-import type { AgentData, ClaudeProfileRecord, ParkedSession } from '../../state';
+import type { AgentData, BindingData, ClaudeProfileRecord, ParkedSession } from '../../state';
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
 
 /** The line the bot prints once its long polling is up. */
@@ -29,6 +29,8 @@ export interface PersistedState {
   claudeProfileOverrides?: Record<string, string>;
   fallbackChain?: FallbackChainEntry[];
   agents?: Record<string, AgentData>;
+  /** The folder each topic is bound to, keyed by the topic. */
+  bindings?: Record<string, BindingData>;
   parkedSessions?: Record<string, ParkedSession>;
   /** The armed API-error retries (a usage-limit wait among them), keyed by the topic. */
   apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number; isLimitProbe?: boolean }>;

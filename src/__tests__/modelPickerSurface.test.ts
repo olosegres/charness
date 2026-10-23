@@ -445,6 +445,12 @@ describe('Telegram command menu', () => {
     assert.equal(commands.includes('auto_continue_limits'), false);
   });
 
+  it('lists /interrupt next to its alias /esc, each naming the other', () => {
+    const descriptionOf = (name: string): string => COMMANDS_MENU.find((entry) => entry.command === name)?.description ?? '';
+    assert.ok(descriptionOf('interrupt').includes('/esc'), '/interrupt names /esc');
+    assert.ok(descriptionOf('esc').includes('/interrupt'), '/esc names /interrupt');
+  });
+
   it('every menu entry carries a non-empty description', () => {
     for (const entry of COMMANDS_MENU) assert.ok(entry.description.trim().length > 0, entry.command);
   });

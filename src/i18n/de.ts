@@ -43,6 +43,23 @@ export const deDict: Record<string, string> = {
   'bind.create_exists': '📁 Ordner `{subdir}` existiert bereits — verknüpfe damit.',
   'bind.create_failed': '❌ Ordner konnte nicht erstellt werden: {error}',
 
+  'topic.askName': '🆕 Wie soll der neue Thread heißen? Sende den Namen.',
+  'topic.nameTooLong': '❌ Ein Thread-Name hat höchstens {max} Zeichen. Sende einen kürzeren.',
+  'topic.askFolder': '📁 In welchem Ordner soll «{name}» arbeiten?',
+  'topic.sameFolderButton': '📁 {subdir} (wie hier)',
+  'topic.otherFolderButton': '📂 Anderer Ordner',
+  'topic.pickFolder': '📂 Wähle den Ordner für «{name}»:',
+  'topic.createFolderPrompt': '✏️ Sende den Namen des neuen Ordners — er wird unter WORK_ROOT erstellt und «{name}» arbeitet darin.',
+  'topic.creatingToast': 'Thread wird erstellt…',
+  'topic.created': '✅ Thread «{name}» ist bereit, an {subdir} gebunden.',
+  'topic.createdNotBound': '⚠️ Thread «{name}» wurde erstellt, aber das Binden schlug fehl: {reason}',
+  'topic.openButton': 'Thread öffnen →',
+  'topic.createFailed': '❌ Der Thread konnte nicht erstellt werden: {reason}',
+  'topic.cancelled': '✖ Abgebrochen — es wurde kein Thread erstellt.',
+  'topic.dmUnsupported': '🧵 Threads gibt es in einer Gruppe mit aktivierten Themen — führe /topic dort aus. Dieser Chat hat keine.',
+  'topic.staleChoice': 'Diese Auswahl ist veraltet — führe /topic erneut aus.',
+  'topic.cancelButton': '✖️ Abbrechen',
+
   'ls.header': '📁 Unterordner von `{workRoot}`:',
   'ls.empty': '📁 Keine verknüpfbaren Unterordner unter `WORK_ROOT`.',
   'list.header': '🧵 Thread-Verknüpfungen ({count}):',
@@ -60,6 +77,7 @@ export const deDict: Record<string, string> = {
     '/quitall — jeden laufenden Agent beenden\n' +
     '/stt — Spracherkennung einstellen\n' +
     '/update — Bot-Updates: automatisch, nur benachrichtigen, aus\n' +
+    '/topic — weiteren Thread auf einem Ordner öffnen\n' +
     '/whoami /version — Debug\n\n' +
     'Um mit einem Agent zu sprechen — öffne einen thematischen Thread.',
   'help.thread_unbound':
@@ -81,8 +99,10 @@ export const deDict: Record<string, string> = {
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/clear — Thread-Nachrichten löschen\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI-Tasten (Claude)\n' +
-    '/bind — Verknüpfung verwalten',
+    '/interrupt (/esc) — laufende Arbeit des Agenten stoppen; die nächste Nachricht steuert ihn um\n' +
+    '/c /y /n /enter /up /down /tab — TUI-Tasten (Claude)\n' +
+    '/bind — Verknüpfung verwalten\n' +
+    '/topic — weiteren Thread auf einem Ordner öffnen',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

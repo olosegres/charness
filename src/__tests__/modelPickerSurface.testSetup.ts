@@ -8,7 +8,7 @@
  * exported picker helpers can be exercised in isolation.
  *
  * Matches neither the `*.test.ts` nor `*.e2e.ts` runner globs, so it is never
- * executed as a test itself. Mirrors `bindKeyboard.testSetup.ts`.
+ * executed as a test itself.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';

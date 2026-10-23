@@ -2610,15 +2610,31 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   sendSignal(key: SessionKey, signal: string): void {
-    if (signal === 'SIGINT') {
-      const session = this.sessions.get(keyToString(key));
-      if (!session?.isActive) return;
+    if (signal === 'SIGINT') this.abortTurn(key, 'SIGINT');
+  }
 
-      console.log(`[OpenCode] Aborting session (SIGINT)`);
-      this.apiRequest('POST', `/session/${session.sessionId}/abort`).catch((e) => {
-        console.error(`[OpenCode] abort error:`, e);
-      });
-    }
+  /**
+   * @description `/esc` / `/interrupt` — OpenCode's double Esc: abort the running generation. The conversation stays,
+   * the next prompt starts a fresh turn (steers it).
+   */
+  sendEscape(key: SessionKey): void {
+    this.abortTurn(key, 'Escape');
+  }
+
+  /**
+   * @description Bot-issued `POST /session/:id/abort` of the running generation, the one path of every interrupt.
+   * Clears the wedged-turn watch: a turn aborted before its first assistant output idles without any, which is the
+   * abort and not a session that accepted the prompt and never ran it (that would replay the prompt on a fresh session).
+   */
+  private abortTurn(key: SessionKey, trigger: string): void {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return;
+
+    console.log(`[OpenCode] Aborting session (${trigger})`);
+    session.awaitingTurnResponse = false;
+    this.apiRequest('POST', `/session/${session.sessionId}/abort`).catch((e) => {
+      console.error(`[OpenCode] abort error:`, e);
+    });
   }
 
   /**

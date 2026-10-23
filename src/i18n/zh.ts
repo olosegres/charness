@@ -43,6 +43,23 @@ export const zhDict: Record<string, string> = {
   'bind.create_exists': '📁 文件夹 `{subdir}` 已存在 — 正在绑定。',
   'bind.create_failed': '❌ 创建文件夹失败：{error}',
 
+  'topic.askName': '🆕 新话题叫什么名字？请发送名称。',
+  'topic.nameTooLong': '❌ 话题名称最多 {max} 个字符，请发送更短的名称。',
+  'topic.askFolder': '📁 «{name}» 要在哪个文件夹中工作？',
+  'topic.sameFolderButton': '📁 {subdir}（与此处相同）',
+  'topic.otherFolderButton': '📂 其他文件夹',
+  'topic.pickFolder': '📂 为 «{name}» 选择文件夹：',
+  'topic.createFolderPrompt': '✏️ 请发送新文件夹的名称 — 它将在 WORK_ROOT 下创建，«{name}» 将在其中工作。',
+  'topic.creatingToast': '正在创建话题…',
+  'topic.created': '✅ 话题 «{name}» 已就绪，已绑定到 {subdir}。',
+  'topic.createdNotBound': '⚠️ 话题 «{name}» 已创建，但绑定失败：{reason}',
+  'topic.openButton': '打开话题 →',
+  'topic.createFailed': '❌ 无法创建话题：{reason}',
+  'topic.cancelled': '✖ 已取消 — 未创建话题。',
+  'topic.dmUnsupported': '🧵 话题存在于启用了话题功能的群组中 — 请在那里运行 /topic。此聊天中没有话题。',
+  'topic.staleChoice': '此选择已过期 — 请重新运行 /topic。',
+  'topic.cancelButton': '✖️ 取消',
+
   'ls.header': '📁 `{workRoot}` 的子文件夹：',
   'ls.empty': '📁 `WORK_ROOT` 下没有可绑定的子文件夹。',
   'list.header': '🧵 话题绑定（{count}）：',
@@ -60,6 +77,7 @@ export const zhDict: Record<string, string> = {
     '/quitall — 退出所有运行中的代理\n' +
     '/stt — 语音识别设置\n' +
     '/update — 机器人更新：自动、仅通知、关闭\n' +
+    '/topic — 在某个文件夹上再开一个话题\n' +
     '/whoami /version — 调试\n\n' +
     '要与代理对话 — 打开一个主题话题。',
   'help.thread_unbound':
@@ -81,8 +99,10 @@ export const zhDict: Record<string, string> = {
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
     '/clear — 删除话题消息\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI 按键（Claude）\n' +
-    '/bind — 管理绑定',
+    '/interrupt (/esc) — 中断正在进行的任务；下一条消息会改变其方向\n' +
+    '/c /y /n /enter /up /down /tab — TUI 按键（Claude）\n' +
+    '/bind — 管理绑定\n' +
+    '/topic — 在某个文件夹上再开一个话题',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

@@ -324,3 +324,28 @@ actions go through the `getUpdateEngine` port (the engine exists only after boot
 updater is still starting). «Update now» bakes the target into the callback data (`upd_go_<version or commit>` on the screen, `upd_ann_<…>` under an announcement in General — that tap answers and leaves the announcement alone instead of overwriting it with the screen), so an old keyboard never
 installs another version than the one on its button; the handler answers after the work with `answerCallbackQuerySafely`. Logic that
 decides WHAT updates is in `src/selfUpdate/`, never here.
+
+## `topicCommand.ts`
+
+`/topic [name]` and its five buttons (`topic_here_` / `topic_other_` / `topic_folder_<i>` / `topic_page_<n>` / `topic_create_`, each
+with the WIZARD id baked in): open another forum topic on a folder. One in-flight wizard per `/topic` run, kept in MEMORY (a restart
+drops it and its old keyboards answer «out of date»; the newest 20 live, each for half an hour). The questions are one message that
+changes shape: the name (a plain message, `/topic <name>` skips it), the folder question («as here» in a bound topic, the picker at
+once in General or an unbound topic), the picker, and finally the answer with the «Open topic →» link — the message is edited, so a
+keyboard is always consumed. The picker is `bindPicker.ts`'s `buildBindKeyboard` — `/bind`'s own layout, create row included — with
+its buttons re-targeted (`BindPickerCallbacks`) at the wizard; its folders are indexes into the list the wizard listed, so a folder
+created meanwhile cannot shift them. The next plain message of the origin topic is the answer to a name question (the topic's, or the
+new folder's) while the wizard holds the capture: the text handler asks `checkIsAwaitingTopicInput` / `submitTopicInput`; any
+command but `/esc` ends that capture silently (`cancelTopicInput`, called from `exitPendingInputModes`, `armFolderCreation` and the
+text handler's slash branch) and leaves a question that waits for a tap alone. The way out of a wizard at ANY step is the «✖️ Cancel»
+row (the picker's last row, the folder question's third) and `/esc`: `cancelTopicWizard` ends the topic's newest wizard that is not yet
+creating its topic, consumes its message into the notice and returns `false` when there is none — then `/esc` is the interrupt of the
+agent. Arming the picker's «create new folder» ends `/bind`'s own armed folder-name question (`disarmFolderCreation` port): the two
+would race for the next message. The folder work is the bot's: `createWorkFolder` (the validation and `mkdir` `/bind`'s «create new folder»
+does) and `bindNewTopic` (`applyBinding` with the topic's name, then the usual binding welcome — no agent starts, and no collision
+warning for a folder the person chose on purpose) come through ports. `createForumTopic` is the Bot API call; its refusal for want of
+`can_manage_topics` shows the existing `error.tg.perm.manage_topics` hint. The link is `t.me/c/<chat id without -100>/<topic id>` (a
+public group: `t.me/<username>/<topic id>`) — the topic id is the id of its creation service message, which a client opens as the
+topic (`buildTopicLink`). The owner's private chat has no topics: `checkIsDmKey` answers it with a line. Whether Telegram also
+delivers the bot the `forum_topic_created` service message of its own topic is not documented; the existing handler is harmless
+either way: the binding exists by then, and the admin list skips bots, so nothing is auto-bound or greeted for the bot's own topic.

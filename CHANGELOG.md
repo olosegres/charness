@@ -11,6 +11,21 @@ that adds a migration guide is offered with a button instead of installed, and a
 back. `/update` in General switches it between Automatic (the default), Notify only and Off, switches the «what's new»
 list and shows what the last check saw; `/version` says when an update is available.
 
+**`/topic` opens another topic on a folder.** `/topic` asks for the new topic's name (`/topic <name>` takes it from the
+command), then for the folder: the one this topic is bound to («as here») or another one from the same picker as `/bind`,
+«create new folder» included — in General and in an unbound topic the picker comes first. The bot creates the topic, binds
+it, greets it as `/bind` does and answers with an «Open topic →» button; no agent starts by itself. The bot needs the
+`can_manage_topics` right (without it the usual hint is shown), «✖️ Cancel» (on the folder question and in the picker) and
+`/esc` (at any step) end it, and in the bot's private chat, which has no topics, the command says so.
+
+**`/interrupt` stops a running OpenCode turn.** `/esc` answered «Not supported for OpenCode», so an OpenCode topic had
+no way to stop the agent and redirect it. `/interrupt` (the new name of `/esc` — both work, and `/interrupt` is in the
+command menu) aborts the generation, cancels a question the agent was waiting on, and leaves the conversation as it
+is: the next message steers the agent. On the Claude
+stream-json backends `/esc` now also declines a question the agent is waiting on (it used to leave it open under the
+aborted turn). Stopping a turn before the agent had written anything (also with `/c`) is no longer taken for a stuck
+session, whose "recovery" ran the request again.
+
 ## 3.3.2 — 2026-10-23
 
 **On Windows the bot can start an `opencode` that npm installed.** 3.3.0 found npm's `opencode.cmd` on PATH but still

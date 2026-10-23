@@ -23,6 +23,7 @@
 
 import * as http from 'http';
 import type { AddressInfo, Socket } from 'net';
+import type { InlineKeyboardButton } from 'telegraf/typings/core/types/typegram';
 
 /**
  * The forum's General topic. Telegram delivers an operator's message there with thread id 1, and a bot send WITHOUT
@@ -58,6 +59,9 @@ interface TelegramChat {
   is_forum: true;
 }
 
+/** A button of an inline keyboard: a tap (`callback_data`) or a link (`url`), as the Bot API types it. */
+export type FakeTelegramInlineButton = InlineKeyboardButton;
+
 /** A message as the fake stores it: the fields the flow reads back. */
 export interface FakeTelegramMessage {
   message_id: number;
@@ -70,7 +74,7 @@ export interface FakeTelegramMessage {
   entities?: Array<{ type: 'bot_command'; offset: number; length: number }>;
   /** A voice note: its message carries no `text` on the wire (the stored `text` is just ''). */
   voice?: FakeTelegramVoice;
-  reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+  reply_markup?: { inline_keyboard: Array<Array<FakeTelegramInlineButton>> };
   /** The `disable_notification` the send carried (bot messages only). */
   isSilent?: boolean;
   isDeleted?: boolean;
@@ -128,6 +132,15 @@ export class FakeTelegram {
    * handler worked longer than Telegram keeps the query open): the tap's spinner never gets its toast.
    */
   isCallbackAnswerExpired = false;
+  /** Whether the bot may create topics (`can_manage_topics`); while unset, `createForumTopic` is refused as the Bot API refuses it. */
+  canManageTopics = true;
+  /**
+   * While set, the topic the bot creates also reaches it as the `forum_topic_created` service message (`from` is the bot
+   * itself): whether Telegram delivers a bot its own service messages is not documented, so a flow can make it so.
+   */
+  isOwnTopicEventDelivered = false;
+  /** The topics the bot created, in order: the id of each (the id of its creation service message) and its name. */
+  readonly createdTopics: Array<{ threadId: number; name: string }> = [];
   /** The responses {@link holdNextResponse} still has to hold, in the order they were asked for. */
   private readonly responseHolds: Array<{ method: string; release: Promise<unknown>; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
@@ -271,6 +284,27 @@ export class FakeTelegram {
     return message;
   }
 
+  /** A topic's id is the id of its creation service message, so it comes from the one message sequence. */
+  private createTopic(name: string): { message_thread_id: number; name: string; icon_color: number } {
+    const iconColor = 0x6FB9F0;
+    const threadId = this.nextMessageId++;
+    this.createdTopics.push({ threadId, name });
+    if (this.isOwnTopicEventDelivered) {
+      this.pushUpdate({
+        message: {
+          message_id: threadId,
+          date: Math.floor(Date.now() / 1000),
+          chat: this.chat,
+          message_thread_id: threadId,
+          is_topic_message: true,
+          from: this.options.botUser,
+          forum_topic_created: { name, icon_color: iconColor },
+        },
+      });
+    }
+    return { message_thread_id: threadId, name, icon_color: iconColor };
+  }
+
   /** The message a request names, or the Bot API's own "message not found" error. */
   private getMessageOrError(payload: Record<string, unknown>): FakeTelegramMessage | ApiError {
     const messageId = Number(payload.message_id);
@@ -359,6 +393,10 @@ export class FakeTelegram {
         };
       case 'getChat':
         return { ok: true, result: this.chat };
+      case 'createForumTopic': {
+        if (!this.canManageTopics) return { ok: false, error_code: 400, description: 'Bad Request: not enough rights to create a topic' };
+        return { ok: true, result: this.createTopic(String(payload.name)) };
+      }
       case 'getFile': {
         const fileId = String(payload.file_id);
         const file = this.files.get(fileId);

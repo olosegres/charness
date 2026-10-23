@@ -47,6 +47,23 @@ export const enDict: Record<string, string> = {
   'bind.create_exists': '📁 Folder `{subdir}` already exists — binding to it.',
   'bind.create_failed': '❌ Failed to create the folder: {error}',
 
+  'topic.askName': '🆕 What should the new topic be called? Send its name.',
+  'topic.nameTooLong': '❌ A topic name holds at most {max} characters. Send a shorter one.',
+  'topic.askFolder': '📁 Which folder should «{name}» work in?',
+  'topic.sameFolderButton': '📁 {subdir} (as here)',
+  'topic.otherFolderButton': '📂 Other folder',
+  'topic.pickFolder': '📂 Choose the folder for «{name}»:',
+  'topic.createFolderPrompt': '✏️ Send a name for the new folder — it is created under WORK_ROOT and «{name}» works in it.',
+  'topic.creatingToast': 'Creating the topic…',
+  'topic.created': '✅ Topic «{name}» is ready, bound to {subdir}.',
+  'topic.createdNotBound': '⚠️ Topic «{name}» was created, but binding it failed: {reason}',
+  'topic.openButton': 'Open topic →',
+  'topic.createFailed': '❌ Could not create the topic: {reason}',
+  'topic.cancelled': '✖ Cancelled — no topic was created.',
+  'topic.dmUnsupported': '🧵 Topics live in a group with topics enabled — run /topic there. This chat has none.',
+  'topic.staleChoice': 'This choice is out of date — run /topic again.',
+  'topic.cancelButton': '✖️ Cancel',
+
   'ls.header': '📁 Subfolders of `{workRoot}`:',
   'ls.empty': '📁 No bindable subfolders under `WORK_ROOT`.',
   'list.header': '🧵 Thread bindings ({count}):',
@@ -64,6 +81,7 @@ export const enDict: Record<string, string> = {
     '/quitall — quit every running agent\n' +
     '/stt — voice recognition settings\n' +
     '/update — bot updates: automatic, notify only, off\n' +
+    '/topic — open another topic on a folder\n' +
     '/whoami /version — debug\n\n' +
     'To talk to an agent — open a topical thread.',
   'help.thread_unbound':
@@ -85,8 +103,10 @@ export const enDict: Record<string, string> = {
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
     '/clear — delete thread messages\n' +
-    '/c /y /n /enter /up /down /tab /esc — TUI keys (Claude)\n' +
-    '/bind — manage binding',
+    '/interrupt (/esc) — stop the running turn; the next message steers it\n' +
+    '/c /y /n /enter /up /down /tab — TUI keys (Claude)\n' +
+    '/bind — manage binding\n' +
+    '/topic — open another topic on a folder',
 
   'doctor.header': '🔍 *Charness Doctor*',
   'doctor.ok': '✅ {label}',

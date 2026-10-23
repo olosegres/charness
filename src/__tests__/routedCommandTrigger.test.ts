@@ -125,6 +125,12 @@ test('an unauthorised sender of a routed command is dropped with NO fall-through
   assert.deepEqual(run.calls, ['authorise']);
 });
 
+test('/interrupt is routed together with its older names /esc and /escape — one handler, no forward to the agent', () => {
+  for (const name of ['interrupt', 'esc', 'escape']) {
+    assert.equal(checkIsRoutedCommand(name), true, `/${name} is a bot-owned command`);
+  }
+});
+
 test('`pair` is deliberately NOT on the router, so /pair falls through to its raw handler', async () => {
   // Two halves of one contract, asserted against the REAL registration table:
   // `pair` is absent from it (while a routed name like `status` is present),

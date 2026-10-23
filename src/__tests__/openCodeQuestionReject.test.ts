@@ -161,6 +161,17 @@ test('S2: cancelPendingQuestionAndForward rejects the question before the SIGINT
   assert.ok(rejectIdx < sigintIdx, 'reject must run BEFORE the SIGINT');
 });
 
+test('S4: the /esc command closes the question and stops the turn BEFORE it waits for the Telegram edit of the question\'s buttons', () => {
+  const body = sliceBody('command(escapeCommandNames');
+  const rejectIdx = body.search(rejectCallRe);
+  const escapeIdx = body.indexOf('adapter.sendEscape(key)');
+  const retireIdx = body.indexOf('retirePendingQuestion(key)');
+  assert.ok(rejectIdx !== -1 && escapeIdx !== -1 && retireIdx !== -1, '/esc must reject, interrupt and retire the buttons');
+  // The retire is an edit through the global send pacer (seconds on a busy instance): nothing the agent needs waits for it.
+  assert.ok(rejectIdx < escapeIdx, 'reject must run BEFORE the interrupt (the deny / the server reject reaches the agent first)');
+  assert.ok(escapeIdx < retireIdx, 'the interrupt must run BEFORE the awaited retire of the question\'s buttons');
+});
+
 test('S3: releaseThreadSession (/new) rejects before stopping the adapters', () => {
   const body = sliceBody('async function releaseThreadSession');
   assert.match(body, rejectCallRe, '/new must reject a pending question before release');

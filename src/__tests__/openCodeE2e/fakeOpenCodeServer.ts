@@ -10,13 +10,17 @@
  *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `telegramBot` server there);
  *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
  *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
- *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`;
+ *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`,
+ *     `POST /question/:id/reply` and `POST /question/:id/reject` (accepted and recorded);
  *   • `POST /instance/dispose`.
  *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
  * assert the bot asked for nothing the fake does not model. A prompt is recorded with its text and model, and never
  * answered by itself — a flow decides what the "model" does next: {@link FakeOpenCodeServer.emitUsageLimit} makes the
- * session's turn fail the way a subscription limit does.
+ * session's turn fail the way a subscription limit does, {@link FakeOpenCodeServer.emitAssistantText} streams the
+ * assistant's words. The one thing the fake does by itself is what the real server does to a turn it is told to abort:
+ * a session a flow marked busy ({@link FakeOpenCodeServer.emitSessionBusy}) and not yet idle ends its turn with the
+ * "Aborted" error and an idle ({@link FakeOpenCodeServer.emitAbortedTurn}).
  *
  * `writeFakeOpenCodeBinary` writes the `opencode` executable the bot shells out to (`opencode models`, `--version`,
  * and — when a flow asks for it — the `opencode serve` the bot spawns once the server is down), and `writeFakeNpm`
@@ -83,6 +87,8 @@ export class FakeOpenCodeServer {
   readonly mcpRegistrations = new Map<string, string[]>();
   private readonly server: http.Server;
   private readonly eventStreams = new Set<http.ServerResponse>();
+  /** The sessions a flow marked busy and has not let go idle: the turns an abort ends. */
+  private readonly runningTurns = new Set<string>();
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private sessionCounter = 0;
 
@@ -141,6 +147,7 @@ export class FakeOpenCodeServer {
   emitSessionIdle(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.runningTurns.delete(sessionId);
     this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'idle' } } }, session.directory);
     this.broadcast({ type: 'session.idle', properties: { sessionID: sessionId } }, session.directory);
   }
@@ -149,7 +156,38 @@ export class FakeOpenCodeServer {
   emitSessionBusy(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.runningTurns.add(sessionId);
     this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'busy' } } }, session.directory);
+  }
+
+  /**
+   * @description The assistant answering: its message (`message.updated`, which is what tells the bot the turn genuinely
+   * started) and the text streamed into it (`message.part.delta`, field `text`).
+   */
+  emitAssistantText(sessionId: string, messageId: string, text: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'message.updated', properties: { info: { id: messageId, sessionID: sessionId, role: 'assistant', time: { created: Date.now() } } } }, session.directory);
+    this.broadcast({ type: 'message.part.delta', properties: { sessionID: sessionId, messageID: messageId, partID: `${messageId}_text`, field: 'text', delta: text } }, session.directory);
+  }
+
+  /**
+   * @description The agent putting a question to the user (`question.asked`): the turn blocks on it until the bot
+   * replies to or rejects `requestId`.
+   */
+  emitQuestionAsked(sessionId: string, requestId: string, questions: ReadonlyArray<{ question: string; header?: string; options: ReadonlyArray<{ label: string; description?: string }> }>): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'question.asked', properties: { id: requestId, sessionID: sessionId, questions } }, session.directory);
+  }
+
+  /**
+   * @description A turn ended by `POST /session/:id/abort` the way the real server ends it: the `session.error` whose
+   * message is the bare "Aborted", then the idle.
+   */
+  emitAbortedTurn(sessionId: string): void {
+    this.emitSessionError(sessionId, { name: 'MessageAbortedError', data: { message: 'Aborted' } });
+    this.emitSessionIdle(sessionId);
   }
 
   /**
@@ -209,6 +247,7 @@ export class FakeOpenCodeServer {
     if (method === 'GET' && record.path === '/session') return reply([...this.sessions.values()].filter((session) => session.directory === record.directory).map(toApiSession));
     if (method === 'POST' && record.path === '/session') return reply(toApiSession(this.createSession(record)));
     if (method === 'POST' && record.path === '/instance/dispose') return reply(true);
+    if (method === 'POST' && /^\/question\/[^/]+\/(reply|reject)$/.test(record.path)) return reply(true);
     if (sessionMatch) {
       const session = this.sessions.get(sessionMatch[1]);
       const action = sessionMatch[2] ?? '';
@@ -219,7 +258,11 @@ export class FakeOpenCodeServer {
         if (typeof title === 'string') session.title = title;
         return reply(toApiSession(session));
       }
-      if (session && method === 'POST' && action === '/abort') return reply(true);
+      if (session && method === 'POST' && action === '/abort') {
+        reply(true);
+        if (this.runningTurns.has(session.id)) this.emitAbortedTurn(session.id);
+        return;
+      }
       // A compaction (`/compact`): accepted and recorded; what the model then does is the flow's to emit.
       if (session && method === 'POST' && action === '/summarize') return reply(true);
       if (session && method === 'POST' && action === '/prompt_async') {
