@@ -45,6 +45,7 @@ export function createOpenCodeSessionFixture(overrides: Partial<OpenCodeSession>
     isBusy: false,
     awaitingTurnResponse: false,
     sawTurnActivity: false,
+    handledTurnErrorTexts: new Set(),
     unconsumedInputCount: 0,
     seenUserMessageIds: new Set(),
     providerRetrySignature: null,

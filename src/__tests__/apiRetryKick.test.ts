@@ -496,6 +496,16 @@ describe('restoring the saved retries at boot', () => {
   });
 });
 
+describe('a conversation-tail retry (the provider refused a history ending on the model\'s turn)', () => {
+  it('sends the "continue" nudge and posts no "resuming" line: its "continuing…" notice went out a moment before', async () => {
+    saveRetry(topicKey, { kind: 'conversationTail' });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.nudges, [{ key: keyToString(topicKey), text: continueNudge }]);
+    assert.deepEqual(world.notices, []);
+  });
+});
+
 describe('a limit probe that fired is remembered across a restart', () => {
   const graceMs = 2 * 60_000;
   /** What the bot does at boot BEFORE the sessions reattach: put back the probes that fired just before it. */

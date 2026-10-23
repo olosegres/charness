@@ -718,6 +718,7 @@ export const zhDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 用量限制已达到 — 重置后自动恢复（~{time}）。',
   'apiRetry.resuming': '↻ 恢复中…',
+  'apiRetry.conversationTailNotice': '↻ 服务商拒绝了上一步 — 继续中…',
   'apiRetry.limitResetResuming': '✅ 限额窗口已重置——我继续本话题的工作。',
   'apiRetry.giveUp':
     '⚠️ {attempts} 次尝试后无法恢复。需要继续时给我发消息。',

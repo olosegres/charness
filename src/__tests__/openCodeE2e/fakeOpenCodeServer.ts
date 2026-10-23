@@ -154,6 +154,17 @@ export class FakeOpenCodeServer {
   }
 
   /**
+   * @description The turn's assistant message stored with its failure: the `message.updated` whose `info.error` is
+   * `error` — what OpenCode publishes beside (before or after) the `session.error` of the same failure, and alone for a
+   * failed compaction.
+   */
+  emitFailedAssistantMessage(sessionId: string, messageId: string, error: Record<string, unknown>): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
+    this.broadcast({ type: 'message.updated', properties: { info: { id: messageId, sessionID: sessionId, role: 'assistant', error, time: { created: Date.now() } } } }, session.directory);
+  }
+
+  /**
    * @description A sub-agent's child session appearing: the `session.updated` whose `info.parentID` names the parent —
    * how OpenCode tells the bot a session's lineage. The child is not added to {@link sessions}: the bot never created it.
    */

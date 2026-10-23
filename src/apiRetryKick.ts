@@ -164,7 +164,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // Announced only once there is a session to resume: a pinned "resuming" over a start that failed would
     // read as work under way. The notices are topic messages (a pin among them): a tracker issue hears about
     // the wait from the request's own answer, and has no topic for the rest (R6).
-    if (checkIsTelegramKey(key)) deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+    // A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
+    if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.

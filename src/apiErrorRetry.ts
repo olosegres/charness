@@ -45,6 +45,14 @@ export function checkIsShortStatedReset(resetAt: number, now: number): boolean {
 }
 
 /**
+ * The retry of a request the provider refused because the conversation ended on the model's turn
+ * ({@link conversationTailRe}): the "continue" nudge is a user turn, which is all the provider asks for — so it goes at
+ * once (a moment, to let the failed turn settle), and only once: the same refusal right after it ends with the give-up.
+ */
+export const conversationTailRetryDelayMs = 2_000;
+export const conversationTailMaxAttempts = 1;
+
+/**
  * Fixed delay for a usage-limit error whose text exposed no reset time (the
  * common case for Claude's "blocked" message): 60 minutes, re-armed on each
  * repeat until {@link usageLimitMaxAttempts}.
@@ -182,6 +190,13 @@ const longWindowRe =
  */
 const limitHitRe = /\b(?:exceeded|exhausted|reached|hit your|too many|throttl\w*|retry|try again)\b/i;
 
+/**
+ * Gemini's refusal of a request whose `contents` end on a `model` turn (a 400 INVALID_ARGUMENT with no code of its
+ * own). OpenCode v1's agent loop sends one after a step that finished `unknown` or on its max-steps prompt (upstream
+ * fixed it in v2 only); the bot's prompts are always user turns, and its "continue" is one.
+ */
+const conversationTailRe = /requests ending with a model turn are not supported/i;
+
 /** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
 const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;
 
@@ -278,6 +293,7 @@ export function checkIsUsageLimitText(text: string): boolean {
  *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
  *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
+ *  1a. the refusal of a history that ends on the model's turn ({@link conversationTailRe}) → `conversationTail`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does.
  *  1b'. a stated reset ({@link parseResetAt}) within {@link shortStatedResetMaxMs} → `transient`;
@@ -307,6 +323,7 @@ export function classifyAgentApiError(text: string, now: number): AgentApiErrorC
   if (authErrorPhrasesRe.test(text)) {
     return { kind: 'auth' };
   }
+  if (conversationTailRe.test(text)) return { kind: 'conversationTail' };
   if (checkIsUsageLimitWarningText(text)) return null;
   // The reset the provider states decides a limit's length when it names one: within the first transient retry it is a
   // throttle, beyond it a window — whatever short-window code (RESOURCE_EXHAUSTED) or quota words ride along. A NAMED
@@ -583,6 +600,8 @@ export type RetryPlan = { delayMs: number } | { giveUp: true };
  * time never overflows the timer.
  *  - transient: {@link transientBackoffMinutes}[attempt-1]; giveUp once attempt
  *    exceeds {@link transientMaxAttempts}.
+ *  - conversationTail: {@link conversationTailRetryDelayMs}; giveUp once attempt exceeds
+ *    {@link conversationTailMaxAttempts}.
  *  - usageLimit: `resetAt` present → `resetAt - now + resetBufferMs`; else
  *    {@link usageLimitDefaultMs}; giveUp once attempt exceeds
  *    {@link usageLimitMaxAttempts}.
@@ -591,6 +610,10 @@ export function getRetryPlan(args: RetryPlanArgs): RetryPlan {
   // auth is never retried (it is surfaced by `decideRetryAction` before this is
   // reached); guard so it can never fall through into the usageLimit branch.
   if (args.kind === 'auth') return { giveUp: true };
+
+  if (args.kind === 'conversationTail') {
+    return args.attempt > conversationTailMaxAttempts ? { giveUp: true } : { delayMs: conversationTailRetryDelayMs };
+  }
 
   if (args.kind === 'transient') {
     if (args.attempt > transientMaxAttempts) return { giveUp: true };

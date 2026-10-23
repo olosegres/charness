@@ -1730,6 +1730,9 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     } else {
       void announceUsageLimitOrSwitch(key, cls, action.fireAt, limitWait, action.attempt, true);
     }
+  } else if (cls.kind === 'conversationTail') {
+    // The topic's one line for it: the retry follows in a moment, and its raw provider text was not posted.
+    void replyToThread(key, t('apiRetry.conversationTailNotice'));
   } else {
     void replyToThread(key, t('apiRetry.transientNotice', {
       minutes: Math.round(action.delayMs / apiRetryMsPerMinute),

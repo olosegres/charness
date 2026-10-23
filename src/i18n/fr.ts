@@ -724,6 +724,7 @@ export const frDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Limite d\'utilisation atteinte — reprise automatique après reset (~{time}).',
   'apiRetry.resuming': '↻ Reprise…',
+  'apiRetry.conversationTailNotice': '↻ Le fournisseur a refusé la dernière étape — on continue…',
   'apiRetry.limitResetResuming': '✅ La fenêtre de limite est réinitialisée — je reprends le travail dans ce sujet.',
   'apiRetry.giveUp':
     '⚠️ Impossible de reprendre après {attempts} tentatives. Écrivez-moi quand continuer.',

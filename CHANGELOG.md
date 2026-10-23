@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Gemini's «Requests ending with a model turn are not supported» on OpenCode recovers by itself.** OpenCode v1 sometimes
+sends Gemini a conversation that ends on the model's own turn, and the turn stopped with the provider's raw text. The
+topic now gets one short line and the bot continues the work at once; if the same refusal comes right back, it says it
+could not resume, as for other errors.
+
+**An OpenCode failure is posted once, without an auth plugin's debug block.** OpenCode reports most failures twice, and
+both were posted, each as the provider's whole message cut at 500 characters — with opencode-antigravity-auth that
+included a «[Debug Info]» block naming your Google project. One line is posted now, and the block stays in the bot log.
+A sub-agent's failed step is no longer posted as the topic's error.
+
 **Google's «You have exhausted your capacity on this model. Your quota will reset after …» is read by its duration.** The
 Gemini subscription and Antigravity quotas say this both for a cap that clears in seconds («after 2s») and for a spent plan
 («after 146h52m11s»). The seconds-long one was announced as «🚧 Usage limit reached» with an hour's wait, and an hours-long

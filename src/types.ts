@@ -237,7 +237,11 @@ export interface PendingQuestionState {
  * restart) — so the bot posts a pinned notice instead of arming a timer.
  */
 export interface AgentApiErrorClass {
-  kind: 'transient' | 'usageLimit' | 'auth';
+  /**
+   * `conversationTail` — the provider refused a request whose history ended on the MODEL's turn (Gemini through
+   * OpenCode v1's agent loop): a user turn fixes it, so it gets one immediate "continue".
+   */
+  kind: 'transient' | 'usageLimit' | 'auth' | 'conversationTail';
   /** Epoch ms when a usage window resets, if the error text exposed one. */
   resetAt?: number;
   /**

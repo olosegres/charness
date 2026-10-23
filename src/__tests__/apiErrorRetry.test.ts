@@ -20,6 +20,7 @@ import {
   resetBufferMs,
   checkIsUsageLimitWindowOver,
   getUnconfirmedLimitAction,
+  conversationTailRetryDelayMs,
 } from '../apiErrorRetry';
 import { maxTimeoutMs } from '../scheduler/engine';
 
@@ -212,6 +213,48 @@ test('parseResetAt: "resets at 3pm" → a sensible future epoch ms (after now, s
 
 test('parseResetAt: message with no time → undefined', () => {
   assert.equal(parseResetAt('Claude usage limit reached', fixedNow), undefined);
+});
+
+// Gemini refuses a request whose history ends on the model's turn (OpenCode v1's agent loop sends one): a user turn is
+// all it asks for, so the bot sends its "continue" at once, once.
+const modelTurnRefusal = 'Requests ending with a model turn are not supported.';
+
+test('classify: Gemini\'s "Requests ending with a model turn are not supported" → conversationTail, whatever rides along', () => {
+  for (const text of [
+    modelTurnRefusal,
+    `${modelTurnRefusal}\n\n[Debug Info]\nRequested Model: gemini-3-pro\nProject: example-project-123`,
+    JSON.stringify({ error: { code: 400, message: modelTurnRefusal, status: 'INVALID_ARGUMENT' } }),
+    `400 ${modelTurnRefusal}\nHTTP 400`,
+  ]) {
+    assert.deepEqual(classifyAgentApiError(text, fixedNow), { kind: 'conversationTail' }, text);
+  }
+});
+
+test('classify: other 400s stay unclassified — the class is for that one refusal', () => {
+  for (const text of [
+    "Unsupported parameter: 'reasoning.summary'",
+    JSON.stringify({ error: { code: 400, message: 'Invalid JSON payload received. Unknown name "foo"', status: 'INVALID_ARGUMENT' } }),
+    'Please ensure that multiturn requests alternate between user and model.',
+    'Requests ending with a user turn are fine.',
+  ]) {
+    assert.equal(classifyAgentApiError(text, fixedNow), null, text);
+  }
+});
+
+test('getRetryPlan / decideRetryAction: a conversation-tail refusal is retried once, at once; again within the grace window → give up', () => {
+  assert.deepEqual(getRetryPlan({ kind: 'conversationTail', attempt: 1, now: fixedNow }), { delayMs: conversationTailRetryDelayMs });
+  assert.ok(conversationTailRetryDelayMs <= 5_000, 'a moment, not the transient minutes');
+  assert.deepEqual(getRetryPlan({ kind: 'conversationTail', attempt: 2, now: fixedNow }), { giveUp: true });
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: null }),
+    { action: 'arm', attempt: 1, delayMs: conversationTailRetryDelayMs, fireAt: fixedNow + conversationTailRetryDelayMs },
+  );
+  assert.deepEqual(
+    decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attempt: 1, firedAt: fixedNow - minuteMs, pending: false } }),
+    { action: 'giveUp', attempts: 1 },
+  );
+  // A refusal long after the last retry is a fresh episode.
+  assert.equal(decideRetryAction({ kind: 'conversationTail', now: fixedNow, prev: { attempt: 1, firedAt: fixedNow - retryRecurrenceGraceMs - 1, pending: false } }).action, 'arm');
 });
 
 test('getRetryPlan: transient attempts 1/2/3 → 5/10/20 min', () => {

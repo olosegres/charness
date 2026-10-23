@@ -767,6 +767,7 @@ export const enDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Usage limit reached — will auto-resume after reset (~{time}).',
   'apiRetry.resuming': '↻ Resuming…',
+  'apiRetry.conversationTailNotice': '↻ The provider rejected the last step — continuing…',
   'apiRetry.limitResetResuming':
     '✅ The limit window has reset — resuming work in this topic.',
   'apiRetry.giveUp':

@@ -724,6 +724,7 @@ export const deDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Nutzungslimit erreicht — automatisches Fortsetzen nach Reset (~{time}).',
   'apiRetry.resuming': '↻ Fortsetzen…',
+  'apiRetry.conversationTailNotice': '↻ Der Anbieter hat den letzten Schritt abgelehnt — es geht weiter…',
   'apiRetry.limitResetResuming': '✅ Das Limit-Fenster wurde zurückgesetzt — ich setze die Arbeit in diesem Thema fort.',
   'apiRetry.giveUp':
     '⚠️ Konnte nach {attempts} Versuchen nicht fortsetzen. Schreibe mir, wann ich weitermachen soll.',

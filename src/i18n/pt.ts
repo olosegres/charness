@@ -725,6 +725,7 @@ export const ptDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 Limite de uso atingido — retoma automática após reset (~{time}).',
   'apiRetry.resuming': '↻ A retomar…',
+  'apiRetry.conversationTailNotice': '↻ O fornecedor recusou o último passo — a continuar…',
   'apiRetry.limitResetResuming': '✅ A janela do limite foi reiniciada — retomo o trabalho neste tópico.',
   'apiRetry.giveUp':
     '⚠️ Não foi possível retomar após {attempts} tentativas. Escreve-me quando continuar.',

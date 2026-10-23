@@ -723,6 +723,7 @@ export const hiDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 उपयोग सीमा पहुँची — रीसेट के बाद स्वतः पुनः ( ~{time})।',
   'apiRetry.resuming': '↻ पुनः शुरू…',
+  'apiRetry.conversationTailNotice': '↻ प्रदाता ने पिछला चरण अस्वीकार कर दिया — जारी रखा जा रहा है…',
   'apiRetry.limitResetResuming': '✅ सीमा की अवधि रीसेट हो गई — मैं इस विषय में काम फिर शुरू कर रहा हूँ।',
   'apiRetry.giveUp':
     '⚠️ {attempts} प्रयासों के बाद पुनः शुरू नहीं कर सका। जब जारी रखना हो तो संदेश भेजें।',

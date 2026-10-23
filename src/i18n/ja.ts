@@ -718,6 +718,7 @@ export const jaDict: Record<string, string> = {
   'apiRetry.usageLimitResetNotice':
     '🚧 利用量制限に到達 — リセット後に自動再開します（~{time}）。',
   'apiRetry.resuming': '↻ 再開中…',
+  'apiRetry.conversationTailNotice': '↻ プロバイダーが直前のステップを拒否しました — 続行します…',
   'apiRetry.limitResetResuming': '✅ 制限のウィンドウがリセットされました — このトピックの作業を再開します。',
   'apiRetry.giveUp':
     '⚠️ {attempts} 回の試行後に再開できませんでした。続行する時にメッセージを送ってください。',
