@@ -148,8 +148,8 @@ not with the runner's bare timeout. Run one flow directly with `--test-timeout=<
 
 A flow does not wait out the production windows in real time: its env file sets `CHARNESS_TEST_TIMINGS`, a JSON object
 of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `jiraPollIntervalMs` —
-below the 10 s floor of `jira.json`, `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's
-minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
+below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine's 10 s poll of the turns it watches,
+`requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the
 agent's own pending work holds a json-stream process). It is the ONE test-only timing seam,
 never a setting: unset, every window is the production one; a value may only shorten its window (each key is capped at its

@@ -70,6 +70,8 @@ export interface RequestWakeUpEngineDeps {
   backstopMs: number;
   /** How often the unwatched open requests are swept; absent: {@link unwatchedSweepMs} (a test instance shortens it). */
   sweepIntervalMs?: number;
+  /** How often the watched turns are polled for their end; absent: {@link watchedTurnPollMs} (a test instance shortens it). */
+  pollIntervalMs?: number;
   /** The first retry of a prompt that could not be posted; absent: `postRetryDelaysMs[0]` (a test instance shortens it). */
   firstPostRetryDelayMs?: number;
   /** Whether the conversation's view hides the agent's stream: only then is a final answer's tail followed. Absent: never. */
@@ -119,7 +121,7 @@ export class RequestWakeUpEngine {
   start(): void {
     this.pollTimer ??= setInterval(() => {
       void this.pollWatchedTurns().catch((e) => logWakeUpFailure('the watched-turn poll', e));
-    }, watchedTurnPollMs);
+    }, this.deps.pollIntervalMs ?? watchedTurnPollMs);
     this.sweepTimer ??= setInterval(() => {
       void this.sweepUnwatchedRequests().catch((e) => logWakeUpFailure('the open-request sweep', e));
     }, this.deps.sweepIntervalMs ?? unwatchedSweepMs);

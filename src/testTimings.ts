@@ -3,7 +3,7 @@ import { openCodeServerRestartRetryBudgetMs } from './adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { globalSendIntervalMs } from './rateLimiter';
-import { unwatchedSweepMs } from './requests/wakeUpEngine';
+import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
@@ -11,7 +11,7 @@ import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
- * Jira poll's 10 s floor, the wake-up sweep's minute, the first re-post retry's minute, the two-minute probe of an
+ * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
@@ -38,6 +38,8 @@ const testTimingsSchema = z.strictObject({
   telegramSendIntervalMs: createShorterWindowSchema(globalSendIntervalMs).optional(),
   /** The Jira poll's interval, at most `jira.json`'s 10 s floor (production: `pollIntervalSeconds`, 10–600 s). */
   jiraPollIntervalMs: createShorterWindowSchema(jiraPollIntervalMinSeconds * msPerSecond).optional(),
+  /** How often the wake-up engine polls the turns it watches for their end (production: `watchedTurnPollMs`, 10 s). */
+  requestTurnPollMs: createShorterWindowSchema(watchedTurnPollMs).optional(),
   /** How often the wake-up engine sweeps the unwatched open requests (production: `unwatchedSweepMs`, 1 min). */
   requestSweepIntervalMs: createShorterWindowSchema(unwatchedSweepMs).optional(),
   /** The first retry of a request whose prompt could not be posted (production: `postRetryDelaysMs[0]`, 1 min). */

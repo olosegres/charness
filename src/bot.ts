@@ -7478,19 +7478,28 @@ async function switchTopicToFallbackEntry(
     }
     firstPrompt = { text: bridge, isRequestPrompt: false };
   }
-  cancelApiRetry(key); // retires the offer too: the switch consumed it
-  const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
-  console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
-  await say(notice);
-  await resumeTopicOnNewSession(key, {
-    modelToPin: getFallbackModelToPin(to, runningModel),
-    // Read after the session is up: the open requests may have changed while it started.
-    getFirstPrompt: () => firstPrompt ?? getLimitResumeMessage({
-      continueNudge: t('apiRetry.continueNudge'),
-      untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
-    }),
-  });
-  return { isSwitched: true, notice };
+  // From the end of the wait until the continue prompt is forwarded, the idle the limit left behind is not a turn end (the
+  // same hold a retry kick has): the model pin below re-spawns the session for seconds, and a wake-up engine that polled
+  // then would remind the agent on top of the prompt this move is about to send. A kick that moved the topic holds it already.
+  const isHoldingTurnEnd = !apiRetryKicksInFlight.has(k);
+  if (isHoldingTurnEnd) apiRetryKicksInFlight.add(k);
+  try {
+    cancelApiRetry(key); // retires the offer too: the switch consumed it
+    const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
+    console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
+    await say(notice);
+    await resumeTopicOnNewSession(key, {
+      modelToPin: getFallbackModelToPin(to, runningModel),
+      // Read after the session is up: the open requests may have changed while it started.
+      getFirstPrompt: () => firstPrompt ?? getLimitResumeMessage({
+        continueNudge: t('apiRetry.continueNudge'),
+        untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+      }),
+    });
+    return { isSwitched: true, notice };
+  } finally {
+    if (isHoldingTurnEnd) apiRetryKicksInFlight.delete(k);
+  }
 }
 
 /** The message that starts the work on a topic's new session, and whether it is the request's own prompt. */
@@ -13271,6 +13280,7 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    pollIntervalMs: ENV.testTimings.requestTurnPollMs,
     sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
     firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.

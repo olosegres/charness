@@ -18,7 +18,7 @@ import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter'
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
 import { globalSendIntervalMs } from '../rateLimiter';
-import { unwatchedSweepMs } from '../requests/wakeUpEngine';
+import { unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
 import { postRetryDelaysMs } from '../requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
@@ -27,6 +27,7 @@ import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['telegramSendIntervalMs', globalSendIntervalMs],
   ['jiraPollIntervalMs', jiraPollIntervalMinSeconds * 1000],
+  ['requestTurnPollMs', watchedTurnPollMs],
   ['requestSweepIntervalMs', unwatchedSweepMs],
   ['requestFirstPostRetryDelayMs', postRetryDelaysMs[0]],
   ['limitProbeDelayMs', unconfirmedLimitProbeDelayMs],

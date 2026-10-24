@@ -180,7 +180,9 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      // The wake-up engine polls the turns it watches every few hundred ms, not every 10 s: a poll that lands in a gap of a
+      // move to another model or account is then certain, not a matter of luck.
+      ...getTelegramFlowTestTimingsEnv({ requestTurnPollMs: 200 }),
     });
   });
 
