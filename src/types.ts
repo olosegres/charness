@@ -1018,6 +1018,15 @@ export interface AgentAdapter extends EventEmitter {
   detachRunningSubagents?(key: SessionKey): Promise<boolean>;
 
   /**
+   * Queue `text` into the turn the session is working on RIGHT NOW, as a note the agent reads between its steps —
+   * without starting a new turn: the response being streamed goes on as one message, and nothing of the turn's state
+   * is reset. Resolves `false`, posting nothing, when the session is not busy, or when the turn waits out a provider
+   * retry (a note must never cut that wait short). Optional: only OpenCode reads a prompt mid-turn (the shared todo
+   * lists' mid-turn board, `todos/midTurn.ts`).
+   */
+  queueNoteIntoRunningTurn?(key: SessionKey, text: string): Promise<boolean>;
+
+  /**
    * @description Read the last `limit` conversational turns (user/assistant
    * messages with renderable text, oldest→newest) of `sessionId` from the
    * backend's own transcript — Claude reads its `.jsonl`, OpenCode calls

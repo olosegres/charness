@@ -102,8 +102,11 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   characters — and prints nothing without one; it always exits 0.
 - The reminder poll hands every BUSY session what changed since its agent last saw the board (`peekChanges`, never
   marked seen there): Claude gets the inbox written (atomically; the same changes are not rewritten), and the changes
-  count as seen once a later poll finds the file gone; OpenCode gets a technical prompt queued while it is busy (it
-  reads `prompt_async` between steps), whose board block the choke point marks seen. An idle or sleeping session gets
-  nothing (D21). The poll runs while the lists are on, the staleness reminder off or not.
+  count as seen once a later poll finds the file gone. OpenCode gets a NOTE INTO ITS RUNNING TURN
+  (`AgentAdapter.queueNoteIntoRunningTurn`): `prompt_async`, read between steps, posted WITHOUT the new-prompt path —
+  that path resets the turn (its response accumulators, so a reply streamed around it splits into two messages) and
+  aborts a provider retry. The note is refused while a provider retry is waited out or the session is not busy, and
+  the changes count as seen only once it was accepted. An idle or sleeping session gets nothing (D21). The poll runs
+  while the lists are on, the staleness reminder off or not.
 - A turn start the bot makes withdraws a waiting inbox (`discardInbox`) — its prompt carries the changes. The boot
   clears every inbox: this process does not know what an old one carries, and what it carried is still unseen.

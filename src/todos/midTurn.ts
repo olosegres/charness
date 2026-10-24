@@ -13,13 +13,17 @@ import type { TodoBoardChanges } from './board';
  *               `DATA_DIR/todos/inbox/<session id>.json`, after the agent's next tool call: ready hook JSON whose
  *               `additionalContext` Claude reads with that tool's result (probed on Claude Code 2.1.310). The hook
  *               moves the file before printing it, so a text is delivered once; with no file it prints nothing.
- *   OpenCode  — a technical prompt queued while the session is busy (`prompt_async`; OpenCode reads it between steps).
+ *   OpenCode  — a note queued INTO the running turn (`AgentAdapter.queueNoteIntoRunningTurn`: `prompt_async`, read
+ *               between steps, with nothing of the turn reset), never while a provider retry is waited out.
  *
  * The bot writes the inbox (atomically) only while the session is busy and something changed since the agent last
  * saw it; the changes count as seen once the hook took the file (the next poll finds it gone). A turn start the bot
  * makes discards a waiting inbox — that prompt carries the changes itself. A restart forgets what was written: at
  * worst a change is delivered twice, never lost.
  */
+
+/** What opens the note a running OpenCode turn reads (agent-facing English); the board's changes follow it. */
+export const todoRunningTurnNoteHeader = '[Todo] Other topics of your project changed their lists while you work. No reply is needed.';
 
 /** The inbox directory under the store's. */
 const inboxDirName = 'inbox';
@@ -62,7 +66,7 @@ export function buildTodoInboxHookOutput(text: string): string {
 /**
  * @name TodoMidTurnDeps
  * @description The board's peek and seen marks, the conversation's live Claude session (`null` = no Claude backend
- * runs it), and the OpenCode post (`false` when the session is not an OpenCode one that is busy now).
+ * runs it), and the note into a running turn (`false` when the backend takes none, or the turn is not running now).
  */
 export interface TodoMidTurnDeps {
   board: {
@@ -71,7 +75,7 @@ export interface TodoMidTurnDeps {
   };
   inboxDir: string;
   getClaudeSessionId: (key: SessionKey) => string | null;
-  postOpenCodeNotice: (key: SessionKey) => Promise<boolean>;
+  postRunningTurnNote: (key: SessionKey, text: string) => Promise<boolean>;
 }
 
 /** @name TodoMidTurn @description What the reminder poll and the prompt choke point call. */
@@ -103,7 +107,7 @@ function checkIsSameRevisions(left: Readonly<Record<string, number>>, right: Rea
 }
 
 export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
-  const { board, inboxDir, getClaudeSessionId, postOpenCodeNotice } = deps;
+  const { board, inboxDir, getClaudeSessionId, postRunningTurnNote } = deps;
   const pendingInboxes = new Map<string, PendingInbox>();
 
   function reconcileOne(conversationKey: string, pending: PendingInbox): void {
@@ -128,7 +132,8 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
       if (changes === null) return;
       const sessionId = getClaudeSessionId(key);
       if (sessionId === null) {
-        await postOpenCodeNotice(key);
+        // Seen only once the note is in: a refused one (no running turn, a provider retry) waits for the next poll.
+        if (await postRunningTurnNote(key, `${todoRunningTurnNoteHeader}\n\n${changes.text}`)) board.markSeenRevisions(key, changes.revisions);
         return;
       }
       if (!sessionIdRe.test(sessionId)) return;

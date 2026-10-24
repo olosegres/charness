@@ -15,7 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString, type SessionKey } from '../sessionKey';
-import { buildTodoInboxHookCommand, buildTodoInboxHookOutput, createTodoMidTurn, getTodoInboxDir, todoInboxMaxChars } from '../todos/midTurn';
+import { buildTodoInboxHookCommand, buildTodoInboxHookOutput, createTodoMidTurn, getTodoInboxDir, todoInboxMaxChars, todoRunningTurnNoteHeader } from '../todos/midTurn';
 import type { TodoBoardChanges } from '../todos/board';
 import { TodoReminderEngine } from '../todos/reminderEngine';
 import { createTodoRegistry } from '../todos/registry';
@@ -76,13 +76,15 @@ describe('the inbox lifecycle', () => {
   let changes: TodoBoardChanges | null;
   let seen: Array<Record<string, number>>;
   let claudeSessionId: string | null;
-  let openCodeNotices: number;
+  let runningTurnNotes: string[];
+  let isNoteAccepted: boolean;
   beforeEach(() => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-midturn-'));
     changes = { text: '[Project board — changes since 12:00]\n#a — working now', revisions: { a: 3 } };
     seen = [];
     claudeSessionId = sessionId;
-    openCodeNotices = 0;
+    runningTurnNotes = [];
+    isNoteAccepted = true;
   });
   afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
@@ -91,7 +93,7 @@ describe('the inbox lifecycle', () => {
       board: { peekChanges: async () => changes, markSeenRevisions: (_key, revisions) => { seen.push({ ...revisions }); } },
       inboxDir: getTodoInboxDir(dataDir),
       getClaudeSessionId: () => claudeSessionId,
-      postOpenCodeNotice: async () => { openCodeNotices += 1; return true; },
+      postRunningTurnNote: async (_key, text) => { runningTurnNotes.push(text); return isNoteAccepted; },
     });
   }
   const inboxPath = (): string => path.join(getTodoInboxDir(dataDir), `${sessionId}.json`);
@@ -126,15 +128,20 @@ describe('the inbox lifecycle', () => {
     assert.equal(fs.existsSync(getTodoInboxDir(dataDir)), false);
   });
 
-  it('nothing changed: nothing written; an OpenCode session gets the queued notice; an odd session id writes nothing', async () => {
+  it('nothing changed: nothing written; an OpenCode session gets the note into its turn, seen only once accepted; an odd session id writes nothing', async () => {
     changes = null;
     const midTurn = createMidTurn();
     await midTurn.deliverIfPending(topicKey);
     assert.equal(fs.existsSync(getTodoInboxDir(dataDir)), false);
     changes = { text: 'x', revisions: { a: 1 } };
     claudeSessionId = null;
+    isNoteAccepted = false;
     await midTurn.deliverIfPending(topicKey);
-    assert.equal(openCodeNotices, 1);
+    assert.deepEqual(runningTurnNotes, [`${todoRunningTurnNoteHeader}\n\nx`]);
+    assert.deepEqual(seen, [], 'a refused note (no running turn, a provider retry) is not seen');
+    isNoteAccepted = true;
+    await midTurn.deliverIfPending(topicKey);
+    assert.deepEqual(seen, [{ a: 1 }]);
     claudeSessionId = '../escape';
     await midTurn.deliverIfPending(topicKey);
     assert.equal(fs.existsSync(getTodoInboxDir(dataDir)), false);

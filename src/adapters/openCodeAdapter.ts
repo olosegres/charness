@@ -2355,6 +2355,29 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
+   * @description A note into the RUNNING turn (`AgentAdapter.queueNoteIntoRunningTurn`): `prompt_async` queues it and
+   * OpenCode reads it between steps. Unlike {@link sendPromptAsync} nothing of the turn is reset — the response
+   * accumulators, the tool-result and error dedup, the wedged-turn detector stay as they are, so the text being
+   * streamed goes on as one message. Refused while the turn waits out a provider retry (posting would not be read
+   * before the retry, and {@link sendPromptAsync}'s path would abort it), during a server restart, or when the session
+   * is not busy. The prompt counts as unconsumed until OpenCode shows it as a user message, like any prompt.
+   */
+  async queueNoteIntoRunningTurn(key: SessionKey, text: string): Promise<boolean> {
+    const session = this.sessions.get(keyToString(key));
+    if (this.serverRestart || !session?.isActive || !this.checkIsBusy(key)) return false;
+    if (session.providerRetrySignature !== null || session.providerRetryAbortPromise !== null) return false;
+    session.unconsumedInputCount += 1;
+    try {
+      await this.apiRequest('POST', `/session/${session.sessionId}/prompt_async`, buildPromptBody(text, session.modelOverride, session.effortLevel));
+      return true;
+    } catch (e) {
+      session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+      console.warn(`[OpenCode] a note into the running turn of ${keyToString(key)} was not accepted:`, e instanceof Error ? e.message : e);
+      return false;
+    }
+  }
+
+  /**
    * @description Send message via async endpoint (returns 204, response streams via SSE).
    * Fire-and-forget — errors are logged but don't block.
    *

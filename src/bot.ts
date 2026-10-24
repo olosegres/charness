@@ -1233,10 +1233,7 @@ function noteTodoFreshContext(key: SessionKey): void {
 
 let todoMidTurn: TodoMidTurn | null = null;
 
-/** What a busy OpenCode session reads between steps when the project board changed (D22); the board follows it. */
-const todoMidTurnNoticeText = '[Todo] Other topics of your project changed their lists while you work. No reply is needed.';
-
-/** Mid-turn delivery of the board (`todos/midTurn.ts`): the Claude inbox hook, the OpenCode queued prompt. */
+/** Mid-turn delivery of the board (`todos/midTurn.ts`): the Claude inbox hook, the note into a running OpenCode turn. */
 function getTodoMidTurn(): TodoMidTurn {
   todoMidTurn ??= createTodoMidTurn({
     board: getTodoBoard(),
@@ -1245,14 +1242,8 @@ function getTodoMidTurn(): TodoMidTurn {
       const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
       return adapterName !== undefined && checkIsClaudeBackend(adapterName) ? getResumableSessionId(key) : null;
     },
-    postOpenCodeNotice: async (key) => {
-      const adapter = getThreadAdapter(key);
-      // Only into a busy turn: OpenCode queues `prompt_async` and reads it between steps; an idle agent gets the
-      // changes with its next prompt instead (D21) — this must never start a turn.
-      if (adapter.name !== openCodeAdapterName || !adapter.checkIsActive(key) || !(adapter.checkIsBusy?.(key) ?? false)) return false;
-      await forwardPromptToAgent(key, adapter, todoMidTurnNoticeText, undefined, { isTechnicalPrompt: true, isIntoRunningTurn: true });
-      return true;
-    },
+    // Into the running turn only (D21): never a new turn, never through the prompt path that resets the turn.
+    postRunningTurnNote: async (key, text) => getThreadAdapter(key).queueNoteIntoRunningTurn?.(key, text) ?? false,
   });
   return todoMidTurn;
 }
@@ -5395,7 +5386,6 @@ interface PromptForwardOptions {
   isTechnicalPrompt?: boolean;
   replyContext?: string;
   requestHeader?: string;
-  isIntoRunningTurn?: boolean;
 }
 
 /** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
@@ -5474,20 +5464,15 @@ async function forwardPromptToLiveAgent(
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
   const todoReminderLine = isTodoDecorated && !isTechnicalPrompt ? takeTodoPromptReminder(key) : null;
   if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;
-  // A note queued into a turn that keeps running (the todo board's mid-turn notice to OpenCode) starts no turn: the
-  // message being streamed goes on, and the working counter keeps its start.
-  const isNewTurn = options.isIntoRunningTurn !== true;
-  if (isNewTurn) markNeedsNewMessage(key);
+  markNeedsNewMessage(key);
   // A new prompt is a new turn: lift the S2 idle-suppress latch and re-base the
   // working-status elapsed so the next busy period shows a fresh 0:00 counter
   // (the single prompt-forward choke point — covers user text, scheduled runs,
   // and the auto-retry "continue" nudge). Harmless for OpenCode threads (they
   // never arm the Claude liveness loop, so these fields stay unread).
   const msgState = getThreadMessageState(key);
-  if (isNewTurn) {
-    msgState.statusIdleSuppressed = false;
-    msgState.workingSince = Date.now();
-  }
+  msgState.statusIdleSuppressed = false;
+  msgState.workingSince = Date.now();
   // The native typing indicator is the loader: it shows immediately, can't be
   // delayed behind a chat-wide 429 cooldown (unlike a sent message), and (S3)
   // persists while output is streaming OR the agent is busy — self-stopping only

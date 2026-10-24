@@ -7,8 +7,9 @@
  *
  *   boot → X runs an OpenCode session and has had its first prompt (its board is seen); Y runs Claude
  *   → Y publishes while X is idle: nothing is sent to X — a peer's change never starts a turn
- *   → X goes busy: ONE queued prompt reaches it with the change — OpenCode reads `prompt_async` between steps — and
- *     the change counts as seen: X's further polls while busy send nothing more
+ *   → X goes busy: ONE note reaches its running turn with the change — OpenCode reads `prompt_async` between steps —
+ *     and the change counts as seen: X's further polls while busy send nothing more; a second change arriving while
+ *     X streams its reply is queued without resetting the turn: the reply before and after it stays ONE message
  *
  * Nothing leaves the machine. Everything the test starts is stopped in `after`.
  */
@@ -172,15 +173,26 @@ describe('Mid-turn board delivery to an OpenCode agent: built charness, fake Bot
     assert.equal(listPromptsOfX().length, promptsBefore, 'a peer\'s change never starts a turn');
   });
 
-  it('X goes busy: ONE queued prompt brings it the change; further polls while it works send nothing more', async () => {
+  it('X goes busy: ONE note brings it the change into its running turn; text streamed around a second note stays one message', async () => {
     const promptsBefore = listPromptsOfX().length;
-    fakeOpenCode.emitSessionBusy(getSessionIdOfX());
-    await getCharness().waitFor('the mid-turn notice to X', turnTimeoutMs, () => listPromptsOfX().length > promptsBefore);
-    const [notice] = listPromptsOfX().slice(promptsBefore);
-    assert.ok(notice.startsWith(midTurnNoticeMarker), notice);
-    assert.match(notice, /\[Project board — changes since \d\d:\d\d\]\n#topic 182 \(repo-y\) — [^\n]*\n {2}▶ Shared change — since \d\d:\d\d/);
+    const sessionId = getSessionIdOfX();
+    fakeOpenCode.emitSessionBusy(sessionId);
+    await getCharness().waitFor('the mid-turn note to X', turnTimeoutMs, () => listPromptsOfX().length > promptsBefore);
+    const [note] = listPromptsOfX().slice(promptsBefore);
+    assert.ok(note.startsWith(midTurnNoticeMarker), note);
+    assert.match(note, /\[Project board — changes since \d\d:\d\d\]\n#topic 182 \(repo-y\) — [^\n]*\n {2}▶ Shared change — since \d\d:\d\d/);
     await sleep(severalPollsMs);
     assert.equal(listPromptsOfX().length, promptsBefore + 1, 'seen once sent: no repeat while X still works');
-    fakeOpenCode.emitSessionIdle(getSessionIdOfX());
+
+    // The agent streams its reply; a second change of Y's arrives in the middle of it.
+    fakeOpenCode.emitAssistantText(sessionId, 'msg_x_2', 'Alpha part one. ');
+    await driverX.waitForMessage('the first part of X\'s reply', (message) => message.text.includes('Alpha part one.'));
+    fakeTelegram.pushOperatorMessage(topicY.threadId, 'TODO-42 [todo:queued:Second change]');
+    await getCharness().waitFor('the second note to X', turnTimeoutMs, () => listPromptsOfX().some((prompt) => prompt.includes('Second change')));
+    fakeOpenCode.emitAssistantText(sessionId, 'msg_x_2', 'Beta part two.');
+    fakeOpenCode.emitSessionIdle(sessionId);
+    const whole = await driverX.waitForMessage('X\'s reply whole', (message) => message.text.includes('Alpha part one. Beta part two.'));
+    assert.ok(whole, 'one message carries the reply before and after the note');
+    assert.deepEqual(fakeTelegram.listBotMessages(topicX.threadId).filter((message) => message.text.includes('Beta part two.')).map((message) => message.message_id), [whole.message_id], 'the note split nothing off');
   });
 });
