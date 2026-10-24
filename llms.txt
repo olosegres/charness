@@ -21,6 +21,7 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 - [Raw terminal](https://github.com/olosegres/charness#raw-terminal-terminal-telegram): `/terminal` binds a topic to a real shell in the project folder.
 - [Restart-safe sessions](https://github.com/olosegres/charness#restart-behaviour): sessions survive both a bot restart and an agent-server restart.
 - [Agent-facing MCP tools](https://github.com/olosegres/charness#bot-injected-agent-tools): the agent can send files, images, and video back to you, post multiple messages, and schedule itself.
+- [Orchestration skills](https://github.com/olosegres/charness#skills-the-bot-gives-its-agents): every agent the bot starts gets a manager skill for driving work through detached workers, with a watch that fires when a worker exits or hangs.
 
 ## Install
 

@@ -750,6 +750,26 @@ Third-party OpenCode MCP servers, including a separate `telegram-mcp`, belong to
 the OpenCode configuration of the Linux user that runs the bot. They are not
 injected by Charness; run `opencode mcp list` as that user to verify them.
 
+### Skills the bot gives its agents
+
+Every agent session the bot starts — Claude Code or OpenCode, in a topic or a
+Jira conversation — also gets three skills that ship with Charness
+(`agent-plugin/`):
+
+- `charness-manager` — driving a plan through detached workers with the bot's
+  own tools: one worker on the checkout at a time, an independent review, and a
+  bot check per worker that wakes the agent when the worker exits OR stops
+  writing for 45 minutes;
+- `charness-delegate-claude` / `charness-delegate-opencode` — launching,
+  watching and resuming a detached `claude -p` / `opencode run` worker.
+
+Claude Code lists them as `charness:charness-manager`, …; OpenCode by their
+names. Your own and your projects' skills stay as they are, and your sessions
+outside the bot do not get these. For Claude Code the bot passes
+`--plugin-dir`; for OpenCode it starts its server with `OPENCODE_CONFIG_DIR`
+naming a folder in `DATA_DIR` — if you set `OPENCODE_CONFIG_DIR` yourself, yours
+is kept and OpenCode topics go without these skills. They update with the bot.
+
 ### Restart behaviour
 
 Bot restarts are designed to be invisible: agents run in external

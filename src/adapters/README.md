@@ -450,6 +450,11 @@ resumable in the other.
   is spawned with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and `forwardPromptToAgent` calls
   `detachRunningSubagents` before `sendInput`, which detaches a blocking sub-agent (best effort, only while a
   child session is busy); OpenCode injects its result back when it finishes.
+- **The bot's skills.** The server is started with `OPENCODE_CONFIG_DIR=<DATA_DIR>/opencode-config`, whose `skills`
+  links to `agent-plugin/skills` (`utils/agentPlugin.ts`; an operator's own variable is kept). OpenCode reads it once,
+  at start, so the boot step `activateAgentSkillsForServer` replaces a server started without it (the controlled
+  restart that restores the sessions) — only when `/proc` shows the listener is an `opencode … serve` process and no
+  session works; any other listener is never touched.
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
@@ -462,6 +467,11 @@ resumable in the other.
   thread-scoped: `/connect` and `/disconnect` resolve the OpenCode adapter through `getProviderAuthAdapter`.
 
 ## Claude, every backend
+
+- **The bot's skills.** Every agent launch — the json-stream spawn (start and resume), the tmux start and resume —
+  carries `--plugin-dir <package>/agent-plugin` (`utils/agentPlugin.ts`; nothing when the folder is missing):
+  Claude Code lists the skills as `charness:<folder>`, also under a Jira session's `--setting-sources project,local`.
+  `foreignKeyGate.test.ts` fails a launch path without it.
 
 - **Effort.** Claude persists `/effort` GLOBALLY in its own settings, so a fresh TUI would inherit another
   topic's level. On every fresh spawn the tmux adapter arms the thread's stored level (`pendingEffortReapply`)

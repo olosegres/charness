@@ -80,3 +80,8 @@ constants in the code; this README keeps what the code cannot say.
   short-lived cancellation-before-registration tombstone set.
 - Connect-time `instructions` and tool descriptions are cached by the client at connect: an already running
   agent sees edits only after it reconnects.
+- **Watching a detached worker.** `workerWatchCheckCommand` is the one recipe for a check on a worker an agent
+  launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min (a `kill -0` alone
+  never fires on a hung worker). The Telegram instructions and the `schedule_create` description carry it, the
+  tracker instructions only the pointer to the `charness-manager` skill (`agent-plugin/`), which carries it
+  verbatim (`agentPluginSkills.test.ts` holds them equal).
