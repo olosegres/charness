@@ -11,7 +11,8 @@
  *   → while the bot is down, M is put on an account billed to API credits and L on an account marked limited
  *   → M works past the interval: held back, billed to API credits (never spend money unasked); M's first prompt is a
  *   fresh session and carries the whole board with P's list
- *   → P's next prompt, after its per-turn stop and resume, carries only what changed — a stop is no fresh context
+ *   → P's next prompt, after its per-turn stop and resume, carries only what changed — a stop is no fresh context, the
+ *   one the running bot sees (its `suspended` event) neither
  *   → L works past the interval: held back, its account is limited
  *   → T shows «Answers only»: a final answer ends a turn past the interval — held back while the text after that
  *   answer is followed
@@ -42,6 +43,7 @@ import {
   getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
+  getTmuxEnv,
   IsolatedCharness,
   listTmuxSessions,
   readJsonLines,
@@ -53,6 +55,8 @@ import {
 import { restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { buildJsonStreamTmuxSessionName } from '../utils/jsonStreamHost';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -127,6 +131,17 @@ async function publishAndAwaitClock(threadId: number, label: string, title: stri
   await getCharness().waitFor(`${label}: the clock started at the turn end`, turnTimeoutMs, () => readTopicTodoFile(threadId).nag?.clockStartedAt !== undefined);
 }
 
+/**
+ * The per-turn process that read the topic's last prompt stopped after its turn: its tmux session on the instance's
+ * private server is gone (one name serves every process of the topic, and the next starts only after the stop).
+ */
+async function awaitPerTurnStop(threadId: number): Promise<void> {
+  const sessionName = buildJsonStreamTmuxSessionName(makeTelegramKey(group.id, threadId));
+  await getCharness().waitFor(`topic ${threadId} stopped after its turn`, turnTimeoutMs, () => (
+    !listTmuxSessions(['-L', getLayout().tmuxSocketName], getTmuxEnv(getLayout().tmuxTmpDir)).includes(sessionName)
+  ));
+}
+
 /** The agent works past the interval; resolves on the bot's line that a due reminder was held back for `reason`. */
 async function workAndAwaitHeldBack(threadId: number, label: string, reason: RegExp): Promise<string> {
   const outputStart = getCharness().output.length;
@@ -171,6 +186,7 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
       CHAT_MODE: 'group',
       DATA_DIR: layout.dataDir,
       WORK_ROOT: layout.workRoot,
+      TMUX_SOCKET_NAME: layout.tmuxSocketName,
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
@@ -206,6 +222,8 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     await workAndAwaitHeldBack(topicP.threadId, 'TODO-52', /the session sleeps after every turn \(never woken for it\)/);
     await sendToAgent(topicP.threadId, 'TODO-53');
     assert.ok(getPromptOf('TODO-53').includes(reminderMarker), 'form a: the reminder rides the next prompt');
+    // Stopped before the restart below, so P sleeps through it and its next prompt starts a process of its own.
+    await awaitPerTurnStop(topicP.threadId);
   });
 
   it('while the bot is down, M is put on an account billed to API credits and L on an account marked limited', async () => {
@@ -238,6 +256,13 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     const prompt = getPromptOf('TODO-54');
     assert.match(prompt, /\[Project board — changes since \d\d:\d\d\]\n#topic 192 \(repo-m\) — [^\n]*\n {2}▶ Metered task/);
     assert.doesNotMatch(prompt, /\[Project board · /, 'not the whole board');
+    // The stop after TODO-53 came before the restart; this one the running bot makes and sees (its `suspended` event).
+    await awaitPerTurnStop(topicP.threadId);
+    await sendToAgent(topicM.threadId, 'TODO-63', '[todo:queued:Metered follow-up]');
+    await getCharness().waitFor('M published the follow-up', turnTimeoutMs, () => JSON.stringify(readTopicTodoFile(topicM.threadId)).includes('Metered follow-up'));
+    await sendToAgent(topicP.threadId, 'TODO-55');
+    assert.match(getPromptOf('TODO-55'), /\[Project board — changes since \d\d:\d\d\]\n#topic 192 \(repo-m\) — [\s\S]*Metered follow-up/);
+    assert.doesNotMatch(getPromptOf('TODO-55'), /\[Project board · /, 'a stop the running bot saw is no fresh context either');
   });
 
   it('L on the limited account: a due reminder is held back', async () => {
