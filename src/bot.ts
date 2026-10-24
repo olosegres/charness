@@ -25,6 +25,7 @@ import {
   registerClaudeConfigDirReader,
   registerClaudeRateLimitSink,
   registerClaudeTurnCostSink,
+  registerOpenCodeServerUpBudgetMs,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -75,8 +76,10 @@ import {
   enterShutdownDrain,
   drainPendingSends,
   shutdownDrainMaxMs,
+  configureGlobalSendInterval,
   type ShutdownDrainVerdict,
 } from './rateLimiter';
+import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
 import {
   stopOpenCodeServer,
   ensureOpenCodeServer,
@@ -132,6 +135,7 @@ import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompu
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
 import { createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
+import { getForumTopicCreatedAction } from './connectors/telegram/forumTopicCreated';
 import {
   getDisconnectPickerKeysForThread,
 } from './utils/providerDisconnectPlan';
@@ -527,12 +531,17 @@ function parseEnv() {
     errors.push(`WORK_ROOT="${workRoot}" is not accessible (${code})`);
   }
 
+  // A test instance's timing overrides (never a setting); an unknown key or a bad value stops the boot, naming it.
+  const testTimingsParse = parseTestTimings(process.env[testTimingsEnvName]);
+  if (!testTimingsParse.ok) errors.push(...testTimingsParse.errors);
+
   if (errors.length > 0) {
     for (const err of errors) console.error(`[startup] ${err}`);
     process.exit(1);
   }
 
   return {
+    testTimings: testTimingsParse.ok ? testTimingsParse.timings : {},
     botToken,
     servedPlatforms: getServedPlatforms(connectors),
     isTelegramServed,
@@ -545,6 +554,12 @@ function parseEnv() {
 }
 
 const ENV = parseEnv();
+
+const testTimingsBootLine = formatTestTimingsBootLine(ENV.testTimings);
+if (testTimingsBootLine !== null) console.log(testTimingsBootLine);
+if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInterval(ENV.testTimings.telegramSendIntervalMs);
+/** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
+const limitProbeDelayMs = ENV.testTimings.limitProbeDelayMs ?? unconfirmedLimitProbeDelayMs;
 
 // The instance default effort (`/effort` in General) is `settings.json`'s `defaultEffort`, re-read when the file changes.
 setInstanceDefaultEffortReader(createInstanceDefaultEffortReader(() => getInstanceSettingsPath(), (line) => console.error(line)));
@@ -1859,9 +1874,9 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
     return false;
   }
   console.log(`[apiRetry] ${k}: an unconfirmed usage limit — probing with a short retry before waiting for the reset`);
-  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(unconfirmedLimitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
+  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(limitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
   const now = Date.now();
-  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + unconfirmedLimitProbeDelayMs, delayMs: unconfirmedLimitProbeDelayMs, isLimitProbe: true });
+  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + limitProbeDelayMs, delayMs: limitProbeDelayMs, isLimitProbe: true });
   return true;
 }
 
@@ -9395,7 +9410,10 @@ bot.on(message('forum_topic_created'), async (ctx) => {
   // attacker-chosen folder. Stash the topic name so a later authorised-user
   // message in the same thread can still benefit from fuzzy auto-bind.
   const userId = ctx.from?.id;
-  if (!userId || !(await checkIsAllowedUser(ctx))) {
+  const action = await getForumTopicCreatedAction({ creatorId: userId, botUserId: bot.botInfo?.id, checkIsCreatorAllowed: () => checkIsAllowedUser(ctx) });
+  // `/topic` binds and greets the topic it created itself; its own service message needs nothing more.
+  if (action === 'ignoreOwn') return;
+  if (action === 'cacheNameOnly') {
     if (topicName) {
       pendingTopicNames.set(keyToString(key), { name: topicName, ts: Date.now() });
     }
@@ -9794,12 +9812,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
-  // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
-  if (isStarting) {
-    noteThreadUserActivity(key);
-    await withThreadLocale(key, () => deliverPromptOrBuffer(key, label, true));
-    return;
-  }
+  // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
+  // not on the `isStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
+  // window was never replayed.
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession' && labels && !reAskedQuestionOptions.has(keyToString(key))) reAskedQuestionOptions.set(keyToString(key), labels);
@@ -12963,6 +12978,7 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
       dataDir: path.dirname(state.stateFilePath),
       workRoot: ENV.workRoot,
       openCodeUrl: process.env.OPENCODE_URL,
+      pollIntervalMsOverride: ENV.testTimings.jiraPollIntervalMs,
     });
   } catch (error) {
     const reasons = error instanceof JiraConnectorStartError ? error.reasons : [error instanceof Error ? error.message : String(error)];
@@ -13014,7 +13030,7 @@ export async function startBot(): Promise<void> {
   // 1. State store. The `[startup] DATA_DIR=` shape is load-bearing: the
   // README's two-instances troubleshooting tells the operator to compare this
   // exact line across instances.
-  state = await getStateStore();
+  state = await getStateStore({ saveDebounceMs: ENV.testTimings.stateSaveDebounceMs });
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
   // R13: before anything reads, rewrites or acts on the state, it must hold only
   // conversations of the platforms this instance serves.
@@ -13047,6 +13063,7 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
+  if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);
   // The usage cache: a first poll now (off the boot path), then the timer.
   claudeUsageRefresher.start();
   void claudeUsageRefresher.refreshAll();
@@ -13102,6 +13119,8 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
+    firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,

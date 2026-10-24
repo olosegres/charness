@@ -279,6 +279,16 @@ describe('prepareJiraConnector', () => {
     assert.ok(fs.existsSync(path.join(dataDir, 'jira-triggers.jsonl')), 'the trigger was recorded');
   });
 
+  it('a test instance\'s poll interval (CHARNESS_TEST_TIMINGS) replaces the config\'s, below its 10 s floor', async () => {
+    writeConfig();
+    const testPollIntervalMs = 50;
+    connector = await prepareJiraConnector({ dataDir, workRoot, openCodeUrl: isolatedOpenCodeUrl, pollIntervalMsOverride: testPollIntervalMs });
+    const countSearches = (): number => requestPaths.filter((requestPath) => requestPath === 'POST /rest/api/3/search/jql').length;
+    await startAndWaitForSearch();
+    // The config says 600 s: a second search within the bounded wait is the override's.
+    await waitUntil(() => countSearches() >= 2);
+  });
+
   it('C14: a jira.json with neither model nor effort launches its sessions on opus with high effort', async () => {
     writeConfig({ model: undefined, effort: undefined });
     connector = await prepare();

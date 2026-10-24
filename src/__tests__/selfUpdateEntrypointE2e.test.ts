@@ -37,6 +37,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -145,6 +146,7 @@ describe('Automatic updates, Docker image: the entrypoint loop and the superviso
       TMUX_TMPDIR: getLayout().tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(getLayout(), null),
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

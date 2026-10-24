@@ -37,7 +37,6 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -47,6 +46,7 @@ import {
 } from './e2e/isolatedCharness';
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { defaultLocale, runWithLocale, t } from '../i18n';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -64,7 +64,7 @@ const inFlightPromptLabel = 'RST-B';
 
 const replyTimeoutMs = 20 * 1000;
 const restartTimeoutMs = 60 * 1000;
-/** The retries' 60 s budget, plus the attempts that wait out a spawn and the install calls. */
+/** The retries' budget (60 s; 10 s in this flow), plus the attempts that wait out a spawn and the install calls. */
 const allAttemptsFailTimeoutMs = 3 * 60 * 1000;
 const afterFailurePromptLabel = 'RST-C';
 /** The log line of a failed attempt to bring the server up (`openCodeAdapter.ts`). */
@@ -143,7 +143,9 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     npmCallLogFile = path.join(layout.fakeLogDir, 'npm-calls.log');
     npmFailFile = path.join(layout.fakeStateDir, 'npm-cannot-install');
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: openCodeModels, defaultModel: defaultOpenCodeModel });
-    openCodePort = await getFreePort();
+    // Below the ephemeral range: the fake server is stopped and started again on this port, and while it is down an
+    // ephemeral one could be handed to any outgoing connection on the host — another flow's, run beside this one.
+    openCodePort = await getFreeFixedPort();
     const openCodeUrl = await fakeOpenCode.start(openCodePort);
     const binaryOptions = { version: fakeOpenCodeVersion, models: openCodeModels, servePidFile };
     writeFakeOpenCodeBinary(layout.binDir, binaryOptions);
@@ -162,6 +164,8 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      // The retries that bring the server up: 10 s instead of 60 s, so the step whose every attempt fails gives up sooner.
+      ...getTelegramFlowTestTimingsEnv({ openCodeServerUpBudgetMs: 10_000 }),
     });
   });
 

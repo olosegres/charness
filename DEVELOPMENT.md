@@ -125,7 +125,8 @@ yarn build        # tsc → dist/ (tsconfig.json; src/__tests__ is not emitted)
 yarn test         # test:unit, then test:flows (node test runner + tsx); build
                   # first — some tests exercise the built dist/cli.js
 yarn test:unit    # every file but the flows; each file must finish in 2 min
-yarn test:flows   # the `*E2e.test.ts` flows; each file must finish in 20 min
+yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wait
+                  # on their fakes, not the CPU); each file must finish in 20 min
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
                    # `charness hot` from anywhere) — a broken edit can't
                    # take the bot down; OpenCode generations stay outside the
@@ -144,6 +145,15 @@ flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test
 A flow's own time budget is that same limit less a teardown reserve (`getFlowDeadlineMs`, read from the process's
 `--test-timeout`), so a flow that runs long fails first, at the wait that is late and with charness's output tail,
 not with the runner's bare timeout. Run one flow directly with `--test-timeout=<ms>`.
+
+A flow does not wait out the production windows in real time: its env file sets `CHARNESS_TEST_TIMINGS`, a JSON object
+of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `jiraPollIntervalMs` —
+below the 10 s floor of `jira.json`, `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's
+minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
+500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries). It is the ONE test-only timing seam,
+never a setting: unset, every window is the production one; a value may only shorten its window (each key is capped at its
+production value); set, the boot prints `[test-timings] … overrides active`, and
+an unknown key or a bad value stops the start naming it.
 
 The Docker dev loop (never `docker compose restart` — it ignores
 `depends_on`):

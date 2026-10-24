@@ -46,6 +46,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const followerThreadId = 111;
@@ -183,6 +184,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -216,7 +218,12 @@ describe('The instance default effort end to end: built charness, fake Bot API',
 
   it('/effort in a topic names the level and where it comes from, and offers «As in General» with the value it would give', async () => {
     const screen = await follower.sendAndAwaitReply('/effort', 'Effort in this topic: medium — as in General');
-    assert.deepEqual(follower.getKeyboardData(screen).at(-1), ['effortsame']);
+    assert.deepEqual(follower.getKeyboardData(screen), [
+      ['effort_low', 'effort_medium', 'effort_high'],
+      ['effort_xhigh', 'effort_max', 'effort_auto'],
+      ['effort_ultracode'],
+      ['effortsame'],
+    ], 'the Claude levels, then «As in General»');
     assert.deepEqual(follower.getKeyboardLabels(screen).at(-1), ['As in General (medium)']);
     assert.ok(follower.getKeyboardLabels(screen).flat().includes('medium ✓'));
   });

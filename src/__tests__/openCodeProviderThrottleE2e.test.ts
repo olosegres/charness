@@ -17,8 +17,8 @@
  *     These run BEFORE the transient steps: a pending retry makes the bot ignore later errors, which would hide it
  *   → the same wording while the topic's short retry is pending: that retry stays, no probe is armed over it
  *   → in a second topic, Anthropic's "This request would exceed your account's rate limit" (OpenCode's next attempt
- *     three hours away): UNCONFIRMED on its own — a two-minute probe retry, no limit notice; the same error right
- *     after the probe's resume confirms it, and only then is the wait to the reset announced
+ *     three hours away): UNCONFIRMED on its own — the short probe retry (two minutes; 30 s in this flow), no limit
+ *     notice; the same error right after the probe's resume confirms it, and only then is the wait to the reset announced
  *   → in a third topic, OpenCode Go's usage limit "It will reset in 2 hours 30 minutes": the notice names the reset
  *     two and a half hours ahead — only the "2 hours" used to be read
  *   → in a fourth topic, a usage limit whose reset is a ZONE-LESS ISO stamp: the plain hourly retry, not a reset time
@@ -61,6 +61,7 @@ import {
 } from './e2e/isolatedCharness';
 import { openLimitsBoard, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { skipArmedRetryCallbackPrefix as skipOnceCallbackPrefix } from '../utils/autoContinueOnLimit';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -97,7 +98,13 @@ const anthropicUnconfirmedMessage = "This request would exceed your account's ra
 const msPerMinute = 60 * msPerSecond;
 /** How far OpenCode's next attempt sits for the Anthropic wording: the window's reset, per its Retry-After. */
 const anthropicRetryAfterMs = 3 * 60 * msPerMinute;
-/** The probe retry (two minutes) plus the resume's round trip. */
+/** The probe of an unconfirmed limit, shortened in this flow (`CHARNESS_TEST_TIMINGS`): 30 s instead of two minutes. */
+const limitProbeDelayMs = 30 * msPerSecond;
+/** The probe's notice: its delay in whole minutes, as the bot words it. */
+const probeNoticeText = `auto-retrying in ${Math.round(limitProbeDelayMs / msPerMinute)} min`;
+/** What the bot logs when it arms the probe — and for no other retry. */
+const probeArmedLogPhrase = 'an unconfirmed usage limit — probing';
+/** The probe retry plus the resume's round trip, with room to spare. */
 const probeTimeoutMs = 4 * msPerMinute;
 const openCodeRetryNoticeStart = '⏳ Provider error — OpenCode retries';
 /** The least a usage-limit wait without a stated reset sits ahead (the usual hour, less slack); the hint put it at ~100 s. */
@@ -170,6 +177,7 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv({ limitProbeDelayMs }),
     });
   });
 
@@ -263,6 +271,8 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
 
     await getCharness().waitFor('the transient retry notice', replyTimeoutMs, () => listSentTexts().some((text) => text.startsWith(transientNoticeStart)));
     assert.deepEqual(listSentTexts().filter((text) => text.startsWith(limitNoticeMark)), [], 'neither the wording nor a header makes it a usage limit');
+    // The bot writes state.json a moment after it armed the retry.
+    await getCharness().waitFor('the retry persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey()] !== undefined);
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey()]?.kind, 'transient', 'a short retry is armed, not a limit wait');
   });
 
@@ -279,10 +289,10 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await openLimitsBoard(fakeTelegram, topic, geminiTopic.threadId);
     assert.ok(getCharness().output.includes(`${getTopicKey()}: an unconfirmed usage limit — a retry is already pending`), 'the unconfirmed limit was seen and left to the pending retry');
     assert.deepEqual(readPersistedState(getLayout()).apiRetries?.[getTopicKey()], pending, 'the pending retry is untouched');
-    assert.equal(listSentTexts().some((text) => text.includes('auto-retrying in 2 min')), false, 'no probe notice');
+    assert.ok(!getCharness().output.includes(`${getTopicKey()}: ${probeArmedLogPhrase}`), 'no probe armed');
   });
 
-  it('Anthropic\'s "would exceed your account\'s rate limit" alone: a two-minute probe, no limit notice', async () => {
+  it('Anthropic\'s "would exceed your account\'s rate limit" alone: the short probe, no limit notice', async () => {
     const driver = new TopicDriver(fakeTelegram, getCharness, anthropicTopic.threadId, replyTimeoutMs);
     await driver.sendAndAwaitReply(`/bind ${anthropicTopic.folder}`, `Bound to \`${anthropicTopic.folder}\``);
     await driver.sendAndAwaitReply('/opencode', 'ready in');
@@ -290,8 +300,9 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await getCharness().waitFor('the prompt to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('ANT-1')));
     fakeOpenCode.emitProviderRetry(getTopicSessionId(anthropicTopic.folder), { attempt: 1, message: anthropicUnconfirmedMessage, next: Date.now() + anthropicRetryAfterMs });
 
-    await getCharness().waitFor('the probe notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(transientNoticeStart) && text.includes('2 min')));
+    await getCharness().waitFor('the probe notice', replyTimeoutMs, () => listSentTexts(anthropicTopic.threadId).some((text) => text.startsWith(transientNoticeStart) && text.includes(probeNoticeText)));
     assert.deepEqual(listSentTexts(anthropicTopic.threadId).filter((text) => text.startsWith(limitNoticeMark)), [], 'not announced as a usage limit on the wording alone');
+    await getCharness().waitFor('the probe persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey(anthropicTopic.threadId)] !== undefined);
     assert.equal(readPersistedState(getLayout()).apiRetries?.[getTopicKey(anthropicTopic.threadId)]?.kind, 'transient', 'a short probe is armed, not a limit wait');
   });
 
@@ -399,6 +410,7 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     await getCharness().waitFor('the usage-limit notice', replyTimeoutMs, () => listSentTexts(dailyQuotaTopic.threadId).some((text) => text.startsWith(limitNoticeMark)));
     const notice = listSentTexts(dailyQuotaTopic.threadId).find((text) => text.startsWith(limitNoticeMark)) ?? '';
     assert.match(notice, /retrying in 60 min/, `the usual usage-limit wait, not the 40-second hint, got: ${notice}`);
+    await getCharness().waitFor('the wait persisted', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[getTopicKey(dailyQuotaTopic.threadId)] !== undefined);
     const retry = readPersistedState(getLayout()).apiRetries?.[getTopicKey(dailyQuotaTopic.threadId)];
     assert.equal(retry?.kind, 'usageLimit');
     assert.ok((retry?.fireAt ?? 0) >= sentAt + usageLimitWaitMinMs, `the wait is set an hour ahead, got ${new Date(retry?.fireAt ?? 0).toISOString()}`);

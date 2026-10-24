@@ -9,6 +9,13 @@ shows the same line in `/doctor`, with a link to the new SETUP.md section «Wind
 projects inside Linux, Windows programs from WSL, and a recipe for a PC with no monitor that starts the bot at Windows boot
 without anyone logged in. A `/doctor` warning that has no hint no longer ends in a dangling dash.
 
+**An answer tapped on a question the bot re-asked after an idle compaction is no longer lost when the tap lands while
+the agent is being stopped.** The idle stop that follows the re-asked question could finish while the tap was being
+answered; the chosen option was then kept for a session start that never came, and the agent never got it. The answer
+now wakes the conversation as any message does.
+
+## 3.5.0 — 2026-10-23
+
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is
 counted for such an account — only the part that turn added to the conversation, never a subscription turn's — and shown
 under the account in `/accounts` and `/limits` (`💳 $12.34 spent since 23.10 · last turn $0.21`), on `/status`, when a

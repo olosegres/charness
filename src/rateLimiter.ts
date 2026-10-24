@@ -172,6 +172,15 @@ export class GlobalSendPacer {
 let globalPacer = new GlobalSendPacer(globalSendIntervalMs, realPacerClock);
 
 /**
+ * @description Replace the process pacer with one releasing a send every `intervalMs` — called once at boot, before
+ * the first send, with the `CHARNESS_TEST_TIMINGS` override of a test instance (`testTimings.ts`); production keeps
+ * {@link globalSendIntervalMs}.
+ */
+export function configureGlobalSendInterval(intervalMs: number): void {
+  globalPacer = new GlobalSendPacer(intervalMs, realPacerClock);
+}
+
+/**
  * @description Test-only seam: replace the process pacer with one on a
  * deterministic clock so `enqueueSend` integration tests run instantly instead
  * of waiting real 2 s windows. Never called in production.

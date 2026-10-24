@@ -187,10 +187,13 @@ export async function prepareJiraConnector(context: {
   openCodeUrl: string | undefined;
   /** Tests only: a shorter base for the setup re-check's backoff (default: the poll interval) and the client's retry sleep. */
   testTiming?: { setupRetryBaseMs: number; sleep: (ms: number) => Promise<void> };
+  /** A test instance's poll interval (`CHARNESS_TEST_TIMINGS`), below the 10 s floor `jira.json` allows; absent: the config's. */
+  pollIntervalMsOverride?: number;
 }): Promise<JiraConnector> {
   const loaded = loadJiraConfig(context);
   if (!loaded.ok) throw new JiraConnectorStartError(loaded.errors);
   const { config } = loaded;
+  const pollIntervalMs = context.pollIntervalMsOverride ?? config.pollIntervalMs;
   const client = createJiraClient({
     baseUrl: config.baseUrl,
     email: config.email,
@@ -256,7 +259,7 @@ export async function prepareJiraConnector(context: {
       siteUrl: config.baseUrl,
       projects,
       runBudgetPer24h: config.runBudgetPer24h,
-      pollIntervalMs: config.pollIntervalMs,
+      pollIntervalMs,
       contextLedger,
       getSpillDir: (key) => path.join(getJiraFilesDir(key), jiraSpillDirName),
       triggerLog,
@@ -268,9 +271,9 @@ export async function prepareJiraConnector(context: {
       parkMention: (issueKey) => answerSink.parkMention(issueKey),
     });
     inbound.start();
-    console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${config.pollIntervalMs / 1000} s`);
+    console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${pollIntervalMs / 1000} s`);
     // The allowlist as Jira receives it — what an operator reads to see which projects the AI account may act in.
-    const mentionWindowMs = config.isMentionWakeOn && trust !== null ? getJiraMentionWindowMs(config.pollIntervalMs) : null;
+    const mentionWindowMs = config.isMentionWakeOn && trust !== null ? getJiraMentionWindowMs(pollIntervalMs) : null;
     console.log(`${jiraPollJqlLogPrefix}${buildJiraTriggerJql(projects, mentionWindowMs)}`);
   };
 
@@ -290,7 +293,7 @@ export async function prepareJiraConnector(context: {
           startPolling(deps, check);
         }
       });
-    }, getJiraRetryDelayMs(context.testTiming?.setupRetryBaseMs ?? config.pollIntervalMs, failureCount));
+    }, getJiraRetryDelayMs(context.testTiming?.setupRetryBaseMs ?? pollIntervalMs, failureCount));
   };
 
   return {

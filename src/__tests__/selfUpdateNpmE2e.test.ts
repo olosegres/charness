@@ -46,6 +46,7 @@ import {
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { getInstalledPackageRoot, installCharnessGlobally, packCharnessVersion, readInstalledVersion, type NpmEnvironment } from './e2e/updateFlowKit';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const otherTopicThreadId = 111;
@@ -183,6 +184,7 @@ describe('Automatic updates, npm: a global install, the fake registry, the fake 
       // What the bot's own `npm` (the update's install) talks to: the loopback registry, with the instance's cache.
       NPM_CONFIG_REGISTRY: registryUrl,
       NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

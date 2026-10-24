@@ -1078,8 +1078,14 @@ test(
       }
       const [serverPid] = getSpawnedPids(spawnLogPath);
       await waitForTestProcessExit(serverPid);
-      // OS process disappearance can precede Node's ChildProcess `exit` event
-      // by one event-loop turn.
+      // OS process disappearance precedes Node's ChildProcess `exit` event — by
+      // one event-loop turn on an idle box, by far more under load. A started
+      // server's exit must be reported: wait for that report, bounded. A start
+      // that failed must report nothing: give a late report its turn to show.
+      const exitReportDeadline = Date.now() + processExitTimeoutMs;
+      while (didStartupResolve && unexpectedExitCalls === 0 && Date.now() < exitReportDeadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
       assert.equal(
         unexpectedExitCalls,

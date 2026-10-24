@@ -223,7 +223,9 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
   reply directive.
 - **Settings live in the JSON config, not in env:** a setting the bot does not need before it can start goes
   into `settings.json` (`instanceSettings.ts`) and is changed from Telegram — never a new `CHARNESS_*` env var,
-  not even as an override. `.env` holds only what startup itself needs (bot token, paths, `DATA_DIR`).
+  not even as an override. `.env` holds only what startup itself needs (bot token, paths, `DATA_DIR`). The one
+  exception is the test-only timing seam `CHARNESS_TEST_TIMINGS` (`testTimings.ts`), set only by a flow's env file —
+  add a test window there, never as a setting or a variable of its own.
 - **CHANGELOG:** every commit with a user-visible change adds an entry under `## Unreleased` in
   `CHANGELOG.md`, starting with a **bold first sentence** that reads on its own — it becomes the item in the
   release notes and in the "what's new" message users get after an update. Pre-commit review FAILS a
@@ -293,7 +295,7 @@ History was scrubbed of real operator identifiers — keep it that way:
   updater at process level: a loopback npm registry and a global install into a temp prefix, a checkout copy with a bare remote,
   the real `charness hot`, the image's own `docker/entrypoint.sh` with its paths in a temp folder (no container). Every instance
   of the harness starts with `autoUpdate: off`, so a flow never updates the tree it runs from; they need `yarn build` first.
-- `jiraConnectorE2e.test.ts` (~7 min, part of `yarn test`) boots a real Jira-only instance through
+- The Jira flows (`jira{Connector,Prompt,Trust}E2e.test.ts`, ≤ 5 min each, part of `yarn test`; shared kit `jiraE2e/jiraFlowKit.ts`) each boot a real Jira-only instance through
   `scripts/run-isolated.sh` (`env -i`, temp HOME/`DATA_DIR`/`WORK_ROOT`, private tmux socket, own OpenCode
   and MCP ports) against `jiraE2e/fakeJira.ts` and `fakeClaude.ts`; cleanup runs from `after` and on
   exit/signal. `live/jiraLive.test.ts` (~14 min, not part of `yarn test`) runs the same loop against a REAL Jira

@@ -14,13 +14,13 @@
  *     typed while a wizard is open retires it
  *   → `/thinking` `/tool_results` `/subagent`: a picker per family, a tap persists
  *     the mode and re-renders the picker
- *   → `/model` `/effort`: the pickers, a tap and a typed pick answered while no
- *     agent runs (the default effort and «as in General»: `effortDefaultE2e.test.ts`)
+ *   → `/model`: the picker, a tap and a typed pick answered while no agent runs (`/effort` — its picker, a tap
+ *     while no agent runs, the default and «as in General» — is `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits_autoswitch` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
- *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
- *     such a rung again, while a rung of a backend already in the list goes in at once
+ *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it (a stale Continue, a rung of
+ *     a backend already in the list, a left-out rung included again: `fallbackChainCommand.test.ts`)
  *   → `/update`: the status of the bot's own updates — in a topic without buttons ("Change it in General"), in General with the controls;
  *     a tap and the typed forms write `autoUpdate` / `whatsNew` into `settings.json` beside the env file and re-render, a hand edit
  *     shows on the next render, `/version` names the version (the updates themselves: `selfUpdate*E2e.test.ts`)
@@ -80,6 +80,8 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -132,6 +134,8 @@ const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
 const perTurnOldCliPromptLabels = ['PT-0', 'PT-3'] as const;
 /** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
 const perTurnStopTimeoutMs = 15 * 1000;
+/** A command whose reply is fixed and changes nothing: a barrier — the bot answers it after everything it was doing. */
+const barrierCommand = '/timezone Not/AZone';
 const perTurnAdapterName = 'claude-per-turn';
 /** The last Claude Code version WITHOUT the background-task list: a conversation that ran on it is refused per-turn (L-D10). */
 const belowGateClaudeCodeVersion = '2.1.286';
@@ -371,6 +375,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -422,6 +427,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the created screen', screen, (text) => text.includes('✅ Reminder created'));
     assert.match(screen.text, /Text: "drink water"/);
 
+    // The bot writes state.json a moment after it changed it.
+    await getCharness().waitFor('the reminder persisted', replyTimeoutMs, () => Object.keys(readPersistedState().schedules ?? {}).length > 0);
     const schedules = Object.values(readPersistedState().schedules ?? {});
     assert.equal(schedules.length, 1);
     assert.equal(schedules[0].deliveryKind, 'reminder', 'a bot-local reminder, never an agent-prompt job');
@@ -495,7 +502,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     });
   });
 
-  // ── /model /effort ───────────────────────────────────────────────────
+  // ── /model (/effort: effortDefaultE2e.test.ts) ──────────────────────────
 
   it('/model lists the agent\'s models; a tap and a typed number are answered while no agent runs', async () => {
     const picker = await topic.sendAndAwaitReply('/model', 'Claude Code (stream) — 4 models');
@@ -505,19 +512,6 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     const tapAnswer = await topic.tapAndAwaitAnswer(picker, 'mdl_0_1');
     assert.match(tapAnswer, /No active session/);
     await topic.sendAndAwaitReply('/model 3', 'No active session. Start an agent first.');
-  });
-
-  it('/effort offers the levels; a tap is saved for the next session', async () => {
-    const picker = await topic.sendAndAwaitReply('/effort', 'Effort in this topic: medium — as in General');
-    assert.deepEqual(topic.getKeyboardData(picker), [
-      ['effort_low', 'effort_medium', 'effort_high'],
-      ['effort_xhigh', 'effort_max', 'effort_auto'],
-      ['effort_ultracode'],
-      ['effortsame'],
-    ]);
-    const answer = await topic.tapAndAwaitAnswer(picker, 'effort_high');
-    assert.match(answer, /Level saved/);
-    await topic.waitForMessageText('the picker shows the pick as the topic\'s own', picker, (text) => text === '⚙️ Effort in this topic: high — set for this topic');
   });
 
   // ── /connect /disconnect ─────────────────────────────────────────────
@@ -548,7 +542,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
   });
 
-  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it; a rung of a backend already there goes in at once; including a left-out rung of a new backend asks again', async () => {
+  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it', async () => {
     // No OpenCode catalog here to add from, so the list starts with the OpenCode rung the state holds and the other
     // backend is a second Claude account, signed in.
     createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: limitsAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
@@ -592,35 +586,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await getCharness().waitFor('the rung in state.json', replyTimeoutMs, () => readChain().length === 2);
     assert.deepEqual(readChain()[1], { backend: 'claude', profile: limitsAccount, model: null });
     await topic.waitForMessageText('the list re-rendered', screen, (text) => text.includes('Runs on:'));
-    assert.equal(await topic.tapAndAwaitAnswer(screen, continueData), 'The list changed since this keyboard was posted — it is re-rendered.', 'a Continue tap from before the change adds nothing');
-    assert.equal(readChain().length, 2);
-
-    // A rung of a backend the list already has goes in at once: no question.
-    await askToAddAccount(new RegExp(`^fbk_addcm_${limitsAccount}_(?!-$)[a-z0-9._-]+$`));
-    await getCharness().waitFor('the second Claude rung in state.json', replyTimeoutMs, () => readChain().length === 3);
-    assert.ok(!screen.text.includes(handoverNote), 'no question for a backend already in the list');
-    assert.equal(readChain()[2].backend, 'claude');
-
-    // Leave the OpenCode rung out, then include it again: Claude is the only backend left in automatic switching, so OpenCode is new.
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the OpenCode rung', /^fbk_op_0_[0-9a-f]{8}$/));
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the rung\'s detail view', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await getCharness().waitFor('the OpenCode rung left out', replyTimeoutMs, () => readChain()[0].disabled === true);
-    await topic.waitForMessageText('the detail view of the left-out rung', screen, (text) => text.includes('Left out of automatic switching'));
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the include button', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await topic.waitForMessageText('the question', screen, (text) => text.startsWith('➕ Include'));
-    assert.equal(screen.text, `➕ Include OpenCode · openai/gpt-5 in automatic switching?\n${handoverNote}`);
-    assert.deepEqual(topic.getKeyboardLabels(screen), [['✅ Continue', '✖️ Cancel']]);
-    assert.match(topic.getKeyboardData(screen)[0][0], /^fbk_tgok_0_[0-9a-f]{8}$/);
-    assert.match(topic.getKeyboardData(screen)[0][1], /^fbk_op_0_[0-9a-f]{8}$/, 'Cancel returns to the rung\'s detail view');
-    assert.equal(readChain()[0].disabled, true, 'still left out before the answer');
-    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][1]);
-    await topic.waitForMessageText('the detail view', screen, (text) => text.includes('Left out of automatic switching'));
-    assert.equal(readChain()[0].disabled, true, 'Cancel changed nothing');
-
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the detail view of the left-out rung', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await topic.waitForMessageText('the question again', screen, (text) => text.startsWith('➕ Include'));
-    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][0]);
-    await getCharness().waitFor('the OpenCode rung included again', replyTimeoutMs, () => readChain()[0].disabled !== true);
+    // The branches after it — a stale Continue, a rung of a backend already in the list, a left-out rung included
+    // again — are the command's own logic over the same callback data: fallbackChainCommand.test.ts.
 
     await topic.sendAndAwaitReply('/limits clear', 'The list of fallback models is empty now.');
     assert.deepEqual(readChain(), []);
@@ -1126,10 +1093,15 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       const [turn] = getAgentTurns(perTurnOldCliPromptLabels[0]);
       const sessionId = getLaunchSessionId(getSessionLaunchOf(turn.pid)?.argv ?? []);
       await getCharness().waitFor('the old CLI version known to the bot', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.jsonStreamTail?.claudeCodeVersion === belowGateClaudeCodeVersion);
-      // The per-turn stop would have taken the process well inside this window on a supported CLI.
-      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
-      assert.ok(checkIsProcessAlive(turn.pid), 'an old CLI is never auto-stopped: the process survives its turn');
       const sinceStart = (): string => getCharness().output.slice(outputBefore);
+      // The turn's usage line is logged in the step that ends the turn, and the per-turn stop is decided right there; a
+      // stop let through logs "stopping" as it starts. A barrier reply after the turn's end: any such line is out by then.
+      const countTurnEnds = (): number => sinceStart().split('\n').filter((line) => line.startsWith(`${claudeJsonStreamUsageLogPrefix}${threadKeyString}:`)).length;
+      const stopStartLine = `[compact-on-idle] ${threadKeyString} stopping the idle process`;
+      await getCharness().waitFor('the old-CLI turn ended', replyTimeoutMs, () => countTurnEnds() >= 1);
+      await topic.sendAndAwaitReply(barrierCommand, 'Not/AZone');
+      assert.ok(!sinceStart().includes(stopStartLine), 'no stop started at the turn\'s end');
+      assert.ok(checkIsProcessAlive(turn.pid), 'an old CLI is never auto-stopped: the process survives its turn');
       assert.ok(!sinceStart().includes(`[compact-on-idle] ${threadKeyString} process stopped`), 'no stop');
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString} is not auto-stopped: Claude Code ${minAutoStopClaudeCodeVersion} or newer is needed`), 'the stop gate said why, once');
 
@@ -1137,6 +1109,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       // ensure, where a refused per-turn pick must stay the pick and run this session without the per-turn stop.
       process.kill(turn.pid, 'SIGKILL');
       await topic.waitForMessage('the session-ended notice', (message) => message.text.includes('session ended'));
+      const turnEndsBeforeResume = countTurnEnds();
       fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnOldCliPromptLabels[1]} [fake:answer] resumed on the old CLI`);
       await getCharness().waitFor('the prompt to reach a resumed old-version agent', agentStartTimeoutMs, () => getAgentTurns(perTurnOldCliPromptLabels[1]).length === 1);
       const [resumedTurn] = getAgentTurns(perTurnOldCliPromptLabels[1]);
@@ -1144,7 +1117,9 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: per-turn refused — Claude Code ${belowGateClaudeCodeVersion} is below ${minAutoStopClaudeCodeVersion}`));
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: the per-turn pick is kept; this session runs without the per-turn stop`));
       assert.equal(readPersistedState().agents?.[threadKeyString]?.name, perTurnAdapterName, 'the per-turn pick is kept — not rewritten to the idle lifecycle');
-      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
+      await getCharness().waitFor('the resumed turn ended', replyTimeoutMs, () => countTurnEnds() > turnEndsBeforeResume);
+      await topic.sendAndAwaitReply(barrierCommand, 'Not/AZone');
+      assert.ok(!sinceStart().includes(stopStartLine), 'no stop started at the resumed turn\'s end');
       assert.ok(checkIsProcessAlive(resumedTurn.pid), 'the resumed old-CLI process survives its turn too');
 
       await topic.sendAndAwaitReply('/quit', 'stopped');
@@ -1164,6 +1139,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await getCharness().waitFor('the process stopped right after its result', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
     assert.ok(getCharness().output.includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`), 'the per-turn stop is the idle stop\'s teardown');
     assert.ok(!getCharness().output.slice(outputBefore).includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
+    await getCharness().waitFor('the session id persisted', replyTimeoutMs, () => Boolean(readPersistedState().agents?.[threadKeyString]?.claudeSessionId));
     assert.ok(readPersistedState().agents?.[threadKeyString]?.claudeSessionId, 'the session id is kept: the conversation sleeps');
   });
 

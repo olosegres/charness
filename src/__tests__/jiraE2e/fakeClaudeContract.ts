@@ -145,6 +145,10 @@ export const fakeClaudeOwnEnvPrefix = 'FAKE_CLAUDE_';
  * session inherits the tmux server's environment and carries no tracker flags.
  */
 export const fakeClaudePlatformEnvName = 'FAKE_CLAUDE_PLATFORM';
+/** How long a `slow-once` first turn works in silence (ms), set by the launcher; unset: the fake's own default. */
+export const fakeClaudeSlowTurnMsEnvName = 'FAKE_CLAUDE_SLOW_TURN_MS';
+/** The most an `answer-after-queued` turn waits for the next message (ms), set by the launcher; unset: the fake's default. */
+export const fakeClaudeQueuedWaitMaxMsEnvName = 'FAKE_CLAUDE_QUEUED_WAIT_MAX_MS';
 export type FakeClaudePlatform = 'jira';
 
 /**

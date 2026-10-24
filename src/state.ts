@@ -57,7 +57,7 @@ import type { LastRunVersion, SelfUpdateRecord } from './selfUpdate/types';
 export const STATE_SCHEMA_VERSION = 1;
 
 /** Default debounce window (ms) for batched saves. Overridable via the store constructor for tests. */
-const DEFAULT_SAVE_DEBOUNCE_MS = 500;
+export const DEFAULT_SAVE_DEBOUNCE_MS = 500;
 
 // The locked display-preference default (`minimal` for all three prefs) lives
 // in `utils/displayVerbosity.ts` (`defaultDisplayVerbosityMode`) — one place
@@ -2911,13 +2911,14 @@ export function resolveDataDir(): string {
  * write chains → corrupted JSON). Production triggers only one call from
  * `startBot()`, but the cost of the guard is trivial.
  *
- * Tests should instantiate `new StateStore(...)` directly instead.
+ * Tests should instantiate `new StateStore(...)` directly instead. `options` apply to the first call only (a test
+ * instance's shorter save debounce, `CHARNESS_TEST_TIMINGS`).
  */
-export async function getStateStore(): Promise<StateStore> {
+export async function getStateStore(options: StateStoreOptions = {}): Promise<StateStore> {
   if (singleton) return singleton;
   if (singletonInFlight) return singletonInFlight;
   singletonInFlight = (async () => {
-    const store = new StateStore(resolveDataDir());
+    const store = new StateStore(resolveDataDir(), options);
     await store.init();
     singleton = store;
     return store;
