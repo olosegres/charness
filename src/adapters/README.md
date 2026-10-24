@@ -180,6 +180,18 @@ countdown. Every automatic stop calls `refreshWorkingState` (a fresh read of
 stdout) inside its transition before its last look. All of it rides the tail
 record (below), so an adopt restores it.
 
+**Lost work.** Pending work that dies with a process anyway — the CLI exits by
+itself (`closed`), a re-spawn (`/model`, `/effort`, account), the idle stop after
+a spent hold (`suspended`), a process found gone at boot (dead at the adopt, or
+its tmux session gone and its tail record still listing work) — is kept by the
+adapter and handed over once by `takeLostWork`; an explicit stop records nothing,
+and an ended process's record drops its pending work, so the next boot reads only
+what died while the bot was away. The bot (`utils/lostWork.ts`) keeps it in
+`state.json` (`lostWork`) until the agent is told: one plain line in a topic, and
+an automatic resume with the note as its prompt — or the note rides the next
+prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
+automatic resume).
+
 **Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on
 (`system/init` `claude_code_version`, persisted with the tail record), so a
 process whose version is unknown or older is never auto-stopped (one log line),

@@ -41,6 +41,7 @@ import {
   sessionViolationExitCode,
   fakeClaudeBackgroundReleaseFileName,
   fakeNotificationTurnLatencyMs,
+  getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
@@ -548,7 +549,8 @@ let turnChain: Promise<void> = Promise.resolve();
  */
 function startNotifyingBackgroundTask(argv: readonly string[], sessionId: string, issueKey: string): void {
   const taskId = `fake-notify-${randomUUID().slice(0, 8)}`;
-  const description = `Watch ${issueKey}`;
+  // Lower case on purpose: a note naming the task must not read as a label (`issueKeyRe`) in a later prompt.
+  const description = getFakeBackgroundTaskDescription(issueKey);
   writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: taskId, task_type: 'local_bash', description }] });
   writeStdout({ type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId, is_backgrounded: true, task_type: 'local_bash', description });
   const releasePath = path.join(getStateDir(), fakeClaudeBackgroundReleaseFileName);

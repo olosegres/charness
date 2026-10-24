@@ -39,8 +39,8 @@ const expectedJiraRoutes: Record<AdapterEventName, 'telegramHandler' | 'requestS
   // An adopted issue's process needs its idle countdown too; no banner.
   started: 'requestSideHandler',
   stopped: 'requestSideHandler',
-  // An idle stop keeps the session, its retry and its compaction state: nothing request-side to drop.
-  suspended: 'nothing',
+  // An idle stop keeps the session, its retry and its compaction state; the work a spent hold let go is noted for the agent.
+  suspended: 'requestSideHandler',
   // The per-turn stop applies to an issue's conversation too; the handler posts nothing.
   turnEnded: 'telegramHandler',
   // A completed compaction resets what an issue's conversation was told: the handler only tells its connector (C6).

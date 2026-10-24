@@ -184,6 +184,40 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-pending', offsetBytes: 0, backgroundTaskIds: ['old1'] }, 'sess-pending', 0).backgroundTasks, [{ taskId: 'old1', description: '' }]);
   });
 
+  it('a process that ends by itself leaves its pending work for the bot, once; an explicit stop leaves nothing', () => {
+    const { adapter, session, append } = createAdapterWithSession();
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+    append(resultLine + backgroundStartedLines);
+    fs.writeFileSync(session.paths.exitCodeFile, '137\n');
+    const closed: SessionKey[] = [];
+    adapter.on('closed', (closedKey: SessionKey) => closed.push(closedKey));
+    adapter['pollTailTick'](session);
+    assert.deepEqual(closed, [key], 'the crash is a close');
+    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [{ taskId: backgroundTaskId, description: backgroundTaskDescription }], scheduledJobCount: 0, hasUnreadTaskResult: false });
+    assert.equal(adapter.takeLostWork(key), null, 'handed over once');
+    assert.equal(tailWrites.at(-1)?.backgroundTasks, undefined, 'the ended process\'s record no longer carries the task: the next boot does not report it again');
+    assert.deepEqual(tailWrites.at(-1)?.backgroundTaskIds, []);
+
+    const second = createAdapterWithSession();
+    second.append(resultLine + backgroundStartedLines);
+    const releasedWrites: JsonStreamTailOffset[] = [];
+    second.adapter.setJsonStreamTailWriter((_k, tail) => releasedWrites.push(tail));
+    second.session.isStopping = true; // `/quit`, `/new`, a backend switch
+    second.adapter['finalizeExternalExit'](second.session, null);
+    assert.equal(second.adapter.takeLostWork(key), null, 'a released conversation has nothing to tell');
+    assert.deepEqual(releasedWrites, [], 'and its record, released by the bot, is not written back');
+  });
+
+  it('a finished task whose turn had not shown is an unread result when the process ends', () => {
+    const { adapter, session, append } = createAdapterWithSession();
+    append(resultLine + backgroundStartedLines + backgroundFinishedLines);
+    session.isSuspending = true;
+    session.isStopping = true;
+    adapter['finalizeExternalExit'](session, null);
+    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [], scheduledJobCount: 0, hasUnreadTaskResult: true });
+  });
+
   it('refreshWorkingState reads what the process wrote since the last poll', () => {
     const { adapter, session, append } = createAdapterWithSession();
     append(resultLine);

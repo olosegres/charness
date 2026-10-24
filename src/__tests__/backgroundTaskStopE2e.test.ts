@@ -12,7 +12,15 @@
  *     stop landed in the gap before that turn's first output and the result was lost) — then the normal idle
  *     lifecycle: the idle compaction first, the stop after it
  *   → BG-2 leaves a task that never reports: the idle fire keeps the process while the hold lasts and looks again,
- *     and once the hold is spent the process is compacted and stopped — a forgotten task does not pin it forever
+ *     and once the hold is spent the process is compacted and stopped — a forgotten task does not pin it forever; the
+ *     topic gets ONE line naming the task, and the agent is not woken for it
+ *   → the next message (BG-3) carries the note about the lost task to the agent, once
+ *   → BG-3's process is killed while its task runs (a crash): one line in the topic, and the conversation is resumed
+ *     at once with a note naming the lost task — the agent is not left waiting for a notification that never comes
+ *   → BG-4's process is killed too, right after that resume: no second resume (no restart loop) — the line says the
+ *     next message tells it, and the next message (BG-5) carries the note
+ *   → BG-6's process is gone when the bot comes back (killed while the bot was down): one line, and the conversation
+ *     is resumed with the note
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -30,8 +38,10 @@ import {
   fakeClaudeBackgroundReleaseFileName,
   fakeClaudeLogFileNames,
   fakeNotificationTurnLatencyMs,
+  getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
   getLaunchSessionId,
+  type FakeClaudePrompt,
   type FakeClaudeTurn,
 } from './jiraE2e/fakeClaudeContract';
 import {
@@ -117,6 +127,48 @@ function findOutput(text: string, fromIndex: number): number {
 }
 
 const stopLine = `[compact-on-idle] ${topicKey} process stopped; the session sleeps`;
+/** The first line of the note the agent gets about lost work (`utils/lostWork.ts`). */
+const lostWorkNoteStart = '[charness] Your Claude Code process ended while your own work was still pending';
+/** The end of the topic line when the bot resumed the agent at once, and when the next message will. */
+const resumedLineEnd = 'I resumed it and asked it to check that work again.';
+const heldLineEnd = 'Your next message resumes it and tells it what was lost.';
+
+function listPrompts(): FakeClaudePrompt[] {
+  return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts));
+}
+
+/** The lost-work note prompts the agents got, oldest first. */
+function listLostWorkNotes(): FakeClaudePrompt[] {
+  return listPrompts().filter((prompt) => prompt.text.includes(lostWorkNoteStart));
+}
+
+/** The topic's lost-work lines that name the task of the turn labelled `label`. */
+function listLostWorkLines(label: string): string[] {
+  const taskName = `«${getFakeBackgroundTaskDescription(label)}»`;
+  return topic.listMessages().map((message) => message.text).filter((text) => text.startsWith('⚠️ The agent\'s process') && text.includes(taskName));
+}
+
+/** How many turns ended so far (the bot logs every result's usage). */
+function countTurnEnds(): number {
+  return getCharness().output.split(`${claudeJsonStreamUsageLogPrefix}${topicKey}:`).length - 1;
+}
+
+/**
+ * Send a labelled message; wait for its answer AND its turn's end — the answer shows a moment before the turn ends (the
+ * answer tool's round-trip), and a step that starts in between reads the late end as its own.
+ */
+async function sendAndAwaitTurnEnd(label: string, text: string): Promise<void> {
+  const turnEndsBefore = countTurnEnds();
+  fakeTelegram.pushOperatorMessage(topicThreadId, `${label} ${text}`);
+  await topic.waitForMessage(`the answer to ${label}`, (message) => message.text.includes(`Fake final answer for ${label}`));
+  await getCharness().waitFor(`the end of ${label}'s turn`, replyTimeoutMs, () => countTurnEnds() > turnEndsBefore);
+}
+
+/** Send a labelled `background-notify` message and wait for its turn's end: its task then runs; the process's pid. */
+async function startBackgroundTask(label: string): Promise<number> {
+  await sendAndAwaitTurnEnd(label, '[fake:background-notify] start a watcher');
+  return getTurnPid(label);
+}
 
 describe('The agent\'s own background work is never cut off by an automatic stop: built charness, fake Bot API, fake claude', () => {
   before(async () => {
@@ -217,5 +269,64 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     assert.ok(Date.now() - answeredAt >= backgroundHoldMs, 'not stopped before the hold was spent');
     assert.ok(listCompactions().length > compactionsBefore, 'compacted before the stop');
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
+    // The task went with the process: one line, and the agent is not woken for a task nobody heard from.
+    await topic.waitForMessage('the line about the task the stop let go', (message) => listLostWorkLines('BG-2').includes(message.text));
+    const [line] = listLostWorkLines('BG-2');
+    assert.ok(line.includes('had no turn for') && line.endsWith(heldLineEnd), line);
+    assert.equal(listLostWorkNotes().length, 0, 'no resume for a spent hold');
+  });
+
+  it('the next message carries the note about the task the hold let go, once', async () => {
+    const promptsBefore = listPrompts().length;
+    await startBackgroundTask('BG-3');
+    const [bg3Prompt] = listPrompts().slice(promptsBefore).filter((prompt) => prompt.text.includes('BG-3 [fake:background-notify]'));
+    assert.ok(bg3Prompt, 'BG-3 reached the agent');
+    assert.ok(bg3Prompt.text.startsWith(lostWorkNoteStart), `the note leads the prompt:\n${bg3Prompt.text}`);
+    assert.ok(bg3Prompt.text.includes(`«${getFakeBackgroundTaskDescription('BG-2')}»`) && bg3Prompt.text.includes('after a long time without a turn'), bg3Prompt.text);
+    assert.equal(listLostWorkNotes().length, 1, 'told once');
+  });
+
+  it('a process killed while its task runs: one line, and the conversation is resumed at once with the note', async () => {
+    const pid = getTurnPid('BG-3');
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    process.kill(pid, 'SIGKILL');
+    await topic.waitForMessage('the line about the task the crash took', (message) => listLostWorkLines('BG-3').includes(message.text));
+    const [line] = listLostWorkLines('BG-3');
+    assert.ok(line.includes('ended unexpectedly') && line.endsWith(resumedLineEnd), line);
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('session ended')), 'the line replaces the bare "session ended"');
+    await getCharness().waitFor('the note to reach the resumed agent', replyTimeoutMs, () => listLostWorkNotes().some((prompt) => prompt.text.includes(`«${getFakeBackgroundTaskDescription('BG-3')}»`)));
+    const note = listLostWorkNotes().at(-1);
+    assert.ok(note?.text.includes('(it exited unexpectedly)'), note?.text);
+    const resumed = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(resumed.length, 1, 'resumed once');
+    assert.equal(resumed[0].pid, note?.pid, 'the note went to the resumed process');
+    assert.equal(getLaunchSessionId(resumed[0].argv), sessionId, 'the same conversation');
+  });
+
+  it('a second crash right after that resume is not resumed again: the next message carries the note', async () => {
+    const pid = await startBackgroundTask('BG-4');
+    const notesBefore = listLostWorkNotes().length;
+    process.kill(pid, 'SIGKILL');
+    await topic.waitForMessage('the line about the task the second crash took', (message) => listLostWorkLines('BG-4').includes(message.text));
+    assert.ok(listLostWorkLines('BG-4')[0].endsWith(heldLineEnd), listLostWorkLines('BG-4')[0]);
+    assert.ok(getCharness().output.includes(`[lost-work] ${topicKey}: the process ended (exited) with the agent's own work pending (1 background task(s), 0 scheduled job(s)); the note rides the next prompt`));
+    await sendAndAwaitTurnEnd('BG-5', '[fake:answer] are you back');
+    const notes = listLostWorkNotes().slice(notesBefore);
+    assert.equal(notes.length, 1, 'one note, with the next message');
+    assert.ok(notes[0].text.includes('BG-5 [fake:answer]') && notes[0].text.includes(`«${getFakeBackgroundTaskDescription('BG-4')}»`), notes[0].text);
+  });
+
+  it('a process gone when the bot comes back: one line, and the conversation is resumed with the note', async () => {
+    const pid = await startBackgroundTask('BG-6');
+    const notesBefore = listLostWorkNotes().length;
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {
+      process.kill(pid, 'SIGKILL'); // a host reboot or a killed tmux server, while the bot is down
+    });
+    await topic.waitForMessage('the line about the task found gone', (message) => listLostWorkLines('BG-6').includes(message.text));
+    const [line] = listLostWorkLines('BG-6');
+    assert.ok(line.includes('was gone after the restart') && line.endsWith(resumedLineEnd), line);
+    await getCharness().waitFor('the note to reach the resumed agent', replyTimeoutMs, () => listLostWorkNotes().length > notesBefore);
+    const note = listLostWorkNotes().at(-1);
+    assert.ok(note?.text.includes('(it was gone when the bot came back after a restart)') && note.text.includes(`«${getFakeBackgroundTaskDescription('BG-6')}»`), note?.text);
   });
 });

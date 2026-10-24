@@ -230,6 +230,8 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
+import { buildLostWorkNote, checkHasLostWork, formatLostWorkTopicLine, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { getPendingWorkHoldMs, pendingWorkHoldMinutesEnvName } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
@@ -4715,6 +4717,8 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // Here, at the start (C6): a request whose ensure finds this start under way builds its prompt against an
   // empty sent-set, so it carries the whole issue even though its own ensure did not start anything.
   noteConversationContextReset(key, 'fresh session');
+  // A new conversation: an untold loss of the previous one means nothing to it.
+  void state.clearLostWork(key);
   const adapter = getThreadAdapter(key);
 
   // Boot loader. A self-greeting agent (Claude) prints its banner shortly — keep
@@ -5164,7 +5168,11 @@ async function forwardPromptToAgent(
   });
   // The request header (S7) leads the per-message body, like the reply quote and
   // unlike the once-per-change thread preamble: it names THIS message's request.
-  const body = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
+  const messageBody = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
+  // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it.
+  const lostWorkRecord = isReplayable && adapter.name !== 'terminal' ? state.getLostWork(key) : undefined;
+  if (lostWorkRecord) void state.clearLostWork(key);
+  const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
   // A genuine new prompt also opens a fresh recovery episode (clears the guard).
@@ -11396,6 +11404,8 @@ function handleQuestionGone(key: SessionKey): void {
 }
 
 function handleAgentClosed(key: SessionKey): void {
+  // What the process held that died with it (its own background work), taken before the cleanup below.
+  const lostWork = takeLostWorkOf(key);
   // Session is gone — drop any not-yet-sent output AND status frame so they
   // don't surface after the "session ended" notice (the trailing-output bug:
   // a 429 backlog could let queued deltas land seconds after the close).
@@ -11416,10 +11426,76 @@ function handleAgentClosed(key: SessionKey): void {
   // A closed session has nothing to compact — drop the idle watchdog + any arm.
   clearThreadCompaction(key);
   const adapter = getThreadAdapter(key);
-  replyToThread(key, t('agent.session_ended', { label: adapter.label })).catch(() => {});
+  // Work died with the process: the lost-work line (and the resume it announces) replaces the bare "session ended".
+  if (lostWork) scheduleLostWorkNote(key, lostWork, 'exited');
+  else replyToThread(key, t('agent.session_ended', { label: adapter.label })).catch(() => {});
   // Banner now reads `idle`; closed sessions may also persist with the
   // wrong model/agent label otherwise.
   updatePinnedStatus(key).catch(() => {});
+}
+
+/** When the bot last resumed a conversation for its lost work, by key — the loop guard (`lostWorkResumeCooldownMs`), per bot life. */
+const lostWorkAutoResumedAt = new Map<string, number>();
+
+const msPerHour = 60 * 60 * 1000;
+
+/** The pending-work hold in force, in hours, as the topic line names it (`utils/jsonStreamPendingWork.ts`). */
+const pendingWorkHoldHours = Number((getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) / msPerHour).toFixed(1));
+
+/** What the conversation's last process took with it when it ended, handed over once by its adapter. */
+function takeLostWorkOf(key: SessionKey, adapter: AgentAdapter = getThreadAdapter(key)): LostWork | null {
+  return adapter.takeLostWork?.(key) ?? null;
+}
+
+/** {@link noteLostWork} from an event handler: in the conversation's locale, not awaited, a failure logged. */
+function scheduleLostWorkNote(key: SessionKey, lostWork: LostWork | null, reason: LostWorkReason): void {
+  if (!lostWork) return;
+  void withThreadLocale(key, () => noteLostWork(key, lostWork, reason)).catch((e) => console.warn(`[lost-work] ${keyToString(key)}:`, e instanceof Error ? e.message : e));
+}
+
+/**
+ * @description A process ended with the agent's own work pending (`utils/lostWork.ts`): keep the loss until the agent
+ * is told, post the ONE plain line in a topic, and — unless the plan says the note waits for the next prompt — resume
+ * the conversation with the note as its prompt. Runs in the conversation's locale.
+ */
+async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: LostWorkReason): Promise<void> {
+  if (!lostWork) return;
+  const kStr = keyToString(key);
+  const now = Date.now();
+  const record = mergeLostWorkRecords(state.getLostWork(key), { ...lostWork, reason, lostAt: now });
+  await state.setLostWork(key, record);
+  const lastAutoResumeAt = lostWorkAutoResumedAt.get(kStr);
+  const plan = getLostWorkPlan({
+    reason,
+    isLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
+    msSinceLastAutoResume: lastAutoResumeAt === undefined ? null : now - lastAutoResumeAt,
+  });
+  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
+  if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, plan, pendingWorkHoldHours, t)).catch(() => {});
+  if (!plan.isAutoResume) return;
+  lostWorkAutoResumedAt.set(kStr, now);
+  await resumeConversationForLostWork(key);
+}
+
+/** Resume the conversation with the lost-work note as its prompt; a failed post keeps the note for the next prompt. */
+async function resumeConversationForLostWork(key: SessionKey): Promise<void> {
+  const record = state.getLostWork(key);
+  if (!record) return;
+  await state.clearLostWork(key);
+  const posted = await postToSession(createLostWorkPostDeps(), keyToString(key), buildLostWorkNote(record, getLocaleEndonym(getActiveLang())));
+  if (posted.ok) return;
+  console.warn(`[lost-work] ${keyToString(key)}: the resume failed (${posted.reason === 'forward-failed' ? posted.error : posted.reason}); the note rides the next prompt`);
+  await state.setLostWork(key, mergeLostWorkRecords(state.getLostWork(key), record));
+}
+
+/** The session post of a lost-work note: a bot note to the agent, not a request — no request is opened for it. */
+function createLostWorkPostDeps(): PostToSessionDeps {
+  return {
+    ...createSessionPostDeps(),
+    forwardPrompt: async (conversationKey, text) => {
+      await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey));
+    },
+  };
 }
 
 function handleAgentError(key: SessionKey, error: Error): void {
@@ -11459,6 +11535,8 @@ function handleAgentStarted(key: SessionKey): void {
   // activity instant rather than restart at the full 55 minutes. A genuinely fresh
   // session has no persisted instant and so gets the full window anyway.
   rearmThreadIdleTimer(key);
+  // A re-spawn (model, effort, account) began without the old process's background work.
+  scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
 }
 
 /**
@@ -11502,6 +11580,8 @@ function handleAgentStopped(key: SessionKey): void {
   // A stopped session has nothing to compact — drop the idle watchdog + any
   // armed agent-triggered compaction.
   clearThreadCompaction(key);
+  // A released conversation's untold loss means nothing to the next one.
+  void state.clearLostWork(key);
   updatePinnedStatus(key).catch(() => {});
 }
 
@@ -11539,6 +11619,8 @@ function dropLostConversationWatermark(key: SessionKey): void {
 function handleAgentSuspended(key: SessionKey): void {
   clearGoneProcessFrames(key);
   updatePinnedStatus(key).catch(() => {});
+  // An idle stop takes pending work with it only once the hold ran out.
+  scheduleLostWorkNote(key, takeLostWorkOf(key), 'holdExpired');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -11902,6 +11984,8 @@ async function reattachExistingSessions(
   //     while its own work is pending) and the next trigger resumes it with the
   //     current tools (`checkIsAdoptedToolListStale`).
   const claudeJsonAdapter = getAdapter(claudeJsonStreamAdapterName);
+  /** The conversations whose process was gone at boot with the agent's own work pending, by key — each told once. */
+  const lostWorkFoundAtBoot = new Map<string, { key: SessionKey; lostWork: LostWork }>();
   let jsonAdopted = 0;
   let jsonKilled = 0;
   let jsonSleeping = 0;
@@ -11950,8 +12034,15 @@ async function reattachExistingSessions(
             }
           } else {
             // Dead/zombie — adopt cleaned it up itself; the thread sleeps (below)
-            // and its next trigger resumes it from the persisted session id.
+            // and its next trigger resumes it from the persisted session id — at once
+            // when its own work died with it (the agent is told, once the adopts are done).
             jsonKilled += 1;
+            const lostWork = takeLostWorkOf(key, ownerAdapter);
+            if (lostWork) {
+              lostWorkFoundAtBoot.set(keyToString(key), { key, lostWork });
+              // Told once: the record it came from drops it (the pass over the sleeping conversations below reads it too).
+              if (agent.jsonStreamTail) void state.setJsonStreamTail(key, getTailRecordWithoutPendingWork(agent.jsonStreamTail));
+            }
           }
         } catch (e) {
           console.warn(`[reattach] claude-json-stream ${sessionName} failed:`, e instanceof Error ? e.message : e);
@@ -11969,6 +12060,13 @@ async function reattachExistingSessions(
     // Sleeping (L4): no process is started — the next trigger resumes the conversation. What the agent
     // produced while the bot was down is still recapped, read from the transcript on disk.
     jsonSleeping += 1;
+    // A process that died while the bot was down (its tmux session gone with it) left its pending work in the record:
+    // the agent is told — once: the record drops it now.
+    const goneProcessLostWork = getLostWorkFromTailRecord(agent.jsonStreamTail ?? null, agent.claudeSessionId);
+    if (agent.jsonStreamTail && checkHasLostWork(goneProcessLostWork) && !lostWorkFoundAtBoot.has(keyToString(key))) {
+      lostWorkFoundAtBoot.set(keyToString(key), { key, lostWork: goneProcessLostWork });
+      void state.setJsonStreamTail(key, getTailRecordWithoutPendingWork(agent.jsonStreamTail));
+    }
     // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
     if (agent.name === claudePerTurnAdapterName) rearmThreadIdleTimer(key);
     const workDirDecision = getWorkDirStartDecision(key);
@@ -11978,6 +12076,8 @@ async function reattachExistingSessions(
     ).catch(() => {});
   }
   console.log(`[reattach] claude-json-stream: adopted ${jsonAdopted}, sleeping ${jsonSleeping}, killed ${jsonKilled} orphans (quiet=${opts.quietReattach})`);
+  // Not awaited: a resume must not hold up the rest of the boot (the prompt is buffered while the session starts).
+  for (const { key, lostWork } of lostWorkFoundAtBoot.values()) scheduleLostWorkNote(key, lostWork, 'foundDead');
 
   // 3. Terminal — tmux shells (`term-…`). Like the Claude scan but simpler:
   //    a terminal has no session-id to recover, so adoption keys purely on a
@@ -13191,11 +13291,21 @@ export async function startBot(): Promise<void> {
     onApiError: (key, error) => dispatchAdapterEvent(key, 'apiError', () => withThreadLocale(key, () => handleApiError(key, error))),
     onNoResponse: (key) => dispatchAdapterEvent(key, 'noResponse', () => handleNoResponse(key)),
     onQuestionGone: (key) => dispatchAdapterEvent(key, 'questionGone', () => withThreadLocale(key, () => handleQuestionGone(key))),
-    onClosed: (key) => dispatchAdapterEvent(key, 'closed', () => withThreadLocale(key, () => handleAgentClosed(key)), () => clearForeignSessionState(key)),
-    // An issue's process gets the idle countdown alone: it has no banner.
-    onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key)), () => rearmThreadIdleTimer(key)),
-    onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
-    onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
+    onClosed: (key) => dispatchAdapterEvent(key, 'closed', () => withThreadLocale(key, () => handleAgentClosed(key)), () => {
+      const lostWork = takeLostWorkOf(key);
+      clearForeignSessionState(key);
+      scheduleLostWorkNote(key, lostWork, 'exited');
+    }),
+    // An issue's process gets the idle countdown and the lost-work note of a re-spawn: it has no banner.
+    onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key)), () => {
+      rearmThreadIdleTimer(key);
+      scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
+    }),
+    onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => {
+      clearForeignSessionState(key);
+      void state.clearLostWork(key);
+    }),
+    onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key)), () => scheduleLostWorkNote(key, takeLostWorkOf(key), 'holdExpired')),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
     onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => { dropLostConversationWatermark(key); noteConversationContextReset(key, 'its transcript was lost'); }),

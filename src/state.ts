@@ -26,6 +26,7 @@ import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
+import type { LostWorkRecord } from './utils/lostWork';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
 import type { Locale } from './i18n';
 import type { LimitHeldPrompt } from './utils/limitHeldPrompts';
@@ -147,9 +148,10 @@ export interface AgentData {
   /**
    * The digest of the bot-MCP tool definitions the json-stream process was
    * started with (`SchedulerMcpHandle.getToolDigest`). Compared at adopt after a
-   * bot restart: a process whose tools are stale is stopped at its next idle
-   * point and resumed with the current ones (lifecycle plan L4). Absent for a
-   * row written before the digest was tracked — read as stale.
+   * bot restart: a process whose tools are stale is logged and follows the idle
+   * lifecycle (never stopped early); its next resume gets the current ones
+   * (lifecycle plan L4). Absent for a row written before the digest was
+   * tracked — read as stale.
    */
   mcpToolDigest?: string;
   /**
@@ -561,6 +563,12 @@ export interface StateV1 {
    */
   limitProbesFired?: Record<string, number>;
   /**
+   * The agent's own pending work a json-stream process took with it when it ended anyway, per {@link SessionKey}
+   * string, until the agent is told (`utils/lostWork.ts`): the bot's automatic resume, or the next prompt, carries the
+   * note and drops the record. Optional — absent when empty.
+   */
+  lostWork?: Record<string, LostWorkRecord>;
+  /**
    * Prompts held during an armed usage-limit wait (Jira plan R23), keyed by
    * {@link SessionKey} string, oldest first. Kept apart from `apiRetries`: the
    * wait can end without its resume (the operator writes, skips or disables it,
@@ -652,7 +660,7 @@ const schedulerMcpSecretByteLength = 32;
  * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
  * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
  */
-type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'openRequests';
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'lostWork' | 'openRequests';
 
 /**
  * @description Promise-chain per-key lock. The map holds the tail of each
@@ -2634,6 +2642,26 @@ export class StateStore {
   async clearLimitProbeFired(key: SessionKey): Promise<void> {
     await this.withLock(key, async () => {
       if (this.dropOptionalMapEntry('limitProbesFired', keyToString(key))) this.scheduleSave();
+    });
+  }
+
+  /** @description The loss the agent of `key` has not been told about yet ({@link StateV1.lostWork}). */
+  getLostWork(key: SessionKey): LostWorkRecord | undefined {
+    return this.state.lostWork?.[keyToString(key)];
+  }
+
+  /** @description Keep `key`'s untold loss (replacing an older one: the caller merges). Debounced. */
+  async setLostWork(key: SessionKey, record: LostWorkRecord): Promise<void> {
+    await this.withLock(key, async () => {
+      (this.state.lostWork ??= {})[keyToString(key)] = record;
+      this.scheduleSave();
+    });
+  }
+
+  /** @description Drop `key`'s loss once the agent was told, or its conversation released. No-op (no save) when absent. */
+  async clearLostWork(key: SessionKey): Promise<void> {
+    await this.withLock(key, async () => {
+      if (this.dropOptionalMapEntry('lostWork', keyToString(key))) this.scheduleSave();
     });
   }
 

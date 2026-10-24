@@ -60,8 +60,8 @@ export const foreignKeyEventRoutes = {
   // Drop the retry, compaction and preamble state a gone session leaves behind.
   closed: 'requestSide',
   stopped: 'requestSide',
-  // An idle stop keeps the session, its retry and its compaction state: only Telegram frames to clean up.
-  suspended: 'none',
+  // An idle stop keeps the session, its retry and its compaction state; the work a spent hold let go is noted for the agent.
+  suspended: 'requestSide',
   // The per-turn stop (L5) applies to an issue's conversation as to a topic's; the handler posts nothing.
   turnEnded: 'all',
   // A completed compaction resets what the conversation was told: its connector sends the whole issue next (C6).

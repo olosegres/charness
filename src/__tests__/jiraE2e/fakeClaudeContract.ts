@@ -124,6 +124,10 @@ export const fakeAskToolName = 'AskUserQuestion';
 export const fakeClaudeBackgroundReleaseFileName = 'background-release';
 /** How long a `background-notify` task's own turn takes from its start to its first output (the API round-trip). */
 export const fakeNotificationTurnLatencyMs = 8000;
+/** The description of the task a `background-notify` turn labelled `issueKey` starts (lower case: never read as a label). */
+export function getFakeBackgroundTaskDescription(issueKey: string): string {
+  return `watcher of ${issueKey.toLowerCase()}`;
+}
 /** The text the turn a finished `background-notify` task starts answers with: `<issueKey>` is the label of the turn that started the task. */
 export function getFakeBackgroundTaskFinishedText(issueKey: string): string {
   return `Background task for ${issueKey} finished.`;

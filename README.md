@@ -178,7 +178,12 @@ backends:
   own work is pending: a background command, Monitor or sub-agent it started, a
   finished task's result it is about to read, a `CronCreate` job it scheduled.
   That work keeps the process for up to 6 h after the agent's last turn, so a
-  task nobody hears from does not keep it forever. The **default**.
+  task nobody hears from does not keep it forever. When that work is lost
+  anyway (a crash, a process gone after a restart, a `/model` / `/effort` /
+  account restart, a task let go after 6 h), the topic gets one plain line and
+  the agent is resumed with a note to check that work again — or, after a
+  forgotten task or a second loss within 10 minutes, your next message carries
+  the note. The **default**.
 - **per-turn** (`/claude_mode per-turn`) — the same host, stopped right
   after every answer. Nothing is lost: the conversation sleeps and your next
   message resumes it. Needs Claude Code 2.1.287 or newer; the switch is

@@ -112,7 +112,8 @@ import { checkIsSameClaudeConfigDir } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapterNames';
 import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
-import { checkHasPendingWork, getPendingWorkHoldRemainingMs, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
+import { checkHasPendingWork, checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
+import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
 import {
   cronCreateToolName,
   cronDeleteToolName,
@@ -445,6 +446,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private claudeConfigDirReader: ClaudeConfigDirReader | null = null;
   /** The stops in flight — the module-level map shared by both lifecycles' instances (see {@link stopsInFlightByKey}). */
   private readonly stopsInFlight = stopsInFlightByKey;
+  /** The agent's own pending work each ended process took with it, until the bot takes it ({@link takeLostWork}). */
+  private readonly lostWorkByKey = new Map<string, LostWork>();
 
   setDisplayPrefsReader(reader: DisplayPrefsReader): void {
     this.displayPrefsReader = reader;
@@ -828,6 +831,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const key = session.key;
     // Only act if this session is still the current one for the key.
     if (this.sessions.get(keyToString(key)) !== session) return;
+    // An explicit stop (`/quit`, `/new`, a backend switch) releases the conversation and its record: nothing to tell
+    // its agent, nothing to write back — a write after the release would bring back a record the bot dropped.
+    if (!session.isStopping || session.isSuspending) {
+      this.recordLostWork(session);
+      this.clearPendingWorkOfEndedProcess(session);
+    }
     this.clearTimers(session);
     session.isActive = false;
     this.sessions.delete(keyToString(key));
@@ -935,6 +944,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const exitCode = readExitCodeFile(paths.exitCodeFile);
     if (pid === null || exitCode !== null || !checkIsPidAlive(pid)) {
       console.log(`[ClaudeJson] adopt: ${sessionName} process is dead (pid=${pid} exit=${exitCode}), cleaning up`);
+      this.storeLostWork(key, getLostWorkFromTailRecord(persistedTail, claudeSessionId));
       await this.killOrphanTmuxSession(sessionName);
       return false;
     }
@@ -1188,6 +1198,43 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     } catch (e) {
       console.warn(`[ClaudeJson] stdout tail read failed for ${keyToString(key)}:`, e instanceof Error ? e.message : e);
     }
+  }
+
+  /**
+   * @description The agent's own pending work the conversation's LAST process took with it when it ended — a crash, a
+   * re-spawn, the idle stop after the pending-work hold, a process found gone at the adopt — handed over once (`null`
+   * when nothing was lost or it was already taken). The bot tells the agent (`utils/lostWork.ts`).
+   */
+  takeLostWork(key: SessionKey): LostWork | null {
+    const k = keyToString(key);
+    const lostWork = this.lostWorkByKey.get(k) ?? null;
+    this.lostWorkByKey.delete(k);
+    return lostWork;
+  }
+
+  /** Keep what an ending process held: its background tasks, its scheduled jobs, a finished task's turn not yet run. */
+  private recordLostWork(session: StreamSession): void {
+    this.storeLostWork(session.key, {
+      backgroundTasks: [...session.backgroundTasks].map(([taskId, description]) => ({ taskId, description })),
+      scheduledJobCount: session.scheduledJobs.size,
+      hasUnreadTaskResult: checkIsNotificationTurnPending({ now: Date.now(), notificationTurnPendingSince: session.notificationTurnPendingSince }),
+    });
+  }
+
+  /**
+   * The ended process's pending work is handled here (kept for the bot, or released): the record must not carry it,
+   * or the next boot would read the conversation's process as one that died with work pending.
+   */
+  private clearPendingWorkOfEndedProcess(session: StreamSession): void {
+    session.backgroundTasks = new Map();
+    session.scheduledJobs = new Map();
+    session.notificationTurnPendingSince = null;
+    this.jsonStreamTailWriter?.(session.key, buildTailRecord(session, session.lastPersistedTailOffset));
+  }
+
+  private storeLostWork(key: SessionKey, lostWork: LostWork): void {
+    if (checkHasLostWork(lostWork)) this.lostWorkByKey.set(keyToString(key), lostWork);
+    else this.lostWorkByKey.delete(keyToString(key));
   }
 
   private getPendingWorkInput(session: StreamSession): PendingWorkInput {
@@ -2184,6 +2231,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const { key, workDir, sessionId } = session;
     const configDir = change.configDir === undefined ? session.configDir : change.configDir;
     session.isRespawning = true;
+    // The re-spawned process starts with none of the old one's background tasks or jobs.
+    this.recordLostWork(session);
     this.rejectQuestion(key);
     await session.stdinWriteChain.catch(() => { /* already logged */ });
     this.clearTimers(session);

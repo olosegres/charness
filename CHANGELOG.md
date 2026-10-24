@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
+ends with its own work pending — it crashed, it was gone after a restart, `/model`, `/effort` or an account change
+restarted it, or a task nobody heard from for 6 h was let go — the topic gets one plain line naming the lost tasks, and
+the agent is resumed at once with a short note to check that work and start again what is still needed (after a
+forgotten task, or a second loss within 10 minutes, the note waits for your next message instead).
+
 **The agent's background work is no longer cut off by an automatic stop.** On the default Claude backend the process
 used to be stopped in the seconds between a background task's end and the agent's turn that reads its result — the
 result was lost and the topic went quiet until you wrote. Now a background command, Monitor or sub-agent the agent

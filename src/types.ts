@@ -7,6 +7,7 @@ import type { OutboundHints } from './platform/outbound';
 import type { FallbackChainEntry } from './utils/fallbackChain';
 import type { ClaudeBackgroundTask } from './utils/claudeStreamJson';
 import type { ScheduledJob } from './utils/claudeScheduledJobs';
+import type { LostWork } from './utils/lostWork';
 
 export interface AgentSession {
   id: string;
@@ -801,6 +802,13 @@ export interface AgentAdapter extends EventEmitter {
    * omits it.
    */
   refreshWorkingState?(key: SessionKey): void;
+
+  /**
+   * The agent's own pending work the conversation's last process took with it when it ended (a crash, a re-spawn, the
+   * idle stop after the pending-work hold, a process found gone at boot), handed over ONCE; `null` when nothing was
+   * lost (`utils/lostWork.ts`). Optional: only a backend that tracks the agent's background work offers it.
+   */
+  takeLostWork?(key: SessionKey): LostWork | null;
 
   /**
    * Whether the live process may be stopped automatically (lifecycle plan L-D10):

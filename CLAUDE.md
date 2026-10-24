@@ -32,7 +32,8 @@ same core serves a second surface — Jira issues (`CONNECTORS=jira`) — throug
   (FIFO stdin, tailed `stdout.jsonl`), stopped at the idle mark (`AGENT_IDLE_MINUTES`, 55 min); `claude-per-turn`
   is the same host stopped after every turn. A stopped conversation SLEEPS (id kept) and the next trigger resumes
   it through `ensureAgentSession`; a process is never stopped while it works (`checkIsWorking`: its turn, or its own
-  background tasks / `CronCreate` jobs within a 6 h hold after its last turn — `utils/jsonStreamPendingWork.ts`), and only a CLI
+  background tasks / `CronCreate` jobs within a 6 h hold after its last turn — `utils/jsonStreamPendingWork.ts`; work
+  that dies with a process anyway is told to the agent once — `utils/lostWork.ts`), and only a CLI
   ≥ 2.1.287 is auto-stopped (`claudeCodeVersion.ts`). `claude` (tmux-scrape) drives the interactive TUI with
   `tmux send-keys` and scrapes it with adaptive `capture-pane` polling (300 ms while the pane changes, backing
   off to 1.5 s). `CLAUDE_SCRAPE_DEBUG=1` logs raw/filtered scrape chunks.

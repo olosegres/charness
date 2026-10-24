@@ -112,8 +112,10 @@ describe('json-stream external transport — exit detection', () => {
     assert.ok(warnings.some((w) => w.includes('code=3')), `real exit code surfaces in the log: ${warnings}`);
     assert.equal(adapter['sessions'].size, 0, 'the session is deregistered');
     assert.equal(fs.existsSync(dir), false, 'the host dir is removed');
-    // The tail offset persisted at the line boundary (== the whole result line).
-    assert.deepEqual(tailWrites, [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] }]);
+    // The tail offset persisted at the line boundary (== the whole result line); the ended process's record then
+    // carries no pending work (the same record again here: there was none).
+    const finalRecord = { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(resultLine), backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [] };
+    assert.deepEqual(tailWrites, [finalRecord, finalRecord]);
   });
 
   it('an exit before the initialize handshake is a start that failed: the wait ends, no closed, the CLI\'s words kept', () => {
