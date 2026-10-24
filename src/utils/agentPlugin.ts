@@ -5,7 +5,8 @@
  *
  *  - Claude Code loads the folder through `--plugin-dir` on every bot launch of an agent session — also under
  *    `--setting-sources project,local` (a Jira session), probed on 2.1.310 — and lists the skills as
- *    `charness:<folder>` beside the user's and the project's own.
+ *    `charness:<folder>` beside the user's and the project's own. A CLI older than the flag
+ *    (`minPluginDirClaudeCodeVersion`) refuses to start with it, so such a CLI starts without the skills.
  *  - OpenCode reads `OPENCODE_CONFIG_DIR` once, when its server starts, and adds the `skills/` of that folder to the
  *    project's and the user's own (probed on the installed build; `OPENCODE_CONFIG_CONTENT` was no option: its
  *    `skills` list REPLACES the project's). The folder is a bot-owned one in `DATA_DIR` whose `skills` links to the
@@ -13,8 +14,15 @@
  *    the bot runs from.
  */
 
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { promisify } from 'util';
+import { checkIsClaudePluginDirSupported, minPluginDirClaudeCodeVersion } from './claudeCodeVersion';
+
+const execFileAsync = promisify(execFile);
+/** A `claude --version` that takes longer is treated as an unknown version (the launch then goes without the flag). */
+const claudeVersionReadTimeoutMs = 10_000;
 
 const agentPluginDirName = 'agent-plugin';
 export const agentPluginSkillsDirName = 'skills';
@@ -29,9 +37,46 @@ export function resolveAgentPluginDir(): string | null {
   return fs.existsSync(path.join(pluginDir, agentPluginSkillsDirName)) ? pluginDir : null;
 }
 
-/** @description The Claude Code flags that load the bot's skills into an agent session: `--plugin-dir <folder>`. */
-export function getClaudeAgentPluginFlags(pluginDir: string | null = resolveAgentPluginDir()): string[] {
-  return pluginDir === null ? [] : ['--plugin-dir', pluginDir];
+/** The version each Claude binary reported, read once per bot process (a hot reload or a restart reads again). */
+const claudeVersionByBinary = new Map<string, string>();
+
+/** @description `claude --version` of `claudeBinary` (`2.1.310 (Claude Code)`), cached; null when it cannot be read (not cached). */
+export async function readClaudeCodeVersion(claudeBinary: string): Promise<string | null> {
+  const cached = claudeVersionByBinary.get(claudeBinary);
+  if (cached !== undefined) return cached;
+  try {
+    const { stdout } = await execFileAsync(claudeBinary, ['--version'], { timeout: claudeVersionReadTimeoutMs, encoding: 'utf8' });
+    const version = stdout.split('\n')[0].trim();
+    if (!version) return null;
+    claudeVersionByBinary.set(claudeBinary, version);
+    return version;
+  } catch {
+    return null;
+  }
+}
+
+let isOldClaudeAnnounced = false;
+
+/**
+ * @description The Claude Code flags that load the bot's skills into an agent session: `--plugin-dir <folder>` — none
+ * when the folder is missing, or when the CLI is older than the flag or its version cannot be read (announced once):
+ * an unknown option would stop the launch itself.
+ */
+export async function getClaudeAgentPluginFlags(
+  claudeBinary: string,
+  pluginDir: string | null = resolveAgentPluginDir(),
+  readVersion: (binary: string) => Promise<string | null> = readClaudeCodeVersion,
+): Promise<string[]> {
+  if (pluginDir === null) return [];
+  const version = await readVersion(claudeBinary);
+  if (!checkIsClaudePluginDirSupported(version)) {
+    if (!isOldClaudeAnnounced) {
+      isOldClaudeAnnounced = true;
+      console.log(`[agentPlugin] Claude Code ${version ?? '(version unreadable)'} predates --plugin-dir (${minPluginDirClaudeCodeVersion}); its sessions start without the bot's skills`);
+    }
+    return [];
+  }
+  return ['--plugin-dir', pluginDir];
 }
 
 /** OpenCode's variable naming an extra config folder, searched like a project's `.opencode` (its `skills/` included). */

@@ -22,6 +22,7 @@ import {
   openCodeConfigDirEnvName,
   parseOpenCodeServerLaunch,
   prepareOpenCodeAgentConfigDir,
+  readClaudeCodeVersion,
   resolveAgentPluginDir,
 } from '../utils/agentPlugin';
 
@@ -32,9 +33,45 @@ describe('agentPlugin', () => {
     assert.equal(resolveAgentPluginDir(), repoAgentPluginDir);
   });
 
-  test('Claude Code gets --plugin-dir with that folder, and nothing when it is missing', () => {
-    assert.deepEqual(getClaudeAgentPluginFlags(), ['--plugin-dir', repoAgentPluginDir]);
-    assert.deepEqual(getClaudeAgentPluginFlags(null), []);
+  test('Claude Code gets --plugin-dir with that folder; nothing when it is missing, for a CLI older than the flag or of unreadable version', async () => {
+    const reportVersion = (version: string | null) => async (): Promise<string | null> => version;
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.1.310 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir]);
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.0.25 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir], 'the first version with the flag');
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.0.24 (Claude Code)')), [], 'it would exit «unknown option»');
+      assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion(null)), []);
+    } finally {
+      console.log = originalLog;
+    }
+    let isVersionRead = false;
+    const recordRead = async (): Promise<string | null> => {
+      isVersionRead = true;
+      return '2.1.310 (Claude Code)';
+    };
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', null, recordRead), []);
+    assert.equal(isVersionRead, false, 'no folder, no version read');
+  });
+
+  test('the CLI version is read once per binary; a failed read is not remembered', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-claude-version-'));
+    try {
+      const callsFile = path.join(binDir, 'calls');
+      const binary = path.join(binDir, 'claude');
+      fs.writeFileSync(binary, `#!/bin/sh\necho call >> '${callsFile}'\necho '2.1.310 (Claude Code)'\n`, { mode: 0o755 });
+      assert.equal(await readClaudeCodeVersion(binary), '2.1.310 (Claude Code)');
+      assert.equal(await readClaudeCodeVersion(binary), '2.1.310 (Claude Code)');
+      assert.equal(fs.readFileSync(callsFile, 'utf8'), 'call\n', 'one run of --version');
+
+      const broken = path.join(binDir, 'broken-claude');
+      fs.writeFileSync(broken, `#!/bin/sh\necho call >> '${callsFile}.broken'\nexit 1\n`, { mode: 0o755 });
+      assert.equal(await readClaudeCodeVersion(broken), null);
+      assert.equal(await readClaudeCodeVersion(broken), null);
+      assert.equal(fs.readFileSync(`${callsFile}.broken`, 'utf8'), 'call\ncall\n', 'tried again');
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
   });
 });
 

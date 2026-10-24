@@ -604,7 +604,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     else args.push('--session-id', sessionId);
     if (opts.model) args.push(claudeModelFlag, opts.model);
     if (opts.effort) args.push(claudeEffortFlag, opts.effort);
-    args.push(...mcpFlags, ...getClaudeAgentPluginFlags());
+    args.push(...mcpFlags, ...(await getClaudeAgentPluginFlags(this.claudePath)));
     // Overflow-triggered compaction gets the bot's summary guidance (see the module); a profile that holds a
     // pasted API key gets it in its own settings file, beside the `apiKeyHelper` that reads the key.
     args.push(...prepareClaudeCompactHookFlags(resolveDataDir(), opts.configDir));

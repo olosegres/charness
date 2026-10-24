@@ -13,7 +13,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsClaudeAutoStopSupported, compareClaudeCodeVersions, getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from '../utils/claudeCodeVersion';
+import { checkIsClaudeAutoStopSupported, checkIsClaudePluginDirSupported, compareClaudeCodeVersions, getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion, minPluginDirClaudeCodeVersion } from '../utils/claudeCodeVersion';
 
 describe('compareClaudeCodeVersions', () => {
   it('compares numerically per component', () => {
@@ -28,6 +28,18 @@ describe('compareClaudeCodeVersions', () => {
     assert.equal(compareClaudeCodeVersions('2.1.287-beta.1', '2.1.287'), 0);
     assert.equal(compareClaudeCodeVersions('unknown', '2.1.287'), null);
     assert.equal(compareClaudeCodeVersions('2.1', '2.1.287'), null);
+  });
+});
+
+describe('checkIsClaudePluginDirSupported (the bot\'s skills)', () => {
+  it('from 2.0.25 on, the --version line included; never for 2.0.24 and older, an unknown or an unparseable version', () => {
+    assert.equal(minPluginDirClaudeCodeVersion, '2.0.25');
+    assert.equal(checkIsClaudePluginDirSupported('2.0.25 (Claude Code)'), true);
+    assert.equal(checkIsClaudePluginDirSupported('2.1.310 (Claude Code)'), true);
+    assert.equal(checkIsClaudePluginDirSupported('2.0.24 (Claude Code)'), false);
+    assert.equal(checkIsClaudePluginDirSupported('1.0.128'), false);
+    assert.equal(checkIsClaudePluginDirSupported(null), false);
+    assert.equal(checkIsClaudePluginDirSupported('dev'), false);
   });
 });
 

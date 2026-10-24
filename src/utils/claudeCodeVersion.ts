@@ -45,6 +45,19 @@ export function checkIsClaudeAutoStopSupported(version: string | null): boolean 
 }
 
 /**
+ * The first Claude Code version that accepts `--plugin-dir` (the bot's skills, `utils/agentPlugin.ts`). Measured on the
+ * published builds: up to 2.0.24 every launch with the flag exits `error: unknown option '--plugin-dir'`; 2.0.25 runs.
+ */
+export const minPluginDirClaudeCodeVersion = '2.0.25';
+
+/** Whether a CLI reporting `version` accepts `--plugin-dir`; `null` / unparseable → `false` (never risk a launch). */
+export function checkIsClaudePluginDirSupported(version: string | null): boolean {
+  if (version === null) return false;
+  const comparison = compareClaudeCodeVersions(version, minPluginDirClaudeCodeVersion);
+  return comparison !== null && comparison >= 0;
+}
+
+/**
  * @description The version a switch of a conversation to the per-turn lifecycle
  * is REFUSED on (L-D10, narrowed): its last known Claude Code version — from the
  * live process or the persisted tail record — when that is below the gate;
