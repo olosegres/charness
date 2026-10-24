@@ -29,6 +29,10 @@
  *     process with the note — no "session ended"
  *   → `/claude_mode` moves the topic to another Claude backend while BG-10's task runs: the switch reply says the
  *     background work stopped, no separate line, and the next message (BG-11) carries the note
+ *   → `/claude_mode` while only BG-12's turn runs and BG-13 waits to be taken in (no task, no job): the reply says
+ *     nothing about background work — the line follows what the note lists — and the note names the cut-off turn
+ *   → `/claude_mode` while BG-15's task runs and the bound folder is gone: the folder error still says the background
+ *     work stopped
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -445,5 +449,33 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     assert.ok(notes[0].text.includes('(the conversation moved to another backend)'), notes[0].text);
     assert.deepEqual(listLostWorkLines('BG-10'), [], 'no lost-work line beside the switch reply');
     assert.ok(!checkIsPidAlive(pid), 'the old process is gone');
+  });
+
+  it('`/claude_mode` while only a turn runs and a message waits to be taken in: no "background tasks stopped" line, the agent hears of the cut-off turn', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'BG-12 [fake:hang-once] a turn that never ends');
+    await getCharness().waitFor('BG-12\'s turn to start', replyTimeoutMs, () => getAgentTurns(getLayout(), 'BG-12').length === 1);
+    const hungPid = getTurnPid('BG-12');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'BG-13 [fake:answer] written while the turn runs');
+    // Read by the process but never echoed (the fake runs one turn at a time): input the CLI has not taken in.
+    await getCharness().waitFor('BG-13 to reach the busy process', replyTimeoutMs, () => listPrompts().some((prompt) => prompt.pid === hungPid && prompt.text.includes('BG-13')));
+    const notesBefore = listLostWorkNotes().length;
+    const messagesBefore = topic.listMessages().length;
+    const reply = await topic.sendAndAwaitReply('/claude_mode json', 'same conversation resumed');
+    assert.ok(!reply.text.includes(enDict['fallback.backgroundStopped']), `no background work was stopped:\n${reply.text}`);
+    await sendAndAwaitTurnEnd('BG-14', '[fake:answer] go on');
+    await getCharness().waitFor('the note about the cut-off turn', replyTimeoutMs, () => listLostWorkNotes().length > notesBefore);
+    const notes = listLostWorkNotes().slice(notesBefore);
+    assert.equal(notes.length, 1, 'told once');
+    assert.ok(notes[0].text.includes('the turn you were in the middle of, which was cut off') && !notes[0].text.includes('background tasks'), notes[0].text);
+    assert.ok(!topic.listMessages().slice(messagesBefore).some((message) => message.text.includes(enDict['fallback.backgroundStopped'])), 'no line about background work, then or later');
+    assert.ok(!checkIsPidAlive(hungPid), 'the old process is gone');
+  });
+
+  it('`/claude_mode` whose bound folder is gone while a task runs: the folder error still says the background work stopped', async () => {
+    const pid = await startBackgroundTask('BG-15');
+    fs.rmSync(path.join(getLayout().workRoot, projectFolder), { recursive: true, force: true });
+    const reply = await topic.sendAndAwaitReply('/claude_mode perturn', enDict['fallback.backgroundStopped']);
+    assert.ok(reply.text.indexOf(enDict['fallback.backgroundStopped']) > 0 && !reply.text.includes('same conversation resumed'), `the folder error, then the line:\n${reply.text}`);
+    await getCharness().waitFor('the old process to end', replyTimeoutMs, () => !checkIsPidAlive(pid));
   });
 });

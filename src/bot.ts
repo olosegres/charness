@@ -241,7 +241,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
@@ -4508,8 +4508,11 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
  * adapters can't end up polling/streaming the same thread at once — that
  * desync caused mixed output, silent `/stop`, and the "I keep getting
  * 'Login successful' on every message" bug reported 2026-05-15.
+ *
+ * Resolves the work the stop cut off that the agent's next prompt is told about (`null`: none), so a caller's line to
+ * the operator is derived from the very record the note lists.
  */
-async function switchThreadAdapter(key: SessionKey, newName: string): Promise<void> {
+async function switchThreadAdapter(key: SessionKey, newName: string): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
   // Another agent or a shell takes the topic over: the open request belonged to
   // the old conversation, so it closes silently instead of a later wake-up
@@ -4540,7 +4543,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   }
   setThreadAdapter(key, newName);
   const agent = state.getAgent(key);
-  if (!agent) return;
+  if (!agent) return null;
   // Wipe ids that don't belong to the new adapter. We persist via
   // setAgent (which merges), so build a fresh record with only the
   // surviving fields.
@@ -4579,6 +4582,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // fields we kept.
   await state.removeAgent(key);
   await state.setAgent(key, next);
+  return switchCutOffWork;
 }
 
 /**
@@ -6908,16 +6912,16 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
   }
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
-  // The operator hears that the background work died with the stopped process; the agent hears it in its next prompt.
-  const backgroundStoppedSuffix = checkIsStoppingBackgroundWork(key) ? `\n${t('fallback.backgroundStopped')}` : '';
 
   // Stops the previous backend, records the pick, keeps `claudeSessionId`.
-  await switchThreadAdapter(key, target);
+  const cutOffWork = await switchThreadAdapter(key, target);
+  // The operator hears that the background work died with the stopped process; the agent hears it in its next prompt.
+  const backgroundStoppedSuffix = checkHasLostBackgroundWork(cutOffWork) ? `\n${t('fallback.backgroundStopped')}` : '';
 
   if (!wasActive) return t('claudeMode.set_idle', { label });
 
   const decision = getWorkDirStartDecision(key);
-  if (!decision.ok) return decision.message;
+  if (!decision.ok) return `${decision.message}${backgroundStoppedSuffix}`;
   const targetAdapter = getThreadAdapter(key);
   sendThreadTypingIndicator(key).catch(() => {});
   if (sessionId && targetAdapter.resumeSession) {
@@ -7443,7 +7447,6 @@ async function switchTopicToFallbackEntry(
     // The same account on another model (a pick beyond the limit's scope) is no account pick: the topic keeps following General.
     if (from.profile !== to.profile) await state.setClaudeProfileOverride(key, to.profile);
     // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
-    isStoppingBackground = checkIsStoppingBackgroundWork(key);
     lostWorkFoldingKeys.add(k);
     let outcome: ClaudeProfileApplyOutcome;
     try {
@@ -7459,6 +7462,7 @@ async function switchTopicToFallbackEntry(
     }
     // The re-spawn took the old process's background work: the notice below says so, the continue nudge tells the agent.
     const cutOffWork = takeLostWorkOf(key);
+    isStoppingBackground = checkHasLostBackgroundWork(cutOffWork);
     if (cutOffWork) await foldLostWorkIntoNextPrompt(key, { ...cutOffWork, reason: 'restarted', lostAt: Date.now() });
   } else if (isSameFamily && to.backend === 'opencode') {
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
@@ -7499,16 +7503,6 @@ interface FirstPromptAfterMove {
 }
 
 /**
- * @description Whether stopping the topic's live session now takes the agent's background work with it — read before a
- * switch stops it, so the switch tells the operator ("background tasks … were stopped"); the agent hears it from the
- * lost-work note.
- */
-function checkIsStoppingBackgroundWork(key: SessionKey): boolean {
-  const adapter = getThreadAdapter(key);
-  return adapter.checkIsActive(key) && (adapter.checkHasBackgroundWork?.(key) ?? false);
-}
-
-/**
  * @description The move ACROSS backends both the usage-limit switch and the operator's manual switch make, first
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
@@ -7517,10 +7511,8 @@ function checkIsStoppingBackgroundWork(key: SessionKey): boolean {
  * operator (the agent is told by the next prompt, `switchThreadAdapter`).
  */
 async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<boolean> {
-  const isStoppingBackground = checkIsStoppingBackgroundWork(key);
   if (account !== null) await state.setClaudeProfileOverride(key, account);
-  await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
-  return isStoppingBackground;
+  return checkHasLostBackgroundWork(await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName));
 }
 
 /**

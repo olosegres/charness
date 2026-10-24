@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildLostWorkNote,
+  checkHasLostBackgroundWork,
   checkHasLostWork,
   formatLostWorkTopicLine,
   getHeldLostWorkPlan,
@@ -68,6 +69,15 @@ describe('lostWork', () => {
     const stripped = getTailRecordWithoutPendingWork(tail);
     assert.deepEqual(stripped, { sessionId: 'sess-1', offsetBytes: 500, backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [], claudeCodeVersion: '2.1.310' });
     assert.equal(checkHasLostWork(getLostWorkFromTailRecord(stripped, 'sess-1')), false, 'told once');
+  });
+
+  it('background work the operator is told a switch stopped: tasks, jobs or an unread result — a cut-off turn alone or nothing is none', () => {
+    assert.equal(checkHasLostBackgroundWork(null), false);
+    assert.equal(checkHasLostBackgroundWork(nothing), false);
+    assert.equal(checkHasLostBackgroundWork({ ...nothing, wasTurnInFlight: true }), false);
+    assert.equal(checkHasLostBackgroundWork({ ...nothing, backgroundTasks: [{ taskId: 'b1', description: '' }] }), true);
+    assert.equal(checkHasLostBackgroundWork({ ...nothing, scheduledJobCount: 1 }), true);
+    assert.equal(checkHasLostBackgroundWork({ ...nothing, hasUnreadTaskResult: true }), true);
   });
 
   it('a record written before the pending work was tracked (bare task ids, never cleared after a crash) is no loss: no wake-up about tasks that died long ago', () => {
@@ -144,6 +154,12 @@ describe('lostWork', () => {
     const parkedNote = buildLostWorkNote({ ...record, reason: 'switched', otherAgentTold: { ...nothing, backgroundTasks: [{ taskId: 'b1', description: 'Watch the test run' }] } }, 'English');
     assert.ok(parkedNote.includes('The agent this conversation moved to meanwhile was told first about background tasks b1 «Watch the test run», and may'), parkedNote);
     assert.ok(!buildLostWorkNote({ ...record, otherAgentTold: nothing }, 'English').includes('was told first about'), 'an empty told part says nothing');
+    const toldWithTurn = buildLostWorkNote({ ...record, reason: 'switched', otherAgentTold: { ...record, wasTurnInFlight: true } }, 'English');
+    const caveat = toldWithTurn.split('\n').find((line) => line.includes('was told first about')) ?? '';
+    assert.ok(caveat.includes('background tasks b1 «Watch the test run», b2; 2 session-only CronCreate job(s), and may'), caveat);
+    assert.ok(!caveat.includes('cut off') && !caveat.includes('had not read'), `the caveat names only what could be started again: ${caveat}`);
+    assert.ok(!buildLostWorkNote({ ...record, otherAgentTold: { ...nothing, hasUnreadTaskResult: true, wasTurnInFlight: true } }, 'English').includes('was told first about'),
+      'a told part with nothing to start again says nothing');
   });
 
   it('the topic line: resumed now, resumed by the next message, or told with the next prompt — the tasks by description, the hold in hours', () => {

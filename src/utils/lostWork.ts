@@ -59,6 +59,14 @@ export function checkHasLostWork(lostWork: LostWork): boolean {
   return lostWork.backgroundTasks.length > 0 || lostWork.scheduledJobCount > 0 || lostWork.hasUnreadTaskResult || lostWork.wasTurnInFlight;
 }
 
+/**
+ * @description Whether the loss holds background work the operator is told was stopped by a switch: background tasks,
+ * scheduled jobs or a finished task's unread result — a cut-off turn alone is no background work.
+ */
+export function checkHasLostBackgroundWork(lostWork: LostWork | null): boolean {
+  return lostWork !== null && (lostWork.backgroundTasks.length > 0 || lostWork.scheduledJobCount > 0 || lostWork.hasUnreadTaskResult);
+}
+
 const noLostWork: LostWork = { backgroundTasks: [], scheduledJobCount: 0, hasUnreadTaskResult: false, wasTurnInFlight: false };
 
 /**
@@ -153,11 +161,15 @@ function describeLostWorkForAgent(lostWork: LostWork): string {
  * the baked reply-language directive (`replyLanguage` is the topic's language endonym).
  */
 export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string): string {
+  // Only what the other agent could have started again: its tasks and jobs, not a result or a cut-off turn.
+  const restartableTold: LostWork | null = record.otherAgentTold
+    ? { ...noLostWork, backgroundTasks: record.otherAgentTold.backgroundTasks, scheduledJobCount: record.otherAgentTold.scheduledJobCount }
+    : null;
   return [
     `[charness] This conversation's agent process ended while its own work was still pending (${lostWorkReasonTexts[record.reason]}): ${describeLostWorkForAgent(record)}.`,
     'That work died with the process: no notification will ever arrive for it.',
-    ...(record.otherAgentTold && checkHasLostWork(record.otherAgentTold)
-      ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(record.otherAgentTold)}, and may have started some of it again: look before you start that twice.`]
+    ...(restartableTold && checkHasLostWork(restartableTold)
+      ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(restartableTold)}, and may have started some of it again: look before you start that twice.`]
       : []),
     `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
   ].join('\n');
