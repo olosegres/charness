@@ -104,6 +104,77 @@ describe('postToSession', () => {
     assert.deepEqual(calls, ['ensure k -', 'forward k p']);
   });
 
+  describe('a session that changed while the post waited for the busy turn', () => {
+    it('is ensured again before the forward: the per-turn stop that follows the turn ended its process, and a forward now would be dropped', async () => {
+      const calls: string[] = [];
+      let isBusy = true;
+      let isProcessAlive = true;
+      const deps = createDeps(calls, {
+        checkBusy: () => isBusy,
+        // The wait ends with the turn; the per-turn stop has put the session to sleep by the time it looks again.
+        sleep: async () => {
+          isBusy = false;
+          isProcessAlive = false;
+        },
+        ensureSession: async (conversationKey) => {
+          calls.push(`ensure ${conversationKey} (process alive: ${isProcessAlive})`);
+          isProcessAlive = true;
+          return { ok: true, isFresh: false };
+        },
+        forwardPrompt: async (conversationKey, text) => {
+          calls.push(`forward ${conversationKey} ${text} (process alive: ${isProcessAlive})`);
+        },
+      });
+      assert.deepEqual(await postToSession(deps, 'k', 'p'), { ok: true, isHeld: false });
+      assert.deepEqual(calls, ['ensure k (process alive: true)', 'ensure k (process alive: false)', 'forward k p (process alive: true)']);
+    });
+
+    it('a post that did not wait ensures once', async () => {
+      const calls: string[] = [];
+      assert.deepEqual(await postToSession(createDeps(calls), 'k', 'p'), { ok: true, isHeld: false });
+      assert.deepEqual(calls, ['ensure k -', 'forward k p']);
+    });
+
+    it('a session the second ensure had to start fresh counts as fresh: the builder is told, though the first ensure found it live', async () => {
+      const calls: string[] = [];
+      let isBusy = true;
+      let ensureCount = 0;
+      const deps = createDeps(calls, {
+        checkBusy: () => isBusy,
+        sleep: async () => { isBusy = false; },
+        ensureSession: async () => {
+          ensureCount += 1;
+          return { ok: true, isFresh: ensureCount === 2 };
+        },
+      });
+      const prompt: SessionPromptText = {
+        fullText: 'the whole issue',
+        buildText: ({ isFresh }) => {
+          calls.push(`build isFresh=${isFresh}`);
+          return isFresh ? 'the whole issue' : 'only what changed';
+        },
+      };
+      await postToSession(deps, 'k', prompt);
+      assert.deepEqual(calls, ['build isFresh=true', 'forward k the whole issue']);
+    });
+
+    it('a session that cannot be ensured again is never forwarded to; the reason is the second ensure\'s', async () => {
+      const calls: string[] = [];
+      let isBusy = true;
+      let ensureCount = 0;
+      const deps = createDeps(calls, {
+        checkBusy: () => isBusy,
+        sleep: async () => { isBusy = false; },
+        ensureSession: async () => {
+          ensureCount += 1;
+          return ensureCount === 1 ? { ok: true, isFresh: false } : { ok: false, reason: 'start-failed' };
+        },
+      });
+      assert.deepEqual(await postToSession(deps, 'k', 'p'), { ok: false, reason: 'start-failed' });
+      assert.deepEqual(calls, []);
+    });
+  });
+
   describe('a prompt built for the session it lands in (Jira prompt context C5)', () => {
     /** A prompt whose builder records when it ran and what it was told. */
     function createSessionPrompt(calls: string[]): SessionPromptText {
@@ -116,7 +187,7 @@ describe('postToSession', () => {
       };
     }
 
-    it('is built after the ensure, the wait for the busy turn and the second hold check — right before the forward', async () => {
+    it('is built after the ensure, the wait for the busy turn, the second hold check and the ensure that follows the wait — right before the forward', async () => {
       const calls: string[] = [];
       let busyChecks = 0;
       const deps = createDeps(calls, {
@@ -138,6 +209,7 @@ describe('postToSession', () => {
         'busy? true',
         'busy? false',
         'hold? the whole issue',
+        'ensure k -',
         'build isFresh=false',
         'forward k only what changed',
       ]);

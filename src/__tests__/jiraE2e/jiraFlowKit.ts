@@ -42,6 +42,7 @@ import {
 import { getPollJqlProjectKeys } from './charnessLog';
 import {
   checkHasFlag,
+  fakeClaudeHoldReleaseFileName,
   fakeClaudeLogFileNames,
   getFlagValues,
   getForeignAgentEnvNames,
@@ -52,6 +53,7 @@ import {
   type FakeClaudeTurn,
 } from './fakeClaudeContract';
 import { getAdfText } from '../../connectors/jira/adf';
+import { JiraContextLedger } from '../../connectors/jira/contextLedger';
 import type { ClosedRequestRecord } from '../../requests/types';
 import { testTimingsEnvName, type TestTimings } from '../../testTimings';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
@@ -225,6 +227,21 @@ export function countAssigneeChanges(issueKey: string): number {
 /** How many requests of the issue are closed (final, question, superseded) in the history. */
 export function countClosedRequestsOf(issueKey: string): number {
   return readClosedRequests().filter((record) => record.origin.attributes.issueKey === issueKey).length;
+}
+
+/** Let the first turn of a `hold-once` conversation end: the fake answers it. */
+export function releaseHeldTurn(): void {
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+}
+
+/** How many blocks of the issue the conversation's agent has taken in (the Jira context ledger's sent-set, read from disk): 0 until a prompt is taken in. */
+export function countTakenInBlocksOf(issueKey: string): number {
+  return Object.keys(JiraContextLedger.createForDataDir(getLayout().dataDir).getSnapshot(issueKey).sent).length;
+}
+
+/** How many polls of the instance opened a request on the issue (the bot's own `[jira] poll:` line, which may list other issues first). */
+export function countRequestPollsOf(issueKey: string): number {
+  return getCharness().output.match(new RegExp(`\\[jira\\] poll: .*\\b${issueKey} request`, 'g'))?.length ?? 0;
 }
 
 /**

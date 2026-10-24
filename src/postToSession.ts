@@ -4,11 +4,12 @@
  * conversation's own sleeping session, else starts one if needed — let a
  * BUSY session finish its turn (up to {@link waitIdleTimeoutMs} — live work is
  * never interrupted on purpose; after the bound the forward takes the normal
- * interrupt path), then forward — unless an armed usage-limit wait holds the
- * prompt, checked before the session is touched and again right before the
- * forward (R23). The scheduler's fire (steps 3–4) and the Jira
- * connector's requests share it. Every side effect is injected, so the wait
- * loop runs on a fake clock in tests.
+ * interrupt path) and ensure the session again once it did (the stop that
+ * follows a per-turn conversation's turn may have put it to sleep), then forward —
+ * unless an armed usage-limit wait holds the prompt, checked before the session
+ * is touched and again right before the forward (R23). The scheduler's fire
+ * (steps 3–4) and the Jira connector's requests share it. Every side effect is
+ * injected, so the wait loop runs on a fake clock in tests.
  */
 
 /** Poll cadence for the wait-for-idle loop: re-check the busy probe every 5s. */
@@ -103,11 +104,21 @@ export async function postToSession(
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
   if (!session.ok) return { ok: false, reason: session.reason };
-  if (deps.checkBusy(conversationKey)) await waitForIdle(deps, conversationKey);
+  const isWaitingForTurn = deps.checkBusy(conversationKey);
+  if (isWaitingForTurn) await waitForIdle(deps, conversationKey);
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
+  let isFresh = session.isFresh;
+  if (isWaitingForTurn) {
+    // The session found live may be asleep by now: a per-turn conversation stops its process right after the turn
+    // waited out above, and a prompt written to the stopped process is dropped. The ensure queues behind a stop in
+    // progress, resumes the session when it is over, and is a no-op on a live one.
+    const woken = await deps.ensureSession(conversationKey, fallbackAdapterName);
+    if (!woken.ok) return { ok: false, reason: woken.reason };
+    isFresh = isFresh || woken.isFresh;
+  }
   try {
-    await deps.forwardPrompt(conversationKey, typeof prompt === 'string' ? prompt : prompt.buildText({ isFresh: session.isFresh }));
+    await deps.forwardPrompt(conversationKey, typeof prompt === 'string' ? prompt : prompt.buildText({ isFresh }));
   } catch (error) {
     return { ok: false, reason: 'forward-failed', error: error instanceof Error ? error.message : String(error) };
   }

@@ -43,6 +43,7 @@ import {
   sessionViolationExitCode,
   fakeClaudeBackgroundGapMsFileName,
   fakeClaudeBackgroundReleaseFileName,
+  fakeClaudeHoldReleaseFileName,
   fakeNotificationTurnLatencyMs,
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
@@ -90,6 +91,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `silent`      — ends EVERY turn without answering (the wake-up rules give up and alert);
  *  - `hang-once`   — starts working on its first turn and never ends it (the
  *    test kills the process), answers in the next turn;
+ *  - `hold-once`   — starts working on the first turn of the issue's FIRST request and keeps working until the test
+ *    writes `fakeClaudeHoldReleaseFileName`, then answers; later turns, and later requests, answer at once;
  *  - `slow-once`   — its first turn works in SILENCE (a long tool call: no frame)
  *    for 45 s, then answers; later turns answer at once;
  *  - `progress`    — sends a `progress` note and ends the turn;
@@ -157,8 +160,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -177,6 +180,8 @@ const compactCommandText = '/compact';
 const backgroundTaskId = 'fake-background-task';
 /** How often a running `background-notify` task looks for the test's release file. */
 const backgroundReleasePollMs = 100;
+/** How often a held `hold-once` turn looks for the test's release file. */
+const holdReleasePollMs = 100;
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -579,6 +584,13 @@ function startNotifyingBackgroundTask(argv: readonly string[], sessionId: string
   }, backgroundReleasePollMs);
 }
 
+/** A `hold-once` turn keeps working until the test writes the release file. */
+async function waitForHoldRelease(): Promise<void> {
+  const releasePath = path.join(getStateDir(), fakeClaudeHoldReleaseFileName);
+  while (!fs.existsSync(releasePath)) await new Promise<void>((resolve) => setTimeout(resolve, holdReleasePollMs));
+  fs.rmSync(releasePath, { force: true });
+}
+
 /** A finished background task: its end, then the turn the CLI starts for it, whose first output waits out the API round-trip. */
 async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string, taskId: string, description: string, issueKey: string): Promise<void> {
   writeStdout({ type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch: { status: 'completed', end_time: Date.now() } });
@@ -731,6 +743,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   if (state.mode === 'hang-once' && isFirstTurn) {
     await new Promise<never>(() => {});
+  }
+  if (state.mode === 'hold-once' && isFirstTurn && listKnownRequests(state.issueKey).length === 1) {
+    await waitForHoldRelease();
   }
   if (state.mode === 'slow-once' && isFirstTurn) {
     await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));

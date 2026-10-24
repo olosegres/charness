@@ -8,6 +8,8 @@
  *   → E1 E2 E4 E6: the first prompt carries every block, later ones only what changed — across a stop, a restart and a
  *     deleted comment; the agent's own answer is never sent back
  *   → E3: a prompt that reached the agent but was never taken in counts for nothing; the re-post is the stored whole prompt
+ *   → E10: a hand-over that comes while the previous turn still works waits for it; the per-turn stop that follows the turn
+ *     does not swallow the prompt — the resumed agent reads it once, as a delta
  *   → E5: a compaction the bot ran, and one the CLI ran by itself, each make the next prompt the whole issue again
  *   → E4, E4b, E4c: a resume the CLI refuses, a transcript with no message, a transcript removed entirely: a fresh session
  *     that gets the whole issue
@@ -40,6 +42,8 @@ import {
   bootJiraOnly,
   checkIsProcessAlive,
   countClosedRequestsOf,
+  countRequestPollsOf,
+  countTakenInBlocksOf,
   createIssue,
   fakeJira,
   getCharness,
@@ -63,6 +67,7 @@ import {
   projectFolder,
   readFakeLog,
   registerJiraFlowHooks,
+  releaseHeldTurn,
   requester,
   resumeTimeoutMs,
   spilledCommentWord,
@@ -172,6 +177,37 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     const nextPrompt = await handOverAndAwaitAnswer(issueKey);
     assert.ok(isDeltaPrompt(nextPrompt), nextPrompt);
     assert.ok(nextPrompt.includes('> Third observation: also on import.') && !nextPrompt.includes('Second observation'), nextPrompt);
+  });
+
+  it('E10: a hand-over that comes while the previous turn still works waits for that turn; the per-turn stop that follows it does not swallow the prompt — the resumed agent reads it once, as a delta', async () => {
+    const issueKey = 'PROJ-20';
+    createIssue(issueKey, 'hold-once');
+    fakeJira.addComment(issueKey, requester, 'First report: the import fails.');
+    handIssueToAi(issueKey, requester);
+    await waitFor(`${issueKey}'s first turn under way`, answerTimeoutMs, () => getTurns(issueKey).length === 1);
+    const [heldTurn] = getTurns(issueKey);
+    // The first prompt must be counted as told, or the second is whole whatever happens to it.
+    await waitFor(`${issueKey}'s first prompt taken in`, resumeTimeoutMs, () => countTakenInBlocksOf(issueKey) > 0);
+
+    // The requester writes again and hands the issue over again while that turn works: the second request waits for it.
+    const secondReportId = fakeJira.addComment(issueKey, requester, 'It also fails on Tuesdays.');
+    handIssueToAi(issueKey, requester);
+    await waitFor(`${issueKey}'s second request opened`, answerTimeoutMs, () => countRequestPollsOf(issueKey) === 2);
+    // The turn ends only now, so the process is stopped (per-turn) long before the waiting post looks at the session again.
+    releaseHeldTurn();
+    await waitFor(`${issueKey}'s process stopped after the held turn (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(heldTurn.pid));
+
+    await waitFor(`${issueKey}'s second request read, answered and closed`, resumeTimeoutMs, () => getPrompts(issueKey).length >= 2 && countClosedRequestsOf(issueKey) >= 2);
+    const prompts = getPrompts(issueKey);
+    assert.equal(prompts.length, 2, 'the second prompt reached the agent once: it was not written to the stopped process and re-posted by the wake-up engine');
+    assert.ok(!getCharness().output.includes(`sendInput to inactive session jira:PROJ:${issueKey} dropped`), 'nothing was written to a stopped session');
+    const secondText = prompts[1].text;
+    assert.ok(isDeltaPrompt(secondText), `a delta against what the first prompt carried:\n${secondText}`);
+    assert.ok(secondText.includes(`Comment ${secondReportId} by Requester`) && secondText.includes('(new)'), secondText);
+    assert.ok(secondText.includes('It replaces the same requester\'s earlier request'), 'the header names the replaced request');
+    const secondLaunch = getLaunchOfPrompt(prompts[1]);
+    assert.ok(getFlagValues(secondLaunch?.argv ?? [], '--resume').length > 0, 'the delta went to a RESUMED session');
+    await waitFor(`${issueKey} handed back`, answerTimeoutMs, () => fakeJira.getIssue(issueKey).assignee?.accountId === requester.accountId);
   });
 
   it('E5: a compaction the bot ran, and one the CLI ran by itself, each make the next prompt the whole issue again', async () => {

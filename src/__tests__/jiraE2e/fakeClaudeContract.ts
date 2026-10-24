@@ -123,6 +123,11 @@ export const fakeAskToolName = 'AskUserQuestion';
  */
 export const fakeClaudeBackgroundReleaseFileName = 'background-release';
 /**
+ * While this file is absent, the first turn of a `hold-once` conversation keeps working; the test writes it to END that
+ * turn (its content is ignored) — the fake removes it and answers.
+ */
+export const fakeClaudeHoldReleaseFileName = 'hold-release';
+/**
  * While this file exists, a released `background-notify` task's turn starts only this many ms (its content) after the
  * background list emptied, and with no `session_state_changed running`: the task's notification is then the ONLY sign
  * that a turn is coming — the gap a stop once landed in, stretched past an idle window.

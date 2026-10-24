@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A prompt that waited for the agent's running turn is no longer lost when the process is stopped right after that turn.** A Jira
+hand-over or a scheduled run that arrived while the agent was still working was written to the process the per-turn stop had
+just ended and dropped; the agent got it only minutes later, as a whole re-post. The prompt now makes sure the conversation is
+awake again before it is sent, so the agent reads it once, as it was built.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
