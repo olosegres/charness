@@ -107,6 +107,22 @@ describe('answerRequest close rules', () => {
     assert.equal(ledger.getNewestOpenRequest(topicKey), undefined);
   });
 
+  it('a final answer whose extra note cannot be built is still reported delivered, without the note', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin);
+    const originalError = console.error;
+    const errors: string[] = [];
+    console.error = (line: string) => { errors.push(line); };
+    let outcome;
+    try {
+      outcome = await answerRequest({ ledger, answerSinks: sinks, getFinalAnswerNote: () => { throw new Error('EACCES'); } }, createArgs(request.id));
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(outcome, { ok: true, message: `Delivered. Request ${request.id} is now closed (final).` });
+    assert.equal(errors.length, 1);
+  });
+
   it('progress answers keep the request open and are all counted, concurrent ones included', async () => {
     await ledger.load();
     const request = await ledger.createRequest(topicKey, origin);

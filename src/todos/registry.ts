@@ -163,9 +163,15 @@ export function createTodoRegistry(deps: TodoRegistryDeps): TodoRegistry {
     },
 
     notePersonActivity(key) {
-      const stored = store.getTopic(key).nag;
-      if (stored === undefined || stored.ignoredCount === 0) return;
-      saveNag(key, getTodoNagStateAfterPersonActivity(getCurrentNag(key)));
+      // On a person's message path, before the prompt is forwarded: a store that cannot be read or written is logged,
+      // never thrown — the message goes on.
+      try {
+        const stored = store.getTopic(key).nag;
+        if (stored === undefined || stored.ignoredCount === 0) return;
+        saveNag(key, getTodoNagStateAfterPersonActivity(getCurrentNag(key)));
+      } catch (e) {
+        console.error(`[todos] ${keyToString(key)}: the reminder's silence could not be lifted:`, e instanceof Error ? e.message : e);
+      }
     },
   };
 }

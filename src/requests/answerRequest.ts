@@ -90,6 +90,20 @@ function buildClosedAnswerMessage(requestId: string, closed: ClosedRequestRecord
   return `Delivered. Request ${requestId} was already closed (${closed.closeReason}${replacedBy}), so nothing about it changed.`;
 }
 
+/**
+ * @description The extra line of a `final` answer's result, or `null`. The answer is delivered and the request closed
+ * by now: a failure here (a store that cannot be read) is logged and the result goes without the line — reported as an
+ * error, it would make the agent answer twice.
+ */
+function getFinalAnswerNoteSafely(deps: AnswerRequestDeps, key: SessionKey, requestCreatedAt: number): string | null {
+  try {
+    return deps.getFinalAnswerNote?.(key, requestCreatedAt) ?? null;
+  } catch (e) {
+    console.error('[requests] the final answer\'s note could not be built:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 /** @description Deliver one answer and apply the close rules. */
 export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequestArgs): Promise<AnswerRequestOutcome> {
   await deps.ledger.whenLoaded();
@@ -135,6 +149,6 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     }));
   // After the close: whoever hears it sees the request as it now stands.
   deps.onAnswerDelivered?.(key, args.requestId, args.kind);
-  const finalNote = args.kind === 'final' ? deps.getFinalAnswerNote?.(key, lookup.request.createdAt) ?? null : null;
+  const finalNote = args.kind === 'final' ? getFinalAnswerNoteSafely(deps, key, lookup.request.createdAt) : null;
   return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}${finalNote === null ? '' : ` ${finalNote}`}` };
 }

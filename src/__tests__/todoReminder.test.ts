@@ -145,6 +145,24 @@ describe('the registry\'s reminder bookkeeping', () => {
     assert.deepEqual(registry.getTopic(topicKey).nag, createTodoNagState(), 'an update resets everything');
   });
 
+  it('a person writing never throws on a store that cannot be written: the message goes on', () => {
+    const store = new TodoStore(dataDir, () => nowMs);
+    const registry = createTodoRegistry({ store, getNowMs: () => nowMs });
+    registry.noteTurnEnd(topicKey, nowMs);
+    registry.addTurnWork(topicKey, intervalMs);
+    registry.noteReminderDelivered(topicKey, nowMs);
+    store.saveTopic = () => { throw new Error('EACCES'); };
+    const originalError = console.error;
+    const errors: string[] = [];
+    console.error = (line: string) => { errors.push(line); };
+    try {
+      assert.doesNotThrow(() => registry.notePersonActivity(topicKey));
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(errors.length, 1);
+  });
+
   it('a person writing in a conversation that never ignored a reminder writes nothing', () => {
     const registry = createRegistry();
     registry.notePersonActivity(topicKey);
