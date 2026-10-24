@@ -186,7 +186,11 @@ export const isolatedSandboxEnv: Record<string, string> = process.env.IS_SANDBOX
 /** The only variables `run-isolated.sh` passes to the instance. */
 export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE', ...Object.keys(isolatedSandboxEnv)];
 
-const waitStepMs = 250;
+/**
+ * How often a wait re-reads its state: every wait that is not already true costs half of this on average, over the
+ * thousands of waits the flows make; the checks are cheap reads of arrays, the output and small files.
+ */
+const waitStepMs = 100;
 /** How much of charness's output a failed wait quotes. */
 const outputTailChars = 4000;
 const stopTimeoutMs = 20 * 1000;
