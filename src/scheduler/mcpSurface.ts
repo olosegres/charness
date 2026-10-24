@@ -121,6 +121,21 @@ const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 const mcpServerName = 'telegram-bot-scheduler';
 const mcpServerVersion = '1.0.0';
 
+/**
+ * The `checkCommand` that watches a detached worker (an agent process an orchestrating agent launched), with `<pid>`
+ * and `<run-dir>` for the agent to fill in. It fails on EITHER signal: the worker's process is gone, or nothing in its
+ * run directory changed for 45 minutes. A check of `kill -0 <pid>` alone stays green while a worker hangs — the reason
+ * this recipe exists. The `charness-manager` skill (`agent-plugin/`) carries it verbatim (a unit test holds them equal).
+ */
+export const workerWatchCheckCommand =
+  'kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find <run-dir> -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }';
+/** How often a worker watch runs: a hang or an exit is noticed within ten minutes. */
+export const workerWatchCheckCron = '*/10 * * * *';
+
+/** The skill an orchestrating agent loads in a bot session, as each CLI names it. */
+const managerSkillInstruction =
+  'load the `charness-manager` skill (Claude Code lists it as `charness:charness-manager`) and follow it instead of any other manager skill';
+
 /** The instruction bullets that hold on every platform (the two platform-neutral tools). */
 const compactConversationInstruction =
   '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
@@ -130,6 +145,10 @@ const answerRequestInstruction =
 /** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
 const todoInstruction =
   '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
+const trackerOrchestrationInstruction = `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}.`;
+const telegramOrchestrationInstruction =
+  `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}. ` +
+  `Watch EACH worker with schedule_create: cron \`${workerWatchCheckCron}\` + checkCommand \`${workerWatchCheckCommand}\` (its PID and run dir filled in) — it fires when the worker exits OR stops writing; a \`kill -0\` alone never fires on a hung worker. Cancel the check once its wake is handled.`;
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
@@ -158,6 +177,7 @@ When to use it:
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
+${telegramOrchestrationInstruction}
 ${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
 ${claudeProfilesInstruction}
 
@@ -178,6 +198,7 @@ ${[
   ...extraInstructions,
   compactConversationInstruction,
   claudeProfilesInstruction,
+  trackerOrchestrationInstruction,
 ].join('\n')}
 
 Each tool's own description has the exact argument recipe.`;
@@ -488,6 +509,14 @@ const digestScope: SchedulerScope = { kind: 'dir', directory: '' };
  * has to be kept in step by hand.
  */
 export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId | null): string {
+  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, getOptionalBotTools(deps)), getBotMcpToolDefinitions(deps, platform));
+}
+
+/**
+ * @description The tool definitions a session of `platform` gets, recorded from the SAME registration the request
+ * path runs (never a handler): what the digest hashes, and what a test reads the tools' names and descriptions from.
+ */
+export function getBotMcpToolDefinitions(deps: SchedulerMcpDeps, platform: PlatformId | null): BotMcpToolDefinition[] {
   const definitions: BotMcpToolDefinition[] = [];
   const recorder: ToolRegistrar = {
     registerTool: (name, config) => {
@@ -495,7 +524,7 @@ export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId
     },
   };
   registerBotTools(recorder, deps, digestScope, platform, undefined);
-  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, getOptionalBotTools(deps)), definitions);
+  return definitions;
 }
 
 /**
@@ -616,7 +645,7 @@ const scheduleCreateShape = {
         'non-zero exit or timeout pins an alert in the topic and wakes you with `prompt` plus the exit ' +
         'code and output tail; later failures stay silent until a run passes again (the topic is told). ' +
         'Keep it a quick probe, e.g. `systemctl --user is-active myapp`, `curl -fsS -m 10 http://127.0.0.1:8080/health`, ' +
-        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`.',
+        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`; a detached worker: the recipe in the tool description.',
     ),
   checkTimeoutSeconds: z
     .number()
@@ -888,7 +917,11 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'with a cron — the bot runs it in this folder and wakes you only when it starts failing. This is ' +
         'the ONLY reliable watcher: it survives bot restarts and crashes. Never build your own (a ' +
         'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
-        'or a restart and then fails silently.',
+        'or a restart and then fails silently.\n\n' +
+        `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
+        `checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when the worker exits OR nothing ` +
+        'in its run dir changed for 45 min, so the first failure is also the "worker finished" signal. Never `kill -0` ' +
+        'alone: it stays green while a worker hangs. One check per worker run; schedule_cancel it once its wake is handled.',
       inputSchema: scheduleCreateShape,
     },
     async (args) => {

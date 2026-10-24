@@ -43,6 +43,10 @@ import {
   buildBotMcpToolDigest,
   createSchedulerMcpServer,
   getBotMcpToolDigest,
+  getBotMcpToolDefinitions,
+  buildMcpServerInstructions,
+  workerWatchCheckCommand,
+  workerWatchCheckCron,
   serializeSchedulerScope,
   parseSchedulerScope,
   getSchedulerMcpPort,
@@ -191,6 +195,41 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
       assert.notEqual(getBotMcpToolDigest(withPort, platform), getBotMcpToolDigest(without, platform), `${platform ?? 'neutral'} digest`);
     }
+  });
+
+  it('schedule_create teaches the worker watch: both signals, the cron, never kill -0 alone', () => {
+    const scheduleCreate = getBotMcpToolDefinitions(createDigestDeps(), 'telegram').find((definition) => definition.name === 'schedule_create');
+    const description = scheduleCreate?.description ?? '';
+    assert.ok(description.includes(`checkCommand \`${workerWatchCheckCommand}\``), description);
+    assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
+    assert.match(description, /Never `kill -0` alone/);
+  });
+
+  it('a tracker conversation is pointed at the manager skill but gets no scheduling recipe — it has no scheduling tools', () => {
+    for (const platform of ['jira', null] as const) {
+      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false });
+      assert.ok(instructions.includes('`charness-manager`'), `${platform ?? 'neutral'}`);
+      assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
+      assert.doesNotMatch(instructions, /schedule_create/);
+    }
+  });
+
+  it('every bot tool the shipped skills name is one a bot session really gets', () => {
+    const deps: SchedulerMcpDeps = {
+      ...createDigestDeps(),
+      fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
+      listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, profiles: [] }),
+    };
+    const offered = new Set((['telegram', 'jira'] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
+    const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
+    const botToolPattern = /\b(?:schedule_[a-z]+|claude_profiles|answer_request|send_[a-z_]+_to_user|compact_conversation|jira_[a-z_]+)\b/g;
+    for (const folder of fs.readdirSync(skillsDir)) {
+      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+      for (const named of new Set(text.match(botToolPattern) ?? [])) {
+        assert.ok(offered.has(named), `${folder} names ${named}, which no bot session gets`);
+      }
+    }
+    assert.ok(offered.has('schedule_create') && offered.has('claude_profiles'), 'the tools the manager leans on');
   });
 
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
@@ -1075,6 +1114,10 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       // Watchdogs go through a check, never a hand-made watcher.
       assert.match(instructions, /checkCommand/);
       assert.match(instructions, /NEVER build your own watcher/);
+      // An orchestrating agent loads the bot's manager skill and watches each worker on BOTH signals.
+      assert.ok(instructions.includes('`charness-manager`'), 'names the bot\'s manager skill');
+      assert.ok(instructions.includes(`checkCommand \`${workerWatchCheckCommand}\``), 'carries the worker watch recipe');
+      assert.ok(instructions.includes(`cron \`${workerWatchCheckCron}\``));
     } finally {
       await client.close();
     }

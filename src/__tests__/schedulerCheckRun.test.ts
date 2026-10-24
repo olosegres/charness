@@ -22,6 +22,8 @@ import {
   runCheckCommand,
 } from '../scheduler/checkRun';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { workerWatchCheckCommand } from '../scheduler/mcpSurface';
+import { spawn } from 'child_process';
 
 /**
  * How long a process that has already closed its output may still be visible to
@@ -153,4 +155,41 @@ test('buildCheckFailurePrompt: marker first, failure details, the job prompt las
   assert.match(prompt, /Command \(run by the bot in this folder\): df -h \//);
   assert.match(prompt, /\(no output\)/);
   assert.ok(prompt.endsWith('\nFree some space.'));
+});
+
+/** How long ago a stalled worker's run dir last changed: past the recipe's 45-minute window. */
+const stalledRunDirAgeMs = 50 * 60_000;
+const checkTimeoutMs = 10_000;
+
+test('the worker watch recipe: silent while the worker lives and writes; fails when it stalls or exits — where kill -0 alone stays silent', async () => {
+  await withTempDir(async (dir) => {
+    const runDir = path.join(dir, 'run');
+    fs.mkdirSync(runDir);
+    const eventsFile = path.join(runDir, 'events.jsonl');
+    fs.writeFileSync(eventsFile, '{}\n');
+    const worker = spawn('sleep', ['30'], { stdio: 'ignore' });
+    const workerPid = worker.pid ?? 0;
+    assert.ok(workerPid > 0);
+    const watch = (command: string) => runCheckCommand({ command, cwd: dir, timeoutMs: checkTimeoutMs, env: process.env });
+    const recipe = workerWatchCheckCommand.replaceAll('<pid>', workerPid.toString()).replaceAll('<run-dir>', runDir);
+    try {
+      const writing = await watch(recipe);
+      assert.equal(writing.exitCode, 0, `a live worker that writes passes: ${writing.output}`);
+
+      const stalledAt = new Date(Date.now() - stalledRunDirAgeMs);
+      fs.utimesSync(eventsFile, stalledAt, stalledAt);
+      fs.utimesSync(runDir, stalledAt, stalledAt);
+      const stalled = await watch(recipe);
+      assert.equal(stalled.exitCode, 2, 'a live worker whose run dir stopped changing fails');
+      assert.match(stalled.output, /no change for 45 min/);
+      const livenessOnly = await watch(`kill -0 ${workerPid}`);
+      assert.equal(livenessOnly.exitCode, 0, 'the liveness-only check stays green on the same hung worker');
+    } finally {
+      worker.kill('SIGKILL');
+    }
+    await new Promise((resolve) => worker.once('exit', resolve));
+    const exited = await watch(recipe);
+    assert.equal(exited.exitCode, 1, 'an exited worker fails — also the "worker finished" signal');
+    assert.match(exited.output, new RegExp(`worker ${workerPid} exited`));
+  });
 });

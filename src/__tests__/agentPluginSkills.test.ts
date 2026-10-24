@@ -13,6 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import { workerWatchCheckCommand, workerWatchCheckCron } from '../scheduler/mcpSurface';
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
 const skillsDir = path.join(pluginDir, 'skills');
@@ -67,6 +68,12 @@ describe('agent-plugin', () => {
       assert.ok(description.length <= maxDescriptionLength, `${description.length} characters`);
     });
   }
+
+  test('charness-manager carries the bot\'s worker watch recipe verbatim — the one the bot\'s own tool texts teach', () => {
+    const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8');
+    assert.ok(text.includes(workerWatchCheckCommand), 'the checkCommand');
+    assert.ok(text.includes(`cron \`${workerWatchCheckCron}\``), 'the cron');
+  });
 
   test('no file holds a real-looking identifier', () => {
     for (const file of listFiles(pluginDir)) {
