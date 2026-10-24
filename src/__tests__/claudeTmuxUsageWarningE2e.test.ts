@@ -42,6 +42,7 @@ import {
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { fakeClaudeTuiBanner, fakeUsageLimitRow, fakeUsageWarningRow } from './tmuxE2e/fakeClaudeTui';
 import { getFlagValues } from './jiraE2e/fakeClaudeContract';
+import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -53,6 +54,8 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'tmux-warning';
 const warningTurnLabel = 'WARN-1';
 const limitTurnLabel = 'LIMIT-1';
+const resumeTurnLabel = 'RESUME-1';
+const sessionDiedLogLine = '[Claude] Session died, cleaning up';
 
 const replyTimeoutMs = 20 * 1000;
 const agentTimeoutMs = 60 * 1000;
@@ -153,6 +156,22 @@ describe('A usage warning on the tmux backend end to end: built charness, fake B
     await getCharness().waitFor('the answer after the warning to be relayed', agentTimeoutMs, () => checkIsRelayed(`Done with ${warningTurnLabel}`));
     assert.equal(getCharness().output.includes(`API error detected (usageLimit): ${fakeUsageWarningRow}`), false, 'the warning row is not taken for an API error');
     assert.deepEqual(listSentTexts().filter((text) => text.startsWith(limitNoticeMark)), [], 'a warning is not a usage limit');
+  });
+
+  it('the TUI dies: the next message resumes the same conversation, and the resumed launch loads the bot\'s skills too', async () => {
+    const [started] = readFakeClaudeTuiLaunches(getLayout());
+    const sessionId = getFlagValues(started.argv, '--session-id')[0];
+    assert.ok(sessionId, 'the start named the conversation');
+    const outputBefore = getCharness().output.length;
+    process.kill(started.pid, 'SIGKILL');
+    await getCharness().waitFor('the TUI process gone', agentTimeoutMs, () => !checkIsPidAlive(started.pid));
+    // The pane poll notices the dead session; a message sent before that would be typed into the dead pane.
+    await getCharness().waitFor('the bot to see the session died', agentTimeoutMs, () => getCharness().output.slice(outputBefore).includes(sessionDiedLogLine));
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${resumeTurnLabel} after the TUI died`);
+    await getCharness().waitFor('a resumed TUI launch', agentTimeoutMs, () => readFakeClaudeTuiLaunches(getLayout()).length === 2);
+    const resumed = readFakeClaudeTuiLaunches(getLayout())[1];
+    assert.deepEqual(getFlagValues(resumed.argv, '--resume'), [sessionId], 'the same conversation, resumed');
+    assert.deepEqual(getFlagValues(resumed.argv, '--plugin-dir'), [builtAgentPluginDir], 'the resume loads the bot\'s skills');
   });
 
   it('a turn that hits the real block: the limit notice is posted', async () => {

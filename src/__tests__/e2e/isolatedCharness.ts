@@ -471,16 +471,16 @@ export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform
   return claudeBin;
 }
 
-/** @description The file the fake TUI logs its session launches to (`{ argv }` per line). */
+/** @description The file the fake TUI logs its session launches to (`{ argv, pid }` per line). */
 export function getFakeClaudeTuiLaunchesPath(layout: IsolatedInstanceLayout): string {
   return path.join(layout.fakeLogDir, 'tui-launches.jsonl');
 }
 
 /** @description Every session launch of the fake TUI so far, oldest first. */
-export function readFakeClaudeTuiLaunches(layout: IsolatedInstanceLayout): { argv: string[] }[] {
+export function readFakeClaudeTuiLaunches(layout: IsolatedInstanceLayout): { argv: string[]; pid: number }[] {
   const file = getFakeClaudeTuiLaunchesPath(layout);
   if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line): { argv: string[] } => JSON.parse(line));
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line): { argv: string[]; pid: number } => JSON.parse(line));
 }
 
 /**

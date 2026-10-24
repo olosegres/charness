@@ -161,7 +161,7 @@ export const fakeClaudeLogFileNames = {
 
 /**
  * The variable the launcher of the fake interactive TUI (`tmuxE2e/fakeClaudeTui.ts`) sets to the file the TUI appends
- * one `{ argv }` line to per session launch — what a flow of the tmux backend reads its launch flags from.
+ * one `{ argv, pid }` line to per session launch — what a flow of the tmux backend reads its launch flags from.
  */
 export const fakeClaudeTuiLaunchesEnvName = 'FAKE_CLAUDE_TUI_LAUNCHES';
 
