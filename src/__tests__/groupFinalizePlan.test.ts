@@ -18,14 +18,14 @@ import { getGroupFinalizePlan } from '../utils/groupFinalizePlan';
 
 test('fully-delivered turn (no pending remainder) → noop, no duplicate post', () => {
   assert.deepEqual(
-    getGroupFinalizePlan({ pendingOutput: null, pendingIsContinuation: false }),
+    getGroupFinalizePlan({ pendingOutput: null, pendingIsContinuation: false, pendingStartsNewMessage: false }),
     { action: 'noop' },
   );
 });
 
 test('a whitespace-only buffer → noop (a blank send would only earn a Telegram error)', () => {
   assert.deepEqual(
-    getGroupFinalizePlan({ pendingOutput: '   \n\t', pendingIsContinuation: false }),
+    getGroupFinalizePlan({ pendingOutput: '   \n\t', pendingIsContinuation: false, pendingStartsNewMessage: false }),
     { action: 'noop' },
   );
 });
@@ -34,11 +34,13 @@ test('a turn whose last landed text lags → finalize sends exactly the pending 
   const plan = getGroupFinalizePlan({
     pendingOutput: 'the tail that never flushed',
     pendingIsContinuation: true,
+    pendingStartsNewMessage: false,
   });
   assert.deepEqual(plan, {
     action: 'send',
     text: 'the tail that never flushed',
     isContinuation: true,
+    startsNewMessage: false,
   });
 });
 
@@ -46,10 +48,26 @@ test('a fresh (non-continuation) remainder finalizes as a new message', () => {
   const plan = getGroupFinalizePlan({
     pendingOutput: 'the settled final answer',
     pendingIsContinuation: false,
+    pendingStartsNewMessage: false,
   });
   assert.deepEqual(plan, {
     action: 'send',
     text: 'the settled final answer',
     isContinuation: false,
+    startsNewMessage: false,
+  });
+});
+
+test('a remainder queued after a turn boundary keeps its new-message mark through the teardown drain', () => {
+  const plan = getGroupFinalizePlan({
+    pendingOutput: 'the next turn\'s first text',
+    pendingIsContinuation: true,
+    pendingStartsNewMessage: true,
+  });
+  assert.deepEqual(plan, {
+    action: 'send',
+    text: 'the next turn\'s first text',
+    isContinuation: true,
+    startsNewMessage: true,
   });
 });

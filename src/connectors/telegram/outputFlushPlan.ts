@@ -121,6 +121,76 @@ export function appendPendingOutput(
   return startsNewParagraph ? `${pending}\n\n${output}` : `${pending}\n${output}`;
 }
 
+/**
+ * @name PendingOutputBuffer
+ * @description The text a thread's output queue holds until its debounce ends, and how it lands: `bot.ts`'s
+ * `OutputQueueState` carries these three fields and the helpers below keep them consistent.
+ */
+export interface PendingOutputBuffer {
+  /** Coalesced, not-yet-sent agent output. `null` = nothing pending. */
+  pendingOutput: string | null;
+  /** Whether the FIRST batch in `pendingOutput` continues the last sent message. */
+  pendingIsContinuation: boolean;
+  /** Whether the first batch opens a message of its own: a turn boundary was marked before it was queued. */
+  pendingStartsNewMessage: boolean;
+}
+
+/** @description The thread's mark that the next output opens a new message (a prompt forwarded, a session started, a question posted). */
+export interface NewMessageMark {
+  needsNewMessage: boolean;
+}
+
+/** @description What one flush sends and how it lands in the topic. */
+export interface PendingOutputFlush {
+  output: string;
+  isContinuation: boolean;
+  startsNewMessage: boolean;
+}
+
+/**
+ * @description Queue one batch of agent output. A buffer that starts here takes the thread's new-message mark and spends
+ * it: the mark belongs to the first text queued AFTER the boundary, not to whichever send completes next — a send that
+ * was already under way when the boundary was marked (the previous turn's text on a slow Bot API round trip) would
+ * otherwise spend it, and the new turn's first text would be appended by edit to the previous turn's message. Later
+ * batches only append.
+ */
+export function addPendingOutput(
+  buffer: PendingOutputBuffer,
+  mark: NewMessageMark,
+  batch: { output: string; isContinuation: boolean; startsNewParagraph: boolean },
+): void {
+  if (buffer.pendingOutput === null) {
+    buffer.pendingIsContinuation = batch.isContinuation;
+    buffer.pendingStartsNewMessage = mark.needsNewMessage;
+    mark.needsNewMessage = false;
+  }
+  buffer.pendingOutput = appendPendingOutput(buffer.pendingOutput, batch.output, batch.isContinuation, batch.startsNewParagraph);
+}
+
+/** @description Take the pending text out for a flush: the buffer is empty afterwards. `null` when nothing is pending. */
+export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputFlush | null {
+  if (!buffer.pendingOutput) return null;
+  const flush: PendingOutputFlush = {
+    output: buffer.pendingOutput,
+    isContinuation: buffer.pendingIsContinuation,
+    startsNewMessage: buffer.pendingStartsNewMessage,
+  };
+  buffer.pendingOutput = null;
+  buffer.pendingIsContinuation = false;
+  buffer.pendingStartsNewMessage = false;
+  return flush;
+}
+
+/**
+ * @description Put the text a flush could not send (see {@link getUnsentRemainder}) back at the FRONT of the buffer: it is
+ * older than anything queued during the send. It restarts a fresh message (its predecessors landed or were edited in
+ * place already), so it is not a continuation; text queued meanwhile keeps its own new-message mark.
+ */
+export function requeueUnsentRemainder(buffer: PendingOutputBuffer, unsentRemainder: string): void {
+  buffer.pendingOutput = buffer.pendingOutput === null ? unsentRemainder : appendPendingOutput(unsentRemainder, buffer.pendingOutput, false);
+  buffer.pendingIsContinuation = false;
+}
+
 /** Separator used to re-join un-sent chunks before re-enqueueing them (S2). The
  *  planner re-splits the rejoined text next flush, so a blank line keeps the
  *  chunk boundary readable without gluing two messages together. */

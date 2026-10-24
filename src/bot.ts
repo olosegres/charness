@@ -215,7 +215,7 @@ import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
-import { getOutputFlushPlan, appendPendingOutput, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
@@ -1275,10 +1275,7 @@ interface ThreadMessageState {
   subagentEditInFlight: boolean;
 }
 
-interface OutputQueueState {
-  pendingOutput: string | null;
-  /** Whether the FIRST batch in `pendingOutput` continues the last sent message. */
-  pendingIsContinuation: boolean;
+interface OutputQueueState extends PendingOutputBuffer {
   isProcessing: boolean;
   debounceTimer: NodeJS.Timeout | null;
 }
@@ -2623,7 +2620,7 @@ function getOutputQueueState(key: SessionKey): OutputQueueState {
   const k = keyToString(key);
   let s = outputQueues.get(k);
   if (!s) {
-    s = { pendingOutput: null, pendingIsContinuation: false, isProcessing: false, debounceTimer: null };
+    s = { pendingOutput: null, pendingIsContinuation: false, pendingStartsNewMessage: false, isProcessing: false, debounceTimer: null };
     outputQueues.set(k, s);
   }
   return s;
@@ -2713,7 +2710,10 @@ function clearThreadQueues(key: SessionKey): void {
   // transports capture + reset their in-flight state SYNCHRONOUSLY before any
   // await, so the clear below can't race the drain. Fire-and-forget.
   void getOutboundFor(key).finalize(key);
-  clearThreadOutputQueues(outputQueues.get(k), statusCoalescers.get(k));
+  const queue = outputQueues.get(k);
+  // Text that took the new-message mark and is dropped unsent leaves the mark with the thread again.
+  if (queue?.pendingOutput != null && queue.pendingStartsNewMessage) markNeedsNewMessage(key);
+  clearThreadOutputQueues(queue, statusCoalescers.get(k));
   // A new session starts with empty context — forget the last-sent outputs so
   // the identical-output backstop can't suppress a legitimate repeat across a
   // session boundary (the same convergence point that clears the other
@@ -3779,7 +3779,7 @@ function escapeMarkdown(text: string): string {
  * @description Queue an output text for a thread with debounce.
  *
  * Multiple `output` events from the adapter are coalesced into one pending
- * buffer (see {@link appendPendingOutput}), not overwritten — every emitted
+ * buffer (see {@link addPendingOutput}), not overwritten — every emitted
  * chunk reaches Telegram. A continuation tail concatenates as-is (it may be
  * cut mid-word); a standalone output joins the buffer with `\n`. The first
  * batch's `isContinuation` is recorded so the flush knows whether the buffer
@@ -3823,10 +3823,9 @@ function queueOutput(
   startsNewParagraph = false,
 ): void {
   const q = getOutputQueueState(key);
-  // The continuation flag of the FIRST batch in a fresh buffer decides whether
-  // the whole flush extends the last sent message; later batches only append.
-  if (q.pendingOutput === null) q.pendingIsContinuation = isContinuation;
-  q.pendingOutput = appendPendingOutput(q.pendingOutput, output, isContinuation, startsNewParagraph);
+  // The first batch in a fresh buffer decides how the whole flush lands: it extends the last sent message, or — a turn
+  // boundary was marked before it was queued — opens a new one. Later batches only append.
+  addPendingOutput(q, getThreadMessageState(key), { output, isContinuation, startsNewParagraph });
   // `isFinal` / `isComplete` still drive the immediate-flush timing below (a
   // finished turn must not wait out the debounce) — they no longer mark the
   // buffer for redelivery (retired with the global send pacer, S4).
@@ -3867,10 +3866,9 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
   if (q.isProcessing || !q.pendingOutput) return;
   q.isProcessing = true;
   try {
-    const out = q.pendingOutput;
-    const isContinuation = q.pendingIsContinuation;
-    q.pendingOutput = null;
-    const { unsentRemainder } = await sendOutputImmediate(key, out, isContinuation);
+    const flush = takePendingOutput(q);
+    if (!flush) return;
+    const { unsentRemainder } = await sendOutputImmediate(key, flush.output, flush.isContinuation, flush.startsNewMessage);
     // No silent drop: a chunk dropped on a 429 after the retry-after wait comes
     // back as `unsentRemainder`. Put it BACK at the FRONT of the buffer (it is
     // older than anything that arrived during the await) so the re-trigger flush
@@ -3878,13 +3876,7 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
     // `getUnsentRemainder`, so this never re-sends what already reached Telegram.
     // The remainder restarts a fresh message (its predecessors landed / edited in
     // place already), so it is NOT a continuation.
-    if (unsentRemainder) {
-      q.pendingOutput =
-        q.pendingOutput === null
-          ? unsentRemainder
-          : appendPendingOutput(unsentRemainder, q.pendingOutput, false);
-      q.pendingIsContinuation = false;
-    }
+    if (unsentRemainder) requeueUnsentRemainder(q, unsentRemainder);
   } finally {
     q.isProcessing = false;
     if (q.pendingOutput) {
@@ -3928,14 +3920,14 @@ async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   if (!q) return;
   const plan = getGroupFinalizePlan(q);
   if (plan.action === 'noop') return; // fully delivered → no-op, no dupe.
-  // Snapshot is captured by the plan; null the buffer SYNCHRONOUSLY before the
+  // Snapshot is captured by the plan; empty the buffer SYNCHRONOUSLY before the
   // await so the immediately-following clear / a concurrent flush can't re-send it.
-  q.pendingOutput = null;
+  takePendingOutput(q);
   if (q.debounceTimer) {
     clearTimeout(q.debounceTimer);
     q.debounceTimer = null;
   }
-  const { unsentRemainder } = await sendOutputImmediate(key, plan.text, plan.isContinuation);
+  const { unsentRemainder } = await sendOutputImmediate(key, plan.text, plan.isContinuation, plan.startsNewMessage);
   // A remainder that still 429'd at teardown is dropped (the buffer is being
   // torn down anyway — unchanged from the pre-S2 discard). Do NOT re-queue: the
   // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
@@ -3959,6 +3951,11 @@ async function finalizeGroupOutput(key: SessionKey): Promise<void> {
  * previous text on the same message id, so the user could read only the last
  * tail. Editing is now reserved for explicit continuations of the SAME reply.
  *
+ * `startsNewMessage`: the text was queued after a turn boundary, so it opens a
+ * message of its own — decided when the text was queued ({@link addPendingOutput}),
+ * not read from the thread here, where a flush of EARLIER text finishing after the
+ * boundary would have spent the mark.
+ *
  * On Markdown rejection by Telegram we fall back to plain text (`parse_mode`
  * unset) — the message lands either way. If the in-place edit fails (message
  * deleted / API hiccup) we send every chunk fresh so the full combined text
@@ -3968,6 +3965,7 @@ async function sendOutputImmediate(
   key: SessionKey,
   output: string,
   isContinuation = false,
+  startsNewMessage = false,
 ): Promise<{ unsentRemainder: string | null }> {
   // The typing loader is stopped upstream in `handleAgentOutput` (the shared
   // onOutput entry for BOTH transports), so it's not repeated here.
@@ -3977,7 +3975,7 @@ async function sendOutputImmediate(
   const { chunks: planChunks, shouldEditFirstChunk } = getOutputFlushPlan({
     output,
     isContinuation,
-    needsNewMessage: msgState.needsNewMessage,
+    needsNewMessage: startsNewMessage,
     lastMessageId: msgState.lastMessageId,
     lastMessageText: msgState.lastMessageText,
   });
@@ -4017,7 +4015,6 @@ async function sendOutputImmediate(
     if (!id) break;
     msgState.lastMessageId = id;
     msgState.lastMessageText = chunks[i];
-    msgState.needsNewMessage = false;
     sentCount = i + 1;
   }
 

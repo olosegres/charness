@@ -7,6 +7,10 @@ hand-over or a scheduled run that arrived while the agent was still working was 
 just ended and dropped; the agent got it only minutes later, as a whole re-post. The prompt now makes sure the conversation is
 awake again before it is sent, so the agent reads it once, as it was built.
 
+**A new turn's text no longer lands inside the previous turn's message.** When the Telegram API was slow, the previous turn's
+last text could finish sending after the next prompt had gone to the agent, and the next turn's first text was then appended
+to that message by an edit instead of starting its own. The "new message" mark now belongs to the first text queued after it.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

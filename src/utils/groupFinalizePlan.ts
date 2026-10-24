@@ -23,6 +23,8 @@ export interface GroupFinalizeInput {
   pendingOutput: string | null;
   /** Whether the FIRST batch in `pendingOutput` continues the last sent message. */
   pendingIsContinuation: boolean;
+  /** Whether the first batch opens a message of its own (a turn boundary was marked before it was queued). */
+  pendingStartsNewMessage: boolean;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface GroupFinalizeInput {
  */
 export type GroupFinalizePlan =
   | { action: 'noop' }
-  | { action: 'send'; text: string; isContinuation: boolean };
+  | { action: 'send'; text: string; isContinuation: boolean; startsNewMessage: boolean };
 
 export function getGroupFinalizePlan(input: GroupFinalizeInput): GroupFinalizePlan {
   // A fully-delivered turn (no pending remainder) — and a buffer holding only
@@ -44,5 +46,6 @@ export function getGroupFinalizePlan(input: GroupFinalizeInput): GroupFinalizePl
     action: 'send',
     text: input.pendingOutput,
     isContinuation: input.pendingIsContinuation,
+    startsNewMessage: input.pendingStartsNewMessage,
   };
 }
