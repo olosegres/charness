@@ -13203,6 +13203,12 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       await state.upsertSchedule({ ...record, isCheckFailing: isFailing, updatedAt: new Date().toISOString() });
       await state.flush();
     },
+    recordAlertPin: async (jobId, messageId) => {
+      const record = state.getSchedules()[jobId];
+      if (!record) return;
+      const alertPinMessageIds = [...(record.alertPinMessageIds ?? []), messageId];
+      await state.upsertSchedule({ ...record, alertPinMessageIds, updatedAt: new Date().toISOString() });
+    },
   });
 
   /**
@@ -13240,6 +13246,10 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     getThreadAdapterName: (threadKeyStr) => {
       const key = keyFromString(threadKeyStr);
       return getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
+    },
+    unpinMessages: async (threadKeyStr, messageIds) => {
+      const key = keyFromString(threadKeyStr);
+      for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
     },
     // Routed through the outbound seam: the agent-facing file tool is a
     // connector delivery, not a direct call into the Telegram send pipeline.

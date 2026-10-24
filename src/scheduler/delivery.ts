@@ -77,6 +77,8 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   runCheck: (threadKey: string, command: string, timeoutMs: number) => Promise<CheckRunResult | null>;
   /** Persist a check job's failing flag (it decides whether the next run alerts). */
   setCheckFailing: (jobId: string, isFailing: boolean) => Promise<void>;
+  /** Remember a check alert's pinned message on its job, so cancelling the job unpins it. */
+  recordAlertPin: (jobId: string, messageId: number) => Promise<void>;
 }
 
 /**
@@ -151,19 +153,21 @@ export function buildCheckFailedAnnouncement(
 }
 
 /**
- * @description Steps 1–2: post the announcement and pin it. A pin failure only
- * logs — the announcement is already visible.
+ * @description Steps 1–2: post the announcement and pin it; resolves with the pinned message id. A pin failure only
+ * logs — the announcement is already visible — and resolves null, as a failed send does.
  */
-async function announceAndPin(deps: ScheduleDeliveryDeps, job: ScheduleRecord, text: string): Promise<void> {
+async function announceAndPin(deps: ScheduleDeliveryDeps, job: ScheduleRecord, text: string): Promise<number | null> {
   const messageId = await deps.announce(job.threadKey, text);
-  if (messageId === null) return;
+  if (messageId === null) return null;
   try {
     await deps.pin(job.threadKey, messageId, job.isPinSilent === true);
+    return messageId;
   } catch (error) {
     console.warn(
       `[scheduler] pin announcement for job ${job.id} failed:`,
       error instanceof Error ? error.message : error,
     );
+    return null;
   }
 }
 
@@ -230,7 +234,8 @@ async function deliverCheck(
 
   await deps.setCheckFailing(job.id, true);
   const failure = describeCheckFailure(result, timeoutSec);
-  await announceAndPin(deps, job, buildCheckFailedAnnouncement(job, fireContext, failure, result.output));
+  const alertPinId = await announceAndPin(deps, job, buildCheckFailedAnnouncement(job, fireContext, failure, result.output));
+  if (alertPinId !== null) await deps.recordAlertPin(job.id, alertPinId);
   return deliverToAgent(
     deps,
     job,

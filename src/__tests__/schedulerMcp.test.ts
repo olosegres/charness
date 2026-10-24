@@ -164,6 +164,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       disarmJob: () => {},
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
+      unpinMessages: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
@@ -284,6 +285,7 @@ describe('createSchedulerMcpServer port binding', () => {
       disarmJob: () => {},
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
+      unpinMessages: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
@@ -758,6 +760,8 @@ interface ServerFixture {
   messageSendHandler: { current: SendMessagesToThread };
   /** The `model` each `claude_profiles` call asked for (`null` = omitted). */
   claudeProfilesCalls: Array<string | null>;
+  /** Every `unpinMessages` call the surface made (schedule_cancel of a check that pinned alerts). */
+  unpinCalls: Array<{ threadKey: string; messageIds: number[] }>;
 }
 
 const mcpSingleMessageId = 301;
@@ -961,6 +965,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     // `authorizedWorkDir` injection) is observable at this boundary.
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
     const claudeProfilesCalls: Array<string | null> = [];
+    const unpinCalls: Array<{ threadKey: string; messageIds: number[] }> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
       return { ok: true, summary: `Delivered ${options.messages.length} messages to the topic.`, undeliveredCount: 0, sentMessageIds: [] };
@@ -977,6 +982,9 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       disarmJob: (jobId) => disarmed.push(jobId),
       getThreadsForDirectory: (directory) => boundThreads.get(directory) ?? [],
       getThreadAdapterName: () => 'claude',
+      unpinMessages: async (threadKey, messageIds) => {
+        unpinCalls.push({ threadKey, messageIds: [...messageIds] });
+      },
       sendFilesToThread,
       sendMessagesToThread,
       compactConversation: () => ({ ok: true, message: 'unused' }),
@@ -1005,6 +1013,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       store,
       armed,
       claudeProfilesCalls,
+      unpinCalls,
       disarmed,
       boundThreads,
       fileWorkDir,
@@ -2142,6 +2151,23 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(fixture.store.getSchedules()[promptJob.id], undefined, 'the prompt job is gone');
     assert.ok(fixture.disarmed.includes(promptJob.id));
     assert.ok(fixture.store.getSchedules()[reminder.id], 'the reminder is untouched');
+    await client.close();
+  });
+
+  it('schedule_cancel of a check unpins the alerts it pinned; a job without pinned alerts unpins nothing', async () => {
+    const watch = await seedThreadSchedule('watch builder S1');
+    await fixture.store.upsertSchedule({ ...watch, deliveryKind: 'check', checkCommand: 'kill -0 1', alertPinMessageIds: [501, 502] });
+    const plain = await seedThreadSchedule('Check the deploy');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const cancelled = await client.callTool({ name: 'schedule_cancel', arguments: { id: watch.id } });
+    assert.notEqual(cancelled.isError, true, firstText(cancelled));
+    assert.match(firstText(cancelled), /2 pinned alert\(s\) unpinned/);
+    assert.deepEqual(fixture.unpinCalls, [{ threadKey: watch.threadKey, messageIds: [501, 502] }]);
+
+    await client.callTool({ name: 'schedule_cancel', arguments: { id: plain.id } });
+    assert.equal(fixture.unpinCalls.length, 1, 'nothing to unpin');
     await client.close();
   });
 

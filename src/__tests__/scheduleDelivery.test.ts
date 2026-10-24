@@ -66,7 +66,7 @@ function makeReminder(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
 const onTime: FireContext = { kind: 'on-time' };
 
 interface CallLogEntry {
-  step: 'announce' | 'pin' | 'ensureSession' | 'forward' | 'runCheck' | 'setCheckFailing';
+  step: 'announce' | 'pin' | 'ensureSession' | 'forward' | 'runCheck' | 'setCheckFailing' | 'recordAlertPin';
   detail?: unknown;
 }
 
@@ -123,6 +123,9 @@ function createHarness(options: {
     },
     setCheckFailing: async (jobId, isFailing) => {
       callLog.push({ step: 'setCheckFailing', detail: { jobId, isFailing } });
+    },
+    recordAlertPin: async (jobId, messageId) => {
+      callLog.push({ step: 'recordAlertPin', detail: { jobId, messageId } });
     },
     now: () => nowMs,
     sleep: async (ms) => {
@@ -541,9 +544,10 @@ test('check: the first failure stores the flag, pins the alert, then wakes the a
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(
     callLog.map((entry) => entry.step),
-    ['runCheck', 'setCheckFailing', 'announce', 'pin', 'ensureSession', 'forward'],
+    ['runCheck', 'setCheckFailing', 'announce', 'pin', 'recordAlertPin', 'ensureSession', 'forward'],
   );
   assert.equal((callLog[0].detail as { timeoutMs: number }).timeoutMs, 20_000);
+  assert.deepEqual(callLog[4].detail, { jobId: 'api-health-abc123', messageId: 42 }, 'the pinned alert is remembered on its job');
   assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', isFailing: true });
 
   const alert = (callLog[2].detail as { text: string }).text;
@@ -553,11 +557,23 @@ test('check: the first failure stores the flag, pins the alert, then wakes the a
   assert.match(alert, /Failed to connect/);
   assert.equal((callLog[3].detail as { isSilent: boolean }).isSilent, false, 'the alert pin notifies');
 
-  const prompt = (callLog[5].detail as { text: string }).text;
+  const prompt = (callLog[6].detail as { text: string }).text;
   assert.ok(prompt.startsWith('[Scheduled check "API health" failed]'));
   assert.match(prompt, /Result: exit 7/);
   assert.match(prompt, /Failed to connect/);
   assert.ok(prompt.endsWith('Find out why the API is down and restart it.'), 'the job prompt comes last');
+});
+
+test('check: an alert whose pin failed is not remembered as pinned', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, pinThrows: true });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await createScheduleDelivery(deps)(makeCheck(), onTime);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.ok(!callLog.some((entry) => entry.step === 'recordAlertPin'));
 });
 
 test('check: a failure while already failing stays silent', async () => {

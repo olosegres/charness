@@ -67,7 +67,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - The first failure is ALSO the "worker finished" signal. On the wake read the worker's result first (its final
   event, its exit, the end of its log), then decide: finished → the next step of the loop; stalled → look at its
   last tool call, stop it, resume the same session; stopped by a usage limit → resume it on another account.
-- Then cancel the check (`schedule_list` → `schedule_cancel`). A new run gets a new check.
+- Then cancel the check (`schedule_list` → `schedule_cancel`) — that also unpins its alert, so a finished worker
+  leaves nothing pinned. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
   live in your process, which the bot stops after an idle stretch.
 

@@ -110,6 +110,11 @@ export interface ScheduleRecord {
    * the check recovered.
    */
   isCheckFailing?: boolean;
+  /**
+   * The message ids of the check alerts this job pinned. `schedule_cancel` unpins them: a watch on a detached worker
+   * fails as the normal "worker finished" signal, and every finished worker would otherwise leave an alert pinned.
+   */
+  alertPinMessageIds?: number[];
 }
 
 /**

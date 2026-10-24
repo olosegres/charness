@@ -382,6 +382,8 @@ export interface SchedulerMcpDeps {
   getThreadsForDirectory: (directory: string) => string[];
   /** Last-used adapter name for a thread, for the `lastAdapterName` snapshot. */
   getThreadAdapterName: (threadKey: string) => string | undefined;
+  /** Unpin these messages of the thread (best-effort: an already unpinned or deleted one is skipped). */
+  unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<void>;
   /**
    * Send 1..10 files/images from the thread's bound folder back into the topic.
    * Path-safety, type classification, and the album/size decision live in the
@@ -1018,7 +1020,10 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
     'schedule_cancel',
     {
       title: 'Cancel a scheduled prompt',
-      description: 'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled.',
+      description:
+        'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled. Cancelling a ' +
+        'watchdog check also unpins the alerts it pinned — cancel a worker watch once its wake is handled, so a finished ' +
+        'worker leaves no pinned alert behind.',
       inputSchema: scheduleCancelShape,
     },
     async (args) => {
@@ -1037,7 +1042,10 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
 
       await deps.store.removeSchedule(args.id);
       deps.disarmJob(args.id);
-      return textResult(`Cancelled "${record.name}" (id: ${record.id}).`);
+      const alertPins = record.alertPinMessageIds ?? [];
+      if (alertPins.length === 0) return textResult(`Cancelled "${record.name}" (id: ${record.id}).`);
+      await deps.unpinMessages(record.threadKey, alertPins);
+      return textResult(`Cancelled "${record.name}" (id: ${record.id}); its ${alertPins.length} pinned alert(s) unpinned.`);
     },
   );
 }

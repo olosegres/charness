@@ -8,7 +8,7 @@ through detached workers with the bot's own tools, and `charness-delegate-claude
 launching, watching and resuming those workers (Claude Code lists them as `charness:charness-manager`, …). The manager
 watches every worker with a bot check that fires when the worker exits OR stops writing for 45 minutes — a check that only
 asks whether the process is alive never fires on a hung worker. Its alert pins silently, since a worker that simply finished
-fires it too. A user or project skill of the same kind stays as it is, a Claude
+fires it too, and cancelling a watchdog check (`schedule_cancel`) unpins the alerts it pinned. A user or project skill of the same kind stays as it is, a Claude
 Code older than 2.0.25 (which has no `--plugin-dir`) starts without them, the operator's own sessions outside the bot do not
 get these skills, and an `OPENCODE_CONFIG_DIR` the operator set is kept (its
 OpenCode topics then go without them). An OpenCode server the bot runs that an earlier version started is replaced at the bot's
