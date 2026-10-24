@@ -337,7 +337,9 @@ persists as the thread's adapter name and the switch RESUMES the same
 conversation (see "Shared session store"; `switchThreadAdapter` keeps
 `claudeSessionId` for all three; `checkIsSameConversationSwitch`). The two
 json-stream lifecycles share one stop-in-flight map, so a switch between them
-never races its own `tmux kill-session` under the shared name. A reattach
+never races its own `tmux kill-session` under the shared name. An explicit stop kills the tmux session
+once, awaited, before the session is dropped; the exit bookkeeping kills it only for a process that ended by itself, so a stop
+cannot reach the next start's session of the same name. A reattach
 guard stops a json-stream thread from re-adopting a stale tmux-`claude` session
 at boot. `hiddenAdapterNames` (in `createAdapter.ts`) keeps both json-stream
 names out of the generic `/start` agent list — they are reached via the
