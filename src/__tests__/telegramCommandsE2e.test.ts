@@ -14,8 +14,8 @@
  *     typed while a wizard is open retires it
  *   → `/thinking` `/tool_results` `/subagent`: a picker per family, a tap persists
  *     the mode and re-renders the picker
- *   → `/model` `/effort`: the pickers, a tap and a typed pick answered while no
- *     agent runs (the default effort and «as in General»: `effortDefaultE2e.test.ts`)
+ *   → `/model`: the picker, a tap and a typed pick answered while no agent runs (`/effort` — its picker, a tap
+ *     while no agent runs, the default and «as in General» — is `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits_autoswitch` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
@@ -499,7 +499,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     });
   });
 
-  // ── /model /effort ───────────────────────────────────────────────────
+  // ── /model (/effort: effortDefaultE2e.test.ts) ──────────────────────────
 
   it('/model lists the agent\'s models; a tap and a typed number are answered while no agent runs', async () => {
     const picker = await topic.sendAndAwaitReply('/model', 'Claude Code (stream) — 4 models');
@@ -509,19 +509,6 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     const tapAnswer = await topic.tapAndAwaitAnswer(picker, 'mdl_0_1');
     assert.match(tapAnswer, /No active session/);
     await topic.sendAndAwaitReply('/model 3', 'No active session. Start an agent first.');
-  });
-
-  it('/effort offers the levels; a tap is saved for the next session', async () => {
-    const picker = await topic.sendAndAwaitReply('/effort', 'Effort in this topic: medium — as in General');
-    assert.deepEqual(topic.getKeyboardData(picker), [
-      ['effort_low', 'effort_medium', 'effort_high'],
-      ['effort_xhigh', 'effort_max', 'effort_auto'],
-      ['effort_ultracode'],
-      ['effortsame'],
-    ]);
-    const answer = await topic.tapAndAwaitAnswer(picker, 'effort_high');
-    assert.match(answer, /Level saved/);
-    await topic.waitForMessageText('the picker shows the pick as the topic\'s own', picker, (text) => text === '⚙️ Effort in this topic: high — set for this topic');
   });
 
   // ── /connect /disconnect ─────────────────────────────────────────────

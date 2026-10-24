@@ -218,7 +218,12 @@ describe('The instance default effort end to end: built charness, fake Bot API',
 
   it('/effort in a topic names the level and where it comes from, and offers «As in General» with the value it would give', async () => {
     const screen = await follower.sendAndAwaitReply('/effort', 'Effort in this topic: medium — as in General');
-    assert.deepEqual(follower.getKeyboardData(screen).at(-1), ['effortsame']);
+    assert.deepEqual(follower.getKeyboardData(screen), [
+      ['effort_low', 'effort_medium', 'effort_high'],
+      ['effort_xhigh', 'effort_max', 'effort_auto'],
+      ['effort_ultracode'],
+      ['effortsame'],
+    ], 'the Claude levels, then «As in General»');
     assert.deepEqual(follower.getKeyboardLabels(screen).at(-1), ['As in General (medium)']);
     assert.ok(follower.getKeyboardLabels(screen).flat().includes('medium ✓'));
   });
