@@ -41,10 +41,11 @@ export interface LostWorkRecord extends LostWork {
   reason: LostWorkReason;
   lostAt: number;
   /**
-   * The agent of the backend the conversation moved to was told about the same loss first (a backend switch tells
-   * both agents): the parked conversation's agent checks before it starts anything again.
+   * The part of this loss the agent of the backend the conversation moved to was told about first (a backend switch
+   * tells both agents): the parked conversation's agent checks that part before it starts anything again. Only that
+   * part — a loss merged in later (the cut-off work of the side being left) is this agent's alone.
    */
-  isOtherAgentTold?: boolean;
+  otherAgentTold?: LostWork;
 }
 
 /**
@@ -110,11 +111,19 @@ export function getLostWorkPlan(input: {
   msSinceLastAutoResume: number | null;
   isRequestRequired: boolean;
 }): LostWorkPlan {
-  const isProcessAlive = input.reason === 'restarted' || input.reason === 'switched';
-  const isResumedByNextMessage = !isProcessAlive && !input.isLimitWaitArmed;
   const isInCooldown = input.msSinceLastAutoResume !== null && input.msSinceLastAutoResume < lostWorkResumeCooldownMs;
   const isAutoResume = input.reason !== 'holdExpired' && input.reason !== 'switched' && !input.isLimitWaitArmed && !isInCooldown && !input.isRequestRequired;
-  return { isAutoResume, isResumedByNextMessage: !isAutoResume && isResumedByNextMessage };
+  return isAutoResume ? { isAutoResume: true, isResumedByNextMessage: false } : getHeldLostWorkPlan(input);
+}
+
+/**
+ * @description The plan of a loss whose note waits for the next prompt — no automatic resume, or one that failed: the
+ * person's next message resumes a STOPPED process; a live one (a re-spawn, a switch) or an armed limit wait's own
+ * resume hears it with the next prompt it gets.
+ */
+export function getHeldLostWorkPlan(input: { reason: LostWorkReason; isLimitWaitArmed: boolean }): LostWorkPlan {
+  const isProcessAlive = input.reason === 'restarted' || input.reason === 'switched';
+  return { isAutoResume: false, isResumedByNextMessage: !isProcessAlive && !input.isLimitWaitArmed };
 }
 
 /** The agent-facing wording of each reason (English on purpose, like every agent-facing template). */
@@ -147,27 +156,40 @@ export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string)
   return [
     `[charness] This conversation's agent process ended while its own work was still pending (${lostWorkReasonTexts[record.reason]}): ${describeLostWorkForAgent(record)}.`,
     'That work died with the process: no notification will ever arrive for it.',
-    ...(record.isOtherAgentTold ? ['The agent this conversation moved to meanwhile was told about it first and may have started some of it again: look before you start anything twice.'] : []),
+    ...(record.otherAgentTold && checkHasLostWork(record.otherAgentTold)
+      ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(record.otherAgentTold)}, and may have started some of it again: look before you start that twice.`]
+      : []),
     `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
   ].join('\n');
 }
 
 /**
  * @description One loss from two: a loss the agent was not told about yet stays, and a newer one adds to it — the
- * tasks by id, the larger job count, the reason and time of the newer loss.
+ * tasks by id, the larger job count, the reason and time of the newer loss. The parts another agent was told first
+ * merge only with each other, never with the rest.
  */
 export function mergeLostWorkRecords(untold: LostWorkRecord | undefined, newer: LostWorkRecord): LostWorkRecord {
   if (!untold) return newer;
-  const tasksById = new Map(untold.backgroundTasks.map((task) => [task.taskId, task]));
+  const otherAgentTold = untold.otherAgentTold && newer.otherAgentTold
+    ? mergeLostWork(untold.otherAgentTold, newer.otherAgentTold)
+    : untold.otherAgentTold ?? newer.otherAgentTold;
+  return {
+    ...mergeLostWork(untold, newer),
+    reason: newer.reason,
+    lostAt: newer.lostAt,
+    ...(otherAgentTold ? { otherAgentTold } : {}),
+  };
+}
+
+/** Two losses as one: the tasks by id, the larger job count, either flag. */
+function mergeLostWork(older: LostWork, newer: LostWork): LostWork {
+  const tasksById = new Map(older.backgroundTasks.map((task) => [task.taskId, task]));
   for (const task of newer.backgroundTasks) tasksById.set(task.taskId, task);
   return {
     backgroundTasks: [...tasksById.values()],
-    scheduledJobCount: Math.max(untold.scheduledJobCount, newer.scheduledJobCount),
-    hasUnreadTaskResult: untold.hasUnreadTaskResult || newer.hasUnreadTaskResult,
-    wasTurnInFlight: untold.wasTurnInFlight || newer.wasTurnInFlight,
-    reason: newer.reason,
-    lostAt: newer.lostAt,
-    ...(untold.isOtherAgentTold || newer.isOtherAgentTold ? { isOtherAgentTold: true } : {}),
+    scheduledJobCount: Math.max(older.scheduledJobCount, newer.scheduledJobCount),
+    hasUnreadTaskResult: older.hasUnreadTaskResult || newer.hasUnreadTaskResult,
+    wasTurnInFlight: older.wasTurnInFlight || newer.wasTurnInFlight,
   };
 }
 

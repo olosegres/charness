@@ -241,7 +241,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
@@ -4564,7 +4564,8 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // tells the agent the topic moves to, and the parked conversation keeps it for its own agent's first prompt back.
   const cutOffRecord: LostWorkRecord | null = switchCutOffWork ? { ...switchCutOffWork, reason: 'switched', lostAt: Date.now() } : null;
   // The parked copy knows the agent the topic moves to hears it first (it may restart some of the work itself).
-  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && cutOffRecord ? { ...switched.parked, lostWork: { ...cutOffRecord, isOtherAgentTold: true } } : switched.parked);
+  const parkedLoss: LostWorkRecord | null = switchCutOffWork && cutOffRecord ? { ...cutOffRecord, otherAgentTold: switchCutOffWork } : null;
+  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && parkedLoss ? { ...switched.parked, lostWork: parkedLoss } : switched.parked);
   // Back to a parked conversation (the side being left may be parked in the same step): what its agent was never told
   // rides its first prompt.
   if (switched.isRestored && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
@@ -6907,6 +6908,8 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
   }
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
+  // The operator hears that the background work died with the stopped process; the agent hears it in its next prompt.
+  const backgroundStoppedSuffix = checkIsStoppingBackgroundWork(key) ? `\n${t('fallback.backgroundStopped')}` : '';
 
   // Stops the previous backend, records the pick, keeps `claudeSessionId`.
   await switchThreadAdapter(key, target);
@@ -6923,13 +6926,13 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
     try {
       await targetAdapter.resumeSession(key, decision.workDir, sessionId, { isWithRecentContext: true });
       await persistSessionStart(key, targetAdapter);
-      return t('claudeMode.switched_resumed', { label });
+      return `${t('claudeMode.switched_resumed', { label })}${backgroundStoppedSuffix}`;
     } catch (e) {
       console.error('[claude_mode] resume failed, starting fresh:', e instanceof Error ? e.message : e);
     }
   }
   const msg = await startAgentSession(key);
-  return msg || t('claudeMode.switched_fresh', { label });
+  return `${msg || t('claudeMode.switched_fresh', { label })}${backgroundStoppedSuffix}`;
 }
 
 command('claude_mode', async (_ctx, key, parsed) => {
@@ -7440,8 +7443,7 @@ async function switchTopicToFallbackEntry(
     // The same account on another model (a pick beyond the limit's scope) is no account pick: the topic keeps following General.
     if (from.profile !== to.profile) await state.setClaudeProfileOverride(key, to.profile);
     // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
-    const adapter = getThreadAdapter(key);
-    isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
+    isStoppingBackground = checkIsStoppingBackgroundWork(key);
     lostWorkFoldingKeys.add(k);
     let outcome: ClaudeProfileApplyOutcome;
     try {
@@ -7497,6 +7499,16 @@ interface FirstPromptAfterMove {
 }
 
 /**
+ * @description Whether stopping the topic's live session now takes the agent's background work with it — read before a
+ * switch stops it, so the switch tells the operator ("background tasks … were stopped"); the agent hears it from the
+ * lost-work note.
+ */
+function checkIsStoppingBackgroundWork(key: SessionKey): boolean {
+  const adapter = getThreadAdapter(key);
+  return adapter.checkIsActive(key) && (adapter.checkHasBackgroundWork?.(key) ?? false);
+}
+
+/**
  * @description The move ACROSS backends both the usage-limit switch and the operator's manual switch make, first
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
@@ -7505,8 +7517,7 @@ interface FirstPromptAfterMove {
  * operator (the agent is told by the next prompt, `switchThreadAdapter`).
  */
 async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<boolean> {
-  const leaving = getThreadAdapter(key);
-  const isStoppingBackground = leaving.checkIsActive(key) && (leaving.checkHasBackgroundWork?.(key) ?? false);
+  const isStoppingBackground = checkIsStoppingBackgroundWork(key);
   if (account !== null) await state.setClaudeProfileOverride(key, account);
   await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
   return isStoppingBackground;
@@ -11519,9 +11530,10 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
   const record = mergeLostWorkRecords(state.getLostWork(key), { ...lostWork, reason, lostAt: now });
   await state.setLostWork(key, record);
   const lastAutoResumeAt = state.getLostWorkResumedAt(key);
+  const isLimitWaitArmed = getArmedApiRetry(key)?.kind === 'usageLimit';
   const plan = getLostWorkPlan({
     reason,
-    isLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
+    isLimitWaitArmed,
     msSinceLastAutoResume: lastAutoResumeAt === undefined ? null : now - lastAutoResumeAt,
     // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer.
     isRequestRequired: !checkIsTelegramKey(key),
@@ -11530,8 +11542,8 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
   let linePlan = plan;
   if (plan.isAutoResume) {
     await state.setLostWorkResumedAt(key, now);
-    // The line says what happened: a resume that failed leaves the note for the next message, and says so.
-    if (!(await resumeConversationForLostWork(key))) linePlan = { isAutoResume: false, isResumedByNextMessage: true };
+    // The line says what happened: a resume that failed leaves the note for the next prompt, worded by the same rule.
+    if (!(await resumeConversationForLostWork(key))) linePlan = getHeldLostWorkPlan({ reason, isLimitWaitArmed });
   }
   if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, linePlan, pendingWorkHoldHours, t)).catch(() => {});
 }

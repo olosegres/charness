@@ -37,6 +37,8 @@ export interface PersistedState {
   apiRetries?: Record<string, { kind: string; attempt: number; fireAt: number; isLimitProbe?: boolean; resumeOn?: FallbackChainEntry }>;
   /** The last conversation cost each topic's Claude session reported (`utils/claudeApiSpend.ts`), keyed by the topic. */
   claudeCostBaselines?: Record<string, ClaudeCostBaseline>;
+  /** When the bot last resumed each topic's conversation by itself for lost work (the loop guard), keyed by the topic. */
+  lostWorkResumedAt?: Record<string, number>;
   [field: string]: unknown;
 }
 

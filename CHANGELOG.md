@@ -7,7 +7,7 @@ ends with its own work pending — it crashed, it was gone after a restart, `/mo
 restarted it (cutting off its turn too), or a task nobody heard from for 6 h was let go — the topic gets one plain line
 naming the lost work, and the agent is resumed at once with a short note to check that work and start again what is still
 needed (after a forgotten task, or a second loss within 10 minutes, the note waits for your next message instead). A
-usage-limit switch to another account or backend says so in its own notice and its first prompt carries the note; a topic
+usage-limit switch to another account or backend, or a `/claude_mode` switch, says so in its own reply and the agent's next prompt carries the note; a topic
 that comes back to a backend it left tells that agent too. `/loop` wakeups (`ScheduleWakeup`) now count as pending work
 like `CronCreate` jobs, and the agent's instructions steer anything that must happen later to the bot's own scheduler.
 

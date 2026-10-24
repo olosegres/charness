@@ -206,9 +206,12 @@ own: a usage-limit account switch (its notice says the background work stopped;
 decided at the call site — the re-spawn's `started` leaves the loss to the switch)
 and a backend switch, which reads the live process's work (`getPendingWork`)
 before it stops it — the operator gets "background tasks … were stopped" (in the
-limit notice, or one line after a manual hand-over), the hand-over bridge carries
-the note, and the parked conversation keeps it for its own first prompt back,
-marked that the other backend's agent was told first. A release (`/quit`, `/new`)
+limit notice, in the `/claude_mode` reply, or one line after a manual hand-over),
+the hand-over bridge carries the note, and the parked conversation keeps it for its
+own first prompt back, with the part the other backend's agent was told first
+(`otherAgentTold`) — a loss merged in later is not added to that part. A resume the
+bot tried and could not do keeps the plan's wording (`getHeldLostWorkPlan`): a live
+process is told with its next prompt, never "your next message". A release (`/quit`, `/new`)
 drops it with the session ids.
 
 **Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on

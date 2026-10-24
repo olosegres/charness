@@ -27,6 +27,8 @@
  *     work stopped, no separate line or resume, and the continue prompt of the new process carries the note
  *   → `/effort` re-spawns the process while BG-9's task runs: one line, and the conversation is resumed in the new
  *     process with the note — no "session ended"
+ *   → `/claude_mode` moves the topic to another Claude backend while BG-10's task runs: the switch reply says the
+ *     background work stopped, no separate line, and the next message (BG-11) carries the note
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -367,8 +369,7 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
       process.kill(pid, 'SIGKILL'); // a host reboot or a killed tmux server, while the bot is down
       // The loop guard survives a restart (BG-3's resume is still inside its 10 minutes); a fresh episode clears it here.
-      const resumedAt = persisted.lostWorkResumedAt;
-      assert.ok(typeof resumedAt === 'object' && resumedAt !== null && typeof (resumedAt as Record<string, unknown>)[topicKey] === 'number', 'the last automatic resume is persisted');
+      assert.equal(typeof persisted.lostWorkResumedAt?.[topicKey], 'number', 'the last automatic resume is persisted');
       delete persisted.lostWorkResumedAt;
     });
     await topic.waitForMessage('the line about the task found gone', (message) => listLostWorkLines('BG-6').includes(message.text));
@@ -429,6 +430,20 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     assert.equal(notes[0].pid, respawned[0].pid, 'by the new process');
     assert.ok(notes[0].text.includes(`«${getFakeBackgroundTaskDescription('BG-9')}»`) && notes[0].text.includes('(the bot restarted it for a model, effort or account change)'), notes[0].text);
     assert.ok(!topic.listMessages().slice(messagesBefore).some((message) => message.text.includes('session ended')), 'a re-spawn is not an ended session');
+    assert.ok(!checkIsPidAlive(pid), 'the old process is gone');
+  });
+
+  it('`/claude_mode` moves the topic to another backend while a task runs: the reply says the work stopped, no separate line, the next message tells the agent', async () => {
+    const pid = await startBackgroundTask('BG-10');
+    const notesBefore = listLostWorkNotes().length;
+    const reply = await topic.sendAndAwaitReply('/claude_mode perturn', 'same conversation resumed');
+    assert.ok(reply.text.includes(enDict['fallback.backgroundStopped']), `the switch reply says the background work was stopped:\n${reply.text}`);
+    await sendAndAwaitTurnEnd('BG-11', '[fake:answer] still there');
+    const notes = listLostWorkNotes().slice(notesBefore);
+    assert.equal(notes.length, 1, 'told once, with the next message');
+    assert.ok(notes[0].text.includes('BG-11 [fake:answer]') && notes[0].text.includes(`«${getFakeBackgroundTaskDescription('BG-10')}»`), notes[0].text);
+    assert.ok(notes[0].text.includes('(the conversation moved to another backend)'), notes[0].text);
+    assert.deepEqual(listLostWorkLines('BG-10'), [], 'no lost-work line beside the switch reply');
     assert.ok(!checkIsPidAlive(pid), 'the old process is gone');
   });
 });

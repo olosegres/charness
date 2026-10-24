@@ -12,6 +12,7 @@ import {
   buildLostWorkNote,
   checkHasLostWork,
   formatLostWorkTopicLine,
+  getHeldLostWorkPlan,
   getLostWorkFromTailRecord,
   getLostWorkPlan,
   getTailRecordWithoutPendingWork,
@@ -90,6 +91,15 @@ describe('lostWork', () => {
     assert.deepEqual(planFor('switched'), { isAutoResume: false, isResumedByNextMessage: false }, 'a switch sends its own first prompt');
   });
 
+  it('the held plan (a resume the bot tried and could not do): a live process is told with its next prompt, a gone one by the person\'s next message, a limit wait by its own resume', () => {
+    assert.deepEqual(getHeldLostWorkPlan({ reason: 'restarted', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false });
+    assert.deepEqual(getHeldLostWorkPlan({ reason: 'switched', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false });
+    for (const reason of ['exited', 'foundDead', 'holdExpired'] as const) {
+      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: true }, reason);
+      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false }, `${reason}: limit wait`);
+    }
+  });
+
   it('a conversation that answers only through a request (a tracker issue) is never resumed by a bare note', () => {
     for (const reason of ['exited', 'foundDead', 'restarted'] as const) {
       assert.equal(planFor(reason, { isRequestRequired: true }).isAutoResume, false, reason);
@@ -106,7 +116,9 @@ describe('lostWork', () => {
       lostAt: 2_000,
     };
     assert.equal(mergeLostWorkRecords(undefined, newer), newer);
-    assert.equal(mergeLostWorkRecords({ ...record, isOtherAgentTold: true }, newer).isOtherAgentTold, true, 'the parked mark survives a merge');
+    const toldPart: LostWork = { ...nothing, backgroundTasks: [{ taskId: 'b1', description: 'Watch the test run' }] };
+    assert.deepEqual(mergeLostWorkRecords({ ...record, otherAgentTold: toldPart }, newer).otherAgentTold, toldPart,
+      'the part the other agent heard survives a merge, and a loss merged in later is not added to it');
     assert.deepEqual(mergeLostWorkRecords(record, newer), {
       backgroundTasks: [{ taskId: 'b1', description: 'Watch the test run' }, { taskId: 'b2', description: 'Rerun' }, { taskId: 'b3', description: 'Deploy' }],
       scheduledJobCount: 2,
@@ -128,8 +140,10 @@ describe('lostWork', () => {
     assert.ok(note.endsWith('IN Русский.'), note);
     assert.ok(buildLostWorkNote({ ...record, reason: 'holdExpired' }, 'English').includes('after a long time without a turn'));
     assert.ok(buildLostWorkNote({ ...record, reason: 'switched' }, 'English').includes('(the conversation moved to another backend)'));
-    assert.ok(!note.includes('told about it first'), 'only a parked note says another agent was told');
-    assert.ok(buildLostWorkNote({ ...record, reason: 'switched', isOtherAgentTold: true }, 'English').includes('The agent this conversation moved to meanwhile was told about it first'));
+    assert.ok(!note.includes('was told first about'), 'only a parked note says another agent was told');
+    const parkedNote = buildLostWorkNote({ ...record, reason: 'switched', otherAgentTold: { ...nothing, backgroundTasks: [{ taskId: 'b1', description: 'Watch the test run' }] } }, 'English');
+    assert.ok(parkedNote.includes('The agent this conversation moved to meanwhile was told first about background tasks b1 «Watch the test run», and may'), parkedNote);
+    assert.ok(!buildLostWorkNote({ ...record, otherAgentTold: nothing }, 'English').includes('was told first about'), 'an empty told part says nothing');
   });
 
   it('the topic line: resumed now, resumed by the next message, or told with the next prompt — the tasks by description, the hold in hours', () => {

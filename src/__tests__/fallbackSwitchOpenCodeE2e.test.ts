@@ -338,7 +338,8 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     // Back to the parked conversation: its own agent hears about the task its process lost, once.
     const backPrompt = listBridgePrompts(getLayout()).at(-1)?.text ?? '';
     assert.ok(backPrompt.includes(lostWorkNoteStart) && backPrompt.includes(`«${backgroundTaskName}»`), backPrompt);
-    assert.ok(backPrompt.includes('The agent this conversation moved to meanwhile was told about it first'), 'it knows the other backend\'s agent heard it first');
+    const toldCaveat = /The agent this conversation moved to meanwhile was told first about ([^\n]*), and may have started/.exec(backPrompt)?.[1] ?? '';
+    assert.ok(toldCaveat.includes(`«${backgroundTaskName}»`), `it knows the other backend's agent heard about the task first: ${backPrompt}`);
     assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.lostWork, undefined, 'the OpenCode session parked in its turn carries no loss');
     assert.equal(listSwitchNotices(claudeTopic).length, 1, 'going back by hand is not a limit: no limit notice');
     assert.equal(fakeOpenCode.prompts.length, openCodePromptsBefore, 'nothing more reaches OpenCode');
