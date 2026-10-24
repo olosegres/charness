@@ -14,7 +14,7 @@
 
 import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -29,8 +29,9 @@ import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 const key = makeTelegramKey(-100999779, 79);
 const stubTmuxName = 'tmux';
 const killSessionArgument = 'kill-session';
-/** How long after the end the test looks for a late, un-awaited kill: a process spawn is milliseconds, even loaded. */
-const lateKillWindowMs = 400;
+const stubExitPollMs = 10;
+/** A bound for a hang only: a stub `tmux` appends one line and exits. */
+const stubExitTimeoutMs = 30_000;
 
 describe('a json-stream session end kills its tmux session', () => {
   let tmuxStubDir = '';
@@ -59,6 +60,26 @@ describe('a json-stream session end kills its tmux session', () => {
     for (const dir of sessionDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  /** Whether a stub `tmux` this process spawned is still running (`pgrep` exits 1 when there is none). */
+  function checkHasLiveTmuxStub(): boolean {
+    const pgrep = spawnSync('pgrep', ['-P', process.pid.toString(), '-x', stubTmuxName], { stdio: 'ignore' });
+    if (pgrep.error) throw pgrep.error;
+    return pgrep.status === 0;
+  }
+
+  /**
+   * Wait until every `tmux` the adapter spawned has exited. A spawn is synchronous and the end is announced after the
+   * kills it makes, so a late second kill would be running here; a stub records its call as its last act, so after this
+   * the log holds every kill — no guessed window for a slow process to miss.
+   */
+  async function waitForTmuxStubsToExit(): Promise<void> {
+    const deadline = Date.now() + stubExitTimeoutMs;
+    while (checkHasLiveTmuxStub()) {
+      assert.ok(Date.now() < deadline, 'the stub tmux processes exited');
+      await new Promise((resolve) => setTimeout(resolve, stubExitPollMs));
+    }
+  }
+
   function readKillSessionCalls(): string[] {
     if (!fs.existsSync(tmuxCallsFile)) return [];
     return fs.readFileSync(tmuxCallsFile, 'utf8').split('\n').filter((line) => line.split(' ').includes(killSessionArgument));
@@ -82,7 +103,7 @@ describe('a json-stream session end kills its tmux session', () => {
     const stopped = new Promise<void>((resolve) => adapter.once('stopped', () => resolve()));
     adapter.stopSession(key);
     await stopped;
-    await new Promise((resolve) => setTimeout(resolve, lateKillWindowMs));
+    await waitForTmuxStubsToExit();
     assert.deepEqual(readKillSessionCalls(), [`${killSessionArgument} -t ${getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key))}`]);
   });
 
@@ -92,7 +113,7 @@ describe('a json-stream session end kills its tmux session', () => {
     sessionProcess.kill('SIGKILL');
     adapter['finalizeExternalExit'](session, 137);
     await closed;
-    await new Promise((resolve) => setTimeout(resolve, lateKillWindowMs));
+    await waitForTmuxStubsToExit();
     assert.deepEqual(readKillSessionCalls(), [`${killSessionArgument} -t ${getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key))}`]);
   });
 });
