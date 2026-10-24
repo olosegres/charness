@@ -3448,10 +3448,12 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // Followed by an option on purpose: `--disallowedTools` takes several values.
       ...getClaudePlatformFlags(key),
       ...claudePermissionArgs,
+      // Followed by an option on purpose: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74, so the
+      // free-text `args` at the end would otherwise be read as a second plugin folder.
+      ...(await getClaudeAgentPluginFlags(claudePath)),
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
       ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
-      ...(await getClaudeAgentPluginFlags(claudePath)),
       ...(args ? [args] : []),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
@@ -4107,10 +4109,11 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       // Followed by an option on purpose: `--disallowedTools` takes several values.
       ...getClaudePlatformFlags(key),
       ...claudePermissionArgs,
+      // Followed by an option on purpose (see `startSession`): `--plugin-dir` takes several values on older CLIs.
+      ...(await getClaudeAgentPluginFlags(claudePath)),
       '--resume', sessionId,
       ...mcpFlagsArr,
       ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
-      ...(await getClaudeAgentPluginFlags(claudePath)),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
 

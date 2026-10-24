@@ -586,6 +586,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
+      // Followed by an option on purpose: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74.
+      ...(await getClaudeAgentPluginFlags(this.claudePath)),
       '--replay-user-messages',
       // Bypass ALL permission checks (tmux-backend parity) so the operator's own
       // agent never stalls on a permission prompt. `--dangerously-skip-permissions`
@@ -604,7 +606,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     else args.push('--session-id', sessionId);
     if (opts.model) args.push(claudeModelFlag, opts.model);
     if (opts.effort) args.push(claudeEffortFlag, opts.effort);
-    args.push(...mcpFlags, ...(await getClaudeAgentPluginFlags(this.claudePath)));
+    args.push(...mcpFlags);
     // Overflow-triggered compaction gets the bot's summary guidance (see the module); a profile that holds a
     // pasted API key gets it in its own settings file, beside the `apiKeyHelper` that reads the key.
     args.push(...prepareClaudeCompactHookFlags(resolveDataDir(), opts.configDir));
