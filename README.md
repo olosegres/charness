@@ -608,7 +608,8 @@ short prompt of its own, at the end of a turn — never into a running turn, nev
 topic on the per-turn Claude backend sleeps after every turn, so it gets the line with its next prompt only), and
 never while a request waits for its answer, a usage limit holds the topic or the topic runs on an account billed to
 API credits. After two reminders in a row without an update the bot stays silent until the agent updates or someone
-writes in the topic. Nothing of this is posted to the topic.
+writes in the topic. The reminder itself is never posted to the topic; a standalone one shows the typing indicator
+while the agent reads it, and what the agent writes in that turn (usually nothing) is relayed as usual.
 
 **`/todo` in General → Settings** turns the shared lists off for the whole instance (agents are then not offered the
 tool) and sets the reminder's interval (off, 30 min, 1 h, 2 h, 4 h). An instance without a General topic sets the
