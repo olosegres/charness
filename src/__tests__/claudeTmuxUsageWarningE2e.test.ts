@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
+  builtAgentPluginDir,
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
@@ -32,6 +33,7 @@ import {
   getFreePort,
   IsolatedCharness,
   listTmuxSessions,
+  readFakeClaudeTuiLaunches,
   removeIsolatedInstanceSync,
   writeFakeClaudeTuiLauncher,
   writeInstanceEnvFile,
@@ -39,6 +41,7 @@ import {
 } from './e2e/isolatedCharness';
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { fakeClaudeTuiBanner, fakeUsageLimitRow, fakeUsageWarningRow } from './tmuxE2e/fakeClaudeTui';
+import { getFlagValues } from './jiraE2e/fakeClaudeContract';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -139,6 +142,9 @@ describe('A usage warning on the tmux backend end to end: built charness, fake B
     // then types the stored effort into the fresh TUI; the flow's prompts come after it.
     fakeTelegram.pushOperatorMessage(topicThreadId, '/claude');
     await getCharness().waitFor('the TUI banner relayed', agentTimeoutMs, () => checkIsRelayed(fakeClaudeTuiBanner));
+    const launches = readFakeClaudeTuiLaunches(getLayout());
+    assert.equal(launches.length, 1, 'one TUI session launch');
+    assert.deepEqual(getFlagValues(launches[0].argv, '--plugin-dir'), [builtAgentPluginDir], 'the TUI session loads the bot\'s skills');
     await getCharness().waitFor('the stored effort typed into the fresh TUI', agentTimeoutMs, () => getCharness().output.includes('[Claude] sendInput: "/effort'));
   });
 

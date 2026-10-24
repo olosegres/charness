@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**Agents now get Charness's own orchestration skills.** Every Claude Code session the bot starts — a topic or a Jira
+conversation, the stream and the tmux backend — loads the bot's skills: `charness:charness-manager` for driving work through
+detached workers with the bot's own tools, and `charness:charness-delegate-claude` / `charness:charness-delegate-opencode` for
+launching, watching and resuming those workers. The manager watches every worker with a bot check that fires when the worker
+exits OR stops writing for 45 minutes — a check that only asks whether the process is alive never fires on a hung worker. A
+user or project skill of the same kind stays as it is; the operator's own sessions outside the bot do not get these skills.
+
 **A `/claude` sent right after `/quit` no longer loses its new session at start.** The ended session killed its tmux session a
 second time, by name and without waiting, after the stop had killed it already; on a busy host that second kill could run once
 the new session had created its own tmux session of the same name, and the start then failed with "the CLI exited before its

@@ -9,10 +9,12 @@
  *   • anything else — answers `● Done with <label>.`.
  *
  * A launch without `--session-id` (`claude --version`, `claude auth status`) prints the version and exits, like the
- * stream-json fake. Matches neither runner glob; started through `writeFakeClaudeTuiLauncher` (`e2e/isolatedCharness.ts`).
+ * stream-json fake. A session launch appends its argv to the file `FAKE_CLAUDE_TUI_LAUNCHES` names, when set. Matches neither runner glob; started through `writeFakeClaudeTuiLauncher` (`e2e/isolatedCharness.ts`).
  */
 
+import * as fs from 'fs';
 import * as readline from 'readline';
+import { fakeClaudeTuiLaunchesEnvName } from '../jiraE2e/fakeClaudeContract';
 
 const fakeClaudeTuiVersion = '2.1.304 (Claude Code)';
 /** The first row the TUI draws — the greeting the bot relays for a tmux start. */
@@ -46,6 +48,8 @@ function main(): void {
     process.stdout.write(`${fakeClaudeTuiVersion}\n`);
     return;
   }
+  const launchesFile = process.env[fakeClaudeTuiLaunchesEnvName];
+  if (launchesFile) fs.appendFileSync(launchesFile, `${JSON.stringify({ argv: process.argv.slice(2) })}\n`);
   writeRows([` ${fakeClaudeTuiBanner}`, '']);
   process.stdout.write(inputBoxRow);
   const lines = readline.createInterface({ input: process.stdin });

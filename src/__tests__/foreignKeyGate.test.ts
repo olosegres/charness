@@ -160,6 +160,8 @@ describe('getClaudePlatformFlags (R1, R7)', () => {
         assert.ok(mcpFlagsName, `${file}:${index + 1} launches without the MCP flags`);
         const argvAround = lines.slice(Math.max(0, index - 25), index + 5).join('\n');
         assert.ok(argvAround.includes(`...${mcpFlagsName}`), `${file}:${index + 1} does not pass ${mcpFlagsName}`);
+        // The skills the bot gives its agents load on every launch path, a Jira one included.
+        assert.ok(argvAround.includes('getClaudeAgentPluginFlags()'), `${file}:${index + 1} launches without the bot's skills`);
       });
     }
     assert.ok(launchCount >= 3, 'tmux start, tmux resume and the json-stream spawn');

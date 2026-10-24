@@ -36,6 +36,7 @@ import {
   getLaunchSessionId,
 } from './jiraE2e/fakeClaudeContract';
 import { resolveThreadFilesDir } from '../botFileStorage';
+import { builtAgentPluginDir } from './e2e/isolatedCharness';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   answerTimeoutMs,
@@ -99,6 +100,7 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     const [firstTurn] = getTurns(issueKey);
     const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
     assert.ok(sessionId, 'the first launch named the conversation');
+    assert.deepEqual(getFlagValues(getSessionLaunchOf(firstTurn.pid)?.argv ?? [], '--plugin-dir'), [builtAgentPluginDir], 'the bot\'s skills, beside --setting-sources project,local');
     await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
 
     // E1 + E4 + E6: one new comment and an edited description; the process is gone, so this is a RESUME — still a delta.
@@ -116,6 +118,7 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     assert.ok(!secondText.includes('Fake final answer for PROJ-11'), 'E6: the agent\'s own answer is not sent back');
     const secondLaunch = getLaunchOfPrompt(getPrompts(issueKey)[1]);
     assert.deepEqual(getFlagValues(secondLaunch?.argv ?? [], '--resume'), [sessionId], 'E4: the delta went to a RESUMED session');
+    assert.deepEqual(getFlagValues(secondLaunch?.argv ?? [], '--plugin-dir'), [builtAgentPluginDir], 'a resume loads the bot\'s skills too');
 
     // E4: a bot restart between two requests — the sent-state is on disk, the next prompt is still a delta. The
     // conversation sleeps between them (its process stopped after the turn), so the restart adopts nothing.

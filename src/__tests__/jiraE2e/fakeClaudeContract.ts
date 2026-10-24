@@ -159,6 +159,12 @@ export const fakeClaudeLogFileNames = {
   hooks: 'hooks.jsonl',
 } as const;
 
+/**
+ * The variable the launcher of the fake interactive TUI (`tmuxE2e/fakeClaudeTui.ts`) sets to the file the TUI appends
+ * one `{ argv }` line to per session launch — what a flow of the tmux backend reads its launch flags from.
+ */
+export const fakeClaudeTuiLaunchesEnvName = 'FAKE_CLAUDE_TUI_LAUNCHES';
+
 /** The flags every session launch of a Jira conversation must carry (R7, R8, R11, D17). */
 export const requiredJiraSessionFlags: ReadonlyArray<readonly string[]> = [
   ['--disallowedTools', 'AskUserQuestion'],

@@ -31,6 +31,7 @@ import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
+  builtAgentPluginDir,
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
@@ -244,6 +245,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     assert.match(ready.text, /⚙️ Effort: high/);
     const { argv } = await askAgentAndReadLaunch(followerThreadId);
     assert.deepEqual(getFlagValues(argv, '--effort'), ['high'], `--effort in ${argv.join(' ')}`);
+    assert.deepEqual(getFlagValues(argv, '--plugin-dir'), [builtAgentPluginDir], 'a new session loads the bot\'s skills');
 
     await follower.sendAndAwaitReply('/status', 'Effort: high');
   });
@@ -298,6 +300,7 @@ describe('The instance default effort end to end: built charness, fake Bot API',
     assert.notEqual(respawned.pid, pickerPidBeforeClear, 'the live process was replaced');
     assert.deepEqual(getFlagValues(respawned.argv, '--effort'), ['low']);
     assert.deepEqual(getFlagValues(respawned.argv, '--resume'), [pickerSessionId], 'the same conversation, resumed');
+    assert.deepEqual(getFlagValues(respawned.argv, '--plugin-dir'), [builtAgentPluginDir], 'a resume loads the bot\'s skills too');
   });
 
   it('a hand edit of settings.json applies to the next start with no restart', async () => {

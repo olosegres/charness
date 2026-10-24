@@ -27,11 +27,13 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
+import { fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, fakeClaudeTuiLaunchesEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord } from '../../requests/types';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 export const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
+/** The skills folder the built bot hands its agents (`--plugin-dir`), resolved the way the bot resolves it. */
+export const builtAgentPluginDir = path.join(fs.realpathSync(repoRoot), 'agent-plugin');
 const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 export const fakeClaudePath = path.join(__dirname, '..', 'jiraE2e', 'fakeClaude.ts');
 /** The fake interactive Claude Code TUI (the tmux backend's agent). */
@@ -469,6 +471,18 @@ export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform
   return claudeBin;
 }
 
+/** @description The file the fake TUI logs its session launches to (`{ argv }` per line). */
+export function getFakeClaudeTuiLaunchesPath(layout: IsolatedInstanceLayout): string {
+  return path.join(layout.fakeLogDir, 'tui-launches.jsonl');
+}
+
+/** @description Every session launch of the fake TUI so far, oldest first. */
+export function readFakeClaudeTuiLaunches(layout: IsolatedInstanceLayout): { argv: string[] }[] {
+  const file = getFakeClaudeTuiLaunchesPath(layout);
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line): { argv: string[] } => JSON.parse(line));
+}
+
 /**
  * @description Write the instance's `claude` as the fake interactive TUI (`tmuxE2e/fakeClaudeTui.ts`) instead of the
  * stream-json fake — for a flow that drives the tmux backend; returns the launcher's path (the instance's `CLAUDE_BIN`).
@@ -477,6 +491,7 @@ export function writeFakeClaudeTuiLauncher(layout: IsolatedInstanceLayout): stri
   const claudeBin = path.join(layout.binDir, 'claude');
   fs.writeFileSync(claudeBin, [
     '#!/bin/sh',
+    `export ${fakeClaudeTuiLaunchesEnvName}='${getFakeClaudeTuiLaunchesPath(layout)}'`,
     `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudeTuiPath}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
