@@ -24,7 +24,7 @@ conversations, Claude Code and OpenCode. The operator's own sessions outside the
 - Folder name = frontmatter `name` = `charness-<role>`. OpenCode has no namespaces: a skill named like a
   project's or user's own one (`manager`) would replace it there.
 - The watch recipe in `charness-manager` is the `workerWatchCheckCommand` constant of
-  `src/scheduler/mcpSurface.ts` verbatim (a unit test holds them equal), and every bot tool a skill names must
+  `src/scheduler/workerWatch.ts` verbatim (a unit test holds them equal), and every bot tool a skill names must
   exist on the bot's MCP surface.
 - Written for this public repository: no real ids, paths or names. The shared rules repository keeps its own
   `manager`; a change wanted in both is ported by hand.

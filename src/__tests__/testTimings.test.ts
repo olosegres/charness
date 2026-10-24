@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingKeys, testTimingsEnvName, type TestTimings } from '../testTimings';
+import { minFireIntervalMs } from '../scheduler/recurrence';
 import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
@@ -38,6 +39,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['backgroundHoldMaxMs', pendingWorkHoldDefaultMs],
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
+  ['scheduleMinFireIntervalMs', minFireIntervalMs],
 ];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;

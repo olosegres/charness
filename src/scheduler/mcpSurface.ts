@@ -24,6 +24,7 @@ import {
 import { getAbortError } from '../utils';
 import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } from './checkRun';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
+import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from './workerWatch';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
@@ -121,21 +122,6 @@ const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 const mcpServerName = 'telegram-bot-scheduler';
 const mcpServerVersion = '1.0.0';
 
-/**
- * The `checkCommand` that watches a detached worker (an agent process an orchestrating agent launched), with `<pid>`
- * and `<run-dir>` for the agent to fill in. It fails on EITHER signal: the worker's process is gone, or nothing in its
- * run directory changed for 45 minutes. A check of `kill -0 <pid>` alone stays green while a worker hangs — the reason
- * this recipe exists. The `charness-manager` skill (`agent-plugin/`) carries it verbatim (a unit test holds them equal).
- */
-export const workerWatchCheckCommand =
-  'kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find <run-dir> -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }';
-/** How often a worker watch runs: a hang or an exit is noticed within ten minutes. */
-export const workerWatchCheckCron = '*/10 * * * *';
-/**
- * A worker watch's alert pin stays silent: a worker that simply finished fires the check too, and a notifying pin per
- * finished worker would alarm the operator for nothing (what they must notice, the agent asks as a question).
- */
-export const workerWatchPinArgument = 'isPinSilent: true';
 
 /** The skill an orchestrating agent loads in a bot session, as each CLI names it. */
 const managerSkillInstruction =

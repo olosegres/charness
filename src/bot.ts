@@ -341,6 +341,7 @@ import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError } from './scheduler/delivery';
 import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
 import { createSchedulerEngine, maxTimeoutMs, type SchedulerEngine } from './scheduler/engine';
+import { registerMinFireIntervalMs } from './scheduler/recurrence';
 import {
   createSchedulerMcpServer,
   getSchedulerMcpPort,
@@ -574,6 +575,7 @@ const testTimingsBootLine = formatTestTimingsBootLine(ENV.testTimings);
 if (testTimingsBootLine !== null) console.log(testTimingsBootLine);
 if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInterval(ENV.testTimings.telegramSendIntervalMs);
 if (ENV.testTimings.backgroundHoldMaxMs !== undefined) registerPendingWorkHoldMs(ENV.testTimings.backgroundHoldMaxMs);
+if (ENV.testTimings.scheduleMinFireIntervalMs !== undefined) registerMinFireIntervalMs(ENV.testTimings.scheduleMinFireIntervalMs);
 /** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
 const limitProbeDelayMs = ENV.testTimings.limitProbeDelayMs ?? unconfirmedLimitProbeDelayMs;
 
@@ -13208,6 +13210,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       if (!record) return;
       const alertPinMessageIds = [...(record.alertPinMessageIds ?? []), messageId];
       await state.upsertSchedule({ ...record, alertPinMessageIds, updatedAt: new Date().toISOString() });
+      // Saved at once, like the failing flag: an id lost in a crash would leave its alert pinned for good.
+      await state.flush();
     },
   });
 

@@ -9,6 +9,7 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from './todos/nag';
 import { todoReminderPollMs } from './todos/reminderEngine';
+import { minFireIntervalMs } from './scheduler/recurrence';
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
@@ -65,6 +66,8 @@ const testTimingsSchema = z.strictObject({
   todoReminderPollMs: createShorterWindowSchema(todoReminderPollMs).optional(),
   /** The todo reminder's interval, in place of the `settings.json` one (production default: 60 min; off stays off). */
   todoReminderIntervalMs: createShorterWindowSchema(todoReminderDefaultMinutes * 60 * msPerSecond).optional(),
+  /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
+  scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),
 });
 
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */

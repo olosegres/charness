@@ -22,7 +22,7 @@ import {
   runCheckCommand,
 } from '../scheduler/checkRun';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
-import { workerWatchCheckCommand } from '../scheduler/mcpSurface';
+import { workerWatchCheckCommand } from '../scheduler/workerWatch';
 import { spawn } from 'child_process';
 
 /**

@@ -45,9 +45,6 @@ import {
   getBotMcpToolDigest,
   getBotMcpToolDefinitions,
   buildMcpServerInstructions,
-  workerWatchCheckCommand,
-  workerWatchCheckCron,
-  workerWatchPinArgument,
   serializeSchedulerScope,
   parseSchedulerScope,
   getSchedulerMcpPort,
@@ -82,6 +79,7 @@ import {
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
+import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/workerWatch';
 
 /** The plan's budget for the always-loaded orchestration bullet of the Telegram instructions. */
 const maxOrchestrationBulletLength = 450;

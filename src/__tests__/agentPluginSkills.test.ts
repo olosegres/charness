@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/mcpSurface';
+import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/workerWatch';
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
 const skillsDir = path.join(pluginDir, 'skills');

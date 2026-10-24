@@ -15,6 +15,17 @@ import type { ScheduleSpec } from './types';
  */
 export const minFireIntervalMs = 5 * 60 * 1000;
 
+/** The gap in force: {@link minFireIntervalMs}, or a test instance's shorter one ({@link registerMinFireIntervalMs}). */
+let effectiveMinFireIntervalMs = minFireIntervalMs;
+
+/**
+ * @description Register a test instance's shorter minimum gap (`CHARNESS_TEST_TIMINGS` `scheduleMinFireIntervalMs`), so a
+ * flow can fire a check every minute instead of waiting five. Never called in production.
+ */
+export function registerMinFireIntervalMs(intervalMs: number): void {
+  effectiveMinFireIntervalMs = intervalMs;
+}
+
 /**
  * Tolerance for classifying a fire as "on time" vs a catch-up. A timer can fire
  * a few ms early/late and a boot replay computes `nowMs` slightly after the due
@@ -91,8 +102,8 @@ export function validateScheduleSpec(spec: ScheduleSpec, nowMs: number): string 
     const gap = runs[i].getTime() - runs[i - 1].getTime();
     if (gap < minGapMs) minGapMs = gap;
   }
-  if (minGapMs < minFireIntervalMs) {
-    const minMinutes = Math.round(minFireIntervalMs / 60000);
+  if (minGapMs < effectiveMinFireIntervalMs) {
+    const minMinutes = Math.round(effectiveMinFireIntervalMs / 60000);
     return `Cron fires too often (min gap ${Math.round(minGapMs / 1000)}s); minimum allowed interval is ${minMinutes} min`;
   }
   return null;

@@ -114,6 +114,15 @@ export const fakeAskQuestion = {
   shortOptionLabel: 'The short way',
   longOptionLabel: `The long way: ${'every step spelled out in detail, '.repeat(8)}and nothing left out.`,
 } as const;
+/**
+ * `arm-watch` / `cancel-watch` (the worker-watch flow): the name of the watch the fake arms on a worker that is gone —
+ * a PID above any Linux `pid_max` (4194304), so the recipe's `kill -0` fails as for a worker that exited — and the
+ * token the watch's own prompt carries, so the check's wake runs `cancel-watch`.
+ */
+export const fakeWatchJobName = 'watch worker W-1';
+export const fakeGoneWorkerPid = 4_194_305;
+export const fakeCancelWatchToken = '[fake:cancel-watch]';
+
 /** The tool name `ask` mode logs its outcome under in `tool-calls.jsonl`; the outcome is the answer the user gave. */
 export const fakeAskToolName = 'AskUserQuestion';
 

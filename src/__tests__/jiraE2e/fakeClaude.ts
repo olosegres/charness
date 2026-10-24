@@ -48,6 +48,8 @@ import {
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
+import { fakeCancelWatchToken, fakeGoneWorkerPid, fakeWatchJobName } from './fakeClaudeContract';
+import { workerWatchCheckCommand } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
@@ -142,6 +144,11 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
  *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells, after the delay in
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
+ *  - `arm-watch`   — an orchestrator watching a worker the way `charness-manager` says: `schedule_create` with the real
+ *    worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that is gone, cron every minute, `isPinSilent:
+ *    true`, a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
+ *    then `schedule_cancel` of that watch, as the skill's "cancel the check once the wake is handled". Both log every
+ *    call to `tool-calls.jsonl` and are honoured by a turn with or without a request, by the token in its text;
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -591,6 +598,28 @@ async function callBotTool(server: McpServerConfig, toolName: string, args: Reco
   }
 }
 
+/** @description `arm-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
+async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'cancel-watch', issueKey: string): Promise<void> {
+  const logToolCall = (tool: string, args: Record<string, string | boolean>, outcome: string): void => {
+    appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool, args, outcome });
+  };
+  if (mode === 'arm-watch') {
+    const args = {
+      name: fakeWatchJobName,
+      cron: '* * * * *',
+      checkCommand: workerWatchCheckCommand.replaceAll('<pid>', fakeGoneWorkerPid.toString()).replaceAll('<run-dir>', getStateDir()),
+      isPinSilent: true,
+      prompt: `${fakeCancelWatchToken} The worker W-1 finished or stalled: read its result, then cancel this watch.`,
+    };
+    logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
+    return;
+  }
+  const listed = await callBotTool(server, 'schedule_list', {});
+  logToolCall('schedule_list', {}, listed);
+  const jobId = new RegExp(`${fakeWatchJobName} \\(id: ([^)]+)\\)`).exec(listed)?.[1];
+  if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
+}
+
 function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
   return callBotTool(server, answerToolName, args);
 }
@@ -793,6 +822,17 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     return;
   }
   const requestId = requestIdRe.exec(content)?.[0];
+  const watchMode = modeRe.exec(content)?.[1];
+  if (watchMode === 'arm-watch' || watchMode === 'cancel-watch') {
+    const watchIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    emitTurnActivity(sessionId, watchIssueKey);
+    const server = getBotMcpServer(argv);
+    if (server) await runWatchMode(server, watchMode, watchIssueKey);
+    if (requestId && server) await callAnswerRequest(server, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    endTurn(sessionId, `Watch ${watchMode} done.`);
+    return;
+  }
   if (!requestId) {
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
