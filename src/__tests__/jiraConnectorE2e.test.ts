@@ -72,7 +72,6 @@ import {
   getTurns,
   handIssueToAi,
   idleStopTimeoutMs,
-  isDeltaPrompt,
   isWholePrompt,
   itHoldsIsolationBeforeBoot,
   itHoldsTheInstanceInvariants,
@@ -389,28 +388,18 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     assert.deepEqual(getFlagValues(getSessionLaunchOf(refreshedTurn.pid)?.argv ?? [], '--resume'), [idleAdoptedSessionId], 'the same conversation, resumed');
   });
 
-  it('per-turn mode (L5): the process is gone right after each answer; the next hand-over resumes the same conversation', async () => {
+  it('per-turn mode (L5): from the restart that switched jira.json to it, a NEW session\'s process is gone right after its answer', async () => {
+    // The resume that follows, its delta prompt and the second stop are the prompt flow's E1 (jiraPromptE2e), which boots
+    // per-turn; what only this flow shows is the switch at a restart reaching the sessions started after it.
     fakeJira.assignIssue('PROJ-10', aiAccount, requester);
     await waitFor('PROJ-10 answered', answerTimeoutMs, () => fakeJira.getIssue('PROJ-10').comments.length === 1);
     const [firstTurn] = getTurns('PROJ-10');
-    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
-    assert.ok(sessionId, 'PROJ-10\'s launch named its conversation');
+    assert.ok(getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []), 'PROJ-10\'s launch named its conversation');
     await waitFor('PROJ-10\'s process stopped right after its turn', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
     // The per-turn stop is the idle stop's teardown; its line follows the bot's own tmux kill, after the process is gone.
     await waitFor('the per-turn stop logged', perTurnStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-10 process stopped; the session sleeps'));
     assert.ok(!getCharness().output.includes('[ClaudeJson] session jira:PROJ:PROJ-10 exited unexpectedly'));
-
-    handIssueToAi('PROJ-10', requester);
-    await waitFor('PROJ-10 answered again', answerTimeoutMs, () => fakeJira.getIssue('PROJ-10').comments.length === 2);
-    const secondTurn = getTurns('PROJ-10').at(-1)!;
-    assert.notEqual(secondTurn.pid, firstTurn.pid, 'a new process per turn');
-    assert.deepEqual(getFlagValues(getSessionLaunchOf(secondTurn.pid)?.argv ?? [], '--resume'), [sessionId], 'the same conversation, resumed');
-    await waitFor('PROJ-10\'s second process stopped too', perTurnStopTimeoutMs, () => !checkIsProcessAlive(secondTurn.pid));
     assert.equal(fakeJira.getIssue('PROJ-10').assignee?.accountId, requester.accountId, 'handed back');
-    // E4: the process stopped after its turn and the session slept — the resume is not a new conversation, so it gets only the changes.
-    const [firstPrompt, secondPrompt] = getPrompts('PROJ-10');
-    assert.ok(isWholePrompt(firstPrompt.text) && isDeltaPrompt(secondPrompt.text), secondPrompt.text);
-    assert.ok(secondPrompt.text.includes('Nothing in the issue changed since your last prompt.'));
   });
 
 

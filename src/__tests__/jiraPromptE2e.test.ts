@@ -118,6 +118,7 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     assert.ok(secondTurn);
     await waitFor(`${issueKey}'s process stopped (per-turn)`, perTurnStopTimeoutMs, () => !checkIsProcessAlive(secondTurn.pid));
     await waitFor('the per-turn stop logged', perTurnStopTimeoutMs, () => getCharness().output.includes(`[compact-on-idle] jira:PROJ:${issueKey} process stopped; the session sleeps`));
+    assert.ok(!getCharness().output.includes(`[ClaudeJson] session jira:PROJ:${issueKey} exited unexpectedly`), 'a per-turn stop is not an unexpected exit');
     await getCharness().stop();
     await startCharness();
     // E2: a comment deleted between requests — one line, then never again.
