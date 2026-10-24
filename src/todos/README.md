@@ -17,7 +17,9 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 ## Items and order (`types.ts`, `merge.ts`, `order.ts`)
 
 - An item: `id` (`t1`, `t2`, … per conversation, never reused), `title` (≤ 200), `status` queued | inWork | done |
-  dropped, `note` (≤ 500), `source`, `ref` (a tracker key / link), created / updated / started / closed times.
+  dropped, `note` (≤ 500), `source`, `ref` (a tracker key / link), created / updated / started / closed times. Title,
+  note and ref are kept on ONE line (`getSingleLineTodoText`): they are pasted into other agents' prompts as board
+  lines, where a line break could pass one agent's text off as a bot-made block.
 - **The array order of the open items IS the queue order** — no separate position numbers. The one total order
   (`getTodoItemsInOrder`): in-work items first, then the queue, then the closed items by close time, newest first.
 - **`todo_update` is an UPSERT** (`applyTodoUpdate`): no id → a new item (queued, last, unless `status` / `position`

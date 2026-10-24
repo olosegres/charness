@@ -35,6 +35,18 @@ export type TodoUpdateResult =
   | { ok: true; file: TodoTopicFile; isChanged: boolean; createdIds: string[] }
   | { ok: false; errors: string[] };
 
+/** Line breaks, tabs and the other control characters, in runs, with the spaces around them. */
+const lineBreakingRunRe = /[\s\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
+/**
+ * @description An agent's text as ONE line: every run of whitespace and control characters becomes one space. A
+ * title, note or ref is pasted into other agents' prompts as a line of the board; a line break in it would break that
+ * layout and let one agent's text pass for a bot-made block (`[Request …]`, `[Project board …]`) in another's prompt.
+ */
+export function getSingleLineTodoText(text: string): string {
+  return text.replace(lineBreakingRunRe, ' ').trim();
+}
+
 /** The prefix of every item id; the number after it counts per conversation. */
 const todoItemIdPrefix = 't';
 
@@ -55,7 +67,7 @@ function getStatusTimes(item: TodoItem, status: TodoStatus, nowMs: number): Pick
 /** @description `item` with the optional text field `name` set, or removed for an empty value. */
 function getItemWithTextField(item: TodoItem, name: 'note' | 'ref', value: string | undefined): TodoItem {
   if (value === undefined) return item;
-  const trimmed = value.trim();
+  const trimmed = getSingleLineTodoText(value);
   if (trimmed.length > 0) return { ...item, [name]: trimmed };
   const withoutField = { ...item };
   delete withoutField[name];
@@ -79,7 +91,7 @@ export function applyTodoUpdate(file: TodoTopicFile, args: TodoUpdateArgs, nowMs
   (args.items ?? []).forEach((patch, index) => {
     const label = `items[${index}]`;
     if (patch.id === undefined) {
-      const title = patch.title?.trim() ?? '';
+      const title = getSingleLineTodoText(patch.title ?? '');
       if (title.length === 0) {
         errors.push(`${label}: a new item needs a title (an item without an id is a new one).`);
         return;
@@ -107,14 +119,14 @@ export function applyTodoUpdate(file: TodoTopicFile, args: TodoUpdateArgs, nowMs
       errors.push(`${label}: there is no item "${patch.id}" in your list.`);
       return;
     }
-    if (patch.title !== undefined && patch.title.trim().length === 0) {
+    if (patch.title !== undefined && getSingleLineTodoText(patch.title).length === 0) {
       errors.push(`${label}: the title of "${patch.id}" cannot be empty.`);
       return;
     }
     const status = patch.status ?? current.status;
     const patched = getItemWithTextField(getItemWithTextField({
       ...current,
-      ...(patch.title === undefined ? {} : { title: patch.title.trim() }),
+      ...(patch.title === undefined ? {} : { title: getSingleLineTodoText(patch.title) }),
       status,
       ...getStatusTimes(current, status, nowMs),
     }, 'note', patch.note), 'ref', patch.ref);
