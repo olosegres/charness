@@ -359,6 +359,8 @@ export interface FakeOpenCodeBinaryOptions extends Pick<FakeOpenCodeOptions, 've
    * the {@link FakeOpenCodeServer} again on the port once it sees the pid). Unset, `serve` fails like any other command.
    */
   servePidFile?: string;
+  /** When set, `opencode serve` appends the `OPENCODE_CONFIG_DIR` it was started with (`OPENCODE_CONFIG_DIR=<value>`). */
+  serveEnvFile?: string;
 }
 
 /**
@@ -373,7 +375,9 @@ export function writeFakeOpenCodeBinary(binDir: string, options: FakeOpenCodeBin
     'case "$1" in',
     `  --version) echo '${options.version}' ;;`,
     `  models) printf '%s\\n' ${options.models.map((model) => `'${model}'`).join(' ')} ;;`,
-    ...(options.servePidFile ? [`  serve) echo "$$" >> '${options.servePidFile}'; exec sleep 3600 ;;`] : []),
+    ...(options.servePidFile
+      ? [`  serve) ${options.serveEnvFile ? `echo "OPENCODE_CONFIG_DIR=$OPENCODE_CONFIG_DIR" >> '${options.serveEnvFile}'; ` : ''}echo "$$" >> '${options.servePidFile}'; exec sleep 3600 ;;`]
+      : []),
     '  *) echo "fake opencode: unsupported command: $*" >&2; exit 2 ;;',
     'esac',
     '',

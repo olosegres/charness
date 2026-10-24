@@ -6,6 +6,11 @@
  *  - Claude Code loads the folder through `--plugin-dir` on every bot launch of an agent session — also under
  *    `--setting-sources project,local` (a Jira session), probed on 2.1.310 — and lists the skills as
  *    `charness:<folder>` beside the user's and the project's own.
+ *  - OpenCode reads `OPENCODE_CONFIG_DIR` once, when its server starts, and adds the `skills/` of that folder to the
+ *    project's and the user's own (probed on the installed build; `OPENCODE_CONFIG_CONTENT` was no option: its
+ *    `skills` list REPLACES the project's). The folder is a bot-owned one in `DATA_DIR` whose `skills` links to the
+ *    package's, because OpenCode writes files (`.gitignore`) into it — inside the package they would dirty a checkout
+ *    the bot runs from.
  */
 
 import fs from 'fs';
@@ -27,4 +32,96 @@ export function resolveAgentPluginDir(): string | null {
 /** @description The Claude Code flags that load the bot's skills into an agent session: `--plugin-dir <folder>`. */
 export function getClaudeAgentPluginFlags(pluginDir: string | null = resolveAgentPluginDir()): string[] {
   return pluginDir === null ? [] : ['--plugin-dir', pluginDir];
+}
+
+/** OpenCode's variable naming an extra config folder, searched like a project's `.opencode` (its `skills/` included). */
+export const openCodeConfigDirEnvName = 'OPENCODE_CONFIG_DIR';
+const openCodeAgentConfigDirName = 'opencode-config';
+
+/** @description The bot-owned OpenCode config folder in `DATA_DIR`. */
+export function getOpenCodeAgentConfigDir(dataDir: string): string {
+  return path.join(path.resolve(dataDir), openCodeAgentConfigDirName);
+}
+
+/**
+ * @description Make the bot's OpenCode config folder hold a `skills` link to the package's skills (created, or
+ * re-pointed when a move of the package left it stale) and return the folder; null when there is nothing to link or a
+ * `skills` there is not the bot's link (left alone) or the folder cannot be written — the server then starts without
+ * the bot's skills.
+ */
+export function prepareOpenCodeAgentConfigDir(dataDir: string, pluginDir: string | null = resolveAgentPluginDir()): string | null {
+  if (pluginDir === null) return null;
+  const configDir = getOpenCodeAgentConfigDir(dataDir);
+  const skillsLink = path.join(configDir, agentPluginSkillsDirName);
+  const skillsTarget = path.join(pluginDir, agentPluginSkillsDirName);
+  try {
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const existing = fs.lstatSync(skillsLink, { throwIfNoEntry: false });
+    if (existing && !existing.isSymbolicLink()) {
+      console.warn(`[agentPlugin] ${skillsLink} is not the bot's link; OpenCode starts without the bot's skills`);
+      return null;
+    }
+    if (existing && fs.readlinkSync(skillsLink) === skillsTarget) return configDir;
+    if (existing) fs.unlinkSync(skillsLink);
+    fs.symlinkSync(skillsTarget, skillsLink, 'dir');
+    return configDir;
+  } catch (e) {
+    console.warn(`[agentPlugin] cannot prepare ${configDir}; OpenCode starts without the bot's skills:`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+let isOperatorConfigDirAnnounced = false;
+
+/**
+ * @description What the `opencode serve` the bot starts gets on top of its environment: `OPENCODE_CONFIG_DIR` naming the
+ * bot's folder — nothing when the operator set the variable (theirs is kept; announced once) or the folder cannot be
+ * prepared.
+ */
+export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: string): Record<string, string> {
+  if (env[openCodeConfigDirEnvName]) {
+    if (!isOperatorConfigDirAnnounced) {
+      isOperatorConfigDirAnnounced = true;
+      console.log(`[agentPlugin] ${openCodeConfigDirEnvName} is set by the operator and kept; OpenCode topics go without the bot's skills`);
+    }
+    return {};
+  }
+  const configDir = prepareOpenCodeAgentConfigDir(dataDir);
+  return configDir === null ? {} : { [openCodeConfigDirEnvName]: configDir };
+}
+
+/**
+ * @name OpenCodeServerLaunchReading
+ * @description What the bot can read about the running OpenCode server's launch: `unknown` — the listener is not a
+ * process it can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`); otherwise the
+ * `OPENCODE_CONFIG_DIR` it was started with (null: none).
+ */
+export type OpenCodeServerLaunchReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null };
+
+const openCodeServeCommand = 'serve';
+const openCodeExecutableNamePrefix = 'opencode';
+const procEntrySeparator = '\0';
+
+/** @description Read a server's launch from its `/proc/<pid>/cmdline` and `/proc/<pid>/environ` contents. */
+export function parseOpenCodeServerLaunch(cmdline: string, environ: string): OpenCodeServerLaunchReading {
+  const argv = cmdline.split(procEntrySeparator).filter(Boolean);
+  const isOpenCodeServe = path.basename(argv[0] ?? '').startsWith(openCodeExecutableNamePrefix) && argv.includes(openCodeServeCommand);
+  if (!isOpenCodeServe) return { kind: 'unknown' };
+  const prefix = `${openCodeConfigDirEnvName}=`;
+  const entry = environ.split(procEntrySeparator).find((variable) => variable.startsWith(prefix));
+  return { kind: 'openCodeServe', configDir: entry === undefined ? null : entry.slice(prefix.length) };
+}
+
+/**
+ * @description The folder a server must have been started with to offer the bot's skills, or null when the bot offers
+ * none (the operator's own `OPENCODE_CONFIG_DIR`, no plugin folder): then no server is ever replaced for them.
+ */
+export function getExpectedOpenCodeAgentConfigDir(env: NodeJS.ProcessEnv, dataDir: string): string | null {
+  if (env[openCodeConfigDirEnvName] || resolveAgentPluginDir() === null) return null;
+  return getOpenCodeAgentConfigDir(dataDir);
+}
+
+/** @description Whether the running server is an `opencode serve` started without the folder the bot now offers. */
+export function checkIsOpenCodeServerMissingAgentSkills(reading: OpenCodeServerLaunchReading, expectedConfigDir: string | null): boolean {
+  return expectedConfigDir !== null && reading.kind === 'openCodeServe' && reading.configDir !== expectedConfigDir;
 }

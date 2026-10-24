@@ -32,6 +32,7 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { FakeOpenCodeServer, writeFakeNpm, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
+  builtAgentPluginDir,
   builtCliPath,
   createIsolatedInstanceLayout,
   exitOnSignal,
@@ -79,6 +80,7 @@ let idleDriver: TopicDriver;
 let busyDriver: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let servePidFile = '';
+let serveEnvFile = '';
 let npmCallLogFile = '';
 /** While it exists the fake npm cannot install opencode. */
 let npmFailFile = '';
@@ -140,6 +142,7 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     const apiRoot = await fakeTelegram.start();
 
     servePidFile = path.join(layout.fakeLogDir, 'opencode-serve.pids');
+    serveEnvFile = path.join(layout.fakeLogDir, 'opencode-serve.env');
     npmCallLogFile = path.join(layout.fakeLogDir, 'npm-calls.log');
     npmFailFile = path.join(layout.fakeStateDir, 'npm-cannot-install');
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: openCodeModels, defaultModel: defaultOpenCodeModel });
@@ -147,7 +150,7 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     // ephemeral one could be handed to any outgoing connection on the host — another flow's, run beside this one.
     openCodePort = await getFreeFixedPort();
     const openCodeUrl = await fakeOpenCode.start(openCodePort);
-    const binaryOptions = { version: fakeOpenCodeVersion, models: openCodeModels, servePidFile };
+    const binaryOptions = { version: fakeOpenCodeVersion, models: openCodeModels, servePidFile, serveEnvFile };
     writeFakeOpenCodeBinary(layout.binDir, binaryOptions);
     // What the fake npm installs: the same fake binary, kept outside the PATH.
     const templateDir = path.join(layout.fakeStateDir, 'opencode-package');
@@ -222,6 +225,12 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
     assert.deepEqual(listSentTexts(busyTopic.threadId, callsBefore), [restoredNotice], 'the busy topic hears exactly one line');
     assert.ok(fakeOpenCode.listRequests('GET', `/session/${busySessionId}`).length > 0, 'the busy session was restored by its id');
     assert.equal(fakeOpenCode.sessions.size, 2, 'no session was created anew');
+
+    // The server the bot spawns offers the bot's skills: OPENCODE_CONFIG_DIR names the bot's folder in DATA_DIR, whose
+    // `skills` links to the package's.
+    const configDir = path.join(getLayout().dataDir, 'opencode-config');
+    assert.deepEqual(fs.readFileSync(serveEnvFile, 'utf8').split('\n').filter(Boolean), [`OPENCODE_CONFIG_DIR=${configDir}`]);
+    assert.equal(fs.readlinkSync(path.join(configDir, 'skills')), path.join(builtAgentPluginDir, 'skills'));
   });
 
   it('the server goes down and the binary cannot be installed: one localized line per topic, no raw error; the next message brings it back', async () => {

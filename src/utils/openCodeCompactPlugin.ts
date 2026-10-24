@@ -120,12 +120,18 @@ export function getCompactPluginActivation(input: {
   sessionStatus: unknown;
 }): CompactPluginActivation {
   if (checkHasOpenCodeCompactPlugin(input.pluginSpecs)) return 'loaded';
-  const status = input.sessionStatus;
-  if (!status || typeof status !== 'object' || Array.isArray(status)) return 'busy';
-  const isAnyBusy = Object.values(status).some(
-    (entry) => !entry || typeof entry !== 'object' || (entry as { type?: unknown }).type !== 'idle',
+  return checkIsOpenCodeSessionStatusIdle(input.sessionStatus) ? 'recreate' : 'busy';
+}
+
+/**
+ * @description Whether a `GET /session/status` map says every session of the instance is idle. A status the bot
+ * cannot read counts as busy: an instance or a server is never recreated on a guess.
+ */
+export function checkIsOpenCodeSessionStatusIdle(sessionStatus: unknown): boolean {
+  if (!sessionStatus || typeof sessionStatus !== 'object' || Array.isArray(sessionStatus)) return false;
+  return Object.values(sessionStatus).every(
+    (entry) => typeof entry === 'object' && entry !== null && 'type' in entry && entry.type === 'idle',
   );
-  return isAnyBusy ? 'busy' : 'recreate';
 }
 
 /** Outcome of {@link installOpenCodeCompactPlugin}. */

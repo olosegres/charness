@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
-import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, readOpenCodeServerLaunch, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import { sleep } from '../utils';
@@ -44,9 +44,15 @@ import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import { checkIsReplacementTurnMissing, checkIsWedgedTurn } from '../utils/openCodeTurnActivity';
 import {
   checkHasOpenCodeCompactPlugin,
+  checkIsOpenCodeSessionStatusIdle,
   getCompactPluginActivation,
   installOpenCodeCompactPlugin,
 } from '../utils/openCodeCompactPlugin';
+import {
+  checkIsOpenCodeServerMissingAgentSkills,
+  getExpectedOpenCodeAgentConfigDir,
+  type OpenCodeServerLaunchReading,
+} from '../utils/agentPlugin';
 import {
   checkIsSimpleApiMethod,
   checkProviderHasAuthCatalogEntry,
@@ -1467,6 +1473,8 @@ export interface OpenCodeServerRestartOps {
   ensureServer(): Promise<void>;
   /** Stop the current server generation and start a new one (never adopts). */
   restartServer(): Promise<void>;
+  /** How the running server was launched — whether it carries the bot's skills folder. */
+  readServerLaunch(): OpenCodeServerLaunchReading;
 }
 
 const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
@@ -1475,6 +1483,7 @@ const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
   checkIsServerRunning: checkIsOpenCodeServerRunning,
   ensureServer: ensureOpenCodeServer,
   restartServer: restartOpenCodeServer,
+  readServerLaunch: readOpenCodeServerLaunch,
 };
 
 /**
@@ -3660,6 +3669,40 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     await Promise.allSettled(
       Array.from(directories, (directory) => this.reconcileSchedulerMcpForDirectory(directory)),
     );
+  }
+
+  /**
+   * @description Boot step for the skills the bot gives its agents (`utils/agentPlugin.ts`). OpenCode reads its
+   * `OPENCODE_CONFIG_DIR` once, at start, so a server started without the bot's folder — by an older bot, adopted ever
+   * since — never offers them. Such a server is replaced through the controlled restart that restores the sessions,
+   * but only when it is known to be an `opencode serve` (never a listener the bot cannot identify) and no session is
+   * working: a busy directory, or a status it cannot read, leaves it for the next boot. Best-effort, never rejects.
+   */
+  async activateAgentSkillsForServer(): Promise<void> {
+    try {
+      const expectedConfigDir = getExpectedOpenCodeAgentConfigDir(process.env, resolveDataDir());
+      if (!checkIsOpenCodeServerMissingAgentSkills(this.serverRestartOps.readServerLaunch(), expectedConfigDir)) return;
+      if (!(await this.checkIsEveryActiveSessionIdle())) {
+        console.log(`[OpenCode] the server was started without the bot's skills; a session is working, the next boot retries`);
+        return;
+      }
+      console.log(`[OpenCode] the server was started without the bot's skills; replacing it`);
+      await this.restartServer(true);
+    } catch (e) {
+      console.warn(`[OpenCode] could not check the server for the bot's skills:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  /** @description Whether no active session is working — by the adapter's own view and by each directory's status. */
+  private async checkIsEveryActiveSessionIdle(): Promise<boolean> {
+    const activeSessions = Array.from(this.sessions.values()).filter((session) => session.isActive);
+    if (activeSessions.some((session) => session.isBusy)) return false;
+    const directories = new Set(activeSessions.map((session) => session.workDir));
+    for (const directory of directories) {
+      const sessionStatus = await this.apiRequest<unknown>('GET', buildDirectoryScopedPath('/session/status', directory));
+      if (!checkIsOpenCodeSessionStatusIdle(sessionStatus)) return false;
+    }
+    return true;
   }
 
   /**

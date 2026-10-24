@@ -871,6 +871,13 @@ export interface AgentAdapter extends EventEmitter {
   activateCompactionPluginForActiveSessions?(): Promise<void>;
 
   /**
+   * Boot step (OpenCode) for the skills the bot gives its agents (`utils/agentPlugin.ts`): replace a server started
+   * without the bot's skills folder once nothing works in it — before {@link activateCompactionPluginForActiveSessions},
+   * whose reconcile then restores what a replacement drops. Best-effort, never rejects; busy → the next boot retries.
+   */
+  activateAgentSkillsForServer?(): Promise<void>;
+
+  /**
    * Heal the bot-owned MCP server `serverName` INSIDE one live session: read the
    * status the backend holds for it and reconnect it when it reports `failed`.
    * The Claude-side counterpart of {@link reconcileSchedulerMcpForActiveSessions}
