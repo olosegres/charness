@@ -41,6 +41,7 @@ import {
   getLaunchSessionId,
   requiredJiraSessionFlags,
   sessionViolationExitCode,
+  fakeClaudeBackgroundGapMsFileName,
   fakeClaudeBackgroundReleaseFileName,
   fakeNotificationTurnLatencyMs,
   getFakeBackgroundTaskDescription,
@@ -583,7 +584,14 @@ async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string,
   writeStdout({ type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch: { status: 'completed', end_time: Date.now() } });
   writeStdout({ type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status: 'completed', output_file: path.join(getStateDir(), `${taskId}.output`), summary: `Background command "${description}" completed (exit code 0)` });
   writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [] });
-  writeTurnStart(argv, sessionId);
+  const gapPath = path.join(getStateDir(), fakeClaudeBackgroundGapMsFileName);
+  if (fs.existsSync(gapPath)) {
+    // Only the notification says a turn is coming: no running event, and the turn starts after the gap.
+    await new Promise((resolve) => setTimeout(resolve, Number(fs.readFileSync(gapPath, 'utf8').trim())));
+    writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+  } else {
+    writeTurnStart(argv, sessionId);
+  }
   writeStdout({ type: 'system', subtype: 'status', status: 'requesting', session_id: sessionId });
   await new Promise((resolve) => setTimeout(resolve, fakeNotificationTurnLatencyMs));
   const text = getFakeBackgroundTaskFinishedText(issueKey);

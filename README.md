@@ -181,7 +181,8 @@ backends:
   (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
   compaction when `/compact_on_idle` allows one — but never while the agent's
   own work is pending: a background command, Monitor or sub-agent it started, a
-  finished task's result it is about to read, a `CronCreate` job it scheduled.
+  finished task's result it is about to read, a `CronCreate` job or a `/loop`
+  wakeup it scheduled.
   That work keeps the process for up to 6 h after the agent's last turn, so a
   task nobody hears from does not keep it forever. When that work is lost
   anyway (a crash, a process gone after a restart, a `/model` / `/effort` /

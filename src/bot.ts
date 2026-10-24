@@ -241,7 +241,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostWork, formatLostWorkTopicLine, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
@@ -4515,9 +4515,12 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // the old conversation, so it closes silently instead of a later wake-up
   // reminding (or, in a terminal, TYPING into) a session that never saw it.
   if (prevName && !checkIsSameConversationSwitch(prevName, newName)) cancelConversationRequest(key);
+  let switchCutOffWork: LostWork | null = null;
   if (prevName && prevName !== newName) {
     try {
       const prev = getAdapter(prevName);
+      // What dies with the stopped process: its own background work and the turn it was in (an explicit stop records nothing).
+      if (prev.checkIsActive(key)) switchCutOffWork = prev.getPendingWork?.(key) ?? null;
       if (prev.checkIsActive(key)) {
         // `stopSession` is `void` in the AgentAdapter contract — OpenCode
         // queues teardown behind its lifecycle lock and returns
@@ -4553,10 +4556,17 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // fallback switch or a plain /claude ↔ /opencode comes back to the conversation it left
   // (L-D4: a sleeping conversation is woken, `/new` is the fresh start). The reattach loop never reads the parked
   // slot, so the audit S12 bug (both ids on the live row) stays fixed.
-  const switched = getAdapterSwitchSessionIds({ previousName: prevName, nextName: newName, agent, parked: state.getParkedSession(key), parkedAt: new Date().toISOString() });
+  const parkedBefore = state.getParkedSession(key);
+  const switched = getAdapterSwitchSessionIds({ previousName: prevName, nextName: newName, agent, parked: parkedBefore, parkedAt: new Date().toISOString() });
   if (switched.ids.claudeSessionId) next.claudeSessionId = switched.ids.claudeSessionId;
   if (switched.ids.opencodeSessionId) next.opencodeSessionId = switched.ids.opencodeSessionId;
-  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked);
+  // Work the switch cut off is told twice, once to each agent: the next prompt (the hand-over bridge, the next message)
+  // tells the agent the topic moves to, and the parked conversation keeps it for its own agent's first prompt back.
+  const cutOffRecord: LostWorkRecord | null = switchCutOffWork ? { ...switchCutOffWork, reason: 'switched', lostAt: Date.now() } : null;
+  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && cutOffRecord ? { ...switched.parked, lostWork: cutOffRecord } : switched.parked);
+  // Back to a parked conversation (its slot cleared): what its agent was never told rides its first prompt now.
+  if (switched.parked === null && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
+  if (cutOffRecord) await foldLostWorkIntoNextPrompt(key, cutOffRecord);
   // The watermark is scoped to its session: it rides along while that session is kept. Every wake of a sleeping
   // conversation passes through here, and the wake reads it as the proof the conversation took a turn.
   if (agent.seenWatermark && [next.claudeSessionId, next.opencodeSessionId].includes(agent.seenWatermark.sessionId)) {
@@ -4740,8 +4750,6 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // Here, at the start (C6): a request whose ensure finds this start under way builds its prompt against an
   // empty sent-set, so it carries the whole issue even though its own ensure did not start anything.
   noteConversationContextReset(key, 'fresh session');
-  // A new conversation: an untold loss of the previous one means nothing to it.
-  void state.clearLostWork(key);
   const adapter = getThreadAdapter(key);
 
   // Boot loader. A self-greeting agent (Claude) prints its banner shortly — keep
@@ -5194,7 +5202,6 @@ async function forwardPromptToAgent(
   const messageBody = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
   // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it.
   const lostWorkRecord = isReplayable && adapter.name !== 'terminal' ? state.getLostWork(key) : undefined;
-  if (lostWorkRecord) void state.clearLostWork(key);
   const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
@@ -5247,6 +5254,8 @@ async function forwardPromptToAgent(
     await adapter.detachRunningSubagents(key);
   }
   adapter.sendInput(key, promptText);
+  // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
+  if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
   // S2 busy-onset arm: start the Claude liveness loop the moment the prompt is
   // forwarded — driven by `checkIsBusy`, not by waiting for an opportunistic
   // scrape emit that may never come during a long quiet think. The arming grace
@@ -7431,13 +7440,22 @@ async function switchTopicToFallbackEntry(
     // The turn is dead after a limit: re-spawn now, even over background work (it is stopped; the notice says so).
     const adapter = getThreadAdapter(key);
     isStoppingBackground = adapter instanceof ClaudeJsonStreamAdapter && adapter.checkHasBackgroundWork(key);
-    const outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
+    lostWorkFoldingKeys.add(k);
+    let outcome: ClaudeProfileApplyOutcome;
+    try {
+      outcome = await applyClaudeProfileToThread(key, { isAfterLimit: true });
+    } finally {
+      lostWorkFoldingKeys.delete(k);
+    }
     if (outcome === 'deferred' || outcome === 'restartRequired') {
       fallbackSwitchOffers.delete(k);
       const notice = buildFallbackDeferredNotice(from, to);
       await say(notice);
       return { isSwitched: false, notice };
     }
+    // The re-spawn took the old process's background work: the notice below says so, the continue nudge tells the agent.
+    const cutOffWork = takeLostWorkOf(key);
+    if (cutOffWork) await foldLostWorkIntoNextPrompt(key, { ...cutOffWork, reason: 'restarted', lostAt: Date.now() });
   } else if (isSameFamily && to.backend === 'opencode') {
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
@@ -11462,6 +11480,22 @@ function takeLostWorkOf(key: SessionKey, adapter: AgentAdapter = getThreadAdapte
   return adapter.takeLostWork?.(key) ?? null;
 }
 
+/**
+ * The conversations a usage-limit switch is re-spawning right now: the re-spawn's `started` leaves the loss to the
+ * switch, which folds it into its own first prompt — decided at the call site, never by which of the two ran first.
+ */
+const lostWorkFoldingKeys = new Set<string>();
+
+/**
+ * @description Keep a loss for the NEXT prompt the conversation gets, with no line and no resume of its own: a move
+ * that already says so in its notice and sends a first prompt (a limit switch's continue nudge, a backend switch's
+ * hand-over bridge, a return to a parked conversation).
+ */
+async function foldLostWorkIntoNextPrompt(key: SessionKey, record: LostWorkRecord): Promise<void> {
+  console.log(`[lost-work] ${keyToString(key)}: the agent's own work ended with the process (${record.reason}); the move's first prompt tells the agent`);
+  await state.setLostWork(key, mergeLostWorkRecords(state.getLostWork(key), record));
+}
+
 /** {@link noteLostWork} from an event handler: in the conversation's locale, not awaited, a failure logged. */
 function scheduleLostWorkNote(key: SessionKey, lostWork: LostWork | null, reason: LostWorkReason): void {
   if (!lostWork) return;
@@ -11484,6 +11518,8 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     reason,
     isLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
     msSinceLastAutoResume: lastAutoResumeAt === undefined ? null : now - lastAutoResumeAt,
+    // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer.
+    isRequestRequired: !checkIsTelegramKey(key),
   });
   console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
   if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, plan, pendingWorkHoldHours, t)).catch(() => {});
@@ -11550,8 +11586,9 @@ function handleAgentStarted(key: SessionKey): void {
   // activity instant rather than restart at the full 55 minutes. A genuinely fresh
   // session has no persisted instant and so gets the full window anyway.
   rearmThreadIdleTimer(key);
-  // A re-spawn (model, effort, account) began without the old process's background work.
-  scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
+  // A re-spawn (model, effort, account) began without the old process's background work — unless a usage-limit switch
+  // is re-spawning it: that switch folds the loss into its own first prompt (`switchTopicToFallbackEntry`).
+  if (!lostWorkFoldingKeys.has(keyToString(key))) scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
 }
 
 /**
@@ -11595,8 +11632,6 @@ function handleAgentStopped(key: SessionKey): void {
   // A stopped session has nothing to compact — drop the idle watchdog + any
   // armed agent-triggered compaction.
   clearThreadCompaction(key);
-  // A released conversation's untold loss means nothing to the next one.
-  void state.clearLostWork(key);
   updatePinnedStatus(key).catch(() => {});
 }
 
@@ -13334,12 +13369,9 @@ export async function startBot(): Promise<void> {
     // An issue's process gets the idle countdown and the lost-work note of a re-spawn: it has no banner.
     onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key)), () => {
       rearmThreadIdleTimer(key);
-      scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
+      if (!lostWorkFoldingKeys.has(keyToString(key))) scheduleLostWorkNote(key, takeLostWorkOf(key), 'restarted');
     }),
-    onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => {
-      clearForeignSessionState(key);
-      void state.clearLostWork(key);
-    }),
+    onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key)), () => scheduleLostWorkNote(key, takeLostWorkOf(key), 'holdExpired')),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),

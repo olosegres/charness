@@ -180,6 +180,12 @@ describe('how the agent is told to write an answer', () => {
     });
   }
 
+  it('a Telegram topic\'s instructions steer anything that must happen later to schedule_*, not the session-only CronCreate / ScheduleWakeup', async () => {
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(topicKey) });
+    const instructions = client.getInstructions() ?? '';
+    assert.match(instructions, /Not CronCreate \/ ScheduleWakeup for anything that must happen: they live only in your process/);
+  });
+
   it('a Jira session without the attachment tool gets the neutral instructions, the style sentence still in them', async () => {
     isJiraAttachmentOffered = false;
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });

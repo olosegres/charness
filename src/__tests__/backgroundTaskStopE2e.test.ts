@@ -11,6 +11,8 @@
  *     NOT stopped early — the task ends, the task's own turn reaches the topic from the SAME process (the incident: the
  *     stop landed in the gap before that turn's first output and the result was lost) — then the normal idle
  *     lifecycle: the idle compaction first, the stop after it
+ *   → BG-7's task ends with only its notification saying a turn is coming (no running event) and the turn starting
+ *     after an idle window: the idle fire lands in that gap, keeps the process, and the turn reaches the topic
  *   → BG-2 leaves a task that never reports: the idle fire keeps the process while the hold lasts and looks again,
  *     and once the hold is spent the process is compacted and stopped — a forgotten task does not pin it forever; the
  *     topic gets ONE line naming the task, and the agent is not woken for it
@@ -21,6 +23,8 @@
  *     next message tells it, and the next message (BG-5) carries the note
  *   → BG-6's process is gone when the bot comes back (killed while the bot was down): one line, and the conversation
  *     is resumed with the note
+ *   → a usage limit moves the topic to a second account while BG-8's task runs: the switch notice says the background
+ *     work stopped, no separate line or resume, and the continue prompt of the new process carries the note
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -35,6 +39,7 @@ import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
+  fakeClaudeBackgroundGapMsFileName,
   fakeClaudeBackgroundReleaseFileName,
   fakeClaudeLogFileNames,
   fakeNotificationTurnLatencyMs,
@@ -59,7 +64,9 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { computeResetsAtIso, getAccountConfigDir, getAgentTurns, getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { enDict } from '../i18n/en';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
@@ -79,6 +86,11 @@ const idleWindowMs = 12 * 1000;
 /** The pending-work hold, cut to a minute: long enough for the restart and the release, short enough to wait out. */
 const backgroundHoldMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
+/** The gap between a task's end and its turn's start in the slow step: past one idle window, so the idle fire lands in it. */
+const backgroundTurnGapMs = idleWindowMs + 3 * 1000;
+/** The account the limit step moves the topic to, and when its limit resets. */
+const takeoverAccount = 'work';
+const resetsAtIso = computeResetsAtIso(1);
 /** The idle compaction and stop after the task's turn: one idle window plus the compaction turn and the teardown. */
 const idleStopTimeoutMs = idleWindowMs + 30 * 1000;
 /** The stop after a spent hold: the hold, the idle fires that look again, then the compaction and the teardown. */
@@ -128,7 +140,7 @@ function findOutput(text: string, fromIndex: number): number {
 
 const stopLine = `[compact-on-idle] ${topicKey} process stopped; the session sleeps`;
 /** The first line of the note the agent gets about lost work (`utils/lostWork.ts`). */
-const lostWorkNoteStart = '[charness] Your Claude Code process ended while your own work was still pending';
+const lostWorkNoteStart = '[charness] This conversation\'s agent process ended while its own work was still pending';
 /** The end of the topic line when the bot resumed the agent at once, and when the next message will. */
 const resumedLineEnd = 'I resumed it and asked it to check that work again.';
 const heldLineEnd = 'Your next message resumes it and tells it what was lost.';
@@ -262,6 +274,27 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
   });
 
+  it('a task whose own turn starts only after an idle window (no running event, only its notification): the idle fire keeps the process and the turn reaches the topic', async () => {
+    const pid = await startBackgroundTask('BG-7');
+    const gapPath = path.join(getLayout().fakeStateDir, fakeClaudeBackgroundGapMsFileName);
+    fs.writeFileSync(gapPath, backgroundTurnGapMs.toString());
+    try {
+      // Released right after the turn ended: the idle fire, one window after that end, lands inside the gap.
+      const outputBeforeRelease = getCharness().output.length;
+      fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeBackgroundReleaseFileName), '');
+      // The turn starts after the gap and shows its output after the round-trip: wait for both.
+      await getCharness().waitFor('the slow task turn in the topic', backgroundTurnGapMs + fakeNotificationTurnLatencyMs + replyTimeoutMs, () =>
+        topic.listMessages().some((message) => message.text.includes(getFakeBackgroundTaskFinishedText('BG-7'))));
+      const sinceRelease = getCharness().output.slice(outputBeforeRelease);
+      assert.ok(sinceRelease.includes(`[compact-on-idle] ${topicKey} process kept: working`), `the idle fire landed in the gap and kept the process:\n${sinceRelease}`);
+      assert.ok(!sinceRelease.includes('stopping the idle process'), 'never stopped in the gap');
+      assert.deepEqual(listTaskTurns().filter((turn) => turn.issueKey === 'BG-7').map((turn) => turn.pid), [pid], 'the task\'s turn ran in the same process, to its end');
+      await getCharness().waitFor('the idle stop after the task turn', idleStopTimeoutMs, () => findOutput(stopLine, outputBeforeRelease) >= 0);
+    } finally {
+      fs.rmSync(gapPath, { force: true });
+    }
+  });
+
   it('a task that never reports holds the process only for the hold: the idle fire keeps it and looks again, then the process is compacted and stopped', async () => {
     const outputBefore = getCharness().output.length;
     const compactionsBefore = listCompactions().length;
@@ -337,5 +370,34 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     await getCharness().waitFor('the note to reach the resumed agent', replyTimeoutMs, () => listLostWorkNotes().length > notesBefore);
     const note = listLostWorkNotes().at(-1);
     assert.ok(note?.text.includes('(it was gone when the bot came back after a restart)') && note.text.includes(`«${getFakeBackgroundTaskDescription('BG-6')}»`), note?.text);
+  });
+
+  it('a usage limit that moves the topic to another account while a task runs: one switch notice, no separate line or resume — the continue prompt tells the agent', async () => {
+    createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: takeoverAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, [takeoverAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'work@example.com', subscriptionType: 'max' } };
+      persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
+      // The switch the limit makes by itself (off: it would only offer a button).
+      persisted.claudeAutoSwitchOnLimitEnabled = true;
+    });
+    await startBackgroundTask('BG-8');
+    const notesBefore = listLostWorkNotes().length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `LIM-1 [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
+    const notice = await topic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+    assert.ok(notice.text.includes(enDict['fallback.backgroundStopped']), `the notice says the background work was stopped:\n${notice.text}`);
+    await getCharness().waitFor('the conversation to go on under the second account', replyTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-1').length === 2);
+    const takeover = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(takeover.length, 1, 'one re-spawn');
+    assert.equal(takeover[0].claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount));
+    const notes = listLostWorkNotes().slice(notesBefore);
+    assert.equal(notes.length, 1, 'told once');
+    assert.equal(notes[0].pid, takeover[0].pid, 'by the new process\'s first prompt');
+    assert.ok(notes[0].text.includes(`«${getFakeBackgroundTaskDescription('BG-8')}»`) && notes[0].text.includes('(the bot restarted it for a model, effort or account change)'), notes[0].text);
+    assert.ok(notes[0].text.slice(notes[0].text.indexOf('\n\n')).trim().length > 0, 'the note leads the continue prompt, it is not a prompt of its own');
+    assert.deepEqual(listLostWorkLines('BG-8'), [], 'no lost-work line beside the switch notice');
+    // Decided at the call site, not by timing: the switch folded the loss; the re-spawn's own lost-work path never ran.
+    assert.ok(getCharness().output.includes(`[lost-work] ${topicKey}: the agent's own work ended with the process (restarted); the move's first prompt tells the agent`), 'folded by the switch');
+    assert.ok(!getCharness().output.includes(`[lost-work] ${topicKey}: the process ended (restarted)`), 'no separate note or line for the re-spawn');
   });
 });

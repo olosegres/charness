@@ -4,9 +4,12 @@
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
 ends with its own work pending — it crashed, it was gone after a restart, `/model`, `/effort` or an account change
-restarted it, or a task nobody heard from for 6 h was let go — the topic gets one plain line naming the lost tasks, and
-the agent is resumed at once with a short note to check that work and start again what is still needed (after a
-forgotten task, or a second loss within 10 minutes, the note waits for your next message instead).
+restarted it (cutting off its turn too), or a task nobody heard from for 6 h was let go — the topic gets one plain line
+naming the lost work, and the agent is resumed at once with a short note to check that work and start again what is still
+needed (after a forgotten task, or a second loss within 10 minutes, the note waits for your next message instead). A
+usage-limit switch to another account or backend says so in its own notice and its first prompt carries the note; a topic
+that comes back to a backend it left tells that agent too. `/loop` wakeups (`ScheduleWakeup`) now count as pending work
+like `CronCreate` jobs, and the agent's instructions steer anything that must happen later to the bot's own scheduler.
 
 **The agent's background work is no longer cut off by an automatic stop.** On the default Claude backend the process
 used to be stopped in the seconds between a background task's end and the agent's turn that reads its result — the

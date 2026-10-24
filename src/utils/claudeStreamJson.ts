@@ -15,6 +15,8 @@
  * Every event type below is backed by a captured sample.
  */
 
+import type { ScheduledWakeupSource } from './claudeScheduledJobs';
+
 /** Narrow an untyped `JSON.parse` result to a plain object (parse-boundary
  *  pattern for untrusted process output; mirrors `checkIsRecord` elsewhere). */
 export function checkIsStreamRecord(value: unknown): value is Record<string, unknown> {
@@ -111,11 +113,12 @@ export type ClaudeStreamAction =
    * A turn STARTS before its first output: `system/session_state_changed`
    * `running` / `requires_action` (emitted only under
    * `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`), or a `command_lifecycle` frame
-   * `started` by a session-only `CronCreate` job firing
-   * (`wakeup_source: "schedule_wakeup"`). The CLI's `idle` state is NOT mapped:
-   * it fires after every `result` while a background task still runs.
+   * `started` by a session-only job firing — `wakeup_source: "schedule_wakeup"`
+   * for a `CronCreate` job, `"loop_wakeup"` for the `ScheduleWakeup` one (probed
+   * live on 2.1.310). The CLI's `idle` state is NOT mapped: it fires after every
+   * `result` while a background task still runs.
    */
-  | { kind: 'turnStarted'; isScheduledWakeup: boolean }
+  | { kind: 'turnStarted'; wakeupSource: ScheduledWakeupSource | null }
   /** A control_request off stdout (permission / AskUserQuestion / dialog). */
   | {
       kind: 'controlRequest';
@@ -265,8 +268,8 @@ function readBackgroundTasks(tasks: unknown): ClaudeBackgroundTask[] {
 /** `system/session_state_changed` states that mean a turn runs (`requires_action`: it waits on a permission or question). */
 const turnRunningSessionStates: readonly string[] = ['running', 'requires_action'];
 
-/** The `command_lifecycle` wakeup source of a session-only `CronCreate` job firing (probed live on 2.1.310). */
-const scheduledWakeupSource = 'schedule_wakeup';
+/** The `command_lifecycle` wakeup sources of a session-only job firing (probed live on 2.1.310). */
+const wakeupSourcesByFrameValue: Readonly<Record<string, ScheduledWakeupSource>> = { schedule_wakeup: 'cron', loop_wakeup: 'loop' };
 
 /** Read a non-negative finite dollar amount, or null (absent or malformed — no figure beats a wrong one). */
 function readCostUsd(rec: Record<string, unknown>, key: string): number | null {
@@ -324,11 +327,12 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
 
   if (type === 'system' && msg.subtype === 'session_state_changed') {
     const sessionState = readString(msg, 'state');
-    return sessionState !== null && turnRunningSessionStates.includes(sessionState) ? [{ kind: 'turnStarted', isScheduledWakeup: false }] : [];
+    return sessionState !== null && turnRunningSessionStates.includes(sessionState) ? [{ kind: 'turnStarted', wakeupSource: null }] : [];
   }
 
   if (type === 'command_lifecycle') {
-    return msg.state === 'started' && msg.wakeup_source === scheduledWakeupSource ? [{ kind: 'turnStarted', isScheduledWakeup: true }] : [];
+    const wakeupSource = typeof msg.wakeup_source === 'string' ? wakeupSourcesByFrameValue[msg.wakeup_source] : undefined;
+    return msg.state === 'started' && wakeupSource !== undefined ? [{ kind: 'turnStarted', wakeupSource }] : [];
   }
 
   if (type === 'system' && msg.subtype === 'status') {

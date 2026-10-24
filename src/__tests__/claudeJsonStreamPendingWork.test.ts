@@ -194,7 +194,7 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     adapter.on('closed', (closedKey: SessionKey) => closed.push(closedKey));
     adapter['pollTailTick'](session);
     assert.deepEqual(closed, [key], 'the crash is a close');
-    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [{ taskId: backgroundTaskId, description: backgroundTaskDescription }], scheduledJobCount: 0, hasUnreadTaskResult: false });
+    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [{ taskId: backgroundTaskId, description: backgroundTaskDescription }], scheduledJobCount: 0, hasUnreadTaskResult: false, wasTurnInFlight: false });
     assert.equal(adapter.takeLostWork(key), null, 'handed over once');
     assert.equal(tailWrites.at(-1)?.backgroundTasks, undefined, 'the ended process\'s record no longer carries the task: the next boot does not report it again');
     assert.deepEqual(tailWrites.at(-1)?.backgroundTaskIds, []);
@@ -215,7 +215,32 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     session.isSuspending = true;
     session.isStopping = true;
     adapter['finalizeExternalExit'](session, null);
-    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [], scheduledJobCount: 0, hasUnreadTaskResult: true });
+    assert.deepEqual(adapter.takeLostWork(key), { backgroundTasks: [], scheduledJobCount: 0, hasUnreadTaskResult: true, wasTurnInFlight: false });
+  });
+
+  it('getPendingWork reads what a LIVE process would lose to a stop the bot makes itself: its tasks and the turn under way', () => {
+    const { adapter, session, append } = createAdapterWithSession();
+    assert.equal(adapter.getPendingWork(key), null, 'nothing pending');
+    append(resultLine + backgroundStartedLines + initLine);
+    assert.deepEqual(adapter.getPendingWork(key), { backgroundTasks: [{ taskId: backgroundTaskId, description: backgroundTaskDescription }], scheduledJobCount: 0, hasUnreadTaskResult: false, wasTurnInFlight: true });
+    session.isActive = false;
+    assert.equal(adapter.getPendingWork(key), null, 'no live process, nothing to read');
+  });
+
+  it('the ScheduleWakeup (/loop) wakeup is pending work until it fires; a loop firing never takes a cron job off', () => {
+    const { adapter, append } = createAdapterWithSession();
+    const toolUse = (id: string, name: string): string =>
+      toLine({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input: {} }] } });
+    const toolResult = (id: string, text: string): string =>
+      toLine({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
+    append(toolUse('t1', 'ScheduleWakeup') + toolResult('t1', 'Next wakeup scheduled for 15:05:00 (in 63s). If you owe the user a status update this tick, write it now.')
+      + toolUse('t2', 'CronCreate') + toolResult('t2', 'Scheduled one-shot task 59151bd3 (20 11 24 10 *). Next run: Oct 24 11:20am.')
+      + resultLine);
+    const jobsOf = (): string[] => [...adapter['sessions'].get(keyToString(key))!.scheduledJobs.values()].map((job) => job.kind);
+    assert.deepEqual(jobsOf(), ['loopWakeup', 'oneShot']);
+    assert.equal(adapter.checkIsWorking(key), true);
+    append(toLine({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started', wakeup_source: 'loop_wakeup', scheduled_for: 1 }) + resultLine);
+    assert.deepEqual(jobsOf(), ['oneShot'], 'the wakeup fired; the cron job stays');
   });
 
   it('refreshWorkingState reads what the process wrote since the last poll', () => {

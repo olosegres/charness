@@ -122,6 +122,12 @@ export const fakeAskToolName = 'AskUserQuestion';
  * writes it to END the task (its content is ignored) — the fake then writes the task's end and starts the task's turn.
  */
 export const fakeClaudeBackgroundReleaseFileName = 'background-release';
+/**
+ * While this file exists, a released `background-notify` task's turn starts only this many ms (its content) after the
+ * background list emptied, and with no `session_state_changed running`: the task's notification is then the ONLY sign
+ * that a turn is coming — the gap a stop once landed in, stretched past an idle window.
+ */
+export const fakeClaudeBackgroundGapMsFileName = 'background-gap-ms';
 /** How long a `background-notify` task's own turn takes from its start to its first output (the API round-trip). */
 export const fakeNotificationTurnLatencyMs = 8000;
 /** The description of the task a `background-notify` turn labelled `issueKey` starts (lower case: never read as a label). */

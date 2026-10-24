@@ -119,7 +119,9 @@ import {
   cronDeleteToolName,
   getCancelledJobIdFromCronDeleteResult,
   getScheduledJobFromCronCreateResult,
+  getScheduledJobFromLoopWakeupResult,
   getScheduledJobsAfterFiring,
+  loopWakeupToolName,
   type ScheduledJob,
 } from '../utils/claudeScheduledJobs';
 
@@ -1217,13 +1219,33 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return lostWork;
   }
 
-  /** Keep what an ending process held: its background tasks, its scheduled jobs, a finished task's turn not yet run. */
+  /**
+   * @description What the LIVE process holds now that would die with it — read by the bot before it stops the
+   * process itself for a backend switch (an explicit stop records nothing); `null` when nothing is pending.
+   */
+  getPendingWork(key: SessionKey): LostWork | null {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return null;
+    const pendingWork = this.describePendingWork(session, { isTurnCutOff: true });
+    return checkHasLostWork(pendingWork) ? pendingWork : null;
+  }
+
+  /**
+   * Keep what a process that ended by itself (or at the idle stop) held. A turn a crash cut off is not counted: the
+   * request core re-posts and wakes an open request (R21); the idle stop never runs mid-turn.
+   */
   private recordLostWork(session: StreamSession): void {
-    this.storeLostWork(session.key, {
+    this.storeLostWork(session.key, this.describePendingWork(session, { isTurnCutOff: false }));
+  }
+
+  /** The pending work of a process: its background tasks, its scheduled jobs, a finished task's turn not yet run, and — when the bot itself cuts it off — the turn under way. */
+  private describePendingWork(session: StreamSession, options: { isTurnCutOff: boolean }): LostWork {
+    return {
       backgroundTasks: [...session.backgroundTasks].map(([taskId, description]) => ({ taskId, description })),
       scheduledJobCount: session.scheduledJobs.size,
       hasUnreadTaskResult: checkIsNotificationTurnPending({ now: Date.now(), notificationTurnPendingSince: session.notificationTurnPendingSince }),
-    });
+      wasTurnInFlight: options.isTurnCutOff && session.isBusy && !session.compactionInProgress,
+    };
   }
 
   /**
@@ -1609,7 +1631,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         return;
       case 'turnStarted':
         this.markTurnStarted(session);
-        if (action.isScheduledWakeup) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs);
+        if (action.wakeupSource !== null) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs, action.wakeupSource);
         return;
       case 'backgroundTasks':
         this.handleBackgroundTasks(session, action);
@@ -1813,10 +1835,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.emit('toolResult', session.key, { tool, output: action.output });
   }
 
-  /** A `CronCreate` / `CronDelete` result changes the session-only jobs the process holds. */
+  /** A `CronCreate` / `CronDelete` / `ScheduleWakeup` result changes the session-only jobs the process holds. */
   private trackScheduledJob(session: StreamSession, tool: string, output: string): void {
-    if (tool === cronCreateToolName) {
-      const job = getScheduledJobFromCronCreateResult(output);
+    if (tool === cronCreateToolName || tool === loopWakeupToolName) {
+      const job = tool === cronCreateToolName ? getScheduledJobFromCronCreateResult(output) : getScheduledJobFromLoopWakeupResult(output);
       if (job) session.scheduledJobs.set(job.jobId, job);
     } else if (tool === cronDeleteToolName) {
       const jobId = getCancelledJobIdFromCronDeleteResult(output);
@@ -2236,8 +2258,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const { key, workDir, sessionId } = session;
     const configDir = change.configDir === undefined ? session.configDir : change.configDir;
     session.isRespawning = true;
-    // The re-spawned process starts with none of the old one's background tasks or jobs.
-    this.recordLostWork(session);
+    // The re-spawned process starts with none of the old one's background tasks or jobs, and the turn it cuts off is
+    // re-prompted by nothing else.
+    this.storeLostWork(key, this.describePendingWork(session, { isTurnCutOff: true }));
     this.rejectQuestion(key);
     await session.stdinWriteChain.catch(() => { /* already logged */ });
     this.clearTimers(session);

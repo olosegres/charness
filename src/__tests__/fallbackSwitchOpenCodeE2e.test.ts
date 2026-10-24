@@ -5,12 +5,13 @@
  * (`openCodeE2e/fakeOpenCodeServer.ts`) that serves only what the bot calls and lists anything else as `unhandled`.
  * The bot ADOPTS that server (it is healthy and current) instead of spawning one. Four topics:
  *
- *   A  Claude → OpenCode: the Claude agent hits a subscription limit, the chain's rung is an OpenCode model. The
- *      notice names the account that hit it and `OpenCode openai/gpt-5`; the OpenCode session is created in the
- *      topic's folder and its first prompt is the context bridge; the Claude conversation is parked. A `/claude`
+ *   A  Claude → OpenCode: the Claude agent, a background task of its own still running, hits a subscription limit, the
+ *      chain's rung is an OpenCode model. The notice names the account that hit it and `OpenCode openai/gpt-5`; the
+ *      OpenCode session is created in the topic's folder and its first prompt is the context bridge, led by the note
+ *      about the task the switch cut off; the Claude conversation is parked with that loss. A `/claude`
  *      by hand then ASKS first (the conversation is handed over in compacted form): ✖️ Cancel changes nothing,
  *      ✅ Continue resumes the PARKED Claude conversation (same id) under the first account, the bridge being its
- *      first prompt.
+ *      first prompt — with the note, so its own agent hears about the task too.
  *   B  OpenCode → Claude: the OpenCode session's turn fails with a usage limit, the chain's rung is a Claude account.
  *      The notice names the model that hit it and `Claude «work»`; a new Claude conversation starts under that
  *      account with the bridge. `/opencode` by hand asks, ✅ resumes the parked OpenCode session (same id) with the
@@ -43,7 +44,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { getFakeBackgroundTaskDescription, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
   builtCliPath,
@@ -85,6 +86,10 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 
 /** One topic per direction. */
 const claudeToOpenCode = { threadId: 111, folder: 'oc-from-claude' };
+/** The background task topic A's Claude agent leaves running when the limit moves the topic away. */
+const backgroundTaskName = getFakeBackgroundTaskDescription('BGA-1');
+/** The first line of the note the agent gets about lost work (`utils/lostWork.ts`). */
+const lostWorkNoteStart = '[charness] This conversation\'s agent process ended while its own work was still pending';
 const openCodeToClaude = { threadId: 112, folder: 'oc-to-claude' };
 const openCodeToOpenCode = { threadId: 113, folder: 'oc-to-oc' };
 const freshSwitch = { threadId: 114, folder: 'oc-fresh' };
@@ -269,6 +274,10 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     await claudeTopic.sendAndAwaitReply('/claude', 'ready in');
     claudeSessionId = getLaunchSessionId(getSessionLaunches(getLayout()).at(-1)?.argv ?? []) ?? '';
     assert.ok(claudeSessionId, 'the Claude agent runs a conversation');
+    // The Claude agent leaves a background task running: the switch stops its process, and the task dies with it.
+    fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, 'BGA-1 [fake:background-notify] start a watcher');
+    await getCharness().waitFor('the bot to see the Claude agent\'s background task', agentStartTimeoutMs, () =>
+      readAgent(claudeToOpenCode.threadId)?.jsonStreamTail?.backgroundTasks?.some((task) => task.description === backgroundTaskName) === true);
     fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, `LIM-A [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
 
     const notice = await claudeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
@@ -282,10 +291,14 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const [bridge] = fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === session.id);
     assert.equal(bridge.model, chainOpenCodeModel, 'the prompt runs the rung\'s model');
     assert.match(bridge.text, /\[Backend switch\] You \(OpenCode · openai\/gpt-5\) are taking this conversation over from Claude · default/, 'the first prompt is the context bridge');
+    // The task the switch cut off is told to the agent the topic moves to, in that first prompt.
+    assert.ok(bridge.text.includes(`${lostWorkNoteStart} (the conversation moved to another backend)`) && bridge.text.includes(`«${backgroundTaskName}»`), bridge.text);
     assert.deepEqual(fakeOpenCode.mcpRegistrations.get(path.join(getLayout().workRoot, claudeToOpenCode.folder)), ['telegramBot'], 'the bot registered its MCP server in the folder\'s instance');
 
     await getCharness().waitFor('the switch to reach state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === openCodeAdapterName);
-    assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.claudeSessionId, claudeSessionId, 'the Claude conversation is parked for the way back');
+    const parked = readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)];
+    assert.equal(parked?.claudeSessionId, claudeSessionId, 'the Claude conversation is parked for the way back');
+    assert.deepEqual(parked?.lostWork?.backgroundTasks.map((task) => task.description), [backgroundTaskName], 'and keeps the cut-off task for its own agent');
     assert.equal(listSwitchNotices(claudeTopic).length, 1);
   });
 
@@ -320,6 +333,10 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
 
     await getCharness().waitFor('the bridge to reach the resumed Claude conversation', agentStartTimeoutMs, () => listBridgePrompts(getLayout()).length > bridgesBefore);
     assert.match(listBridgePrompts(getLayout()).at(-1)?.text ?? '', /\[Backend switch\] You \(Claude · default\) are taking this conversation over from OpenCode, because the operator switched this topic's agent\./, 'the first prompt is the context bridge, worded for a manual switch');
+    // Back to the parked conversation: its own agent hears about the task its process lost, once.
+    const backPrompt = listBridgePrompts(getLayout()).at(-1)?.text ?? '';
+    assert.ok(backPrompt.includes(lostWorkNoteStart) && backPrompt.includes(`«${backgroundTaskName}»`), backPrompt);
+    assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.lostWork, undefined, 'the OpenCode session parked in its turn carries no loss');
     assert.equal(listSwitchNotices(claudeTopic).length, 1, 'going back by hand is not a limit: no limit notice');
     assert.equal(fakeOpenCode.prompts.length, openCodePromptsBefore, 'nothing more reaches OpenCode');
 

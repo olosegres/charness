@@ -308,13 +308,15 @@ describe('classifyClaudeStreamMessage — a task\'s end and a turn\'s start (mea
   });
 
   it('session_state_changed running / requires_action → turnStarted; idle (it fires while a background task still runs) → nothing', () => {
-    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'running' }), [{ kind: 'turnStarted', isScheduledWakeup: false }]);
-    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'requires_action' }), [{ kind: 'turnStarted', isScheduledWakeup: false }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'running' }), [{ kind: 'turnStarted', wakeupSource: null }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'requires_action' }), [{ kind: 'turnStarted', wakeupSource: null }]);
     assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }), []);
   });
 
-  it('a command_lifecycle start by a scheduled job firing → turnStarted as a scheduled wakeup; any other lifecycle frame → nothing', () => {
-    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started', wakeup_source: 'schedule_wakeup' }), [{ kind: 'turnStarted', isScheduledWakeup: true }]);
+  it('a command_lifecycle start by a CronCreate job (schedule_wakeup) or the ScheduleWakeup one (loop_wakeup) → turnStarted naming the source; any other lifecycle frame → nothing', () => {
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started', wakeup_source: 'schedule_wakeup' }), [{ kind: 'turnStarted', wakeupSource: 'cron' }]);
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c3', state: 'started', wakeup_source: 'loop_wakeup', scheduled_for: 1792839900000 }), [{ kind: 'turnStarted', wakeupSource: 'loop' }]);
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c4', state: 'started', wakeup_source: 'something_new' }), []);
     assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'completed' }), []);
     assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c2', state: 'started' }), []);
   });

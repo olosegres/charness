@@ -811,6 +811,12 @@ export interface AgentAdapter extends EventEmitter {
   takeLostWork?(key: SessionKey): LostWork | null;
 
   /**
+   * What the LIVE process holds that would die with it (`utils/lostWork.ts`), read before the bot stops it itself for
+   * a backend switch — an explicit stop records nothing. `null` when nothing is pending. Optional, like `takeLostWork`.
+   */
+  getPendingWork?(key: SessionKey): LostWork | null;
+
+  /**
    * Whether the live process may be stopped automatically (lifecycle plan L-D10):
    * its CLI reports the background-task list (`claude_code_version` ≥ 2.1.287).
    * Unknown version → `false`. Optional: a backend that is never auto-stopped omits it.

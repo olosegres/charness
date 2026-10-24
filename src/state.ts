@@ -234,6 +234,11 @@ export interface ParkedSession {
   opencodeSessionId?: string;
   /** ISO instant of the switch. */
   parkedAt: string;
+  /**
+   * The agent's own pending work the switch cut off in the parked conversation (`utils/lostWork.ts`): when the topic
+   * comes back to it, its first prompt tells its agent.
+   */
+  lostWork?: LostWorkRecord;
 }
 
 /**
@@ -1340,8 +1345,10 @@ export class StateStore {
       }
       const { claudeSessionId, opencodeSessionId, jsonStreamTail, startedAt, mcpToolDigest, ...rest } = existing;
       this.state.agents[k] = rest;
-      // A released conversation is gone for this thread: the other family's parked id goes with it.
+      // A released conversation is gone for this thread: the other family's parked id goes with it, and so does a loss
+      // its agent was never told about.
       this.dropParkedSession(k);
+      this.dropOptionalMapEntry('lostWork', k);
       this.scheduleSave();
     });
   }

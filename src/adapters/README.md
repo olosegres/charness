@@ -88,11 +88,13 @@ Newline-delimited JSON, one object per line, parsed in
   `idle`, emitted only under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which every
   wrapper sets. `running` marks a turn at its start; `idle` is ignored (it fires
   after every `result`, while a background task still runs).
-- `command_lifecycle` `state:"started"` `wakeup_source:"schedule_wakeup"` — a
-  session-only `CronCreate` job fired and starts a turn (it does not name the
-  job). `CronCreate` / `CronDelete` tool results name the job
-  (`utils/claudeScheduledJobs.ts`); the CLI keeps such jobs in memory only and
-  never lists them as background tasks.
+- `command_lifecycle` `state:"started"` — a session-only job fired and starts a
+  turn; it names its source, not the job: `wakeup_source:"schedule_wakeup"` for a
+  `CronCreate` job, `"loop_wakeup"` for the `ScheduleWakeup` (`/loop`) one (both
+  probed live on 2.1.310). The `CronCreate` / `CronDelete` / `ScheduleWakeup` tool
+  results name what was scheduled (`utils/claudeScheduledJobs.ts`); the CLI keeps
+  such jobs in memory only and never lists them as background tasks. A cancelled
+  `/loop` wakeup's wording is unknown: it is held until the hold runs out.
 
 ### Multi-turn — one process per conversation, two lifecycles
 
@@ -181,16 +183,25 @@ stdout) inside its transition before its last look. All of it rides the tail
 record (below), so an adopt restores it.
 
 **Lost work.** Pending work that dies with a process anyway — the CLI exits by
-itself (`closed`), a re-spawn (`/model`, `/effort`, account), the idle stop after
-a spent hold (`suspended`), a process found gone at boot (dead at the adopt, or
-its tmux session gone and its tail record still listing work) — is kept by the
-adapter and handed over once by `takeLostWork`; an explicit stop records nothing,
-and an ended process's record drops its pending work, so the next boot reads only
-what died while the bot was away. The bot (`utils/lostWork.ts`) keeps it in
-`state.json` (`lostWork`) until the agent is told: one plain line in a topic, and
-an automatic resume with the note as its prompt — or the note rides the next
-prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
-automatic resume).
+itself (`closed`), a re-spawn (`/model`, `/effort`, account; the turn it cuts off
+counts too — nothing else re-prompts it, whereas a turn a crash cuts off is the
+request core's), the idle stop after a spent hold (`suspended`), a process found
+gone at boot (dead at the adopt, or its tmux session gone and its tail record
+still listing work; a record written before this tracking is ignored) — is kept by
+the adapter and handed over once by `takeLostWork`. An explicit stop records
+nothing, and an ended process's record drops its pending work, so the next boot
+reads only what died while the bot was away. The bot (`utils/lostWork.ts`) keeps
+it in `state.json` (`lostWork`) until the agent is told: one plain line in a
+topic, and an automatic resume with the note as its prompt — or the note rides the
+next prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
+automatic resume, a tracker issue, whose agent answers only through a request).
+A move that sends its own first prompt folds the note into it, with no line of its
+own: a usage-limit account switch (its notice says the background work stopped;
+decided at the call site — the re-spawn's `started` leaves the loss to the switch)
+and a backend switch, which reads the live process's work (`getPendingWork`)
+before it stops it — the hand-over bridge carries the note, and the parked
+conversation keeps it for its own first prompt back. A release (`/quit`, `/new`)
+drops it with the session ids.
 
 **Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on
 (`system/init` `claude_code_version`, persisted with the tail record), so a
