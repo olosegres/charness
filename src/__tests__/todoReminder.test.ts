@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { keyToString } from '../sessionKey';
 import {
   buildTodoReminderText,
   createTodoNagState,
@@ -52,6 +53,7 @@ const openGate: TodoStandaloneGate = {
   isAnswerTailFollowed: false,
   isLimited: false,
   isApiBilled: false,
+  isStoppingAfterTurn: false,
 };
 const staleNag = { clockStartedAt: nowMs - 2 * intervalMs, workedMs: intervalMs, ignoredCount: 0 };
 
@@ -75,6 +77,7 @@ describe('the reminder decisions (D10–D13)', () => {
       [{ isAnswerTailFollowed: true }, 'the text after a final answer is followed'],
       [{ isLimited: true }, 'the account or model is limited'],
       [{ isApiBilled: true }, 'billed to API credits'],
+      [{ isStoppingAfterTurn: true }, 'the session sleeps after every turn (never woken for it)'],
     ];
     for (const [change, reason] of gates) {
       assert.deepEqual(decideStandaloneTodoReminder(staleNag, intervalMs, { ...openGate, ...change }), { shouldRemind: false, skipReasons: [reason] }, reason);
@@ -168,7 +171,7 @@ describe('the reminder poll', () => {
       registry,
       listConversations: () => [topicKey],
       probeTurn: () => probe,
-      getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, ...options.gate }),
+      getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, isStoppingAfterTurn: false, ...options.gate }),
       getIntervalMs: () => intervalMs,
       checkIsEnabled: () => true,
       postReminder: async (_key, text) => {
@@ -207,6 +210,37 @@ describe('the reminder poll', () => {
     assert.equal(registry.getTopic(topicKey).nag?.ignoredCount, 1);
     await pollAt(engine, minuteMs, false);
     assert.equal(posted.length, 1, 'an idle poll is no turn end');
+  });
+
+  it('the adapter\'s turn end counts when no poll sees it idle — a per-turn process is stopped right after its turn', async () => {
+    const { engine, registry } = createEngine({ gate: { isStoppingAfterTurn: true } });
+    await engine.poll();
+    await pollAt(engine, minuteMs, true);
+    // The adapter clears its busy flag before it emits the turn end.
+    probe = { ...probe, isBusy: false };
+    await engine.noteAdapterTurnEnd(topicKey);
+    const clockStartedAt = registry.getTopic(topicKey).nag?.clockStartedAt;
+    assert.equal(clockStartedAt, clockMs, 'the turn end of the event starts the clock');
+    probe = { ...probe, isActive: false };
+    await pollAt(engine, minuteMs, false);
+    assert.equal(registry.getTopic(topicKey).nag?.clockStartedAt, clockStartedAt, 'the stopped process is no second end');
+    probe = { ...probe, isActive: true };
+    await workOneInterval(engine);
+    probe = { ...probe, isBusy: false };
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (line: string) => { logs.push(line); };
+    try {
+      await engine.noteAdapterTurnEnd(topicKey);
+    } finally {
+      console.log = originalLog;
+    }
+    assert.deepEqual(posted, [], 'a session that sleeps after every turn is never reminded on its own');
+    assert.ok(logs.some((line) => line.includes('stale list, no reminder: the session sleeps after every turn')), logs.join('\n'));
+    await pollAt(engine, minuteMs, true);
+    probe = { ...probe, isBusy: false, hasUnconsumedInput: true };
+    await engine.noteAdapterTurnEnd(topicKey);
+    assert.ok(engine['wasBusy'].get(keyToString(topicKey)), 'a held end (unread input) is left to the poll');
   });
 
   it('a turn shorter than a poll is still seen ending once its output was noted', async () => {

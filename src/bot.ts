@@ -13603,6 +13603,7 @@ export async function startBot(): Promise<void> {
     probeTurn: probeThreadTurn,
     getGate: (key) => ({
       hasOpenRequest: requestLedger.listOpenRequestsOf(key).length > 0,
+      isStoppingAfterTurn: getThreadAdapter(key).name === claudePerTurnAdapterName,
       isAnswerTailFollowed: requestWakeUpEngine?.checkIsAnswerTailFollowed(key) ?? false,
       ...getConversationAccountState(key),
     }),
@@ -13722,7 +13723,12 @@ export async function startBot(): Promise<void> {
     }),
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key)), () => scheduleLostWorkNote(key, takeLostWorkOf(key), 'holdExpired')),
-    onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),
+    onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => {
+      // Every platform's (the route is `all`): the todo reminder's turn end, which the per-turn stop below would
+      // otherwise hide from its poll.
+      void todoReminderEngine?.noteAdapterTurnEnd(key).catch((e) => console.warn(`[todos] the turn end of ${keyToString(key)} was not noted:`, e instanceof Error ? e.message : e));
+      handleAgentTurnEnded(key);
+    }),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
     onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => { dropLostConversationWatermark(key); noteConversationContextReset(key, 'its transcript was lost'); }),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {

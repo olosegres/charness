@@ -57,6 +57,8 @@ export interface TodoStandaloneGate {
   isLimited: boolean;
   /** The conversation runs on an account billed to API credits: never spend money unasked. */
   isApiBilled: boolean;
+  /** The backend stops the process after every turn (the per-turn lifecycle): the session sleeps now. */
+  isStoppingAfterTurn: boolean;
 }
 
 /** @description What the reminder decided: the text to deliver, or why not. */
@@ -120,6 +122,7 @@ export function decideStandaloneTodoReminder(nag: TodoNagState, intervalMs: numb
   const skipReasons = [
     ...getStaleSkipReasons(nag, intervalMs),
     !gate.isActive && 'no live session (never woken for it)',
+    gate.isStoppingAfterTurn && 'the session sleeps after every turn (never woken for it)',
     gate.isBusy && 'busy',
     gate.isTurnEndBlocked && 'something holds the turn open',
     gate.hasUnconsumedInput === true && 'input not taken in yet',

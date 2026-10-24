@@ -46,7 +46,10 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 - **Stale = WORKED time, not wall time** (D10): the reminder engine polls the conversations' sessions (the wake-up
   engine's turn probe, `todoReminderPollMs`) and counts the busy polls; a late poll counts at most three intervals.
   The clock starts at the first turn end after an update (`nag.clockStartedAt`), so neither the update's own turn nor
-  days of quiet count. A busy → idle edge is a turn end; agent output marks a turn too short for a poll.
+  days of quiet count. A busy → idle edge is a turn end; agent output marks a turn too short for a poll; and the
+  adapter's own `turnEnded` (json-stream, every terminal `result`, any platform) is a turn end too — the per-turn
+  lifecycle stops the process right after it, before any poll could find it idle. A per-turn session counts as
+  asleep for the standalone reminder (`isStoppingAfterTurn`): it gets the line with its next prompt only.
 - The work is kept in memory between turn ends and stored with the list at a turn end (`nag` in the topic file), so a
   restart loses at most a running turn's share. A turn that ends right before a stop may be read as ended only by the
   next process — or not at all — and the clock then starts a turn later.

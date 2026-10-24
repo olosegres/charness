@@ -165,7 +165,7 @@ describe('the poll drives the mid-turn delivery', () => {
         registry: createTodoRegistry({ store: new TodoStore(dataDir), getNowMs: Date.now }),
         listConversations: (): SessionKey[] => [busyKey, idleKey],
         probeTurn: (key) => probes.get(keyToString(key)) ?? { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false },
-        getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false }),
+        getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, isStoppingAfterTurn: false }),
         getIntervalMs: () => null,
         checkIsEnabled: () => isEnabled,
         postReminder: async () => true,

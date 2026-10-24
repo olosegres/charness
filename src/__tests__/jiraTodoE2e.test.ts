@@ -10,7 +10,7 @@
  *     and summary, with its item in work
  *   → an agent that keeps working on its own (a background task) past the reminder's interval gets the standalone
  *     reminder at a turn end — and nothing of it reaches the issue: no comment, no hand-back, no request (D58)
- *   → the second issue's conversation, resumed after its idle stop, gets the whole board again (a stop is a fresh context)
+ *   → the second issue's conversation, compacted and stopped at its idle mark, gets the whole board again when resumed
  *   → the instance invariants (R11, R32, R6, the private tmux server)
  *
  * Nothing leaves the machine; everything the test starts is stopped in `after`.
@@ -106,8 +106,9 @@ describe('Shared todo lists in Jira conversations: built charness, fake Jira, fa
     assert.equal(countClosedRequestsOf('PROJ-3'), closedBefore, 'no request opened or closed');
   });
 
-  it('a conversation resumed after its idle stop gets the whole board again: a stop is a fresh context (D20, D56)', async () => {
+  it('a conversation compacted and stopped at its idle mark gets the whole board again when resumed: the compaction is a fresh context (D20, D56)', async () => {
     await waitFor('PROJ-2\'s process stopped at the idle mark', idleStopTimeoutMs, () => getCharness().output.includes('[compact-on-idle] jira:PROJ:PROJ-2 process stopped; the session sleeps'));
+    assert.match(getCharness().output, /\[jira\] PROJ-2: its context was reset \(compaction/, 'the idle mark compacted it before the stop');
     const prompt = await handOverAndAwaitAnswer('PROJ-2');
     assert.match(prompt, new RegExp(`\\[Project board · ${repositoryName} · 2 other topics\\]`));
     assert.match(prompt, /PROJ-3 «\[fake:background-notify\] Task PROJ-3» — [^\n]*\n {2}▶ Watch the build/);

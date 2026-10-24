@@ -604,7 +604,8 @@ queue is.
 the first turn after its last update; a topic that was quiet for days is not reminded on its first turn) without
 updating its list, the next prompt it gets — from you, a scheduled run, a "continue" — carries one line asking it to
 update it. An agent that keeps working with no prompt reaching it (its own background tasks) gets the reminder as a
-short prompt of its own, at the end of a turn — never into a running turn, never by waking a sleeping session, and
+short prompt of its own, at the end of a turn — never into a running turn, never by waking a sleeping session (a
+topic on the per-turn Claude backend sleeps after every turn, so it gets the line with its next prompt only), and
 never while a request waits for its answer, a usage limit holds the topic or the topic runs on an account billed to
 API credits. After two reminders in a row without an update the bot stays silent until the agent updates or someone
 writes in the topic. Nothing of this is posted to the topic.

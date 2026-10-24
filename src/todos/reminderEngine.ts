@@ -43,6 +43,11 @@ export interface TodoReminderEngineDeps {
   pollIntervalMs?: number;
 }
 
+/** @description Whether the session stands at a settled turn end: live, idle, nothing holding the turn, nothing unread. */
+function checkIsSettledTurnEnd(probe: SessionTurnProbe): boolean {
+  return probe.isActive && !probe.isBusy && !probe.isTurnEndBlocked && probe.hasUnconsumedInput !== true;
+}
+
 export class TodoReminderEngine {
   private timer: NodeJS.Timeout | null = null;
   private lastPollAt: number | null = null;
@@ -108,12 +113,30 @@ export class TodoReminderEngine {
       await this.deps.midTurn?.deliverIfPending(key);
       return;
     }
-    const isTurnEnd = wasBusy && probe.isActive && !probe.isTurnEndBlocked && probe.hasUnconsumedInput !== true;
+    const isTurnEnd = wasBusy && checkIsSettledTurnEnd(probe);
     if (!isTurnEnd) {
       // A turn whose end is held (a question, a compaction, unread input) ends at a later poll.
       if (wasBusy && probe.isActive) this.wasBusy.set(conversationKey, true);
       return;
     }
+    await this.handleTurnEnd(key, probe, nowMs, intervalMs);
+  }
+
+  /**
+   * @description The adapter reported a turn's end (json-stream `turnEnded`, every terminal `result`). A poll can miss
+   * it — the per-turn lifecycle stops the process right after, before the next poll finds it idle — so the event is a
+   * turn end of its own; a turn whose end is held (unread input, a compaction) is left to the poll.
+   */
+  async noteAdapterTurnEnd(key: SessionKey): Promise<void> {
+    if (!this.deps.checkIsEnabled()) return;
+    const probe = this.deps.probeTurn(key);
+    if (!checkIsSettledTurnEnd(probe)) return;
+    this.wasBusy.set(keyToString(key), false);
+    await this.handleTurnEnd(key, probe, this.now(), this.deps.getIntervalMs());
+  }
+
+  private async handleTurnEnd(key: SessionKey, probe: SessionTurnProbe, nowMs: number, intervalMs: number | null): Promise<void> {
+    const conversationKey = keyToString(key);
     this.deps.registry.noteTurnEnd(key, nowMs);
     if (this.posting.has(conversationKey)) return;
     const decision = this.deps.registry.decideStandaloneReminder(key, intervalMs, { ...probe, ...this.deps.getGate(key) }, nowMs);
