@@ -1069,4 +1069,10 @@ export const frDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Descendre',
   'limits.btnUse': '✅ Utiliser',
   'limits.btnDontUse': '🚫 Ne pas utiliser',
+  'todo.topicTitle': '📋 Tâches — {topic}',
+  'todo.inWorkHeader': '▶ En cours',
+  'todo.queueHeader': '▷ File d\'attente',
+  'todo.doneTodayHeader': '✓ Fait aujourd\'hui',
+  'todo.sinceClock': 'depuis {time}',
+  'todo.emptyList': 'Rien de publié pour l\'instant — l\'agent ajoute des tâches quand il commence à travailler.',
 };

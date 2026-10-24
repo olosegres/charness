@@ -1073,4 +1073,10 @@ export const ruDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Ниже',
   'limits.btnUse': '✅ Использовать',
   'limits.btnDontUse': '🚫 Не использовать',
+  'todo.topicTitle': '📋 Задачи — {topic}',
+  'todo.inWorkHeader': '▶ В работе',
+  'todo.queueHeader': '▷ Очередь',
+  'todo.doneTodayHeader': '✓ Сделано сегодня',
+  'todo.sinceClock': 'с {time}',
+  'todo.emptyList': 'Пока ничего не опубликовано — агент добавляет задачи, когда начинает работу.',
 };

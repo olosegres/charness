@@ -351,6 +351,8 @@ import { schedulerMcpServerName } from './scheduler/injection';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
+import { TodoStore } from './todos/store';
+import { createTodoRegistry, type TodoRegistry } from './todos/registry';
 import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
@@ -432,6 +434,7 @@ import {
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 import { createLimitsBoard } from './connectors/telegram/commands/limitsBoard';
+import { createTodo } from './connectors/telegram/commands/todo';
 import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
 import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operatorSwitchPlan';
 import { checkNeedsBackendSwitchConfirmation, getBackendFamily, getBackendSwitchModelToPin, formatBackendFamily, formatBackendSwitchBridgeLabel, formatBackendSwitchTarget, type BackendFamily, type BackendSwitchTarget } from './utils/backendSwitchPlan';
@@ -1115,6 +1118,14 @@ function checkIsAgentEventShownInTopic(key: SessionKey, event: AgentStreamEvent)
  */
 function getDataDir(): string {
   return path.dirname(state.stateFilePath);
+}
+
+/** The shared todo registry (`todos/`), built on first use: its store lives in `DATA_DIR`, known once the state is. */
+let todoRegistry: TodoRegistry | null = null;
+
+function getTodoRegistry(): TodoRegistry {
+  todoRegistry ??= createTodoRegistry({ store: new TodoStore(getDataDir()), getNowMs: Date.now });
+  return todoRegistry;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -7810,6 +7821,8 @@ const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoS
   takeSwitchOffer: takeFallbackSwitchOffer,
 });
 
+const { registerTodoCommands } = createTodo({ ...botCore, getTodoRegistry });
+
 const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimitsBoard({
   ...botCore,
   getInstanceTimezone: getCurrentTimezone,
@@ -7901,6 +7914,7 @@ registerTopicCommand();
 registerFallbackChainCommands();
 
 registerLimitsBoardCommands();
+registerTodoCommands();
 
 registerSttCommands();
 
@@ -8561,7 +8575,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
@@ -11798,6 +11812,7 @@ export const COMMANDS_MENU = [
   { command: 'update', description: '🔄 Bot updates: automatic, notify only, off' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },
   { command: 'reminders', description: '🔔 Reminders — add, list, delete (no agent)' },
+  { command: 'todo', description: '📋 Agents\' published todo lists' },
   { command: 'status', description: '📊 Show status' },
   { command: 'output', description: '📜 Last 500 lines' },
   { command: 'trace', description: '🛰 Output-trace recorder on/off' },
@@ -12980,10 +12995,15 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     ...(jiraConnector
       ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
       : {}),
+    todos: {
+      update: (threadKeyStr, args) => getTodoRegistry().updateTodos(keyFromString(threadKeyStr), args),
+      read: (threadKeyStr, args) => getTodoRegistry().readTodos(keyFromString(threadKeyStr), args),
+    },
     answerRequest: (args) => answerRequest({
       ledger: wiring.requestLedger,
       answerSinks: wiring.answerSinks,
       onAnswerDelivered: (key, requestId, kind) => requestWakeUpEngine?.noteAnswerDelivered(key, requestId, kind),
+      getFinalAnswerNote: (key, requestCreatedAt) => getTodoRegistry().getFinalAnswerNote(key, requestCreatedAt),
     }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),

@@ -60,6 +60,9 @@ constants in the code; this README keeps what the code cannot say.
   `fetchJiraAttachment` port it supplies (the connector stays lazily loaded); the issue is the session's own
   conversation, taken from its token, never from an argument. The tool changes the Jira digest, so an adopted
   process reconnects at idle (L4).
+- `todo_update` / `todo_read` (the shared todo registry, `../todos/`) are offered to a Telegram AND a Jira session
+  when the `todos` port is wired, never to a session no codec reads; the instructions name an optional tool only
+  where it is offered (`OptionalBotTools`). The conversation comes from the token (`resolveTargetThreadKey`).
 - The server serves BEFORE sessions re-attach, so a tool that reads session state awaits
   `deps.whenSessionsRestored()`. Boot order is `runSessionBootPhase`: bot MCP first, then reattach and
   restores, then `onSessionsRestored`, then the active-session heals, then the schedule re-arm. A session

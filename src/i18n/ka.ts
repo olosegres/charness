@@ -1069,4 +1069,10 @@ export const kaDict: Record<string, string> = {
   'limits.btnDown': '⬇️ ქვევით',
   'limits.btnUse': '✅ გამოყენება',
   'limits.btnDontUse': '🚫 არ გამოიყენო',
+  'todo.topicTitle': '📋 ამოცანები — {topic}',
+  'todo.inWorkHeader': '▶ მიმდინარე',
+  'todo.queueHeader': '▷ რიგი',
+  'todo.doneTodayHeader': '✓ დღეს შესრულდა',
+  'todo.sinceClock': '{time}-დან',
+  'todo.emptyList': 'ჯერ არაფერია გამოქვეყნებული — აგენტი ამოცანებს სამუშაოს დაწყებისას ამატებს.',
 };

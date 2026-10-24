@@ -1075,4 +1075,10 @@ export const ukDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Нижче',
   'limits.btnUse': '✅ Використовувати',
   'limits.btnDontUse': '🚫 Не використовувати',
+  'todo.topicTitle': '📋 Завдання — {topic}',
+  'todo.inWorkHeader': '▶ У роботі',
+  'todo.queueHeader': '▷ Черга',
+  'todo.doneTodayHeader': '✓ Зроблено сьогодні',
+  'todo.sinceClock': 'з {time}',
+  'todo.emptyList': 'Поки нічого не опубліковано — агент додає завдання, коли починає роботу.',
 };

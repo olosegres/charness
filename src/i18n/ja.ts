@@ -1063,4 +1063,10 @@ export const jaDict: Record<string, string> = {
   'limits.btnDown': '⬇️ 下へ',
   'limits.btnUse': '✅ 使う',
   'limits.btnDontUse': '🚫 使わない',
+  'todo.topicTitle': '📋 タスク — {topic}',
+  'todo.inWorkHeader': '▶ 作業中',
+  'todo.queueHeader': '▷ 待ち行列',
+  'todo.doneTodayHeader': '✓ 今日完了',
+  'todo.sinceClock': '{time} から',
+  'todo.emptyList': 'まだ何も公開されていません — エージェントは作業を始めるときにタスクを追加します。',
 };

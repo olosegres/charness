@@ -1063,4 +1063,10 @@ export const zhDict: Record<string, string> = {
   'limits.btnDown': '⬇️ 下移',
   'limits.btnUse': '✅ 使用',
   'limits.btnDontUse': '🚫 不使用',
+  'todo.topicTitle': '📋 任务 — {topic}',
+  'todo.inWorkHeader': '▶ 进行中',
+  'todo.queueHeader': '▷ 队列',
+  'todo.doneTodayHeader': '✓ 今日完成',
+  'todo.sinceClock': '自 {time}',
+  'todo.emptyList': '尚未发布任何内容 — 智能体开始工作时会添加任务。',
 };

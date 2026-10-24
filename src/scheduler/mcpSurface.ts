@@ -35,6 +35,9 @@ import {
 } from '../requests/answerRequest';
 import { answerStyleInstruction } from '../requests/answerStyle';
 import type { RequestAnswerKind } from '../requests/types';
+import type { TodoUpdateArgs } from '../todos/merge';
+import { todoHistoryMaxItems, type TodoReadArgs, type TodoToolOutcome } from '../todos/registry';
+import { todoNoteMaxLength, todoPositions, todoRefMaxLength, todoStatuses, todoTitleMaxLength } from '../todos/types';
 
 /**
  * @description The bot-owned MCP server exposes the agent-facing tools —
@@ -124,22 +127,42 @@ const compactConversationInstruction =
 const answerRequestInstruction =
   '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. ' +
   answerStyleInstruction;
+/** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
+const todoInstruction =
+  '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
-const telegramInstructions = `This MCP lets the agent act on its own Telegram topic.
+/**
+ * @name OptionalBotTools
+ * @description The tools a session gets only when their port is wired — the instructions name a tool only when it
+ * is offered.
+ */
+export interface OptionalBotTools {
+  isJiraAttachmentToolOffered: boolean;
+  isTodoToolOffered: boolean;
+}
+
+/** @description Which optional tools `deps` offers. */
+function getOptionalBotTools(deps: SchedulerMcpDeps): OptionalBotTools {
+  return { isJiraAttachmentToolOffered: deps.fetchJiraAttachment !== undefined, isTodoToolOffered: deps.todos !== undefined };
+}
+
+function buildTelegramInstructions(isTodoToolOffered: boolean): string {
+  return `This MCP lets the agent act on its own Telegram topic.
 
 When to use it:
 • The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they live only in your process, which the bot stops after a long idle stretch, and die with it.
 • You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document, never .webm/.mov — those render as GIFs or don't play); transcode first if needed (the tool description has the ffmpeg recipe).
 • You want to deliver SEVERAL discrete messages (each as its own Telegram message, e.g. a per-item news digest) → send_messages_to_user. Each item can optionally attach ONE file/photo/video (text becomes its caption).
 ${compactConversationInstruction}
-• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
+${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
 ${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
 ${claudeProfilesInstruction}
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
+}
 
 /** What a Jira session's instructions add: the tool that reaches the issue's original files (C10). */
 const jiraAttachmentInstruction =
@@ -160,9 +183,6 @@ ${[
 Each tool's own description has the exact argument recipe.`;
 }
 
-const neutralInstructions = buildTrackerInstructions([]);
-const jiraInstructions = buildTrackerInstructions([jiraAttachmentInstruction]);
-
 /**
  * Connect-time `instructions` returned in the MCP `initialize` handshake — a
  * short, high-level pointer the client surfaces to the agent BEFORE any call.
@@ -172,11 +192,16 @@ const jiraInstructions = buildTrackerInstructions([jiraAttachmentInstruction]);
  *
  * @description The connect-time instructions for a session of `platform`: only
  * a Telegram session has the scheduling and send-to-topic tools, so only its
- * instructions name them (Jira connector plan J2, D18).
+ * instructions name them (Jira connector plan J2, D18); an optional tool is named
+ * only where it is offered.
  */
-export function buildMcpServerInstructions(platform: PlatformId | null, isJiraAttachmentToolOffered = false): string {
-  if (platform === 'telegram') return telegramInstructions;
-  return platform === 'jira' && isJiraAttachmentToolOffered ? jiraInstructions : neutralInstructions;
+export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools): string {
+  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered);
+  if (platform !== 'jira') return buildTrackerInstructions([]);
+  return buildTrackerInstructions([
+    ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
+    ...(offered.isTodoToolOffered ? [todoInstruction] : []),
+  ]);
 }
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */
@@ -367,6 +392,14 @@ export interface SchedulerMcpDeps {
    */
   listClaudeProfiles?: (model: string | null) => Promise<ClaudeProfilesReport>;
   /**
+   * `todo_update` / `todo_read`: the conversation's published todo list (`todos/registry.ts`). Offered to Telegram
+   * and Jira sessions; absent = the tools are not offered.
+   */
+  todos?: {
+    update: (threadKey: string, args: TodoUpdateArgs) => TodoToolOutcome;
+    read: (threadKey: string, args: TodoReadArgs) => TodoToolOutcome;
+  };
+  /**
    * Deliver an agent's answer to a request and apply the close rules
    * (`answer_request`). The surface passes the scope check in; the rules live in
    * `requests/answerRequest.ts`.
@@ -462,7 +495,7 @@ export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId
     },
   };
   registerBotTools(recorder, deps, digestScope, platform, undefined);
-  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, deps.fetchJiraAttachment !== undefined), definitions);
+  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, getOptionalBotTools(deps)), definitions);
 }
 
 /**
@@ -1139,6 +1172,107 @@ function registerCompactConversationTool(server: ToolRegistrar, deps: SchedulerM
   );
 }
 
+/** The most items one `todo_update` call may name, and the longest `order` — a stand-up list is a few items (D1). */
+const todoUpdateMaxItems = 30;
+const todoOrderMaxIds = 100;
+
+const todoItemPatchSchema = z.object({
+  id: z
+    .string()
+    .trim()
+    .regex(/^t\d+$/)
+    .optional()
+    .describe('The item to change ("t3", from your list). Leave it out to ADD a new item.'),
+  title: z
+    .string()
+    .max(todoTitleMaxLength)
+    .optional()
+    .describe('Task-sized and concrete: name the area (files, tests). Required for a new item.'),
+  status: z
+    .enum(todoStatuses)
+    .optional()
+    .describe('queued (default for a new item) · inWork (you are on it) · done · dropped (will not be done — the way to remove an item).'),
+  note: z.string().max(todoNoteMaxLength).optional().describe('A short note other agents should know (what is left, a blocker). An empty note removes it.'),
+  ref: z
+    .string()
+    .max(todoRefMaxLength)
+    .optional()
+    .describe('A tracker key / id / link the item stands for, e.g. the bug ticket you just created. An empty ref removes it.'),
+  position: z.enum(todoPositions).optional().describe('Put the item first or last among the open ones (a new item goes last by default).'),
+});
+
+const threadKeyArgSchema = z
+  .string()
+  .optional()
+  .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.');
+
+const todoUpdateShape = {
+  items: z
+    .preprocess(coerceJsonArrayArg, z.array(todoItemPatchSchema).max(todoUpdateMaxItems))
+    .optional()
+    .describe('Items to add (no id) or change (id + only the fields that change). Nothing disappears by omission: set status dropped to remove one.'),
+  order: z
+    .preprocess(coerceJsonArrayArg, z.array(z.string().trim().min(1)).max(todoOrderMaxIds))
+    .optional()
+    .describe('Open item ids in the wanted queue order; the ones left out keep their relative order after them.'),
+  threadKey: threadKeyArgSchema,
+};
+
+const todoReadShape = {
+  includeHistory: z.boolean().optional().describe(`Also list older closed items (done / dropped), up to ${todoHistoryMaxItems}.`),
+  threadKey: threadKeyArgSchema,
+};
+
+/**
+ * @description Register `todo_update` / `todo_read` (shared todo registry D3–D5): the published list of the
+ * conversation the token names — never another one; the rules live in `todos/registry.ts`.
+ */
+function registerTodoTools(
+  server: ToolRegistrar,
+  deps: SchedulerMcpDeps,
+  todos: NonNullable<SchedulerMcpDeps['todos']>,
+  scope: SchedulerScope,
+): void {
+  server.registerTool(
+    'todo_update',
+    {
+      title: 'Update your published todo list',
+      description:
+        'Publish what you are doing so the agents in the project\'s other topics see it and never fix the same thing ' +
+        'unknowingly (and you see theirs). Stand-up level: a few task-sized items, never micro-steps (those stay in ' +
+        'your own todo tool). Add an item as inWork BEFORE you start any task, self-found fixes included (a failing ' +
+        'test, a leak), naming the area concretely; mark it done / dropped as soon as it is. An UPSERT: an item ' +
+        'without id is new; with an id only the fields given change. A call with no items and no order confirms the ' +
+        'list is still accurate. The result is your list.',
+      inputSchema: todoUpdateShape,
+    },
+    async (args) => {
+      const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
+      if (!resolved.ok) return errorResult(resolved.error);
+      const outcome = todos.update(resolved.threadKey, {
+        ...(args.items === undefined ? {} : { items: args.items }),
+        ...(args.order === undefined ? {} : { order: args.order }),
+      });
+      return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
+    },
+  );
+
+  server.registerTool(
+    'todo_read',
+    {
+      title: 'Read your published todo list',
+      description: 'Your published todo list (in work, the queue in order, recently done); with includeHistory also the older closed items.',
+      inputSchema: todoReadShape,
+    },
+    async (args) => {
+      const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
+      if (!resolved.ok) return errorResult(resolved.error);
+      const outcome = todos.read(resolved.threadKey, { ...(args.includeHistory === undefined ? {} : { includeHistory: args.includeHistory }) });
+      return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
+    },
+  );
+}
+
 /**
  * `jira_get_attachment`: the issue is the conversation this session's token names — never an argument —
  * so a file of any other issue cannot be asked for, however the id got into the agent's head.
@@ -1420,7 +1554,7 @@ function buildRequestServer(
   const platform = getSchedulerScopePlatform(scope);
   const server = new McpServer(
     { name: mcpServerName, version: mcpServerVersion },
-    { instructions: buildMcpServerInstructions(platform, deps.fetchJiraAttachment !== undefined) },
+    { instructions: buildMcpServerInstructions(platform, getOptionalBotTools(deps)) },
   );
   registerBotTools(server, deps, scope, platform, requestSignal);
   return server;
@@ -1443,6 +1577,8 @@ function registerBotTools(
   // The original files of the conversation's own issue: only a Jira session, and only with the connector loaded.
   if (platform === 'jira' && deps.fetchJiraAttachment) registerJiraAttachmentTool(server, deps, deps.fetchJiraAttachment, scope);
   registerCompactConversationTool(server, deps, scope);
+  // A published list belongs to a conversation of a platform that has one (D54): a topic or a Jira issue.
+  if (deps.todos && (platform === 'telegram' || platform === 'jira')) registerTodoTools(server, deps, deps.todos, scope);
   registerAnswerRequestTool(server, deps, scope, platform);
   if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps.listClaudeProfiles);
 }

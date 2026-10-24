@@ -1070,4 +1070,10 @@ export const ptDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Descer',
   'limits.btnUse': '✅ Usar',
   'limits.btnDontUse': '🚫 Não usar',
+  'todo.topicTitle': '📋 Tarefas — {topic}',
+  'todo.inWorkHeader': '▶ Em andamento',
+  'todo.queueHeader': '▷ Fila',
+  'todo.doneTodayHeader': '✓ Feito hoje',
+  'todo.sinceClock': 'desde {time}',
+  'todo.emptyList': 'Nada publicado ainda — o agente adiciona tarefas quando começa a trabalhar.',
 };

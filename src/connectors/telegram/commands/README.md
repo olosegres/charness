@@ -349,3 +349,10 @@ public group: `t.me/<username>/<topic id>`) — the topic id is the id of its cr
 topic (`buildTopicLink`). The owner's private chat has no topics: `checkIsDmKey` answers it with a line. Whether Telegram also
 delivers the bot the `forum_topic_created` service message of its own topic is not documented; the existing handler is harmless
 either way: the binding exists by then, and the admin list skips bots, so nothing is auto-bound or greeted for the bot's own topic.
+
+## `todo.ts`
+
+`/todo` — the shared todo registry (`../../../todos/`) seen from Telegram. In a bound topic: its published list
+(`renderTodoTopicView` over `getTodoListView` — in work with its clock, the queue numbered, done today; an empty list
+says the agent adds items when it starts work). Unbound topics and General get the bind refusal. Read-only: an item
+is changed by telling the agent.

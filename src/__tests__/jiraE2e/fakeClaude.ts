@@ -147,6 +147,11 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    answers `final`. Also honoured by a turn WITHOUT a request (a topic whose view has requests off), for the
  *    prompt carrying the token.
  *
+ * Todo tokens in the text of a turn that gets as far as answering (with or without a request): `[todo:<status>:<title>]`
+ * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
+ * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
+ * publishes).
+ *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
  *
@@ -194,6 +199,11 @@ const probeToolName = 'e2e-tool';
 const fetchIdsRe = /\[fetch:([0-9,]+)\]/;
 const replyToIdsRe = /\[reply-to:([0-9,]+)\]/;
 const limitResetsRe = /\[limit-resets:([^\]]+)\]/;
+/** `[todo:<status>:<title>]` adds an item; `[todo-id:<id>:<status>]` changes one; `[todo-touch]` confirms the list. */
+const todoAddRe = /\[todo:(queued|inWork|done|dropped):([^\]]+)\]/g;
+const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
+const todoTouchToken = '[todo-touch]';
+const todoUpdateToolName = 'todo_update';
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
 const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
 /** The request header's line naming the requests this one replaced (`requests/requestHeader.ts`); group 1 lists their ids. */
@@ -516,7 +526,7 @@ function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
   return null;
 }
 
-async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, string | string[]>): Promise<string> {
+async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>): Promise<string> {
   if (!server.url) throw new Error('the bot MCP server has no url');
   const client = new Client({ name: 'fake-claude', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers ?? {} } }));
@@ -531,6 +541,21 @@ async function callBotTool(server: McpServerConfig, toolName: string, args: Reco
 
 function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
   return callBotTool(server, answerToolName, args);
+}
+
+/**
+ * The todo tokens of a prompt, as ONE `todo_update` call (what a real agent does when it starts or finishes a task):
+ * logged to `tool-calls.jsonl` with its outcome. A prompt with no token calls nothing.
+ */
+async function runTodoTokens(server: McpServerConfig | null, content: string, issueKey: string): Promise<void> {
+  const items = [
+    ...[...content.matchAll(todoAddRe)].map((match) => ({ title: match[2], status: match[1] })),
+    ...[...content.matchAll(todoPatchRe)].map((match) => ({ id: match[1], status: match[2] })),
+  ];
+  if (items.length === 0 && !content.includes(todoTouchToken)) return;
+  const args = items.length === 0 ? {} : { items };
+  const outcome = server ? await callBotTool(server, todoUpdateToolName, args) : 'error: no bot MCP server in --mcp-config';
+  appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool: todoUpdateToolName, args, outcome });
 }
 
 /** R6: what a real turn streams before its answer — a `system/status` frame, a thinking block, a tool call and its result. */
@@ -705,6 +730,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
     emitTurnActivity(sessionId, noRequestIssueKey);
+    await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     // A turn without a request honours two modes, by the token in ITS OWN text: `ask` (a question needs no request
     // to be put to the user) and `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once").
@@ -751,6 +777,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));
   }
   const server = getBotMcpServer(argv);
+  await runTodoTokens(server, content, state.issueKey);
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server

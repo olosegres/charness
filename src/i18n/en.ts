@@ -1113,4 +1113,10 @@ export const enDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Down',
   'limits.btnUse': '✅ Use',
   'limits.btnDontUse': '🚫 Don\'t use',
+  'todo.topicTitle': '📋 Todo — {topic}',
+  'todo.inWorkHeader': '▶ In work',
+  'todo.queueHeader': '▷ Queue',
+  'todo.doneTodayHeader': '✓ Done today',
+  'todo.sinceClock': 'since {time}',
+  'todo.emptyList': 'Nothing published yet — the agent adds items when it starts work.',
 };

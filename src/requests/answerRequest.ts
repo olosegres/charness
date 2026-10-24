@@ -43,6 +43,11 @@ export interface AnswerRequestDeps {
   ledger: Pick<RequestLedger, 'whenLoaded' | 'getRequest' | 'updateOpenRequest' | 'closeRequest'>;
   answerSinks: AnswerSinks;
   onAnswerDelivered?: (key: SessionKey, requestId: string, kind: RequestAnswerKind) => void;
+  /**
+   * A line the result of a `final` answer to an open request carries, or `null` — the todo registry's reminder when
+   * the published list still shows work in progress that the request never touched (`todos/registry.ts`, D8).
+   */
+  getFinalAnswerNote?: (key: SessionKey, requestCreatedAt: number) => string | null;
 }
 
 /**
@@ -130,5 +135,6 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     }));
   // After the close: whoever hears it sees the request as it now stands.
   deps.onAnswerDelivered?.(key, args.requestId, args.kind);
-  return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}` };
+  const finalNote = args.kind === 'final' ? deps.getFinalAnswerNote?.(key, lookup.request.createdAt) ?? null : null;
+  return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}${finalNote === null ? '' : ` ${finalNote}`}` };
 }

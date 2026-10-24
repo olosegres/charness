@@ -1069,4 +1069,10 @@ export const esDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Bajar',
   'limits.btnUse': '✅ Usar',
   'limits.btnDontUse': '🚫 No usar',
+  'todo.topicTitle': '📋 Tareas — {topic}',
+  'todo.inWorkHeader': '▶ En curso',
+  'todo.queueHeader': '▷ En cola',
+  'todo.doneTodayHeader': '✓ Hecho hoy',
+  'todo.sinceClock': 'desde las {time}',
+  'todo.emptyList': 'Aún no hay nada publicado: el agente añade tareas cuando empieza a trabajar.',
 };

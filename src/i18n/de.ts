@@ -1069,4 +1069,10 @@ export const deDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Tiefer',
   'limits.btnUse': '✅ Verwenden',
   'limits.btnDontUse': '🚫 Nicht verwenden',
+  'todo.topicTitle': '📋 Aufgaben — {topic}',
+  'todo.inWorkHeader': '▶ In Arbeit',
+  'todo.queueHeader': '▷ Warteschlange',
+  'todo.doneTodayHeader': '✓ Heute erledigt',
+  'todo.sinceClock': 'seit {time}',
+  'todo.emptyList': 'Noch nichts veröffentlicht — der Agent trägt Aufgaben ein, sobald er mit der Arbeit beginnt.',
 };

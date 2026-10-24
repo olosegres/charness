@@ -71,6 +71,8 @@ Numeric bounds are named constants in the files below; this README says only wha
   answer to an already closed request is still delivered and changes nothing — deliberately, never blocked;
   for a superseded request the tool result names the request that replaced it, so the agent knows which
   one its answer belonged to.
+- A `final` to an open request may carry one more line (`getFinalAnswerNote`): the todo registry's reminder when the
+  conversation's published list still shows work in progress the request never updated (`../todos/README.md`).
 
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 

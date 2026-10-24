@@ -1069,4 +1069,10 @@ export const uzDict: Record<string, string> = {
   'limits.btnDown': '⬇️ Pastga',
   'limits.btnUse': '✅ Ishlatish',
   'limits.btnDontUse': '🚫 Ishlatmaslik',
+  'todo.topicTitle': '📋 Vazifalar — {topic}',
+  'todo.inWorkHeader': '▶ Ishlanmoqda',
+  'todo.queueHeader': '▷ Navbat',
+  'todo.doneTodayHeader': '✓ Bugun bajarildi',
+  'todo.sinceClock': '{time} dan beri',
+  'todo.emptyList': 'Hali hech narsa e\'lon qilinmagan — agent ishni boshlaganda vazifa qo\'shadi.',
 };

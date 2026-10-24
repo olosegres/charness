@@ -29,6 +29,7 @@ These hold whichever surface you drive it from — the same core serves all of t
 - **Waits out usage limits** — when the agent hits a usage / session limit the bot reads the reset time out of the error (honouring the timezone the provider quotes; a mere warning such as `Approaching session limit · resets …` or the switch onto extra usage is not a limit), waits, then tells the agent to continue by itself and pins the "work resumed" message so a muted topic still notifies you; `/limits_autoswitch` turns waiting off per topic and `/limits` skips a single resume. With a **fallback chain** (`/limits_autoswitch`: other Claude accounts, OpenCode providers and models, in your order of preference) the limit notice offers «🔁 Switch to …» buttons to move the topic to the next entry with room and continue at once — or the bot does it by itself when you turn switching on; across backends the new agent gets a context bridge with the previous one's last turns
 - **Updates itself** — checks for a new version hourly, installs it when no agent is working, restarts in place (same process, agents keep running) and says in General what changed; npm installs and git checkouts, hot mode and Docker included. Off with `/update` in General. See [Updating](SETUP.md#updating)
 - **Restart-safe** — agents run as external processes (tmux, `opencode serve`) that the bot re-adopts after a restart instead of killing them; a prompt sent while a session boots is buffered and replayed. See [Restart behaviour](#restart-behaviour)
+- **Shared todo lists** — every agent publishes a short stand-up list of what it is working on (in work, the queue, done); `/todo` shows a topic's list, so agents in other topics of the same project can avoid doing the same work twice. See [Shared todo lists](#shared-todo-lists-todo)
 
 ### Telegram
 
@@ -117,6 +118,7 @@ actually start an agent or terminal in the folder.
 | `/interrupt`, `/esc`, `/escape` | Interrupt the running turn — Claude gets a raw Escape (which also dismisses a selector), OpenCode aborts the generation; the conversation stays and your next message steers the agent. A question the agent is waiting on is closed first (rejected on OpenCode, declined on the Claude stream-json backends) and its buttons are retired. A pending sign-in, account-name prompt or `/topic` wizard is cancelled first instead (the agent is not interrupted). Not supported in a `/terminal` topic |
 | `/schedule` | Schedule a prompt in free text — the agent parses the time and owns the job; see [Scheduler](#scheduler-schedule-telegram) |
 | `/stt` | Voice recognition, from any topic (General included); instance-wide, applied to the next voice note — no restart. The main screen holds only what applies to recognition as a whole: the ordered list of **engines** (the first that works answers; when one fails the next takes over) — one full-width button each (`1. GigaAM (local) · running · 10s+25% · ✓` — name, the local engine's short state, timeout `base s + % of the voice`, ✓ usable / ✗ disabled or skipped) — then «➕ Add engine», «🌐 Language» (auto or `ru en uk de fr es`) and «✖️ Close». A tap on an engine opens its **card**: ⬆️ Up / ⬇️ Down, ✅ Use / 🚫 Don't use, ⏱ Timeout (presets), then what the kind adds — 🔑 key for **Groq**, **OpenAI** or a **custom** OpenAI-compatible server (its address, a base like `http://host:8000` is completed; then «does it need a key?»), and 🗑 Remove. A pasted key is deleted from the topic the moment it is accepted, never shown again and kept out of the logs; an address with a login in it is refused. **GigaAM (local)** (Russian only, runs on this machine) is added through «➕ Add engine» like the others: installed, it joins the list at once; not installed, a confirmation (≈ 400 MB on disk; ≈ 0.5 GB RAM while it runs, up to ≈ 0.9 GB on a long voice, nothing while stopped) leads to the install with a live progress message, and the message becomes its card. Its card holds everything local: the status line (ready · running / stopped / paused after failed starts / installing / not installed), «⏱ Exit after idle» (5 / 15 / 30 / 60 min or never), «⚙️ Workers» (1 / 2 / 4 / 8), «🔄 Try again now» (while paused), «Remove from list» (the files stay) and «🗑 Remove model files». Everything lives in one file, `stt.json` — see [Voice input](SETUP.md#voice-input). `/voice` and `/speech` are hidden aliases |
+| `/todo` | The agent's published todo list for this topic: in work, the queue in order, done today. Read-only — tell the agent to change it. See [Shared todo lists](#shared-todo-lists-todo) |
 | `/reminders` | Reminders set with buttons only — the bot posts and pins them itself, with no agent involved; works in any topic, bound or not. See [Reminders](#reminders-reminders-telegram) |
 | `/clear_messages` | Delete bot messages in this topic (up to 48h, Telegram limit) |
 | `/clear` | Forwarded to the agent (Claude wipes context; OpenCode plain text) — not a bot command anymore. Also purges the topic's file-intake dir |
@@ -539,6 +541,35 @@ a single catch-up.
 Reminders are yours, not the agent's: the scheduling tools an agent can call
 do not see them, so it can neither list nor delete them.
 
+### Shared todo lists (`/todo`)
+
+Each conversation — a Telegram topic or a Jira issue — keeps a short published todo list: what its agent is
+working on now, what is queued and in what order, and what it finished. Stand-up level: a few task-sized items,
+never the agent's micro-steps. The agent keeps it itself through the bot's `todo_update` tool (its instructions ask
+it to add an item **before** it starts any task, its own fixes included, and to close it as soon as it is done);
+nothing is ever removed silently — an item is closed as done or dropped.
+
+`/todo` in a topic shows its list:
+
+```
+📋 Todo — flows-speedup
+
+▶ In work
+   Speed up limits flow tests (src/__tests__/limits*) — since 13:05
+
+▷ Queue
+   1. Shorten the Jira poll window
+   2. Bump tsx
+
+✓ Done today
+   Fix .env leak in envLoader — 12:40
+```
+
+The view is read-only: to change the list, tell the agent. The list belongs to the topic, not to the session —
+`/new`, `/quit`, switching backends and restarting the bot keep it. When the agent sends its final answer while its
+list still shows work in progress it did not touch, the bot reminds it (in the tool result) to record what changed.
+The lists live in `DATA_DIR/todos/`; items closed more than 30 days ago move to `DATA_DIR/todos/archive/`.
+
 ### Raw terminal (`/terminal`) (Telegram)
 
 `/terminal` binds the topic to a real interactive `$SHELL` (in tmux) in the
@@ -619,6 +650,8 @@ agent even when two clients use the same JSON-RPC request id. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;
+- `todo_update` / `todo_read` — the agent's published todo list (see [Shared todo
+  lists](#shared-todo-lists-todo)), offered in Telegram topics and Jira issues alike;
 - `compact_conversation` — lets the agent compact its OWN session when you ask it
   to in plain words ("compact our conversation"). It arms the compaction and
   returns immediately; the bot runs the real compaction the moment the current

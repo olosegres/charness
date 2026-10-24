@@ -54,6 +54,12 @@ restarted bot read that limit error from what the agent wrote during the downtim
 hour before was taken as closing tomorrow, and the account stayed limited — shown so on `/limits`, passed over by the account
 switch — for up to a day. The reset is now worked out from the time the agent's transcript recorded the error.
 
+**Agents publish what they work on, and `/todo` shows it.** Every topic's agent now keeps a short published todo list
+— in work, the queue in order, done — through a new bot tool, adding an item before it starts a task and closing it
+when it is done; `/todo` in a topic shows the list. It belongs to the topic, so `/new`, `/quit`, a backend switch and
+a restart keep it, and a final answer while the list still shows unfinished work reminds the agent to update it. Jira
+conversations publish the same way.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

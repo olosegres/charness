@@ -1068,4 +1068,10 @@ export const hiDict: Record<string, string> = {
   'limits.btnDown': '⬇️ नीचे',
   'limits.btnUse': '✅ उपयोग करें',
   'limits.btnDontUse': '🚫 उपयोग न करें',
+  'todo.topicTitle': '📋 कार्य — {topic}',
+  'todo.inWorkHeader': '▶ जारी काम',
+  'todo.queueHeader': '▷ कतार',
+  'todo.doneTodayHeader': '✓ आज पूरा हुआ',
+  'todo.sinceClock': '{time} से',
+  'todo.emptyList': 'अभी कुछ प्रकाशित नहीं हुआ — एजेंट काम शुरू करते ही कार्य जोड़ता है।',
 };
