@@ -170,6 +170,9 @@ function getCurrentLocale(): Locale {
   return localeStorage.getStore() ?? defaultLocale;
 }
 
+/** @description The shape of {@link t}, for pure modules that take the translator as a parameter. */
+export type Translate = (code: string, opts?: Record<string, string | number>) => string;
+
 /**
  * @description Format a localised message.
  *

@@ -68,6 +68,10 @@ export interface RequestWakeUpEngineDeps {
   forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
   deliverAlert: (key: SessionKey, request: OpenRequestState, reason: RequestAlertReason) => Promise<string | null>;
   backstopMs: number;
+  /** How often the unwatched open requests are swept; absent: {@link unwatchedSweepMs} (a test instance shortens it). */
+  sweepIntervalMs?: number;
+  /** The first retry of a prompt that could not be posted; absent: `postRetryDelaysMs[0]` (a test instance shortens it). */
+  firstPostRetryDelayMs?: number;
   /** Whether the conversation's view hides the agent's stream: only then is a final answer's tail followed. Absent: never. */
   checkIsAnswerTailWatched?: (key: SessionKey) => boolean;
   /** Bring the session up (resume only) and forward the answer-tail reminder; `false` when it could not be reached. */
@@ -118,7 +122,7 @@ export class RequestWakeUpEngine {
     }, watchedTurnPollMs);
     this.sweepTimer ??= setInterval(() => {
       void this.sweepUnwatchedRequests().catch((e) => logWakeUpFailure('the open-request sweep', e));
-    }, unwatchedSweepMs);
+    }, this.deps.sweepIntervalMs ?? unwatchedSweepMs);
     this.pollTimer.unref?.();
     this.sweepTimer.unref?.();
   }
@@ -176,7 +180,7 @@ export class RequestWakeUpEngine {
   async notePostFailed(key: SessionKey, requestId: string): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
-    const retry = getPostRetryUpdate(request, this.now());
+    const retry = getPostRetryUpdate(request, this.now(), this.deps.firstPostRetryDelayMs);
     if (!retry) return;
     try {
       await this.deps.ledger.updateOpenRequest(request.id, retry);
@@ -398,7 +402,7 @@ export class RequestWakeUpEngine {
     if (outcome === 'requestGone') return;
     if (decision.reason === 'postRetry') {
       // R28: a retry that failed again tries later; once spent, the backstop decides — no alert yet.
-      const retry = getPostRetryUpdate(updated, this.now());
+      const retry = getPostRetryUpdate(updated, this.now(), this.deps.firstPostRetryDelayMs);
       if (retry) await this.deps.ledger.updateOpenRequest(updated.id, retry);
       return;
     }

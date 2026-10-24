@@ -321,10 +321,11 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 ## Tests
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
-`jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; `jiraConnectorE2e.test.ts` boots a
-real Jira-only instance (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
-groups and their members) and `fakeClaude.ts`, and, restarted with a `trustedGroup`, proves the filter, the notice
-and an automation's hand-over end to end;
+`jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; three flows boot a
+real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
+groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle),
+`jiraPromptE2e.test.ts` (what the prompts carry) and `jiraTrustE2e.test.ts` (with a `trustedGroup`: the filter, the
+notice, an automation's hand-over and mentions), sharing `__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and
 effort) also need `JIRA_LIVE_MEDIA_ISSUE` and an instance `jira.json` that maps `ffmpeg` in `agentBinaries` and names

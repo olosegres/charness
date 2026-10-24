@@ -108,6 +108,7 @@ export const hiDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot ग्रुप एडमिन है',
   'doctor.can_manage_topics': '`can_manage_topics` प्रदान किया गया',
   'doctor.can_delete_messages': '`can_delete_messages` प्रदान किया गया',
@@ -157,6 +158,9 @@ export const hiDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'थ्रेड की पिन की गई स्थिति (Stage 7) अनुपलब्ध रहेगी',
+
+  'nativeWindows.limitedNotice':
+    'नेटिव Windows में सीमाएँ हैं: Claude (tmux ज़रूरी), सेल्फ़-अपडेट, hot मोड और लोकल वॉइस रिकग्निशन यहाँ काम नहीं करते। सब कुछ पाने के लिए Charness को WSL2 के अंदर चलाएँ: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

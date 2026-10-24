@@ -46,6 +46,7 @@ import {
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { readHotSupervisorRecord } from '../selfUpdate/hotSupervisor';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -158,6 +159,7 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
       CLAUDE_BIN: writeFakeClaudeLauncher(getLayout(), null),
       OPENCODE_URL: `http://127.0.0.1:${openCodePort}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 

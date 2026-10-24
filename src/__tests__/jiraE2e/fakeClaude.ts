@@ -23,6 +23,8 @@ import {
   fakeClaudeLoginUrl,
   fakeConsoleLogin,
   fakeClaudePlatformEnvName,
+  fakeClaudeQueuedWaitMaxMsEnvName,
+  fakeClaudeSlowTurnMsEnvName,
   fakeClaudeVersion,
   fakeCompactionCostUsd,
   fakeTurnCostUsd,
@@ -156,10 +158,18 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
 
 export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
 const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
-/** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
-const queuedMessageWaitMaxMs = 40 * 1000;
-/** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
-const slowTurnMs = 45_000;
+/**
+ * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
+ * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
+ */
+const defaultQueuedMessageWaitMaxMs = 40 * 1000;
+const queuedMessageWaitMaxMs = getPositiveMsFromEnv(fakeClaudeQueuedWaitMaxMsEnvName, defaultQueuedMessageWaitMaxMs);
+/**
+ * How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. The
+ * launcher may set it (`fakeClaudeSlowTurnMsEnvName`) to what the flow's restart actually needs.
+ */
+const defaultSlowTurnMs = 45_000;
+const slowTurnMs = getPositiveMsFromEnv(fakeClaudeSlowTurnMsEnvName, defaultSlowTurnMs);
 /** The literal slash command the bot writes as a user turn to compact the session. */
 const compactCommandText = '/compact';
 /** The `task_id` of the background task a `background` turn leaves running (never ends: the test kills the process). */
@@ -255,6 +265,12 @@ function notifyUserMessageQueued(): void {
   const waiters = queuedUserMessageWaiters;
   queuedUserMessageWaiters = [];
   for (const resolve of waiters) resolve();
+}
+
+/** A duration the launcher set in the environment: a positive whole number of ms, else `defaultMs`. */
+function getPositiveMsFromEnv(envName: string, defaultMs: number): number {
+  const valueMs = Number(process.env[envName]);
+  return Number.isInteger(valueMs) && valueMs > 0 ? valueMs : defaultMs;
 }
 
 /** Wait until a user message is queued behind the running turn, or `queuedMessageWaitMaxMs` passed. */

@@ -14,7 +14,8 @@ The bot runs anywhere the agent CLIs run:
 - **Your own working machine** — the simplest start: launch `charness`
   from your projects parent folder and your laptop/desktop becomes the
   backend. The catch: agents are only reachable while the machine is on and
-  awake.
+  awake. On Windows that machine runs Charness inside
+  WSL2 — see [Windows (WSL2)](#windows-wsl2).
 - **A remote server (cloud VPS/VDS or bare metal)** — the more convenient
   setup: organize your working environment there once (git + your repos,
   Claude Code / OpenCode, `charness`) and you get an always-on dev box you
@@ -43,6 +44,203 @@ not exist. At a cold start the bot renames those two dirs itself (leaving a syml
 at the old path) and says so; every old name still in use prints one deprecation
 line. What it does, its limits and the steps by hand:
 [MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md).
+
+### Windows (WSL2)
+
+**On Windows run Charness inside WSL2** — a real Linux, where everything works. **Native Windows** (`npm install -g charness`
+in PowerShell) stays allowed but is limited: Claude and `/terminal` need tmux, a self-update cannot restart the bot in place
+(no `process.execve`; the bot only says that a new version is out), hot mode refuses to start and the local speech engine's
+installer is POSIX-only. A native Windows bot says so itself: on the console at start, once in General per cold start, and in
+`/doctor`.
+
+#### Install WSL and Charness
+
+1. In an **administrator** PowerShell: `wsl --install`, then restart Windows. It needs Windows 10 2004+ or Windows 11 and
+   installs Ubuntu; its first launch asks for a Linux user name and password. `wsl --list --verbose` must show `VERSION 2`
+   and `wsl --update` brings WSL itself up to date ([Microsoft: install WSL](https://learn.microsoft.com/en-us/windows/wsl/install)).
+2. Inside Ubuntu (Start menu → Ubuntu, or `wsl` in PowerShell):
+
+```bash
+sudo apt update && sudo apt install -y tmux git curl
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash   # then open a new Ubuntu window
+nvm install 22        # 22.15+ is what a self-update needs to restart the bot in place (check: node -v)
+npm install -g charness
+```
+
+The bot installs the agents on first use (`/claude`, `/opencode`); to have them up front: `npm install -g @anthropic-ai/claude-code opencode-ai`.
+
+#### Config, projects, topics
+
+- **Config** is `~/.config/charness/.env` **inside Ubuntu** (not the Windows one) — [Telegram setup](#telegram-setup). Coming from a
+  native Windows install: stop that bot first (a token has one long-poller), copy the file and fix every Windows path in it
+  (`WORK_ROOT`, `DATA_DIR`, `CLAUDE_BIN`, …):
+
+  ```bash
+  mkdir -p ~/.config/charness && cp /mnt/c/Users/<name>/.config/charness/.env ~/.config/charness/.env
+  ```
+- **Projects live in the Linux filesystem** — `~/projects/<repo>`, not under `/mnt/c`. Microsoft: «For the fastest performance
+  speed, store your files in the WSL file system» ([Working across file systems](https://learn.microsoft.com/en-us/windows/wsl/filesystems));
+  `/mnt/c` is the Windows disk reached through WSL's DrvFs bridge, slower for git and builds. Windows reaches them at
+  `\\wsl.localhost\Ubuntu\home\<user>\projects` (type it into Explorer's address bar; `\\wsl$\Ubuntu\…` is the older form),
+  and VS Code opens them through its [WSL extension](https://code.visualstudio.com/docs/remote/wsl): `code .` in the project
+  folder in Ubuntu. Run the bot from the projects parent: `cd ~/projects && charness`.
+- **Topics start over.** The WSL bot has its own `DATA_DIR`, so it knows none of the old topic bindings: run `/bind <folder>`
+  in each topic again (the folder must exist under the WSL `WORK_ROOT`: `git clone` the repository there, or
+  `cp -r /mnt/c/Users/<name>/projects/<repo> ~/projects/`). Claude conversations of the native install stay
+  in Windows' `%USERPROFILE%\.claude` and cannot be resumed from WSL.
+
+#### Windows programs from WSL (interop)
+
+Interop is on by default (`[interop] enabled=true` in `/etc/wsl.conf`). A Windows program starts from Ubuntu by name **with its
+extension**, as the active Windows user ([Microsoft: run Windows tools from Linux](https://learn.microsoft.com/en-us/windows/wsl/filesystems#run-windows-tools-from-linux)),
+and `wslpath` — a tool that comes with WSL (`wslpath --help` lists its options) — converts paths between the two worlds:
+
+```bash
+powershell.exe -NoProfile -Command "Get-Date"
+cmd.exe /C dir
+wslpath -w ~/projects/app          # WSL path → Windows path, e.g. \\wsl.localhost\Ubuntu\home\…
+wslpath -u 'C:\Users\me'           # Windows path → WSL path (/mnt/c/Users/me)
+```
+
+Such a program has the rights of the WSL session, not administrator's. To run one elevated, start it through PowerShell:
+`powershell.exe -Command "Start-Process <program> -Verb RunAs"` — Windows then asks for confirmation (UAC) on the desktop and
+somebody has to click it. That works only when you opened WSL yourself at a logged-in desktop. **On the headless PC below it does not:**
+the distro there is started by a scheduled task, nobody is logged in, there is no desktop to show the prompt on and nobody
+to click it, so an elevated call from the bot fails or hangs. Do not build on elevated Windows programs there; do such a step by
+hand at the PC.
+
+#### A PC with no monitor as an always-on server
+
+The goal: Windows boots, nobody logs in, the Linux that WSL runs (the *distro*, here Ubuntu) starts, systemd — Linux's service
+manager — starts the bot, and nothing shuts the distro down. Four parts; the Windows half follows Microsoft's documentation (linked), so check a step against the page when your Windows build
+behaves differently.
+
+**1. systemd and the bot as a user service (inside Ubuntu).** The current Ubuntu from `wsl --install` has it on by default
+(check with `systemctl status`); any other distro needs `/etc/wsl.conf` — `sudo nano /etc/wsl.conf`:
+
+```ini
+[boot]
+systemd=true
+```
+
+then `wsl --shutdown` in PowerShell and open Ubuntu again. It needs WSL 0.67.6+ (`wsl --version`; `wsl --update`), and Microsoft
+lists the `[boot]` section for Windows 11 and Windows Server 2022 ([systemd in WSL](https://learn.microsoft.com/en-us/windows/wsl/systemd),
+[wsl.conf](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#boot-settings)). Then write `~/.config/systemd/user/charness.service`:
+
+```ini
+[Unit]
+Description=Charness
+
+[Service]
+WorkingDirectory=%h/projects
+ExecStart=/bin/bash -c 'source %h/.nvm/nvm.sh && exec charness'
+KillMode=process
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+`nvm.sh` puts the nvm Node — and so `charness`, `claude` and `opencode` — on the service's `PATH`, which a service does not
+inherit from your shell. `KillMode=process` is the one [Restart behaviour](README.md#restart-behaviour) asks for: systemd's
+default would kill the agents' tmux and `opencode serve` with the bot, and while systemd marks `process` «not recommended»
+([systemd.kill](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html)), leaving them running is exactly
+what lets a bot restart keep its agents. Enable it and let the user manager start without a login:
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now charness
+sudo loginctl enable-linger "$USER"     # "a user manager is spawned for the user at boot and kept around after logouts"
+journalctl --user -u charness -f        # the bot's log
+```
+
+([loginctl](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html).)
+
+**2. Keep the distro running.** systemd services do **not** keep a WSL instance alive: «systemd services will NOT keep your WSL
+instance alive» ([systemd in WSL](https://learn.microsoft.com/en-us/windows/wsl/systemd#how-does-enabling-systemd-affect-wsl-architecture)),
+and an idle distro is shut down (by default 15 s after its last process exits). The documented switches are two idle
+timeouts in `%UserProfile%\.wslconfig` of the Windows account that runs the task below (e.g. `C:\Users\<name>\.wslconfig`) — the
+file does not exist by default, create it:
+
+```ini
+# How long a distro may sit idle before it is shut down, in ms; -1 = never (default 15000)
+[general]
+instanceIdleTimeout=-1
+
+# The same for the WSL 2 virtual machine (default 60000); Windows 11 only, leave it out on Windows 10
+[wsl2]
+vmIdleTimeout=-1
+```
+
+Both are needed — the maintainers' answer in [microsoft/WSL#13291](https://github.com/microsoft/WSL/issues/13291) —
+and `instanceIdleTimeout` exists since WSL 2.5.4 ([release notes](https://github.com/microsoft/WSL/releases/tag/2.5.4);
+[wsl-config](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#general-wsl-settings)). Apply with `wsl --shutdown`.
+On an older WSL, `wsl --update` first; failing that, the community workaround is a Windows process that never ends, e.g. the
+task below running `--exec sleep infinity` instead of `/bin/true`, with its time limit removed
+(`New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)`; the default is three days).
+
+**3. Start the distro at Windows boot, nobody logged in.** A scheduled task with the *At startup* trigger, registered with
+the account's password (Task Scheduler's «Run whether user is logged on or not»), starts without anyone logged in. Register it
+once from an **administrator** PowerShell, as the Windows account that installed the distro (a WSL distro is registered per
+Windows account). `Get-Credential` asks for that account's **password**: if you sign in to Windows with a Microsoft account
+(an e-mail address), it is that account's password — not the PIN or the fingerprint. Some setups refuse a stored password
+while Settings → Accounts → Sign-in options has «only allow Windows Hello sign-in for Microsoft accounts» switched on; if
+registering or running the task fails with a password error, switch it off and register again.
+
+```powershell
+$cred = Get-Credential "$env:USERDOMAIN\$env:USERNAME"
+$action = New-ScheduledTaskAction -Execute 'C:\Program Files\WSL\wsl.exe' -Argument '--distribution Ubuntu --exec /bin/true'
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName 'Start WSL' -Action $action -Trigger $trigger -Settings $settings `
+  -User $cred.UserName -Password $cred.GetNetworkCredential().Password
+```
+
+Use `C:\Program Files\WSL\wsl.exe`, **not** the `wsl.exe` on `PATH` (`C:\Windows\System32`): a task that runs without a
+logged-in user has no desktop session («Session 0»), and Microsoft says only the Program Files copy works there since WSL 2.0.0
+([microsoft/WSL#9231](https://github.com/microsoft/WSL/issues/9231), still open: the System32 copy waits for a Windows image change). The
+password is stored in the task: when the Windows password changes, register the task again. A task registered with a password
+launches only if the account has the «Log on as a batch job» right, which Administrators have by default
+([Task Scheduler security contexts](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)).
+Once the distro is up, systemd, the lingering user manager and
+`charness.service` follow by themselves.
+
+**4. Never sleep, and make switching on a real boot.** Two things, both required, from an administrator PowerShell
+([powercfg](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)):
+
+```powershell
+powercfg /change standby-timeout-ac 0     # never go to sleep on mains power (minutes; 0 = never)
+powercfg /hibernate off                   # no hibernation — and with it no Fast Startup
+```
+
+(The screen may still turn off.) Why the second line: Windows' *Fast Startup*, on by default when the PC can hibernate,
+makes «Shut down» a hibernation instead of a full shutdown ([Microsoft](https://learn.microsoft.com/en-us/troubleshoot/windows-client/setup-upgrade-and-drivers/updates-not-install-with-fast-startup)),
+so the next power-on is a resume, not a boot — and reports say the *At startup* task of part 3 then does not run
+([Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/3254425/scheduled-at-startup-task-that-worked-in-windows-7)).
+A «Restart» is a real boot either way. With hibernation off, switching the PC on starts the task.
+
+**Check:** shut Windows down (not only restart), switch it on again, do **not** log in, and message the bot from your phone —
+it answers. That proves the whole chain. Then log in once: `wsl --list --running` shows Ubuntu and
+`systemctl --user status charness` inside it shows the bot. Reports from WSL 2.0.0 ([microsoft/WSL#9231](https://github.com/microsoft/WSL/issues/9231))
+say that once the same user logged in and ran WSL commands, a distro started this way appeared as *Stopped* or actually
+stopped; this is not confirmed on current WSL. If the bot stops after you log in, run the task again (Task Scheduler → *Run*), and please
+[open an issue](https://github.com/olosegres/charness/issues) with your `wsl --version`.
+
+**Known risks.**
+
+- A Windows restart, a Windows Update reboot or `wsl --shutdown` ends the agents' processes, like a container restart:
+  each conversation resumes with its next message ([Restart behaviour](README.md#restart-behaviour)).
+- **If a Windows program that the bot calls fails, run `wsl --update` in PowerShell first** and try again: the known
+  failures below were fixed in newer WSL. The details, for whoever helps you: Windows `.exe` interop from a systemd service
+  has failed in some WSL versions. WSL 2.0.5–2.0.13 could not run a Windows program stored in the Linux filesystem from a
+  process without a live interop session, a systemd service among them
+  ([microsoft/WSL#10812](https://github.com/microsoft/WSL/issues/10812), fixed in 2.0.14); and with `mono` installed its
+  `binfmt` handler can take over `.exe` files («File does not contain a valid CIL image»,
+  [microsoft/WSL#13000](https://github.com/microsoft/WSL/issues/13000); WSL 2.5.8 added a systemd override that protects WSL's
+  interop entry). Workarounds: keep Windows tools on the Windows disk and call them by their `/mnt/c/…` path, and with
+  `mono` installed run `sudo update-binfmts --disable cli`.
+- Starting WSL from a scheduled task is the part Microsoft documents least: if the check above fails, run the task by hand
+  (Task Scheduler → *Run*) and read its *Last Run Result*.
 
 ### Environment variables
 
@@ -77,7 +275,6 @@ your chosen providers need them.
 | `SCHEDULER_MCP_PORT` | an OS-chosen free loopback port | You need a stable, explicitly chosen port; it must differ from this instance's `OPENCODE_URL` port |
 | `CLAUDE_SCRAPE_DEBUG` | off | You are debugging Claude tmux scraping and need full RAW/FILTERED chunks |
 | `AGENT_IDLE_MINUTES` | `55` | A json-stream Claude topic idle for this long is compacted (when `/compact_on_idle` allows) and its process stopped; the session sleeps and the next message resumes it — shorten it only for a test; a non-positive or non-numeric value keeps the default |
-| `AGENT_BACKGROUND_HOLD_MINUTES` | `360` | How long the agent's own pending work (background tasks, `CronCreate` jobs) keeps a json-stream Claude process from its idle stop after the agent's last turn — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
 | `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/charness/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` (in a checkout) starts an instance with a clean environment plus this variable |

@@ -7,7 +7,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -15,7 +15,7 @@ import * as path from 'path';
 import { StateStore } from '../state';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
-import { RequestWakeUpEngine } from '../requests/wakeUpEngine';
+import { RequestWakeUpEngine, unwatchedSweepMs } from '../requests/wakeUpEngine';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
 import { progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
@@ -64,7 +64,13 @@ const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message
   wakeUpMessages.push(message);
 };
 
-function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
+/** The windows a test instance may shorten (`CHARNESS_TEST_TIMINGS`); absent: the production ones. */
+interface EngineTimings {
+  sweepIntervalMs?: number;
+  firstPostRetryDelayMs?: number;
+}
+
+function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): RequestWakeUpEngine {
   return new RequestWakeUpEngine({
     ledger,
     probeTurn: () => probe,
@@ -79,6 +85,7 @@ function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
       return alertMessageRef;
     },
     backstopMs,
+    ...timings,
     now: () => nowMs,
   });
 }
@@ -821,6 +828,23 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 0);
   });
 
+  it('a test instance\'s first retry delay posts it again that much later; a retry that fails again still waits 5 minutes', async () => {
+    const firstPostRetryDelayMs = 5_000;
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { firstPostRetryDelayMs });
+    await createFailedPost(ledger, engine);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, nowMs + firstPostRetryDelayMs, 'armed at the shorter delay');
+    nowMs += firstPostRetryDelayMs - 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages, [], 'not due yet');
+
+    isWakeUpDeliverable = false;
+    nowMs += 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(preparedFor.map((message) => message.reason), ['postRetry'], 'tried at the shorter delay — and failed again');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, nowMs + 5 * minuteMs, 'only the first delay is shortened');
+  });
+
   it('a retry that fails again tries after 5, then 15 minutes, with no alert; then the backstop takes over', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
@@ -1093,5 +1117,45 @@ describe('the tail after a final answer, where the view hides the stream', () =>
     await endTurn(engine);
     await endTurn(engine);
     assert.deepEqual(tailReminders, [], 'unreachable, and not tried again');
+  });
+});
+
+describe('the sweep timer', () => {
+  /** The wake-ups of one request (a function: the asserts above narrow the shared list itself). */
+  const listWakeUpsOf = (requestId: string): Array<{ requestId: string; reason: RequestWakeUpReason }> => wakeUps.filter((wakeUp) => wakeUp.requestId === requestId);
+  /** Let the sweep a timer tick started run to its end (its awaits are real promises). */
+  const settleSweep = async (): Promise<void> => {
+    for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  it('started, it sweeps on the production minute, or on the shorter interval a test instance sets', async () => {
+    mock.timers.enable({ apis: ['setInterval'] });
+    const engines: RequestWakeUpEngine[] = [];
+    try {
+      const testSweepIntervalMs = 5_000;
+      const shortLedger = await createLedger();
+      const defaultLedger = await createLedger();
+      const shortEngine = createEngine(shortLedger, { sweepIntervalMs: testSweepIntervalMs });
+      const defaultEngine = createEngine(defaultLedger);
+      engines.push(shortEngine, defaultEngine);
+      const shortRequest = await shortLedger.createRequest(topicKey, { kind: 'message', attributes: {} });
+      const defaultRequest = await defaultLedger.createRequest(topicKey, { kind: 'message', attributes: {} });
+      nowMs += backstopMs;
+      shortEngine.start();
+      defaultEngine.start();
+
+      mock.timers.tick(testSweepIntervalMs - 1);
+      await settleSweep();
+      assert.deepEqual(wakeUps, [], 'no sweep before the interval');
+      mock.timers.tick(1);
+      await settleSweep();
+      assert.deepEqual(wakeUps, [{ requestId: shortRequest.id, reason: 'backstop' }], 'the shorter interval swept its backstopped request; the default one did not yet');
+      mock.timers.tick(unwatchedSweepMs - testSweepIntervalMs);
+      await settleSweep();
+      assert.deepEqual(listWakeUpsOf(defaultRequest.id), [{ requestId: defaultRequest.id, reason: 'backstop' }], 'the production minute swept the other');
+    } finally {
+      for (const engine of engines) engine.stop();
+      mock.timers.reset();
+    }
   });
 });

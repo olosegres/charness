@@ -16,6 +16,18 @@ agent's last turn, so a forgotten task does not keep it forever). After a bot up
 agent is no longer stopped early either: it is compacted and stopped at its normal idle mark, and resumes with the new
 tools.
 
+**On native Windows the bot now says which features do not work there and points to WSL2.** Claude and `/terminal` need
+tmux, a self-update cannot restart the bot in place, hot mode refuses to start and the local speech engine cannot be
+installed; at a cold start the bot prints one console line, posts one short notice in General (in the chat's language) and
+shows the same line in `/doctor`, with a link to the new SETUP.md section «Windows (WSL2)»: install WSL, the config and
+projects inside Linux, Windows programs from WSL, and a recipe for a PC with no monitor that starts the bot at Windows boot
+without anyone logged in. A `/doctor` warning that has no hint no longer ends in a dangling dash.
+
+**An answer tapped on a question the bot re-asked after an idle compaction is no longer lost when the tap lands while
+the agent is being stopped.** The idle stop that follows the re-asked question could finish while the tap was being
+answered; the chosen option was then kept for a session start that never came, and the agent never got it. The answer
+now wakes the conversation as any message does.
+
 ## 3.5.0 — 2026-10-23
 
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is

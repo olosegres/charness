@@ -13,6 +13,9 @@
  *     as ONE message, and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
+ *   → a tap read INSIDE the idle stop (the process ignores its stop signals, so the stop lasts its kill wait) whose
+ *     toast the fake Bot API holds until the stop is over: the label wakes the conversation and reaches the resumed
+ *     process — it used to be kept for the stop's window, which had already closed, and reached no one
  *   → a tap read while the process is live, whose delivery the idle stop overtakes (the fake Bot API holds the
  *     re-asked question's and the toast's responses to put the stop between the two): the stop still under way when the
  *     label is delivered — it is held and reaches the resumed process; the stop already over — the conversation is
@@ -50,6 +53,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -168,6 +172,7 @@ describe('A pending question the idle compaction re-asks, end to end: built char
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
@@ -299,6 +304,37 @@ describe('A pending question the idle compaction re-asks, end to end: built char
       fs.rmSync(ignoreStopSignalsPath, { force: true });
     }
     assert.ok(getCharness().output.includes('was still running'), 'the stop really lasted its kill wait');
+  });
+
+  it('a tap read INSIDE the idle stop, delivered after it is over: the label wakes the conversation instead of waiting in a closed window', async () => {
+    // The process ignores the stop signals, so the stop lasts its kill wait: the tap is read while its window is open.
+    const ignoreStopSignalsPath = path.join(getLayout().fakeStateDir, fakeClaudeIgnoreStopSignalsFileName);
+    fs.writeFileSync(ignoreStopSignalsPath, '');
+    const toastHold = createRelease();
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-7 [fake:answer] one more turn to compress');
+      await getCharness().waitFor('the warm-up turn WARM-7 to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('WARM-7').length > 0);
+      const labelPromptsBefore = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+      const stopStartsBefore = countIdleStopStarts();
+      const idleStopsBefore = countIdleStops();
+      const reasked = await waitForReaskedQuestion('REASK-7', { isIdleStopAwaited: false });
+      const askingPid = getAgentPrompts('REASK-7')[0]?.pid;
+      assert.ok(askingPid !== undefined, 'the process that put the question');
+      await getCharness().waitFor('the idle stop to begin', agentStartTimeoutMs, () => countIdleStopStarts() > stopStartsBefore);
+
+      // The toast reaches the Bot API once the handler has read the session — inside the stop's window — and is held
+      // there until the stop is over: the label is delivered after the window has closed.
+      fakeTelegram.holdNextResponse('answerCallbackQuery', toastHold.promise);
+      assert.equal(await topic.tapAndAwaitAnswer(reasked, 'reask_0'), fakeAskQuestion.shortOptionLabel);
+      assert.equal(countIdleStops(), idleStopsBefore, 'precondition: the tap was read before the stop was over');
+      await getCharness().waitFor('the idle stop to end', agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
+      toastHold.release();
+
+      await assertTheLabelReachedAResumedProcess({ reasked, askingPid, labelPromptsBefore });
+    } finally {
+      toastHold.release();
+      fs.rmSync(ignoreStopSignalsPath, { force: true });
+    }
   });
 
   it('a tap read while the process is live, delivered after the idle stop is over: the conversation is woken and gets it', async () => {

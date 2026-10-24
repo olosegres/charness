@@ -25,6 +25,8 @@ import {
   registerClaudeConfigDirReader,
   registerClaudeRateLimitSink,
   registerClaudeTurnCostSink,
+  registerOpenCodeServerUpBudgetMs,
+  registerPendingWorkHoldMs,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -75,8 +77,10 @@ import {
   enterShutdownDrain,
   drainPendingSends,
   shutdownDrainMaxMs,
+  configureGlobalSendInterval,
   type ShutdownDrainVerdict,
 } from './rateLimiter';
+import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
 import {
   stopOpenCodeServer,
   ensureOpenCodeServer,
@@ -92,6 +96,12 @@ import {
   type ReadinessFacts,
   type StartupTarget,
 } from './utils/startupReadiness';
+import { formatDoctorLine, type DoctorLine } from './utils/doctorLine';
+import {
+  getNativeWindowsConsoleLine,
+  getNativeWindowsDoctorLine,
+  getNativeWindowsGeneralNotice,
+} from './utils/nativeWindows';
 import { getStateStore, KeyLock, resolveDataDir, type StateStore } from './state';
 import { releaseLock } from './instanceLock';
 import { gracefulShutdown } from './shutdown';
@@ -126,6 +136,7 @@ import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompu
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
 import { createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
+import { getForumTopicCreatedAction } from './connectors/telegram/forumTopicCreated';
 import {
   getDisconnectPickerKeysForThread,
 } from './utils/providerDisconnectPlan';
@@ -231,7 +242,7 @@ import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
 import { buildLostWorkNote, checkHasLostWork, formatLostWorkTopicLine, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
-import { getPendingWorkHoldMs, pendingWorkHoldMinutesEnvName } from './utils/jsonStreamPendingWork';
+import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
@@ -523,12 +534,17 @@ function parseEnv() {
     errors.push(`WORK_ROOT="${workRoot}" is not accessible (${code})`);
   }
 
+  // A test instance's timing overrides (never a setting); an unknown key or a bad value stops the boot, naming it.
+  const testTimingsParse = parseTestTimings(process.env[testTimingsEnvName]);
+  if (!testTimingsParse.ok) errors.push(...testTimingsParse.errors);
+
   if (errors.length > 0) {
     for (const err of errors) console.error(`[startup] ${err}`);
     process.exit(1);
   }
 
   return {
+    testTimings: testTimingsParse.ok ? testTimingsParse.timings : {},
     botToken,
     servedPlatforms: getServedPlatforms(connectors),
     isTelegramServed,
@@ -541,6 +557,13 @@ function parseEnv() {
 }
 
 const ENV = parseEnv();
+
+const testTimingsBootLine = formatTestTimingsBootLine(ENV.testTimings);
+if (testTimingsBootLine !== null) console.log(testTimingsBootLine);
+if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInterval(ENV.testTimings.telegramSendIntervalMs);
+if (ENV.testTimings.backgroundHoldMaxMs !== undefined) registerPendingWorkHoldMs(ENV.testTimings.backgroundHoldMaxMs);
+/** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
+const limitProbeDelayMs = ENV.testTimings.limitProbeDelayMs ?? unconfirmedLimitProbeDelayMs;
 
 // The instance default effort (`/effort` in General) is `settings.json`'s `defaultEffort`, re-read when the file changes.
 setInstanceDefaultEffortReader(createInstanceDefaultEffortReader(() => getInstanceSettingsPath(), (line) => console.error(line)));
@@ -1855,9 +1878,9 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
     return false;
   }
   console.log(`[apiRetry] ${k}: an unconfirmed usage limit — probing with a short retry before waiting for the reset`);
-  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(unconfirmedLimitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
+  void replyToThread(key, t('apiRetry.transientNotice', { minutes: Math.round(limitProbeDelayMs / apiRetryMsPerMinute), attempt: 1 }));
   const now = Date.now();
-  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + unconfirmedLimitProbeDelayMs, delayMs: unconfirmedLimitProbeDelayMs, isLimitProbe: true });
+  armApiRetryTimer(key, { kind: 'transient', attempt: 1, fireAt: now + limitProbeDelayMs, delayMs: limitProbeDelayMs, isLimitProbe: true });
   return true;
 }
 
@@ -6552,18 +6575,6 @@ bot.action('open_sessions', async (ctx) => {
 //  /doctor — self-diagnostics (plan §20.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface DoctorLine {
-  status: 'ok' | 'warn' | 'fail';
-  label: string;
-  hint?: string;
-}
-
-function formatDoctorLine(line: DoctorLine): string {
-  if (line.status === 'ok')  return t('doctor.ok',   { label: line.label });
-  if (line.status === 'warn') return t('doctor.warn', { label: line.label, hint: line.hint ?? '' });
-  return                       t('doctor.fail', { label: line.label, hint: line.hint ?? '' });
-}
-
 async function checkCliPresent(cmd: string): Promise<boolean> {
   try {
     await execFileAsync(cmd, ['--version'], { timeout: 1500 });
@@ -6573,6 +6584,10 @@ async function checkCliPresent(cmd: string): Promise<boolean> {
 
 async function runDoctor(): Promise<DoctorLine[]> {
   const lines: DoctorLine[] = [];
+
+  // 0. Native Windows runs with limits (no tmux, no self-update restart, no hot mode, no local speech install).
+  const nativeWindowsLine = getNativeWindowsDoctorLine(process.platform, t);
+  if (nativeWindowsLine) lines.push(nativeWindowsLine);
 
   // 1. Bot admin permissions in the configured group.
   const groupId = getAllowedGroupId();
@@ -6677,7 +6692,7 @@ command('doctor', async (_ctx, key) => {
   // Single big edit-in-place would be nicer, but doctor is rarely run and
   // gathering the report in series keeps it dead simple.
   const lines = await runDoctor();
-  const body = lines.map(formatDoctorLine).join('\n');
+  const body = lines.map((line) => formatDoctorLine(line, t)).join('\n');
   await replyToThread(
     key,
     `${t('doctor.header')}\n\n${body}`,
@@ -9413,7 +9428,10 @@ bot.on(message('forum_topic_created'), async (ctx) => {
   // attacker-chosen folder. Stash the topic name so a later authorised-user
   // message in the same thread can still benefit from fuzzy auto-bind.
   const userId = ctx.from?.id;
-  if (!userId || !(await checkIsAllowedUser(ctx))) {
+  const action = await getForumTopicCreatedAction({ creatorId: userId, botUserId: bot.botInfo?.id, checkIsCreatorAllowed: () => checkIsAllowedUser(ctx) });
+  // `/topic` binds and greets the topic it created itself; its own service message needs nothing more.
+  if (action === 'ignoreOwn') return;
+  if (action === 'cacheNameOnly') {
     if (topicName) {
       pendingTopicNames.set(keyToString(key), { name: topicName, ts: Date.now() });
     }
@@ -9812,12 +9830,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
-  // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
-  if (isStarting) {
-    noteThreadUserActivity(key);
-    await withThreadLocale(key, () => deliverPromptOrBuffer(key, label, true));
-    return;
-  }
+  // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
+  // not on the `isStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
+  // window was never replayed.
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession' && labels && !reAskedQuestionOptions.has(keyToString(key))) reAskedQuestionOptions.set(keyToString(key), labels);
@@ -11439,8 +11454,8 @@ const lostWorkAutoResumedAt = new Map<string, number>();
 
 const msPerHour = 60 * 60 * 1000;
 
-/** The pending-work hold in force, in hours, as the topic line names it (`utils/jsonStreamPendingWork.ts`). */
-const pendingWorkHoldHours = Number((getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) / msPerHour).toFixed(1));
+/** The pending-work hold in force, in hours, as the topic line names it (`utils/jsonStreamPendingWork.ts`; a test instance's shorter one). */
+const pendingWorkHoldHours = Number(((ENV.testTimings.backgroundHoldMaxMs ?? pendingWorkHoldDefaultMs) / msPerHour).toFixed(1));
 
 /** What the conversation's last process took with it when it ended, handed over once by its adapter. */
 function takeLostWorkOf(key: SessionKey, adapter: AgentAdapter = getThreadAdapter(key)): LostWork | null {
@@ -12881,10 +12896,11 @@ async function resolveBotAdminRights(
 }
 
 /**
- * @description The General topic the updater talks in: the paired group's General when a group is paired, else the owner's DM
- * General (`null` when neither exists — a Jira-only instance has no Telegram to say anything in).
+ * @description The General topic the bot speaks to the operator in (the updater, the native-Windows notice): the paired group's
+ * General when a group is paired, else the owner's DM General (`null` when neither exists — a Jira-only instance has no
+ * Telegram to say anything in).
  */
-function getUpdateGeneralKey(): SessionKey | null {
+function getOperatorGeneralKey(): SessionKey | null {
   const groupId = getAllowedGroupId();
   if (groupId !== null) return makeTelegramKey(groupId, GENERAL_THREAD_ID);
   const ownerUserId = getOwnerUserId();
@@ -12898,7 +12914,7 @@ function getUpdateGeneralKey(): SessionKey | null {
  */
 async function postUpdateMessageToGeneral(message: UpdateMessage): Promise<void> {
   if (!ENV.isTelegramServed) return;
-  const generalKey = getUpdateGeneralKey();
+  const generalKey = getOperatorGeneralKey();
   if (generalKey === null) {
     console.log(`[update] no General topic to post "${message.kind}" in`);
     return;
@@ -13042,6 +13058,19 @@ async function sendStartupStatus(isHotReload: boolean): Promise<void> {
 }
 
 /**
+ * @description On native Windows, say once per cold start in General which features do not work there and point to WSL2,
+ * worded in that chat's language. Best-effort like the readiness status: no General topic to speak in is not an error (the
+ * console line already said it), and a failed send is logged by the send path.
+ */
+async function postNativeWindowsNoticeToGeneral(isHotReload: boolean): Promise<void> {
+  const generalKey = getOperatorGeneralKey();
+  if (generalKey === null) return;
+  const text = withThreadLocale(generalKey, () => getNativeWindowsGeneralNotice({ platform: process.platform, isHotReload }, t));
+  if (text === null) return;
+  await replyToThread(generalKey, text);
+}
+
+/**
  * @description Load and prepare the Jira connector, or end the start: a broken
  * config, a token of another account or an unknown trigger status is fatal, with
  * every reason on its own line (values never printed).
@@ -13053,6 +13082,7 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
       dataDir: path.dirname(state.stateFilePath),
       workRoot: ENV.workRoot,
       openCodeUrl: process.env.OPENCODE_URL,
+      pollIntervalMsOverride: ENV.testTimings.jiraPollIntervalMs,
     });
   } catch (error) {
     const reasons = error instanceof JiraConnectorStartError ? error.reasons : [error instanceof Error ? error.message : String(error)];
@@ -13104,7 +13134,7 @@ export async function startBot(): Promise<void> {
   // 1. State store. The `[startup] DATA_DIR=` shape is load-bearing: the
   // README's two-instances troubleshooting tells the operator to compare this
   // exact line across instances.
-  state = await getStateStore();
+  state = await getStateStore({ saveDebounceMs: ENV.testTimings.stateSaveDebounceMs });
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
   // R13: before anything reads, rewrites or acts on the state, it must hold only
   // conversations of the platforms this instance serves.
@@ -13137,6 +13167,7 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
+  if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);
   // The usage cache: a first poll now (off the boot path), then the timer.
   claudeUsageRefresher.start();
   void claudeUsageRefresher.refreshAll();
@@ -13192,6 +13223,8 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
+    firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,
@@ -13220,6 +13253,8 @@ export async function startBot(): Promise<void> {
     `Boot mode:        ${bootMode.isHotReload ? 'HOT RELOAD' : 'COLD START'} ` +
       `(downtime=${downtimeMs === null ? 'unknown' : `${downtimeMs}ms`})`,
   );
+  const nativeWindowsConsoleLine = getNativeWindowsConsoleLine(process.platform, t);
+  if (nativeWindowsConsoleLine) console.warn(nativeWindowsConsoleLine);
   console.log(`Chat mode:        ${getChatMode()}`);
   // In `both`, the DM surface only lights up when an OWNER_USER_ID is set;
   // otherwise the instance serves the group only. Surface that explicitly so an
@@ -13748,6 +13783,11 @@ export async function startBot(): Promise<void> {
     await sendStartupStatus(bootMode.isHotReload);
   } catch (e) {
     console.warn('[startup-status] failed:', e instanceof Error ? e.message : e);
+  }
+  try {
+    await postNativeWindowsNoticeToGeneral(bootMode.isHotReload);
+  } catch (e) {
+    console.warn('[platform] native Windows notice failed:', e instanceof Error ? e.message : e);
   }
   await startUpdates();
   // The local speech engine: clean up after an earlier run, re-attach to / start its install. Starts no process.

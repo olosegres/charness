@@ -1,3 +1,4 @@
+import type { Translate } from '../i18n';
 import type { WhatsNewSummary } from './releaseNotes';
 import type { AutoUpdateMode } from './updateModes';
 
@@ -47,8 +48,6 @@ export interface RenderedUpdateMessage {
   pin: boolean;
   buttons: UpdateMessageButton[];
 }
-
-export type Translate = (code: string, vars?: Record<string, string | number>) => string;
 
 const bullet = '•';
 

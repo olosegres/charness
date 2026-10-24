@@ -27,7 +27,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { fakeClaudePlatformEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
+import { fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord } from '../../requests/types';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -186,7 +186,11 @@ export const isolatedSandboxEnv: Record<string, string> = process.env.IS_SANDBOX
 /** The only variables `run-isolated.sh` passes to the instance. */
 export const isolatedLaunchEnvNames = ['HOME', 'PATH', 'USER', 'SHELL', 'LANG', 'TERM', 'ENV_FILE', ...Object.keys(isolatedSandboxEnv)];
 
-const waitStepMs = 250;
+/**
+ * How often a wait re-reads its state: every wait that is not already true costs half of this on average, over the
+ * thousands of waits the flows make; the checks are cheap reads of arrays, the output and small files.
+ */
+const waitStepMs = 100;
 /** How much of charness's output a failed wait quotes. */
 const outputTailChars = 4000;
 const stopTimeoutMs = 20 * 1000;
@@ -437,14 +441,18 @@ export function getIsolatedPath(layout: IsolatedInstanceLayout): string {
  * @description Write the fake `claude` launcher into the layout's bin folder and
  * resolve its path. `platform` tells the fake which contract to enforce (the
  * Jira flags and the R32 environment for `jira`; none for a Telegram session).
+ * `slowTurnMs` sizes the fake's `slow-once` turn to what the flow's restart needs, `queuedWaitMaxMs` its
+ * `answer-after-queued` cap to the instance's poll.
  */
-export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform: FakeClaudePlatform | null): string {
+export function writeFakeClaudeLauncher(layout: IsolatedInstanceLayout, platform: FakeClaudePlatform | null, options: { slowTurnMs?: number; queuedWaitMaxMs?: number } = {}): string {
   const claudeBin = path.join(layout.binDir, 'claude');
   fs.writeFileSync(claudeBin, [
     '#!/bin/sh',
     `export FAKE_CLAUDE_LOG_DIR='${layout.fakeLogDir}'`,
     `export FAKE_CLAUDE_STATE_DIR='${layout.fakeStateDir}'`,
     ...(platform === null ? [] : [`export ${fakeClaudePlatformEnvName}='${platform}'`]),
+    ...(options.slowTurnMs === undefined ? [] : [`export ${fakeClaudeSlowTurnMsEnvName}='${options.slowTurnMs}'`]),
+    ...(options.queuedWaitMaxMs === undefined ? [] : [`export ${fakeClaudeQueuedWaitMaxMsEnvName}='${options.queuedWaitMaxMs}'`]),
     `exec '${process.execPath}' --import '${pathToFileURL(tsxLoaderPath).href}' '${fakeClaudePath}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });

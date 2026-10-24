@@ -108,6 +108,7 @@ export const frDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Le bot est admin du groupe',
   'doctor.can_manage_topics': '`can_manage_topics` accordé',
   'doctor.can_delete_messages': '`can_delete_messages` accordé',
@@ -157,6 +158,9 @@ export const frDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Le statut épinglé du fil (Stage 7) sera indisponible',
+
+  'nativeWindows.limitedNotice':
+    "Windows natif est limité : Claude (nécessite tmux), la mise à jour automatique, le mode hot et la reconnaissance vocale locale n'y fonctionnent pas. Lancez Charness dans WSL2 pour tout avoir : {setupUrl}",
 
   'whoami.report':
     '👤 user : `{userId}`\n💬 chat : `{chatId}`\n🧵 thread : `{threadId}`\n' +

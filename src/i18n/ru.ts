@@ -112,6 +112,7 @@ export const ruDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Бот — админ группы',
   'doctor.can_manage_topics': 'Право `can_manage_topics`',
   'doctor.can_delete_messages': 'Право `can_delete_messages`',
@@ -161,6 +162,9 @@ export const ruDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Pinned-статус треда (Этап 7) будет недоступен',
+
+  'nativeWindows.limitedNotice':
+    'Нативный Windows ограничен: Claude (нужен tmux), самообновление, hot-режим и локальное распознавание голоса здесь не работают. Запустите Charness внутри WSL2 — там работает всё: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { readUpdatePending, writeUpdatePending } from '../selfUpdate/updatePending';
+import { testTimingsEnvName } from '../testTimings';
 
 let tmpRoot: string;
 let claudeShim: string;
@@ -155,7 +156,7 @@ function writePreRenameInstall(): { legacyDataDir: string; legacyConfigDir: stri
 }
 
 /** What the start needs to get past the lock and into the bot, which then fails fast on the fake token. */
-function runPastTheLock(entryPath: string, workRoot: string): { status: number | null; stderr: string } {
+function runPastTheLock(entryPath: string, workRoot: string, extraEnv: Record<string, string> = {}): { status: number | null; stderr: string } {
   // The old voice keys would make the child announce its own (unrelated) deprecation and write a stt.json.
   const { GROQ_API_KEY: _groqApiKey, OPENAI_API_KEY: _openAiApiKey, ...inheritedEnv } = process.env;
   const r = spawnSync(process.execPath, [entryPath], {
@@ -167,6 +168,7 @@ function runPastTheLock(entryPath: string, workRoot: string): { status: number |
       TELEGRAM_BOT_TOKEN: 'fake-token-' + Date.now(),
       ALLOWED_GROUP_ID: '-100',
       WORK_ROOT: workRoot,
+      ...extraEnv,
     },
     cwd: tmpRoot,
     encoding: 'utf8',
@@ -203,6 +205,18 @@ test('a cold start moves a pre-rename install once, says what it did in the bot 
   const second = runPastTheLock(cliPath, workRoot);
 
   assert.doesNotMatch(second.stderr, /\[migrate\]|deprecated/, 'a second start finds nothing to do');
+});
+
+test('a CHARNESS_TEST_TIMINGS with an unknown key stops the start before the bot connects, naming the key', () => {
+  const workRoot = path.join(tmpRoot, 'work');
+  fs.mkdirSync(workRoot);
+  // No token either: were the check missing, the start would still stop there and never reach Telegram.
+  const { status, stderr } = runPastTheLock(cliPath, workRoot, { TELEGRAM_BOT_TOKEN: '', [testTimingsEnvName]: '{"telegramSendIntervalMS":200}' });
+
+  assert.equal(status, 1);
+  const timingsErrors = stderr.split('\n').filter((line) => line.startsWith(`[startup] ${testTimingsEnvName}`));
+  assert.equal(timingsErrors.length, 1, stderr);
+  assert.match(timingsErrors[0], /telegramSendIntervalMS/, 'the misspelt key is named');
 });
 
 test('a hot worker reload does not migrate; it announces what the old names still cost', () => {

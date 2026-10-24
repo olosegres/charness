@@ -10,7 +10,6 @@ import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsClaudeBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 import type { ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
-import { getPendingWorkHoldMs, pendingWorkHoldMinutesEnvName } from '../utils/jsonStreamPendingWork';
 
 // The predicate lives with the names (a reader of a name should not load a backend); callers keep importing it here.
 export { checkIsClaudeBackend };
@@ -21,8 +20,8 @@ const adapterFactories: Record<string, AdapterFactory> = {
   claude: () => new ClaudeCliAdapter(),
   opencode: () => new OpenCodeAdapter(),
   terminal: () => new TerminalAdapter(),
-  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle', backgroundHoldMs: getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) }),
-  [claudePerTurnAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn', backgroundHoldMs: getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) }),
+  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle', backgroundHoldMs: pendingWorkHoldMs ?? undefined }),
+  [claudePerTurnAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn', backgroundHoldMs: pendingWorkHoldMs ?? undefined }),
 };
 
 /**
@@ -50,6 +49,10 @@ function checkAdapterTakesLaunchDefaults(adapter: AgentAdapter): adapter is Agen
 
 function checkAdapterTakesClaudeConfigDirReader(adapter: AgentAdapter): adapter is AgentAdapter & { setClaudeConfigDirReader(reader: ClaudeConfigDirReader): void } {
   return typeof (adapter as { setClaudeConfigDirReader?: unknown }).setClaudeConfigDirReader === 'function';
+}
+
+function checkAdapterTakesServerUpBudget(adapter: AgentAdapter): adapter is AgentAdapter & { setServerRestartRetryBudgetMs(budgetMs: number): void } {
+  return typeof (adapter as { setServerRestartRetryBudgetMs?: unknown }).setServerRestartRetryBudgetMs === 'function';
 }
 
 function checkAdapterTakesJsonStreamTailWriter(adapter: AgentAdapter): adapter is AgentAdapter & { setJsonStreamTailWriter(writer: JsonStreamTailWriter): void } {
@@ -154,6 +157,36 @@ export function registerSeenWatermarkWriter(writer: SeenWatermarkWriter): void {
   seenWatermarkWriter = writer;
   for (const adapter of adapterInstances.values()) {
     if (checkAdapterTakesWatermarkWriter(adapter)) adapter.setSeenWatermarkWriter(writer);
+  }
+}
+
+/** A test instance's bound on the retries that bring the OpenCode server up — same late-wiring idiom; `null`: the adapter's own. */
+let openCodeServerUpBudgetMs: number | null = null;
+
+/**
+ * @description Register a test instance's shorter bound on the retries that bring the OpenCode server up
+ * (`CHARNESS_TEST_TIMINGS` `openCodeServerUpBudgetMs`), applied to the instance whether it exists already or is
+ * created later. Never called in production: the adapter keeps its 60 s.
+ */
+export function registerOpenCodeServerUpBudgetMs(budgetMs: number): void {
+  openCodeServerUpBudgetMs = budgetMs;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesServerUpBudget(adapter)) adapter.setServerRestartRetryBudgetMs(budgetMs);
+  }
+}
+
+/** A test instance's pending-work hold for the json-stream adapters — same late-wiring idiom; `null`: the adapters' own 6 h. */
+let pendingWorkHoldMs: number | null = null;
+
+/**
+ * @description Register a test instance's shorter pending-work hold (`CHARNESS_TEST_TIMINGS` `backgroundHoldMaxMs`,
+ * `utils/jsonStreamPendingWork.ts`), applied to the json-stream adapters whether they exist already or are created later.
+ * Never called in production: the adapters keep their 6 h.
+ */
+export function registerPendingWorkHoldMs(holdMs: number): void {
+  pendingWorkHoldMs = holdMs;
+  for (const adapter of adapterInstances.values()) {
+    if (adapter instanceof ClaudeJsonStreamAdapter) adapter.setPendingWorkHoldMs(holdMs);
   }
 }
 
@@ -338,6 +371,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (claudeTurnCostSink && checkAdapterTakesClaudeTurnCostSink(adapter)) {
       adapter.setClaudeTurnCostSink(claudeTurnCostSink);
+    }
+    if (openCodeServerUpBudgetMs !== null && checkAdapterTakesServerUpBudget(adapter)) {
+      adapter.setServerRestartRetryBudgetMs(openCodeServerUpBudgetMs);
     }
   }
   return adapter;

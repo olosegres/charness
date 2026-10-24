@@ -421,7 +421,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   readonly lifecycle: JsonStreamLifecycle;
 
   /** How long the agent's own pending work holds the process after its last turn (`utils/jsonStreamPendingWork.ts`). */
-  private readonly pendingWorkHoldMs: number;
+  private pendingWorkHoldMs: number;
 
   constructor(options: { lifecycle: JsonStreamLifecycle; backgroundHoldMs?: number } = { lifecycle: 'idle' }) {
     super();
@@ -448,6 +448,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private readonly stopsInFlight = stopsInFlightByKey;
   /** The agent's own pending work each ended process took with it, until the bot takes it ({@link takeLostWork}). */
   private readonly lostWorkByKey = new Map<string, LostWork>();
+
+  /** A test instance's shorter pending-work hold (`createAdapter.registerPendingWorkHoldMs`). */
+  setPendingWorkHoldMs(holdMs: number): void {
+    this.pendingWorkHoldMs = holdMs;
+  }
 
   setDisplayPrefsReader(reader: DisplayPrefsReader): void {
     this.displayPrefsReader = reader;

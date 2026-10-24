@@ -164,7 +164,7 @@ but not yet echoed, a bot-issued compaction in flight. Pending work is:
 
 - the live background-task list (`system/background_tasks_changed`) and the
   session-only `CronCreate` jobs — held only while the agent's last turn ended
-  less than the HOLD ago (6 h, `AGENT_BACKGROUND_HOLD_MINUTES` for a test). Every
+  less than the HOLD ago (6 h; `CHARNESS_TEST_TIMINGS` `backgroundHoldMaxMs` for a test). Every
   turn resets it, so a watchdog that re-arms itself keeps its process; a task
   nobody hears from (a forgotten dev server) is let go. A bot-issued compaction's
   turn does not reset it;

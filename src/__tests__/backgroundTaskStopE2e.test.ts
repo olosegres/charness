@@ -4,7 +4,7 @@
  * with the fake `claude` (`jiraE2e/fakeClaude.ts`, mode `background-notify`) leaving a background task running after
  * its answer and ending it the way the real CLI 2.1.310 was measured to: the task's end, the empty background list,
  * then the task's own turn, whose first output comes only after the API round-trip (8 s here). The idle window and
- * the pending-work hold are cut to seconds (`AGENT_IDLE_MINUTES`, `AGENT_BACKGROUND_HOLD_MINUTES`). One flow, in order:
+ * the pending-work hold are cut to seconds (`AGENT_IDLE_MINUTES`, `CHARNESS_TEST_TIMINGS` `backgroundHoldMaxMs`). One flow, in order:
  *
  *   boot → the topic is bound → `/claude` → BG-1 answered; its background task runs
  *   → the bot restarts after an upgrade that changed its tools: the adopted process runs a stale tool list, and is
@@ -59,8 +59,9 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getSessionLaunches, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -76,7 +77,6 @@ const projectFolder = 'background-work';
 const idleWindowMinutes = '0.2';
 const idleWindowMs = 12 * 1000;
 /** The pending-work hold, cut to a minute: long enough for the restart and the release, short enough to wait out. */
-const backgroundHoldMinutes = '1';
 const backgroundHoldMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
 /** The idle compaction and stop after the task's turn: one idle window plus the compaction turn and the teardown. */
@@ -155,18 +155,27 @@ function countTurnEnds(): number {
 
 /**
  * Send a labelled message; wait for its answer AND its turn's end — the answer shows a moment before the turn ends (the
- * answer tool's round-trip), and a step that starts in between reads the late end as its own.
+ * answer tool's round-trip). The fake runs one turn at a time, so the first end after the answer shows is this turn's:
+ * an end counted from before the send could be an earlier turn's (a note queued ahead of it).
  */
 async function sendAndAwaitTurnEnd(label: string, text: string): Promise<void> {
-  const turnEndsBefore = countTurnEnds();
   fakeTelegram.pushOperatorMessage(topicThreadId, `${label} ${text}`);
   await topic.waitForMessage(`the answer to ${label}`, (message) => message.text.includes(`Fake final answer for ${label}`));
-  await getCharness().waitFor(`the end of ${label}'s turn`, replyTimeoutMs, () => countTurnEnds() > turnEndsBefore);
+  const turnEndsAtAnswer = countTurnEnds();
+  await getCharness().waitFor(`the end of ${label}'s turn`, replyTimeoutMs, () => countTurnEnds() > turnEndsAtAnswer);
 }
 
-/** Send a labelled `background-notify` message and wait for its turn's end: its task then runs; the process's pid. */
+/**
+ * Send a labelled `background-notify` message and wait until the bot has seen the task it left running — its persisted
+ * tail record lists it (the turn-end count cannot tell this turn from a queued one before it: the answer arrives over
+ * the answer tool, ahead of the bot's read of the earlier turn's end). Returns the process's pid.
+ */
 async function startBackgroundTask(label: string): Promise<number> {
-  await sendAndAwaitTurnEnd(label, '[fake:background-notify] start a watcher');
+  fakeTelegram.pushOperatorMessage(topicThreadId, `${label} [fake:background-notify] start a watcher`);
+  await topic.waitForMessage(`the answer to ${label}`, (message) => message.text.includes(`Fake final answer for ${label}`));
+  const description = getFakeBackgroundTaskDescription(label);
+  await getCharness().waitFor(`the bot to see ${label}'s task`, replyTimeoutMs, () =>
+    readPersistedState(getLayout()).agents?.[topicKey]?.jsonStreamTail?.backgroundTasks?.some((task) => task.description === description) === true);
   return getTurnPid(label);
 }
 
@@ -194,7 +203,7 @@ describe('The agent\'s own background work is never cut off by an automatic stop
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       AGENT_IDLE_MINUTES: idleWindowMinutes,
-      AGENT_BACKGROUND_HOLD_MINUTES: backgroundHoldMinutes,
+      ...getTelegramFlowTestTimingsEnv({ backgroundHoldMaxMs: backgroundHoldMs }),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),

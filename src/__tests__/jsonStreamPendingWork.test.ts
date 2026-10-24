@@ -1,6 +1,6 @@
 /**
  * @description The pending-work judgement's pure rules: the hold after the agent's last turn, the grace of a finished
- * task's turn, and the test override of the hold.
+ * task's turn.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -10,10 +10,8 @@ import assert from 'node:assert/strict';
 import {
   checkHasPendingWork,
   checkIsNotificationTurnPending,
-  getPendingWorkHoldMs,
   getPendingWorkHoldRemainingMs,
   notificationTurnGraceMs,
-  pendingWorkHoldDefaultMs,
   type PendingWorkInput,
 } from '../utils/jsonStreamPendingWork';
 
@@ -37,13 +35,5 @@ describe('jsonStreamPendingWork', () => {
     assert.equal(checkIsNotificationTurnPending({ now, notificationTurnPendingSince: now - 1_000 }), true);
     assert.equal(checkHasPendingWork({ ...idle, notificationTurnPendingSince: now - 1_000 }), true);
     assert.equal(checkIsNotificationTurnPending({ now, notificationTurnPendingSince: now - notificationTurnGraceMs }), false);
-  });
-
-  it('the hold override: minutes for a test, junk or nothing keeps the 6-hour default', () => {
-    assert.equal(pendingWorkHoldDefaultMs, 6 * 60 * 60 * 1000);
-    assert.equal(getPendingWorkHoldMs(undefined), pendingWorkHoldDefaultMs);
-    assert.equal(getPendingWorkHoldMs('1'), 60_000);
-    assert.equal(getPendingWorkHoldMs('abc'), pendingWorkHoldDefaultMs);
-    assert.equal(getPendingWorkHoldMs('0'), pendingWorkHoldDefaultMs);
   });
 });

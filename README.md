@@ -80,6 +80,11 @@ The bot serves two Telegram surfaces:
 
 Full setup — Telegram, Jira, environment, updating: [SETUP.md](SETUP.md)
 
+**Platforms:** Linux, macOS, and Windows via WSL2 — on Windows WSL2 is the recommended and fully supported way
+([Windows (WSL2)](SETUP.md#windows-wsl2), with a recipe for an always-on PC with no monitor). Native Windows works with
+limits: OpenCode runs, but Claude and `/terminal` need tmux, a self-update cannot restart the bot in place, hot mode refuses
+to start and the local speech engine cannot be installed. A native Windows bot says so at start (console, General, `/doctor`).
+
 ## Reference
 
 ### Commands (Telegram)

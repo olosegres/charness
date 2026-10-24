@@ -108,6 +108,7 @@ export const ptDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'O bot é admin do grupo',
   'doctor.can_manage_topics': '`can_manage_topics` concedido',
   'doctor.can_delete_messages': '`can_delete_messages` concedido',
@@ -157,6 +158,9 @@ export const ptDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'O estado fixado do tópico (Stage 7) não estará disponível',
+
+  'nativeWindows.limitedNotice':
+    'O Windows nativo é limitado: o Claude (precisa do tmux), a atualização automática, o modo hot e o reconhecimento de voz local não funcionam aqui. Execute o Charness dentro do WSL2 para ter tudo: {setupUrl}',
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

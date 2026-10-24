@@ -10,8 +10,6 @@
  * the agent was being woken to read its task's result.
  */
 
-import { getMinutesOverrideMs } from './minutesOverride';
-
 /**
  * How long a background task's notification holds the process for the turn it starts. The CLI starts that turn ~0.1 s
  * after the notification; the grace only bounds a notification whose turn never shows (one folded into a running
@@ -25,14 +23,7 @@ export const notificationTurnGraceMs = 30_000;
  * only a task nobody heard from in that time (a forgotten dev server, a `sleep infinity`) is let go.
  */
 export const pendingWorkHoldDefaultMs = 6 * 60 * 60 * 1000;
-
-/** The test override of {@link pendingWorkHoldDefaultMs}, in minutes (the `AGENT_IDLE_MINUTES` pattern, L-D9). */
-export const pendingWorkHoldMinutesEnvName = 'AGENT_BACKGROUND_HOLD_MINUTES';
-
-/** @description The hold in force: the {@link pendingWorkHoldMinutesEnvName} override, else the 6-hour default. */
-export function getPendingWorkHoldMs(overrideMinutes: string | undefined): number {
-  return getMinutesOverrideMs(overrideMinutes, pendingWorkHoldDefaultMs);
-}
+// A test instance shortens it through `CHARNESS_TEST_TIMINGS` `backgroundHoldMaxMs` (`createAdapter.registerPendingWorkHoldMs`).
 
 /** @name PendingWorkInput @description The session state the pending-work judgement reads, with its clock. */
 export interface PendingWorkInput {

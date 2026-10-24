@@ -112,6 +112,7 @@ export const enDict: Record<string, string> = {
   'doctor.ok': '✅ {label}',
   'doctor.warn': '⚠️ {label} — {hint}',
   'doctor.fail': '❌ {label} — {hint}',
+  'doctor.warnWithoutHint': '⚠️ {label}',
   'doctor.bot_admin': 'Bot is a group admin',
   'doctor.can_manage_topics': '`can_manage_topics` granted',
   'doctor.can_delete_messages': '`can_delete_messages` granted',
@@ -161,6 +162,9 @@ export const enDict: Record<string, string> = {
   'mcp.source_thread': 'thread (`DATA_DIR`/threads/...)',
 
   'doctor.pin_hint': 'Pinned thread status (Stage 7) will be unavailable',
+
+  'nativeWindows.limitedNotice':
+    "Native Windows is limited: Claude (needs tmux), self-update, hot mode and local voice recognition don't work here. Run Charness inside WSL2 to get everything: {setupUrl}",
 
   'whoami.report':
     '👤 user: `{userId}`\n💬 chat: `{chatId}`\n🧵 thread: `{threadId}`\n' +

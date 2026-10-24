@@ -39,6 +39,7 @@ import {
 } from './e2e/isolatedCharness';
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { fakeClaudeTuiBanner, fakeUsageLimitRow, fakeUsageWarningRow } from './tmuxE2e/fakeClaudeTui';
+import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 141;
@@ -115,6 +116,7 @@ describe('A usage warning on the tmux backend end to end: built charness, fake B
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      ...getTelegramFlowTestTimingsEnv(),
     });
   });
 
