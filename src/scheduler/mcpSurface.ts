@@ -122,7 +122,6 @@ const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 const mcpServerName = 'telegram-bot-scheduler';
 const mcpServerVersion = '1.0.0';
 
-
 /** The skill an orchestrating agent loads in a bot session, as each CLI names it. */
 const managerSkillInstruction =
   'load the `charness-manager` skill (Claude Code lists it as `charness:charness-manager`) and follow it instead of any other manager skill';
