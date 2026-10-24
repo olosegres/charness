@@ -155,6 +155,8 @@ export const fakeClaudeLogFileNames = {
   violations: 'violations.jsonl',
   answers: 'answers.jsonl',
   turns: 'turns.jsonl',
+  /** One record per `PostToolUse` hook output that carried `additionalContext`: `{ issueKey, pid, sessionId, additionalContext }`. */
+  hooks: 'hooks.jsonl',
 } as const;
 
 /** The flags every session launch of a Jira conversation must carry (R7, R8, R11, D17). */
@@ -255,4 +257,12 @@ export function getFlagValues(argv: readonly string[], name: string): string[] {
 /** @description The conversation a session launch runs: its `--session-id`, or the `--resume` id. */
 export function getLaunchSessionId(argv: readonly string[]): string | undefined {
   return getFlagValues(argv, '--session-id')[0] ?? getFlagValues(argv, '--resume')[0];
+}
+
+/** @name FakeClaudeHookContext @description One line of the fake's `hooks.jsonl`: what a `PostToolUse` hook gave the agent. */
+export interface FakeClaudeHookContext {
+  issueKey: string;
+  pid: number;
+  sessionId: string;
+  additionalContext: string;
 }

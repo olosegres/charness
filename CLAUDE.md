@@ -118,7 +118,8 @@ per-backend controls are optional methods the bot checks before calling.
   reaches the topic sets `AgentAdapter.streamsCompactionSummary` (OpenCode) and the bot posts no copy;
   that streamed summary is tagged `OutboundHints.isCompactionSummary` and obeys the same switch. The
   backends' OWN overflow compaction gets the same summary guidance (name the loaded skills, reload them):
-  Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`),
+  Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`, which also
+  carries the todo lists' `PostToolUse` inbox hook, `todos/midTurn.ts`),
   OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`); at boot
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
   scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or

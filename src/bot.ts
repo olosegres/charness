@@ -359,6 +359,7 @@ import { TodoReminderEngine } from './todos/reminderEngine';
 import { createRepositoryIdentityReader, groupTodoProjects, runGitInFolder, type TodoProject, type TodoProjectMember } from './todos/projects';
 import { createTodoBoard, type TodoBoard, type TodoSessionActivity } from './todos/board';
 import { createTodoTools, type TodoTools } from './todos/tools';
+import { createTodoMidTurn, getTodoInboxDir, type TodoMidTurn } from './todos/midTurn';
 import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
@@ -1230,11 +1231,46 @@ function noteTodoFreshContext(key: SessionKey): void {
   }
 }
 
+let todoMidTurn: TodoMidTurn | null = null;
+
+/** What a busy OpenCode session reads between steps when the project board changed (D22); the board follows it. */
+const todoMidTurnNoticeText = '[Todo] Other topics of your project changed their lists while you work. No reply is needed.';
+
+/** Mid-turn delivery of the board (`todos/midTurn.ts`): the Claude inbox hook, the OpenCode queued prompt. */
+function getTodoMidTurn(): TodoMidTurn {
+  todoMidTurn ??= createTodoMidTurn({
+    board: getTodoBoard(),
+    inboxDir: getTodoInboxDir(getDataDir()),
+    getClaudeSessionId: (key) => {
+      const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
+      return adapterName !== undefined && checkIsClaudeBackend(adapterName) ? getResumableSessionId(key) : null;
+    },
+    postOpenCodeNotice: async (key) => {
+      const adapter = getThreadAdapter(key);
+      // Only into a busy turn: OpenCode queues `prompt_async` and reads it between steps; an idle agent gets the
+      // changes with its next prompt instead (D21) — this must never start a turn.
+      if (adapter.name !== openCodeAdapterName || !adapter.checkIsActive(key) || !(adapter.checkIsBusy?.(key) ?? false)) return false;
+      await forwardPromptToAgent(key, adapter, todoMidTurnNoticeText, undefined, { isTechnicalPrompt: true, isIntoRunningTurn: true });
+      return true;
+    },
+  });
+  return todoMidTurn;
+}
+
 let todoTools: TodoTools | null = null;
 
 function getTodoTools(): TodoTools {
   todoTools ??= createTodoTools({ registry: getTodoRegistry(), board: getTodoBoard() });
   return todoTools;
+}
+
+/** A turn start the bot makes carries the board itself: a waiting mid-turn inbox is withdrawn (or counted, if taken). */
+function discardTodoInbox(key: SessionKey): void {
+  try {
+    getTodoMidTurn().discardInbox(key);
+  } catch (e) {
+    console.error(`[todos] ${keyToString(key)}: the mid-turn inbox could not be withdrawn:`, e instanceof Error ? e.message : e);
+  }
 }
 
 /** The board block a prompt forwarded now carries (D20), or `null`; taking it counts as seen. A failure never stops the prompt. */
@@ -5359,6 +5395,7 @@ interface PromptForwardOptions {
   isTechnicalPrompt?: boolean;
   replyContext?: string;
   requestHeader?: string;
+  isIntoRunningTurn?: boolean;
 }
 
 /** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
@@ -5432,19 +5469,25 @@ async function forwardPromptToLiveAgent(
   // then the todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
   // command or a shell line; the reminder never rides the standalone reminder itself.
   const isTodoDecorated = !checkShouldSkipPreambleForText(text) && adapter.name !== 'terminal';
+  if (isTodoDecorated) discardTodoInbox(key);
   const todoBoardBlock = isTodoDecorated ? await takeTodoPromptBoard(key) : null;
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
   const todoReminderLine = isTodoDecorated && !isTechnicalPrompt ? takeTodoPromptReminder(key) : null;
   if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;
-  markNeedsNewMessage(key);
+  // A note queued into a turn that keeps running (the todo board's mid-turn notice to OpenCode) starts no turn: the
+  // message being streamed goes on, and the working counter keeps its start.
+  const isNewTurn = options.isIntoRunningTurn !== true;
+  if (isNewTurn) markNeedsNewMessage(key);
   // A new prompt is a new turn: lift the S2 idle-suppress latch and re-base the
   // working-status elapsed so the next busy period shows a fresh 0:00 counter
   // (the single prompt-forward choke point — covers user text, scheduled runs,
   // and the auto-retry "continue" nudge). Harmless for OpenCode threads (they
   // never arm the Claude liveness loop, so these fields stay unread).
   const msgState = getThreadMessageState(key);
-  msgState.statusIdleSuppressed = false;
-  msgState.workingSince = Date.now();
+  if (isNewTurn) {
+    msgState.statusIdleSuppressed = false;
+    msgState.workingSince = Date.now();
+  }
   // The native typing indicator is the loader: it shows immediately, can't be
   // delayed behind a chat-wide 429 cooldown (unlike a sent message), and (S3)
   // persists while output is streaming OR the agent is busy — self-stopping only
@@ -13579,9 +13622,12 @@ export async function startBot(): Promise<void> {
       ...getConversationAccountState(key),
     }),
     getIntervalMs: getTodoReminderIntervalMsNow,
+    checkIsEnabled: () => readTodoSettings().isEnabled,
     postReminder: postTodoReminder,
+    midTurn: getTodoMidTurn(),
     pollIntervalMs: ENV.testTimings.todoReminderPollMs,
   });
+  getTodoMidTurn().clearInboxes();
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle

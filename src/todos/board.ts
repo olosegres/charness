@@ -44,6 +44,16 @@ export interface TodoBoardDeps {
   getNowMs: () => number;
 }
 
+/**
+ * @name TodoBoardChanges
+ * @description What changed in the project since the agent last saw it, not yet marked seen: the text a mid-turn
+ * delivery carries and the peer revisions it shows.
+ */
+export interface TodoBoardChanges {
+  text: string;
+  revisions: Record<string, number>;
+}
+
 /** @name TodoBoard @description The board's deliveries; each one counts as seen. */
 export interface TodoBoard {
   /** The block a bot-made turn start carries (D20), or `null` when nothing is due. */
@@ -54,6 +64,14 @@ export interface TodoBoard {
   takeProjectBoard(key: SessionKey): Promise<string>;
   /** The agent lost its context (a fresh session, a compaction, `/clear`): the next board is the whole one. */
   noteFreshContext(key: SessionKey): void;
+  /**
+   * The changes since the agent last saw the board, WITHOUT marking them seen (a mid-turn delivery marks them once it
+   * reached the agent); `null` when nothing changed, or when the agent has seen no board yet (its next prompt carries
+   * the whole one).
+   */
+  peekChanges(key: SessionKey): Promise<TodoBoardChanges | null>;
+  /** These peer revisions reached the agent (a mid-turn delivery). */
+  markSeenRevisions(key: SessionKey, revisions: Readonly<Record<string, number>>): void;
 }
 
 /** @description `3 min ago`, `2 h ago`, `4 d ago`; under a minute: `just now`. */
@@ -210,6 +228,25 @@ export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
       const text = formatFullBoard(located.projectName, located.peers, nowMs, boardReadMaxChars);
       markSeen(key, located.peers, nowMs);
       return text;
+    },
+
+    async peekChanges(key) {
+      const seen = store.getTopic(key).boardSeen;
+      if (seen === undefined) return null;
+      const located = await getPeers(key);
+      if (located === null) return null;
+      const changed = getChangedPeers(key, located.peers);
+      if (changed.length === 0) return null;
+      return {
+        text: formatTodoBoardBlocks(`[Project board — changes since ${formatLocalClock(seen.at)}]`, renderBlocks(changed, getNowMs()), boardMaxChars),
+        revisions: Object.fromEntries(changed.map(({ conversationKey, file }) => [conversationKey, file.revision])),
+      };
+    },
+
+    markSeenRevisions(key, revisions) {
+      const file = store.getTopic(key);
+      if (file.boardSeen === undefined) return;
+      store.saveTopic(key, { ...file, boardSeen: { revisions: { ...file.boardSeen.revisions, ...revisions }, at: getNowMs() } });
     },
 
     noteFreshContext(key) {

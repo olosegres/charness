@@ -151,7 +151,10 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * Todo tokens in the text of a turn that gets as far as answering (with or without a request): `[todo:<status>:<title>]`
  * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
  * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
- * publishes). A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers.
+ * publishes). A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
+ * `[tool-after-ms:<n>]` token makes one more tool call n ms later, after which the launch's `PostToolUse` hooks (its
+ * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
+ * `hooks.jsonl`.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
@@ -205,6 +208,7 @@ const todoAddRe = /\[todo:(queued|inWork|done|dropped):([^\]]+)\]/g;
 const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
 const todoTouchToken = '[todo-touch]';
 const workMsRe = /\[work-ms:(\d+)\]/;
+const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
 const bgCountRe = /\[bg-count:(\d+)\]/;
 const todoUpdateToolName = 'todo_update';
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
@@ -225,19 +229,64 @@ let launchApiKeySource: 'apiKeyHelper' | 'none' = 'none';
  * through `/bin/sh`; `isHelperKeyPlausible` is `null` without a helper. The key itself never leaves this function.
  */
 function readLaunchApiKeySource(argv: readonly string[]): { source: 'apiKeyHelper' | 'none'; isHelperKeyPlausible: boolean | null } {
-  const settingsArg = getFlagValues(argv, '--settings').at(-1);
-  if (settingsArg === undefined) return { source: 'none', isHelperKeyPlausible: null };
-  let settings: unknown;
-  try {
-    settings = JSON.parse(settingsArg.trimStart().startsWith('{') ? settingsArg : fs.readFileSync(settingsArg, 'utf8'));
-  } catch {
-    return { source: 'none', isHelperKeyPlausible: null };
-  }
+  const settings = readLaunchSettings(argv);
+  if (settings === null) return { source: 'none', isHelperKeyPlausible: null };
   const helper = settings && typeof settings === 'object' ? (settings as { apiKeyHelper?: unknown }).apiKeyHelper : undefined;
   if (typeof helper !== 'string') return { source: 'none', isHelperKeyPlausible: null };
   const output = spawnSync('/bin/sh', ['-c', helper], { encoding: 'utf8' }).stdout?.trim() ?? '';
   const isHelperKeyPlausible = plausibleApiKeyRe.test(output);
   return { source: isHelperKeyPlausible ? 'apiKeyHelper' : 'none', isHelperKeyPlausible };
+}
+
+/** The launch's settings as the real CLI reads them: its LAST `--settings` (a JSON string or a file); `null` without one. */
+function readLaunchSettings(argv: readonly string[]): unknown {
+  const settingsArg = getFlagValues(argv, '--settings').at(-1);
+  if (settingsArg === undefined) return null;
+  try {
+    return JSON.parse(settingsArg.trimStart().startsWith('{') ? settingsArg : fs.readFileSync(settingsArg, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** The `PostToolUse` command hooks of the launch's settings (no matcher: every tool). */
+function getPostToolUseHookCommands(argv: readonly string[]): string[] {
+  const settings = readLaunchSettings(argv) as { hooks?: { PostToolUse?: Array<{ hooks?: Array<{ type?: string; command?: string }> }> } } | null;
+  return (settings?.hooks?.PostToolUse ?? []).flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
+}
+
+/** How long a hook command may run, as the real CLI bounds it (it waits up to a minute; the fake's are quick). */
+const hookTimeoutMs = 10_000;
+
+/**
+ * A tool call the way the real CLI makes it, its `PostToolUse` hooks included: each hook gets the hook input on stdin
+ * and its stdout, when it is hook JSON with `additionalContext`, is what the agent reads with the tool's result —
+ * logged to `hooks.jsonl`.
+ */
+function runToolCallWithHooks(argv: readonly string[], sessionId: string, issueKey: string): void {
+  const toolUseId = `toolu_${randomUUID()}`;
+  writeStdout({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Read', input: { file_path: 'NOTES.md' } }] }, parent_tool_use_id: null, session_id: sessionId });
+  writeStdout({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'no such file' }] }, parent_tool_use_id: null, session_id: sessionId });
+  const input = JSON.stringify({ session_id: sessionId, transcript_path: getTranscriptPath(sessionId), cwd: process.cwd(), hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'NOTES.md' }, tool_response: { content: 'no such file' } });
+  for (const command of getPostToolUseHookCommands(argv)) {
+    const ran = spawnSync('/bin/sh', ['-c', command], { input, encoding: 'utf8', timeout: hookTimeoutMs });
+    const output = ran.stdout?.trim() ?? '';
+    if (output === '') continue;
+    try {
+      const additionalContext = (JSON.parse(output) as { hookSpecificOutput?: { additionalContext?: unknown } }).hookSpecificOutput?.additionalContext;
+      if (typeof additionalContext === 'string') appendJsonLine(fakeClaudeLogFileNames.hooks, { issueKey, pid: process.pid, sessionId, additionalContext });
+    } catch {
+      // Not hook JSON: the real CLI shows it to nobody but the transcript; nothing reaches the agent.
+    }
+  }
+}
+
+/** A `[tool-after-ms:<n>]` token: n ms into the turn the agent makes one more tool call (hooks run after it). */
+async function runLateToolCall(argv: readonly string[], sessionId: string, content: string, issueKey: string): Promise<void> {
+  const delayMs = Number(toolAfterMsRe.exec(content)?.[1] ?? '0');
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  runToolCallWithHooks(argv, sessionId, issueKey);
 }
 
 /** The login `auth login` recorded in a config directory (`fakeClaudeLoginFileName`), `null` when there is none. */
@@ -751,6 +800,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     emitTurnActivity(sessionId, noRequestIssueKey);
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
+    await runLateToolCall(argv, sessionId, content, noRequestIssueKey);
     // A turn without a request honours two modes, by the token in ITS OWN text: `ask` (a question needs no request
     // to be put to the user) and `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once").
@@ -801,6 +851,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const server = getBotMcpServer(argv);
   await runTodoTokens(server, content, state.issueKey);
   await waitTurnWork(content);
+  await runLateToolCall(argv, sessionId, content, state.issueKey);
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server

@@ -170,6 +170,7 @@ describe('the reminder poll', () => {
       probeTurn: () => probe,
       getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, ...options.gate }),
       getIntervalMs: () => intervalMs,
+      checkIsEnabled: () => true,
       postReminder: async (_key, text) => {
         posted.push(text);
         return options.isPosted ?? true;

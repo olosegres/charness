@@ -588,7 +588,9 @@ changed since the agent last saw them, and nothing when none did:
 ```
 
 The agent's own `todo_update` answers the same way, so every update is an overlap check. A change in another topic
-never wakes an agent by itself: it learns of it at its next prompt or update. The board is capped (five items of
+never wakes an agent by itself: an idle or sleeping agent learns of it at its next prompt or update, and a **working**
+one in the middle of its turn — Claude with the result of its next tool call (a hook the bot adds to every Claude
+session it starts), OpenCode as a short message it reads between steps. The board is capped (five items of
 each kind per topic, about 3000 characters, the most recently active topics first); the agent can read the whole of
 it with `todo_read`. **`/todo` → Project ▸** in a topic overrides the grouping: join another topic's project, keep
 an own project, or go back to automatic. A Jira conversation is on the board too, named by its issue key and summary

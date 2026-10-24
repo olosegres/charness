@@ -18,6 +18,10 @@
  * nothing when the compaction's `custom_instructions` (part of the JSON the hook
  * reads on stdin) already contain the skills guidance — otherwise the model would
  * get the instruction twice.
+ *
+ * The same launch settings carry the shared todo lists' `PostToolUse` hook
+ * (`todos/midTurn.ts`): it prints the session's inbox — the project board's
+ * changes — after a tool call, and nothing when there is none.
  */
 
 import fs from 'fs';
@@ -30,6 +34,7 @@ import {
 import { shellSingleQuote } from './tmuxExec';
 import { checkHasClaudeProfileApiKey, claudeProfileLaunchSettingsFileName } from './claudeProfiles';
 import { buildClaudeApiKeyHelperSettings } from './claudeApiKeyHelper';
+import { buildTodoInboxHookCommand, getTodoInboxDir } from '../todos/midTurn';
 
 /**
  * Name of the hook settings file inside `DATA_DIR`. ONE file shared by every
@@ -66,11 +71,23 @@ export function buildPreCompactHookCommand(input: {
   return `grep -qF -e ${shellSingleQuote(input.alreadySentMarker)} || printf '%s\\n' ${shellSingleQuote(input.instruction)}`;
 }
 
-/** The `--settings` payload: one `PreCompact` command hook, no matcher (auto AND manual). */
-export function buildClaudeCompactHookSettings(command: string): {
-  hooks: { PreCompact: Array<{ hooks: Array<{ type: 'command'; command: string }> }> };
+/** One command hook with no matcher (every compaction, every tool). */
+type CommandHookGroups = Array<{ hooks: Array<{ type: 'command'; command: string }> }>;
+
+/**
+ * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions) and the shared
+ * todo lists' `PostToolUse` inbox hook (every tool: the project board's changes reach a working agent with its next
+ * tool result, `todos/midTurn.ts`).
+ */
+export function buildClaudeLaunchHookSettings(commands: { preCompact: string; postToolUse: string }): {
+  hooks: { PreCompact: CommandHookGroups; PostToolUse: CommandHookGroups };
 } {
-  return { hooks: { PreCompact: [{ hooks: [{ type: 'command', command }] }] } };
+  return {
+    hooks: {
+      PreCompact: [{ hooks: [{ type: 'command', command: commands.preCompact }] }],
+      PostToolUse: [{ hooks: [{ type: 'command', command: commands.postToolUse }] }],
+    },
+  };
 }
 
 /**
@@ -86,11 +103,13 @@ export function buildClaudeCompactHookSettings(command: string): {
  * the same settings go inline instead, so the account never loses its key to a full disk.
  */
 export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string | null = null): string[] {
-  const command = buildPreCompactHookCommand({
-    instruction: getHookCompactionInstruction(),
-    alreadySentMarker: compactionSkillsGuidance,
+  const hookSettings = buildClaudeLaunchHookSettings({
+    preCompact: buildPreCompactHookCommand({
+      instruction: getHookCompactionInstruction(),
+      alreadySentMarker: compactionSkillsGuidance,
+    }),
+    postToolUse: buildTodoInboxHookCommand(getTodoInboxDir(dataDir)),
   });
-  const hookSettings = buildClaudeCompactHookSettings(command);
   if (configDir !== null && checkHasClaudeProfileApiKey(configDir)) {
     const settings = { ...hookSettings, ...buildClaudeApiKeyHelperSettings(configDir) };
     const written = writeLaunchSettingsFile(configDir, path.join(configDir, claudeProfileLaunchSettingsFileName), settings);

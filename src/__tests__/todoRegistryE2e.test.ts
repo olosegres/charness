@@ -22,6 +22,8 @@
  *     A; a fresh session and a compaction in B bring the whole board again; the picker: «Own project» takes B off the
  *     board at once, «Automatic» brings it back; a topic on a folder that is no checkout joins A's project by hand;
  *     General's `/todo` lists the project with its topics
+ *   → mid-turn (S4): while B works, A publishes; B gets A's change with its next tool result — the launch settings'
+ *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the agent is the fake. Everything the test
  * starts is stopped in `after`.
@@ -36,7 +38,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeBackgroundReleaseFileName, fakeClaudeLogFileNames } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeBackgroundReleaseFileName, fakeClaudeLogFileNames, type FakeClaudeHookContext } from './jiraE2e/fakeClaudeContract';
 import {
   assertMcpListeningOn,
   builtCliPath,
@@ -82,6 +84,8 @@ const reminderIntervalMs = 4000;
 const reminderPollMs = 500;
 /** A turn that works past the interval. */
 const longTurnWorkMs = 5000;
+/** How long into its turn B makes the tool call whose hook delivers A's change (A publishes meanwhile). */
+const midTurnToolDelayMs = 8000;
 /** What the agent reads in a reminder, either form. */
 const reminderMarker = '[Todo] Your published todo list was last updated';
 
@@ -483,5 +487,25 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
   it('General\'s /todo lists the project with its topics', async () => {
     const board = await sendAndAwaitReply(generalTopicThreadId, '/todo', '📋 Todo — all projects');
     assert.match(board.text, /\n\nproj-a · topics: 3\n {3}#topic 111 \(proj-a\) {3}nothing in work · queue 2\n {3}#topic 222 \(proj-b\) {3}▶ Fix the footer\n {3}#topic 444 \(notes\) {3}asleep · nothing in work$/);
+  });
+
+  // ── S4 — mid-turn delivery ────────────────────────────────────────────
+
+  it('a working agent gets another topic\'s change with its next tool result (the PostToolUse inbox hook); its next prompt does not repeat it', async () => {
+    const readHookContexts = (): FakeClaudeHookContext[] => readJsonLines<FakeClaudeHookContext>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.hooks)).filter((record) => record.issueKey === 'TODO-31');
+    fakeTelegram.pushOperatorMessage(topicBThreadId, `TODO-31 [tool-after-ms:${midTurnToolDelayMs}]`);
+    await getCharness().waitFor('B working on TODO-31', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-31\b/.test(prompt.text)));
+    await publishThroughAgent(topicAThreadId, 'TODO-32', '[todo:queued:Mid-turn item]');
+    await getCharness().waitFor('B\'s next tool result carried the change', turnTimeoutMs, () => readHookContexts().length > 0);
+    assert.match(readHookContexts()[0].additionalContext, /^\[Project board — changes since \d\d:\d\d\]\n#topic 111 \(proj-a\) — [^\n]*[\s\S]*Mid-turn item/);
+    assert.deepEqual(fs.readdirSync(path.join(getLayout().dataDir, 'todos', 'inbox')), [], 'the inbox was taken whole');
+    // Seen once taken: the bot's next poll finds the inbox gone; B's next prompt brings nothing more.
+    await getCharness().waitFor('the change counted as seen', turnTimeoutMs, () => {
+      const seen = (readTopicTodoFileOf(topicBThreadId).boardSeen as { revisions?: Record<string, number> } | undefined)?.revisions ?? {};
+      const revisionOfA = (JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'todos', `${group.id}_${topicAThreadId}.json`), 'utf8')) as { revision: number }).revision;
+      return seen[`${group.id}:${topicAThreadId}`] === revisionOfA;
+    });
+    await publishThroughAgent(topicBThreadId, 'TODO-33', '[todo-touch]');
+    assert.doesNotMatch(getPromptOf('TODO-33'), /Mid-turn item/);
   });
 });

@@ -9,7 +9,8 @@ import type { TodoRegistry } from './registry';
  * conversation's work; a busy → idle edge is a turn end, which starts the reminder's clock (the first one after an
  * update) and, when the list is stale and every gate holds, posts the standalone reminder. Every decision is the
  * registry's (`nag.ts`); this module only observes and acts. A failure in one conversation is logged and never stops
- * the others.
+ * the others. The same poll hands a busy session the project board's changes mid-turn (`midTurn.ts`) — it runs while
+ * the shared lists are on, the reminder off or not.
  */
 
 /** How often the sessions are polled — the wake-up engine's turn poll. */
@@ -33,7 +34,11 @@ export interface TodoReminderEngineDeps {
   probeTurn: (key: SessionKey) => SessionTurnProbe;
   getGate: (key: SessionKey) => Omit<TodoStandaloneGate, keyof SessionTurnProbe>;
   getIntervalMs: () => number | null;
+  /** Whether the shared lists are on at all; off, the poll does nothing. */
+  checkIsEnabled: () => boolean;
   postReminder: (key: SessionKey, text: string) => Promise<boolean>;
+  /** Mid-turn delivery (D22): reconcile what the hooks took, and deliver to a busy session what changed. */
+  midTurn?: { reconcile(): void; deliverIfPending(key: SessionKey): Promise<void> };
   now?: () => number;
   pollIntervalMs?: number;
 }
@@ -77,27 +82,30 @@ export class TodoReminderEngine {
     const nowMs = this.now();
     const elapsedMs = Math.min(nowMs - (this.lastPollAt ?? nowMs), maxCountedPollIntervals * this.pollIntervalMs);
     this.lastPollAt = nowMs;
-    // Off (the feature or its reminder): nothing is counted, and a turn seen busy now is not an end later.
-    if (this.deps.getIntervalMs() === null) {
+    // Off: nothing is counted, and a turn seen busy now is not an end later.
+    if (!this.deps.checkIsEnabled()) {
       this.wasBusy.clear();
       return;
     }
+    const intervalMs = this.deps.getIntervalMs();
+    this.deps.midTurn?.reconcile();
     for (const key of this.deps.listConversations()) {
       try {
-        await this.pollConversation(key, nowMs, elapsedMs);
+        await this.pollConversation(key, nowMs, elapsedMs, intervalMs);
       } catch (e) {
         console.warn(`[todos] reminder poll of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e);
       }
     }
   }
 
-  private async pollConversation(key: SessionKey, nowMs: number, elapsedMs: number): Promise<void> {
+  private async pollConversation(key: SessionKey, nowMs: number, elapsedMs: number, intervalMs: number | null): Promise<void> {
     const conversationKey = keyToString(key);
     const probe = this.deps.probeTurn(key);
     const wasBusy = this.wasBusy.get(conversationKey) === true;
     this.wasBusy.set(conversationKey, probe.isBusy);
     if (probe.isBusy) {
       this.deps.registry.addTurnWork(key, elapsedMs);
+      await this.deps.midTurn?.deliverIfPending(key);
       return;
     }
     const isTurnEnd = wasBusy && probe.isActive && !probe.isTurnEndBlocked && probe.hasUnconsumedInput !== true;
@@ -108,7 +116,7 @@ export class TodoReminderEngine {
     }
     this.deps.registry.noteTurnEnd(key, nowMs);
     if (this.posting.has(conversationKey)) return;
-    const decision = this.deps.registry.decideStandaloneReminder(key, this.deps.getIntervalMs(), { ...probe, ...this.deps.getGate(key) }, nowMs);
+    const decision = this.deps.registry.decideStandaloneReminder(key, intervalMs, { ...probe, ...this.deps.getGate(key) }, nowMs);
     if (!decision.shouldRemind) {
       // A due reminder that a gate holds back is worth one line per turn end; a list that is not due is not.
       if (decision.isStale) console.log(`[todos] ${conversationKey}: stale list, no reminder: ${decision.skipReasons.join(', ')}`);

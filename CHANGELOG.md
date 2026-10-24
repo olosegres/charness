@@ -54,6 +54,11 @@ restarted bot read that limit error from what the agent wrote during the downtim
 hour before was taken as closing tomorrow, and the account stayed limited — shown so on `/limits`, passed over by the account
 switch — for up to a day. The reset is now worked out from the time the agent's transcript recorded the error.
 
+**A working agent now hears of another topic's todo change in the middle of its turn.** Claude gets the project
+board's changes with the result of its next tool call (a `PostToolUse` hook in the settings file the bot starts every
+Claude session with), OpenCode as a queued message it reads between steps; an idle or sleeping agent is never woken
+for it.
+
 **The agents of one repository now see each other's todo lists.** Topics on checkouts or worktrees of the same git
 repository form a project, and every prompt an agent gets carries the project board — the whole of it on a fresh
 context, later only what changed in the other topics — as does its own `todo_update`; another topic's change never

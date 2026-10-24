@@ -13,7 +13,7 @@ import os from 'os';
 import path from 'path';
 
 import {
-  buildClaudeCompactHookSettings,
+  buildClaudeLaunchHookSettings,
   buildPreCompactHookCommand,
   claudeCompactHookSettingsFileName,
   getHookCompactionInstruction,
@@ -75,9 +75,12 @@ test('compactionSkillsGuidance: JSON leaves it unescaped, so the hook can match 
   assert.match(compactionSkillsGuidance, /^[\x20-\x7e]+$/);
 });
 
-test('buildClaudeCompactHookSettings: one PreCompact command hook with no matcher', () => {
-  assert.deepEqual(buildClaudeCompactHookSettings('echo hi'), {
-    hooks: { PreCompact: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] },
+test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command hook, neither with a matcher', () => {
+  assert.deepEqual(buildClaudeLaunchHookSettings({ preCompact: 'echo hi', postToolUse: 'echo tool' }), {
+    hooks: {
+      PreCompact: [{ hooks: [{ type: 'command', command: 'echo hi' }] }],
+      PostToolUse: [{ hooks: [{ type: 'command', command: 'echo tool' }] }],
+    },
   });
 });
 
