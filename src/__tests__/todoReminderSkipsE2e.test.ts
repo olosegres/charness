@@ -16,8 +16,11 @@
  *   → T shows «Answers only»: a final answer ends a turn past the interval — held back while the text after that
  *   answer is followed
  *
- * The turn-state gates (busy, a held turn, input not taken in) are what a turn end IS: a poll never decides at such a
- * moment, so they are unit-tested only (`todoReminder.test.ts`).
+ *   → Q asks the operator a question and waits on it past the interval: no reminder while the question is pinned, and
+ *   none at the turn end after it is answered — waiting is no work
+ *
+ * Busy and input not taken in are what a turn end is NOT: a poll never decides at such a moment, so they are
+ * unit-tested only (`todoReminder.test.ts`).
  *
  * Nothing leaves the machine. Everything the test starts is stopped in `after`.
  */
@@ -31,7 +34,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -60,6 +63,7 @@ const topicP = { threadId: 191, folder: 'repo-p' };
 const topicM = { threadId: 192, folder: 'repo-m' };
 const topicL = { threadId: 193, folder: 'plain-l' };
 const topicT = { threadId: 194, folder: 'plain-t' };
+const topicQ = { threadId: 195, folder: 'plain-q' };
 const meteredAccount = 'metered';
 const cappedAccount = 'capped';
 const replyTimeoutMs = 20 * 1000;
@@ -106,7 +110,7 @@ function getPromptOf(label: string): string {
   return prompt.text;
 }
 
-function readTopicTodoFile(threadId: number): { nag?: { clockStartedAt?: number }; lastTurnEndAt?: number } {
+function readTopicTodoFile(threadId: number): { nag?: { clockStartedAt?: number; workedMs?: number }; lastTurnEndAt?: number } {
   const filePath = path.join(getLayout().dataDir, 'todos', `${group.id}_${threadId}.json`);
   return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : {};
 }
@@ -141,7 +145,7 @@ async function workAndAwaitHeldBack(threadId: number, label: string, reason: Reg
 describe('The todo reminder\'s held-back cases and the per-turn backend: built charness, fake Bot API, fake claude (S2)', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-todoskip-', [topicP.folder, topicM.folder, topicL.folder, topicT.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-todoskip-', [topicP.folder, topicM.folder, topicL.folder, topicT.folder, topicQ.folder], getFlowDeadlineMs());
     const runGit = (cwd: string, ...args: string[]): void => {
       execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'init.defaultBranch=main', ...args], { cwd, stdio: 'ignore' });
     };
@@ -158,7 +162,7 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     process.once('SIGTERM', exitOnSignal);
 
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
-    for (const topic of [topicP, topicM, topicL, topicT]) drivers.set(topic.threadId, new TopicDriver(fakeTelegram, getCharness, topic.threadId, replyTimeoutMs));
+    for (const topic of [topicP, topicM, topicL, topicT, topicQ]) drivers.set(topic.threadId, new TopicDriver(fakeTelegram, getCharness, topic.threadId, replyTimeoutMs));
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -186,9 +190,9 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
   });
 
-  it('boots and binds the four topics', async () => {
+  it('boots and binds the five topics', async () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
-    for (const topic of [topicP, topicM, topicL, topicT]) await getDriver(topic.threadId).sendAndAwaitReply(`/bind ${topic.folder}`, `Bound to \`${topic.folder}\``);
+    for (const topic of [topicP, topicM, topicL, topicT, topicQ]) await getDriver(topic.threadId).sendAndAwaitReply(`/bind ${topic.folder}`, `Bound to \`${topic.folder}\``);
   });
 
   it('per-turn P: the adapter\'s turn end starts the clock though the process is stopped right after it', async () => {
@@ -251,5 +255,24 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     const linePattern = new RegExp(`\\[todos\\] ${group.id}:${topicT.threadId}: stale list, no reminder: [^\\n]*`);
     await getCharness().waitFor('TODO-82: the held-back reminder', turnTimeoutMs, () => linePattern.test(getCharness().output.slice(outputStart)));
     assert.match(linePattern.exec(getCharness().output.slice(outputStart))?.[0] ?? '', /the text after a final answer is followed/);
+  });
+
+  it('Q waits on its question past the interval: no reminder while it is pinned, none after it is answered — waiting is no work', async () => {
+    const driver = getDriver(topicQ.threadId);
+    await driver.sendAndAwaitReply('/claude', 'ready in');
+    await publishAndAwaitClock(topicQ.threadId, 'TODO-91', 'Asked task');
+    const outputStart = getCharness().output.length;
+    const sentMessageId = fakeTelegram.pushOperatorMessage(topicQ.threadId, 'TODO-92 [fake:ask]');
+    const question = await driver.waitForMessage('Q\'s question', (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
+    // The scenario itself: the question waits for the operator longer than the reminder's interval.
+    await new Promise((resolve) => setTimeout(resolve, reminderIntervalMs + longTurnWorkMs));
+    const answeredAt = Date.now();
+    const [[firstOption]] = driver.getKeyboardData(question);
+    await driver.tapAndAwaitAnswer(question, firstOption);
+    await getCharness().waitFor('the turn end after the answer', turnTimeoutMs, () => (readTopicTodoFile(topicQ.threadId).lastTurnEndAt ?? 0) > answeredAt);
+    const workedMs = readTopicTodoFile(topicQ.threadId).nag?.workedMs ?? 0;
+    assert.ok(workedMs < reminderIntervalMs, `the wait counted as work: ${workedMs} ms`);
+    const output = getCharness().output.slice(outputStart);
+    assert.ok(!output.includes(`[todos] ${group.id}:${topicQ.threadId}: stale list`), 'no reminder, none held back: the list is not stale');
   });
 });

@@ -4,10 +4,13 @@ import type { TodoStandaloneGate } from './nag';
 import type { TodoRegistry } from './registry';
 
 /**
- * @description The timer side of the staleness reminder (D10–D12): no adapter emits a turn-end event, so the
- * conversations' sessions are POLLED like the wake-up engine's watched turns. Each poll adds the busy time to the
- * conversation's work; a busy → idle edge is a turn end, which starts the reminder's clock (the first one after an
- * update) and, when the list is stale and every gate holds, posts the standalone reminder. Every decision is the
+ * @description The timer side of the staleness reminder (D10–D12). The conversations' sessions are POLLED like the
+ * wake-up engine's watched turns: each poll adds the WORKING time to the conversation's work — busy, and nothing
+ * holding the turn (a session waiting on a question is busy, but its agent does nothing) —, and a busy → idle edge is
+ * a turn end. The adapter's own turn end (`noteAdapterTurnEnd`, json-stream's `turnEnded`) is one too: the per-turn
+ * lifecycle stops the process right after it, before a poll could find it idle. A turn end starts the reminder's
+ * clock (the first one after an update) and, when the list is stale and every gate holds, posts the standalone
+ * reminder. Every decision is the
  * registry's (`nag.ts`); this module only observes and acts. A failure in one conversation is logged and never stops
  * the others. The same poll hands a busy session the project board's changes mid-turn (`midTurn.ts`) — it runs while
  * the shared lists are on, the reminder off or not.
@@ -109,7 +112,8 @@ export class TodoReminderEngine {
     const wasBusy = this.wasBusy.get(conversationKey) === true;
     this.wasBusy.set(conversationKey, probe.isBusy);
     if (probe.isBusy) {
-      this.deps.registry.addTurnWork(key, elapsedMs);
+      // A turn held open (a question waiting for the operator, a compaction) is no work of the agent's.
+      if (!probe.isTurnEndBlocked) this.deps.registry.addTurnWork(key, elapsedMs);
       await this.deps.midTurn?.deliverIfPending(key);
       return;
     }

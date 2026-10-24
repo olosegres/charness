@@ -261,6 +261,20 @@ describe('the reminder poll', () => {
     assert.ok(engine['wasBusy'].get(keyToString(topicKey)), 'a held end (unread input) is left to the poll');
   });
 
+  it('a turn held open by a question waiting for the operator counts no work while it waits', async () => {
+    const { engine, registry } = createEngine();
+    await engine.poll();
+    await pollAt(engine, minuteMs, true);
+    await pollAt(engine, minuteMs, false);
+    probe = { ...probe, isTurnEndBlocked: true };
+    await workOneInterval(engine);
+    probe = { ...probe, isTurnEndBlocked: false };
+    await pollAt(engine, minuteMs, true);
+    await pollAt(engine, minuteMs, false);
+    assert.equal(registry.getTopic(topicKey).nag?.workedMs, minuteMs, 'only the minute after the answer counts');
+    assert.deepEqual(posted, []);
+  });
+
   it('a turn shorter than a poll is still seen ending once its output was noted', async () => {
     const { engine, registry } = createEngine();
     await engine.poll();

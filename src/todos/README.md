@@ -46,7 +46,8 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 ## Staleness reminder (`nag.ts`, `reminderEngine.ts`)
 
 - **Stale = WORKED time, not wall time** (D10): the reminder engine polls the conversations' sessions (the wake-up
-  engine's turn probe, `todoReminderPollMs`) and counts the busy polls; a late poll counts at most three intervals.
+  engine's turn probe, `todoReminderPollMs`) and counts the WORKING polls — busy and nothing holding the turn (a
+  session waiting on a question is busy, its agent does nothing); a late poll counts at most three intervals.
   The clock starts at the first turn end after an update (`nag.clockStartedAt`), so neither the update's own turn nor
   days of quiet count. A busy → idle edge is a turn end; agent output marks a turn too short for a poll; and the
   adapter's own `turnEnded` (json-stream, every terminal `result`, any platform) is a turn end too — the per-turn
