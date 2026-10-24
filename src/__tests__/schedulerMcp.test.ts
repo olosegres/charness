@@ -47,6 +47,7 @@ import {
   buildMcpServerInstructions,
   workerWatchCheckCommand,
   workerWatchCheckCron,
+  workerWatchPinArgument,
   serializeSchedulerScope,
   parseSchedulerScope,
   getSchedulerMcpPort,
@@ -81,6 +82,9 @@ import {
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
+
+/** The plan's budget for the always-loaded orchestration bullet of the Telegram instructions. */
+const maxOrchestrationBulletLength = 450;
 
 const secret = 'a'.repeat(64);
 const threadAKey = keyToString(makeTelegramKey(-1001234567890, 11));
@@ -202,6 +206,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const description = scheduleCreate?.description ?? '';
     assert.ok(description.includes(`checkCommand \`${workerWatchCheckCommand}\``), description);
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
+    assert.ok(description.includes(`\`${workerWatchPinArgument}\``), 'a normal worker finish fires the check: its pin must not notify');
     assert.match(description, /Never `kill -0` alone/);
   });
 
@@ -1114,10 +1119,14 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       // Watchdogs go through a check, never a hand-made watcher.
       assert.match(instructions, /checkCommand/);
       assert.match(instructions, /NEVER build your own watcher/);
-      // An orchestrating agent loads the bot's manager skill and watches each worker on BOTH signals.
-      assert.ok(instructions.includes('`charness-manager`'), 'names the bot\'s manager skill');
-      assert.ok(instructions.includes(`checkCommand \`${workerWatchCheckCommand}\``), 'carries the worker watch recipe');
-      assert.ok(instructions.includes(`cron \`${workerWatchCheckCron}\``));
+      // An orchestrating agent loads the bot's manager skill and watches each worker the schedule_create way. The
+      // always-loaded bullet stays short: the recipe itself lives in the tool description, never twice in the context.
+      const orchestrationBullet = instructions.split('\n').find((line) => line.includes('`charness-manager`')) ?? '';
+      assert.ok(orchestrationBullet, 'names the bot\'s manager skill');
+      assert.ok(orchestrationBullet.length <= maxOrchestrationBulletLength, `${orchestrationBullet.length} characters`);
+      assert.ok(orchestrationBullet.includes(`\`${workerWatchPinArgument}\``), 'a worker watch pins silently');
+      assert.match(orchestrationBullet, /never `kill -0` alone/);
+      assert.ok(!instructions.includes(workerWatchCheckCommand), 'the recipe is in the tool description only');
     } finally {
       await client.close();
     }

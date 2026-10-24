@@ -82,6 +82,7 @@ constants in the code; this README keeps what the code cannot say.
   agent sees edits only after it reconnects.
 - **Watching a detached worker.** `workerWatchCheckCommand` is the one recipe for a check on a worker an agent
   launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min (a `kill -0` alone
-  never fires on a hung worker). The Telegram instructions and the `schedule_create` description carry it, the
-  tracker instructions only the pointer to the `charness-manager` skill (`agent-plugin/`), which carries it
-  verbatim (`agentPluginSkills.test.ts` holds them equal).
+  never fires on a hung worker), armed with `isPinSilent: true` (`workerWatchPinArgument`) because a normal finish
+  fires it too. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
+  `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
+  and at that description; the tracker instructions only at the skill.

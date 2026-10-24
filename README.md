@@ -759,7 +759,7 @@ Jira conversation — also gets three skills that ship with Charness
 - `charness-manager` — driving a plan through detached workers with the bot's
   own tools: one worker on the checkout at a time, an independent review, and a
   bot check per worker that wakes the agent when the worker exits OR stops
-  writing for 45 minutes;
+  writing for 45 minutes (pinned silently: a finished worker fires it too);
 - `charness-delegate-claude` / `charness-delegate-opencode` — launching,
   watching and resuming a detached `claude -p` / `opencode run` worker.
 

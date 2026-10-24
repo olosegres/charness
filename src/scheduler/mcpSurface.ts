@@ -131,6 +131,11 @@ export const workerWatchCheckCommand =
   'kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find <run-dir> -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }';
 /** How often a worker watch runs: a hang or an exit is noticed within ten minutes. */
 export const workerWatchCheckCron = '*/10 * * * *';
+/**
+ * A worker watch's alert pin stays silent: a worker that simply finished fires the check too, and a notifying pin per
+ * finished worker would alarm the operator for nothing (what they must notice, the agent asks as a question).
+ */
+export const workerWatchPinArgument = 'isPinSilent: true';
 
 /** The skill an orchestrating agent loads in a bot session, as each CLI names it. */
 const managerSkillInstruction =
@@ -148,7 +153,7 @@ const todoInstruction =
 const trackerOrchestrationInstruction = `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}.`;
 const telegramOrchestrationInstruction =
   `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}. ` +
-  `Watch EACH worker with schedule_create: cron \`${workerWatchCheckCron}\` + checkCommand \`${workerWatchCheckCommand}\` (its PID and run dir filled in) — it fires when the worker exits OR stops writing; a \`kill -0\` alone never fires on a hung worker. Cancel the check once its wake is handled.`;
+  `Watch EACH worker with schedule_create — its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
@@ -919,9 +924,10 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
         'or a restart and then fails silently.\n\n' +
         `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
-        `checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when the worker exits OR nothing ` +
-        'in its run dir changed for 45 min, so the first failure is also the "worker finished" signal. Never `kill -0` ' +
-        'alone: it stays green while a worker hangs. One check per worker run; schedule_cancel it once its wake is handled.',
+        `\`${workerWatchPinArgument}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
+        'the worker exits OR nothing in its run dir changed for 45 min, so the first failure is also the "worker finished" ' +
+        'signal (hence the silent pin: a normal finish must not notify the user). Never `kill -0` alone: it stays green ' +
+        'while a worker hangs. One check per worker run; schedule_cancel it once its wake is handled.',
       inputSchema: scheduleCreateShape,
     },
     async (args) => {

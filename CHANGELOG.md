@@ -7,7 +7,8 @@ conversation (the stream and the tmux backend) and OpenCode — gets the bot's s
 through detached workers with the bot's own tools, and `charness-delegate-claude` / `charness-delegate-opencode` for
 launching, watching and resuming those workers (Claude Code lists them as `charness:charness-manager`, …). The manager
 watches every worker with a bot check that fires when the worker exits OR stops writing for 45 minutes — a check that only
-asks whether the process is alive never fires on a hung worker. A user or project skill of the same kind stays as it is, a Claude
+asks whether the process is alive never fires on a hung worker. Its alert pins silently, since a worker that simply finished
+fires it too. A user or project skill of the same kind stays as it is, a Claude
 Code older than 2.0.25 (which has no `--plugin-dir`) starts without them, the operator's own sessions outside the bot do not
 get these skills, and an `OPENCODE_CONFIG_DIR` the operator set is kept (its
 OpenCode topics then go without them). An OpenCode server started by an earlier version is replaced at the bot's next start

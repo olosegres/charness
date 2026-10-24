@@ -50,7 +50,7 @@ informed. You never write product code and never review a diff yourself.
 ## Watch every worker with a bot check
 
 Right after each launch, create ONE check for that worker run with `schedule_create`: cron `*/10 * * * *`,
-a name like `watch <role> <scope>`, and this `checkCommand` with the real PID and run directory:
+`isPinSilent: true`, a name like `watch <role> <scope>`, and this `checkCommand` with the real PID and run directory:
 
 ```
 kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find <run-dir> -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }
@@ -58,6 +58,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 - It fails on EITHER signal: the worker's process is gone, or nothing in its run directory changed for 45
   minutes. A check that only runs `kill -0 <pid>` never fires on a hung worker — never arm one.
+- `isPinSilent: true`: the check's alert is pinned, and a worker that simply finished fires it too — a loud pin
+  per finished worker would notify the user for nothing. What the user must notice you ask as a question.
 - The run directory is where the worker writes all the time (its event log). A worker that runs one long command
   may write nothing for a while: add the folder that command writes to (`find <run-dir> <test-output-dir> …`).
 - The check's `prompt` must stand on its own — the wake may reach a resumed or compacted you: the role, the scope

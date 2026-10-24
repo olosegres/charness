@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { workerWatchCheckCommand, workerWatchCheckCron } from '../scheduler/mcpSurface';
+import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/mcpSurface';
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
 const skillsDir = path.join(pluginDir, 'skills');
@@ -73,6 +73,7 @@ describe('agent-plugin', () => {
     const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8');
     assert.ok(text.includes(workerWatchCheckCommand), 'the checkCommand');
     assert.ok(text.includes(`cron \`${workerWatchCheckCron}\``), 'the cron');
+    assert.ok(text.includes(`\`${workerWatchPinArgument}\``), 'the silent pin: a normal finish fires the check');
   });
 
   test('no file holds a real-looking identifier', () => {
