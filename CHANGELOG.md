@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**An answer tapped on a question the bot re-asked after an idle compaction is no longer lost when the tap lands while
+the agent is being stopped.** The idle stop that follows the re-asked question could finish while the tap was being
+answered; the chosen option was then kept for a session start that never came, and the agent never got it. The answer
+now wakes the conversation as any message does.
+
 ## 3.5.0 — 2026-10-23
 
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is

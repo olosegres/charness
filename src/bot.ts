@@ -9814,12 +9814,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
-  // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
-  if (isStarting) {
-    noteThreadUserActivity(key);
-    await withThreadLocale(key, () => deliverPromptOrBuffer(key, label, true));
-    return;
-  }
+  // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
+  // not on the `isStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
+  // window was never replayed.
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession' && labels && !reAskedQuestionOptions.has(keyToString(key))) reAskedQuestionOptions.set(keyToString(key), labels);
