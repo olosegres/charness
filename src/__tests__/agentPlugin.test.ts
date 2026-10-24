@@ -14,11 +14,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  checkIsOpenCodeServerMissingAgentSkills,
   getClaudeAgentPluginFlags,
   getExpectedOpenCodeAgentConfigDir,
   getOpenCodeAgentConfigDir,
   getOpenCodeAgentConfigEnv,
+  getOpenCodeAgentSkillsServerAction,
   openCodeConfigDirEnvName,
   parseOpenCodeServerLaunch,
   prepareOpenCodeAgentConfigDir,
@@ -131,6 +131,17 @@ describe('the OpenCode config folder', () => {
     assert.equal(getExpectedOpenCodeAgentConfigDir({}, dataDir), getOpenCodeAgentConfigDir(dataDir));
   });
 
+  test('a folder that cannot be prepared is no expected folder: no server is replaced for skills it would not get', () => {
+    fs.mkdirSync(path.join(getOpenCodeAgentConfigDir(dataDir), 'skills', 'someone-elses'), { recursive: true });
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      assert.equal(getExpectedOpenCodeAgentConfigDir({}, dataDir), null);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test('a relative DATA_DIR names the same absolute folder the server is started with', () => {
     assert.equal(getOpenCodeAgentConfigDir('relative-data'), path.join(process.cwd(), 'relative-data', 'opencode-config'));
   });
@@ -151,12 +162,16 @@ describe('reading a running server\'s launch', () => {
     }
   });
 
-  test('missing the skills: only an identified server started without the expected folder, and only when the bot offers one', () => {
+  test('the boot step replaces only an opencode serve the bot owns, started without the folder it now offers', () => {
     const expected = '/data/charness/opencode-config';
-    assert.equal(checkIsOpenCodeServerMissingAgentSkills({ kind: 'openCodeServe', configDir: null }, expected), true);
-    assert.equal(checkIsOpenCodeServerMissingAgentSkills({ kind: 'openCodeServe', configDir: '/old' }, expected), true);
-    assert.equal(checkIsOpenCodeServerMissingAgentSkills({ kind: 'openCodeServe', configDir: expected }, expected), false);
-    assert.equal(checkIsOpenCodeServerMissingAgentSkills({ kind: 'unknown' }, expected), false);
-    assert.equal(checkIsOpenCodeServerMissingAgentSkills({ kind: 'openCodeServe', configDir: null }, null), false);
+    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), expected), 'replace');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started('/old'), expected), 'replace');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(expected), expected), 'none');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null, false), expected), 'skipNotOwned', 'D5: never a server the bot does not own');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(expected, false), expected), 'none', 'it already offers them');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, expected), 'skipUnidentified');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), null), 'none', 'the bot offers no folder');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, null), 'none');
   });
 });

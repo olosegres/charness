@@ -11,8 +11,8 @@ asks whether the process is alive never fires on a hung worker. Its alert pins s
 fires it too. A user or project skill of the same kind stays as it is, a Claude
 Code older than 2.0.25 (which has no `--plugin-dir`) starts without them, the operator's own sessions outside the bot do not
 get these skills, and an `OPENCODE_CONFIG_DIR` the operator set is kept (its
-OpenCode topics then go without them). An OpenCode server started by an earlier version is replaced at the bot's next start
-once nothing works in it.
+OpenCode topics then go without them). An OpenCode server the bot runs that an earlier version started is replaced at the bot's
+next start once nothing works in it; a server the bot does not own is left as it is.
 
 **A `/claude` sent right after `/quit` no longer loses its new session at start.** The ended session killed its tmux session a
 second time, by name and without waiting, after the stop had killed it already; on a busy host that second kill could run once

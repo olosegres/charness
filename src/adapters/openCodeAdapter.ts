@@ -49,8 +49,8 @@ import {
   installOpenCodeCompactPlugin,
 } from '../utils/openCodeCompactPlugin';
 import {
-  checkIsOpenCodeServerMissingAgentSkills,
   getExpectedOpenCodeAgentConfigDir,
+  getOpenCodeAgentSkillsServerAction,
   type OpenCodeServerLaunchReading,
 } from '../utils/agentPlugin';
 import {
@@ -1759,6 +1759,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * tests can fail attempts and shrink the pauses — production never changes them.
    */
   private serverRestartOps: OpenCodeServerRestartOps = defaultOpenCodeServerRestartOps;
+  /** The skills boot step said once why it leaves the running server alone (`activateAgentSkillsForServer`). */
+  private isAgentSkillsSkipAnnounced = false;
   private serverRestartRetryDelaysMs: readonly number[] = openCodeServerRestartRetryDelaysMs;
   private serverRestartRetryBudgetMs = openCodeServerRestartRetryBudgetMs;
 
@@ -3675,13 +3677,24 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Boot step for the skills the bot gives its agents (`utils/agentPlugin.ts`). OpenCode reads its
    * `OPENCODE_CONFIG_DIR` once, at start, so a server started without the bot's folder — by an older bot, adopted ever
    * since — never offers them. Such a server is replaced through the controlled restart that restores the sessions,
-   * but only when it is known to be an `opencode serve` (never a listener the bot cannot identify) and no session is
-   * working: a busy directory, or a status it cannot read, leaves it for the next boot. Best-effort, never rejects.
+   * but only when the bot owns it (its process record) AND `/proc` shows it is an `opencode … serve` (a server the bot
+   * does not own, or a listener it cannot identify, is left as is — one log line per process), the folder it would get is
+   * ready, and no session is working: a busy directory, or a status it cannot read, leaves it for the next boot.
+   * Best-effort, never rejects.
    */
   async activateAgentSkillsForServer(): Promise<void> {
     try {
       const expectedConfigDir = getExpectedOpenCodeAgentConfigDir(process.env, resolveDataDir());
-      if (!checkIsOpenCodeServerMissingAgentSkills(this.serverRestartOps.readServerLaunch(), expectedConfigDir)) return;
+      const action = getOpenCodeAgentSkillsServerAction(this.serverRestartOps.readServerLaunch(), expectedConfigDir);
+      if (action === 'skipNotOwned' || action === 'skipUnidentified') {
+        if (!this.isAgentSkillsSkipAnnounced) {
+          this.isAgentSkillsSkipAnnounced = true;
+          const reason = action === 'skipNotOwned' ? 'is not owned by the bot' : 'cannot be identified as `opencode serve`';
+          console.log(`[OpenCode] the server ${reason}; it is left as is, and offers the bot's skills only if it was started with them`);
+        }
+        return;
+      }
+      if (action === 'none') return;
       if (!(await this.checkIsEveryActiveSessionIdle())) {
         console.log(`[OpenCode] the server was started without the bot's skills; a session is working, the next boot retries`);
         return;

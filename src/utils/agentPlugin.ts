@@ -139,16 +139,21 @@ export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: strin
  * @name OpenCodeServerLaunchReading
  * @description What the bot can read about the running OpenCode server's launch: `unknown` — the listener is not a
  * process it can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`); otherwise the
- * `OPENCODE_CONFIG_DIR` it was started with (null: none).
+ * `OPENCODE_CONFIG_DIR` it was started with (null: none) and whether the bot owns it (its process record).
  */
-export type OpenCodeServerLaunchReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null };
+export type OpenCodeServerLaunchReading =
+  | { kind: 'unknown' }
+  | { kind: 'openCodeServe'; configDir: string | null; isOwnedByBot: boolean };
+
+/** @description What the `/proc` entries of a server's process say, before the bot's own record of who started it. */
+export type OpenCodeServeProcessReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null };
 
 const openCodeServeCommand = 'serve';
 const openCodeExecutableNamePrefix = 'opencode';
 const procEntrySeparator = '\0';
 
 /** @description Read a server's launch from its `/proc/<pid>/cmdline` and `/proc/<pid>/environ` contents. */
-export function parseOpenCodeServerLaunch(cmdline: string, environ: string): OpenCodeServerLaunchReading {
+export function parseOpenCodeServerLaunch(cmdline: string, environ: string): OpenCodeServeProcessReading {
   const argv = cmdline.split(procEntrySeparator).filter(Boolean);
   const isOpenCodeServe = path.basename(argv[0] ?? '').startsWith(openCodeExecutableNamePrefix) && argv.includes(openCodeServeCommand);
   if (!isOpenCodeServe) return { kind: 'unknown' };
@@ -158,15 +163,28 @@ export function parseOpenCodeServerLaunch(cmdline: string, environ: string): Ope
 }
 
 /**
- * @description The folder a server must have been started with to offer the bot's skills, or null when the bot offers
- * none (the operator's own `OPENCODE_CONFIG_DIR`, no plugin folder): then no server is ever replaced for them.
+ * @description The folder a server must have been started with to offer the bot's skills — prepared here, so it is
+ * the folder a new server WOULD get — or null when the bot offers none: the operator's own `OPENCODE_CONFIG_DIR`, no
+ * plugin folder, or a folder that cannot be prepared. Then no server is ever replaced for the skills: its replacement
+ * would come up without them too, and the next boot would replace it again.
  */
 export function getExpectedOpenCodeAgentConfigDir(env: NodeJS.ProcessEnv, dataDir: string): string | null {
-  if (env[openCodeConfigDirEnvName] || resolveAgentPluginDir() === null) return null;
-  return getOpenCodeAgentConfigDir(dataDir);
+  if (env[openCodeConfigDirEnvName]) return null;
+  return prepareOpenCodeAgentConfigDir(dataDir);
 }
 
-/** @description Whether the running server is an `opencode serve` started without the folder the bot now offers. */
-export function checkIsOpenCodeServerMissingAgentSkills(reading: OpenCodeServerLaunchReading, expectedConfigDir: string | null): boolean {
-  return expectedConfigDir !== null && reading.kind === 'openCodeServe' && reading.configDir !== expectedConfigDir;
+/**
+ * @name OpenCodeAgentSkillsServerAction
+ * @description What the boot step does about the running server: nothing (it offers the skills, or the bot offers
+ * none); replace it (an `opencode serve` the bot owns, started without the folder); or leave it and say why — a server
+ * the bot does not own (locked decision D5: never touched), or a listener it cannot identify.
+ */
+export type OpenCodeAgentSkillsServerAction = 'none' | 'replace' | 'skipNotOwned' | 'skipUnidentified';
+
+/** @description Decide the boot step's action from the server's launch and the folder the bot now offers. */
+export function getOpenCodeAgentSkillsServerAction(reading: OpenCodeServerLaunchReading, expectedConfigDir: string | null): OpenCodeAgentSkillsServerAction {
+  if (expectedConfigDir === null) return 'none';
+  if (reading.kind === 'unknown') return 'skipUnidentified';
+  if (reading.configDir === expectedConfigDir) return 'none';
+  return reading.isOwnedByBot ? 'replace' : 'skipNotOwned';
 }

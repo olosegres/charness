@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
-import { getOpenCodeAgentConfigEnv, parseOpenCodeServerLaunch, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
+import { getOpenCodeAgentConfigEnv, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
 import {
   hotReloadEnvName,
   openCodeProcessFileEnvName,
@@ -862,18 +862,25 @@ export function checkIsOpenCodeServerStale(runningVersion: string | null, instal
 /**
  * @description How the server listening on `OPENCODE_URL` was launched (`utils/agentPlugin.ts`): read from its
  * `/proc/<pid>` entries, so it is `unknown` off Linux, for a server on another host, and for a listener that is not an
- * `opencode … serve` process — the bot never replaces such a server for its skills.
+ * `opencode … serve` process — the bot never replaces such a server for its skills. `isOwnedByBot`: the bot holds a
+ * process record for the endpoint — the server it spawned, or the loopback listener it adopted on its own port, which
+ * it already stops on a stale version or a credential reload. No record (another host, no ownership file) = not
+ * owned.
  */
 export function readOpenCodeServerLaunch(): OpenCodeServerLaunchReading {
   const serverUrl = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl);
   if (!loopbackHostnames.has(serverUrl.hostname)) return { kind: 'unknown' };
   const pid = getPidListeningOnEndpoint(serverUrl.hostname, getOpenCodePort(serverUrl));
   if (pid === null) return { kind: 'unknown' };
+  let processReading: OpenCodeServeProcessReading;
   try {
-    return parseOpenCodeServerLaunch(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'), fs.readFileSync(`/proc/${pid}/environ`, 'utf8'));
+    processReading = parseOpenCodeServerLaunch(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'), fs.readFileSync(`/proc/${pid}/environ`, 'utf8'));
   } catch {
     return { kind: 'unknown' };
   }
+  if (processReading.kind === 'unknown') return processReading;
+  const isOwnedByBot = checkHasOwnedOpenCodeProcess(serverUrl.origin);
+  return { ...processReading, isOwnedByBot };
 }
 
 /** Find the PID LISTENING on one endpoint (lsof, with an ss fallback). */

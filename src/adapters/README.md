@@ -453,8 +453,9 @@ resumable in the other.
 - **The bot's skills.** The server is started with `OPENCODE_CONFIG_DIR=<DATA_DIR>/opencode-config`, whose `skills`
   links to `agent-plugin/skills` (`utils/agentPlugin.ts`; an operator's own variable is kept). OpenCode reads it once,
   at start, so the boot step `activateAgentSkillsForServer` replaces a server started without it (the controlled
-  restart that restores the sessions) — only when `/proc` shows the listener is an `opencode … serve` process and no
-  session works; any other listener is never touched.
+  restart that restores the sessions) — only when the bot owns it (its process record for the endpoint), `/proc`
+  shows the listener is an `opencode … serve` process, the folder it would get is prepared, and no session works; a
+  server the bot does not own or cannot identify is left as is (one log line).
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own

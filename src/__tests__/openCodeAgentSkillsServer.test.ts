@@ -1,8 +1,9 @@
 /**
- * @description `OpenCodeAdapter.activateAgentSkillsForServer` (bot-shipped skills, D5): an `opencode serve` started
- * without the bot's skills folder is replaced through the controlled restart — only when nothing works in it; a
- * busy session, a busy or unreadable directory status, a listener the bot cannot identify, a server that already has
- * the folder, and an operator's own `OPENCODE_CONFIG_DIR` all leave it alone.
+ * @description `OpenCodeAdapter.activateAgentSkillsForServer` (bot-shipped skills, D5): an `opencode serve` the bot
+ * OWNS, started without its skills folder, is replaced through the controlled restart — only when nothing works in it; a
+ * busy session, a busy or unreadable directory status, a server the bot does not own or a listener it cannot
+ * identify (both said once in the log), a server that already has the folder, a folder that cannot be prepared (its
+ * replacement would lack it too: a restart at every boot) and an operator's own `OPENCODE_CONFIG_DIR` all leave it.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -84,32 +85,56 @@ async function runQuietly(adapter: OpenCodeAdapter): Promise<void> {
 
 describe('activateAgentSkillsForServer', () => {
   it('replaces an idle opencode serve started without the folder (an older bot started it), once, forced', async () => {
-    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null } });
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true } });
     await runQuietly(adapter);
     assert.deepEqual(forcedRestarts, [true]);
   });
 
   it('replaces one started with another folder (DATA_DIR moved)', async () => {
-    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: '/elsewhere/opencode-config' } });
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: '/elsewhere/opencode-config', isOwnedByBot: true } });
     await runQuietly(adapter);
     assert.deepEqual(forcedRestarts, [true]);
   });
 
   it('leaves a server that already has the folder', async () => {
-    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir) } });
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir), isOwnedByBot: true } });
     await runQuietly(adapter);
     assert.deepEqual(forcedRestarts, []);
   });
 
-  it('never touches a listener it cannot identify as opencode serve', async () => {
-    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'unknown' } });
-    await runQuietly(adapter);
+  it('never touches a server the bot does not own, nor a listener it cannot identify — and says so once per process', async () => {
+    for (const launch of [{ kind: 'openCodeServe', configDir: null, isOwnedByBot: false }, { kind: 'unknown' }] as const) {
+      const { adapter, forcedRestarts } = createAdapter({ launch });
+      const lines: string[] = [];
+      const originalLog = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        await adapter.activateAgentSkillsForServer();
+        await adapter.activateAgentSkillsForServer();
+      } finally {
+        console.log = originalLog;
+      }
+      assert.deepEqual(forcedRestarts, [], launch.kind);
+      assert.equal(lines.filter((line) => line.includes('it is left as is')).length, 1, `one line: ${JSON.stringify(lines)}`);
+    }
+  });
+
+  it('never replaces a server when the folder it would get cannot be prepared — the new one would lack the skills too', async () => {
+    fs.mkdirSync(path.join(getOpenCodeAgentConfigDir(dataDir), 'skills'), { recursive: true });
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true } });
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      await runQuietly(adapter);
+    } finally {
+      console.warn = originalWarn;
+    }
     assert.deepEqual(forcedRestarts, []);
   });
 
   it('waits for the next boot while a session works — by the adapter\'s view or by the directory status, or when the status cannot be read', async () => {
     for (const options of [{ isSessionBusy: true }, { status: busyStatus }, { status: 'not a status map' }]) {
-      const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null }, ...options });
+      const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true }, ...options });
       await runQuietly(adapter);
       assert.deepEqual(forcedRestarts, [], JSON.stringify(options));
     }
@@ -117,7 +142,7 @@ describe('activateAgentSkillsForServer', () => {
 
   it('never replaces a server for an operator who set OPENCODE_CONFIG_DIR', async () => {
     process.env[openCodeConfigDirEnvName] = '/operator/own';
-    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: '/operator/own-old' } });
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: '/operator/own-old', isOwnedByBot: true } });
     await runQuietly(adapter);
     assert.deepEqual(forcedRestarts, []);
   });
