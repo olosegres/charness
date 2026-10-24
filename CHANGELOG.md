@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.6.0 — 2026-10-24
+
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
 ends with its own work pending — it crashed, it was gone after a restart, `/model`, `/effort` or an account change
 restarted it (cutting off its turn too), or a task nobody heard from for 6 h was let go — the topic gets one plain line
