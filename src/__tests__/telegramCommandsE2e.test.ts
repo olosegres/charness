@@ -19,8 +19,8 @@
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
  *   → `/limits_autoswitch` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
- *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it — and so is including
- *     such a rung again, while a rung of a backend already in the list goes in at once
+ *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it (a stale Continue, a rung of
+ *     a backend already in the list, a left-out rung included again: `fallbackChainCommand.test.ts`)
  *   → `/update`: the status of the bot's own updates — in a topic without buttons ("Change it in General"), in General with the controls;
  *     a tap and the typed forms write `autoUpdate` / `whatsNew` into `settings.json` beside the env file and re-render, a hand edit
  *     shows on the next render, `/version` names the version (the updates themselves: `selfUpdate*E2e.test.ts`)
@@ -539,7 +539,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
   });
 
-  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it; a rung of a backend already there goes in at once; including a left-out rung of a new backend asks again', async () => {
+  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it', async () => {
     // No OpenCode catalog here to add from, so the list starts with the OpenCode rung the state holds and the other
     // backend is a second Claude account, signed in.
     createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: limitsAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
@@ -583,35 +583,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await getCharness().waitFor('the rung in state.json', replyTimeoutMs, () => readChain().length === 2);
     assert.deepEqual(readChain()[1], { backend: 'claude', profile: limitsAccount, model: null });
     await topic.waitForMessageText('the list re-rendered', screen, (text) => text.includes('Runs on:'));
-    assert.equal(await topic.tapAndAwaitAnswer(screen, continueData), 'The list changed since this keyboard was posted — it is re-rendered.', 'a Continue tap from before the change adds nothing');
-    assert.equal(readChain().length, 2);
-
-    // A rung of a backend the list already has goes in at once: no question.
-    await askToAddAccount(new RegExp(`^fbk_addcm_${limitsAccount}_(?!-$)[a-z0-9._-]+$`));
-    await getCharness().waitFor('the second Claude rung in state.json', replyTimeoutMs, () => readChain().length === 3);
-    assert.ok(!screen.text.includes(handoverNote), 'no question for a backend already in the list');
-    assert.equal(readChain()[2].backend, 'claude');
-
-    // Leave the OpenCode rung out, then include it again: Claude is the only backend left in automatic switching, so OpenCode is new.
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the OpenCode rung', /^fbk_op_0_[0-9a-f]{8}$/));
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the rung\'s detail view', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await getCharness().waitFor('the OpenCode rung left out', replyTimeoutMs, () => readChain()[0].disabled === true);
-    await topic.waitForMessageText('the detail view of the left-out rung', screen, (text) => text.includes('Left out of automatic switching'));
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the include button', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await topic.waitForMessageText('the question', screen, (text) => text.startsWith('➕ Include'));
-    assert.equal(screen.text, `➕ Include OpenCode · openai/gpt-5 in automatic switching?\n${handoverNote}`);
-    assert.deepEqual(topic.getKeyboardLabels(screen), [['✅ Continue', '✖️ Cancel']]);
-    assert.match(topic.getKeyboardData(screen)[0][0], /^fbk_tgok_0_[0-9a-f]{8}$/);
-    assert.match(topic.getKeyboardData(screen)[0][1], /^fbk_op_0_[0-9a-f]{8}$/, 'Cancel returns to the rung\'s detail view');
-    assert.equal(readChain()[0].disabled, true, 'still left out before the answer');
-    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][1]);
-    await topic.waitForMessageText('the detail view', screen, (text) => text.includes('Left out of automatic switching'));
-    assert.equal(readChain()[0].disabled, true, 'Cancel changed nothing');
-
-    await topic.tapAndAwaitAnswer(screen, await waitForButton('the detail view of the left-out rung', /^fbk_tg_0_[0-9a-f]{8}$/));
-    await topic.waitForMessageText('the question again', screen, (text) => text.startsWith('➕ Include'));
-    await topic.tapAndAwaitAnswer(screen, topic.getKeyboardData(screen)[0][0]);
-    await getCharness().waitFor('the OpenCode rung included again', replyTimeoutMs, () => readChain()[0].disabled !== true);
+    // The branches after it — a stale Continue, a rung of a backend already in the list, a left-out rung included
+    // again — are the command's own logic over the same callback data: fallbackChainCommand.test.ts.
 
     await topic.sendAndAwaitReply('/limits clear', 'The list of fallback models is empty now.');
     assert.deepEqual(readChain(), []);
