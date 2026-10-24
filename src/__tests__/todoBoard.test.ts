@@ -253,10 +253,12 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
   let clockMs: number;
   let project: TodoProject | null;
   const activities = new Map<string, TodoSessionActivity>();
+  let boardShownKeys: string[] = [];
   beforeEach(() => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-board-'));
     clockMs = nowMs;
     project = { name: 'charness', memberKeys: [keyToString(topicA), keyToString(topicB), keyToString(issue1)] };
+    boardShownKeys = [];
   });
   afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
@@ -270,7 +272,7 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
       getSessionActivity: (conversationKey) => activities.get(conversationKey) ?? 'idle',
       getNowMs: () => clockMs,
     });
-    return { registry, board, tools: createTodoTools({ registry, board }) };
+    return { registry, board, tools: createTodoTools({ registry, board, onBoardShown: (key) => boardShownKeys.push(keyToString(key)) }) };
   }
 
   it('a fresh context gets the whole board and its own list; then only what changed; nothing when nothing did', async () => {
@@ -320,6 +322,7 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     assert.match(whole.ok ? whole.message : '', /^\[Project board · charness · 1 other topic\]\n#222/);
     const refused = await tools.update(topicA, { items: [{ id: 't9' }] });
     assert.equal(refused.ok, false, 'a refusal carries no board');
+    assert.deepEqual(boardShownKeys, [keyToString(topicA), keyToString(topicA), keyToString(topicA)], 'every result that showed the board withdraws a waiting inbox; a refusal none');
   });
 });
 

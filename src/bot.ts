@@ -1251,7 +1251,7 @@ function getTodoMidTurn(): TodoMidTurn {
 let todoTools: TodoTools | null = null;
 
 function getTodoTools(): TodoTools {
-  todoTools ??= createTodoTools({ registry: getTodoRegistry(), board: getTodoBoard() });
+  todoTools ??= createTodoTools({ registry: getTodoRegistry(), board: getTodoBoard(), onBoardShown: discardTodoInbox });
   return todoTools;
 }
 
