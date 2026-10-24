@@ -561,6 +561,12 @@ export function resolveTargetThreadKey(
 
 // ─── tool input schemas + spec building ──────────────────────────────
 
+/** The optional target thread every topic-scoped tool takes (a `dir:` scope with several bound threads needs it). */
+const threadKeyArgSchema = z
+  .string()
+  .optional()
+  .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.');
+
 const scheduleCreateShape = {
   name: z.string().min(1).max(maxNameLength).describe('Short human name for the job (shown in announcements/lists).'),
   cron: z
@@ -626,25 +632,16 @@ const scheduleCreateShape = {
     .boolean()
     .optional()
     .describe('Pin the fire announcement silently (no member notification). Default false = notify all.'),
-  threadKey: z
-    .string()
-    .optional()
-    .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.'),
+  threadKey: threadKeyArgSchema,
 };
 
 const scheduleListShape = {
-  threadKey: z
-    .string()
-    .optional()
-    .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.'),
+  threadKey: threadKeyArgSchema,
 };
 
 const scheduleCancelShape = {
   id: z.string().min(1).describe('The schedule id to cancel (from schedule_list).'),
-  threadKey: z
-    .string()
-    .optional()
-    .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.'),
+  threadKey: threadKeyArgSchema,
 };
 
 /**
@@ -692,10 +689,7 @@ const sendFileShape = {
     .describe(
       'Explicitly force sendDocument (original quality, no inline preview), including for MP4s that use sendVideo by default.',
     ),
-  threadKey: z
-    .string()
-    .optional()
-    .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.'),
+  threadKey: threadKeyArgSchema,
 };
 
 /**
@@ -752,10 +746,7 @@ const sendMessageShape = {
         'per headline). Do NOT also print the same content as your normal reply, or it posts twice. Text supports ' +
         'the usual markdown (links, bold); an over-long text item is split automatically.',
     ),
-  threadKey: z
-    .string()
-    .optional()
-    .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.'),
+  threadKey: threadKeyArgSchema,
 };
 
 /**
@@ -1200,11 +1191,6 @@ const todoItemPatchSchema = z.object({
     .describe('A tracker key / id / link the item stands for, e.g. the bug ticket you just created. An empty ref removes it.'),
   position: z.enum(todoPositions).optional().describe('Put the item first or last among the open ones (a new item goes last by default).'),
 });
-
-const threadKeyArgSchema = z
-  .string()
-  .optional()
-  .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.');
 
 const todoUpdateShape = {
   items: z
