@@ -346,6 +346,16 @@ export function getTmuxSocketDir(dir: string): string {
   return path.join(dir, `tmux-${process.getuid?.() ?? 0}`);
 }
 
+/**
+ * @description The names of the tmux servers under a TMUX_TMPDIR — its sockets, not every entry of the folder: a client
+ * that starts a server first takes `<socket>.lock`, the new server removes it once it listens, and a client that lost
+ * that race to another one (a burst of `new-session`s on a busy host) leaves a fresh one beside the live socket. The
+ * lock is a regular file, never a server.
+ */
+export function listTmuxServerSocketNames(tmuxTmpDir: string): string[] {
+  return fs.readdirSync(getTmuxSocketDir(tmuxTmpDir), { withFileTypes: true }).filter((entry) => entry.isSocket()).map((entry) => entry.name);
+}
+
 /** Lines another process may still be appending to: only those already ended by a newline are read. */
 export function readJsonLines<TRecord>(filePath: string): TRecord[] {
   if (!fs.existsSync(filePath)) return [];

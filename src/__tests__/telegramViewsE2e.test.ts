@@ -56,10 +56,10 @@ import {
   getInstanceEnvNames,
   getProcessEnvNames,
   getTmuxEnv,
-  getTmuxSocketDir,
   holdPort,
   IsolatedCharness,
   isolatedLaunchEnvNames,
+  listTmuxServerSocketNames,
   listTmuxSessions,
   readClosedRequests as readClosedRequestsOf,
   readJsonLines,
@@ -591,7 +591,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
     const instance = getLayout();
     // A call without `-L` would have started (or reached) a `default` server beside the named one.
-    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(instance.tmuxTmpDir)), [instance.tmuxSocketName], 'one tmux server, the named one');
+    assert.deepEqual(listTmuxServerSocketNames(instance.tmuxTmpDir), [instance.tmuxSocketName], 'one tmux server, the named one');
     const instanceSessions = new Set(listTmuxSessions(['-L', instance.tmuxSocketName], getTmuxEnv(instance.tmuxTmpDir)));
     assert.ok(instanceSessions.size > 0, 'the agent runs on the private server');
     const defaultSessionsNow = listTmuxSessions([]);

@@ -28,9 +28,9 @@ import {
   getInstanceEnvNames,
   getProcessEnvNames,
   getTmuxEnv,
-  getTmuxSocketDir,
   IsolatedCharness,
   isolatedLaunchEnvNames,
+  listTmuxServerSocketNames,
   listTmuxSessions,
   readClosedRequests as readClosedRequestsOf,
   readJsonLines,
@@ -460,7 +460,7 @@ export function itHoldsTheInstanceInvariants(): void {
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
     // A call without `-L` would have started (or reached) a `default` server beside it.
     const instance = getLayout();
-    assert.deepEqual(fs.readdirSync(getTmuxSocketDir(instance.tmuxTmpDir)), [instance.tmuxSocketName], 'one tmux server, the named one');
+    assert.deepEqual(listTmuxServerSocketNames(instance.tmuxTmpDir), [instance.tmuxSocketName], 'one tmux server, the named one');
     const instanceSessions = new Set(listTmuxSessions(['-L', instance.tmuxSocketName], getInstanceTmuxEnv()));
     assert.ok(instanceSessions.size > 0);
     const defaultSessionsNow = listTmuxSessions([]);
