@@ -14,7 +14,8 @@
  *     reached" notice (the reset used to be read against the boot time — tomorrow's 10:20am — and the topic was
  *     told it waits a day for a limit that had already reset); it resumes at once, says so, and the agent takes the
  *     "continue" nudge
- *   → a LIVE limit error is announced whatever its reset says, a reset already past included
+ *   → a LIVE limit error is announced whatever its reset says, a reset already past included (and, the window
+ *     being over, the work resumes at once)
  *   → a reset in a NAMED zone (`resets 2:10pm (Europe/Moscow)`, the way Claude Code writes it) is read in that zone:
  *     the notice names it in the instance zone, not the Moscow clock as if it were local
  *   → a weekly reset written with its date (`resets Oct 25, 3pm (Europe/Moscow)`) is waited for until that date —
@@ -60,7 +61,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance, type PersistedState } from './e2e/fallbackFlowKit';
 import { fakeClaudeAlwaysUsageLimitFileName, fakeClaudeApiErrorDelayFileName, fakeClaudeApiErrorOnceFileName, getFakeClaudeTranscriptPath } from './jiraE2e/fakeClaudeContract';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
@@ -103,6 +104,8 @@ const weeklyResetAheadMs = 3 * 24 * 60 * 60 * 1000;
 const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
 const recoveryLogLine = 're-arming a limit wait left over from before the restart';
+/** The adopt line of the json-stream adapter: where the adopted bot starts reading the stdout log, and how long the log is. */
+const adoptLogLineRegex = /\[ClaudeJson\] adopt: re-attaching to \S+ in \S+ \(pid=\d+, tail=(\d+)\/(\d+)\)/;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -134,10 +137,6 @@ function formatUtcResetClock(atMs: number): string {
   return `${hour12}:${minutes}${hour < hoursPerHalfDay ? 'am' : 'pm'} (UTC)`;
 }
 
-/**
- * Every limit notice the bot SENT to the topic — read off the Bot API calls, not the topic's current messages: a
- * notice the resume removes again a moment later still reached the user as a notification.
- */
 /**
  * Move the transcript's API-error entry back to `writtenAt`: the moment the error happened, which the stdout log's
  * mtime no longer tells once later frames were appended.
@@ -174,12 +173,42 @@ function formatUtcNoticeClock(atMs: number, nowMs: number): string {
   return isToday ? at.slice(11, 16) : `${at.slice(0, 10)} ${at.slice(11, 16)}`;
 }
 
+/**
+ * Every limit notice the bot SENT to the topic — read off the Bot API calls, not the topic's current messages: a
+ * notice the resume removes again a moment later still reached the user as a notification.
+ */
 function listSentLimitNotices(): string[] {
   return fakeTelegram
     .listCalls('sendMessage')
     .filter((call) => call.payload.message_thread_id === topicThreadId)
     .map((call) => (typeof call.payload.text === 'string' ? call.payload.text : ''))
     .filter((text) => text.startsWith(limitNoticeMark));
+}
+
+/**
+ * Whether the bot has recorded the topic's whole stdout log as handled. The offset moves past a turn's text only once
+ * its 350 ms batch is out, so a restart right after a turn lands inside that window: the adopted bot then replays the
+ * turn from the older offset — by design, so no text is lost — and with it the turn's limit error, a second episode
+ * that is announced or armed a poll later and races whatever the flow does next.
+ */
+function checkIsStdoutLogHandled(): boolean {
+  const key = makeTelegramKey(group.id, topicThreadId);
+  const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, key));
+  const logSizeBytes = fs.existsSync(stdoutFile) ? fs.statSync(stdoutFile).size : 0;
+  return (readPersistedState(getLayout()).agents?.[keyToString(key)]?.jsonStreamTail?.offsetBytes ?? 0) >= logSizeBytes;
+}
+
+/**
+ * Restart the instance once nothing of the previous bot's log is left to replay (see {@link checkIsStdoutLogHandled}),
+ * so the recovery under test is the only thing that revisits a finished episode. Not for a restart that is MEANT to
+ * replay a turn in flight.
+ */
+async function restartWithHandledLog(mutatePersisted: (persisted: PersistedState) => void): Promise<IsolatedCharness> {
+  await getCharness().waitFor('the bot to record its whole stdout log as handled', replyTimeoutMs, checkIsStdoutLogHandled);
+  const restarted = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), mutatePersisted);
+  const adoptLine = adoptLogLineRegex.exec(restarted.output);
+  if (adoptLine) assert.equal(adoptLine[1], adoptLine[2], 'the adopted bot starts its tail at the end of the log: nothing of an earlier turn is replayed');
+  return restarted;
 }
 
 describe('The boot recovery of a parked usage limit end to end: built charness, fake Bot API, fake claude', () => {
@@ -247,7 +276,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const sessionId = readPersistedState(getLayout()).agents?.[keyToString(key)]?.claudeSessionId ?? '';
     assert.ok(sessionId, 'the topic ran a Claude conversation');
     const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, topicFolder), sessionId });
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+    charness = await restartWithHandledLog((persisted) => {
       // The wait the live bot armed is gone — the case the recovery exists for — and the error is an hour old, while
       // the stdout log was written to just now (after the reset): its mtime would read the reset as tomorrow's.
       delete persisted.apiRetries?.[keyToString(key)];
@@ -264,9 +293,15 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
 
   it('a LIVE limit error is announced even when the reset it names is already past (only a recovered episode resumes silently)', async () => {
     const limitNoticesBefore = listSentLimitNotices().length;
+    const turnsBefore = getAllAgentTurns(getLayout()).length;
     const pastResetIso = new Date(Date.now() - resetAgoMs).toISOString();
-    fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-live [fake:usage-limit-once] [limit-resets:${pastResetIso}] again`);
+    const liveRequestId = fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-live [fake:usage-limit-once] [limit-resets:${pastResetIso}] again`);
     await getCharness().waitFor('the live limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
+    // The window is over, so the wait is zero: the work resumes at once, which ends the episode. The step is done only
+    // then — the next one starts from a quiet topic, not beside a resume still on its way.
+    await topic.waitForMessage('the resume notice', (message) => message.message_id > liveRequestId && message.text.includes(resumedNoticeText));
+    await getCharness().waitFor('the agent to take the "continue" nudge', agentStartTimeoutMs, () => getAllAgentTurns(getLayout()).length === turnsBefore + 2);
+    assert.equal(listSentLimitNotices().length - limitNoticesBefore, 1, 'one limit error, one notice');
   });
 
   it('a reset in a named zone is read in that zone: the notice names the instant in the instance zone', async () => {
@@ -276,8 +311,9 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const moscowClock = `${formatMoscowClock(resetAtMs)} (Europe/Moscow)`;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-zone [fake:usage-limit-once] [limit-resets:${moscowClock}] once more`);
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
-    const notice = listSentLimitNotices()[limitNoticesBefore];
-    assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the reset in UTC, got: ${notice}`);
+    const newNotices = listSentLimitNotices().slice(limitNoticesBefore);
+    assert.equal(newNotices.length, 1, `one notice for the one limit error, got: ${newNotices.join(' | ')}`);
+    assert.ok(newNotices[0].includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the reset in UTC, got: ${newNotices[0]}`);
   });
 
   it('a weekly reset written with its date is waited for until that date', async () => {
@@ -286,8 +322,9 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const datedReset = `${formatMoscowDatedReset(resetAtMs)} (Europe/Moscow)`;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-weekly [fake:usage-limit-once] [limit-resets:${datedReset}] the weekly window`);
     await getCharness().waitFor('the limit notice', agentStartTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
-    const notice = listSentLimitNotices()[limitNoticesBefore];
-    assert.ok(notice.includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the dated reset, got: ${notice}`);
+    const newNotices = listSentLimitNotices().slice(limitNoticesBefore);
+    assert.equal(newNotices.length, 1, `one notice for the one limit error, got: ${newNotices.join(' | ')}`);
+    assert.ok(newNotices[0].includes(`(~${formatUtcNoticeClock(resetAtMs, Date.now())})`), `the dated reset, got: ${newNotices[0]}`);
     const key = keyToString(makeTelegramKey(group.id, topicThreadId));
     await getCharness().waitFor('the wait until that date persisted', replyTimeoutMs, () => (readPersistedState(getLayout()).apiRetries?.[key]?.fireAt ?? 0) >= resetAtMs);
   });
@@ -303,7 +340,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const limitNoticesBefore = listSentLimitNotices().length;
     const turnsBefore = getAllAgentTurns(getLayout()).length;
 
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    charness = await restartWithHandledLog(() => {});
 
     // The boot recovery runs before the bot starts polling, which the restart already waited for.
     assert.equal(getCharness().output.includes(recoveryLogLine), false, 'the dismissed wait is not re-armed');
@@ -328,7 +365,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     assert.equal(readPersistedState(getLayout()).apiRetries?.[key], undefined, 'nothing armed after the give-up');
     const turnsBefore = getAllAgentTurns(getLayout()).length;
 
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    charness = await restartWithHandledLog(() => {});
 
     assert.equal(getCharness().output.includes(recoveryLogLine), false, 'the given-up wait is not re-armed');
     assert.ok(getCharness().output.includes(`[limitRecovery] ${key}: skipped (alreadyHandled)`), 'the episode is known as handled');
@@ -338,7 +375,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
   it('the unconfirmed Anthropic wording with the account\'s session window read at 100 %: the wait is announced at once', async () => {
     const limitNoticesBefore = listSentLimitNotices().length;
     const sessionResetsAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+    charness = await restartWithHandledLog((persisted) => {
       persisted.claudeProfiles = {
         ...persisted.claudeProfiles,
         default: {
@@ -363,7 +400,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const key = keyToString(makeTelegramKey(group.id, topicThreadId));
     const limitNoticesBefore = listSentLimitNotices().length;
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+    charness = await restartWithHandledLog((persisted) => {
       // The wait the step before armed is gone, and so is the limit mark it set on the account; the reading still says
       // 100 %, but of a window that reset 10 minutes ago. The boot recovery hands the parked error — the same
       // unconfirmed wording — to the same decision.
@@ -392,7 +429,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
   it('the unconfirmed wording with a 100 % window still ahead, but in a STALE snapshot: the probe, not the wait', async () => {
     const key = keyToString(makeTelegramKey(group.id, topicThreadId));
     const limitNoticesBefore = listSentLimitNotices().length;
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+    charness = await restartWithHandledLog((persisted) => {
       delete persisted.apiRetries?.[key];
       // Neither the previous step's limit mark nor its "signed out" (which keeps the refresher away): this snapshot must be re-polled.
       const { limitedUntil: _settledMark, loggedIn: _signedOut, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
@@ -426,7 +463,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
     // The probe's "continue" turn hits the wording again.
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    charness = await restartWithHandledLog(() => {});
 
     await getCharness().waitFor('the limit notice after the restored probe\'s resume', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore);
     assert.ok(getCharness().output.includes('it came again after the probe'), 'confirmed by the repeat');
@@ -441,7 +478,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     // The probe's "continue" turn takes the wording again, and only after the restart below.
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), unconfirmedError);
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), resumeTurnErrorDelayMs.toString());
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+    charness = await restartWithHandledLog((persisted) => {
       // The wait the step before confirmed is gone, and so is the account's limit mark: the boot recovery hands its
       // parked error — the unconfirmed wording — to the probe again.
       delete persisted.apiRetries?.[key];
@@ -458,6 +495,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
 
     const limitNoticesBefore = listSentLimitNotices().length;
     const callsBeforeRestart = fakeTelegram.listCalls('sendMessage').length;
+    // Not `restartWithHandledLog`: the resume turn is in flight, and the adopted bot replaying it is what this step is about.
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
     await getCharness().waitFor('the resume turn\'s error to be decided', probeResumeTimeoutMs, () => listSentLimitNotices().length > limitNoticesBefore || getCharness().output.includes(probeArmedLogPhrase));
     fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), { force: true });
