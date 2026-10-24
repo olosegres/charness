@@ -81,6 +81,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -133,6 +134,8 @@ const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
 const perTurnOldCliPromptLabels = ['PT-0', 'PT-3'] as const;
 /** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
 const perTurnStopTimeoutMs = 15 * 1000;
+/** A command whose reply is fixed and changes nothing: a barrier — the bot answers it after everything it was doing. */
+const barrierCommand = '/timezone Not/AZone';
 const perTurnAdapterName = 'claude-per-turn';
 /** The last Claude Code version WITHOUT the background-task list: a conversation that ran on it is refused per-turn (L-D10). */
 const belowGateClaudeCodeVersion = '2.1.286';
@@ -1090,10 +1093,15 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       const [turn] = getAgentTurns(perTurnOldCliPromptLabels[0]);
       const sessionId = getLaunchSessionId(getSessionLaunchOf(turn.pid)?.argv ?? []);
       await getCharness().waitFor('the old CLI version known to the bot', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.jsonStreamTail?.claudeCodeVersion === belowGateClaudeCodeVersion);
-      // The per-turn stop would have taken the process well inside this window on a supported CLI.
-      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
-      assert.ok(checkIsProcessAlive(turn.pid), 'an old CLI is never auto-stopped: the process survives its turn');
       const sinceStart = (): string => getCharness().output.slice(outputBefore);
+      // The turn's usage line is logged in the step that ends the turn, and the per-turn stop is decided right there; a
+      // stop let through logs "stopping" as it starts. A barrier reply after the turn's end: any such line is out by then.
+      const countTurnEnds = (): number => sinceStart().split('\n').filter((line) => line.startsWith(`${claudeJsonStreamUsageLogPrefix}${threadKeyString}:`)).length;
+      const stopStartLine = `[compact-on-idle] ${threadKeyString} stopping the idle process`;
+      await getCharness().waitFor('the old-CLI turn ended', replyTimeoutMs, () => countTurnEnds() >= 1);
+      await topic.sendAndAwaitReply(barrierCommand, 'Not/AZone');
+      assert.ok(!sinceStart().includes(stopStartLine), 'no stop started at the turn\'s end');
+      assert.ok(checkIsProcessAlive(turn.pid), 'an old CLI is never auto-stopped: the process survives its turn');
       assert.ok(!sinceStart().includes(`[compact-on-idle] ${threadKeyString} process stopped`), 'no stop');
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString} is not auto-stopped: Claude Code ${minAutoStopClaudeCodeVersion} or newer is needed`), 'the stop gate said why, once');
 
@@ -1101,6 +1109,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       // ensure, where a refused per-turn pick must stay the pick and run this session without the per-turn stop.
       process.kill(turn.pid, 'SIGKILL');
       await topic.waitForMessage('the session-ended notice', (message) => message.text.includes('session ended'));
+      const turnEndsBeforeResume = countTurnEnds();
       fakeTelegram.pushOperatorMessage(topicThreadId, `${perTurnOldCliPromptLabels[1]} [fake:answer] resumed on the old CLI`);
       await getCharness().waitFor('the prompt to reach a resumed old-version agent', agentStartTimeoutMs, () => getAgentTurns(perTurnOldCliPromptLabels[1]).length === 1);
       const [resumedTurn] = getAgentTurns(perTurnOldCliPromptLabels[1]);
@@ -1108,7 +1117,9 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: per-turn refused — Claude Code ${belowGateClaudeCodeVersion} is below ${minAutoStopClaudeCodeVersion}`));
       assert.ok(sinceStart().includes(`[lifecycle] ${threadKeyString}: the per-turn pick is kept; this session runs without the per-turn stop`));
       assert.equal(readPersistedState().agents?.[threadKeyString]?.name, perTurnAdapterName, 'the per-turn pick is kept — not rewritten to the idle lifecycle');
-      await new Promise<void>((resolve) => setTimeout(resolve, perTurnStopTimeoutMs));
+      await getCharness().waitFor('the resumed turn ended', replyTimeoutMs, () => countTurnEnds() > turnEndsBeforeResume);
+      await topic.sendAndAwaitReply(barrierCommand, 'Not/AZone');
+      assert.ok(!sinceStart().includes(stopStartLine), 'no stop started at the resumed turn\'s end');
       assert.ok(checkIsProcessAlive(resumedTurn.pid), 'the resumed old-CLI process survives its turn too');
 
       await topic.sendAndAwaitReply('/quit', 'stopped');
