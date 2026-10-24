@@ -34,16 +34,17 @@ describe('claudeScheduledJobs', () => {
     assert.equal(getScheduledJobFromLoopWakeupResult('Loop stopped.'), null);
   });
 
-  it('a CronCreate firing takes the oldest one-shot job off and leaves recurring jobs and the wakeup; a loop firing takes the wakeup alone', () => {
-    const jobs = new Map<string, ScheduledJob>([
-      ['r1', { jobId: 'r1', kind: 'recurring' }],
+  it('a CronCreate firing takes the oldest one-shot job off when no recurring job could have fired; beside one it takes nothing off; a loop firing takes the wakeup alone', () => {
+    const oneShotsAndWakeup = new Map<string, ScheduledJob>([
       ['o1', { jobId: 'o1', kind: 'oneShot' }],
       [loopWakeupJobId, { jobId: loopWakeupJobId, kind: 'loopWakeup' }],
       ['o2', { jobId: 'o2', kind: 'oneShot' }],
     ]);
-    assert.deepEqual([...getScheduledJobsAfterFiring(jobs, 'cron').keys()], ['r1', loopWakeupJobId, 'o2']);
-    assert.deepEqual([...getScheduledJobsAfterFiring(jobs, 'loop').keys()], ['r1', 'o1', 'o2'], 'a /loop wakeup never takes a cron job off (its frame says loop_wakeup, probed live)');
-    assert.deepEqual([...jobs.keys()], ['r1', 'o1', loopWakeupJobId, 'o2'], 'the input is not changed');
+    assert.deepEqual([...getScheduledJobsAfterFiring(oneShotsAndWakeup, 'cron').keys()], [loopWakeupJobId, 'o2']);
+    assert.deepEqual([...getScheduledJobsAfterFiring(oneShotsAndWakeup, 'loop').keys()], ['o1', 'o2'], 'a /loop wakeup never takes a cron job off (its frame says loop_wakeup, probed live)');
+    assert.deepEqual([...oneShotsAndWakeup.keys()], ['o1', loopWakeupJobId, 'o2'], 'the input is not changed');
+    const withRecurring = new Map<string, ScheduledJob>([['r1', { jobId: 'r1', kind: 'recurring' }], ['o1', { jobId: 'o1', kind: 'oneShot' }]]);
+    assert.deepEqual([...getScheduledJobsAfterFiring(withRecurring, 'cron').keys()], ['r1', 'o1'], 'either could have fired: a pending one-shot is never taken off');
     const recurringOnly = new Map<string, ScheduledJob>([['r1', { jobId: 'r1', kind: 'recurring' }]]);
     assert.deepEqual([...getScheduledJobsAfterFiring(recurringOnly, 'cron').keys()], ['r1']);
   });

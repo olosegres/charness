@@ -75,6 +75,7 @@ import {
   type PersistedState,
 } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { enDict } from '../i18n/en';
 import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -283,7 +284,8 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const notice = await claudeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}. Switch: /limits`,
+      // The task the move cut off: the operator hears it in the notice, the agent in its first prompt (below).
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}. Switch: /limits\n${enDict['fallback.backgroundStopped']}`,
     );
     await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > 0);
 
@@ -336,6 +338,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     // Back to the parked conversation: its own agent hears about the task its process lost, once.
     const backPrompt = listBridgePrompts(getLayout()).at(-1)?.text ?? '';
     assert.ok(backPrompt.includes(lostWorkNoteStart) && backPrompt.includes(`«${backgroundTaskName}»`), backPrompt);
+    assert.ok(backPrompt.includes('The agent this conversation moved to meanwhile was told about it first'), 'it knows the other backend\'s agent heard it first');
     assert.equal(readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)]?.lostWork, undefined, 'the OpenCode session parked in its turn carries no loss');
     assert.equal(listSwitchNotices(claudeTopic).length, 1, 'going back by hand is not a limit: no limit notice');
     assert.equal(fakeOpenCode.prompts.length, openCodePromptsBefore, 'nothing more reaches OpenCode');

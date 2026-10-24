@@ -60,12 +60,17 @@ export function getScheduledJobFromLoopWakeupResult(output: string): ScheduledJo
 
 /**
  * @description The jobs left after a job of `source` fired. A `ScheduleWakeup` firing takes the wakeup off. A
- * `CronCreate` firing does not name the job, so one one-shot job is taken off — the OLDEST, whichever fired, keeps the
- * count right — and recurring jobs stay; with no one-shot job left, the firing was a recurring job's.
+ * `CronCreate` firing does not name the job: with no recurring job it was a one-shot job's, and one is taken off — the
+ * OLDEST, whichever fired, keeps the count right. With a recurring job beside it the firing could be either, and nothing
+ * is taken off: a one-shot job still counted after it fired only holds the process within the hold, whereas one taken
+ * off while still pending would be lost at a stop without a word.
  */
 export function getScheduledJobsAfterFiring(jobs: ReadonlyMap<string, ScheduledJob>, source: ScheduledWakeupSource): Map<string, ScheduledJob> {
   const remaining = new Map(jobs);
-  const fired = source === 'loop' ? remaining.get(loopWakeupJobId) : [...remaining.values()].find((job) => job.kind === 'oneShot');
+  const isRecurringBeside = [...remaining.values()].some((job) => job.kind === 'recurring');
+  const fired = source === 'loop'
+    ? remaining.get(loopWakeupJobId)
+    : (isRecurringBeside ? undefined : [...remaining.values()].find((job) => job.kind === 'oneShot'));
   if (fired) remaining.delete(fired.jobId);
   return remaining;
 }

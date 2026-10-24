@@ -574,6 +574,11 @@ export interface StateV1 {
    */
   lostWork?: Record<string, LostWorkRecord>;
   /**
+   * When the bot last resumed a conversation with a lost-work note, per {@link SessionKey} string (epoch ms): the loop
+   * guard (`lostWorkResumeCooldownMs`) holds across restarts. Optional — absent when empty.
+   */
+  lostWorkResumedAt?: Record<string, number>;
+  /**
    * Prompts held during an armed usage-limit wait (Jira plan R23), keyed by
    * {@link SessionKey} string, oldest first. Kept apart from `apiRetries`: the
    * wait can end without its resume (the operator writes, skips or disables it,
@@ -665,7 +670,7 @@ const schedulerMcpSecretByteLength = 32;
  * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
  * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
  */
-type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'lostWork' | 'openRequests';
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'lostWork' | 'lostWorkResumedAt' | 'openRequests';
 
 /**
  * @description Promise-chain per-key lock. The map holds the tail of each
@@ -1349,6 +1354,7 @@ export class StateStore {
       // its agent was never told about.
       this.dropParkedSession(k);
       this.dropOptionalMapEntry('lostWork', k);
+      this.dropOptionalMapEntry('lostWorkResumedAt', k);
       this.scheduleSave();
     });
   }
@@ -2661,6 +2667,19 @@ export class StateStore {
   async setLostWork(key: SessionKey, record: LostWorkRecord): Promise<void> {
     await this.withLock(key, async () => {
       (this.state.lostWork ??= {})[keyToString(key)] = record;
+      this.scheduleSave();
+    });
+  }
+
+  /** @description When the bot last resumed `key`'s conversation with a lost-work note ({@link StateV1.lostWorkResumedAt}). */
+  getLostWorkResumedAt(key: SessionKey): number | undefined {
+    return this.state.lostWorkResumedAt?.[keyToString(key)];
+  }
+
+  /** @description Record that the bot resumed `key`'s conversation with a lost-work note at `resumedAt`. Debounced. */
+  async setLostWorkResumedAt(key: SessionKey, resumedAt: number): Promise<void> {
+    await this.withLock(key, async () => {
+      (this.state.lostWorkResumedAt ??= {})[keyToString(key)] = resumedAt;
       this.scheduleSave();
     });
   }

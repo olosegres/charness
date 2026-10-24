@@ -106,6 +106,7 @@ describe('lostWork', () => {
       lostAt: 2_000,
     };
     assert.equal(mergeLostWorkRecords(undefined, newer), newer);
+    assert.equal(mergeLostWorkRecords({ ...record, isOtherAgentTold: true }, newer).isOtherAgentTold, true, 'the parked mark survives a merge');
     assert.deepEqual(mergeLostWorkRecords(record, newer), {
       backgroundTasks: [{ taskId: 'b1', description: 'Watch the test run' }, { taskId: 'b2', description: 'Rerun' }, { taskId: 'b3', description: 'Deploy' }],
       scheduledJobCount: 2,
@@ -127,6 +128,8 @@ describe('lostWork', () => {
     assert.ok(note.endsWith('IN Русский.'), note);
     assert.ok(buildLostWorkNote({ ...record, reason: 'holdExpired' }, 'English').includes('after a long time without a turn'));
     assert.ok(buildLostWorkNote({ ...record, reason: 'switched' }, 'English').includes('(the conversation moved to another backend)'));
+    assert.ok(!note.includes('told about it first'), 'only a parked note says another agent was told');
+    assert.ok(buildLostWorkNote({ ...record, reason: 'switched', isOtherAgentTold: true }, 'English').includes('The agent this conversation moved to meanwhile was told about it first'));
   });
 
   it('the topic line: resumed now, resumed by the next message, or told with the next prompt — the tasks by description, the hold in hours', () => {

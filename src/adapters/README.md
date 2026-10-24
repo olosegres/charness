@@ -94,7 +94,9 @@ Newline-delimited JSON, one object per line, parsed in
   probed live on 2.1.310). The `CronCreate` / `CronDelete` / `ScheduleWakeup` tool
   results name what was scheduled (`utils/claudeScheduledJobs.ts`); the CLI keeps
   such jobs in memory only and never lists them as background tasks. A cancelled
-  `/loop` wakeup's wording is unknown: it is held until the hold runs out.
+  `/loop` wakeup's wording is unknown: it is held until the hold runs out. A cron
+  firing beside a recurring job could be either job's: nothing is taken off then
+  (a fired one-shot job stays counted within the hold, never a pending one lost).
 
 ### Multi-turn — one process per conversation, two lifecycles
 
@@ -194,13 +196,17 @@ reads only what died while the bot was away. The bot (`utils/lostWork.ts`) keeps
 it in `state.json` (`lostWork`) until the agent is told: one plain line in a
 topic, and an automatic resume with the note as its prompt — or the note rides the
 next prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
-automatic resume, a tracker issue, whose agent answers only through a request).
+automatic resume — that stamp is persisted, so a restart keeps it —, a tracker
+issue, whose agent answers only through a request). The line is posted after the
+resume, so it never claims a resume that failed.
 A move that sends its own first prompt folds the note into it, with no line of its
 own: a usage-limit account switch (its notice says the background work stopped;
 decided at the call site — the re-spawn's `started` leaves the loss to the switch)
 and a backend switch, which reads the live process's work (`getPendingWork`)
-before it stops it — the hand-over bridge carries the note, and the parked
-conversation keeps it for its own first prompt back. A release (`/quit`, `/new`)
+before it stops it — the operator gets "background tasks … were stopped" (in the
+limit notice, or one line after a manual hand-over), the hand-over bridge carries
+the note, and the parked conversation keeps it for its own first prompt back,
+marked that the other backend's agent was told first. A release (`/quit`, `/new`)
 drops it with the session ids.
 
 **Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on

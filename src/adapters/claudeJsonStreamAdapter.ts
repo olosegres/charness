@@ -1908,8 +1908,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       console.log(`${claudeJsonStreamUsageLogPrefix}${keyToString(session.key)}: input=${inputTokens} cacheRead=${cacheReadTokens} cacheWrite=${cacheWriteTokens} output=${outputTokens}`);
     }
     session.isBusy = false;
-    // The pending-work hold counts from the agent's own last turn: a bot-issued compaction is not one.
-    if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
+    // The pending-work hold counts from the agent's own last turn: a bot-issued compaction is not one. A task that
+    // finished during the agent's turn was folded into it (the CLI replays its notification into the running turn):
+    // no turn of its own follows, so its announcement ends here too.
+    if (!session.isCompactionResultPending) {
+      session.lastTurnEndedAt = Date.now();
+      session.notificationTurnPendingSince = null;
+    }
     session.isCompactionResultPending = false;
     // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
     // queued behind it, and a count left above zero would make the session look "working" forever — a pending

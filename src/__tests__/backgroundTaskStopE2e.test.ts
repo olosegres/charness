@@ -25,6 +25,8 @@
  *     is resumed with the note
  *   → a usage limit moves the topic to a second account while BG-8's task runs: the switch notice says the background
  *     work stopped, no separate line or resume, and the continue prompt of the new process carries the note
+ *   → `/effort` re-spawns the process while BG-9's task runs: one line, and the conversation is resumed in the new
+ *     process with the note — no "session ended"
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -45,6 +47,7 @@ import {
   fakeNotificationTurnLatencyMs,
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
+  getFlagValues,
   getLaunchSessionId,
   type FakeClaudePrompt,
   type FakeClaudeTurn,
@@ -361,8 +364,12 @@ describe('The agent\'s own background work is never cut off by an automatic stop
   it('a process gone when the bot comes back: one line, and the conversation is resumed with the note', async () => {
     const pid = await startBackgroundTask('BG-6');
     const notesBefore = listLostWorkNotes().length;
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
       process.kill(pid, 'SIGKILL'); // a host reboot or a killed tmux server, while the bot is down
+      // The loop guard survives a restart (BG-3's resume is still inside its 10 minutes); a fresh episode clears it here.
+      const resumedAt = persisted.lostWorkResumedAt;
+      assert.ok(typeof resumedAt === 'object' && resumedAt !== null && typeof (resumedAt as Record<string, unknown>)[topicKey] === 'number', 'the last automatic resume is persisted');
+      delete persisted.lostWorkResumedAt;
     });
     await topic.waitForMessage('the line about the task found gone', (message) => listLostWorkLines('BG-6').includes(message.text));
     const [line] = listLostWorkLines('BG-6');
@@ -379,6 +386,8 @@ describe('The agent\'s own background work is never cut off by an automatic stop
       persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
       // The switch the limit makes by itself (off: it would only offer a button).
       persisted.claudeAutoSwitchOnLimitEnabled = true;
+      // A fresh episode for the steps after this one: BG-6's resume no longer holds the loop guard.
+      delete persisted.lostWorkResumedAt;
     });
     await startBackgroundTask('BG-8');
     const notesBefore = listLostWorkNotes().length;
@@ -399,5 +408,27 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     // Decided at the call site, not by timing: the switch folded the loss; the re-spawn's own lost-work path never ran.
     assert.ok(getCharness().output.includes(`[lost-work] ${topicKey}: the agent's own work ended with the process (restarted); the move's first prompt tells the agent`), 'folded by the switch');
     assert.ok(!getCharness().output.includes(`[lost-work] ${topicKey}: the process ended (restarted)`), 'no separate note or line for the re-spawn');
+  });
+
+  it('`/effort` re-spawns the process while a task runs: one line, the conversation resumed with the note in the new process, no "session ended"', async () => {
+    const pid = await startBackgroundTask('BG-9');
+    const notesBefore = listLostWorkNotes().length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const messagesBefore = topic.listMessages().length;
+    const picker = await topic.sendAndAwaitReply('/effort', 'Effort in this topic');
+    await topic.tapAndAwaitAnswer(picker, 'effort_high');
+    await topic.waitForMessage('the line about the task the re-spawn took', (message) => listLostWorkLines('BG-9').includes(message.text));
+    const [line] = listLostWorkLines('BG-9');
+    assert.ok(line.includes('was restarted for the model, effort or account change') && line.endsWith(resumedLineEnd), line);
+    const respawned = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(respawned.length, 1, 're-spawned once');
+    assert.deepEqual(getFlagValues(respawned[0].argv, '--effort'), ['high'], 'with the picked level');
+    await getCharness().waitFor('the note to reach the re-spawned agent', replyTimeoutMs, () => listLostWorkNotes().length > notesBefore);
+    const notes = listLostWorkNotes().slice(notesBefore);
+    assert.equal(notes.length, 1, 'told once');
+    assert.equal(notes[0].pid, respawned[0].pid, 'by the new process');
+    assert.ok(notes[0].text.includes(`«${getFakeBackgroundTaskDescription('BG-9')}»`) && notes[0].text.includes('(the bot restarted it for a model, effort or account change)'), notes[0].text);
+    assert.ok(!topic.listMessages().slice(messagesBefore).some((message) => message.text.includes('session ended')), 'a re-spawn is not an ended session');
+    assert.ok(!checkIsPidAlive(pid), 'the old process is gone');
   });
 });

@@ -143,22 +143,40 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
       toLine({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } });
     const toolResult = (id: string, text: string): string =>
       toLine({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
-    append(toolUse('t1', 'CronCreate', { cron: '20 11 24 10 *', recurring: false, prompt: 'check' })
-      + toolResult('t1', 'Scheduled one-shot task 59151bd3 (20 11 24 10 *). Next run: Oct 24 11:20am. Session-only (not written to disk, dies when Claude exits). It will fire once then auto-delete.')
-      + toolUse('t2', 'CronCreate', { cron: '17 */3 * * *', recurring: true, prompt: 'check' })
-      + toolResult('t2', 'Scheduled recurring job 99a38c99 (Every 3 hours at :17). Next run: Oct 24 12:47pm. Session-only (not written to disk, dies when Claude exits). Auto-expires after 7 days. Use CronDelete to cancel sooner.')
-      + resultLine);
-    assert.deepEqual([...adapter['sessions'].get(keyToString(key))!.scheduledJobs.keys()], ['59151bd3', '99a38c99']);
-    assert.equal(adapter.checkIsWorking(key), true, 'scheduled jobs hold the process');
+    const jobIds = (): string[] => [...adapter['sessions'].get(keyToString(key))!.scheduledJobs.keys()];
+    const oneShot = (id: string, jobId: string): string => toolUse(id, 'CronCreate', { cron: '20 11 24 10 *', recurring: false, prompt: 'check' })
+      + toolResult(id, `Scheduled one-shot task ${jobId} (20 11 24 10 *). Next run: Oct 24 11:20am. Session-only (not written to disk, dies when Claude exits). It will fire once then auto-delete.`);
+    const cronFiring = (commandId: string): string => toLine({ type: 'command_lifecycle', command_uuid: commandId, state: 'started', wakeup_source: 'schedule_wakeup' });
 
-    // The one-shot job fires: its turn starts with a `command_lifecycle` frame, then the job is gone.
-    append(toLine({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started', wakeup_source: 'schedule_wakeup' }));
+    append(oneShot('t1', '59151bd3') + resultLine);
+    assert.deepEqual(jobIds(), ['59151bd3']);
+    assert.equal(adapter.checkIsWorking(key), true, 'a scheduled job holds the process');
+    // The one-shot job fires: its turn starts with a `command_lifecycle` frame, and the job is gone.
+    append(cronFiring('c1'));
     assert.equal(adapter.checkIsBusy(key), true, 'the fired job\'s turn is a turn');
     append(resultLine);
-    assert.deepEqual([...adapter['sessions'].get(keyToString(key))!.scheduledJobs.keys()], ['99a38c99'], 'the fired one-shot job is gone, the recurring one stays');
+    assert.deepEqual(jobIds(), [], 'the fired one-shot job is gone');
 
-    append(toolUse('t3', 'CronDelete', { id: '99a38c99' }) + toolResult('t3', 'Cancelled job 99a38c99.') + resultLine);
+    // Beside a recurring job a firing could be either job's: nothing is taken off, so a pending one-shot is never lost.
+    append(oneShot('t2', 'a1b2c3d4')
+      + toolUse('t3', 'CronCreate', { cron: '17 */3 * * *', recurring: true, prompt: 'check' })
+      + toolResult('t3', 'Scheduled recurring job 99a38c99 (Every 3 hours at :17). Next run: Oct 24 12:47pm. Session-only (not written to disk, dies when Claude exits). Auto-expires after 7 days. Use CronDelete to cancel sooner.')
+      + resultLine + cronFiring('c2') + resultLine);
+    assert.deepEqual(jobIds(), ['a1b2c3d4', '99a38c99'], 'an ambiguous firing takes nothing off');
+    append(toolUse('t4', 'CronDelete', { id: '99a38c99' }) + toolResult('t4', 'Cancelled job 99a38c99.') + resultLine);
+    assert.deepEqual(jobIds(), ['a1b2c3d4'], 'the one-shot job is still tracked once the recurring one is cancelled');
+    assert.equal(adapter.checkIsWorking(key), true);
+    append(cronFiring('c3') + resultLine);
     assert.equal(adapter['sessions'].get(keyToString(key))!.scheduledJobs.size, 0);
+    assert.equal(adapter.checkIsWorking(key), false);
+  });
+
+  it('a task that finished during the agent\'s turn was folded into it: the turn\'s end ends its announcement (no false "unread result" at a crash)', () => {
+    const { adapter, session, append } = createAdapterWithSession();
+    append(resultLine + backgroundStartedLines + initLine + backgroundFinishedLines);
+    assert.ok(session.notificationTurnPendingSince !== null, 'announced mid-turn');
+    append(resultLine);
+    assert.equal(session.notificationTurnPendingSince, null);
     assert.equal(adapter.checkIsWorking(key), false);
   });
 

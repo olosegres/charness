@@ -4563,9 +4563,14 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   // Work the switch cut off is told twice, once to each agent: the next prompt (the hand-over bridge, the next message)
   // tells the agent the topic moves to, and the parked conversation keeps it for its own agent's first prompt back.
   const cutOffRecord: LostWorkRecord | null = switchCutOffWork ? { ...switchCutOffWork, reason: 'switched', lostAt: Date.now() } : null;
-  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && cutOffRecord ? { ...switched.parked, lostWork: cutOffRecord } : switched.parked);
-  // Back to a parked conversation (its slot cleared): what its agent was never told rides its first prompt now.
-  if (switched.parked === null && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
+  // The parked copy knows the agent the topic moves to hears it first (it may restart some of the work itself).
+  if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && cutOffRecord ? { ...switched.parked, lostWork: { ...cutOffRecord, isOtherAgentTold: true } } : switched.parked);
+  // Back to a parked conversation (its id is the one kept now — the side being left may be parked in the same step):
+  // what its agent was never told rides its first prompt.
+  const isParkedRestored = parkedBefore !== null
+    && ((parkedBefore.claudeSessionId !== undefined && switched.ids.claudeSessionId === parkedBefore.claudeSessionId)
+      || (parkedBefore.opencodeSessionId !== undefined && switched.ids.opencodeSessionId === parkedBefore.opencodeSessionId));
+  if (isParkedRestored && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
   if (cutOffRecord) await foldLostWorkIntoNextPrompt(key, cutOffRecord);
   // The watermark is scoped to its session: it rides along while that session is kept. Every wake of a sleeping
   // conversation passes through here, and the wake reads it as the proof the conversation took a turn.
@@ -7466,7 +7471,7 @@ async function switchTopicToFallbackEntry(
       reason: 'limit',
       resetsAtText: getFallbackResetTime(from),
     });
-    await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null);
+    isStoppingBackground = await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null);
     if (to.backend === 'opencode') {
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
@@ -7499,11 +7504,15 @@ interface FirstPromptAfterMove {
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
  * session, parks its id and brings back the target family's parked one. The context bridge is built BEFORE this, while
- * the adapter being left still runs.
+ * the adapter being left still runs. Resolves whether the stop took background work with it — the caller tells the
+ * operator (the agent is told by the next prompt, `switchThreadAdapter`).
  */
-async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<void> {
+async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<boolean> {
+  const leaving = getThreadAdapter(key);
+  const isStoppingBackground = leaving.checkIsActive(key) && (leaving.checkHasBackgroundWork?.(key) ?? false);
   if (account !== null) await state.setClaudeProfileOverride(key, account);
   await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName);
+  return isStoppingBackground;
 }
 
 /**
@@ -7596,7 +7605,9 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
       userMessage: options.userMessage,
     })
     : null;
-  await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+  const isStoppingBackground = await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+  // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
+  if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
   cancelApiRetry(key); // a wait armed for the backend just left is over
   await resumeTopicOnNewSession(key, {
     modelToPin: getBackendSwitchModelToPin(target),
@@ -11467,9 +11478,6 @@ function handleAgentClosed(key: SessionKey): void {
   updatePinnedStatus(key).catch(() => {});
 }
 
-/** When the bot last resumed a conversation for its lost work, by key — the loop guard (`lostWorkResumeCooldownMs`), per bot life. */
-const lostWorkAutoResumedAt = new Map<string, number>();
-
 const msPerHour = 60 * 60 * 1000;
 
 /** The pending-work hold in force, in hours, as the topic line names it (`utils/jsonStreamPendingWork.ts`; a test instance's shorter one). */
@@ -11513,7 +11521,7 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
   const now = Date.now();
   const record = mergeLostWorkRecords(state.getLostWork(key), { ...lostWork, reason, lostAt: now });
   await state.setLostWork(key, record);
-  const lastAutoResumeAt = lostWorkAutoResumedAt.get(kStr);
+  const lastAutoResumeAt = state.getLostWorkResumedAt(key);
   const plan = getLostWorkPlan({
     reason,
     isLimitWaitArmed: getArmedApiRetry(key)?.kind === 'usageLimit',
@@ -11521,22 +11529,29 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer.
     isRequestRequired: !checkIsTelegramKey(key),
   });
-  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
-  if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, plan, pendingWorkHoldHours, t)).catch(() => {});
-  if (!plan.isAutoResume) return;
-  lostWorkAutoResumedAt.set(kStr, now);
-  await resumeConversationForLostWork(key);
+  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
+  let linePlan = plan;
+  if (plan.isAutoResume) {
+    await state.setLostWorkResumedAt(key, now);
+    // The line says what happened: a resume that failed leaves the note for the next message, and says so.
+    if (!(await resumeConversationForLostWork(key))) linePlan = { isAutoResume: false, isResumedByNextMessage: true };
+  }
+  if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, linePlan, pendingWorkHoldHours, t)).catch(() => {});
 }
 
-/** Resume the conversation with the lost-work note as its prompt; a failed post keeps the note for the next prompt. */
-async function resumeConversationForLostWork(key: SessionKey): Promise<void> {
+/**
+ * @description Resume the conversation with the lost-work note as its prompt; `false` when the post failed — the note
+ * then stays for the next prompt.
+ */
+async function resumeConversationForLostWork(key: SessionKey): Promise<boolean> {
   const record = state.getLostWork(key);
-  if (!record) return;
+  if (!record) return true;
   await state.clearLostWork(key);
   const posted = await postToSession(createLostWorkPostDeps(), keyToString(key), buildLostWorkNote(record, getLocaleEndonym(getActiveLang())));
-  if (posted.ok) return;
+  if (posted.ok) return true;
   console.warn(`[lost-work] ${keyToString(key)}: the resume failed (${posted.reason === 'forward-failed' ? posted.error : posted.reason}); the note rides the next prompt`);
   await state.setLostWork(key, mergeLostWorkRecords(state.getLostWork(key), record));
+  return false;
 }
 
 /** The session post of a lost-work note: a bot note to the agent, not a request — no request is opened for it. */

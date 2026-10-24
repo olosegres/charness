@@ -40,6 +40,11 @@ export type LostWorkReason = 'exited' | 'foundDead' | 'restarted' | 'holdExpired
 export interface LostWorkRecord extends LostWork {
   reason: LostWorkReason;
   lostAt: number;
+  /**
+   * The agent of the backend the conversation moved to was told about the same loss first (a backend switch tells
+   * both agents): the parked conversation's agent checks before it starts anything again.
+   */
+  isOtherAgentTold?: boolean;
 }
 
 /**
@@ -142,6 +147,7 @@ export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string)
   return [
     `[charness] This conversation's agent process ended while its own work was still pending (${lostWorkReasonTexts[record.reason]}): ${describeLostWorkForAgent(record)}.`,
     'That work died with the process: no notification will ever arrive for it.',
+    ...(record.isOtherAgentTold ? ['The agent this conversation moved to meanwhile was told about it first and may have started some of it again: look before you start anything twice.'] : []),
     `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
   ].join('\n');
 }
@@ -161,6 +167,7 @@ export function mergeLostWorkRecords(untold: LostWorkRecord | undefined, newer: 
     wasTurnInFlight: untold.wasTurnInFlight || newer.wasTurnInFlight,
     reason: newer.reason,
     lostAt: newer.lostAt,
+    ...(untold.isOtherAgentTold || newer.isOtherAgentTold ? { isOtherAgentTold: true } : {}),
   };
 }
 
