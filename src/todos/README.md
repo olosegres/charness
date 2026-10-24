@@ -63,3 +63,31 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 - **Settings:** `settings.json` `todo: { isEnabled, reminderMinutes }` (`instanceSettings.ts`), defaults on / 60 min,
   set from `/todo` in General. Off = the tools are not offered (the MCP `todos` port is read per request), no board,
   no reminder, no final-answer hint.
+
+## Projects (`projects.ts`)
+
+- **Automatic by repository** (D15): a topic's bound folder → its git ROOT COMMIT (`git rev-list --max-parents=0`,
+  cached 10 min, a 5 s bound per git call) — the same in every clone and worktree; the project's name is its first
+  member's repository folder name (git's common dir: a worktree or a submodule names its repository, a clone its own
+  folder). A folder that is no checkout is a project of its folder.
+- **Jira** (D57): a conversation's project lists `repos` in `jira.json`; conversations that share a name are one
+  board, and a topic whose repository folder has that name joins it. The name joins the union ONLY when a Jira
+  conversation names it, so unrelated repositories with one folder name never meet. No `repos` → one shared board.
+- **Overrides** (D16): `state.json` `todoProjectOverrides` — `own` or `join` another conversation; a join of a
+  conversation that is no longer bound falls back to automatic. Unbinding takes a topic off every board (the list stays).
+
+## Board (`board.ts`, `tools.ts`)
+
+- What each agent has SEEN is stored with its list (`boardSeen`: each peer's `revision` and when), so sleep, a
+  restart and a hot reload keep it. A fresh context forgets it (`noteFreshContext`, called at the points that clear
+  the thread-context preamble marker — session start, stop, close, `/clear` — and at every completed compaction or
+  lost conversation, `noteConversationContextReset`), so the next prompt carries the whole board and the own list.
+- `takePromptBoard` (at `forwardPromptToAgent`, every turn start the bot makes — the standalone reminder included,
+  never a slash command or a shell line): whole board on a fresh context, else `[Project board — changes since HH:MM]`
+  with the peers whose `revision` moved, else nothing. `todo_update` / `todo_read` (`tools.ts`) answer the own list
+  and the same delta; `todo_read` with `scope: project` the whole board (a larger cap). A peer that never published is
+  left out. A peer change never starts a turn (D21).
+- D18 caps: per peer 5 in work, the first 5 queued (+N), 5 done of the last two local days by date, titles 120
+  characters; the block ≤ 3000 characters, the most recently active peers first, the rest named for `todo_read`.
+- Labels (D55): a topic `#<topic name> (<folder>)`; a Jira peer `<KEY> «<summary>»`, the summary the connector last
+  showed that issue's agent (memory only; `null` = withheld by the trusted group, then the key alone).

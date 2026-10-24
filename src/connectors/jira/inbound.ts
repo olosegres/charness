@@ -6,7 +6,7 @@ import { getMentionedAccountIds } from './adf';
 import { getJiraIssueProjectKey, makeJiraKey } from './sessionKeyCodec';
 import { createMentionTrigger, findNewestTrigger, getIssueTrigger, getRequester, mentionTriggerIdPrefix, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
-import { buildIssueBlocks, checkIsCommentTrusted, type JiraBlockTrust, type JiraExtraField } from './issueBlocks';
+import { buildIssueBlocks, checkIsCommentTrusted, getShownIssueSummary, type JiraBlockTrust, type JiraExtraField } from './issueBlocks';
 import { fetchJiraIssueContext } from './issueContext';
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from './prompt';
 import { getIssueDelta } from './issueDelta';
@@ -142,6 +142,8 @@ export interface JiraInboundDeps {
   contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild'>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
   parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
+  /** The summary a request's prompt shows of its issue — `null` when withheld (D55: the todo boards name the issue by it). */
+  noteShownSummary?: (issueKey: string, summary: string | null) => void;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice and the hand-back (the answer side). */
   refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
   /** A mention over the run budget: the park notice, no hand-back (the answer side). */
@@ -423,6 +425,7 @@ export class JiraInbound {
       allowlistedProjectKeys: new Set(deps.projects.keys()),
     };
     const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId, blockTrust);
+    deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
     const key = makeJiraKey(issue.key);
     const promptInput = {
       issueKey: issue.key,

@@ -28,8 +28,13 @@ import type { TodoTopicFile } from './types';
 /** The most closed items `todo_read`'s history returns (D5). */
 export const todoHistoryMaxItems = 50;
 
-/** @name TodoReadArgs @description A `todo_read` call: the conversation's own list, optionally with its history. */
+/** What `todo_read` reads: the conversation's own list, or its project's whole board. */
+export const todoReadScopes = ['own', 'project'] as const;
+export type TodoReadScope = (typeof todoReadScopes)[number];
+
+/** @name TodoReadArgs @description A `todo_read` call: the own list (optionally with its history) or the project board. */
 export interface TodoReadArgs {
+  scope?: TodoReadScope;
   includeHistory?: boolean;
 }
 
@@ -50,6 +55,8 @@ export interface TodoRegistry {
   getFinalAnswerNote(key: SessionKey, requestCreatedAt: number): string | null;
   /** The conversation's stored record (the `/todo` view reads it). */
   getTopic(key: SessionKey): TodoTopicFile;
+  /** The file store itself, for the project board that reads the peers' lists and stores what each agent saw. */
+  getStore(): TodoStore;
   /** The session was busy for `elapsedMs` (the reminder engine's poll); kept in memory until the turn ends. */
   addTurnWork(key: SessionKey, elapsedMs: number): void;
   /** A turn of the conversation ended: the work is stored, and the reminder's clock starts at the first one. */
@@ -120,6 +127,7 @@ export function createTodoRegistry(deps: TodoRegistryDeps): TodoRegistry {
     },
 
     getTopic: (key) => store.getTopic(key),
+    getStore: () => store,
 
     addTurnWork(key, elapsedMs) {
       // Before the clock starts nothing counts (the turn the update was made in included).
@@ -129,10 +137,9 @@ export function createTodoRegistry(deps: TodoRegistryDeps): TodoRegistry {
     },
 
     noteTurnEnd(key, nowMs) {
-      const stored = store.getTopic(key).nag;
       const nag = getTodoNagStateAtTurnEnd(getCurrentNag(key), nowMs);
-      if (stored !== undefined && nag.workedMs === stored.workedMs && nag.clockStartedAt === stored.clockStartedAt) return;
-      saveNag(key, nag);
+      unsavedWorkMs.delete(keyToString(key));
+      store.saveTopic(key, { ...store.getTopic(key), nag, lastTurnEndAt: nowMs });
     },
 
     takePromptReminder(key, intervalMs, nowMs) {

@@ -54,6 +54,16 @@ export interface JiraConnector {
    * With `trustedGroup`, a file whose uploader is not trusted is refused, and so is every file until the group is read.
    */
   fetchAttachment(key: SessionKey, attachmentId: string): Promise<JiraAttachmentToolResult>;
+  /**
+   * The shared todo boards (D57): the repository names `jira.json` lists for the project of conversation `key`
+   * (`repos`); `null` when it lists none — then its conversations share the instance's one Jira board.
+   */
+  getConversationRepositoryNames(key: SessionKey): readonly string[] | null;
+  /**
+   * The issue's summary as the connector last showed it to the agent (D55): `null` when no request of this process
+   * fetched the issue yet, or when the trusted group rule withholds it (someone outside the group wrote it).
+   */
+  getConversationTitle(key: SessionKey): string | null;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -233,6 +243,8 @@ export async function prepareJiraConnector(context: {
     unconfirmedPosts,
   });
   let inbound: JiraInbound | null = null;
+  /** Issue key → the summary its last fetched context showed the agent (trust-filtered); memory only. */
+  const shownSummaries = new Map<string, string | null>();
   const adoptTrustedGroup = (ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
     const { trustedGroup } = ready;
     trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;
@@ -269,6 +281,7 @@ export async function prepareJiraConnector(context: {
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
       parkMention: (issueKey) => answerSink.parkMention(issueKey),
+      noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();
     console.log(`[jira] polling ${[...projects.keys()].join(', ')} every ${pollIntervalMs / 1000} s`);
@@ -316,6 +329,9 @@ export async function prepareJiraConnector(context: {
       }
       return fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir, trust }, key, attachmentId);
     },
+    getConversationRepositoryNames: (key) => config.projects.get(key.space)?.repositoryNames ?? null,
+    // A Jira conversation's thread IS its issue key.
+    getConversationTitle: (key) => shownSummaries.get(key.thread) ?? null,
     onContextReset: (key, reason) => {
       contextLedger.reset(key.thread);
       console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);

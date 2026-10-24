@@ -772,7 +772,11 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    `runBudgetPer24h` defaults to 5; `model` and `effort` set the sessions' Claude model and reasoning effort
    (optional; absent → `opus` and `high`, either key overrides only its own default). `extraFields` (optional,
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
-   ones, shown under their site name; an id the site does not list is logged at start and left out. `agentBinaries` (optional, host runtime) maps a tool name to the absolute path of an executable — for
+   ones, shown under their site name; an id the site does not list is logged at start and left out. `repos`
+   (optional) lists the repositories the project's issues work on, by folder name (`["example-repo"]`): the
+   [shared todo lists](README.md#shared-todo-lists-todo) put the conversations of projects that share a name on one
+   board, together with the Telegram topics on a repository folder of that name; projects without `repos` share one
+   board for the whole instance. `agentBinaries` (optional, host runtime) maps a tool name to the absolute path of an executable — for
    example `{ "ffmpeg": "/opt/tools/ffmpeg" }` — which is checked at start and put on the agents' PATH. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.

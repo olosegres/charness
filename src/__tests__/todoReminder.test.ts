@@ -334,6 +334,6 @@ describe('settings.json todo, the idle-only post and the settings screen', () =>
     assert.equal(off.text, 'Todo settings\n\nShared todo lists: off');
     assert.deepEqual(off.rows.map((row) => row.map((button) => button.data)), [['todo_on'], ['todo_general']]);
     assert.equal(renderTodoSettingsScreen({ isEnabled: true, reminderMinutes: 45 }).text.split('\n')[3], 'Reminder when a list is stale: 45 min');
-    assert.match(renderTodoGeneralScreen({ isEnabled: false, reminderMinutes: 60 }).text, /^📋 Todo — all projects\n\nShared todo lists are off/);
+    assert.match(renderTodoGeneralScreen({ isEnabled: false, reminderMinutes: 60 }, []).text, /^📋 Todo — all projects\n\nShared todo lists are off/);
   });
 });

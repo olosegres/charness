@@ -24,6 +24,7 @@ import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend'
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
+import type { TodoProjectOverride } from './todos/projects';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
 import type { LostWorkRecord } from './utils/lostWork';
@@ -391,6 +392,11 @@ export interface StateV1 {
    * Optional so older state files stay valid.
    */
   recentModels?: string[];
+  /**
+   * The shared todo lists' project overrides (`/todo` → Project): conversation key → "own project" or "join the
+   * project of conversation X" (`todos/projects.ts`). Absent = automatic for every topic; dropped when empty.
+   */
+  todoProjectOverrides?: Record<string, TodoProjectOverride>;
   /**
    * Compact-on-idle toggle (`/compact_on_idle`). `compactOnIdleEnabled` is the
    * INSTANCE-WIDE default, driven from the General topic; absent ⇒ ON (the
@@ -1633,6 +1639,27 @@ export class StateStore {
     const next = pushRecentModel(this.state.recentModels ?? [], modelId);
     if (next.length > 0) this.state.recentModels = next;
     else delete this.state.recentModels;
+    this.scheduleSave();
+  }
+
+  // ── shared todo lists: project overrides (`/todo` → Project) ──
+
+  /** The topics' project overrides, by conversation key; a malformed hand edit reads as automatic. */
+  getTodoProjectOverrides(): Readonly<Record<string, TodoProjectOverride>> {
+    const valid: Record<string, TodoProjectOverride> = {};
+    for (const [conversationKey, override] of Object.entries(this.state.todoProjectOverrides ?? {})) {
+      if (override?.kind === 'own' || (override?.kind === 'join' && typeof override.conversationKey === 'string')) valid[conversationKey] = override;
+    }
+    return valid;
+  }
+
+  /** @description Set `key`'s project override; `null` = automatic (the entry is dropped). */
+  async setTodoProjectOverride(key: SessionKey, override: TodoProjectOverride | null): Promise<void> {
+    const overrides = { ...(this.state.todoProjectOverrides ?? {}) };
+    if (override === null) delete overrides[keyToString(key)];
+    else overrides[keyToString(key)] = override;
+    if (Object.keys(overrides).length > 0) this.state.todoProjectOverrides = overrides;
+    else delete this.state.todoProjectOverrides;
     this.scheduleSave();
   }
 

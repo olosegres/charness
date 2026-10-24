@@ -355,6 +355,10 @@ either way: the binding exists by then, and the admin list skips bots, so nothin
 `/todo` — the shared todo registry (`../../../todos/`) seen from Telegram. In a bound topic: its published list
 (`renderTodoTopicView` over `getTodoListView` — in work with its clock, the queue numbered, done today; an empty list
 says the agent adds items when it starts work). An unbound topic gets the bind refusal. Read-only: an item is changed
-by telling the agent. In General: the board (S3) and «Settings ▸» (`todo_cfg`) — the switch (`todo_on` / `todo_off`)
+by telling the agent. The view ends with the topic's project line and «Project ▸» (`todo_prj`): the picker — «Automatic» (`todo_prj_auto`),
+«Join the project of …» (`todo_prj_join_<i>`, indexes into a per-message snapshot of the candidates; an index whose
+topic is gone or unbound is refused, never a neighbour joined), «Own project» (`todo_prj_own`), pages (`todo_prj_page_<n>`)
+and «‹ Back» to the list (`todo_list`); a pick is stored in `state.json` `todoProjectOverrides` and re-renders the
+picker. In General: every project's board and «Settings ▸» (`todo_cfg`) — the switch (`todo_on` / `todo_off`)
 and the reminder's intervals (`todo_rem_<minutes>`, only the offered values are accepted), written to `settings.json`
 through `saveInstanceSettingsChange` (only the tapped field), re-rendered in place; a tap outside General is refused.

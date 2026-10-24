@@ -13,7 +13,9 @@ the instance's env file), `accountId` (the AI account — the token must belong 
 at boot), `projects` (key → `{ folder, triggerStatuses, extraFields? }`, the allowlist; status NAMES resolved to
 ids at boot; `extraFields` = field ids like `customfield_10042` or `duedate` that the prompt shows under their
 site name — none by default, and an id the site does not list is logged once at boot and left out),
-`pollIntervalSeconds` (10–600, default 30), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
+`repos` (per project, optional: the repository folder names its issues work on — the shared todo boards group the
+conversations by them, `../../todos/README.md`; the connector also keeps, in memory, the summary each issue's prompt
+last showed the agent — `null` when the trusted group withholds it — for the boards' labels), `pollIntervalSeconds` (10–600, default 30), `runBudgetPer24h` (default 5), `trustedGroup` (the NAME of one Jira
 group, see "The trusted group" under Isolation; absent → none, with one boot line `[jira] no trustedGroup: …`; the
 AI account needs the *Browse users and groups* global permission to read it), `wakeOnMention` (boolean: whether an
 @-mention of the AI account in a comment wakes it, see "An @-mention wakes the AI"; absent → on exactly when a

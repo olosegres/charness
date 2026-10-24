@@ -64,8 +64,8 @@ function buildDeps(store: StateStore, answerSinks: AnswerSinks): SchedulerMcpDep
     get todos() {
       return isTodoOffered
         ? {
-          update: (threadKey: string, args: Parameters<TodoRegistry['updateTodos']>[1]) => registry.updateTodos(keyFromString(threadKey), args),
-          read: (threadKey: string, args: Parameters<TodoRegistry['readTodos']>[1]) => registry.readTodos(keyFromString(threadKey), args),
+          update: async (threadKey: string, args: Parameters<TodoRegistry['updateTodos']>[1]) => registry.updateTodos(keyFromString(threadKey), args),
+          read: async (threadKey: string, args: Parameters<TodoRegistry['readTodos']>[1]) => registry.readTodos(keyFromString(threadKey), args),
         }
         : undefined;
     },

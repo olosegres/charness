@@ -54,6 +54,13 @@ restarted bot read that limit error from what the agent wrote during the downtim
 hour before was taken as closing tomorrow, and the account stayed limited — shown so on `/limits`, passed over by the account
 switch — for up to a day. The reset is now worked out from the time the agent's transcript recorded the error.
 
+**The agents of one repository now see each other's todo lists.** Topics on checkouts or worktrees of the same git
+repository form a project, and every prompt an agent gets carries the project board — the whole of it on a fresh
+context, later only what changed in the other topics — as does its own `todo_update`; another topic's change never
+wakes an agent. `/todo` → Project ▸ joins another topic's project or keeps an own one, `/todo` in General lists every
+project, and Jira conversations share a board with the topics on the repositories their `jira.json` project lists in
+the new `repos` key.
+
 **An agent that works for an hour without updating its todo list is reminded to.** The next prompt it gets carries
 one line; an agent that keeps working on its own gets a short prompt of its own at the end of a turn — never into a
 running turn, a sleeping session, an unanswered request, a usage limit or an account billed to API credits — and the

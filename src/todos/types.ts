@@ -77,4 +77,17 @@ export interface TodoTopicFile {
   lastUpdateAt?: number;
   /** The staleness reminder's bookkeeping (`nag.ts`); absent = nothing worked or reminded since the last update. */
   nag?: TodoNagState;
+  /** When a turn of this conversation last ended (a peer's board line says how long ago). */
+  lastTurnEndAt?: number;
+  /**
+   * What this conversation's agent has seen of its project's other lists (D19): each peer's `revision` and when.
+   * Absent = nothing yet, or the agent lost its context — the next board it gets is the whole one.
+   */
+  boardSeen?: TodoBoardSeen;
+}
+
+/** @name TodoBoardSeen @description The peers' revisions an agent was last shown, and when. */
+export interface TodoBoardSeen {
+  revisions: Record<string, number>;
+  at: number;
 }

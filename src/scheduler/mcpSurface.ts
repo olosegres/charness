@@ -36,7 +36,7 @@ import {
 import { answerStyleInstruction } from '../requests/answerStyle';
 import type { RequestAnswerKind } from '../requests/types';
 import type { TodoUpdateArgs } from '../todos/merge';
-import { todoHistoryMaxItems, type TodoReadArgs, type TodoToolOutcome } from '../todos/registry';
+import { todoHistoryMaxItems, todoReadScopes, type TodoReadArgs, type TodoToolOutcome } from '../todos/registry';
 import { todoNoteMaxLength, todoPositions, todoRefMaxLength, todoStatuses, todoTitleMaxLength } from '../todos/types';
 
 /**
@@ -396,8 +396,8 @@ export interface SchedulerMcpDeps {
    * and Jira sessions; absent = the tools are not offered.
    */
   todos?: {
-    update: (threadKey: string, args: TodoUpdateArgs) => TodoToolOutcome;
-    read: (threadKey: string, args: TodoReadArgs) => TodoToolOutcome;
+    update: (threadKey: string, args: TodoUpdateArgs) => Promise<TodoToolOutcome>;
+    read: (threadKey: string, args: TodoReadArgs) => Promise<TodoToolOutcome>;
   };
   /**
    * Deliver an agent's answer to a request and apply the close rules
@@ -1219,7 +1219,11 @@ const todoUpdateShape = {
 };
 
 const todoReadShape = {
-  includeHistory: z.boolean().optional().describe(`Also list older closed items (done / dropped), up to ${todoHistoryMaxItems}.`),
+  scope: z
+    .enum(todoReadScopes)
+    .optional()
+    .describe('own (default): your list · project: the whole board of the project\'s other topics (what they work on now).'),
+  includeHistory: z.boolean().optional().describe(`With scope own: also list older closed items (done / dropped), up to ${todoHistoryMaxItems}.`),
   threadKey: threadKeyArgSchema,
 };
 
@@ -1243,13 +1247,13 @@ function registerTodoTools(
         'your own todo tool). Add an item as inWork BEFORE you start any task, self-found fixes included (a failing ' +
         'test, a leak), naming the area concretely; mark it done / dropped as soon as it is. An UPSERT: an item ' +
         'without id is new; with an id only the fields given change. A call with no items and no order confirms the ' +
-        'list is still accurate. The result is your list.',
+        'list is still accurate. The result is your list and what changed in the project\'s other topics since you last saw them.',
       inputSchema: todoUpdateShape,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
       if (!resolved.ok) return errorResult(resolved.error);
-      const outcome = todos.update(resolved.threadKey, {
+      const outcome = await todos.update(resolved.threadKey, {
         ...(args.items === undefined ? {} : { items: args.items }),
         ...(args.order === undefined ? {} : { order: args.order }),
       });
@@ -1261,13 +1265,19 @@ function registerTodoTools(
     'todo_read',
     {
       title: 'Read your published todo list',
-      description: 'Your published todo list (in work, the queue in order, recently done); with includeHistory also the older closed items.',
+      description:
+        'Your published todo list (in work, the queue in order, recently done) and what changed in the project\'s other ' +
+        'topics since you last saw them; with includeHistory also your older closed items; with scope project the whole board ' +
+        'of the other topics.',
       inputSchema: todoReadShape,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
       if (!resolved.ok) return errorResult(resolved.error);
-      const outcome = todos.read(resolved.threadKey, { ...(args.includeHistory === undefined ? {} : { includeHistory: args.includeHistory }) });
+      const outcome = await todos.read(resolved.threadKey, {
+        ...(args.scope === undefined ? {} : { scope: args.scope }),
+        ...(args.includeHistory === undefined ? {} : { includeHistory: args.includeHistory }),
+      });
       return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
     },
   );

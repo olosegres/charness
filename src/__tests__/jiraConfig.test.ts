@@ -75,7 +75,7 @@ describe('validateJiraConfig', () => {
     assert.equal(config.pollIntervalMs, 30_000);
     assert.equal(config.runBudgetPer24h, jiraRunBudgetDefault);
     assert.equal(config.adapter, 'claude-json-stream');
-    assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'], extraFieldIds: [] }]]);
+    assert.deepEqual([...config.projects], [['PROJ', { folder: 'proj-work', triggerStatusNames: ['AI To Do'], extraFieldIds: [], repositoryNames: null }]]);
   });
 
   it('explicit poll interval, budget, json-stream adapter, model and effort are taken', () => {
@@ -175,6 +175,17 @@ describe('validateJiraConfig', () => {
     assert.deepEqual(result.config.projects.get('PROJ')?.extraFieldIds, ['customfield_10042', 'duedate']);
     const errors = getErrors(createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], extraFields: ['labels', ''] } } }));
     assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json projects.PROJ.extraFields.1']);
+  });
+
+  it('D57: a project\'s repos are its repository names for the shared todo boards (duplicates once); an empty list is refused', () => {
+    const result = validateJiraConfig(
+      createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], repos: ['example-repo', 'example-repo', 'example-lib'] } } }),
+      { workRoot, openCodeUrl: isolatedOpenCodeUrl },
+    );
+    assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+    assert.deepEqual(result.config.projects.get('PROJ')?.repositoryNames, ['example-repo', 'example-lib']);
+    const errors = getErrors(createConfig({ projects: { PROJ: { folder: 'proj-work', triggerStatuses: ['AI To Do'], repos: [] } } }));
+    assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json projects.PROJ.repos']);
   });
 
   it('R15: an effort outside Claude\'s levels and a model that is not a model name are refused by field', () => {

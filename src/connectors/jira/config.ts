@@ -68,6 +68,9 @@ const projectSchema = z.strictObject({
   // Fields beyond the standard ones the prompt shows, by id (`customfield_10042`, `duedate`); none by default (C11).
   // Whether the site has the field is checked at boot against its field list, never refused here.
   extraFields: z.array(z.string().min(1)).optional(),
+  // The repositories the project's issues work on, by folder name: the shared todo lists put the conversations of
+  // projects that share one — and the Telegram topics on a repository of that name — on one board (D57).
+  repos: z.array(z.string().min(1)).min(1).optional(),
 });
 
 const rawConfigSchema = z.strictObject({
@@ -100,6 +103,8 @@ export interface JiraProjectConfig {
   triggerStatusNames: string[];
   /** Ids of the extra fields the prompt shows; resolved to names at boot, an unknown one dropped. */
   extraFieldIds: string[];
+  /** The repository names of `repos`; `null` = none listed (the project's conversations share the instance's Jira board). */
+  repositoryNames: string[] | null;
 }
 
 /** @name JiraConfig @description The validated configuration. */
@@ -251,7 +256,12 @@ export function validateJiraConfig(
       errors.push(`jira.json projects.${projectKey}.folder: ${reason}`);
       continue;
     }
-    projects.set(projectKey, { folder, triggerStatusNames: project.triggerStatuses, extraFieldIds: [...new Set(project.extraFields ?? [])] });
+    projects.set(projectKey, {
+      folder,
+      triggerStatusNames: project.triggerStatuses,
+      extraFieldIds: [...new Set(project.extraFields ?? [])],
+      repositoryNames: project.repos === undefined ? null : [...new Set(project.repos)],
+    });
   }
 
   if (errors.length > 0) return { ok: false, errors };

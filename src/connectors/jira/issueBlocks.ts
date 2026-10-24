@@ -119,6 +119,16 @@ function checkIsFieldTrusted(context: JiraIssueContext, trust: JiraBlockTrust, f
 }
 
 /**
+ * @description The issue's summary the way its prompt shows it to the agent: the text when it may be shown, `null`
+ * when it is empty or withheld (with a trusted group, its creator or any editor of it is outside the group).
+ */
+export function getShownIssueSummary(context: JiraIssueContext, trust: JiraBlockTrust | null): string | null {
+  const summary = getSingleLineText(context.issue.fields.summary ?? '');
+  if (summary === '') return null;
+  return trust !== null && !checkIsFieldTrusted(context, trust, { id: summaryFieldId }) ? null : summary;
+}
+
+/**
  * `PROJ-5 "summary" (Status)`: what another issue is called. With a trusted group the summary is kept only for an
  * issue of a listed project — who wrote any other's is unknown, so its key and status say all.
  */

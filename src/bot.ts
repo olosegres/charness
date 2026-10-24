@@ -356,6 +356,9 @@ import { createTodoRegistry, type TodoReadArgs, type TodoRegistry } from './todo
 import type { TodoUpdateArgs } from './todos/merge';
 import { getTodoReminderIntervalMs } from './todos/nag';
 import { TodoReminderEngine } from './todos/reminderEngine';
+import { createRepositoryIdentityReader, groupTodoProjects, runGitInFolder, type TodoProject, type TodoProjectMember } from './todos/projects';
+import { createTodoBoard, type TodoBoard, type TodoSessionActivity } from './todos/board';
+import { createTodoTools, type TodoTools } from './todos/tools';
 import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
@@ -1139,13 +1142,111 @@ function getTodoReminderIntervalMsNow(): number | null {
   return getTodoReminderIntervalMs(readTodoSettings(), ENV.testTimings.todoReminderIntervalMs);
 }
 
-/** The reminder line a prompt forwarded now carries (D11 form a), or `null`; taking it counts as delivered. */
+/**
+ * The reminder line a prompt forwarded now carries (D11 form a), or `null`; taking it counts as delivered. The lists
+ * are a courtesy to the agent: a failure here is logged and the prompt goes on without the line.
+ */
 function takeTodoPromptReminder(key: SessionKey): string | null {
-  return getTodoRegistry().takePromptReminder(key, getTodoReminderIntervalMsNow(), Date.now());
+  try {
+    return getTodoRegistry().takePromptReminder(key, getTodoReminderIntervalMsNow(), Date.now());
+  } catch (e) {
+    console.error(`[todos] ${keyToString(key)}: the reminder line could not be taken:`, e instanceof Error ? e.message : e);
+    return null;
+  }
 }
 
 /** The staleness reminder's poll (`todos/reminderEngine.ts`), built at boot and started once the sessions are restored. */
 let todoReminderEngine: TodoReminderEngine | null = null;
+
+/** Which folders are one git repository (`todos/projects.ts`), cached. */
+const readTodoRepositoryIdentity = createRepositoryIdentityReader(runGitInFolder);
+
+/** What the boards need of the Jira connector (D55, D57); set at boot when it is loaded. */
+let todoJiraConversations: Pick<JiraConnector, 'getConversationRepositoryNames' | 'getConversationTitle'> | null = null;
+
+/** Every bound conversation as the project grouping sees it, in binding order. */
+async function listTodoProjectMembers(): Promise<TodoProjectMember[]> {
+  return Promise.all(state.listBindings().map(async ({ key, data }): Promise<TodoProjectMember> => {
+    const conversationKey = keyToString(key);
+    if (key.platform === 'jira') {
+      return { conversationKey, workDir: null, identity: null, jiraRepositoryNames: todoJiraConversations?.getConversationRepositoryNames(key) ?? null };
+    }
+    const decision = resolveBoundWorkDir(ENV.workRoot, data);
+    const workDir = decision.kind === 'proceed' ? decision.workDir : null;
+    return { conversationKey, workDir, identity: workDir === null ? null : await readTodoRepositoryIdentity(workDir) };
+  }));
+}
+
+/** The instance's project boards (D15, D16, D57). */
+async function listTodoProjects(): Promise<TodoProject[]> {
+  return groupTodoProjects(await listTodoProjectMembers(), state.getTodoProjectOverrides());
+}
+
+async function getTodoProjectOf(key: SessionKey): Promise<TodoProject | null> {
+  const conversationKey = keyToString(key);
+  return (await listTodoProjects()).find((project) => project.memberKeys.includes(conversationKey)) ?? null;
+}
+
+/** How a conversation is named on a board and in the picker: `#topic (folder)`, or the issue `PROJ-123 «summary»` (D55). */
+function getTodoConversationLabel(conversationKey: string): string {
+  const key = tryKeyFromString(conversationKey);
+  if (key === null) return conversationKey;
+  if (key.platform === 'jira') {
+    const title = todoJiraConversations?.getConversationTitle(key) ?? null;
+    return title === null ? key.thread : `${key.thread} «${title}»`;
+  }
+  const binding = state.getBinding(key);
+  return `#${binding?.topicName ?? `topic ${key.thread}`}${binding ? ` (${binding.subdir})` : ''}`;
+}
+
+function getTodoSessionActivity(conversationKey: string): TodoSessionActivity {
+  const key = tryKeyFromString(conversationKey);
+  if (key === null) return 'asleep';
+  const adapter = getThreadAdapter(key);
+  if (!adapter.checkIsActive(key)) return 'asleep';
+  return adapter.checkIsBusy?.(key) ? 'working' : 'idle';
+}
+
+let todoBoard: TodoBoard | null = null;
+
+/** The project boards (`todos/board.ts`), built on first use like the registry. */
+function getTodoBoard(): TodoBoard {
+  todoBoard ??= createTodoBoard({
+    store: getTodoRegistry().getStore(),
+    getProjectOf: getTodoProjectOf,
+    getPeerLabel: getTodoConversationLabel,
+    getSessionActivity: getTodoSessionActivity,
+    getNowMs: Date.now,
+  });
+  return todoBoard;
+}
+
+/** The agent lost its context: its next prompt carries the whole board (D20). Logged, never thrown, on a lifecycle path. */
+function noteTodoFreshContext(key: SessionKey): void {
+  try {
+    getTodoBoard().noteFreshContext(key);
+  } catch (e) {
+    console.error(`[todos] ${keyToString(key)}: the board's seen state could not be reset:`, e instanceof Error ? e.message : e);
+  }
+}
+
+let todoTools: TodoTools | null = null;
+
+function getTodoTools(): TodoTools {
+  todoTools ??= createTodoTools({ registry: getTodoRegistry(), board: getTodoBoard() });
+  return todoTools;
+}
+
+/** The board block a prompt forwarded now carries (D20), or `null`; taking it counts as seen. A failure never stops the prompt. */
+async function takeTodoPromptBoard(key: SessionKey): Promise<string | null> {
+  if (!readTodoSettings().isEnabled) return null;
+  try {
+    return await getTodoBoard().takePromptBoard(key);
+  } catch (e) {
+    console.error(`[todos] ${keyToString(key)}: the project board could not be built:`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Per-thread in-memory state
@@ -2607,6 +2708,8 @@ const threadContextMarkers = new Map<string, string>();
  */
 function clearThreadContextMarker(key: SessionKey): void {
   threadContextMarkers.delete(keyToString(key));
+  // The same boundary for the project board: the next turn start carries it whole (D20).
+  noteTodoFreshContext(key);
 }
 
 function getThreadMessageState(key: SessionKey): ThreadMessageState {
@@ -5325,9 +5428,13 @@ async function forwardPromptToLiveAgent(
   if (state.checkIsTimestampsEnabled(key) && !checkShouldSkipPreambleForText(text)) {
     promptText = `${formatIsoLocalOffset(sentAtMs ?? Date.now())}\n\n${promptText}`;
   }
-  // The todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
-  // command, a shell line, or the standalone reminder itself.
-  const todoReminderLine = isTechnicalPrompt || checkShouldSkipPreambleForText(text) || adapter.name === 'terminal' ? null : takeTodoPromptReminder(key);
+  // The project board rides every turn start the bot makes (D20: whole on a fresh context, else only what changed),
+  // then the todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
+  // command or a shell line; the reminder never rides the standalone reminder itself.
+  const isTodoDecorated = !checkShouldSkipPreambleForText(text) && adapter.name !== 'terminal';
+  const todoBoardBlock = isTodoDecorated ? await takeTodoPromptBoard(key) : null;
+  if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
+  const todoReminderLine = isTodoDecorated && !isTechnicalPrompt ? takeTodoPromptReminder(key) : null;
   if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;
   markNeedsNewMessage(key);
   // A new prompt is a new turn: lift the S2 idle-suppress latch and re-base the
@@ -7876,6 +7983,9 @@ const { registerTodoCommands, registerTodoCallbacks } = createTodo({
   getTodoRegistry,
   readTodoSettings,
   getSettingsPath: () => getInstanceSettingsPath(),
+  listTodoProjects,
+  getConversationLabel: getTodoConversationLabel,
+  checkIsConversationAsleep: (conversationKey) => getTodoSessionActivity(conversationKey) === 'asleep',
 });
 
 const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimitsBoard({
@@ -12835,6 +12945,8 @@ let connectorConversationHooks: ReadonlyMap<PlatformId, ConnectorConversationHoo
  * {@link clearThreadContextMarker}, which a stop clears too.
  */
 function noteConversationContextReset(key: SessionKey, reason: string): void {
+  // A completed compaction or a fresh session: the agent forgot the board too (D20).
+  noteTodoFreshContext(key);
   connectorConversationHooks.get(key.platform)?.onContextReset(key, reason);
 }
 
@@ -13084,8 +13196,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     get todos() {
       return readTodoSettings().isEnabled
         ? {
-          update: (threadKeyStr: string, args: TodoUpdateArgs) => getTodoRegistry().updateTodos(keyFromString(threadKeyStr), args),
-          read: (threadKeyStr: string, args: TodoReadArgs) => getTodoRegistry().readTodos(keyFromString(threadKeyStr), args),
+          update: (threadKeyStr: string, args: TodoUpdateArgs) => getTodoTools().update(keyFromString(threadKeyStr), args),
+          read: (threadKeyStr: string, args: TodoReadArgs) => getTodoTools().read(keyFromString(threadKeyStr), args),
         }
         : undefined;
     },
@@ -13407,6 +13519,7 @@ export async function startBot(): Promise<void> {
   void claudeUsageRefresher.refreshAll();
 
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
+  todoJiraConversations = jiraConnector;
   if (jiraConnector) {
     const { launchDefaults } = jiraConnector;
     registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));

@@ -15,7 +15,13 @@
  *     an agent that keeps working on its own (background tasks) is reminded twice, then the bot stays silent; an
  *     update restarts the clock, which waits for the next turn end
  *   → General's `/todo` opens the settings: an interval tap writes `settings.json` and moves the ✓; «Turn off» hides
- *     the intervals and a topic's `/todo` says the lists are off; «Turn on» brings them back
+ *     the intervals and a topic's `/todo` says the lists are off; «Turn on» brings them back (the reminder is then set
+ *     off, so the board steps below see no reminder prompts)
+ *   → the project board (topic A's folder a git repository, topic B's a clone of it): B's first prompt carries the
+ *     whole board with A's list; A's next prompt only what changed, the one after nothing — and B's change did not wake
+ *     A; a fresh session and a compaction in B bring the whole board again; the picker: «Own project» takes B off the
+ *     board at once, «Automatic» brings it back; a topic on a folder that is no checkout joins A's project by hand;
+ *     General's `/todo` lists the project with its topics
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the agent is the fake. Everything the test
  * starts is stopped in `after`.
@@ -25,6 +31,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -58,6 +65,11 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const folderA = 'proj-a';
+/** A second checkout (a clone) of topic A's repository, and a folder that is no checkout at all. */
+const folderB = 'proj-b';
+const folderNotes = 'notes';
+const topicBThreadId = 222;
+const topicCThreadId = 444;
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
 const bootTimeoutMs = 60 * 1000;
@@ -148,9 +160,20 @@ function listStandaloneReminders(): FakePrompt[] {
   return readPrompts().filter((prompt) => prompt.text.includes(reminderMarker) && !/\bTODO-\d+\b/.test(prompt.text));
 }
 
-/** The topic's stored list record, as a restart reads it. */
-function readTopicTodoFile(): { lastUpdateAt?: number; nag?: { clockStartedAt?: number; workedMs: number; ignoredCount: number } } {
-  return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'todos', `${group.id}_${topicAThreadId}.json`), 'utf8'));
+/** A topic's stored list record, as a restart reads it. */
+function readTopicTodoFileOf(threadId: number): { lastUpdateAt?: number; nag?: { clockStartedAt?: number; workedMs: number; ignoredCount: number }; boardSeen?: object } {
+  return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'todos', `${group.id}_${threadId}.json`), 'utf8'));
+}
+
+function readTopicTodoFile(): ReturnType<typeof readTopicTodoFileOf> {
+  return readTopicTodoFileOf(topicAThreadId);
+}
+
+/** The text of the prompt the fake agent read for `label`. */
+function getPromptOf(label: string): string {
+  const prompt = readPrompts().find((candidate) => new RegExp(`\\b${label}\\b`).test(candidate.text));
+  if (!prompt) throw new Error(`no prompt for ${label}`);
+  return prompt.text;
 }
 
 /** Wait for a bot log line (after `outputStart`) that `pattern` matches. */
@@ -187,6 +210,32 @@ async function tapAndAwaitRerender(message: FakeTelegramMessage, data: string, e
   await getCharness().waitFor(`the message re-rendered after ${data}`, replyTimeoutMs, () => (fakeTelegram.getMessage(message.message_id)?.text ?? '').includes(expectedText));
 }
 
+/** The most `/compact` attempts while the agent still finishes the turn before. */
+const compactAttempts = 5;
+
+function countCompactions(): number {
+  return readJsonLines(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.compactions)).length;
+}
+
+/**
+ * `/compact` in a topic until the agent ran the compaction: the bot announces it, then refuses it while the agent is
+ * still in its turn ("busy" — a tool call the fake logged does not mean its turn is over). Resolves once a compaction
+ * turn ran.
+ */
+async function compactWhenIdle(threadId: number): Promise<void> {
+  const compactionsBefore = countCompactions();
+  for (let attempt = 1; attempt <= compactAttempts; attempt += 1) {
+    const sentAfterId = fakeTelegram.pushOperatorMessage(threadId, '/compact');
+    let isRefusedAsBusy = false;
+    await getCharness().waitFor('the compaction or its refusal', turnTimeoutMs, () => {
+      isRefusedAsBusy = fakeTelegram.listBotMessages(threadId).some((message) => message.message_id > sentAfterId && message.text.includes('The agent is busy right now'));
+      return isRefusedAsBusy || countCompactions() > compactionsBefore;
+    });
+    if (!isRefusedAsBusy) return;
+  }
+  throw new Error(`/compact was refused as busy ${compactAttempts} times`);
+}
+
 function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
@@ -194,7 +243,17 @@ function removeInstanceSync(): void {
 describe('Shared todo registry end to end: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-todo-', [folderA], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-todo-', [folderA, folderB, folderNotes], getFlowDeadlineMs());
+    // Topic A's folder is a git repository and topic B's a clone of it: one project by root commit (D15).
+    const runGit = (cwd: string, ...args: string[]): void => {
+      execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'init.defaultBranch=main', ...args], { cwd, stdio: 'ignore' });
+    };
+    const repoA = path.join(layout.workRoot, folderA);
+    runGit(repoA, 'init', '-q');
+    fs.writeFileSync(path.join(repoA, 'README.md'), '# proj\n');
+    runGit(repoA, 'add', '.');
+    runGit(repoA, 'commit', '-q', '-m', 'first');
+    runGit(layout.workRoot, 'clone', '-q', repoA, path.join(layout.workRoot, folderB));
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
@@ -248,7 +307,8 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
 
   it('/todo before anything is published shows the empty state', async () => {
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
-    assert.equal(view.text, `📋 Todo — ${folderA}\n\nNothing published yet — the agent adds items when it starts work.`);
+    assert.equal(view.text, `📋 Todo — ${folderA}\n\nNothing published yet — the agent adds items when it starts work.\n\nProject: ${folderA} · topics: 1 (automatic)`);
+    assert.deepEqual(getKeyboardLabels(view), [['Project ▸']]);
   });
 
   it('the agent publishes an in-work and a queued item: the tool answers with the list and /todo shows both', async () => {
@@ -257,14 +317,14 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     assert.match(call.outcome, /^Saved\. New items: t1, t2\./);
     assert.match(call.outcome, /▶ in work:\n {2}t1 Speed up limits flow tests — since \d\d:\d\d/);
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
-    assert.match(view.text, /^📋 Todo — proj-a\n\n▶ In work\n {3}Speed up limits flow tests — since \d\d:\d\d\n\n▷ Queue\n {3}1\. Bump tsx$/);
+    assert.match(view.text, /^📋 Todo — proj-a\n\n▶ In work\n {3}Speed up limits flow tests — since \d\d:\d\d\n\n▷ Queue\n {3}1\. Bump tsx\n\nProject: proj-a · topics: 1 \(automatic\)$/);
   });
 
   it('the agent closes the in-work item: /todo lists it under «Done today»', async () => {
     const call = await publishThroughAgent(topicAThreadId, 'TODO-2', '[todo-id:t1:done]');
     assert.match(call.outcome, /^Saved\./);
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
-    assert.match(view.text, /▷ Queue\n {3}1\. Bump tsx\n\n✓ Done today\n {3}Speed up limits flow tests — \d\d:\d\d$/);
+    assert.match(view.text, /▷ Queue\n {3}1\. Bump tsx\n\n✓ Done today\n {3}Speed up limits flow tests — \d\d:\d\d\n\nProject: proj-a/);
     assert.doesNotMatch(view.text, /In work/);
   });
 
@@ -352,8 +412,76 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     assert.deepEqual(getKeyboardLabels(fakeTelegram.getMessage(general.message_id) ?? general), [['Turn on'], ['‹ Back']]);
     assert.deepEqual(readSettingsFile().todo, { reminderMinutes: 30, isEnabled: false });
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
-    assert.match(view.text, /Shared todo lists are off: agents are not offered them\. Turn them on in General\.$/);
+    assert.match(view.text, /\n\nShared todo lists are off: agents are not offered them\. Turn them on in General\.$/);
     await tapAndAwaitRerender(general, 'todo_on', 'Shared todo lists: on', '✅ Saved');
     assert.equal(readSettingsFile().todo?.isEnabled, true);
+    await tapAndAwaitRerender(general, 'todo_rem_0', 'stale: off', '✅ Saved');
+    assert.deepEqual(readSettingsFile().todo, { reminderMinutes: 0, isEnabled: true });
+  });
+
+  // ── S3 — the project board ────────────────────────────────────────────
+
+  it('a topic on another checkout of the same repository is in A\'s project: its first prompt carries the whole board', async () => {
+    await sendAndAwaitReply(topicBThreadId, `/bind ${folderB}`, `Bound to \`${folderB}\``);
+    await sendAndAwaitReply(topicBThreadId, '/claude', 'ready in');
+    const call = await publishThroughAgent(topicBThreadId, 'TODO-21', '[todo:inWork:Fix the footer]');
+    const prompt = getPromptOf('TODO-21');
+    assert.match(prompt, /\[Project board · proj-a · 1 other topic\]\n#topic 111 \(proj-a\) — (active|working)[^\n]*\n {2}▷ queue: 1\. Bump tsx/);
+    assert.match(call.outcome, /\n\nNo changes in the project's other topics since \d\d:\d\d\.$/, 'the tool result says nothing changed since the prompt');
+  });
+
+  it('A\'s next prompt carries only what changed — B\'s item —, the one after nothing; B\'s change never woke A', async () => {
+    assert.equal(readPrompts().filter((prompt) => !/\bTODO-\d+\b/.test(prompt.text)).length, listStandaloneReminders().length, 'no prompt without a label but the reminders: nothing woke A for the board');
+    await publishThroughAgent(topicAThreadId, 'TODO-22', '[todo-touch]');
+    assert.match(getPromptOf('TODO-22'), /\[Project board — changes since \d\d:\d\d\]\n#topic 222 \(proj-b\) — [^\n]*\n {2}▶ Fix the footer — since \d\d:\d\d/);
+    await publishThroughAgent(topicAThreadId, 'TODO-23', '[todo-touch]');
+    assert.doesNotMatch(getPromptOf('TODO-23'), /Project board/);
+  });
+
+  it('a fresh session and a completed compaction in B each bring the whole board (and B\'s own list) again', async () => {
+    await publishThroughAgent(topicBThreadId, 'TODO-24', '[todo-touch]');
+    assert.doesNotMatch(getPromptOf('TODO-24'), /Project board/, 'nothing changed for B');
+    await sendAndAwaitReply(topicBThreadId, '/new', 'ready in');
+    await publishThroughAgent(topicBThreadId, 'TODO-25', '[todo-touch]');
+    assert.match(getPromptOf('TODO-25'), /\[Project board · proj-a · 1 other topic\][\s\S]*\n\nYour published todo list:\n▶ in work:\n {2}t1 Fix the footer/);
+    await compactWhenIdle(topicBThreadId);
+    await getCharness().waitFor('the board forgotten after the compaction', turnTimeoutMs, () => readTopicTodoFileOf(topicBThreadId).boardSeen === undefined);
+    await publishThroughAgent(topicBThreadId, 'TODO-26', '[todo-touch]');
+    assert.match(getPromptOf('TODO-26'), /\[Project board · proj-a · 1 other topic\]/);
+  });
+
+  it('the picker: «Own project» takes B off the board at once; «Automatic» brings it back', async () => {
+    const view = await sendAndAwaitReply(topicBThreadId, '/todo', '📋 Todo —');
+    assert.match(view.text, /\n\nProject: proj-a · topics: 2 \(automatic\)$/);
+    await tapAndAwaitRerender(view, 'todo_prj', 'Project for proj-b', null);
+    const picker = (): FakeTelegramMessage => fakeTelegram.getMessage(view.message_id) ?? view;
+    assert.equal(picker().text, 'Project for proj-b\n\nNow: proj-a — automatic · topics: 2');
+    assert.deepEqual(getKeyboardLabels(picker()), [['✓ Automatic'], ['Join the project of #topic 111 (proj-a)'], ['Own project'], ['‹ Back']]);
+    await tapAndAwaitRerender(view, 'todo_prj_own', 'Now: proj-b — own project · topics: 1', '✅ Project: proj-b');
+    await publishThroughAgent(topicAThreadId, 'TODO-27', '[todo:queued:Write the docs]');
+    await publishThroughAgent(topicBThreadId, 'TODO-28', '[todo-touch]');
+    assert.doesNotMatch(getPromptOf('TODO-28'), /Project board/, 'B is alone in its own project');
+    await tapAndAwaitRerender(view, 'todo_prj_auto', 'Now: proj-a — automatic · topics: 2', '✅ Project: proj-a');
+    await publishThroughAgent(topicBThreadId, 'TODO-29', '[todo-touch]');
+    assert.match(getPromptOf('TODO-29'), /\[Project board — changes since \d\d:\d\d\]\n#topic 111 \(proj-a\)[\s\S]*Write the docs/);
+    await tapAndAwaitRerender(view, 'todo_list', 'Project: proj-a · topics: 2 (automatic)', null);
+  });
+
+  it('a topic on a folder that is no checkout is a project of its own and joins A\'s by hand', async () => {
+    await sendAndAwaitReply(topicCThreadId, `/bind ${folderNotes}`, `Bound to \`${folderNotes}\``);
+    const view = await sendAndAwaitReply(topicCThreadId, '/todo', '📋 Todo —');
+    assert.match(view.text, /Project: notes · topics: 1 \(automatic\)$/);
+    await tapAndAwaitRerender(view, 'todo_prj', 'Project for notes', null);
+    const labels = getKeyboardLabels(fakeTelegram.getMessage(view.message_id) ?? view);
+    const joinIndex = labels.flat().filter((label) => label.startsWith('Join the project of')).indexOf('Join the project of #topic 111 (proj-a)');
+    assert.ok(joinIndex >= 0, JSON.stringify(labels));
+    await tapAndAwaitRerender(view, `todo_prj_join_${joinIndex}`, 'Now: proj-a — joined by hand · topics: 3', '✅ Project: proj-a');
+    const persisted = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { todoProjectOverrides?: Record<string, unknown> };
+    assert.deepEqual(persisted.todoProjectOverrides, { [`${group.id}:${topicCThreadId}`]: { kind: 'join', conversationKey: `${group.id}:${topicAThreadId}` } });
+  });
+
+  it('General\'s /todo lists the project with its topics', async () => {
+    const board = await sendAndAwaitReply(generalTopicThreadId, '/todo', '📋 Todo — all projects');
+    assert.match(board.text, /\n\nproj-a · topics: 3\n {3}#topic 111 \(proj-a\) {3}nothing in work · queue 2\n {3}#topic 222 \(proj-b\) {3}▶ Fix the footer\n {3}#topic 444 \(notes\) {3}asleep · nothing in work$/);
   });
 });

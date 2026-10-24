@@ -304,6 +304,9 @@ export function getProbeToolPath(): string {
 /** The fake Jira's base url, kept for a `jira.json` rewrite between a stop and a restart. */
 let jiraBaseUrl = '';
 
+/** The repository names the flow's project lists (`repos`, the shared todo boards); `null` = none, as most flows boot. */
+let projectRepositoryNames: string[] | null = null;
+
 /** Write `jira.json` for the instance; `adapter` is the json-stream lifecycle its sessions run on, `trustedGroup` the group that filters whose text counts. */
 export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn', trustedGroup?: string): void {
   fs.writeFileSync(path.join(getLayout().dataDir, 'jira.json'), JSON.stringify({
@@ -312,7 +315,7 @@ export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn
     email: aiCredentials.email,
     apiToken: `\${${instanceTokenEnvName}}`,
     accountId: aiAccount.accountId,
-    projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name] } },
+    projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name], ...(projectRepositoryNames === null ? {} : { repos: projectRepositoryNames }) } },
     pollIntervalSeconds,
     adapter,
     ...(trustedGroup === undefined ? {} : { trustedGroup }),
@@ -325,10 +328,15 @@ export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn
 export interface JiraFlowConfig {
   adapter: 'claude-json-stream' | 'claude-per-turn';
   trustedGroup?: string;
+  /** The project's `repos` (the shared todo boards, D57); absent = none. */
+  repos?: string[];
+  /** Windows the flow shortens beyond the ones every Jira flow does (`CHARNESS_TEST_TIMINGS`). */
+  extraTimings?: TestTimings;
 }
 
 function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config: JiraFlowConfig): void {
   const instance = getLayout();
+  projectRepositoryNames = config.repos ?? null;
   writeJiraConfig(config.adapter, config.trustedGroup);
 
   const claudeBin = writeFakeClaudeLauncher(instance, 'jira', { slowTurnMs, queuedWaitMaxMs });
@@ -343,7 +351,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config:
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
     AGENT_IDLE_MINUTES: idleMinutes,
-    [testTimingsEnvName]: JSON.stringify(jiraFlowTestTimings),
+    [testTimingsEnvName]: JSON.stringify({ ...jiraFlowTestTimings, ...config.extraTimings }),
     [instanceTokenEnvName]: aiCredentials.apiToken,
   });
 }
@@ -353,8 +361,9 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-export function createIssue(key: string, mode: string): void {
-  fakeJira.createIssue({ key, summary: `[fake:${mode}] Task ${key}`, description: `Please handle ${key}.`, statusId: inProgress.id, reporter: requester });
+/** A new issue in the trigger status; its summary names the fake agent's mode, `extraDescription` follows the default text. */
+export function createIssue(key: string, mode: string, extraDescription = ''): void {
+  fakeJira.createIssue({ key, summary: `[fake:${mode}] Task ${key}`, description: `Please handle ${key}.${extraDescription}`, statusId: inProgress.id, reporter: requester });
 }
 
 /**

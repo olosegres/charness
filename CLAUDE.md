@@ -208,7 +208,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `connectors/test/` | Capability-configurable test double; TESTS ONLY, no production import |
 | `platform/` | Core-side seam contracts: inbound/outbound/answer sink, command router, capability fallback, `CONNECTORS` filter, unserved-state guard |
 | `selfUpdate/` | The bot updates itself: pure policy (`updatePolicy.ts`), the engine over ports (`updateEngine.ts`: hourly check, idle loop, boot step), npm / git sources, in-place `execve` restart, the hot supervisor's re-exec, the `update-pending.json` boot rollback, `charness self-check`. `/update` is `connectors/telegram/commands/selfUpdate.ts` over `utils/updateScreenPlan.ts`. README: contracts |
-| `todos/` | Shared agent todo registry: per-conversation published lists in `DATA_DIR/todos/` (store, upsert, order, format), the `todo_*` tools' service. README: contracts |
+| `todos/` | Shared agent todo registry: per-conversation published lists in `DATA_DIR/todos/` (store, upsert, order, format), the `todo_*` tools, the staleness reminder, projects by git root commit and the project board glued at `forwardPromptToAgent`. README: contracts |
 | `requests/` | Request ledger, `answer_request`, wake-up engine + rules, session turn probe, limit-wait answers |
 | `scheduler/` | Schedule store/engine/recurrence/delivery/run ledger; the bot-owned MCP server (`mcpSurface.ts`), its injection and boot order |
 | `utils/` | ~85 mostly pure helpers behind `bot.ts` and the adapters: Claude scrape pipeline, tmux primitives, json-stream host, picker/render plans, reminders, timezone, limit/compaction rules, file send |
