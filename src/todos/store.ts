@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { writeJsonFileAtomically } from '../configDirFile';
-import { keyToSlug, keyToString, tryKeyFromSlug, type SessionKey } from '../sessionKey';
+import { keyToSlug, keyToString, type SessionKey } from '../sessionKey';
 import { checkIsOpenTodoItem } from './order';
 import { todoSources, todoStatuses, type TodoItem, type TodoTopicFile } from './types';
 
@@ -160,20 +160,5 @@ export class TodoStore {
       }
     });
     return items.sort((left, right) => (right.closedAt ?? 0) - (left.closedAt ?? 0)).slice(0, limit);
-  }
-
-  /** @description Every conversation that has a stored list. */
-  listTopicKeys(): SessionKey[] {
-    let names: string[];
-    try {
-      names = fs.readdirSync(this.getDir());
-    } catch {
-      return [];
-    }
-    return names.flatMap((name) => {
-      if (!name.endsWith(todoFileExtension)) return [];
-      const key = tryKeyFromSlug(name.slice(0, -todoFileExtension.length), conversationSlugSeparator);
-      return key ? [key] : [];
-    });
   }
 }

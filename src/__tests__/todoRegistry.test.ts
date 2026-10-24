@@ -139,7 +139,6 @@ describe('the file store', () => {
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
     assert.deepEqual(fs.readdirSync(path.join(dataDir, 'todos')), ['jira_PROJ_PROJ-7.json'], 'no temp file is left behind');
     assert.deepEqual(new TodoStore(dataDir).getTopic(jiraKey), saved);
-    assert.deepEqual(new TodoStore(dataDir).listTopicKeys(), [jiraKey]);
   });
 
   it('a conversation that never published reads empty and writes nothing', () => {
