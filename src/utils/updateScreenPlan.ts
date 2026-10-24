@@ -1,6 +1,7 @@
 import type { GitSkipReason } from '../selfUpdate/types';
 import type { UpdateOffer, UpdateStatus } from '../selfUpdate/updateEngine';
-import { updateAnnouncementInstallCallbackPrefix, updateInstallCallbackPrefix, type Translate } from '../selfUpdate/updateMessages';
+import type { Translate } from '../i18n';
+import { updateAnnouncementInstallCallbackPrefix, updateInstallCallbackPrefix } from '../selfUpdate/updateMessages';
 import type { AutoUpdateMode } from '../selfUpdate/updateModes';
 
 /**

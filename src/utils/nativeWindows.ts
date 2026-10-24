@@ -1,4 +1,4 @@
-import type { Translate } from '../selfUpdate/updateMessages';
+import type { Translate } from '../i18n';
 import type { DoctorLine } from './doctorLine';
 
 /**

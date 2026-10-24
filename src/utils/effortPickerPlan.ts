@@ -11,6 +11,8 @@
  *   that puts the topic back on General's value.
  */
 
+import type { Translate } from '../i18n';
+
 /** Levels per keyboard row. */
 export const effortPickerColumns = 3;
 
@@ -61,8 +63,6 @@ export type EffortPickerInput =
       /** The backend can clear a pick (`clearEffort`): the «as in General» button is offered. */
       canClear: boolean;
     };
-
-type Translate = (code: string, vars?: Record<string, string | number>) => string;
 
 function buildLevelRows(levels: readonly string[], current: string): EffortPickerButton[][] {
   const buttons = levels.map((level) => ({ text: level === current ? `${level} ✓` : level, data: buildEffortLevelCallback(level) }));
