@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 
@@ -17,10 +18,14 @@ import { promisify } from 'util';
  * when some Jira conversation names it, so two unrelated repositories that happen to share a folder name never meet.
  */
 
-/** How long a folder's repository identity is trusted before git is asked again (a folder may become a checkout). */
+/** How long a folder's repository is trusted before git is asked again (a folder may become a checkout, or move). */
 export const repositoryIdentityTtlMs = 10 * 60 * 1000;
-/** A git query that takes longer is abandoned: the folder then counts as no checkout. */
-const gitQueryTimeoutMs = 5000;
+/** A read that failed (git missing, slow, the folder gone) is tried again this soon — a project must not split for long. */
+export const failedRepositoryReadRetryMs = 30 * 1000;
+/** `git rev-parse` answers at once; a longer one is abandoned. */
+const gitQuickQueryTimeoutMs = 5000;
+/** `git rev-list --max-parents=0` walks the whole history: a large repository needs longer, once per process. */
+const gitHistoryQueryTimeoutMs = 30 * 1000;
 const gitDirName = '.git';
 const gitDirSuffix = '.git';
 /** The board every Jira conversation of a project without `repos` shares. */
@@ -57,15 +62,15 @@ export interface TodoProject {
   memberKeys: string[];
 }
 
-/** @description Run git in `workDir`; its trimmed stdout, or `null` when it failed or ran too long. */
-export type RunGit = (workDir: string, args: readonly string[]) => Promise<string | null>;
+/** @description Run git in `workDir` within `timeoutMs`; its trimmed stdout, or `null` when it failed or ran too long. */
+export type RunGit = (workDir: string, args: readonly string[], timeoutMs: number) => Promise<string | null>;
 
 const execFileAsync = promisify(execFile);
 
-/** @description The real git, bounded by {@link gitQueryTimeoutMs}. */
-export const runGitInFolder: RunGit = async (workDir, args) => {
+/** @description The real git. */
+export const runGitInFolder: RunGit = async (workDir, args, timeoutMs) => {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', workDir, ...args], { timeout: gitQueryTimeoutMs, encoding: 'utf8' });
+    const { stdout } = await execFileAsync('git', ['-C', workDir, ...args], { timeout: timeoutMs, encoding: 'utf8' });
     return stdout.trim();
   } catch {
     return null;
@@ -79,20 +84,58 @@ export function getRepositoryNameFromCommonDir(commonDir: string): string {
   return baseName.endsWith(gitDirSuffix) ? baseName.slice(0, -gitDirSuffix.length) : baseName;
 }
 
-/** @description A reader of folders' repository identities, cached for {@link repositoryIdentityTtlMs}. */
-export function createRepositoryIdentityReader(runGit: RunGit, getNowMs: () => number = Date.now): (workDir: string) => Promise<RepositoryIdentity | null> {
-  const cache = new Map<string, { identity: RepositoryIdentity | null; readAt: number }>();
+/** A cached read: its value (`null` = it failed) and when it was made. */
+interface CachedRead<TValue> {
+  value: TValue | null;
+  readAt: number;
+}
+
+/** @description Whether a cached read still stands: a success for `ttlMs`, a failure only for the short retry window. */
+function checkIsReadFresh<TValue>(cached: CachedRead<TValue> | undefined, nowMs: number, ttlMs: number): cached is CachedRead<TValue> {
+  return cached !== undefined && nowMs - cached.readAt < (cached.value === null ? failedRepositoryReadRetryMs : ttlMs);
+}
+
+/**
+ * @description A reader of folders' repository identities. Two cheap-to-expensive steps, cached apart: a folder's
+ * git common dir (`git rev-parse --git-common-dir`, resolved against the folder — no `--path-format`, which needs git
+ * 2.31) for {@link repositoryIdentityTtlMs}, and the repository's root commit by its common dir (the history walk runs
+ * once per repository; a root commit never changes). A failed read is tried again after
+ * {@link failedRepositoryReadRetryMs}, and a failure on a folder that IS a checkout (it has `.git`) is logged once.
+ */
+export function createRepositoryIdentityReader(
+  runGit: RunGit,
+  getNowMs: () => number = Date.now,
+  logWarning: (line: string) => void = (line) => console.warn(line),
+): (workDir: string) => Promise<RepositoryIdentity | null> {
+  const commonDirs = new Map<string, CachedRead<string>>();
+  const rootCommits = new Map<string, CachedRead<string>>();
+  const warnedFolders = new Set<string>();
+
+  function warnOnceIfCheckout(workDir: string, what: string): void {
+    if (warnedFolders.has(workDir) || !fs.existsSync(path.join(workDir, gitDirName))) return;
+    warnedFolders.add(workDir);
+    logWarning(`[todos] git could not read ${what} of ${workDir}: its topic is a project of its own until it can`);
+  }
+
   return async (workDir) => {
-    const cached = cache.get(workDir);
-    if (cached && getNowMs() - cached.readAt < repositoryIdentityTtlMs) return cached.identity;
-    const [roots, commonDir] = await Promise.all([
-      runGit(workDir, ['rev-list', '--max-parents=0', 'HEAD']),
-      runGit(workDir, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-    ]);
-    const rootCommit = roots?.split('\n').map((line) => line.trim()).filter((line) => line !== '').sort()[0];
-    const identity = rootCommit && commonDir ? { rootCommit, repositoryName: getRepositoryNameFromCommonDir(commonDir) } : null;
-    cache.set(workDir, { identity, readAt: getNowMs() });
-    return identity;
+    const nowMs = getNowMs();
+    let commonDir = commonDirs.get(workDir);
+    if (!checkIsReadFresh(commonDir, nowMs, repositoryIdentityTtlMs)) {
+      const output = await runGit(workDir, ['rev-parse', '--git-common-dir'], gitQuickQueryTimeoutMs);
+      commonDir = { value: output ? path.resolve(workDir, output) : null, readAt: getNowMs() };
+      commonDirs.set(workDir, commonDir);
+      if (commonDir.value === null) warnOnceIfCheckout(workDir, 'the repository');
+    }
+    if (commonDir.value === null) return null;
+    let rootCommit = rootCommits.get(commonDir.value);
+    if (!checkIsReadFresh(rootCommit, nowMs, Number.POSITIVE_INFINITY)) {
+      const roots = await runGit(workDir, ['rev-list', '--max-parents=0', 'HEAD'], gitHistoryQueryTimeoutMs);
+      const firstRoot = roots?.split('\n').map((line) => line.trim()).filter((line) => line !== '').sort()[0] ?? null;
+      rootCommit = { value: firstRoot, readAt: getNowMs() };
+      rootCommits.set(commonDir.value, rootCommit);
+      if (firstRoot === null) warnOnceIfCheckout(workDir, 'the first commit');
+    }
+    return rootCommit.value === null ? null : { rootCommit: rootCommit.value, repositoryName: getRepositoryNameFromCommonDir(commonDir.value) };
   };
 }
 

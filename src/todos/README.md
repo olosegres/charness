@@ -69,10 +69,12 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 
 ## Projects (`projects.ts`)
 
-- **Automatic by repository** (D15): a topic's bound folder → its git ROOT COMMIT (`git rev-list --max-parents=0`,
-  cached 10 min, a 5 s bound per git call) — the same in every clone and worktree; the project's name is its first
-  member's repository folder name (git's common dir: a worktree or a submodule names its repository, a clone its own
-  folder). A folder that is no checkout is a project of its folder.
+- **Automatic by repository** (D15): a topic's bound folder → its git common dir (`git rev-parse --git-common-dir`,
+  resolved against the folder, cached 10 min) → the repository's ROOT COMMIT (`git rev-list --max-parents=0`, a 30 s
+  bound, cached by common dir: one history walk per repository) — the same in every clone and worktree; the project's
+  name is its first member's repository folder name (a worktree or a submodule names its repository, a clone its own
+  folder). A folder that is no checkout is a project of its folder. A failed read is tried again after 30 s, and a
+  failure on a folder that has `.git` is logged once — the topic is a project of its own meanwhile.
 - **Jira** (D57): a conversation's project lists `repos` in `jira.json`; conversations that share a name are one
   board, and a topic whose repository folder has that name joins it. The name joins the union ONLY when a Jira
   conversation names it, so unrelated repositories with one folder name never meet. No `repos` → one shared board.

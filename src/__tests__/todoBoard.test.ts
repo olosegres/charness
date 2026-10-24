@@ -20,6 +20,7 @@ import {
   createRepositoryIdentityReader,
   getRepositoryNameFromCommonDir,
   groupTodoProjects,
+  failedRepositoryReadRetryMs,
   repositoryIdentityTtlMs,
   runGitInFolder,
   type RunGit,
@@ -156,7 +157,59 @@ describe('repository identity', () => {
     assert.equal(calls, 2, 'cached');
     clockMs += repositoryIdentityTtlMs;
     await read('/w/example-repo');
-    assert.equal(calls, 4, 'asked again after the TTL');
+    assert.equal(calls, 3, 'the folder\'s repository asked again after the TTL; its root commit, kept by repository, not');
+  });
+
+  it('a worktree\'s relative common dir is resolved; another folder of one repository walks no history again', async () => {
+    const asked: string[] = [];
+    const runGit: RunGit = async (dir, args) => {
+      asked.push(`${dir} ${args[0]}`);
+      if (args[0] === 'rev-list') return 'aaa';
+      return dir === '/w/example-repo' ? '.git' : '/w/example-repo/.git/worktrees/feature';
+    };
+    const read = createRepositoryIdentityReader(runGit, () => nowMs);
+    assert.deepEqual(await read('/w/example-repo'), { rootCommit: 'aaa', repositoryName: 'example-repo' }, 'a relative `.git` is the folder\'s own');
+    // A real worktree's common dir is the main repository's `.git`; this one names a worktree dir: still one history read per dir.
+    await read('/w/feature');
+    assert.deepEqual(asked, ['/w/example-repo rev-parse', '/w/example-repo rev-list', '/w/feature rev-parse', '/w/feature rev-list']);
+    const sameRepository: RunGit = async (_dir, args) => (args[0] === 'rev-list' ? 'aaa' : '/w/example-repo/.git');
+    let historyReads = 0;
+    const counting: RunGit = async (dir, args, timeoutMs) => {
+      if (args[0] === 'rev-list') historyReads += 1;
+      return sameRepository(dir, args, timeoutMs);
+    };
+    const shared = createRepositoryIdentityReader(counting, () => nowMs);
+    await shared('/w/example-repo');
+    await shared('/w/example-repo-wt');
+    assert.equal(historyReads, 1, 'one repository, one history walk');
+  });
+
+  it('a failed read is tried again soon, not kept for the TTL; a failure on a checkout is logged once', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-gitfail-'));
+    try {
+      fs.mkdirSync(path.join(root, '.git'));
+      let isGitWorking = false;
+      let clockMs = nowMs;
+      const warnings: string[] = [];
+      const runGit: RunGit = async (_dir, args) => {
+        if (!isGitWorking) return null;
+        return args[0] === 'rev-list' ? 'aaa' : path.join(root, '.git');
+      };
+      const read = createRepositoryIdentityReader(runGit, () => clockMs, (line) => warnings.push(line));
+      assert.equal(await read(root), null);
+      assert.equal(await read(root), null);
+      assert.equal(warnings.length, 1, 'logged once, not per read');
+      isGitWorking = true;
+      assert.equal(await read(root), null, 'within the retry window the failure stands');
+      clockMs += failedRepositoryReadRetryMs;
+      assert.equal((await read(root))?.rootCommit, 'aaa', 'tried again soon after');
+      const plainWarnings: string[] = [];
+      const plain = createRepositoryIdentityReader(async () => null, () => nowMs, (line) => plainWarnings.push(line));
+      await plain(path.join(root, 'no-checkout-here'));
+      assert.deepEqual(plainWarnings, [], 'a folder that is no checkout is no failure');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
