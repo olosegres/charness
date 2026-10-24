@@ -850,7 +850,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.settleAdoptCatchUp(session, true);
     this.closeFifo(session);
     const stderrTail = session.isStopping ? '' : readStderrTail(session.paths.stderrFile);
-    void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
+    // An explicit stop killed the host and waited for the process already (`terminateSessionProcess`). A second kill, by
+    // name and not awaited, could run after the NEXT start created its tmux session of the same name and end that one.
+    if (!session.isStopping) void tmuxAsync('kill-session', '-t', getTmuxSessionTarget(buildJsonStreamTmuxSessionName(key)));
     try { fs.rmSync(session.paths.dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     cleanupMcpTempFiles({ key, dataDir: resolveDataDir() });
     if (session.pendingInitResolve !== null && !session.isStopping) {
