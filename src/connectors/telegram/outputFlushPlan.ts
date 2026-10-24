@@ -122,73 +122,79 @@ export function appendPendingOutput(
 }
 
 /**
- * @name PendingOutputBuffer
- * @description The text a thread's output queue holds until its debounce ends, and how it lands: `bot.ts`'s
- * `OutputQueueState` carries these three fields and the helpers below keep them consistent.
+ * @name PendingOutputSegment
+ * @description A run of agent text waiting for its flush that belongs to ONE side of a turn boundary: batches queued with
+ * no boundary marked between them are coalesced into one segment, and a boundary marked after a segment started ends it.
  */
-export interface PendingOutputBuffer {
-  /** Coalesced, not-yet-sent agent output. `null` = nothing pending. */
-  pendingOutput: string | null;
-  /** Whether the FIRST batch in `pendingOutput` continues the last sent message. */
-  pendingIsContinuation: boolean;
-  /** Whether the first batch opens a message of its own: a turn boundary was marked before it was queued. */
-  pendingStartsNewMessage: boolean;
-}
-
-/** @description The thread's mark that the next output opens a new message (a prompt forwarded, a session started, a question posted). */
-export interface NewMessageMark {
-  needsNewMessage: boolean;
-}
-
-/** @description What one flush sends and how it lands in the topic. */
-export interface PendingOutputFlush {
+export interface PendingOutputSegment {
   output: string;
+  /** Whether the FIRST batch in `output` continues the last sent message. */
   isContinuation: boolean;
+  /** Whether the first batch opens a message of its own: a turn boundary was marked before it was queued. */
   startsNewMessage: boolean;
 }
 
 /**
- * @description Queue one batch of agent output. A buffer that starts here takes the thread's new-message mark and spends
- * it: the mark belongs to the first text queued AFTER the boundary, not to whichever send completes next — a send that
- * was already under way when the boundary was marked (the previous turn's text on a slow Bot API round trip) would
- * otherwise spend it, and the new turn's first text would be appended by edit to the previous turn's message. Later
- * batches only append.
+ * @name PendingOutputBuffer
+ * @description What a thread's output queue holds until its debounce ends, oldest segment first: `bot.ts`'s
+ * `OutputQueueState` carries it and the helpers below keep it consistent.
+ */
+export interface PendingOutputBuffer {
+  pendingSegments: PendingOutputSegment[];
+}
+
+/** @description The thread's mark that the next output opens a new message (a prompt forwarded, a session started, a question posted, a status frame shown). */
+export interface NewMessageMark {
+  needsNewMessage: boolean;
+}
+
+/**
+ * @description Queue one batch of agent output. Without a mark set it joins the newest segment (or starts the first one). With
+ * the mark set it starts a segment of its own and spends the mark — also when an earlier segment is still waiting: that
+ * text belongs to the turn before the boundary, so it flushes where it was going (as a continuation of the message it
+ * extends) and the batch after the boundary opens a new message.
+ *
+ * The mark belongs to the first text queued AFTER it, not to whichever send completes next: a send already under way when the
+ * boundary was marked (the previous turn's text on a slow Bot API round trip) would otherwise spend it, and the new turn's
+ * first text would be appended by edit to the previous turn's message.
  */
 export function addPendingOutput(
   buffer: PendingOutputBuffer,
   mark: NewMessageMark,
   batch: { output: string; isContinuation: boolean; startsNewParagraph: boolean },
 ): void {
-  if (buffer.pendingOutput === null) {
-    buffer.pendingIsContinuation = batch.isContinuation;
-    buffer.pendingStartsNewMessage = mark.needsNewMessage;
-    mark.needsNewMessage = false;
+  if (batch.output === '') return;
+  const newest = buffer.pendingSegments.at(-1);
+  if (newest && !mark.needsNewMessage) {
+    newest.output = appendPendingOutput(newest.output, batch.output, batch.isContinuation, batch.startsNewParagraph);
+    return;
   }
-  buffer.pendingOutput = appendPendingOutput(buffer.pendingOutput, batch.output, batch.isContinuation, batch.startsNewParagraph);
+  buffer.pendingSegments.push({ output: batch.output, isContinuation: batch.isContinuation, startsNewMessage: mark.needsNewMessage });
+  mark.needsNewMessage = false;
 }
 
-/** @description Take the pending text out for a flush: the buffer is empty afterwards. `null` when nothing is pending. */
-export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputFlush | null {
-  if (!buffer.pendingOutput) return null;
-  const flush: PendingOutputFlush = {
-    output: buffer.pendingOutput,
-    isContinuation: buffer.pendingIsContinuation,
-    startsNewMessage: buffer.pendingStartsNewMessage,
-  };
-  buffer.pendingOutput = null;
-  buffer.pendingIsContinuation = false;
-  buffer.pendingStartsNewMessage = false;
-  return flush;
+/** @description Whether anything waits to be sent. */
+export function checkHasPendingOutput(buffer: PendingOutputBuffer): boolean {
+  return buffer.pendingSegments.length > 0;
+}
+
+/** @description Take the oldest segment out for a flush. `null` when nothing is pending. */
+export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputSegment | null {
+  return buffer.pendingSegments.shift() ?? null;
 }
 
 /**
  * @description Put the text a flush could not send (see {@link getUnsentRemainder}) back at the FRONT of the buffer: it is
  * older than anything queued during the send. It restarts a fresh message (its predecessors landed or were edited in
- * place already), so it is not a continuation; text queued meanwhile keeps its own new-message mark.
+ * place already), so it is not a continuation; it joins the next segment unless a boundary was marked before that one.
  */
 export function requeueUnsentRemainder(buffer: PendingOutputBuffer, unsentRemainder: string): void {
-  buffer.pendingOutput = buffer.pendingOutput === null ? unsentRemainder : appendPendingOutput(unsentRemainder, buffer.pendingOutput, false);
-  buffer.pendingIsContinuation = false;
+  const [next, ...later] = buffer.pendingSegments;
+  if (next && !next.startsNewMessage) {
+    buffer.pendingSegments = [{ output: appendPendingOutput(unsentRemainder, next.output, false), isContinuation: false, startsNewMessage: false }, ...later];
+    return;
+  }
+  buffer.pendingSegments = [{ output: unsentRemainder, isContinuation: false, startsNewMessage: false }, ...buffer.pendingSegments];
 }
 
 /** Separator used to re-join un-sent chunks before re-enqueueing them (S2). The

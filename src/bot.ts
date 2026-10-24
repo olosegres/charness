@@ -215,7 +215,7 @@ import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
-import { addPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
@@ -2620,7 +2620,7 @@ function getOutputQueueState(key: SessionKey): OutputQueueState {
   const k = keyToString(key);
   let s = outputQueues.get(k);
   if (!s) {
-    s = { pendingOutput: null, pendingIsContinuation: false, pendingStartsNewMessage: false, isProcessing: false, debounceTimer: null };
+    s = { pendingSegments: [], isProcessing: false, debounceTimer: null };
     outputQueues.set(k, s);
   }
   return s;
@@ -2640,7 +2640,7 @@ function checkIsOutputStreaming(key: SessionKey): boolean {
   if (getOutboundFor(key).checkIsDelivering(key)) return true;
   const q = outputQueues.get(keyToString(key));
   if (!q) return false;
-  return q.pendingOutput !== null || q.isProcessing || q.debounceTimer !== null;
+  return checkHasPendingOutput(q) || q.isProcessing || q.debounceTimer !== null;
 }
 
 function getStatusCoalesceState(key: SessionKey): StatusCoalesceState {
@@ -2706,13 +2706,13 @@ function clearThreadQueues(key: SessionKey): void {
   // `/quit` release, session `closed`/`stopped`, `/unbind`, and topic-delete —
   // all route through here. CRITICAL ORDER: finalize BEFORE
   // `clearThreadOutputQueues`, because the group finalize drains
-  // `q.pendingOutput` and the clear would otherwise null it first (S2). Both
+  // the pending segments and the clear would otherwise drop them first (S2). Both
   // transports capture + reset their in-flight state SYNCHRONOUSLY before any
   // await, so the clear below can't race the drain. Fire-and-forget.
   void getOutboundFor(key).finalize(key);
   const queue = outputQueues.get(k);
   // Text that took the new-message mark and is dropped unsent leaves the mark with the thread again.
-  if (queue?.pendingOutput != null && queue.pendingStartsNewMessage) markNeedsNewMessage(key);
+  if (queue?.pendingSegments.some((segment) => segment.startsNewMessage)) markNeedsNewMessage(key);
   clearThreadOutputQueues(queue, statusCoalescers.get(k));
   // A new session starts with empty context — forget the last-sent outputs so
   // the identical-output backstop can't suppress a legitimate repeat across a
@@ -3680,7 +3680,7 @@ function startTypingLoader(key: SessionKey): void {
       console.warn(
         `[typing] ${keyToString(key)} force-stop: kept alive by leaked output-queue state — ` +
         `isOutputStreaming=${checkIsOutputStreaming(key)} isAdapterBusy=${checkIsAdapterBusy(key)} ` +
-        `pendingOutput=${q?.pendingOutput !== null && q?.pendingOutput !== undefined} ` +
+        `pendingOutput=${q !== undefined && checkHasPendingOutput(q)} ` +
         `isProcessing=${q?.isProcessing === true} debounceTimer=${q?.debounceTimer !== null && q?.debounceTimer !== undefined}`,
       );
       if (q?.debounceTimer) { clearTimeout(q.debounceTimer); q.debounceTimer = null; }
@@ -3706,7 +3706,7 @@ function checkIsTypingLoopStuck(key: SessionKey): boolean {
     isAdapterBusy: checkIsAdapterBusy(key),
     isCompacting: checkIsThreadCompacting(key),
     isTransportStreaming: getOutboundFor(key).checkIsDelivering(key),
-    hasPendingOutput: q?.pendingOutput != null,
+    hasPendingOutput: q !== undefined && checkHasPendingOutput(q),
     isProcessing: q?.isProcessing === true,
     hasDebounceTimer: q?.debounceTimer != null,
   });
@@ -3823,8 +3823,8 @@ function queueOutput(
   startsNewParagraph = false,
 ): void {
   const q = getOutputQueueState(key);
-  // The first batch in a fresh buffer decides how the whole flush lands: it extends the last sent message, or — a turn
-  // boundary was marked before it was queued — opens a new one. Later batches only append.
+  // A batch joins the newest pending segment; one queued after a turn boundary was marked starts a segment of its own, which
+  // opens a new message, and leaves the earlier segment to flush where it was going.
   addPendingOutput(q, getThreadMessageState(key), { output, isContinuation, startsNewParagraph });
   // `isFinal` / `isComplete` still drive the immediate-flush timing below (a
   // finished turn must not wait out the debounce) — they no longer mark the
@@ -3848,7 +3848,8 @@ function queueOutput(
     // S3: scale the in-cooldown debounce to the live remaining cooldown.
     remainingCooldownMs: getRateLimitRemainingMs(getTelegramChatId(key)),
   });
-  if (timing === 'now') {
+  // An earlier segment, sealed by a boundary, has nothing more to wait for: its turn is over.
+  if (timing === 'now' || q.pendingSegments.length > 1) {
     // Final frame: flush immediately. `processOutputQueue` already guards
     // `isProcessing`, so this is idempotent if a flush is mid-flight (the
     // pending frame will be picked up by the re-trigger timer it arms).
@@ -3863,7 +3864,7 @@ function queueOutput(
 
 async function processOutputQueue(key: SessionKey): Promise<void> {
   const q = getOutputQueueState(key);
-  if (q.isProcessing || !q.pendingOutput) return;
+  if (q.isProcessing || !checkHasPendingOutput(q)) return;
   q.isProcessing = true;
   try {
     const flush = takePendingOutput(q);
@@ -3879,7 +3880,7 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
     if (unsentRemainder) requeueUnsentRemainder(q, unsentRemainder);
   } finally {
     q.isProcessing = false;
-    if (q.pendingOutput) {
+    if (checkHasPendingOutput(q)) {
       // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
       // call whose handle was never stored. A `queueOutput` call between
       // here and the timer firing would `clearTimeout(null)` and
@@ -3890,7 +3891,7 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
       q.debounceTimer = setTimeout(() => {
         q.debounceTimer = null;
         processOutputQueue(key);
-      }, getOutputDelay(getTelegramChatId(key)));
+      }, q.pendingSegments.length > 1 ? 0 : getOutputDelay(getTelegramChatId(key)));
     }
   }
 }
@@ -3900,7 +3901,7 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
  * coalesced-but-unsent output against what actually landed, and force-send the
  * remainder so the agent's FINAL answer is never discarded on teardown (S2).
  *
- * Today the group output queue coalesces into `q.pendingOutput` and the
+ * Today the group output queue coalesces into `q.pendingSegments` and the
  * (possibly 429-stretched) debounce flushes it later; a teardown
  * (`idle`/`isFinal` → `handleAgentStopped`, `/new`, `/quit`, `/unbind`,
  * topic-delete) runs `clearThreadOutputQueues` which DISCARDS that buffer — so
@@ -3922,18 +3923,21 @@ async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   if (plan.action === 'noop') return; // fully delivered → no-op, no dupe.
   // Snapshot is captured by the plan; empty the buffer SYNCHRONOUSLY before the
   // await so the immediately-following clear / a concurrent flush can't re-send it.
-  takePendingOutput(q);
+  q.pendingSegments = [];
   if (q.debounceTimer) {
     clearTimeout(q.debounceTimer);
     q.debounceTimer = null;
   }
-  const { unsentRemainder } = await sendOutputImmediate(key, plan.text, plan.isContinuation, plan.startsNewMessage);
-  // A remainder that still 429'd at teardown is dropped (the buffer is being
-  // torn down anyway — unchanged from the pre-S2 discard). Do NOT re-queue: the
-  // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
-  // global pacing a 429 here is essentially impossible.
-  if (unsentRemainder) {
-    console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
+  for (const segment of plan.segments) {
+    const { unsentRemainder } = await sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage);
+    // A remainder that still 429'd at teardown is dropped (the buffer is being
+    // torn down anyway — unchanged from the pre-S2 discard), and so is everything behind it. Do NOT re-queue: the
+    // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
+    // global pacing a 429 here is essentially impossible.
+    if (unsentRemainder) {
+      console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
+      return;
+    }
   }
 }
 
@@ -4187,7 +4191,7 @@ const shutdownOutputFlushMaxMs = shutdownDrainMaxMs + 1000;
  * already-emitted answer chunks died in the send pipeline with the
  * process and were never re-sent). Two buffers drain, in order:
  *
- *  [A] per-thread COALESCE state — the group/baseline `q.pendingOutput`
+ *  [A] per-thread COALESCE state — the group/baseline `q.pendingSegments`
  *      buffers (enumerated here from {@link outputQueues}) and the DM
  *      transport's active drafts (enumerated via `getInFlightThreadKeys`) —
  *      each finalized to a permanent message via the transport's
@@ -4217,7 +4221,7 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
     // queues + the connector's own unfinalized content (deduped by serialised key).
     const pendingKeys = new Map<string, SessionKey>();
     for (const [keyStr, q] of outputQueues) {
-      if (q.pendingOutput === null) continue;
+      if (!checkHasPendingOutput(q)) continue;
       try {
         pendingKeys.set(keyStr, keyFromString(keyStr));
       } catch {
@@ -4234,11 +4238,11 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
     // A DM-surface thread on a non-draft adapter (e.g. terminal) coalesces via
     // the group `queueOutput` path, but its transport finalize handled only the
     // draft — drain any such leftover buffer directly. Group keys were already
-    // drained above (their finalize nulls `pendingOutput` synchronously), so
+    // drained above (their finalize empties the pending segments synchronously), so
     // this is a no-op for them.
     const leftoverDrains: Promise<void>[] = [];
     for (const [keyStr, q] of outputQueues) {
-      if (q.pendingOutput === null) continue;
+      if (!checkHasPendingOutput(q)) continue;
       try {
         leftoverDrains.push(finalizeGroupOutput(keyFromString(keyStr)));
       } catch {

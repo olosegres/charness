@@ -11,41 +11,33 @@
  * the buffer, then `sendOutputImmediate`); this owns only the decision.
  *
  * The group queue already SEPARATES what landed from what is pending:
- * `lastMessageText` holds the last landed message and `pendingOutput` holds the
+ * `lastMessageText` holds the last landed message and the pending segments hold the
  * coalesced-but-unsent remainder. So the "reconcile final accumulated vs last
- * landed" reduces to: send `pendingOutput` if it is non-empty. No text diff is
- * needed — the queue is the single source of the remainder.
+ * landed" reduces to: send the pending segments, in order, if there are any. No text
+ * diff is needed — the queue is the single source of the remainder.
  */
+
+import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPlan';
 
 /** The load-bearing fields of `bot.ts`'s `OutputQueueState` the decision needs. */
 export interface GroupFinalizeInput {
-  /** Coalesced, not-yet-sent agent output. `null` = nothing pending. */
-  pendingOutput: string | null;
-  /** Whether the FIRST batch in `pendingOutput` continues the last sent message. */
-  pendingIsContinuation: boolean;
-  /** Whether the first batch opens a message of its own (a turn boundary was marked before it was queued). */
-  pendingStartsNewMessage: boolean;
+  /** Coalesced, not-yet-sent agent output, oldest first. Empty = nothing pending. */
+  pendingSegments: readonly PendingOutputSegment[];
 }
 
 /**
  * @description The finalize plan: either nothing to do (fully delivered), or the
- * exact remainder to send and how.
+ * exact remainder to send — segment by segment, each landing as it was queued.
  */
 export type GroupFinalizePlan =
   | { action: 'noop' }
-  | { action: 'send'; text: string; isContinuation: boolean; startsNewMessage: boolean };
+  | { action: 'send'; segments: PendingOutputSegment[] };
 
 export function getGroupFinalizePlan(input: GroupFinalizeInput): GroupFinalizePlan {
-  // A fully-delivered turn (no pending remainder) — and a buffer holding only
-  // whitespace, which would earn a Telegram error and is not a real answer — is
+  // A fully-delivered turn (no pending remainder) — and segments holding only
+  // whitespace, which would earn a Telegram error and are not a real answer — is
   // a no-op, so a settle/teardown never double-posts.
-  if (input.pendingOutput === null || input.pendingOutput.trim() === '') {
-    return { action: 'noop' };
-  }
-  return {
-    action: 'send',
-    text: input.pendingOutput,
-    isContinuation: input.pendingIsContinuation,
-    startsNewMessage: input.pendingStartsNewMessage,
-  };
+  const segments = input.pendingSegments.filter((segment) => segment.output.trim() !== '');
+  if (segments.length === 0) return { action: 'noop' };
+  return { action: 'send', segments };
 }

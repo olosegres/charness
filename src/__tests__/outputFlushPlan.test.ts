@@ -21,13 +21,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addPendingOutput,
+  checkHasPendingOutput,
   getOutputFlushPlan,
   appendPendingOutput,
   getUnsentRemainder,
   getGroupDeltaContinuation,
   requeueUnsentRemainder,
   takePendingOutput,
+  type NewMessageMark,
   type PendingOutputBuffer,
+  type PendingOutputSegment,
 } from '../connectors/telegram/outputFlushPlan';
 import { MAX_MESSAGE_LEN, splitMessage } from '../connectors/telegram/messageSplit';
 
@@ -235,74 +238,128 @@ describe('getGroupDeltaContinuation (S3 — Claude edit-in-place in group mode)'
 });
 
 function createEmptyBuffer(): PendingOutputBuffer {
-  return { pendingOutput: null, pendingIsContinuation: false, pendingStartsNewMessage: false };
+  return { pendingSegments: [] };
 }
 
 const midReplyBatch = { isContinuation: true, startsNewParagraph: false };
 
+/** What `sendOutputImmediate` decides for a taken segment, against the message the topic ended on. */
+function planTakenSegment(segment: PendingOutputSegment, lastMessage: { id: number | null; text: string | null }): { isEditInPlace: boolean; chunks: string[] } {
+  const plan = getOutputFlushPlan({
+    output: segment.output,
+    isContinuation: segment.isContinuation,
+    needsNewMessage: segment.startsNewMessage,
+    lastMessageId: lastMessage.id,
+    lastMessageText: lastMessage.text,
+  });
+  return { isEditInPlace: plan.shouldEditFirstChunk, chunks: plan.chunks };
+}
+
 describe('addPendingOutput / takePendingOutput (the new-message mark belongs to the text queued after it)', () => {
-  it('the first batch of a buffer takes the thread\'s mark and spends it; later batches only append', () => {
+  it('without a mark, batches coalesce into one segment that continues the last message; the first batch decides how it lands', () => {
     const buffer = createEmptyBuffer();
-    const mark = { needsNewMessage: true };
+    const mark: NewMessageMark = { needsNewMessage: false };
     addPendingOutput(buffer, mark, { output: 'first ', ...midReplyBatch });
-    assert.deepEqual(buffer, { pendingOutput: 'first ', pendingIsContinuation: true, pendingStartsNewMessage: true });
-    assert.equal(mark.needsNewMessage, false, 'the mark is spent by the text that took it');
-    mark.needsNewMessage = true; // a boundary marked while that text is still pending belongs to the NEXT buffer
     addPendingOutput(buffer, mark, { output: 'second', isContinuation: false, startsNewParagraph: false });
-    assert.equal(buffer.pendingOutput, 'first \nsecond', 'appended like any later batch');
-    assert.equal(buffer.pendingIsContinuation, true, 'the first batch decides how the buffer lands');
-    assert.equal(buffer.pendingStartsNewMessage, true);
-    assert.equal(mark.needsNewMessage, true, 'the mark is left for the next buffer');
+    assert.deepEqual(buffer.pendingSegments, [{ output: 'first \nsecond', isContinuation: true, startsNewMessage: false }]);
   });
 
-  it('a buffer queued with no mark set continues the last message', () => {
+  it('the first segment takes the mark and spends it', () => {
     const buffer = createEmptyBuffer();
-    const mark = { needsNewMessage: false };
-    addPendingOutput(buffer, mark, { output: 'tail', ...midReplyBatch });
-    assert.equal(buffer.pendingStartsNewMessage, false);
+    const mark: NewMessageMark = { needsNewMessage: true };
+    addPendingOutput(buffer, mark, { output: 'first ', ...midReplyBatch });
+    assert.deepEqual(buffer.pendingSegments, [{ output: 'first ', isContinuation: true, startsNewMessage: true }]);
+    assert.equal(mark.needsNewMessage, false, 'the mark is spent by the text that took it');
+    addPendingOutput(buffer, mark, { output: 'more', ...midReplyBatch });
+    assert.equal(buffer.pendingSegments.length, 1, 'later batches of the same turn only append');
+    assert.equal(buffer.pendingSegments[0].output, 'first more');
   });
 
-  it('take hands over the text with its flags and empties the buffer; nothing pending → null', () => {
+  it('a boundary marked while earlier text is still waiting splits it: the earlier text keeps its place, the new text opens a new message', () => {
+    // A mid-reply tail waits out the debounce; the user\'s next prompt is forwarded (the mark is set); the agent\'s next text
+    // arrives before the tail flushed. One buffer would edit both into the previous message, ABOVE the prompt.
     const buffer = createEmptyBuffer();
+    const mark: NewMessageMark = { needsNewMessage: false };
+    addPendingOutput(buffer, mark, { output: 'the end of the previous reply', ...midReplyBatch });
+    mark.needsNewMessage = true;
+    addPendingOutput(buffer, mark, { output: 'the answer to the prompt', ...midReplyBatch });
+    assert.equal(mark.needsNewMessage, false, 'the text after the boundary took the mark');
+    assert.deepEqual(buffer.pendingSegments, [
+      { output: 'the end of the previous reply', isContinuation: true, startsNewMessage: false },
+      { output: 'the answer to the prompt', isContinuation: true, startsNewMessage: true },
+    ]);
+
+    const lastMessage = { id: 41, text: 'the previous reply, so far' };
+    const first = takePendingOutput(buffer);
+    assert.ok(first);
+    assert.equal(planTakenSegment(first, lastMessage).isEditInPlace, true, 'the tail still extends the message it belongs to');
+    const second = takePendingOutput(buffer);
+    assert.ok(second);
+    assert.equal(planTakenSegment(second, { id: 41, text: 'the previous reply, so far the end of the previous reply' }).isEditInPlace, false, 'the new turn\'s text is a message of its own');
     assert.equal(takePendingOutput(buffer), null);
-    addPendingOutput(buffer, { needsNewMessage: true }, { output: 'answer', isContinuation: false, startsNewParagraph: false });
-    assert.deepEqual(takePendingOutput(buffer), { output: 'answer', isContinuation: false, startsNewMessage: true });
-    assert.deepEqual(buffer, createEmptyBuffer());
-    assert.equal(takePendingOutput(buffer), null);
+  });
+
+  it('a mark spent by a status frame splits the same way (text, tool call, text)', () => {
+    const buffer = createEmptyBuffer();
+    const mark: NewMessageMark = { needsNewMessage: false };
+    addPendingOutput(buffer, mark, { output: 'text before the tool call', ...midReplyBatch });
+    mark.needsNewMessage = true; // a status frame was on screen when the next output arrived
+    addPendingOutput(buffer, mark, { output: 'text after it', ...midReplyBatch });
+    assert.deepEqual(buffer.pendingSegments.map((segment) => segment.startsNewMessage), [false, true]);
   });
 
   it('a boundary marked while the previous turn\'s text is being sent: the new turn\'s first text still opens a message of its own, whenever the earlier send completes', () => {
-    // The CI failure of the usage-limit flow, state by state: the interrupted turn's text is taken for a flush that is slow
-    // to finish, the work continues (a prompt is forwarded: the boundary is marked), the resumed turn's text is queued ...
+    // The CI failure of the usage-limit flow, state by state: the interrupted turn\'s text is taken for a flush that is slow
+    // to finish, the work continues (a prompt is forwarded: the boundary is marked), the resumed turn\'s text is queued ...
     const thread = { needsNewMessage: false, lastMessageId: 75 as number | null, lastMessageText: 'Working on LIM-7.' as string | null };
     const buffer = createEmptyBuffer();
-    addPendingOutput(buffer, thread, { output: 'Working on LIM-7.', isContinuation: true, startsNewParagraph: false });
+    addPendingOutput(buffer, thread, { output: 'Working on LIM-7.', ...midReplyBatch });
     const interrupted = takePendingOutput(buffer);
     assert.ok(interrupted);
     thread.needsNewMessage = true;
-    addPendingOutput(buffer, thread, { output: 'Working on LIM-7.', isContinuation: true, startsNewParagraph: false });
+    addPendingOutput(buffer, thread, { output: 'Working on LIM-7.', ...midReplyBatch });
     // ... and only now does the earlier send end: it lands and moves the last-message cursor, but it never touches the mark.
     const resumed = takePendingOutput(buffer);
     assert.ok(resumed);
-    const plan = getOutputFlushPlan({
-      output: resumed.output,
-      isContinuation: resumed.isContinuation,
-      needsNewMessage: resumed.startsNewMessage,
-      lastMessageId: thread.lastMessageId,
-      lastMessageText: thread.lastMessageText,
-    });
-    assert.equal(plan.shouldEditFirstChunk, false, 'a new message, not an edit of the interrupted turn\'s');
+    const plan = planTakenSegment(resumed, { id: thread.lastMessageId, text: thread.lastMessageText });
+    assert.equal(plan.isEditInPlace, false, 'a new message, not an edit of the interrupted turn\'s');
     assert.deepEqual(plan.chunks, ['Working on LIM-7.']);
   });
 
-  it('an unsent remainder goes back to the front as a fresh message; the text queued meanwhile keeps its own mark', () => {
+  it('empty output queues nothing and spends no mark', () => {
     const buffer = createEmptyBuffer();
-    requeueUnsentRemainder(buffer, 'the part that hit a 429');
-    assert.deepEqual(buffer, { pendingOutput: 'the part that hit a 429', pendingIsContinuation: false, pendingStartsNewMessage: false });
+    const mark: NewMessageMark = { needsNewMessage: true };
+    addPendingOutput(buffer, mark, { output: '', ...midReplyBatch });
+    assert.equal(checkHasPendingOutput(buffer), false);
+    assert.equal(mark.needsNewMessage, true);
+  });
+
+  it('take hands over the oldest segment with its flags; nothing pending → null', () => {
+    const buffer = createEmptyBuffer();
+    assert.equal(takePendingOutput(buffer), null);
+    addPendingOutput(buffer, { needsNewMessage: true }, { output: 'answer', isContinuation: false, startsNewParagraph: false });
+    assert.equal(checkHasPendingOutput(buffer), true);
+    assert.deepEqual(takePendingOutput(buffer), { output: 'answer', isContinuation: false, startsNewMessage: true });
+    assert.equal(checkHasPendingOutput(buffer), false);
+    assert.equal(takePendingOutput(buffer), null);
+  });
+
+  it('an unsent remainder goes back to the front as a fresh message and joins the next segment; a segment after a boundary stays apart', () => {
+    const alone = createEmptyBuffer();
+    requeueUnsentRemainder(alone, 'the part that hit a 429');
+    assert.deepEqual(alone.pendingSegments, [{ output: 'the part that hit a 429', isContinuation: false, startsNewMessage: false }]);
 
     const queuedMeanwhile = createEmptyBuffer();
-    addPendingOutput(queuedMeanwhile, { needsNewMessage: true }, { output: 'newer', ...midReplyBatch });
+    addPendingOutput(queuedMeanwhile, { needsNewMessage: false }, { output: 'newer', ...midReplyBatch });
     requeueUnsentRemainder(queuedMeanwhile, 'older');
-    assert.deepEqual(queuedMeanwhile, { pendingOutput: 'older\nnewer', pendingIsContinuation: false, pendingStartsNewMessage: true });
+    assert.deepEqual(queuedMeanwhile.pendingSegments, [{ output: 'older\nnewer', isContinuation: false, startsNewMessage: false }]);
+
+    const behindBoundary = createEmptyBuffer();
+    addPendingOutput(behindBoundary, { needsNewMessage: true }, { output: 'the next turn', ...midReplyBatch });
+    requeueUnsentRemainder(behindBoundary, 'the previous turn\'s part');
+    assert.deepEqual(behindBoundary.pendingSegments, [
+      { output: 'the previous turn\'s part', isContinuation: false, startsNewMessage: false },
+      { output: 'the next turn', isContinuation: true, startsNewMessage: true },
+    ]);
   });
 });

@@ -1,3 +1,5 @@
+import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPlan';
+
 /**
  * @description Minimal shape of the bot's per-thread output queue that
  * {@link clearThreadOutputQueues} needs to drop. Mirrors the load-bearing
@@ -5,9 +7,9 @@
  * unit-testable function instead of reaching into module-private maps.
  */
 export interface ClearableOutputQueue {
-  /** Coalesced, not-yet-sent agent output. `null` = nothing queued. */
-  pendingOutput: string | null;
-  /** Armed debounce timer that would flush `pendingOutput`. `null` = none. */
+  /** Coalesced, not-yet-sent agent output, oldest first. Empty = nothing queued. */
+  pendingSegments: PendingOutputSegment[];
+  /** Armed debounce timer that would flush the pending segments. `null` = none. */
   debounceTimer: NodeJS.Timeout | null;
 }
 
@@ -46,7 +48,7 @@ export function clearThreadOutputQueues(
   coalescer: ClearableStatusCoalescer | undefined,
 ): void {
   if (queue) {
-    queue.pendingOutput = null;
+    queue.pendingSegments = [];
     if (queue.debounceTimer) {
       clearTimeout(queue.debounceTimer);
       queue.debounceTimer = null;

@@ -5,16 +5,21 @@ import {
   type ClearableOutputQueue,
   type ClearableStatusCoalescer,
 } from '../utils/clearThreadOutputQueues';
+import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPlan';
+
+function createSegment(output: string): PendingOutputSegment {
+  return { output, isContinuation: false, startsNewMessage: false };
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 describe('clearThreadOutputQueues', () => {
-  it('drops pendingOutput, cancels the debounce timer, and clears the status frame', async () => {
+  it('drops the pending segments, cancels the debounce timer, and clears the status frame', async () => {
     let timerFired = false;
     const queue: ClearableOutputQueue = {
-      pendingOutput: 'queued delta that must not post after stop',
+      pendingSegments: [createSegment('queued delta that must not post after stop')],
       // A real armed timer: if clearThreadOutputQueues does NOT cancel it,
       // `timerFired` flips to true and the assertion below fails — this is
       // the load-bearing check (not a synthetic marker).
@@ -28,7 +33,7 @@ describe('clearThreadOutputQueues', () => {
 
     clearThreadOutputQueues(queue, coalescer);
 
-    assert.equal(queue.pendingOutput, null, 'pendingOutput must be dropped');
+    assert.deepEqual(queue.pendingSegments, [], 'the pending segments must be dropped');
     assert.equal(queue.debounceTimer, null, 'debounceTimer handle must be nulled');
     assert.equal(coalescer.pendingText, null, 'status pendingText must be dropped');
 
@@ -58,12 +63,12 @@ describe('clearThreadOutputQueues', () => {
   });
 
   it('is a no-op on an already-empty queue and coalescer', () => {
-    const queue: ClearableOutputQueue = { pendingOutput: null, debounceTimer: null };
+    const queue: ClearableOutputQueue = { pendingSegments: [], debounceTimer: null };
     const coalescer: ClearableStatusCoalescer = { pendingText: null };
 
     clearThreadOutputQueues(queue, coalescer);
 
-    assert.equal(queue.pendingOutput, null);
+    assert.deepEqual(queue.pendingSegments, []);
     assert.equal(queue.debounceTimer, null);
     assert.equal(coalescer.pendingText, null);
   });
@@ -77,13 +82,13 @@ describe('clearThreadOutputQueues', () => {
 
   it('clears the output queue even when only the queue exists', () => {
     const queue: ClearableOutputQueue = {
-      pendingOutput: 'tail',
+      pendingSegments: [createSegment('tail')],
       debounceTimer: null,
     };
 
     clearThreadOutputQueues(queue, undefined);
 
-    assert.equal(queue.pendingOutput, null);
+    assert.deepEqual(queue.pendingSegments, []);
   });
 
   it('clears the status frame even when only the coalescer exists', () => {

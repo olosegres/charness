@@ -19,7 +19,8 @@ move is under way.
 
 **A new turn's text no longer lands inside the previous turn's message.** When the Telegram API was slow, the previous turn's
 last text could finish sending after the next prompt had gone to the agent, and the next turn's first text was then appended
-to that message by an edit instead of starting its own. The "new message" mark now belongs to the first text queued after it.
+to that message by an edit instead of starting its own. The "new message" mark now belongs to the first text queued after it,
+and text still waiting when your next prompt goes out is no longer pulled into the new reply's message.
 
 ## 3.6.0 — 2026-10-24
 
