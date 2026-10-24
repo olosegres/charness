@@ -26,7 +26,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import { fakeJiraSearchRequest } from './jiraE2e/fakeJira';
-import { getPolledDecisions } from './jiraE2e/charnessLog';
+import { getPolledDecisions, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
 import { getAdfText, getMentionedAccountIds } from '../connectors/jira/adf';
 import { resolveThreadFilesDir } from '../botFileStorage';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
@@ -62,6 +62,11 @@ import {
   trustedGroupName,
   waitFor,
 } from './jiraE2e/jiraFlowKit';
+
+/** The requests the polls opened for an issue — for itself or for a mention in it (`KEY#mention:<comment id>`), in order. */
+function listPolledRequestKeysOf(issueKey: string): string[] {
+  return getPolledRequestIssueKeys(getCharness().output).filter((decisionKey) => decisionKey === issueKey || decisionKey.startsWith(`${issueKey}#`));
+}
 
 describe('Jira connector end to end — the trusted group and mentions: built charness, fake Jira, fake claude (J7)', () => {
   registerJiraFlowHooks({ layoutPrefix: 'charness-j7-trust-', config: { adapter: 'claude-per-turn', trustedGroup: trustedGroupName } });
@@ -125,6 +130,9 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     assert.equal(refusedIssue.comments[0].author.accountId, aiAccount.accountId);
     await waitFor('two more polls', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBeforeRefusal + 2);
+    // A poll logs its decisions before the next one starts, so the second of these polls has decided after the hand-over
+    // — at once, where a wrongly started agent would show its turn only seconds later.
+    assert.deepEqual(listPolledRequestKeysOf(refusedKey), [], 'no poll opened a request for it');
     assert.equal(refusedIssue.comments.length, 1, 'the notice is posted once per trigger');
     assert.deepEqual(getTurns(refusedKey), [], 'no agent ran');
     assert.deepEqual(getPrompts(refusedKey), []);
@@ -158,6 +166,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
       await waitFor(`${count} more polls`, restartPollWaitMs, () => countPolls() >= target);
     };
     const getMentionRequests = (): ClosedRequestRecord[] => readClosedRequests().filter((record) => record.origin.attributes.issueKey === issueKey);
+    const getMentionDecisionKey = (commentId: string): string => `${issueKey}#mention:${commentId}`;
 
     // (a) A member mentions the AI: one request, answered by a comment; nothing is handed over or back.
     const mentionId = fakeJira.addComment(issueKey, requester, 'why does the export fail on empty rows?', { mentions: [aiAccount] });
@@ -191,7 +200,10 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
       decided === `${issueKey}#mention:${mentionId}` && decision === 'request'), 'the poll logged the mention decision');
 
     // (b) The same comment never wakes it twice — the answer moved the issue, the next polls read its comments again.
+    // A poll logs its decisions before the next one starts: after two more polls one of them decided after the answer,
+    // and a second wake is in the log at once — its agent turn would land only seconds later.
     await awaitPolls(2);
+    assert.deepEqual(listPolledRequestKeysOf(issueKey), [getMentionDecisionKey(mentionId)], 'no poll opened a second request');
     assert.equal(getPrompts(issueKey).length, 1);
     assert.equal(getMentionRequests().length, 1);
     assert.equal(issue.comments.length, 2);
@@ -201,6 +213,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     const ignoredLine = `[jira] ${issueKey}: the mention in comment ${outsiderMentionId} is ignored: its author or last editor is outside the trusted group`;
     await waitFor('the outsider\'s mention ignored', answerTimeoutMs, () => getCharness().output.includes(ignoredLine));
     await awaitPolls(2);
+    assert.deepEqual(listPolledRequestKeysOf(issueKey), [getMentionDecisionKey(mentionId)], 'the outsider\'s mention opened no request');
     assert.equal(getCharness().output.split('\n').filter((line) => line.includes(ignoredLine)).length, 1, 'logged once');
     assert.equal(getPrompts(issueKey).length, 1, 'no agent turn for it');
     assert.equal(issue.comments.length, 3, 'only the outsider\'s own comment was added');
@@ -208,6 +221,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     // (d) An edit that ADDS a mention to an older comment wakes it once.
     const plainId = fakeJira.addComment(issueKey, requester, 'the export also hangs on a single row');
     await awaitPolls(2);
+    assert.deepEqual(listPolledRequestKeysOf(issueKey), [getMentionDecisionKey(mentionId)], 'a comment without a mention opened no request');
     assert.equal(getPrompts(issueKey).length, 1, 'a comment without a mention wakes nothing');
     fakeJira.editComment(issueKey, plainId, 'the export also hangs on a single row — can you look?', requester, { mentions: [aiAccount] });
     await waitFor(`${issueKey}: the edited comment's mention answered`, answerTimeoutMs, () =>
@@ -221,6 +235,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     assert.equal(issue.assignee?.accountId, requester.accountId);
     assert.equal(countAssigneeChanges(issueKey), 0);
     await awaitPolls(2);
+    assert.deepEqual(listPolledRequestKeysOf(issueKey), [getMentionDecisionKey(mentionId), getMentionDecisionKey(plainId)], 'the edit opened one request');
     assert.equal(getPrompts(issueKey).length, 2, 'the edit woke it once');
   });
 
