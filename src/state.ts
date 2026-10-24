@@ -57,7 +57,7 @@ import type { LastRunVersion, SelfUpdateRecord } from './selfUpdate/types';
 export const STATE_SCHEMA_VERSION = 1;
 
 /** Default debounce window (ms) for batched saves. Overridable via the store constructor for tests. */
-const DEFAULT_SAVE_DEBOUNCE_MS = 500;
+export const DEFAULT_SAVE_DEBOUNCE_MS = 500;
 
 // The locked display-preference default (`minimal` for all three prefs) lives
 // in `utils/displayVerbosity.ts` (`defaultDisplayVerbosityMode`) — one place

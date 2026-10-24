@@ -151,7 +151,8 @@ of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the globa
 below the 10 s floor of `jira.json`, `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's
 minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce). It is the ONE test-only timing seam,
-never a setting: unset, every window is the production one; set, the boot prints `[test-timings] … overrides active`, and
+never a setting: unset, every window is the production one; a value may only shorten its window (each key is capped at its
+production value); set, the boot prints `[test-timings] … overrides active`, and
 an unknown key or a bad value stops the start naming it.
 
 The Docker dev loop (never `docker compose restart` — it ignores

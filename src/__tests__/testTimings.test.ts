@@ -6,11 +6,30 @@
  *   • a valid object is read as is;
  *   • anything else — not JSON, an unknown key, a value that is not a positive whole number of ms — is an error that
  *     names the variable and the key (the boot then stops with it);
+ *   • a value may only shorten its window: at most the production value of its key, never past Node's timer limit;
  *   • the boot line names every override in force, and there is none without one.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from '../testTimings';
+import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName, type TestTimings } from '../testTimings';
+import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
+import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
+import { globalSendIntervalMs } from '../rateLimiter';
+import { unwatchedSweepMs } from '../requests/wakeUpEngine';
+import { postRetryDelaysMs } from '../requests/wakeUpRules';
+import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
+
+/** Every key with the production window it may only shorten. */
+const productionWindowsMs: Array<[keyof TestTimings, number]> = [
+  ['telegramSendIntervalMs', globalSendIntervalMs],
+  ['jiraPollIntervalMs', jiraPollIntervalMinSeconds * 1000],
+  ['requestSweepIntervalMs', unwatchedSweepMs],
+  ['requestFirstPostRetryDelayMs', postRetryDelaysMs[0]],
+  ['limitProbeDelayMs', unconfirmedLimitProbeDelayMs],
+  ['stateSaveDebounceMs', DEFAULT_SAVE_DEBOUNCE_MS],
+];
+/** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
+const beyondTimerMaxMs = 2_147_483_648;
 
 describe('parseTestTimings', () => {
   it('unset or blank: no overrides', () => {
@@ -42,6 +61,19 @@ describe('parseTestTimings', () => {
       assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} limitProbeDelayMs:`)), JSON.stringify(parsed));
     }
   });
+});
+
+describe('a test timing may only shorten its window', () => {
+  for (const [key, productionMs] of productionWindowsMs) {
+    it(`${key}: the production ${productionMs} ms is accepted, one ms more and a timer-overflowing value are refused naming it`, () => {
+      assert.deepEqual(parseTestTimings(JSON.stringify({ [key]: productionMs })), { ok: true, timings: { [key]: productionMs } });
+      for (const tooLongMs of [productionMs + 1, beyondTimerMaxMs]) {
+        const parsed = parseTestTimings(JSON.stringify({ [key]: tooLongMs }));
+        assert.equal(parsed.ok, false, `${tooLongMs} is refused`);
+        assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} ${key}:`)), JSON.stringify(parsed));
+      }
+    });
+  }
 });
 
 describe('formatTestTimingsBootLine', () => {

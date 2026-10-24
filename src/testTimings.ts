@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
+import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
+import { globalSendIntervalMs } from './rateLimiter';
+import { unwatchedSweepMs } from './requests/wakeUpEngine';
+import { postRetryDelaysMs } from './requests/wakeUpRules';
+import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
@@ -9,30 +15,38 @@ import { z } from 'zod';
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
  * key or a bad value fails the start with the key named, and a valid one prints one line, so an instance that carries it
- * by mistake is visible at once.
+ * by mistake is visible at once. A value may only SHORTEN its window: each key is capped at its production value (and at
+ * the longest delay Node's timers keep).
  */
 
 /** The variable the instance reads; set only by a test's env file. */
 export const testTimingsEnvName = 'CHARNESS_TEST_TIMINGS';
 
-const positiveMsSchema = z.number().int().positive();
+/** The longest delay Node's `setTimeout` / `setInterval` keep; a longer one fires after 1 ms (a `TimeoutOverflowWarning`). */
+const timerMaxDelayMs = 2_147_483_647;
+const msPerSecond = 1000;
+
+/** A window in whole ms that may only shorten `productionMs`. */
+function createShorterWindowSchema(productionMs: number): z.ZodNumber {
+  return z.number().int().positive().max(Math.min(productionMs, timerMaxDelayMs));
+}
 
 const testTimingsSchema = z.strictObject({
   /** The global Telegram send pacer's interval (production: `globalSendIntervalMs`, 2 s). */
-  telegramSendIntervalMs: positiveMsSchema.optional(),
-  /** The Jira poll's interval, below `jira.json`'s 10 s floor (production: `pollIntervalSeconds`). */
-  jiraPollIntervalMs: positiveMsSchema.optional(),
+  telegramSendIntervalMs: createShorterWindowSchema(globalSendIntervalMs).optional(),
+  /** The Jira poll's interval, at most `jira.json`'s 10 s floor (production: `pollIntervalSeconds`, 10–600 s). */
+  jiraPollIntervalMs: createShorterWindowSchema(jiraPollIntervalMinSeconds * msPerSecond).optional(),
   /** How often the wake-up engine sweeps the unwatched open requests (production: `unwatchedSweepMs`, 1 min). */
-  requestSweepIntervalMs: positiveMsSchema.optional(),
+  requestSweepIntervalMs: createShorterWindowSchema(unwatchedSweepMs).optional(),
   /** The first retry of a request whose prompt could not be posted (production: `postRetryDelaysMs[0]`, 1 min). */
-  requestFirstPostRetryDelayMs: positiveMsSchema.optional(),
+  requestFirstPostRetryDelayMs: createShorterWindowSchema(postRetryDelaysMs[0]).optional(),
   /** The short retry that probes an unconfirmed usage limit (production: `unconfirmedLimitProbeDelayMs`, 2 min). */
-  limitProbeDelayMs: positiveMsSchema.optional(),
+  limitProbeDelayMs: createShorterWindowSchema(unconfirmedLimitProbeDelayMs).optional(),
   /**
    * How long `state.json` waits for more changes before it is written (production: 500 ms, restarted by every change):
    * short, a flow reading the file after what the bot showed reads what it did.
    */
-  stateSaveDebounceMs: positiveMsSchema.optional(),
+  stateSaveDebounceMs: createShorterWindowSchema(DEFAULT_SAVE_DEBOUNCE_MS).optional(),
 });
 
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */
