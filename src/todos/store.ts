@@ -51,6 +51,12 @@ const todoTopicFileSchema = z.object({
   revision: z.number().int().nonnegative(),
   changedAt: z.number().optional(),
   lastUpdateAt: z.number().optional(),
+  nag: z.object({
+    clockStartedAt: z.number().optional(),
+    workedMs: z.number().nonnegative(),
+    ignoredCount: z.number().int().nonnegative(),
+    lastRemindedAt: z.number().optional(),
+  }).optional(),
 });
 
 /** @description The empty record of a conversation that never published anything. */

@@ -1,3 +1,5 @@
+import type { TodoNagState } from './nag';
+
 /**
  * @description Shapes of the shared agent todo registry: one published list per conversation (a Telegram topic, a
  * Jira issue), kept in its own file under `DATA_DIR/todos/` (`store.ts`). A list belongs to the CONVERSATION, never to
@@ -73,4 +75,6 @@ export interface TodoTopicFile {
   changedAt?: number;
   /** When the agent last called `todo_update`. */
   lastUpdateAt?: number;
+  /** The staleness reminder's bookkeeping (`nag.ts`); absent = nothing worked or reminded since the last update. */
+  nag?: TodoNagState;
 }

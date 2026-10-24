@@ -606,6 +606,7 @@ a hand edit applies to the next session start, no restart.
 | `defaultEffort` | The reasoning effort of every topic that has no `/effort` pick of its own: `low`, `medium`, `high`, `xhigh`, `max`, `auto` or `ultracode`. Set it from **`/effort` in the General topic** (a tap writes the file), or by hand. Leave it out and the built-in default, `medium`, applies |
 | `autoUpdate` | What the instance does about a new charness version: `on` installs it by itself when the bot is idle, `notify` says it is out and offers a button, `off` never looks. Set it from **`/update` in General**, or by hand. Leave it out and `on` applies ([Updating](#updating)) |
 | `whatsNew` | `true` (default): after an update General lists the CHANGELOG entries it brought; `false`: only the «Updated a → b» line. Set from `/update` in General, or by hand |
+| `todo` | The shared todo lists ([README](README.md#shared-todo-lists-todo)): `{ "isEnabled": true, "reminderMinutes": 60 }`. `isEnabled: false` turns the feature off (agents are not offered the tools); `reminderMinutes` is how long an agent may work without updating its list before it is reminded, `0` = never. Set both from **`/todo` in General → Settings**, or by hand — the way for an instance without a General topic (a Jira-only one). Leave it out and on / 60 apply |
 
 What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
 (a Jira conversation: `effort` in `jira.json`, `high` when absent — Jira never reads `defaultEffort`), `defaultEffort`,

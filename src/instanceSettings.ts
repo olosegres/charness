@@ -2,6 +2,7 @@ import * as os from 'os';
 import { z } from 'zod';
 import {
   createConfigFileLoader,
+  getCaughtErrnoCode,
   getConfigDirFilePath,
   writeJsonFileAtomically,
   type ConfigFileLoad,
@@ -9,12 +10,14 @@ import {
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
+import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 
 /**
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory
  * (beside the instance's real `.env`, like `stt.json`). `/effort` in the General topic writes it; an operator may
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
- * settings will move here later; today it holds `defaultEffort`, `autoUpdate` and `whatsNew`.
+ * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew` and `todo` (the shared todo
+ * lists: on / off and the staleness reminder's interval — also the way an instance without General sets them).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -35,17 +38,27 @@ export interface InstanceSettings {
   autoUpdate: AutoUpdateMode | null;
   /** Whether the list of changes is posted after a version change; `null` = yes. */
   whatsNew: boolean | null;
+  /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
+  todo: { isEnabled: boolean | null; reminderMinutes: number | null };
 }
+
+/** The longest reminder interval a hand-edited `settings.json` may name: a day. */
+const todoReminderMaxMinutes = 24 * 60;
 
 const rawSettingsSchema = z.strictObject({
   defaultEffort: z.enum(claudeEffortLevels).optional(),
   autoUpdate: z.enum(autoUpdateModes).optional(),
   whatsNew: z.boolean().optional(),
+  todo: z.strictObject({
+    isEnabled: z.boolean().optional(),
+    /** `0` = no staleness reminder. */
+    reminderMinutes: z.number().int().min(0).max(todoReminderMaxMinutes).optional(),
+  }).optional(),
 });
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, todo: { isEnabled: null, reminderMinutes: null } };
 }
 
 /**
@@ -66,6 +79,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       defaultEffort: parsed.data.defaultEffort ?? null,
       autoUpdate: parsed.data.autoUpdate ?? null,
       whatsNew: parsed.data.whatsNew ?? null,
+      todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
     },
   };
 }
@@ -100,10 +114,33 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
     ...(settings.defaultEffort === null ? {} : { defaultEffort: settings.defaultEffort }),
     ...(settings.autoUpdate === null ? {} : { autoUpdate: settings.autoUpdate }),
     ...(settings.whatsNew === null ? {} : { whatsNew: settings.whatsNew }),
+    ...(settings.todo.isEnabled === null && settings.todo.reminderMinutes === null
+      ? {}
+      : {
+        todo: {
+          ...(settings.todo.isEnabled === null ? {} : { isEnabled: settings.todo.isEnabled }),
+          ...(settings.todo.reminderMinutes === null ? {} : { reminderMinutes: settings.todo.reminderMinutes }),
+        },
+      }),
   };
   const validation = validateInstanceSettings(body);
   if (!validation.ok) throw new Error(`refusing to write an invalid ${instanceSettingsFileName}: ${validation.errors.join('; ')}`);
   writeJsonFileAtomically(filePath, body, settingsFileMode);
+}
+
+/**
+ * @description Write `change` on top of what `settings.json` at `filePath` holds (a broken file is replaced — the
+ * button the operator tapped is the fix). `null` on success, else the errno code of the failed write (logged).
+ */
+export function saveInstanceSettingsChange(filePath: string, change: Partial<InstanceSettings>): string | null {
+  try {
+    saveInstanceSettings(filePath, { ...loadInstanceSettingsForUpdate(filePath), ...change });
+    return null;
+  } catch (error) {
+    const code = getCaughtErrnoCode(error);
+    console.warn(`[Settings] could not write ${filePath} (${code})`);
+    return code;
+  }
 }
 
 /**
@@ -116,6 +153,35 @@ export function loadInstanceSettingsForUpdate(filePath: string): InstanceSetting
 }
 
 /**
+ * The broken states of the file already logged. The load is cached by the file's stamp, so every reader of one broken
+ * state holds the SAME load object: one line per broken state for the whole process, however many readers read it.
+ */
+const reportedInvalidLoads = new WeakSet<InstanceSettingsLoad>();
+
+/**
+ * @description A reader of one part of `settings.json`, re-read when the file changes: `select` picks it out of the
+ * file's settings. An invalid file reads as the empty settings (so `select` fills in the defaults), and ONE line per
+ * distinct broken state of the file is logged — not one per read, not one per reader.
+ */
+function createSettingsPartReader<TPart>(
+  getFilePath: () => string,
+  logError: (line: string) => void,
+  select: (settings: InstanceSettings) => TPart,
+): () => TPart {
+  return () => {
+    const load = loadInstanceSettings(getFilePath());
+    if (load.status === 'invalid') {
+      if (!reportedInvalidLoads.has(load)) {
+        reportedInvalidLoads.add(load);
+        logError(`[Settings] ${load.errors.join('; ')} (the built-in defaults apply until it is fixed)`);
+      }
+      return select(createEmptyInstanceSettings());
+    }
+    return select(load.config);
+  };
+}
+
+/**
  * @description The reader that `effortLevels.setInstanceDefaultEffortReader` takes: `settings.json`'s
  * `defaultEffort`, re-read when the file changes. A missing file, or a file without the field, is `null` (the
  * code fallback). An invalid file is `null` too, and `logError` gets ONE line per distinct broken state of the
@@ -125,19 +191,7 @@ export function createInstanceDefaultEffortReader(
   getFilePath: () => string,
   logError: (line: string) => void,
 ): () => ClaudeEffortLevel | null {
-  let lastReportedLoad: InstanceSettingsLoad | null = null;
-  return () => {
-    const load = loadInstanceSettings(getFilePath());
-    if (load.status === 'invalid') {
-      if (load !== lastReportedLoad) {
-        lastReportedLoad = load;
-        logError(`[Settings] ${load.errors.join('; ')} (the built-in defaults apply until it is fixed)`);
-      }
-      return null;
-    }
-    lastReportedLoad = null;
-    return load.config.defaultEffort;
-  };
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.defaultEffort);
 }
 
 /**
@@ -146,17 +200,20 @@ export function createInstanceDefaultEffortReader(
  * as the defaults, and `logError` gets ONE line per distinct broken state (not one per read).
  */
 export function createUpdateSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => UpdateSettings {
-  let lastReportedLoad: InstanceSettingsLoad | null = null;
-  return () => {
-    const load = loadInstanceSettings(getFilePath());
-    if (load.status === 'invalid') {
-      if (load !== lastReportedLoad) {
-        lastReportedLoad = load;
-        logError(`[Settings] ${load.errors.join('; ')} (the built-in defaults apply until it is fixed)`);
-      }
-      return { autoUpdate: defaultAutoUpdateMode, whatsNew: defaultWhatsNew };
-    }
-    lastReportedLoad = null;
-    return { autoUpdate: load.config.autoUpdate ?? defaultAutoUpdateMode, whatsNew: load.config.whatsNew ?? defaultWhatsNew };
-  };
+  return createSettingsPartReader(getFilePath, logError, (settings) => ({
+    autoUpdate: settings.autoUpdate ?? defaultAutoUpdateMode,
+    whatsNew: settings.whatsNew ?? defaultWhatsNew,
+  }));
+}
+
+/**
+ * @description The reader the todo registry uses: `settings.json`'s `todo` with the defaults (on, a reminder every
+ * hour) filled in, re-read when the file changes. An invalid file reads as the defaults, and `logError` gets ONE line
+ * per distinct broken state (not one per read).
+ */
+export function createTodoSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => TodoReminderSettings {
+  return createSettingsPartReader(getFilePath, logError, (settings) => ({
+    isEnabled: settings.todo.isEnabled ?? true,
+    reminderMinutes: settings.todo.reminderMinutes ?? todoReminderDefaultMinutes,
+  }));
 }

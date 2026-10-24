@@ -56,6 +56,8 @@ export interface ForwardedPromptKind {
    * way for it keeps its tier — else a wedged reminder restarts the escalation.
    */
   isRequestReminder: boolean;
+  /** A bot-made technical prompt (the todo list's staleness reminder): never the work to replay. */
+  isTechnicalPrompt: boolean;
 }
 
 /**
@@ -64,5 +66,5 @@ export interface ForwardedPromptKind {
  * new prompt does.
  */
 export function checkIsReplayablePrompt(kind: ForwardedPromptKind): boolean {
-  return !kind.isSlashCommand && !kind.isRecoveryReplay && !kind.isRequestReminder;
+  return !kind.isSlashCommand && !kind.isRecoveryReplay && !kind.isRequestReminder && !kind.isTechnicalPrompt;
 }

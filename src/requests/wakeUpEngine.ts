@@ -212,6 +212,11 @@ export class RequestWakeUpEngine {
     this.answerTails.set(conversationKey, { key, tail: createAnswerTail(requestId, this.now()) });
   }
 
+  /** @description Whether the agent's text after a final answer is being followed in this conversation. */
+  checkIsAnswerTailFollowed(key: SessionKey): boolean {
+    return this.answerTails.has(keyToString(key));
+  }
+
   /** @description The agent wrote text of its own in this conversation (not a sub-agent's, not a block the bot made). */
   noteAnswerTailOutput(key: SessionKey): void {
     const entry = this.answerTails.get(keyToString(key));

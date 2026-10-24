@@ -177,7 +177,7 @@ import {
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
-import { postToSession, type PostToSessionDeps } from './postToSession';
+import { postToIdleSession, postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
@@ -290,7 +290,7 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createInstanceDefaultEffortReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { createInstanceDefaultEffortReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -352,7 +352,10 @@ import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBo
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
 import { TodoStore } from './todos/store';
-import { createTodoRegistry, type TodoRegistry } from './todos/registry';
+import { createTodoRegistry, type TodoReadArgs, type TodoRegistry } from './todos/registry';
+import type { TodoUpdateArgs } from './todos/merge';
+import { getTodoReminderIntervalMs } from './todos/nag';
+import { TodoReminderEngine } from './todos/reminderEngine';
 import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
@@ -1127,6 +1130,22 @@ function getTodoRegistry(): TodoRegistry {
   todoRegistry ??= createTodoRegistry({ store: new TodoStore(getDataDir()), getNowMs: Date.now });
   return todoRegistry;
 }
+
+/** `settings.json`'s `todo` (on / off, the reminder's interval), re-read when the file changes. */
+const readTodoSettings = createTodoSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
+
+/** The staleness reminder's interval now; `null` = off (the feature or its reminder). */
+function getTodoReminderIntervalMsNow(): number | null {
+  return getTodoReminderIntervalMs(readTodoSettings(), ENV.testTimings.todoReminderIntervalMs);
+}
+
+/** The reminder line a prompt forwarded now carries (D11 form a), or `null`; taking it counts as delivered. */
+function takeTodoPromptReminder(key: SessionKey): string | null {
+  return getTodoRegistry().takePromptReminder(key, getTodoReminderIntervalMsNow(), Date.now());
+}
+
+/** The staleness reminder's poll (`todos/reminderEngine.ts`), built at boot and started once the sessions are restored. */
+let todoReminderEngine: TodoReminderEngine | null = null;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Per-thread in-memory state
@@ -5234,6 +5253,7 @@ async function forwardPromptToAgent(
 interface PromptForwardOptions {
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
+  isTechnicalPrompt?: boolean;
   replyContext?: string;
   requestHeader?: string;
 }
@@ -5248,13 +5268,15 @@ async function forwardPromptToLiveAgent(
 ): Promise<void> {
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
+  const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
   // Skip slash commands (not worth replaying), the recovery replay itself (keeps
-  // the once-per-episode guard intact) and a request reminder (the request's own
-  // prompt stays the one to replay).
+  // the once-per-episode guard intact), a request reminder (the request's own
+  // prompt stays the one to replay) and a bot-made technical prompt.
   const isReplayable = checkIsReplayablePrompt({
     isSlashCommand: checkShouldSkipPreambleForText(text),
     isRecoveryReplay: options.isRecoveryReplay ?? false,
     isRequestReminder: options.isRequestReminder ?? false,
+    isTechnicalPrompt,
   });
   // R23: prompts held during a usage-limit wait ride the first such prompt
   // forwarded to a live session once no wait holds them — after it, in arrival
@@ -5303,6 +5325,10 @@ async function forwardPromptToLiveAgent(
   if (state.checkIsTimestampsEnabled(key) && !checkShouldSkipPreambleForText(text)) {
     promptText = `${formatIsoLocalOffset(sentAtMs ?? Date.now())}\n\n${promptText}`;
   }
+  // The todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
+  // command, a shell line, or the standalone reminder itself.
+  const todoReminderLine = isTechnicalPrompt || checkShouldSkipPreambleForText(text) || adapter.name === 'terminal' ? null : takeTodoPromptReminder(key);
+  if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;
   markNeedsNewMessage(key);
   // A new prompt is a new turn: lift the S2 idle-suppress latch and re-base the
   // working-status elapsed so the next busy period shows a fresh 0:00 counter
@@ -5317,7 +5343,8 @@ async function forwardPromptToLiveAgent(
   // persists while output is streaming OR the agent is busy — self-stopping only
   // when the topic drains + idles.
   getOutboundFor(key).setActivity(key, 'working');
-  if (adapter.interruptAndWaitIdle) {
+  // A technical prompt is posted only into an idle session: there is no turn to interrupt or sub-agent to detach.
+  if (adapter.interruptAndWaitIdle && !isTechnicalPrompt) {
     await adapter.interruptAndWaitIdle(key);
   }
   // OpenCode: if a sub-agent is synchronously blocking this session, detach it to
@@ -5325,7 +5352,7 @@ async function forwardPromptToLiveAgent(
   // the whole (possibly long) sub-agent run — the sub-agent keeps working and its
   // result is injected back when it finishes. No-op for other adapters and when
   // no sub-agent is running. Best-effort; never blocks the forward on failure.
-  if (adapter.detachRunningSubagents) {
+  if (adapter.detachRunningSubagents && !isTechnicalPrompt) {
     await adapter.detachRunningSubagents(key);
   }
   adapter.sendInput(key, promptText);
@@ -7336,6 +7363,29 @@ function getTopicFallbackPosition(key: SessionKey): FallbackChainEntry | null {
 }
 
 /**
+ * @description Whether the account or model `key` runs on is marked limited now, and whether it is billed to API
+ * credits — what the todo list's standalone reminder never fires into (D12).
+ */
+function getConversationAccountState(key: SessionKey): { isLimited: boolean; isApiBilled: boolean } {
+  const position = getTopicFallbackPosition(key);
+  if (position === null) return { isLimited: false, isApiBilled: false };
+  const nowMs = Date.now();
+  const checkIsFuture = (instant: string | undefined): boolean => instant !== undefined && Date.parse(instant) > nowMs;
+  if (position.backend === 'opencode') return { isLimited: checkIsFuture(state.getOpenCodeModelLimitedUntil(buildOpenCodeModelLabel(position))), isApiBilled: false };
+  const info = state.getClaudeProfileInfo(position.profile);
+  return { isLimited: checkIsFuture(info?.limitedUntil) || info?.creditExhaustedAt !== undefined, isApiBilled: info?.billing === 'api' };
+}
+
+/**
+ * @description A person wrote in the conversation (a message, voice, file, album; an issue's request): the
+ * compact-on-idle latch clears (D2) and the todo reminder's silence after ignored reminders ends (D13).
+ */
+function notePersonActivity(key: SessionKey): void {
+  noteThreadUserActivity(key);
+  getTodoRegistry().notePersonActivity(key);
+}
+
+/**
  * @description What a usage limit on `key` leads to (`utils/fallbackChain.ts`): the rung the topic is on is
  * marked limited until the reset the error named (a Claude profile: else its session window, else the retry's
  * blind delay; an OpenCode model: else the blind delay), the usage snapshots are brought up to date, and the
@@ -7821,7 +7871,12 @@ const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoS
   takeSwitchOffer: takeFallbackSwitchOffer,
 });
 
-const { registerTodoCommands } = createTodo({ ...botCore, getTodoRegistry });
+const { registerTodoCommands, registerTodoCallbacks } = createTodo({
+  ...botCore,
+  getTodoRegistry,
+  readTodoSettings,
+  getSettingsPath: () => getInstanceSettingsPath(),
+});
 
 const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimitsBoard({
   ...botCore,
@@ -9312,7 +9367,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       // cancel it silently, like the text/voice handlers.
       cancelApiRetry(key);
       // A user album is genuine user activity → clear the compact-on-idle latch (D2).
-      noteThreadUserActivity(key);
+      notePersonActivity(key);
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
         const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, replyContext);
@@ -9413,7 +9468,7 @@ async function handleIncomingFile(
   // cancel it silently, like the text/voice handlers.
   cancelApiRetry(key);
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
-  noteThreadUserActivity(key);
+  notePersonActivity(key);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
   // A file sent as a REPLY carries the message it answers, as a typed or spoken reply does.
   const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(key, ctx.message));
@@ -9886,6 +9941,7 @@ registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
 registerLimitsBoardCallbacks();
+registerTodoCallbacks();
 registerSttCallbacks();
 
 registerSelfUpdateCallbacks();
@@ -10138,7 +10194,7 @@ async function deliverActivePrompt(
   // A genuine USER message (text or voice) — clear the compact-on-idle latch so
   // the next idle period can compact again (D2), whether it answers a pending
   // question or is a fresh prompt.
-  noteThreadUserActivity(key);
+  notePersonActivity(key);
   const pending = pendingQuestions.get(keyToString(key));
   if (pending && adapter.answerQuestion) {
     const currentQuestion = pending.data.questions[pending.currentIndex];
@@ -12847,6 +12903,35 @@ async function remindAnswerTail(key: SessionKey, text: string): Promise<boolean>
 }
 
 /**
+ * @description How a conversation's session stands right now (`requests/sessionTurnProbe.ts`) — the one probe the
+ * wake-up engine and the todo reminder both poll.
+ */
+const probeThreadTurn = createSessionTurnProbe({
+  getAdapter: getThreadAdapter,
+  checkHasPendingQuestion: (keyString) => pendingQuestions.has(keyString),
+  checkHasQuestionPin: (keyString) => questionPinnedMessageId.has(keyString),
+  checkIsCompacting: (keyString) => threadsCompacting.has(keyString),
+  getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
+  checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
+  checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
+  checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
+  serializeKey: keyToString,
+});
+
+/**
+ * @description The todo list's standalone reminder (D11 form b): a technical prompt, posted only into a live session
+ * that is idle right now — never a resume, never an interrupt (`postToIdleSession`). It opens no request and is never
+ * replayed; in a Jira conversation it is no hand-over and nothing of its turn reaches the issue (D58).
+ */
+function postTodoReminder(key: SessionKey, text: string): Promise<boolean> {
+  const adapter = getThreadAdapter(key);
+  return postToIdleSession({
+    checkIsIdle: () => adapter.checkIsActive(key) && !(adapter.checkIsBusy?.(key) ?? false),
+    forward: () => forwardPromptToAgent(key, adapter, text, undefined, { isTechnicalPrompt: true }),
+  });
+}
+
+/**
  * @description The person took over the conversation (interrupt, quit, restart,
  * switch or resume of the session, a switch to another agent or a shell, leaving
  * the folder): its open request closes silently and nothing wakes it. Safe before
@@ -12995,15 +13080,20 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     ...(jiraConnector
       ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
       : {}),
-    todos: {
-      update: (threadKeyStr, args) => getTodoRegistry().updateTodos(keyFromString(threadKeyStr), args),
-      read: (threadKeyStr, args) => getTodoRegistry().readTodos(keyFromString(threadKeyStr), args),
+    // Read per request: General can turn the shared lists off, and the tools go with them.
+    get todos() {
+      return readTodoSettings().isEnabled
+        ? {
+          update: (threadKeyStr: string, args: TodoUpdateArgs) => getTodoRegistry().updateTodos(keyFromString(threadKeyStr), args),
+          read: (threadKeyStr: string, args: TodoReadArgs) => getTodoRegistry().readTodos(keyFromString(threadKeyStr), args),
+        }
+        : undefined;
     },
     answerRequest: (args) => answerRequest({
       ledger: wiring.requestLedger,
       answerSinks: wiring.answerSinks,
       onAnswerDelivered: (key, requestId, kind) => requestWakeUpEngine?.noteAnswerDelivered(key, requestId, kind),
-      getFinalAnswerNote: (key, requestCreatedAt) => getTodoRegistry().getFinalAnswerNote(key, requestCreatedAt),
+      getFinalAnswerNote: (key, requestCreatedAt) => (readTodoSettings().isEnabled ? getTodoRegistry().getFinalAnswerNote(key, requestCreatedAt) : null),
     }, args),
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
@@ -13252,7 +13342,7 @@ function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string
     postRequest: async (key, requestId, prompt) => {
       // A request is the issue's "user message" (L-D5): it clears the spent idle-compaction
       // latch like a topic's message does, or the issue would never compact again.
-      noteThreadUserActivity(key);
+      notePersonActivity(key);
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) {
         // R28: retried at about 1, 5 and 15 min, outside the wake-up cap.
@@ -13344,17 +13434,7 @@ export async function startBot(): Promise<void> {
   // but started only once the sessions are restored (its sweep reads them).
   requestWakeUpEngine = new RequestWakeUpEngine({
     ledger: requestLedger,
-    probeTurn: createSessionTurnProbe({
-      getAdapter: getThreadAdapter,
-      checkHasPendingQuestion: (keyString) => pendingQuestions.has(keyString),
-      checkHasQuestionPin: (keyString) => questionPinnedMessageId.has(keyString),
-      checkIsCompacting: (keyString) => threadsCompacting.has(keyString),
-      getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
-      checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
-      checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
-      checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
-      serializeKey: keyToString,
-    }),
+    probeTurn: probeThreadTurn,
     prepareWakeUpSession: (key, message) =>
       prepareRequestWakeUpSession(key, message, key.platform === 'jira' ? jiraConnector?.adapterName : undefined),
     forwardWakeUp: forwardRequestWakeUp,
@@ -13375,6 +13455,20 @@ export async function startBot(): Promise<void> {
     remindAnswerTail,
   });
   requestLimitWaitAnswerDeps = { ledger: requestLedger, engine: requestWakeUpEngine, answerSinks };
+  // The todo list's staleness reminder (D10–D12) polls the same turns; started once the sessions are restored.
+  todoReminderEngine = new TodoReminderEngine({
+    registry: getTodoRegistry(),
+    listConversations: () => state.listBindings().map(({ key }) => key),
+    probeTurn: probeThreadTurn,
+    getGate: (key) => ({
+      hasOpenRequest: requestLedger.listOpenRequestsOf(key).length > 0,
+      isAnswerTailFollowed: requestWakeUpEngine?.checkIsAnswerTailFollowed(key) ?? false,
+      ...getConversationAccountState(key),
+    }),
+    getIntervalMs: getTodoReminderIntervalMsNow,
+    postReminder: postTodoReminder,
+    pollIntervalMs: ENV.testTimings.todoReminderPollMs,
+  });
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle
@@ -13444,8 +13538,9 @@ export async function startBot(): Promise<void> {
   // that gives a conversation of another platform only its request-side handling
   // (Jira connector plan J2b, R2 — the routing table is unit-tested per event).
   const noteTurnOutput = (key: SessionKey): void => {
-    // Output means a turn is under way — the wake-up engine's busy-onset signal.
+    // Output means a turn is under way — the wake-up engine's busy-onset signal, and the todo reminder's.
     requestWakeUpEngine?.noteAgentOutput(key);
+    todoReminderEngine?.noteAgentOutput(key);
   };
   registerAdapterEventHandlers({
     onOutput: (key, output, meta) => dispatchAdapterEvent(key, 'output', () => {
@@ -13631,6 +13726,7 @@ export async function startBot(): Promise<void> {
       markSessionsRestored();
       // From here the engine can tell a live turn from a dead session.
       requestWakeUpEngine?.start();
+      todoReminderEngine?.start();
       jiraConnector?.start(createJiraSessionDeps(requestLedger, jiraConnector.adapterName));
     },
     healActiveSessions: () => {
@@ -13848,6 +13944,7 @@ export async function startBot(): Promise<void> {
         // means the next boot's rearmAll picks them back up (catch-up replay).
         schedulerEngine?.shutdown();
         requestWakeUpEngine?.stop();
+        todoReminderEngine?.stop();
         jiraConnector?.stop();
         if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
         updateEngine?.stop();

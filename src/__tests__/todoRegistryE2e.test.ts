@@ -9,6 +9,13 @@
  *   → the agent publishes an in-work item and a queued one: the tool answers with the list; `/todo` shows both
  *   → the agent closes the in-work item: `/todo` lists it under «Done today»
  *   → charness restarted: the list survives (it belongs to the topic, not to the process or the session)
+ *   → the staleness reminder (a 4 s interval through the test-timing seam): the agent works longer than the interval
+ *     with no prompt reaching it → ONE standalone reminder at the turn end, no request opened for it; with a request
+ *     left open the standalone one is held back and the person's next message carries the reminder line instead;
+ *     an agent that keeps working on its own (background tasks) is reminded twice, then the bot stays silent; an
+ *     update restarts the clock, which waits for the next turn end
+ *   → General's `/todo` opens the settings: an interval tap writes `settings.json` and moves the ✓; «Turn off» hides
+ *     the intervals and a topic's `/todo` says the lists are off; «Turn on» brings them back
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the agent is the fake. Everything the test
  * starts is stopped in `after`.
@@ -21,8 +28,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeLogFileNames } from './jiraE2e/fakeClaudeContract';
+import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { fakeClaudeBackgroundReleaseFileName, fakeClaudeLogFileNames } from './jiraE2e/fakeClaudeContract';
 import {
   assertMcpListeningOn,
   builtCliPath,
@@ -33,6 +40,7 @@ import {
   getFreePort,
   getInstanceEnvNames,
   IsolatedCharness,
+  isolatedSettingsFileName,
   readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
@@ -57,6 +65,19 @@ const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
 /** A session start, a turn and the agent's tool call through the bot MCP. */
 const turnTimeoutMs = 60 * 1000;
+/** The staleness reminder's interval and poll for this instance (production: the settings' 1 h, a 10 s poll). */
+const reminderIntervalMs = 4000;
+const reminderPollMs = 500;
+/** A turn that works past the interval. */
+const longTurnWorkMs = 5000;
+/** What the agent reads in a reminder, either form. */
+const reminderMarker = '[Todo] Your published todo list was last updated';
+
+interface FakePrompt {
+  issueKey: string;
+  requestId: string | null;
+  text: string;
+}
 
 interface FakeToolCall {
   issueKey: string;
@@ -118,6 +139,54 @@ async function publishThroughAgent(threadId: number, label: string, tokens: stri
   return readTodoCalls(label)[0];
 }
 
+function readPrompts(): FakePrompt[] {
+  return readJsonLines<FakePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts));
+}
+
+/** The standalone reminders the agent read: a prompt with the reminder and no operator label. */
+function listStandaloneReminders(): FakePrompt[] {
+  return readPrompts().filter((prompt) => prompt.text.includes(reminderMarker) && !/\bTODO-\d+\b/.test(prompt.text));
+}
+
+/** The topic's stored list record, as a restart reads it. */
+function readTopicTodoFile(): { lastUpdateAt?: number; nag?: { clockStartedAt?: number; workedMs: number; ignoredCount: number } } {
+  return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'todos', `${group.id}_${topicAThreadId}.json`), 'utf8'));
+}
+
+/** Wait for a bot log line (after `outputStart`) that `pattern` matches. */
+async function waitForLogLine(description: string, outputStart: number, pattern: RegExp): Promise<void> {
+  await getCharness().waitFor(description, turnTimeoutMs, () => pattern.test(getCharness().output.slice(outputStart)));
+}
+
+/** The test ends one of the fake agent's background tasks; resolves once the turn it starts has answered. */
+async function releaseBackgroundTask(): Promise<void> {
+  const taskTurnsBefore = readTaskTurnCount();
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeBackgroundReleaseFileName), '');
+  await getCharness().waitFor('the background task\'s turn', turnTimeoutMs, () => readTaskTurnCount() > taskTurnsBefore);
+}
+
+function readTaskTurnCount(): number {
+  return readJsonLines<{ origin?: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.origin === 'task-notification').length;
+}
+
+function readSettingsFile(): { todo?: { isEnabled?: boolean; reminderMinutes?: number } } {
+  return JSON.parse(fs.readFileSync(path.join(path.dirname(getLayout().envFile), isolatedSettingsFileName), 'utf8'));
+}
+
+/** The button labels of a message, row by row. */
+function getKeyboardLabels(message: FakeTelegramMessage): string[][] {
+  return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.map((button) => button.text));
+}
+
+/** Tap `data` on `message` and wait for its toast and for the message to read `expectedText`. */
+async function tapAndAwaitRerender(message: FakeTelegramMessage, data: string, expectedText: string, toast: string | null): Promise<void> {
+  const answersBefore = fakeTelegram.callbackAnswers.length;
+  fakeTelegram.pushCallback(message.message_id, data);
+  await getCharness().waitFor(`the tap on ${data} answered`, replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
+  if (toast !== null) assert.equal(fakeTelegram.callbackAnswers.at(-1), toast);
+  await getCharness().waitFor(`the message re-rendered after ${data}`, replyTimeoutMs, () => (fakeTelegram.getMessage(message.message_id)?.text ?? '').includes(expectedText));
+}
+
 function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
@@ -148,7 +217,7 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: schedulerMcpPort.toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      ...getTelegramFlowTestTimingsEnv({ todoReminderPollMs: reminderPollMs, todoReminderIntervalMs: reminderIntervalMs }),
     });
   });
 
@@ -200,9 +269,91 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
   });
 
   it('a restart keeps the list: it belongs to the topic', async () => {
+    // The bot reads the agent's stream on its own pace: a turn that ends just before the stop is never seen ending, and
+    // the reminder's clock (S2) would start a turn later. Restart only once the turn of the last update was seen ending.
+    await getCharness().waitFor('the turn of the last update seen ending', turnTimeoutMs, () => readTopicTodoFile().nag?.clockStartedAt !== undefined);
     await getCharness().stop();
     await startCharness();
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
     assert.match(view.text, /▷ Queue\n {3}1\. Bump tsx\n\n✓ Done today\n {3}Speed up limits flow tests/);
+  });
+
+  // ── S2 — the staleness reminder ───────────────────────────────────────
+
+  it('an agent that works past the interval with no prompt reaching it gets ONE standalone reminder at the turn end', async () => {
+    const remindersBefore = listStandaloneReminders().length;
+    const outputStart = getCharness().output.length;
+    fakeTelegram.pushOperatorMessage(topicAThreadId, `TODO-3 [work-ms:${longTurnWorkMs}]`);
+    await getCharness().waitFor('the standalone reminder', turnTimeoutMs, () => listStandaloneReminders().length > remindersBefore);
+    const [reminder] = listStandaloneReminders().slice(remindersBefore);
+    assert.equal(reminder.requestId, null, 'the reminder opens no request');
+    assert.match(reminder.text, /\[Todo\] Your published todo list was last updated \d+ min ago and you have worked since\. todo_update records in-work \/ queued \/ done; with no items it confirms the list is still accurate\. No text reply is needed\./);
+    await waitForLogLine('the bot\'s reminder log line', outputStart, /\[todos\] -1001111111111:111: stale list — reminded the agent/);
+    assert.ok(!readPrompts().find((prompt) => prompt.text.includes('TODO-3'))?.text.includes(reminderMarker), 'the prompt that started the work carried none: nothing was due yet');
+    await getCharness().waitFor('the reminder counted', turnTimeoutMs, () => readTopicTodoFile().nag?.ignoredCount === 1);
+    assert.equal(listStandaloneReminders().length, remindersBefore + 1, 'one reminder');
+  });
+
+  it('with a request left open the standalone reminder is held back; the person\'s next message carries the line', async () => {
+    await sendAndAwaitReply(topicAThreadId, '/verbosity stream_answers', 'This topic shows: Stream + answers');
+    const remindersBefore = listStandaloneReminders().length;
+    const outputStart = getCharness().output.length;
+    fakeTelegram.pushOperatorMessage(topicAThreadId, `TODO-4 [fake:progress] [work-ms:${longTurnWorkMs}]`);
+    await waitForLogLine('the held-back reminder', outputStart, /stale list, no reminder: an open request/);
+    assert.equal(listStandaloneReminders().length, remindersBefore, 'no standalone reminder while the request is open');
+    fakeTelegram.pushOperatorMessage(topicAThreadId, 'TODO-5 [fake:answer]');
+    await getCharness().waitFor('the prompt of TODO-5', turnTimeoutMs, () => readPrompts().some((prompt) => prompt.text.includes('TODO-5')));
+    const prompt = readPrompts().find((candidate) => candidate.text.includes('TODO-5'));
+    assert.ok(prompt?.text.includes(reminderMarker), 'the person\'s message carries the reminder line');
+    assert.ok((prompt?.text.indexOf('TODO-5') ?? -1) < (prompt?.text.indexOf(reminderMarker) ?? -1), 'after the message itself');
+  });
+
+  it('an agent that keeps working on its own is reminded twice, then the bot stays silent', async () => {
+    await sendAndAwaitReply(topicAThreadId, '/verbosity stream', 'This topic shows: Stream only');
+    fakeTelegram.pushOperatorMessage(topicAThreadId, 'TODO-6 [fake:background-notify] [bg-count:3]');
+    await getCharness().waitFor('the turn of TODO-6', turnTimeoutMs, () => readPrompts().some((prompt) => prompt.text.includes('TODO-6')));
+    const remindersBefore = listStandaloneReminders().length;
+    await releaseBackgroundTask();
+    await getCharness().waitFor('the first reminder', turnTimeoutMs, () => listStandaloneReminders().length === remindersBefore + 1);
+    await releaseBackgroundTask();
+    await getCharness().waitFor('the second reminder', turnTimeoutMs, () => listStandaloneReminders().length === remindersBefore + 2);
+    const outputStart = getCharness().output.length;
+    await releaseBackgroundTask();
+    await waitForLogLine('the silence', outputStart, /stale list, no reminder: silent after 2 ignored reminders/);
+    assert.equal(listStandaloneReminders().length, remindersBefore + 2, 'no third reminder');
+  });
+
+  it('an update restarts the clock: the work of the turn it was made in does not count, the clock starts at its end', async () => {
+    const sentAt = Date.now();
+    await publishThroughAgent(topicAThreadId, 'TODO-7', `[todo-touch] [work-ms:${longTurnWorkMs}]`);
+    assert.ok((readTopicTodoFile().lastUpdateAt ?? 0) >= sentAt);
+    await getCharness().waitFor('the clock started at the turn end', turnTimeoutMs, () => (readTopicTodoFile().nag?.clockStartedAt ?? 0) > sentAt);
+    assert.deepEqual({ workedMs: readTopicTodoFile().nag?.workedMs, ignoredCount: readTopicTodoFile().nag?.ignoredCount }, { workedMs: 0, ignoredCount: 0 });
+  });
+
+  // ── S2 — the settings in General ──────────────────────────────────────
+
+  it('General\'s /todo opens the settings: an interval tap writes settings.json and moves the ✓', async () => {
+    const general = await sendAndAwaitReply(generalTopicThreadId, '/todo', '📋 Todo — all projects');
+    assert.deepEqual(getKeyboardLabels(general), [['Settings ▸']]);
+    await tapAndAwaitRerender(general, 'todo_cfg', 'Todo settings', null);
+    const settings = () => fakeTelegram.getMessage(general.message_id) ?? general;
+    assert.equal(settings().text, 'Todo settings\n\nShared todo lists: on\nReminder when a list is stale: 1 h');
+    assert.deepEqual(getKeyboardLabels(settings()), [['Turn off'], ['off', '30 min', '✓ 1 h', '2 h', '4 h'], ['‹ Back']]);
+    await tapAndAwaitRerender(general, 'todo_rem_30', 'stale: 30 min', '✅ Saved');
+    assert.deepEqual(getKeyboardLabels(settings())[1], ['off', '✓ 30 min', '1 h', '2 h', '4 h']);
+    assert.deepEqual(readSettingsFile().todo, { reminderMinutes: 30 }, 'only the tapped field is written');
+  });
+
+  it('«Turn off» hides the intervals and a topic\'s /todo says the lists are off; «Turn on» brings them back', async () => {
+    const general = [...fakeTelegram.listBotMessages(generalTopicThreadId)].reverse().find((message) => message.text.startsWith('Todo settings'));
+    assert.ok(general, 'the settings screen is in General');
+    await tapAndAwaitRerender(general, 'todo_off', 'Shared todo lists: off', '✅ Saved');
+    assert.deepEqual(getKeyboardLabels(fakeTelegram.getMessage(general.message_id) ?? general), [['Turn on'], ['‹ Back']]);
+    assert.deepEqual(readSettingsFile().todo, { reminderMinutes: 30, isEnabled: false });
+    const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
+    assert.match(view.text, /Shared todo lists are off: agents are not offered them\. Turn them on in General\.$/);
+    await tapAndAwaitRerender(general, 'todo_on', 'Shared todo lists: on', '✅ Saved');
+    assert.equal(readSettingsFile().todo?.isEnabled, true);
   });
 });

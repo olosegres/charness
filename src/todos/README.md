@@ -40,3 +40,26 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 - **The final-answer hint (D8):** an `answer_request` `final` to an open request whose conversation still shows
   in-work items, while the list was not updated during that request (`lastUpdateAt` before the request's creation),
   gets one line asking to record the change — in the tool result, no extra turn.
+
+## Staleness reminder (`nag.ts`, `reminderEngine.ts`)
+
+- **Stale = WORKED time, not wall time** (D10): the reminder engine polls the conversations' sessions (the wake-up
+  engine's turn probe, `todoReminderPollMs`) and counts the busy polls; a late poll counts at most three intervals.
+  The clock starts at the first turn end after an update (`nag.clockStartedAt`), so neither the update's own turn nor
+  days of quiet count. A busy → idle edge is a turn end; agent output marks a turn too short for a poll.
+- The work is kept in memory between turn ends and stored with the list at a turn end (`nag` in the topic file), so a
+  restart loses at most a running turn's share. A turn that ends right before a stop may be read as ended only by the
+  next process — or not at all — and the clock then starts a turn later.
+- **Form a** — the reminder line rides the next prompt from any source at the ONE choke point (`forwardPromptToAgent`
+  takes it through `takeTodoPromptReminder`; never a slash command, a shell line or the standalone reminder itself).
+- **Form b** — at a turn end, only when every gate of D12 holds (`decideStandaloneTodoReminder` names each failing one;
+  a due reminder that a gate holds back logs one line): posted through `postToIdleSession` — never a resume, never an
+  interrupt — as a technical prompt (`isTechnicalPrompt`: no request, never replayed, no interrupt). In a Jira
+  conversation nothing of that turn reaches the issue: the agent can answer only through `answer_request`, and no
+  request is open (a gate), so it is no hand-over and spends no run budget (D58).
+- A delivered reminder (either form) starts the work count afresh and counts as ignored until the next update; after
+  `todoReminderMaxIgnored` (2) the bot is silent until the agent updates or a person writes (`notePersonActivity`,
+  beside the compact-on-idle latch).
+- **Settings:** `settings.json` `todo: { isEnabled, reminderMinutes }` (`instanceSettings.ts`), defaults on / 60 min,
+  set from `/todo` in General. Off = the tools are not offered (the MCP `todos` port is read per request), no board,
+  no reminder, no final-answer hint.

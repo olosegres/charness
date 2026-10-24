@@ -125,7 +125,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` is set) → `init` → `status` — and the task's own turn shows its first
  *    output only `fakeNotificationTurnLatencyMs` later (the API round-trip), then answers
  *    `getFakeBackgroundTaskFinishedText` in plain text (logged to `turns.jsonl` with `origin: 'task-notification'`).
- *    Honoured by a turn with or without a request, by the token in its text;
+ *    Honoured by a turn with or without a request, by the token in its text; in a turn without a request a
+ *    `[bg-count:<n>]` token starts n such tasks, listed together — each write of the release file ends one;
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
@@ -150,7 +151,7 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * Todo tokens in the text of a turn that gets as far as answering (with or without a request): `[todo:<status>:<title>]`
  * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
  * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
- * publishes).
+ * publishes). A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
@@ -203,6 +204,8 @@ const limitResetsRe = /\[limit-resets:([^\]]+)\]/;
 const todoAddRe = /\[todo:(queued|inWork|done|dropped):([^\]]+)\]/g;
 const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
 const todoTouchToken = '[todo-touch]';
+const workMsRe = /\[work-ms:(\d+)\]/;
+const bgCountRe = /\[bg-count:(\d+)\]/;
 const todoUpdateToolName = 'todo_update';
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
 const requesterDoesNotSeePlainTextPhrase = 'does not see your plain text output or your thinking';
@@ -590,6 +593,20 @@ function writeTurnStart(argv: readonly string[], sessionId: string): void {
 /** One turn at a time, in arrival order, as the real CLI does — a user message's turn and a finished task's turn alike. */
 let turnChain: Promise<void> = Promise.resolve();
 
+/** The `background-notify` tasks still running, as the CLI lists them in `background_tasks_changed`. */
+let runningNotifyingTasks: Array<{ task_id: string; task_type: string; description: string }> = [];
+
+/** How many tasks a `background-notify` turn starts: a `[bg-count:<n>]` token, else one. Each write of the release file ends one. */
+function getNotifyingTaskCount(content: string): number {
+  return Number(bgCountRe.exec(content)?.[1] ?? '1');
+}
+
+/** A `[work-ms:<n>]` token: the turn works this long (busy, silent) before it answers — a long task. */
+async function waitTurnWork(content: string): Promise<void> {
+  const workMs = Number(workMsRe.exec(content)?.[1] ?? '0');
+  if (workMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, workMs));
+}
+
 /**
  * The background task a `background-notify` turn leaves running: listed now, ended once the test writes the release
  * file — then the task's own turn is queued like any other.
@@ -598,7 +615,8 @@ function startNotifyingBackgroundTask(argv: readonly string[], sessionId: string
   const taskId = `fake-notify-${randomUUID().slice(0, 8)}`;
   // Lower case on purpose: a note naming the task must not read as a label (`issueKeyRe`) in a later prompt.
   const description = getFakeBackgroundTaskDescription(issueKey);
-  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: taskId, task_type: 'local_bash', description }] });
+  runningNotifyingTasks.push({ task_id: taskId, task_type: 'local_bash', description });
+  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [...runningNotifyingTasks] });
   writeStdout({ type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId, is_backgrounded: true, task_type: 'local_bash', description });
   const releasePath = path.join(getStateDir(), fakeClaudeBackgroundReleaseFileName);
   const poll = setInterval(() => {
@@ -620,7 +638,8 @@ async function waitForHoldRelease(): Promise<void> {
 async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string, taskId: string, description: string, issueKey: string): Promise<void> {
   writeStdout({ type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch: { status: 'completed', end_time: Date.now() } });
   writeStdout({ type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status: 'completed', output_file: path.join(getStateDir(), `${taskId}.output`), summary: `Background command "${description}" completed (exit code 0)` });
-  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [] });
+  runningNotifyingTasks = runningNotifyingTasks.filter((task) => task.task_id !== taskId);
+  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [...runningNotifyingTasks] });
   const gapPath = path.join(getStateDir(), fakeClaudeBackgroundGapMsFileName);
   if (fs.existsSync(gapPath)) {
     // Only the notification says a turn is coming: no running event, and the turn starts after the gap.
@@ -731,6 +750,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
     emitTurnActivity(sessionId, noRequestIssueKey);
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
+    await waitTurnWork(content);
     // A turn without a request honours two modes, by the token in ITS OWN text: `ask` (a question needs no request
     // to be put to the user) and `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once").
@@ -743,7 +763,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion() });
     }
     endTurn(sessionId, 'Nothing to do.');
-    if (noRequestMode === 'background-notify') startNotifyingBackgroundTask(argv, sessionId, noRequestIssueKey);
+    if (noRequestMode === 'background-notify') {
+      for (let index = 0; index < getNotifyingTaskCount(content); index += 1) startNotifyingBackgroundTask(argv, sessionId, noRequestIssueKey);
+    }
     return;
   }
   const isRequestPrompt = content.includes(`[Request ${requestId}`);
@@ -778,6 +800,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const server = getBotMcpServer(argv);
   await runTodoTokens(server, content, state.issueKey);
+  await waitTurnWork(content);
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server

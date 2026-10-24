@@ -22,6 +22,8 @@ import { unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
 import { postRetryDelaysMs } from '../requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
+import { todoReminderDefaultMinutes } from '../todos/nag';
+import { todoReminderPollMs } from '../todos/reminderEngine';
 
 /** Every key with the production window it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -34,6 +36,8 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['stateSaveDebounceMs', DEFAULT_SAVE_DEBOUNCE_MS],
   ['openCodeServerUpBudgetMs', openCodeServerRestartRetryBudgetMs],
   ['backgroundHoldMaxMs', pendingWorkHoldDefaultMs],
+  ['todoReminderPollMs', todoReminderPollMs],
+  ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
 ];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;

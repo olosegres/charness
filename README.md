@@ -570,6 +570,19 @@ The view is read-only: to change the list, tell the agent. The list belongs to t
 list still shows work in progress it did not touch, the bot reminds it (in the tool result) to record what changed.
 The lists live in `DATA_DIR/todos/`; items closed more than 30 days ago move to `DATA_DIR/todos/archive/`.
 
+**A list that went stale is pointed out to the agent.** Once an agent has worked for an hour (counted from the end of
+the first turn after its last update; a topic that was quiet for days is not reminded on its first turn) without
+updating its list, the next prompt it gets — from you, a scheduled run, a "continue" — carries one line asking it to
+update it. An agent that keeps working with no prompt reaching it (its own background tasks) gets the reminder as a
+short prompt of its own, at the end of a turn — never into a running turn, never by waking a sleeping session, and
+never while a request waits for its answer, a usage limit holds the topic or the topic runs on an account billed to
+API credits. After two reminders in a row without an update the bot stays silent until the agent updates or someone
+writes in the topic. Nothing of this is posted to the topic.
+
+**`/todo` in General → Settings** turns the shared lists off for the whole instance (agents are then not offered the
+tool) and sets the reminder's interval (off, 30 min, 1 h, 2 h, 4 h). An instance without a General topic sets the
+same in `settings.json` ([Instance settings](SETUP.md#instance-settings-settingsjson)).
+
 ### Raw terminal (`/terminal`) (Telegram)
 
 `/terminal` binds the topic to a real interactive `$SHELL` (in tmux) in the

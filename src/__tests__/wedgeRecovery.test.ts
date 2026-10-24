@@ -64,7 +64,7 @@ describe('decideWedgeRecovery', () => {
 });
 
 describe('checkIsReplayablePrompt', () => {
-  const genuinePrompt = { isSlashCommand: false, isRecoveryReplay: false, isRequestReminder: false };
+  const genuinePrompt = { isSlashCommand: false, isRecoveryReplay: false, isRequestReminder: false, isTechnicalPrompt: false };
 
   it('a genuine new prompt becomes the one to replay', () => {
     assert.equal(checkIsReplayablePrompt(genuinePrompt), true);
@@ -72,6 +72,10 @@ describe('checkIsReplayablePrompt', () => {
 
   it('a request reminder keeps the request\'s prompt and the recovery tier', () => {
     assert.equal(checkIsReplayablePrompt({ ...genuinePrompt, isRequestReminder: true }), false);
+  });
+
+  it('a technical prompt (the todo reminder) is never the work to replay', () => {
+    assert.equal(checkIsReplayablePrompt({ ...genuinePrompt, isTechnicalPrompt: true }), false);
   });
 
   it('a slash command and the recovery replay itself are never cached', () => {

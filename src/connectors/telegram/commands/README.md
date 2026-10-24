@@ -354,5 +354,7 @@ either way: the binding exists by then, and the admin list skips bots, so nothin
 
 `/todo` — the shared todo registry (`../../../todos/`) seen from Telegram. In a bound topic: its published list
 (`renderTodoTopicView` over `getTodoListView` — in work with its clock, the queue numbered, done today; an empty list
-says the agent adds items when it starts work). Unbound topics and General get the bind refusal. Read-only: an item
-is changed by telling the agent.
+says the agent adds items when it starts work). An unbound topic gets the bind refusal. Read-only: an item is changed
+by telling the agent. In General: the board (S3) and «Settings ▸» (`todo_cfg`) — the switch (`todo_on` / `todo_off`)
+and the reminder's intervals (`todo_rem_<minutes>`, only the offered values are accepted), written to `settings.json`
+through `saveInstanceSettingsChange` (only the tapped field), re-rendered in place; a tap outside General is refused.

@@ -54,6 +54,12 @@ restarted bot read that limit error from what the agent wrote during the downtim
 hour before was taken as closing tomorrow, and the account stayed limited — shown so on `/limits`, passed over by the account
 switch — for up to a day. The reset is now worked out from the time the agent's transcript recorded the error.
 
+**An agent that works for an hour without updating its todo list is reminded to.** The next prompt it gets carries
+one line; an agent that keeps working on its own gets a short prompt of its own at the end of a turn — never into a
+running turn, a sleeping session, an unanswered request, a usage limit or an account billed to API credits — and the
+bot falls silent after two ignored reminders. `/todo` in General → Settings turns the lists off or sets the interval
+(off, 30 min, 1 h, 2 h, 4 h); an instance without General sets `todo` in `settings.json`.
+
 **Agents publish what they work on, and `/todo` shows it.** Every topic's agent now keeps a short published todo list
 — in work, the queue in order, done — through a new bot tool, adding an item before it starts a task and closing it
 when it is done; `/todo` in a topic shows the list. It belongs to the topic, so `/new`, `/quit`, a backend switch and

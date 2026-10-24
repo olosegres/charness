@@ -6,8 +6,7 @@
 import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { t } from '../../../i18n';
-import { getCaughtErrnoCode } from '../../../configDirFile';
-import { loadInstanceSettingsForUpdate, saveInstanceSettings, type InstanceSettings } from '../../../instanceSettings';
+import { saveInstanceSettingsChange, type InstanceSettings } from '../../../instanceSettings';
 import { autoUpdateModes, type AutoUpdateMode } from '../../../selfUpdate/updateModes';
 import type { InstallRequestResult, UpdateEngine } from '../../../selfUpdate/updateEngine';
 import type { SessionKey } from '../../../sessionKey';
@@ -81,15 +80,7 @@ export function createSelfUpdate(ports: SelfUpdatePorts) {
 
   /** Write a change on top of what `settings.json` already holds. `null` on success, else the errno code of the failed write. */
   function saveSetting(change: Partial<Pick<InstanceSettings, 'autoUpdate' | 'whatsNew'>>): string | null {
-    const filePath = getSettingsPath();
-    try {
-      saveInstanceSettings(filePath, { ...loadInstanceSettingsForUpdate(filePath), ...change });
-      return null;
-    } catch (error) {
-      const code = getCaughtErrnoCode(error);
-      console.warn(`[Settings] could not write ${filePath} (${code})`);
-      return code;
-    }
+    return saveInstanceSettingsChange(getSettingsPath(), change);
   }
 
   function getWriteFailedText(key: SessionKey, code: string): string {

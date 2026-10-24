@@ -125,3 +125,28 @@ export async function postToSession(
   }
   return { ok: true, isHeld: false };
 }
+
+/**
+ * @name PostToIdleSessionDeps
+ * @description `checkIsIdle` = the session is live and not working right now; `forward` writes the prompt.
+ */
+export interface PostToIdleSessionDeps {
+  checkIsIdle: () => boolean;
+  forward: () => Promise<void>;
+}
+
+/**
+ * @description The idle-only sibling of {@link postToSession} for a bot-made technical prompt (the todo list's
+ * staleness reminder): it never ensures, resumes or starts a session and never waits for a turn — a session that is
+ * not idle at this moment gets nothing (`false`). A forward that throws is logged and reads as not posted.
+ */
+export async function postToIdleSession(deps: PostToIdleSessionDeps): Promise<boolean> {
+  if (!deps.checkIsIdle()) return false;
+  try {
+    await deps.forward();
+    return true;
+  } catch (error) {
+    console.warn('[postToIdleSession] the forward failed:', error instanceof Error ? error.message : error);
+    return false;
+  }
+}

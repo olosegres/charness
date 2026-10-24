@@ -7,12 +7,15 @@ import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
+import { todoReminderDefaultMinutes } from './todos/nag';
+import { todoReminderPollMs } from './todos/reminderEngine';
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
- * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold). It is NOT a setting: no
+ * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the
+ * todo reminder's 10 s poll and its interval). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
@@ -58,6 +61,10 @@ const testTimingsSchema = z.strictObject({
    * last turn (production: `pendingWorkHoldDefaultMs`, 6 h).
    */
   backgroundHoldMaxMs: createShorterWindowSchema(pendingWorkHoldDefaultMs).optional(),
+  /** How often the todo reminder polls the sessions for their work and turn ends (production: `todoReminderPollMs`, 10 s). */
+  todoReminderPollMs: createShorterWindowSchema(todoReminderPollMs).optional(),
+  /** The todo reminder's interval, in place of the `settings.json` one (production default: 60 min; off stays off). */
+  todoReminderIntervalMs: createShorterWindowSchema(todoReminderDefaultMinutes * 60 * msPerSecond).optional(),
 });
 
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */
