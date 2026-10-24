@@ -64,7 +64,13 @@ const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message
   wakeUpMessages.push(message);
 };
 
-function createEngine(ledger: RequestLedger, sweepIntervalMs?: number): RequestWakeUpEngine {
+/** The windows a test instance may shorten (`CHARNESS_TEST_TIMINGS`); absent: the production ones. */
+interface EngineTimings {
+  sweepIntervalMs?: number;
+  firstPostRetryDelayMs?: number;
+}
+
+function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): RequestWakeUpEngine {
   return new RequestWakeUpEngine({
     ledger,
     probeTurn: () => probe,
@@ -79,7 +85,7 @@ function createEngine(ledger: RequestLedger, sweepIntervalMs?: number): RequestW
       return alertMessageRef;
     },
     backstopMs,
-    sweepIntervalMs,
+    ...timings,
     now: () => nowMs,
   });
 }
@@ -822,6 +828,23 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.wakeCount, 0);
   });
 
+  it('a test instance\'s first retry delay posts it again that much later; a retry that fails again still waits 5 minutes', async () => {
+    const firstPostRetryDelayMs = 5_000;
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { firstPostRetryDelayMs });
+    await createFailedPost(ledger, engine);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, nowMs + firstPostRetryDelayMs, 'armed at the shorter delay');
+    nowMs += firstPostRetryDelayMs - 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages, [], 'not due yet');
+
+    isWakeUpDeliverable = false;
+    nowMs += 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(preparedFor.map((message) => message.reason), ['postRetry'], 'tried at the shorter delay — and failed again');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, nowMs + 5 * minuteMs, 'only the first delay is shortened');
+  });
+
   it('a retry that fails again tries after 5, then 15 minutes, with no alert; then the backstop takes over', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
@@ -1112,7 +1135,7 @@ describe('the sweep timer', () => {
       const testSweepIntervalMs = 5_000;
       const shortLedger = await createLedger();
       const defaultLedger = await createLedger();
-      const shortEngine = createEngine(shortLedger, testSweepIntervalMs);
+      const shortEngine = createEngine(shortLedger, { sweepIntervalMs: testSweepIntervalMs });
       const defaultEngine = createEngine(defaultLedger);
       engines.push(shortEngine, defaultEngine);
       const shortRequest = await shortLedger.createRequest(topicKey, { kind: 'message', attributes: {} });

@@ -52,6 +52,9 @@ const testTimingsSchema = z.strictObject({
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */
 export type TestTimings = z.infer<typeof testTimingsSchema>;
 
+/** Every key the seam accepts — each must reach its consumer (`bot.ts`, the composition root, reads it). */
+export const testTimingKeys = testTimingsSchema.keyof().options;
+
 export type TestTimingsParse = { ok: true; timings: TestTimings } | { ok: false; errors: string[] };
 
 /**

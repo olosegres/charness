@@ -11,7 +11,9 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName, type TestTimings } from '../testTimings';
+import * as fs from 'fs';
+import * as path from 'path';
+import { formatTestTimingsBootLine, parseTestTimings, testTimingKeys, testTimingsEnvName, type TestTimings } from '../testTimings';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
 import { globalSendIntervalMs } from '../rateLimiter';
@@ -86,5 +88,13 @@ describe('formatTestTimingsBootLine', () => {
       formatTestTimingsBootLine({ telegramSendIntervalMs: 200, limitProbeDelayMs: 30_000 }),
       `[test-timings] ${testTimingsEnvName} overrides active: telegramSendIntervalMs=200, limitProbeDelayMs=30000`,
     );
+  });
+});
+
+describe('the composition root hands every key to its consumer', () => {
+  it('bot.ts reads each key the seam accepts from the parsed timings — a key parsed but wired nowhere would shorten nothing', () => {
+    const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+    assert.ok(testTimingKeys.length >= productionWindowsMs.length, 'the walk is not vacuous');
+    assert.deepEqual(testTimingKeys.filter((key) => !botSource.includes(`ENV.testTimings.${key}`)), []);
   });
 });
