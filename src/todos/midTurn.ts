@@ -44,12 +44,19 @@ export function getTodoInboxDir(dataDir: string): string {
  * @description The `PostToolUse` hook's shell command: read the hook input whole (the CLI must never write into a
  * closed pipe), take its `session_id`, move that session's inbox aside and print it; nothing without one. It always
  * exits 0 — a hook failure must never stop the agent's tool.
+ *
+ * Only the MAIN agent takes the inbox. A sub-agent's tool call fires the hook too, with the SAME `session_id` and an
+ * `agent_id` of its own (measured on Claude Code 2.1.310); taken there, the changes would land in the sub-agent's
+ * context and count as seen while the main agent never got them. The top-level fields come before `tool_input`, so the
+ * hook reads only that head — a tool's own input or output naming `agent_id` or `session_id` is never mistaken for them.
  */
 export function buildTodoInboxHookCommand(inboxDir: string): string {
   const dir = shellSingleQuote(inboxDir);
   return [
     'input=$(cat)',
-    `id=$(printf '%s' "$input" | grep -o '"session_id" *: *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\\([A-Za-z0-9_-]*\\)"$/\\1/')`,
+    `head=\${input%%'"tool_input"'*}`,
+    `case "$head" in *'"agent_id"'*) exit 0;; esac`,
+    `id=$(printf '%s' "$head" | grep -o '"session_id" *: *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\\([A-Za-z0-9_-]*\\)"$/\\1/')`,
     `f=${dir}/"$id"${inboxFileExtension}`,
     '[ -n "$id" ] && mv "$f" "$f.$$" 2>/dev/null && cat "$f.$$" && rm -f "$f.$$"',
     'exit 0',

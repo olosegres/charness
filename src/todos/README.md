@@ -106,7 +106,9 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   tmux backends and by a key profile's own file) carries a `PostToolUse` command hook with no matcher. It reads the
   hook input whole, takes its `session_id` (only `[A-Za-z0-9_-]`, so nothing outside the inbox is reachable), MOVES
   `DATA_DIR/todos/inbox/<session id>.json` aside and prints it — ready hook JSON, `additionalContext` ≤ 10,000
-  characters — and prints nothing without one; it always exits 0.
+  characters — and prints nothing without one; it always exits 0. A sub-agent's tool call fires the hook with the
+  SAME `session_id` and an `agent_id` (Claude Code 2.1.310): the hook skips it, so only the main agent takes the
+  inbox; it reads the input's top-level fields only (the head before `tool_input`).
 - The reminder poll hands every BUSY session what changed since its agent last saw the board (`peekChanges`, never
   marked seen there): Claude gets the inbox written (atomically; the same changes are not rewritten), and the changes
   count as seen once a later poll finds the file gone. OpenCode gets a NOTE INTO ITS RUNNING TURN

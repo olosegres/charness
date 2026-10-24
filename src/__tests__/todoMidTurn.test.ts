@@ -51,6 +51,20 @@ describe('the PostToolUse inbox hook', () => {
     assert.deepEqual(runHook(command, '{ "no": "session" }'), { stdout: '', status: 0 });
   });
 
+  it('a sub-agent\'s tool call (same session_id, an agent_id) leaves the inbox for the main agent; a tool input naming agent_id does not', () => {
+    const inboxDir = getTodoInboxDir(dataDir);
+    fs.mkdirSync(inboxDir, { recursive: true });
+    const output = buildTodoInboxHookOutput('changes');
+    fs.writeFileSync(path.join(inboxDir, `${sessionId}.json`), output);
+    const command = buildTodoInboxHookCommand(inboxDir);
+    // The field order of Claude Code 2.1.310's hook input.
+    const subAgentInput = JSON.stringify({ session_id: sessionId, cwd: '/w', agent_id: 'a1d69d11bd557a8a3', agent_type: 'general-purpose', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo' }, tool_response: {} });
+    assert.deepEqual(runHook(command, subAgentInput), { stdout: '', status: 0 });
+    assert.ok(fs.existsSync(path.join(inboxDir, `${sessionId}.json`)), 'still waiting for the main agent');
+    const mainInput = JSON.stringify({ session_id: sessionId, cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo "agent_id": x' }, tool_response: { stdout: '{"agent_id": "y"}' } });
+    assert.deepEqual(runHook(command, mainInput), { stdout: output, status: 0 });
+  });
+
   it('a session id that would leave the inbox matches nothing', () => {
     const inboxDir = getTodoInboxDir(dataDir);
     fs.mkdirSync(inboxDir, { recursive: true });
