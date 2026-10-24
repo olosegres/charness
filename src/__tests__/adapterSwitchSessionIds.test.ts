@@ -25,7 +25,7 @@ describe('getAdapterSwitchSessionIds', () => {
   it('leaving Claude for OpenCode parks the Claude id and brings no OpenCode id', () => {
     assert.deepEqual(
       switchAdapter({ previousName: claudeJsonStreamAdapterName, nextName: openCodeAdapterName, agent: { claudeSessionId: claudeId } }),
-      { ids: {}, parked: { adapterName: claudeJsonStreamAdapterName, claudeSessionId: claudeId, parkedAt } },
+      { ids: {}, parked: { adapterName: claudeJsonStreamAdapterName, claudeSessionId: claudeId, parkedAt }, isRestored: false },
     );
   });
 
@@ -33,7 +33,7 @@ describe('getAdapterSwitchSessionIds', () => {
     const parked: ParkedSession = { adapterName: claudeJsonStreamAdapterName, claudeSessionId: claudeId, parkedAt: '2026-10-18T09:00:00.000Z' };
     assert.deepEqual(
       switchAdapter({ previousName: openCodeAdapterName, nextName: claudeJsonStreamAdapterName, agent: { opencodeSessionId: openCodeId }, parked }),
-      { ids: { claudeSessionId: claudeId }, parked: { adapterName: openCodeAdapterName, opencodeSessionId: openCodeId, parkedAt } },
+      { ids: { claudeSessionId: claudeId }, parked: { adapterName: openCodeAdapterName, opencodeSessionId: openCodeId, parkedAt }, isRestored: true },
       'the Claude conversation comes back AND the OpenCode session waits for the next switch',
     );
   });
@@ -42,7 +42,7 @@ describe('getAdapterSwitchSessionIds', () => {
     const parked: ParkedSession = { adapterName: openCodeAdapterName, opencodeSessionId: openCodeId, parkedAt: '2026-10-18T09:00:00.000Z' };
     assert.deepEqual(
       switchAdapter({ previousName: claudeJsonStreamAdapterName, nextName: openCodeAdapterName, agent: { claudeSessionId: claudeId }, parked }),
-      { ids: { opencodeSessionId: openCodeId }, parked: { adapterName: claudeJsonStreamAdapterName, claudeSessionId: claudeId, parkedAt } },
+      { ids: { opencodeSessionId: openCodeId }, parked: { adapterName: claudeJsonStreamAdapterName, claudeSessionId: claudeId, parkedAt }, isRestored: true },
     );
   });
 
@@ -50,11 +50,11 @@ describe('getAdapterSwitchSessionIds', () => {
     const parked: ParkedSession = { adapterName: openCodeAdapterName, opencodeSessionId: openCodeId, parkedAt };
     assert.deepEqual(
       switchAdapter({ previousName: 'terminal', nextName: openCodeAdapterName, agent: {}, parked }),
-      { ids: { opencodeSessionId: openCodeId }, parked: null },
+      { ids: { opencodeSessionId: openCodeId }, parked: null, isRestored: true },
     );
     assert.deepEqual(
       switchAdapter({ previousName: 'terminal', nextName: claudeJsonStreamAdapterName, agent: {}, parked }),
-      { ids: {}, parked: undefined },
+      { ids: {}, parked: undefined, isRestored: false },
       'the parked OpenCode id is not the Claude family\'s',
     );
   });
@@ -62,19 +62,20 @@ describe('getAdapterSwitchSessionIds', () => {
   it('a flip between the two Claude backends keeps the one conversation and parks nothing', () => {
     assert.deepEqual(
       switchAdapter({ previousName: 'claude', nextName: claudeJsonStreamAdapterName, agent: { claudeSessionId: claudeId } }),
-      { ids: { claudeSessionId: claudeId }, parked: undefined },
+      { ids: { claudeSessionId: claudeId }, parked: undefined, isRestored: false },
     );
   });
 
   it('the live id of the family being entered wins over a parked one; an agent with no id for the family it leaves parks nothing', () => {
     const parked: ParkedSession = { adapterName: claudeJsonStreamAdapterName, claudeSessionId: otherClaudeId, parkedAt };
     assert.deepEqual(
-      switchAdapter({ previousName: 'claude', nextName: claudeJsonStreamAdapterName, agent: { claudeSessionId: claudeId }, parked }).ids,
-      { claudeSessionId: claudeId },
+      switchAdapter({ previousName: 'claude', nextName: claudeJsonStreamAdapterName, agent: { claudeSessionId: claudeId }, parked }),
+      { ids: { claudeSessionId: claudeId }, parked: undefined, isRestored: false },
+      'the parked conversation is not the one the thread runs',
     );
     assert.deepEqual(
       switchAdapter({ previousName: openCodeAdapterName, nextName: claudeJsonStreamAdapterName, agent: {} }),
-      { ids: {}, parked: undefined },
+      { ids: {}, parked: undefined, isRestored: false },
     );
   });
 });

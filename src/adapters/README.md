@@ -82,8 +82,10 @@ Newline-delimited JSON, one object per line, parsed in
   (the agent reads the result); measured on 2.1.310: `task_notification` →
   `background_tasks_changed []` → (+72 ms) `session_state_changed running` →
   (+125 ms) `init` → the turn's first output only after the API round-trip
-  (1.3 s small context, 3–5 s large). A foreground task's notification comes
-  mid-turn and starts nothing.
+  (1.3 s small context, 3–5 s large). A background task that ends DURING a turn
+  is not folded into it: its own turn starts right after that turn's `result`
+  (`init` +45 ms, no `running` first; measured on 2.1.310). A foreground task's
+  notification comes mid-turn and starts nothing.
 - `system` `subtype:"session_state_changed"` — `running` / `requires_action` /
   `idle`, emitted only under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which every
   wrapper sets. `running` marks a turn at its start; `idle` is ignored (it fires

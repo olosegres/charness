@@ -21,10 +21,14 @@ export interface SessionIds {
   opencodeSessionId?: string;
 }
 
-/** What the thread's row and the parked slot become: `parked` is `undefined` to leave the slot as it is. */
+/**
+ * What the thread's row and the parked slot become: `parked` is `undefined` to leave the slot as it is. `isRestored` —
+ * the parked conversation is the one the thread now runs (the slot may hold the side being left in the same step).
+ */
 export interface AdapterSwitchSessionIds {
   ids: SessionIds;
   parked: ParkedSession | null | undefined;
+  isRestored: boolean;
 }
 
 export function getAdapterSwitchSessionIds(input: {
@@ -56,6 +60,6 @@ export function getAdapterSwitchSessionIds(input: {
     isRestored = true;
   }
 
-  return { ids, parked: leftBehind ?? (isRestored ? null : undefined) };
+  return { ids, parked: leftBehind ?? (isRestored ? null : undefined), isRestored };
 }
 

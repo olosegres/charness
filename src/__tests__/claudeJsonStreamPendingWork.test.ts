@@ -171,12 +171,16 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     assert.equal(adapter.checkIsWorking(key), false);
   });
 
-  it('a task that finished during the agent\'s turn was folded into it: the turn\'s end ends its announcement (no false "unread result" at a crash)', () => {
+  it('a task that finished during the agent\'s turn gets its own turn right after that turn\'s result: held across the gap', () => {
     const { adapter, session, append } = createAdapterWithSession();
     append(resultLine + backgroundStartedLines + initLine + backgroundFinishedLines);
     assert.ok(session.notificationTurnPendingSince !== null, 'announced mid-turn');
+    // Measured on 2.1.310: result → (+45 ms) init of the task's own turn, no `session_state_changed running` before it.
     append(resultLine);
-    assert.equal(session.notificationTurnPendingSince, null);
+    assert.equal(adapter.checkIsWorking(key), true, 'the task\'s own turn is coming: a per-turn stop here would lose its result');
+    append(initLine);
+    assert.equal(session.notificationTurnPendingSince, null, 'its turn showed');
+    append(resultLine);
     assert.equal(adapter.checkIsWorking(key), false);
   });
 

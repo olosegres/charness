@@ -4565,12 +4565,9 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<vo
   const cutOffRecord: LostWorkRecord | null = switchCutOffWork ? { ...switchCutOffWork, reason: 'switched', lostAt: Date.now() } : null;
   // The parked copy knows the agent the topic moves to hears it first (it may restart some of the work itself).
   if (switched.parked !== undefined) await state.setParkedSession(key, switched.parked && cutOffRecord ? { ...switched.parked, lostWork: { ...cutOffRecord, isOtherAgentTold: true } } : switched.parked);
-  // Back to a parked conversation (its id is the one kept now — the side being left may be parked in the same step):
-  // what its agent was never told rides its first prompt.
-  const isParkedRestored = parkedBefore !== null
-    && ((parkedBefore.claudeSessionId !== undefined && switched.ids.claudeSessionId === parkedBefore.claudeSessionId)
-      || (parkedBefore.opencodeSessionId !== undefined && switched.ids.opencodeSessionId === parkedBefore.opencodeSessionId));
-  if (isParkedRestored && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
+  // Back to a parked conversation (the side being left may be parked in the same step): what its agent was never told
+  // rides its first prompt.
+  if (switched.isRestored && parkedBefore?.lostWork) await foldLostWorkIntoNextPrompt(key, parkedBefore.lostWork);
   if (cutOffRecord) await foldLostWorkIntoNextPrompt(key, cutOffRecord);
   // The watermark is scoped to its session: it rides along while that session is kept. Every wake of a sleeping
   // conversation passes through here, and the wake reads it as the proof the conversation took a turn.

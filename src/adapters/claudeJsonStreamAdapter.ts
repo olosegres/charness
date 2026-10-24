@@ -1909,12 +1909,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     session.isBusy = false;
     // The pending-work hold counts from the agent's own last turn: a bot-issued compaction is not one. A task that
-    // finished during the agent's turn was folded into it (the CLI replays its notification into the running turn):
-    // no turn of its own follows, so its announcement ends here too.
-    if (!session.isCompactionResultPending) {
-      session.lastTurnEndedAt = Date.now();
-      session.notificationTurnPendingSince = null;
-    }
+    // finished during the turn is NOT folded into it: its own turn starts right after this `result` (`init` +45 ms,
+    // measured on 2.1.310), so its announcement stays until that turn shows — clearing it here would let the per-turn
+    // stop kill the process in that gap.
+    if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
     session.isCompactionResultPending = false;
     // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
     // queued behind it, and a count left above zero would make the session look "working" forever — a pending
