@@ -13,6 +13,9 @@
  *     as ONE message, and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
+ *   → a tap read INSIDE the idle stop (the process ignores its stop signals, so the stop lasts its kill wait) whose
+ *     toast the fake Bot API holds until the stop is over: the label wakes the conversation and reaches the resumed
+ *     process — it used to be kept for the stop's window, which had already closed, and reached no one
  *   → a tap read while the process is live, whose delivery the idle stop overtakes (the fake Bot API holds the
  *     re-asked question's and the toast's responses to put the stop between the two): the stop still under way when the
  *     label is delivered — it is held and reaches the resumed process; the stop already over — the conversation is
