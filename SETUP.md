@@ -92,8 +92,8 @@ The bot installs the agents on first use (`/claude`, `/opencode`); to have them 
 #### Windows programs from WSL (interop)
 
 Interop is on by default (`[interop] enabled=true` in `/etc/wsl.conf`). A Windows program starts from Ubuntu by name **with its
-extension**, as the active Windows user, and `wslpath` converts paths between the two worlds
-([Microsoft: run Windows tools from Linux](https://learn.microsoft.com/en-us/windows/wsl/filesystems#run-windows-tools-from-linux)):
+extension**, as the active Windows user ([Microsoft: run Windows tools from Linux](https://learn.microsoft.com/en-us/windows/wsl/filesystems#run-windows-tools-from-linux)),
+and `wslpath` — a tool that comes with WSL (`wslpath --help` lists its options) — converts paths between the two worlds:
 
 ```bash
 powershell.exe -NoProfile -Command "Get-Date"
@@ -103,13 +103,16 @@ wslpath -u 'C:\Users\me'           # Windows path → WSL path (/mnt/c/Users/me)
 ```
 
 Such a program has the rights of the WSL session, not administrator's. To run one elevated, start it through PowerShell:
-`powershell.exe -Command "Start-Process <program> -Verb RunAs"` — Windows then shows a UAC prompt on the desktop and
-somebody has to click it.
+`powershell.exe -Command "Start-Process <program> -Verb RunAs"` — Windows then asks for confirmation (UAC) on the desktop and
+somebody has to click it. That works only when you opened WSL yourself at a logged-in desktop. **On the headless PC below it does not:**
+the distro there is started by a scheduled task, nobody is logged in, there is no desktop to show the prompt on and nobody
+to click it, so an elevated call from the bot fails or hangs. Do not build on elevated Windows programs there; do such a step by
+hand at the PC.
 
 #### A PC with no monitor as an always-on server
 
-The goal: Windows boots, nobody logs in, the distro starts, systemd starts the bot, and nothing shuts the distro down. Four
-parts; the Windows half follows Microsoft's documentation (linked), so check a step against the page when your Windows build
+The goal: Windows boots, nobody logs in, the Linux that WSL runs (the *distro*, here Ubuntu) starts, systemd — Linux's service
+manager — starts the bot, and nothing shuts the distro down. Four parts; the Windows half follows Microsoft's documentation (linked), so check a step against the page when your Windows build
 behaves differently.
 
 **1. systemd and the bot as a user service (inside Ubuntu).** The current Ubuntu from `wsl --install` has it on by default
@@ -156,7 +159,8 @@ journalctl --user -u charness -f        # the bot's log
 **2. Keep the distro running.** systemd services do **not** keep a WSL instance alive: «systemd services will NOT keep your WSL
 instance alive» ([systemd in WSL](https://learn.microsoft.com/en-us/windows/wsl/systemd#how-does-enabling-systemd-affect-wsl-architecture)),
 and an idle distro is shut down (by default 15 s after its last process exits). The documented switches are two idle
-timeouts in `%UserProfile%\.wslconfig` — the file does not exist by default, create it:
+timeouts in `%UserProfile%\.wslconfig` of the Windows account that runs the task below (e.g. `C:\Users\<name>\.wslconfig`) — the
+file does not exist by default, create it:
 
 ```ini
 # How long a distro may sit idle before it is shut down, in ms; -1 = never (default 15000)
@@ -178,7 +182,10 @@ task below running `--exec sleep infinity` instead of `/bin/true`, with its time
 **3. Start the distro at Windows boot, nobody logged in.** A scheduled task with the *At startup* trigger, registered with
 the account's password (Task Scheduler's «Run whether user is logged on or not»), starts without anyone logged in. Register it
 once from an **administrator** PowerShell, as the Windows account that installed the distro (a WSL distro is registered per
-Windows account):
+Windows account). `Get-Credential` asks for that account's **password**: if you sign in to Windows with a Microsoft account
+(an e-mail address), it is that account's password — not the PIN or the fingerprint. Some setups refuse a stored password
+while Settings → Accounts → Sign-in options has «only allow Windows Hello sign-in for Microsoft accounts» switched on; if
+registering or running the task fails with a password error, switch it off and register again.
 
 ```powershell
 $cred = Get-Credential "$env:USERDOMAIN\$env:USERNAME"
@@ -198,24 +205,40 @@ launches only if the account has the «Log on as a batch job» right, which Admi
 Once the distro is up, systemd, the lingering user manager and
 `charness.service` follow by themselves.
 
-**4. Never sleep.** In Windows' power settings set sleep «when plugged in» to **Never** (the screen may turn off). From a
-command line, values in minutes and `0` for never: `powercfg /change standby-timeout-ac 0` and `powercfg /change hibernate-timeout-ac 0`;
-`powercfg /hibernate off` removes hibernation altogether ([powercfg](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)).
+**4. Never sleep, and make switching on a real boot.** Two things, both required, from an administrator PowerShell
+([powercfg](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)):
 
-**Check:** restart Windows, do not log in, message the bot from your phone. After logging in once, `wsl --list --running`
-shows Ubuntu, and `systemctl --user status charness` inside it shows the bot.
+```powershell
+powercfg /change standby-timeout-ac 0     # never go to sleep on mains power (minutes; 0 = never)
+powercfg /hibernate off                   # no hibernation — and with it no Fast Startup
+```
+
+(The screen may still turn off.) Why the second line: Windows' *Fast Startup*, on by default when the PC can hibernate,
+makes «Shut down» a hibernation instead of a full shutdown ([Microsoft](https://learn.microsoft.com/en-us/troubleshoot/windows-client/setup-upgrade-and-drivers/updates-not-install-with-fast-startup)),
+so the next power-on is a resume, not a boot — and reports say the *At startup* task of part 3 then does not run
+([Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/3254425/scheduled-at-startup-task-that-worked-in-windows-7)).
+A «Restart» is a real boot either way. With hibernation off, switching the PC on starts the task.
+
+**Check:** shut Windows down (not only restart), switch it on again, do **not** log in, and message the bot from your phone —
+it answers. That proves the whole chain. Then log in once: `wsl --list --running` shows Ubuntu and
+`systemctl --user status charness` inside it shows the bot. Reports from WSL 2.0.0 ([microsoft/WSL#9231](https://github.com/microsoft/WSL/issues/9231))
+say that once the same user logged in and ran WSL commands, a distro started this way appeared as *Stopped* or actually
+stopped; this is not confirmed on current WSL. If the bot stops after you log in, run the task again (Task Scheduler → *Run*), and please
+[open an issue](https://github.com/olosegres/charness/issues) with your `wsl --version`.
 
 **Known risks.**
 
 - A Windows restart, a Windows Update reboot or `wsl --shutdown` ends the agents' processes, like a container restart:
   each conversation resumes with its next message ([Restart behaviour](README.md#restart-behaviour)).
-- Windows `.exe` interop from a systemd service has failed in some WSL versions. WSL 2.0.5–2.0.13 could not run a Windows
-  program stored in the Linux filesystem from a process without a live interop session, a systemd service among them
+- **If a Windows program that the bot calls fails, run `wsl --update` in PowerShell first** and try again: the known
+  failures below were fixed in newer WSL. The details, for whoever helps you: Windows `.exe` interop from a systemd service
+  has failed in some WSL versions. WSL 2.0.5–2.0.13 could not run a Windows program stored in the Linux filesystem from a
+  process without a live interop session, a systemd service among them
   ([microsoft/WSL#10812](https://github.com/microsoft/WSL/issues/10812), fixed in 2.0.14); and with `mono` installed its
   `binfmt` handler can take over `.exe` files («File does not contain a valid CIL image»,
   [microsoft/WSL#13000](https://github.com/microsoft/WSL/issues/13000); WSL 2.5.8 added a systemd override that protects WSL's
-  interop entry). Workarounds: keep WSL current (`wsl --update`), keep Windows tools on the Windows disk and call them by their
-  `/mnt/c/…` path, and with `mono` run `sudo update-binfmts --disable cli`.
+  interop entry). Workarounds: keep Windows tools on the Windows disk and call them by their `/mnt/c/…` path, and with
+  `mono` installed run `sudo update-binfmts --disable cli`.
 - Starting WSL from a scheduled task is the part Microsoft documents least: if the check above fails, run the task by hand
   (Task Scheduler → *Run*) and read its *Last Run Result*.
 
