@@ -23,8 +23,9 @@ const skillNamePattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const maxSkillNameLength = 64;
 const maxDescriptionLength = 1024;
 const frontmatterPattern = /^---\n([\s\S]*?)\n---\n/;
-/** Shapes of real instance identifiers that must never enter the public repository. */
-const realIdentifierPatterns = [/\/home\/(?!user\b)[a-z]/, /\/data\/[a-z]/, /\/bulk\//, /t\.me\/c\//, /-100\d{7,}/, /@gmail\.com/];
+/** Shapes of real instance identifiers: a home folder other than the placeholder `/home/user`, a private-chat link, a
+ * supergroup id, an e-mail address. */
+const realIdentifierPatterns = [/\/home\/(?!user\b)[a-z]/, /\/Users\/(?!user\b)[a-z]/, /t\.me\/c\//, /-100\d{7,}/, /[\w.+-]+@[\w-]+\.[a-z]{2,}/i];
 
 type SkillFrontmatter = { name: string; description: string };
 

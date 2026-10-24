@@ -152,7 +152,7 @@ describe('reading a running server\'s launch', () => {
   const serveCmdline = env(['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '4096']);
 
   test('an opencode serve process: the OPENCODE_CONFIG_DIR it was started with, or none', () => {
-    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/data/charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/data/charness/opencode-config' });
+    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/home/user/.charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/home/user/.charness/opencode-config' });
     assert.deepEqual(parseOpenCodeServerLaunch(env(['/usr/lib/node_modules/opencode-ai/bin/opencode.exe', 'serve']), env(['HOME=/home/user'])), { kind: 'openCodeServe', configDir: null });
   });
 
@@ -163,7 +163,7 @@ describe('reading a running server\'s launch', () => {
   });
 
   test('the boot step replaces only an opencode serve the bot owns, started without the folder it now offers', () => {
-    const expected = '/data/charness/opencode-config';
+    const expected = '/home/user/.charness/opencode-config';
     const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
     assert.equal(getOpenCodeAgentSkillsServerAction(started(null), expected), 'replace');
     assert.equal(getOpenCodeAgentSkillsServerAction(started('/old'), expected), 'replace');
