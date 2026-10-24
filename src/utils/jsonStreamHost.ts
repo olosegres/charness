@@ -28,6 +28,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
+import type { ClaudeBackgroundTask } from './claudeStreamJson';
+import type { ScheduledJob } from './claudeScheduledJobs';
 import { setTimeout as sleep } from 'timers/promises';
 import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 import type { JsonStreamTailOffset } from '../types';
@@ -143,6 +145,13 @@ export function parseJsonStreamTmuxSessionName(name: string): SessionKey | null 
 }
 
 /**
+ * The CLI's opt-in to `system/session_state_changed` frames: `running` marks a turn at its START (72 ms after a
+ * finished background task empties its list, measured on 2.1.310), not at its first output after the API round-trip.
+ * Set by every wrapper beside the environment it starts claude with (`utils/jsonStreamPendingWork.ts`).
+ */
+export const claudeSessionStateEventsVariableName = 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS';
+
+/**
  * @description The `#!/bin/sh` host script (exact shape proven by the P1 probe
  * `p1-probe2.mjs`): background claude with its stdio rerouted to the host files,
  * record the child pid, then `wait` and record the exit code. `0<>` opens the
@@ -153,12 +162,11 @@ export function parseJsonStreamTmuxSessionName(name: string): SessionKey | null 
  * (a tracker conversation, R32) claude gets exactly those variables instead —
  * `env -i`, so nothing of the tmux server's environment reaches it (no API key
  * either). A non-default Claude account profile adds `CLAUDE_CONFIG_DIR=<dir>` to
- * either `env` form (`utils/claudeProfiles.ts`); the default profile adds nothing,
- * so the wrapper of a topic that never picked an account is byte-identical to
- * the golden shape. The variable sits in the process environment — not only in
- * the CLI's own reading of it — so a child `claude` the agent starts inherits the
- * same account. All embedded strings are single-quoted; `claudePath` must be
- * ABSOLUTE (tmux server PATH differs).
+ * either `env` form (`utils/claudeProfiles.ts`); the default profile adds nothing.
+ * The variable sits in the process environment — not only in the CLI's own
+ * reading of it — so a child `claude` the agent starts inherits the same account.
+ * Both forms also set {@link claudeSessionStateEventsVariableName}. All embedded
+ * strings are single-quoted; `claudePath` must be ABSOLUTE (tmux server PATH differs).
  */
 export function buildWrapperScript(
   claudePath: string,
@@ -170,9 +178,10 @@ export function buildWrapperScript(
 ): string {
   const command = [claudePath, ...args].map(shellSingleQuote).join(' ');
   const configDirAssignment = configDir === null ? [] : [shellSingleQuote(`${claudeConfigDirVariableName}=${configDir}`)];
+  const ownAssignments = [shellSingleQuote(`${claudeSessionStateEventsVariableName}=1`), ...configDirAssignment];
   const envCommand = environment === null
-    ? ['env', '-u', 'ANTHROPIC_API_KEY', ...configDirAssignment].join(' ')
-    : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`)), ...configDirAssignment].join(' ');
+    ? ['env', '-u', 'ANTHROPIC_API_KEY', ...ownAssignments].join(' ')
+    : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`)), ...ownAssignments].join(' ');
   return `#!/bin/sh
 cd ${shellSingleQuote(workDir)} || exit ${wrapperCdFailExitCode}
 ${envCommand} ${command} \\
@@ -388,10 +397,15 @@ export function readFileByteRange(filePath: string, startOffset: number, endOffs
  *  in force at that point (see {@link resolveAdoptedTail}). */
 export interface AdoptedTailStart {
   startOffset: number;
-  backgroundTaskIds: string[];
+  backgroundTasks: ClaudeBackgroundTask[];
   isTurnInFlight: boolean;
   outstandingToolUseIds: string[];
   claudeCodeVersion: string | null;
+  notificationTurnPendingSinceMs: number | null;
+  /** `null` when the record carries none (nothing was pending): the adopt counts the hold from now. */
+  lastTurnEndedAtMs: number | null;
+  scheduledJobs: ScheduledJob[];
+  isConfigDirSwitchPending: boolean;
 }
 
 /**
@@ -413,14 +427,22 @@ export function resolveAdoptedTail(
   stdoutSizeBytes: number,
 ): AdoptedTailStart {
   if (persistedTail === null || persistedTail.sessionId !== claudeSessionId) {
-    return { startOffset: stdoutSizeBytes, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null };
+    return {
+      startOffset: stdoutSizeBytes, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null,
+      notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false,
+    };
   }
   return {
     startOffset: Math.min(persistedTail.offsetBytes, stdoutSizeBytes),
-    backgroundTaskIds: persistedTail.backgroundTaskIds ?? [],
+    // A record written before the descriptions were kept has the ids alone.
+    backgroundTasks: persistedTail.backgroundTasks ?? (persistedTail.backgroundTaskIds ?? []).map((taskId) => ({ taskId, description: '' })),
     isTurnInFlight: persistedTail.isTurnInFlight ?? false,
     outstandingToolUseIds: persistedTail.outstandingToolUseIds ?? [],
     claudeCodeVersion: persistedTail.claudeCodeVersion ?? null,
+    notificationTurnPendingSinceMs: persistedTail.notificationTurnPendingSinceMs ?? null,
+    lastTurnEndedAtMs: persistedTail.lastTurnEndedAtMs ?? null,
+    scheduledJobs: persistedTail.scheduledJobs ?? [],
+    isConfigDirSwitchPending: persistedTail.isConfigDirSwitchPending ?? false,
   };
 }
 

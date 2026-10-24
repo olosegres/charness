@@ -277,7 +277,7 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
 });
 
 describe('classifyClaudeStreamMessage — background task list (L-D2; probed on 2.1.287)', () => {
-  it('system/background_tasks_changed → backgroundTasks with every task_id (a background Bash and a background sub-agent)', () => {
+  it('system/background_tasks_changed → backgroundTasks with every task_id and its description (a background Bash and a background sub-agent)', () => {
     const msg = {
       type: 'system', subtype: 'background_tasks_changed', session_id: 'abc',
       tasks: [
@@ -285,16 +285,38 @@ describe('classifyClaudeStreamMessage — background task list (L-D2; probed on 
         { task_id: 'a9f8e7d6', task_type: 'local_agent', description: 'Explore', status: 'running' },
       ],
     };
-    assert.deepEqual(classify(msg), [{ kind: 'backgroundTasks', taskIds: ['b1a2c3d4', 'a9f8e7d6'] }]);
+    assert.deepEqual(classify(msg), [{ kind: 'backgroundTasks', tasks: [{ taskId: 'b1a2c3d4', description: 'sleep 30' }, { taskId: 'a9f8e7d6', description: 'Explore' }] }]);
   });
 
   it('an empty tasks list → backgroundTasks with no ids (nothing runs in the background)', () => {
-    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }), [{ kind: 'backgroundTasks', taskIds: [] }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }), [{ kind: 'backgroundTasks', tasks: [] }]);
   });
 
   it('a task without a string task_id is skipped; a missing tasks field reads as empty', () => {
-    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_type: 'local_bash' }, { task_id: 'ok1' }] }), [{ kind: 'backgroundTasks', taskIds: ['ok1'] }]);
-    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed' }), [{ kind: 'backgroundTasks', taskIds: [] }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_type: 'local_bash' }, { task_id: 'ok1' }] }), [{ kind: 'backgroundTasks', tasks: [{ taskId: 'ok1', description: '' }] }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'background_tasks_changed' }), [{ kind: 'backgroundTasks', tasks: [] }]);
+  });
+});
+
+describe('classifyClaudeStreamMessage — a task\'s end and a turn\'s start (measured on 2.1.310)', () => {
+  it('system/task_notification → taskNotification with the task id; without an id → nothing', () => {
+    assert.deepEqual(
+      classify({ type: 'system', subtype: 'task_notification', task_id: 'b4qu6cqpx', status: 'completed', output_file: '/tmp/x.output', summary: 'Background command "sleep" completed' }),
+      [{ kind: 'taskNotification', taskId: 'b4qu6cqpx' }],
+    );
+    assert.deepEqual(classify({ type: 'system', subtype: 'task_notification', status: 'completed' }), []);
+  });
+
+  it('session_state_changed running / requires_action → turnStarted; idle (it fires while a background task still runs) → nothing', () => {
+    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'running' }), [{ kind: 'turnStarted', isScheduledWakeup: false }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'requires_action' }), [{ kind: 'turnStarted', isScheduledWakeup: false }]);
+    assert.deepEqual(classify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }), []);
+  });
+
+  it('a command_lifecycle start by a scheduled job firing → turnStarted as a scheduled wakeup; any other lifecycle frame → nothing', () => {
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'started', wakeup_source: 'schedule_wakeup' }), [{ kind: 'turnStarted', isScheduledWakeup: true }]);
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c1', state: 'completed' }), []);
+    assert.deepEqual(classify({ type: 'command_lifecycle', command_uuid: 'c2', state: 'started' }), []);
   });
 });
 

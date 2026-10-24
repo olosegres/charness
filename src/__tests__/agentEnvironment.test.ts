@@ -22,7 +22,7 @@ import { promisify } from 'node:util';
 import { addEnvFileVariableNames, agentEnvironmentNames, getAgentEnvironment, resetEnvFileVariableNamesForTests } from '../utils/agentEnvironment';
 import { loadEnvFiles } from '../cli/envLoader';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
-import { buildWrapperScript, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
+import { buildWrapperScript, claudeSessionStateEventsVariableName, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { getTmuxExecEnv, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -128,7 +128,8 @@ describe('the json-stream wrapper with an environment', () => {
       fs.writeFileSync(paths.wrapperFile, script, { mode: 0o755 });
       await execFileAsync(paths.wrapperFile, [], { env: { ...process.env, [instanceSecretName]: instanceSecretValue, ANTHROPIC_API_KEY: 'key' } });
       const printed = fs.readFileSync(paths.stdoutFile, 'utf8');
-      assert.deepEqual(getEnvNames(printed).sort(), ['HOME', 'LANG']);
+      // The given environment plus the wrapper's own opt-in to the CLI's session-state events, nothing else.
+      assert.deepEqual(getEnvNames(printed).sort(), [claudeSessionStateEventsVariableName, 'HOME', 'LANG'].sort());
       assert.ok(printed.includes("LANG=C.UTF-8 'quoted'"), 'a value is passed verbatim');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

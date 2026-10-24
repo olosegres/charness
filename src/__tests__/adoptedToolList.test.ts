@@ -1,28 +1,23 @@
 /**
- * @description The decision for a json-stream process adopted at boot (lifecycle
- * plan L4): a digest equal to the current build's → fresh; a different or
- * missing one → stale, stopped now when idle, else once it stops working (never
- * while it works, L-D2).
+ * @description Whether a json-stream process adopted at boot runs a stale tool
+ * list (lifecycle plan L4): a digest equal to the current build's → fresh; a
+ * different or missing one → stale. Stale is only a fact the boot logs — the
+ * process follows the normal idle lifecycle (compaction, then the stop).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideAdoptedToolListRefresh } from '../utils/adoptedToolList';
+import { checkIsAdoptedToolListStale } from '../utils/adoptedToolList';
 
-describe('decideAdoptedToolListRefresh', () => {
-  it('the same digest means the process got the current tools: fresh, working or not', () => {
-    assert.equal(decideAdoptedToolListRefresh({ persistedDigest: 'd1', currentDigest: 'd1', isWorking: false }), 'fresh');
-    assert.equal(decideAdoptedToolListRefresh({ persistedDigest: 'd1', currentDigest: 'd1', isWorking: true }), 'fresh');
+describe('checkIsAdoptedToolListStale', () => {
+  it('the same digest means the process got the current tools', () => {
+    assert.equal(checkIsAdoptedToolListStale({ persistedDigest: 'd1', currentDigest: 'd1' }), false);
   });
 
-  it('a different digest: stopped now when idle, stopped once idle when working', () => {
-    assert.equal(decideAdoptedToolListRefresh({ persistedDigest: 'old', currentDigest: 'd1', isWorking: false }), 'stopNow');
-    assert.equal(decideAdoptedToolListRefresh({ persistedDigest: 'old', currentDigest: 'd1', isWorking: true }), 'stopWhenIdle');
-  });
-
-  it('a row written before the digest was tracked reads as stale', () => {
-    assert.equal(decideAdoptedToolListRefresh({ persistedDigest: undefined, currentDigest: 'd1', isWorking: false }), 'stopNow');
+  it('a different digest, or a row written before the digest was tracked, is stale', () => {
+    assert.equal(checkIsAdoptedToolListStale({ persistedDigest: 'old', currentDigest: 'd1' }), true);
+    assert.equal(checkIsAdoptedToolListStale({ persistedDigest: undefined, currentDigest: 'd1' }), true);
   });
 });

@@ -202,6 +202,20 @@ export function checkIsWorkingAtIdle(input: {
   return checkIsBusyForRealTurn(input) || input.hasBackgroundWork;
 }
 
+/** Past the pending-work hold's end by this much, the re-check finds the hold spent rather than a few ms left. */
+export const pendingWorkRecheckMarginMs = 1000;
+
+/**
+ * @description When the idle fire looks again at a process kept ONLY by the agent's own pending work (background
+ * tasks, scheduled jobs, a finished task's turn on its way): the next idle window, or the end of the pending-work
+ * hold if that comes first. D2's no-reschedule rule does not cover this case: a task nobody hears from produces no
+ * output to re-arm the timer, and the hold would never be enforced.
+ */
+export function getPendingWorkRecheckDelayMs(input: { idleWindowMs: number; holdRemainingMs: number | null }): number {
+  if (input.holdRemainingMs === null) return input.idleWindowMs;
+  return Math.min(input.idleWindowMs, input.holdRemainingMs + pendingWorkRecheckMarginMs);
+}
+
 /** What the idle timer does when it fires: the compaction half and the stop half, each with its reasons. */
 export interface IdleFireDecision {
   /** Run the idle compaction (D1/D2). */

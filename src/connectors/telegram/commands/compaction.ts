@@ -26,7 +26,9 @@ import {
   type IdleCompactionArmKind,
   getIdleCompactionArmDecision,
   checkIsWorkingAtIdle,
+  checkIsBusyForRealTurn,
   getIdleFireDecision,
+  getPendingWorkRecheckDelayMs,
 } from '../../../utils/compactOnIdle';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
@@ -424,11 +426,7 @@ export function createCompaction(ports: CompactionPorts) {
     // A compaction in flight is NOT user/turn activity — skip so the compaction's
     // own streamed summary (some backends) can't re-arm the watchdog into a loop.
     if (threadsCompacting.has(kStr)) return;
-    const compactionState = getThreadCompactionState(kStr);
-    if (compactionState.idleTimer) {
-      clearTimeout(compactionState.idleTimer);
-      compactionState.idleTimer = null;
-    }
+    clearIdleFireTimer(kStr);
     const adapter = getThreadAdapter(key);
     const isSuspendable = typeof adapter.suspendSession === 'function';
     if (!isSuspendable && !getState().checkIsCompactOnIdleEnabled(key)) return;
@@ -453,6 +451,20 @@ export function createCompaction(ports: CompactionPorts) {
       // re-deriving it here would let the log name a case the timer is not in.
       console.log(`[compact-on-idle] ${kStr} armed on session start: ${idleArmKindLabels[kind]}, ${(delayMs / 60_000).toFixed(1)} min`);
     }
+    setIdleFireTimer(key, delayMs);
+  }
+
+  function clearIdleFireTimer(kStr: string): void {
+    const compactionState = getThreadCompactionState(kStr);
+    if (!compactionState.idleTimer) return;
+    clearTimeout(compactionState.idleTimer);
+    compactionState.idleTimer = null;
+  }
+
+  /** The thread's ONE idle-fire timer: whoever arms it replaces the one armed before. */
+  function setIdleFireTimer(key: SessionKey, delayMs: number): void {
+    const compactionState = getThreadCompactionState(keyToString(key));
+    if (compactionState.idleTimer) clearTimeout(compactionState.idleTimer);
     const timer = setTimeout(() => {
       compactionState.idleTimer = null;
       void withThreadLocale(key, () => onIdleCompactionTimerFired(key));
@@ -573,10 +585,13 @@ export function createCompaction(ports: CompactionPorts) {
       console.log(`[compact-on-idle] ${kStr} timer fired but the compaction is skipped: ${decision.compactionSkipReasons.join(', ')}`);
     }
     if (!decision.shouldSuspend) {
-      // D2: no reschedule. A real running turn will emit output that resets the
-      // timer via `noteThreadActivity`; every other miss re-arms only on the next
-      // genuine USER message (which clears the latch).
+      // D2: no reschedule. A real running turn resets the timer via
+      // `noteThreadActivity` with its output and its end; every other miss re-arms
+      // only on the next genuine USER message (which clears the latch) — except a
+      // process kept only by the agent's own pending work, which is looked at
+      // again (bounded hold).
       console.log(`[compact-on-idle] ${kStr} process kept: ${decision.suspendSkipReasons.join(', ')}`);
+      armPendingWorkRecheck(key, adapter);
       return;
     }
     // A per-turn session is stopped by its own `turnEnded` as the compaction turn ends (L5): nothing left to stop.
@@ -586,9 +601,26 @@ export function createCompaction(ports: CompactionPorts) {
     }
     if (checkIsThreadWorking(key, adapter)) {
       console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire`);
+      armPendingWorkRecheck(key, adapter);
       return;
     }
     await suspendThreadSession(key);
+  }
+
+  /**
+   * @description The idle fire found the process kept ONLY by the agent's own pending work (background tasks,
+   * scheduled jobs, a finished task's turn on its way) — no real turn runs. Look again at the next idle window or when
+   * the pending-work hold runs out, whichever is first: a task that never reports produces no output to re-arm the
+   * timer, and the hold must still end. A real turn keeps D2's rule — its output re-arms the timer.
+   */
+  function armPendingWorkRecheck(key: SessionKey, adapter: AgentAdapter): void {
+    const kStr = keyToString(key);
+    if (!adapter.checkIsActive(key)) return;
+    const isRealTurn = checkIsBusyForRealTurn({ isBusy: adapter.checkIsBusy?.(key) ?? false, hasPendingQuestion: pendingQuestions.has(kStr) });
+    if (isRealTurn || !(adapter.checkHasBackgroundWork?.(key) ?? false)) return;
+    const delayMs = getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: adapter.getPendingWorkHoldRemainingMs?.(key) ?? null });
+    console.log(`[compact-on-idle] ${kStr} looks again in ${(delayMs / 60_000).toFixed(1)} min: only the agent's own pending work keeps it`);
+    setIdleFireTimer(key, delayMs);
   }
 
   /** The idle compaction itself (D1/D2): latch, stamp, re-ask a pending question after it, post the outcome. */

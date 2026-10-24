@@ -209,23 +209,25 @@ describe('json-stream external transport — exit detection', () => {
     const twoTasks = resultLine + buildBackgroundTasksLine(['b1', 'a2']);
     fs.writeFileSync(session.paths.stdoutFile, twoTasks);
     adapter['drainStdoutTail'](session);
-    assert.deepEqual([...session.backgroundTaskIds], ['b1', 'a2']);
+    assert.deepEqual([...session.backgroundTasks.keys()], ['b1', 'a2']);
     assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
     assert.equal(adapter.checkHasBackgroundWork(key), true, 'reported apart from the turn, so a pending question cannot excuse it');
     assert.equal(adapter.checkIsBusy(key), false, 'no turn runs');
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [] },
-      'the list rides along with the offset so an adopt restores it');
+    assert.deepEqual(tailWrites.at(-1), {
+      sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [],
+      backgroundTasks: [{ taskId: 'b1', description: '' }, { taskId: 'a2', description: '' }], lastTurnEndedAtMs: session.lastTurnEndedAt,
+    }, 'the list rides along with the offset so an adopt restores it');
 
     // The list is re-sent WHOLE: a frame naming one task replaces, not merges.
     const oneTask = twoTasks + buildBackgroundTasksLine(['a2']);
     fs.writeFileSync(session.paths.stdoutFile, oneTask);
     adapter['drainStdoutTail'](session);
-    assert.deepEqual([...session.backgroundTaskIds], ['a2']);
+    assert.deepEqual([...session.backgroundTasks.keys()], ['a2']);
 
     const noTasks = oneTask + buildBackgroundTasksLine([]);
     fs.writeFileSync(session.paths.stdoutFile, noTasks);
     adapter['drainStdoutTail'](session);
-    assert.deepEqual([...session.backgroundTaskIds], []);
+    assert.deepEqual([...session.backgroundTasks.keys()], []);
     assert.equal(adapter.checkIsWorking(key), false, 'an empty list means nothing runs');
     assert.deepEqual(tailWrites.at(-1)?.backgroundTaskIds, []);
   });

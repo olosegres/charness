@@ -72,11 +72,27 @@ Newline-delimited JSON, one object per line, parsed in
 - `system` `subtype:"background_tasks_changed"` — the CLI's CURRENT list of
   background tasks (`tasks[].task_id`; a background Bash / Monitor is
   `local_bash`, a background sub-agent `local_agent`), re-sent whole on every
-  change, empty when nothing runs. The adapter keeps it per session (persisted
-  with the tail offset, restored on adopt) and `checkIsWorking` reports a
-  non-empty list as working: a stop would kill those tasks. Reported from
-  Claude Code 2.1.287 on (`init.claude_code_version`;
+  change, empty when nothing runs. The adapter keeps it per session with each
+  task's `description` (persisted with the tail offset, restored on adopt) and
+  `checkIsWorking` reports a non-empty list as working: a stop would kill those
+  tasks. Reported from Claude Code 2.1.287 on (`init.claude_code_version`;
   `utils/claudeCodeVersion.ts` is the gate).
+- `system` `subtype:"task_notification"` — a task ended. For a task in the
+  background list the CLI then empties the list and starts the task's OWN turn
+  (the agent reads the result); measured on 2.1.310: `task_notification` →
+  `background_tasks_changed []` → (+72 ms) `session_state_changed running` →
+  (+125 ms) `init` → the turn's first output only after the API round-trip
+  (1.3 s small context, 3–5 s large). A foreground task's notification comes
+  mid-turn and starts nothing.
+- `system` `subtype:"session_state_changed"` — `running` / `requires_action` /
+  `idle`, emitted only under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which every
+  wrapper sets. `running` marks a turn at its start; `idle` is ignored (it fires
+  after every `result`, while a background task still runs).
+- `command_lifecycle` `state:"started"` `wakeup_source:"schedule_wakeup"` — a
+  session-only `CronCreate` job fired and starts a turn (it does not name the
+  job). `CronCreate` / `CronDelete` tool results name the job
+  (`utils/claudeScheduledJobs.ts`); the CLI keeps such jobs in memory only and
+  never lists them as background tasks.
 
 ### Multi-turn — one process per conversation, two lifecycles
 
@@ -141,15 +157,28 @@ re-spawn) waits for it to be gone, because that exit is what writes the stub: up
 process is SIGKILLed (`waitForPidExitOrKill`) — a launch finds what the exit leaves and never runs beside the process it replaces.
 
 **Working (L-D2).** A process is never stopped while it works: a running turn
-(`checkIsBusy`), or `checkHasBackgroundWork` — the CLI's live background-task
-list (`system/background_tasks_changed`, `tasks[].task_id`; a background Bash
-or Monitor is `local_bash`, a background sub-agent `local_agent`; re-sent whole
-on every change, empty when nothing runs), input written but not yet echoed, a
-bot-issued compaction in flight. The two halves are read apart by the idle fire:
-a pending interactive question excuses the turn (D1: reject, compact, re-ask)
-but never a background task. A finished background task starts a turn of its
-own (`task_notification`), which re-arms the idle timer. The list rides the tail
-record (below) so an adopt restores it.
+(`checkIsBusy` — from its start: `init`, `session_state_changed running`, a
+scheduled job firing — not from its first output), or `checkHasBackgroundWork`:
+the agent's own pending work (`utils/jsonStreamPendingWork.ts`), input written
+but not yet echoed, a bot-issued compaction in flight. Pending work is:
+
+- the live background-task list (`system/background_tasks_changed`) and the
+  session-only `CronCreate` jobs — held only while the agent's last turn ended
+  less than the HOLD ago (6 h, `AGENT_BACKGROUND_HOLD_MINUTES` for a test). Every
+  turn resets it, so a watchdog that re-arms itself keeps its process; a task
+  nobody hears from (a forgotten dev server) is let go. A bot-issued compaction's
+  turn does not reset it;
+- a background task's `task_notification`, until its turn shows (≤ 30 s grace):
+  the list empties BEFORE that turn's first output, and the gap once read as idle
+  — the stop landed right as the agent was woken to read its task's result.
+
+The two halves are read apart by the idle fire: a pending interactive question
+excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle
+fire kept ONLY by pending work looks again at the next idle window or when the
+hold runs out (`getPendingWorkRecheckDelayMs`); a turn's end restarts the idle
+countdown. Every automatic stop calls `refreshWorkingState` (a fresh read of
+stdout) inside its transition before its last look. All of it rides the tail
+record (below), so an adopt restores it.
 
 **Version gate (L-D10).** The task list is reported from Claude Code 2.1.287 on
 (`system/init` `claude_code_version`, persisted with the tail record), so a
@@ -181,8 +210,10 @@ restarts — every hot reload — never touch it. Per-thread host dir
   line-boundary byte offset persists in `state.json` (`agents[key].jsonStreamTail`)
   but only once batched answer text has actually been EMITTED — an offset past
   un-emitted text would skip it on replay (live seam-loss 2026-07-05).
-  The record also carries the background-task list, a turn-in-flight flag and
-  the outstanding tool calls as of that offset (written on every advance and on
+  The record also carries the background-task list (ids, and `backgroundTasks`
+  with descriptions), a turn-in-flight flag, the outstanding tool calls, the
+  pending notification turn, the hold's start, the `CronCreate` jobs and a
+  deferred account switch as of that offset (written on every advance and on
   each user turn), so an adopt restores a working state the frames before the
   offset built — a long, silent tool call leaves nothing after it to rebuild
   from (L-D2), and the restored outstanding tool keeps the busy-idle watchdog
@@ -204,9 +235,14 @@ a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned
 at boot — its next trigger resumes the conversation — and the downtime recap is
 read from the transcript alone. An adopted process keeps the bot-MCP tool list
 it got at its own start (the bot's MCP server is stateless and cannot push a
-`tools/list_changed`), so one started under an earlier bot build — the
-persisted `mcpToolDigest` differs from the current one — is stopped at its next
-idle point and resumed with the current tools. Explicit stop = SIGTERM + tmux
+`tools/list_changed`): one started under an earlier bot build — the persisted
+`mcpToolDigest` differs from the current one — is logged and NOT stopped early.
+It follows the idle lifecycle (the idle compaction, then the stop, never while
+its own work is pending) and the next trigger resumes it with the current tools.
+The same holds for an account profile that changed while it ran; only a switch
+the user picked while it worked (persisted in the tail record) still applies at
+the end of its turn. Only the per-turn backend's adopted process is stopped at
+its next idle point (its after-turn stop). Explicit stop = SIGTERM + tmux
 kill + host-dir removal. The IDLE stop (`suspendSession`, lifecycle plan L3) is
 the same teardown converging on `suspended` instead of `stopped`: the session
 id stays persisted and the next trigger resumes the conversation; the bot never

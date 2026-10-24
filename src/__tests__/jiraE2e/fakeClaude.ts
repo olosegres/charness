@@ -39,8 +39,12 @@ import {
   getLaunchSessionId,
   requiredJiraSessionFlags,
   sessionViolationExitCode,
+  fakeClaudeBackgroundReleaseFileName,
+  fakeNotificationTurnLatencyMs,
+  getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
+import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
 /**
  * @description A stand-in for the `claude` CLI in the process-level tests (Jira
@@ -108,6 +112,13 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
  *    turns and the idle stop must keep it (lifecycle plan L-D2);
+ *  - `background-notify` — answers `final`, then leaves a background task running until the test writes
+ *    `fakeClaudeBackgroundReleaseFileName`; the task then ENDS the way the real CLI 2.1.310 was measured to end one:
+ *    `task_updated` → `task_notification` → `background_tasks_changed []` → (`session_state_changed running` when
+ *    `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` is set) → `init` → `status` — and the task's own turn shows its first
+ *    output only `fakeNotificationTurnLatencyMs` later (the API round-trip), then answers
+ *    `getFakeBackgroundTaskFinishedText` in plain text (logged to `turns.jsonl` with `origin: 'task-notification'`).
+ *    Honoured by a turn with or without a request, by the token in its text;
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
  *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
@@ -142,8 +153,8 @@ import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask'];
 /** How long an `answer-after-queued` turn waits for the next message before it answers anyway (a poll is 10 s in the tests). */
 const queuedMessageWaitMaxMs = 40 * 1000;
 /** How long a `slow-once` first turn works in silence before it answers — longer than a bot stop plus a boot. */
@@ -152,6 +163,8 @@ const slowTurnMs = 45_000;
 const compactCommandText = '/compact';
 /** The `task_id` of the background task a `background` turn leaves running (never ends: the test kills the process). */
 const backgroundTaskId = 'fake-background-task';
+/** How often a running `background-notify` task looks for the test's release file. */
+const backgroundReleasePollMs = 100;
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
@@ -517,6 +530,51 @@ function emitTurnActivity(sessionId: string, issueKey: string): void {
   writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: `Working on ${issueKey}.` } } });
 }
 
+/**
+ * A turn's start as the real CLI writes it: `session_state_changed running` (only when the launch environment opts in,
+ * as the bot's wrapper does) and then `init`.
+ */
+function writeTurnStart(argv: readonly string[], sessionId: string): void {
+  if (process.env[claudeSessionStateEventsVariableName]) writeStdout({ type: 'system', subtype: 'session_state_changed', state: 'running', session_id: sessionId });
+  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+}
+
+/** One turn at a time, in arrival order, as the real CLI does — a user message's turn and a finished task's turn alike. */
+let turnChain: Promise<void> = Promise.resolve();
+
+/**
+ * The background task a `background-notify` turn leaves running: listed now, ended once the test writes the release
+ * file — then the task's own turn is queued like any other.
+ */
+function startNotifyingBackgroundTask(argv: readonly string[], sessionId: string, issueKey: string): void {
+  const taskId = `fake-notify-${randomUUID().slice(0, 8)}`;
+  const description = `Watch ${issueKey}`;
+  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: taskId, task_type: 'local_bash', description }] });
+  writeStdout({ type: 'system', subtype: 'task_started', session_id: sessionId, task_id: taskId, is_backgrounded: true, task_type: 'local_bash', description });
+  const releasePath = path.join(getStateDir(), fakeClaudeBackgroundReleaseFileName);
+  const poll = setInterval(() => {
+    if (!fs.existsSync(releasePath)) return;
+    clearInterval(poll);
+    fs.rmSync(releasePath, { force: true });
+    turnChain = turnChain.then(() => runBackgroundTaskTurn(argv, sessionId, taskId, description, issueKey));
+  }, backgroundReleasePollMs);
+}
+
+/** A finished background task: its end, then the turn the CLI starts for it, whose first output waits out the API round-trip. */
+async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string, taskId: string, description: string, issueKey: string): Promise<void> {
+  writeStdout({ type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch: { status: 'completed', end_time: Date.now() } });
+  writeStdout({ type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status: 'completed', output_file: path.join(getStateDir(), `${taskId}.output`), summary: `Background command "${description}" completed (exit code 0)` });
+  writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [] });
+  writeTurnStart(argv, sessionId);
+  writeStdout({ type: 'system', subtype: 'status', status: 'requesting', session_id: sessionId });
+  await new Promise((resolve) => setTimeout(resolve, fakeNotificationTurnLatencyMs));
+  const text = getFakeBackgroundTaskFinishedText(issueKey);
+  recordTranscriptMessage(sessionId, `<task-notification>${taskId}</task-notification>`);
+  appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey, origin: 'task-notification', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+  writeStdout({ type: 'result', subtype: 'success', is_error: false, result: text, origin: { kind: 'task-notification', producer: 'session-task' }, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
+}
+
 function endTurn(sessionId: string, resultText: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
@@ -585,7 +643,7 @@ function getReportedModel(argv: readonly string[]): string {
 
 async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
   recordTranscriptMessage(sessionId, content);
-  writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: getReportedModel(argv), apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
+  writeTurnStart(argv, sessionId);
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
   const apiErrorOncePath = path.join(getStateDir(), fakeClaudeApiErrorOnceFileName);
   if (fs.existsSync(apiErrorOncePath)) {
@@ -621,6 +679,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion() });
     }
     endTurn(sessionId, 'Nothing to do.');
+    if (noRequestMode === 'background-notify') startNotifyingBackgroundTask(argv, sessionId, noRequestIssueKey);
     return;
   }
   const isRequestPrompt = content.includes(`[Request ${requestId}`);
@@ -713,6 +772,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // Reported AFTER the result, as the CLI does for a task the turn left running.
     writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: backgroundTaskId, task_type: 'local_bash', description: 'sleep', status: 'running' }] });
   }
+  if (state.mode === 'background-notify' && isFirstTurn) startNotifyingBackgroundTask(argv, sessionId, state.issueKey);
 }
 
 /**
@@ -787,8 +847,6 @@ async function main(): Promise<void> {
   if (getFlagValues(argv, '--resume')[0] === sessionId) conversationCostUsd = readRestoredConversationCost(sessionId);
   exitOnStopSignal(sessionId);
 
-  // One turn at a time, in arrival order, as the real CLI does.
-  let turnChain: Promise<void> = Promise.resolve();
   const lines = readline.createInterface({ input: process.stdin });
   lines.on('line', (line) => {
     if (!line.trim()) return;

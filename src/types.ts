@@ -5,6 +5,8 @@ import type { McpHealOutcome } from './utils/claudeMcpHeal';
 import type { SessionKey } from './sessionKey';
 import type { OutboundHints } from './platform/outbound';
 import type { FallbackChainEntry } from './utils/fallbackChain';
+import type { ClaudeBackgroundTask } from './utils/claudeStreamJson';
+import type { ScheduledJob } from './utils/claudeScheduledJobs';
 
 export interface AgentSession {
   id: string;
@@ -97,6 +99,22 @@ export interface JsonStreamTailOffset {
    * watchdog's silence window and stopped mid-call after all.
    */
   outstandingToolUseIds?: string[];
+  /**
+   * The background tasks as of `offsetBytes` with the descriptions the agent gave them — written beside
+   * `backgroundTaskIds` (which an older reader still reads) while any runs; the lost-work note names them.
+   */
+  backgroundTasks?: ClaudeBackgroundTask[];
+  /**
+   * When a background task's notification announced the turn it starts, while that turn has not shown yet
+   * (`utils/jsonStreamPendingWork.ts`): a reload inside that sub-second gap must not read the process as idle.
+   */
+  notificationTurnPendingSinceMs?: number;
+  /** When the conversation's last turn ended, while background tasks or scheduled jobs are pending: the hold counts from it. */
+  lastTurnEndedAtMs?: number;
+  /** The session-only `CronCreate` jobs the process holds (`utils/claudeScheduledJobs.ts`); absent when none. */
+  scheduledJobs?: ScheduledJob[];
+  /** An account switch the user picked while the process worked, still waiting for its turn to end: a reload keeps it. */
+  isConfigDirSwitchPending?: boolean;
 }
 
 /**
@@ -768,6 +786,21 @@ export interface AgentAdapter extends EventEmitter {
    * Optional, like `checkIsWorking`.
    */
   checkHasBackgroundWork?(key: SessionKey): boolean;
+
+  /**
+   * The hold left for the agent's own pending work between turns — background tasks, scheduled jobs — which keeps
+   * the process only for a bounded time after its last turn (`utils/jsonStreamPendingWork.ts`): `null` with nothing
+   * pending, `0` once spent. The idle fire that found only this work re-checks no later than when it runs out.
+   * Optional, like `checkHasBackgroundWork`.
+   */
+  getPendingWorkHoldRemainingMs?(key: SessionKey): number | null;
+
+  /**
+   * Bring the in-memory working state up to what the process wrote so far (the json-stream tail is polled with a
+   * backoff). An automatic stop calls it right before its last look. Optional: a backend whose state is current
+   * omits it.
+   */
+  refreshWorkingState?(key: SessionKey): void;
 
   /**
    * Whether the live process may be stopped automatically (lifecycle plan L-D10):

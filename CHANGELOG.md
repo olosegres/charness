@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**The agent's background work is no longer cut off by an automatic stop.** On the default Claude backend the process
+used to be stopped in the seconds between a background task's end and the agent's turn that reads its result — the
+result was lost and the topic went quiet until you wrote. Now a background command, Monitor or sub-agent the agent
+started, the result it is about to read and a `CronCreate` job it scheduled all keep the process (for up to 6 h after the
+agent's last turn, so a forgotten task does not keep it forever). After a bot update that changed its tools, a running
+agent is no longer stopped early either: it is compacted and stopped at its normal idle mark, and resumes with the new
+tools.
+
 ## 3.5.0 — 2026-10-23
 
 **You can see what an account billed to API credits has spent.** On the default Claude backend each turn's cost is

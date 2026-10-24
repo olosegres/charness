@@ -68,7 +68,8 @@ export const foreignKeyEventRoutes = {
   contextCompacted: 'all',
   // A live re-spawn began a new conversation where one was lost: a connector that tracks what it told starts over (C6); only a topic gets the notice.
   conversationLost: 'requestSide',
-  started: 'none',
+  // A started or adopted process arms its idle countdown (compaction, then the stop) whatever the platform; the banner is a topic's.
+  started: 'requestSide',
   // Logged; there is no topic to post it to.
   error: 'requestSide',
 } as const satisfies Readonly<Record<AdapterEventName, ForeignKeyEventRoute>>;

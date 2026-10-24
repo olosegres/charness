@@ -7,6 +7,7 @@
 
 import * as path from 'path';
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
+import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
 export const argvViolationExitCode = 3;
 /**
@@ -116,6 +117,18 @@ export const fakeAskQuestion = {
 /** The tool name `ask` mode logs its outcome under in `tool-calls.jsonl`; the outcome is the answer the user gave. */
 export const fakeAskToolName = 'AskUserQuestion';
 
+/**
+ * While this file is absent, the background task a `background-notify` turn leaves running keeps running; the test
+ * writes it to END the task (its content is ignored) — the fake then writes the task's end and starts the task's turn.
+ */
+export const fakeClaudeBackgroundReleaseFileName = 'background-release';
+/** How long a `background-notify` task's own turn takes from its start to its first output (the API round-trip). */
+export const fakeNotificationTurnLatencyMs = 8000;
+/** The text the turn a finished `background-notify` task starts answers with: `<issueKey>` is the label of the turn that started the task. */
+export function getFakeBackgroundTaskFinishedText(issueKey: string): string {
+  return `Background task for ${issueKey} finished.`;
+}
+
 export const fakeClaudeLogFileNames = {
   /** One record per user message the fake READ, the crashing ones too: `{ pid, issueKey, requestId, text }`. */
   prompts: 'prompts.jsonl',
@@ -200,10 +213,11 @@ const shellAddedEnvNames: readonly string[] = ['PWD'];
 
 /**
  * @description The variables of an agent's environment R32 does not allow: anything
- * but the agent allowlist, what a shell adds, and the fake's own launcher variables.
+ * but the agent allowlist, what a shell adds, the wrapper's own opt-in to the CLI's
+ * session-state events, and the fake's own launcher variables.
  */
 export function getForeignAgentEnvNames(envNames: readonly string[]): string[] {
-  const allowedNames: readonly string[] = [...agentEnvironmentNames, ...shellAddedEnvNames];
+  const allowedNames: readonly string[] = [...agentEnvironmentNames, ...shellAddedEnvNames, claudeSessionStateEventsVariableName];
   return envNames.filter((name) => !allowedNames.includes(name) && !name.startsWith(fakeClaudeOwnEnvPrefix));
 }
 

@@ -28,6 +28,8 @@ import {
   formatTokenCount,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
+  getPendingWorkRecheckDelayMs,
+  pendingWorkRecheckMarginMs,
 } from '../utils/compactOnIdle';
 
 type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
@@ -533,4 +535,12 @@ test('buildIdleCompactionNoticeParts: nothing to say → every part null (the ca
     questionText: null,
   });
   assert.deepEqual(parts, { notice: null, summary: null, question: null });
+});
+
+test('getPendingWorkRecheckDelayMs: the next idle window, or just past the pending-work hold if that ends first', () => {
+  const idleWindowMs = 55 * 60_000;
+  assert.equal(getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: null }), idleWindowMs, 'no hold (a turn on its way, input not yet taken in): the window');
+  assert.equal(getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: 6 * 60 * 60_000 }), idleWindowMs, 'a long hold left: the window');
+  assert.equal(getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: 10 * 60_000 }), 10 * 60_000 + pendingWorkRecheckMarginMs, 'the hold ends first: just past its end');
+  assert.equal(getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: 0 }), pendingWorkRecheckMarginMs, 'a spent hold: at once, after the margin');
 });

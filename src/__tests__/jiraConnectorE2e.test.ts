@@ -25,7 +25,9 @@
  *     message written mid-turn is read only after the turn ends) answers the
  *     first, then reads the second prompt — its header names the replaced one —
  *     and answers a short pointer; the issue goes back once (R34)
- *   → charness restarted: no request is opened a second time
+ *   → charness restarted: no request is opened a second time; the adopted processes with a stale tool list are
+ *     not stopped early — each follows the idle lifecycle (the idle stop after its turn), the one with a background
+ *     task is kept
  *   → restarted again with a `trustedGroup` in jira.json: a member's hand-over of an issue carrying
  *     an outsider's comment and file and an automation's comment reaches the agent with markers for the
  *     outsider's and the automation's text in full, and the file tool refuses the outsider's file; an
@@ -641,7 +643,7 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     assert.ok(issueCalls.indexOf('PUT /rest/api/3/issue/PROJ-7/assignee') > thirdCommentIndex, 'handed back by the second answer only, after its comment');
   });
 
-  it('a restart opens no request a second time; a gone process is not re-spawned; an adopted one with a stale tool list is stopped once idle (L4)', async () => {
+  it('a restart opens no request a second time; a gone process is not re-spawned; an adopted one with a stale tool list is never stopped early — it follows the idle lifecycle (L4)', async () => {
     // PROJ-2 is handed over once more right before the restart, so its process is alive and IDLE at the boot.
     const proj2CommentsBefore = fakeJira.getIssue('PROJ-2').comments.length;
     handIssueToAi('PROJ-2', requester);
@@ -673,18 +675,20 @@ describe('Jira connector end to end: built charness, fake Jira, fake claude (J7)
     const bootOutput = (): string => getCharness().output.slice(outputBeforeRestart);
     assert.match(bootOutput(), /\[reattach\] claude-json-stream: adopted [1-9]\d*, sleeping [1-9]\d*, killed 0 orphans/, 'the live processes adopted; the stopped ones sleep');
     assert.ok(!bootOutput().includes('resume=true'), 'no sleeping conversation was re-spawned at boot');
-    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-2: adopted with a stale tool list (idle: stopped now)'));
-    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-8: adopted with a stale tool list (working: stopped once idle)'));
-    await waitFor('PROJ-2\'s stale process stopped right after the adopt', answerTimeoutMs, () => !checkIsProcessAlive(idleAdoptedTurn.pid));
+    const staleToolListLine = (issueKey: string): string => `[reattach] jira:PROJ:${issueKey}: adopted with a stale tool list; it gets the current tools when it resumes after its idle stop`;
+    for (const issueKey of ['PROJ-2', 'PROJ-8', 'PROJ-9']) assert.ok(bootOutput().includes(staleToolListLine(issueKey)), `${issueKey}'s stale tool list was seen at the adopt`);
+    assert.ok(!bootOutput().includes('stopping the adopted process'), 'no early stop of an adopted process');
+    // The stale idle process follows the idle lifecycle: stopped by the idle fire, never right after the adopt.
+    await waitFor('PROJ-2\'s stale process stopped at its idle mark', idleStopTimeoutMs, () => !checkIsProcessAlive(idleAdoptedTurn.pid));
+    await waitFor('PROJ-2\'s idle stop logged', idleStopTimeoutMs, () => bootOutput().includes('[compact-on-idle] jira:PROJ:PROJ-2 process stopped; the session sleeps'));
     assert.ok(checkIsProcessAlive(workingAdoptedTurn.pid), 'PROJ-8 keeps working: its background task is never killed');
-    // A stale process adopted MID-TURN (no frame since the persisted tail: a long tool call) is kept until its result (L-D2).
-    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: adopted with a stale tool list (working: stopped once idle)'), 'the turn in flight was seen at the adopt');
+    // A stale process adopted MID-TURN (no frame since the persisted tail: a long tool call) is kept through its turn (L-D2).
     assert.ok(checkIsProcessAlive(midTurnAdoptedTurn.pid), 'PROJ-9\'s process survives the adopt mid-turn');
     assert.equal(fakeJira.getIssue('PROJ-9').comments.length, 0, 'still working');
     await waitFor('PROJ-9 answered by the adopted process', 2 * answerTimeoutMs, () => fakeJira.getIssue('PROJ-9').comments.length > 0);
     assert.equal(getTurns('PROJ-9').length, 1, 'answered by the turn that was in flight, in the adopted process');
-    await waitFor('PROJ-9\'s stale process stopped once its turn ended', answerTimeoutMs, () => !checkIsProcessAlive(midTurnAdoptedTurn.pid));
-    assert.ok(bootOutput().includes('[reattach] jira:PROJ:PROJ-9: stopping the adopted process (the stale tool list)'));
+    await waitFor('PROJ-9\'s stale process stopped at its idle mark after the turn', idleStopTimeoutMs, () => !checkIsProcessAlive(midTurnAdoptedTurn.pid));
+    await waitFor('PROJ-9\'s idle stop logged', idleStopTimeoutMs, () => bootOutput().includes('[compact-on-idle] jira:PROJ:PROJ-9 process stopped; the session sleeps'));
     // Two polls after the restart: the first one decided every issue again.
     await waitFor('two polls after the restart', restartPollWaitMs, () =>
       fakeJira.requestLog.filter((request) => request === fakeJiraSearchRequest).length >= searchesBefore + 2);

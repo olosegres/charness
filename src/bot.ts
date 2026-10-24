@@ -229,7 +229,7 @@ import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionI
 import { AgentBackendUnavailableError } from './adapters/backendUnavailableError';
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
-import { decideAdoptedToolListRefresh } from './utils/adoptedToolList';
+import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
@@ -4652,20 +4652,19 @@ async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Prom
 }
 
 /**
- * @description An adopted json-stream process whose tool list is stale (L4) is
- * stopped at its next idle point: now when idle, else once it stops working —
- * polled, since the bot gets no "turn ended" event it can hang this on. The next
- * trigger resumes the conversation with the current tools. The first look waits
- * for the adopt's replay: until the tail has consumed what stdout held at the
- * adopt, the live state is the persisted one plus nothing, and a turn that ended
- * or began during the downtime would be misread.
+ * @description A per-turn json-stream process that outlived the bot (L5) is stopped as soon as it is idle — its turn
+ * (if any) ended and none of its own work is pending — the per-turn backend's after-turn stop, which the downtime
+ * swallowed. Polled, since the turn may have ended before the adopt. The first look waits for the adopt's replay:
+ * until the tail has consumed what stdout held at the adopt, the live state is the persisted one plus nothing, and a
+ * turn that ended or began during the downtime would be misread. The idle-lifecycle backend has no such stop: its
+ * adopted process, stale tool list or not, is stopped by the idle fire after the compaction.
  */
-function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter, reason: 'the stale tool list' | 'the per-turn lifecycle' | 'the account profile'): void {
+function stopAdoptedPerTurnSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAdapter): void {
   const kStr = keyToString(key);
   const tick = (): void => {
-    if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing to refresh
+    if (!adapter.checkIsActive(key)) return; // gone meanwhile (a stop, a crash): nothing left to stop
     if (adapter.checkIsWorking?.(key)) {
-      const timer = setTimeout(tick, adoptedToolListRefreshPollMs);
+      const timer = setTimeout(tick, adoptedPerTurnStopPollMs);
       timer.unref?.();
       return;
     }
@@ -4673,22 +4672,22 @@ function stopAdoptedSessionWhenIdle(key: SessionKey, adapter: ClaudeJsonStreamAd
     // the suspend would decline on every poll. Stop looking: a later turn's `init` reports the version,
     // and the lifecycle's own stop (the idle timer, the per-turn `turnEnded`) takes over from there.
     if (!adapter.checkIsAutoStopSupported(key)) {
-      console.log(`[reattach] ${kStr}: the adopted process is kept (${reason}): its Claude Code version is unknown or too old for the auto-stop; its own lifecycle stop takes over once a turn reports it`);
+      console.log(`[reattach] ${kStr}: the adopted process is kept (the per-turn lifecycle): its Claude Code version is unknown or too old for the auto-stop; its own lifecycle stop takes over once a turn reports it`);
       return;
     }
-    console.log(`[reattach] ${kStr}: stopping the adopted process (${reason}); the next trigger resumes it`);
+    console.log(`[reattach] ${kStr}: stopping the adopted process (the per-turn lifecycle); the next trigger resumes it`);
     void suspendThreadSession(key)
       .then(() => {
         // The suspend declines when a turn began between the look and the transition: look again.
-        if (adapter.checkIsActive(key)) setTimeout(tick, adoptedToolListRefreshPollMs).unref?.();
+        if (adapter.checkIsActive(key)) setTimeout(tick, adoptedPerTurnStopPollMs).unref?.();
       })
-      .catch((e) => console.warn(`[reattach] ${kStr}: the stale-tool-list stop failed:`, e instanceof Error ? e.message : e));
+      .catch((e) => console.warn(`[reattach] ${kStr}: the per-turn stop of the adopted process failed:`, e instanceof Error ? e.message : e));
   };
   void adapter.whenAdoptReplayed(key).then(tick);
 }
 
-/** How often an adopted, stale-tool-list process that is still working is re-checked for idleness (L4). */
-const adoptedToolListRefreshPollMs = 5000;
+/** How often an adopted per-turn process that is still working is re-checked for idleness (L5). */
+const adoptedPerTurnStopPollMs = 5000;
 
 async function startAgentSession(key: SessionKey, args?: string): Promise<string> {
   const kStr = keyToString(key);
@@ -5016,6 +5015,8 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
   }
   autoStopUnsupportedLoggedKeys.delete(kStr);
   await sessionTransitions.run(kStr, async () => {
+    // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
+    adapter.refreshWorkingState?.(key);
     if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
     startupPromptBuffer.markStarting(kStr);
     console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
@@ -5035,13 +5036,20 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
 const autoStopUnsupportedLoggedKeys = new Set<string>();
 
 /**
- * @description `turnEnded` from a json-stream adapter: in the per-turn lifecycle
- * (L5, L-D3) the process is stopped right after the turn — unless a deferred
- * compaction is armed (its drain compacts first, and that turn ends here too) or
- * the process still works (a background task, input not yet taken in). The
- * session sleeps; the next trigger resumes it with the prompt cache warm.
+ * @description `turnEnded` from a json-stream adapter. The idle countdown runs from
+ * the end of the last turn: an idle fire that found the turn still running is not
+ * rescheduled (D2), and a turn whose answer went out through `answer_request`
+ * produces no later output to re-arm it — the process would never reach its idle
+ * compaction and stop, and its pending-work hold would never be enforced. (A
+ * bot-issued compaction's own turn end is skipped by the arming's loop guard.)
+ * In the per-turn lifecycle (L5, L-D3) the process is then stopped right after
+ * the turn — unless a deferred compaction is armed (its drain compacts first,
+ * and that turn ends here too) or the process still works (a background task,
+ * input not yet taken in). The session sleeps; the next trigger resumes it with
+ * the prompt cache warm.
  */
 function handleAgentTurnEnded(key: SessionKey): void {
+  noteThreadActivity(key);
   const adapter = getThreadAdapter(key);
   if (adapter.name !== claudePerTurnAdapterName) return;
   if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
@@ -11888,9 +11896,11 @@ async function reattachExistingSessions(
   //     json-stream thread with a persisted id but no live process SLEEPS
   //     (lifecycle plan L4): it is NOT re-spawned — its next trigger resumes it
   //     — and it gets the downtime recap read from the transcript alone. An
-  //     adopted process keeps the bot-MCP tool list it got at its own start, so
-  //     one started under an earlier bot build is stopped at its next idle point
-  //     and resumed with the current tools (`decideAdoptedToolListRefresh`).
+  //     adopted process keeps the bot-MCP tool list it got at its own start: one
+  //     started under an earlier bot build is NOT stopped early — it follows the
+  //     normal idle lifecycle (compaction at the idle mark, then the stop, never
+  //     while its own work is pending) and the next trigger resumes it with the
+  //     current tools (`checkIsAdoptedToolListStale`).
   const claudeJsonAdapter = getAdapter(claudeJsonStreamAdapterName);
   let jsonAdopted = 0;
   let jsonKilled = 0;
@@ -11926,25 +11936,17 @@ async function reattachExistingSessions(
             jsonAdopted += 1;
             if (ownerAdapter.lifecycle === 'perTurn') {
               // A per-turn process that outlived the bot is stopped as soon as its turn (if any) ends (L5).
-              stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the per-turn lifecycle');
+              stopAdoptedPerTurnSessionWhenIdle(key, ownerAdapter);
             }
-            const refresh = decideAdoptedToolListRefresh({
-              persistedDigest: agent.mcpToolDigest,
-              currentDigest: botMcpToolDigestReader?.(key.platform) ?? '',
-              isWorking: ownerAdapter.checkIsWorking(key),
-            });
-            if (refresh !== 'fresh') {
-              // Read from the persisted state (the turn-in-flight flag, the task list); the stop itself
-              // looks again once the downtime frames have replayed.
-              console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list (${refresh === 'stopNow' ? 'idle: stopped now' : 'working: stopped once idle'})`);
-              if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the stale tool list');
+            if (checkIsAdoptedToolListStale({ persistedDigest: agent.mcpToolDigest, currentDigest: botMcpToolDigestReader?.(key.platform) ?? '' })) {
+              console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list; it gets the current tools when it resumes after its idle stop`);
             }
-            // The surviving process keeps the account it was spawned with; a topic whose pick changed while the
-            // bot was down gets it at the next idle point (the resume reads the current profile).
+            // The surviving process keeps the account it was spawned with. A switch the user picked while it worked is
+            // restored with the adopt and still applies at the end of its turn; any other change of the resolved
+            // profile reaches it when it resumes after its idle stop.
             const spawnedConfigDir = ownerAdapter.getSessionClaudeConfigDir(key);
             if (spawnedConfigDir !== undefined && !checkIsSameClaudeConfigDir(spawnedConfigDir, resolveThreadClaudeConfigDir(key))) {
               console.log(`[reattach] ${keyToString(key)}: adopted under profile dir ${spawnedConfigDir ?? 'default'}, the topic now resolves to ${resolveThreadClaudeConfigDir(key) ?? 'default'}`);
-              if (ownerAdapter.lifecycle !== 'perTurn') stopAdoptedSessionWhenIdle(key, ownerAdapter, 'the account profile');
             }
           } else {
             // Dead/zombie — adopt cleaned it up itself; the thread sleeps (below)
@@ -13190,7 +13192,8 @@ export async function startBot(): Promise<void> {
     onNoResponse: (key) => dispatchAdapterEvent(key, 'noResponse', () => handleNoResponse(key)),
     onQuestionGone: (key) => dispatchAdapterEvent(key, 'questionGone', () => withThreadLocale(key, () => handleQuestionGone(key))),
     onClosed: (key) => dispatchAdapterEvent(key, 'closed', () => withThreadLocale(key, () => handleAgentClosed(key)), () => clearForeignSessionState(key)),
-    onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key))),
+    // An issue's process gets the idle countdown alone: it has no banner.
+    onStarted: (key) => dispatchAdapterEvent(key, 'started', () => withThreadLocale(key, () => handleAgentStarted(key)), () => rearmThreadIdleTimer(key)),
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key))),
     onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => handleAgentTurnEnded(key)),

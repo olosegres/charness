@@ -98,7 +98,24 @@ export type ClaudeStreamAction =
    * (`task_notification`). Probed on Claude Code 2.1.287 — older CLIs never emit
    * it, which is why auto-stop is gated on the version.
    */
-  | { kind: 'backgroundTasks'; taskIds: string[] }
+  | { kind: 'backgroundTasks'; tasks: ClaudeBackgroundTask[] }
+  /**
+   * `system/task_notification` — a task reached its end. For a task in the
+   * background list the CLI empties the list right AFTER this frame and then
+   * starts the task's own turn (the agent reads the result), the turn's first
+   * output only after the API round-trip — measured live on 2.1.310. A
+   * foreground task's notification (mid-turn, never in the list) starts nothing.
+   */
+  | { kind: 'taskNotification'; taskId: string }
+  /**
+   * A turn STARTS before its first output: `system/session_state_changed`
+   * `running` / `requires_action` (emitted only under
+   * `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`), or a `command_lifecycle` frame
+   * `started` by a session-only `CronCreate` job firing
+   * (`wakeup_source: "schedule_wakeup"`). The CLI's `idle` state is NOT mapped:
+   * it fires after every `result` while a background task still runs.
+   */
+  | { kind: 'turnStarted'; isScheduledWakeup: boolean }
   /** A control_request off stdout (permission / AskUserQuestion / dialog). */
   | {
       kind: 'controlRequest';
@@ -226,16 +243,30 @@ function readTurnUsage(usage: unknown, modelUsage: unknown): ClaudeTurnUsage | n
   return readModelUsageTotal(modelUsage) ?? resultUsage;
 }
 
-/** The `task_id`s of a `background_tasks_changed` frame's `tasks` list; an
- *  entry without a string id is skipped (it cannot be matched to anything). */
-function readBackgroundTaskIds(tasks: unknown): string[] {
-  if (!Array.isArray(tasks)) return [];
-  const taskIds: string[] = [];
-  for (const task of tasks) {
-    if (checkIsStreamRecord(task) && typeof task.task_id === 'string') taskIds.push(task.task_id);
-  }
-  return taskIds;
+/** @name ClaudeBackgroundTask @description One entry of the CLI's background-task list: its id and the description the agent gave it. */
+export interface ClaudeBackgroundTask {
+  taskId: string;
+  description: string;
 }
+
+/** The entries of a `background_tasks_changed` frame's `tasks` list; an entry
+ *  without a string id is skipped (it cannot be matched to anything). */
+function readBackgroundTasks(tasks: unknown): ClaudeBackgroundTask[] {
+  if (!Array.isArray(tasks)) return [];
+  const backgroundTasks: ClaudeBackgroundTask[] = [];
+  for (const task of tasks) {
+    if (checkIsStreamRecord(task) && typeof task.task_id === 'string') {
+      backgroundTasks.push({ taskId: task.task_id, description: readString(task, 'description') ?? '' });
+    }
+  }
+  return backgroundTasks;
+}
+
+/** `system/session_state_changed` states that mean a turn runs (`requires_action`: it waits on a permission or question). */
+const turnRunningSessionStates: readonly string[] = ['running', 'requires_action'];
+
+/** The `command_lifecycle` wakeup source of a session-only `CronCreate` job firing (probed live on 2.1.310). */
+const scheduledWakeupSource = 'schedule_wakeup';
 
 /** Read a non-negative finite dollar amount, or null (absent or malformed — no figure beats a wrong one). */
 function readCostUsd(rec: Record<string, unknown>, key: string): number | null {
@@ -283,7 +314,21 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   }
 
   if (type === 'system' && msg.subtype === 'background_tasks_changed') {
-    return [{ kind: 'backgroundTasks', taskIds: readBackgroundTaskIds(msg.tasks) }];
+    return [{ kind: 'backgroundTasks', tasks: readBackgroundTasks(msg.tasks) }];
+  }
+
+  if (type === 'system' && msg.subtype === 'task_notification') {
+    const taskId = readString(msg, 'task_id');
+    return taskId === null ? [] : [{ kind: 'taskNotification', taskId }];
+  }
+
+  if (type === 'system' && msg.subtype === 'session_state_changed') {
+    const sessionState = readString(msg, 'state');
+    return sessionState !== null && turnRunningSessionStates.includes(sessionState) ? [{ kind: 'turnStarted', isScheduledWakeup: false }] : [];
+  }
+
+  if (type === 'command_lifecycle') {
+    return msg.state === 'started' && msg.wakeup_source === scheduledWakeupSource ? [{ kind: 'turnStarted', isScheduledWakeup: true }] : [];
   }
 
   if (type === 'system' && msg.subtype === 'status') {

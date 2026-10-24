@@ -89,7 +89,7 @@ describe('buildWrapperScript', () => {
       script,
       `#!/bin/sh
 cd '/work/my dir' || exit ${wrapperCdFailExitCode}
-env -u ANTHROPIC_API_KEY '/opt/bin/claude' '-p' '--session-id' 'u-u-i-d' \\
+env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '/opt/bin/claude' '-p' '--session-id' 'u-u-i-d' \\
   0<> '/data/dir/jsonstream/-100_1/stdin.fifo' >> '/data/dir/jsonstream/-100_1/stdout.jsonl' 2>> '/data/dir/jsonstream/-100_1/stderr.log' &
 CHILD=$!
 echo $CHILD > '/data/dir/jsonstream/-100_1/pid'
@@ -104,15 +104,15 @@ describe('buildWrapperScript with a Claude account profile', () => {
   it('adds CLAUDE_CONFIG_DIR to the env call only for a non-default profile, and the value reads back from the script', () => {
     const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
     const defaultScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, null);
-    assert.match(defaultScript, /^env -u ANTHROPIC_API_KEY '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.match(defaultScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '\/opt\/bin\/claude' '-p' \\$/m);
     assert.equal(readWrapperScriptConfigDirFromText(defaultScript), null);
 
     const profileScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, "/data/dir/claude-profiles/it's-work");
-    assert.match(profileScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/it'\\''s-work' '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.match(profileScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/it'\\''s-work' '\/opt\/bin\/claude' '-p' \\$/m);
     assert.equal(readWrapperScriptConfigDirFromText(profileScript), "/data/dir/claude-profiles/it's-work");
 
     const trackerScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, { HOME: '/home/user' }, '/data/dir/claude-profiles/work');
-    assert.match(trackerScript, /^env -i 'HOME=\/home\/user' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/work' '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.match(trackerScript, /^env -i 'HOME=\/home\/user' 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/work' '\/opt\/bin\/claude' '-p' \\$/m);
   });
 
   it('readWrapperScriptConfigDir reads a persisted wrapper and tolerates a missing file', () => {
@@ -302,13 +302,13 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   it('a trusted record (same session) restores its offset AND its background-task list', () => {
     assert.deepEqual(
       resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, backgroundTaskIds: ['b1', 'a2'] }, 'sess-1', 500),
-      { startOffset: 120, backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null },
+      { startOffset: 120, backgroundTasks: [{ taskId: 'b1', description: '' }, { taskId: 'a2', description: '' }], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false },
     );
   });
 
   it('a record of another session (or none) seeds to EOF with no tasks — no backlog flood, no inherited list', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
-    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
+    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
   });
 
   it('restores the CLI version of a trusted record (the auto-stop gate, L-D10); a foreign or older record has none', () => {
@@ -327,7 +327,7 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   });
 
   it('clamps the offset to the file size; a record written before the list was tracked reads as no tasks', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTaskIds: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
   });
 });
 

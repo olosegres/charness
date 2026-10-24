@@ -174,7 +174,11 @@ backends:
   output, and it survives bot restarts (the bot re-adopts the process and
   replays what was produced during the downtime). After ~55 min idle
   (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
-  compaction when `/compact_on_idle` allows one. The **default**.
+  compaction when `/compact_on_idle` allows one — but never while the agent's
+  own work is pending: a background command, Monitor or sub-agent it started, a
+  finished task's result it is about to read, a `CronCreate` job it scheduled.
+  That work keeps the process for up to 6 h after the agent's last turn, so a
+  task nobody hears from does not keep it forever. The **default**.
 - **per-turn** (`/claude_mode per-turn`) — the same host, stopped right
   after every answer. Nothing is lost: the conversation sleeps and your next
   message resumes it. Needs Claude Code 2.1.287 or newer; the switch is

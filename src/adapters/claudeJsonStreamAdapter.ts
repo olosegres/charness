@@ -112,6 +112,15 @@ import { checkIsSameClaudeConfigDir } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapterNames';
 import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
+import { checkHasPendingWork, getPendingWorkHoldRemainingMs, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
+import {
+  cronCreateToolName,
+  cronDeleteToolName,
+  getCancelledJobIdFromCronDeleteResult,
+  getScheduledJobFromCronCreateResult,
+  getScheduledJobsAfterFiring,
+  type ScheduledJob,
+} from '../utils/claudeScheduledJobs';
 
 
 /** The two lifecycles of the json-stream host (see {@link ClaudeJsonStreamAdapter.lifecycle}). */
@@ -312,11 +321,27 @@ export interface StreamSession {
   unconsumedInputCount: number;
   /**
    * The CLI's live background-task list (`system/background_tasks_changed`,
-   * re-sent whole on every change): a background Bash / Monitor / sub-agent the
-   * process is still running between turns. Non-empty = working (L-D2) — a stop
-   * would kill them. Persisted with the tail offset so an adopt restores it.
+   * re-sent whole on every change), id → the description the agent gave it: a
+   * background Bash / Monitor / sub-agent the process is still running between
+   * turns. Non-empty = working within the hold (L-D2, `utils/jsonStreamPendingWork.ts`)
+   * — a stop would kill them. Persisted with the tail offset so an adopt restores it.
    */
-  backgroundTaskIds: Set<string>;
+  backgroundTasks: Map<string, string>;
+  /**
+   * When a background task's `task_notification` announced the turn it starts and that
+   * turn has not shown yet; `null` otherwise. Counts as working for a short grace: the
+   * gap between the task's end and its turn's first output read as idle once.
+   */
+  notificationTurnPendingSince: number | null;
+  /** When the agent's last turn ended (the process start before its first turn): the pending-work hold counts from it. */
+  lastTurnEndedAt: number;
+  /**
+   * The next `result` ends a bot-issued `/compact` turn, not one of the agent's: the compaction settles on its
+   * `compact_boundary`, so `compactionInProgress` is already off when that result arrives.
+   */
+  isCompactionResultPending: boolean;
+  /** The session-only `CronCreate` jobs the process holds, oldest first (`utils/claudeScheduledJobs.ts`). */
+  scheduledJobs: Map<string, ScheduledJob>;
   /** The CLI version reported on `system/init` (`claude_code_version`); the
    *  auto-stop gate (L-D10) reads it. `null` until the first init / on an adopt. */
   claudeCodeVersion: string | null;
@@ -394,9 +419,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    */
   readonly lifecycle: JsonStreamLifecycle;
 
-  constructor(options: { lifecycle: JsonStreamLifecycle } = { lifecycle: 'idle' }) {
+  /** How long the agent's own pending work holds the process after its last turn (`utils/jsonStreamPendingWork.ts`). */
+  private readonly pendingWorkHoldMs: number;
+
+  constructor(options: { lifecycle: JsonStreamLifecycle; backgroundHoldMs?: number } = { lifecycle: 'idle' }) {
     super();
     this.lifecycle = options.lifecycle;
+    this.pendingWorkHoldMs = options.backgroundHoldMs ?? pendingWorkHoldDefaultMs;
     this.name = options.lifecycle === 'perTurn' ? claudePerTurnAdapterName : claudeJsonStreamAdapterName;
     this.label = options.lifecycle === 'perTurn' ? 'Claude Code (per-turn)' : 'Claude Code (stream)';
   }
@@ -624,7 +653,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
-      backgroundTaskIds: new Set(), claudeCodeVersion: null, applyingChunk: null,
+      backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
+      claudeCodeVersion: null, applyingChunk: null,
       adoptCatchUpOffset: null, adoptCatchUpResolvers: [],
     };
     this.sessions.set(keyToString(key), session);
@@ -915,7 +945,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       return false;
     }
     const size = getFileSize(paths.stdoutFile) ?? 0;
-    const { startOffset, backgroundTaskIds, isTurnInFlight, outstandingToolUseIds, claudeCodeVersion } = resolveAdoptedTail(persistedTail, claudeSessionId, size);
+    const adoptedTail = resolveAdoptedTail(persistedTail, claudeSessionId, size);
+    const { startOffset, isTurnInFlight, outstandingToolUseIds, claudeCodeVersion } = adoptedTail;
 
     console.log(`[ClaudeJson] adopt: re-attaching to ${sessionName} in ${workDir} (pid=${pid}, tail=${startOffset}/${size})`);
     const launchFlags = readWrapperScriptLaunchFlags(paths.wrapperFile);
@@ -939,7 +970,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // the topic resolves to now, and a later re-spawn passes them on.
       model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
-      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: false, startCostUsd: null,
+      // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, startCostUsd: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -950,8 +982,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       // The frames that built the list and reported the version lie before the
-      // tail offset (not replayed): both come from the persisted record.
-      backgroundTaskIds: new Set(backgroundTaskIds), claudeCodeVersion, applyingChunk: null,
+      // tail offset (not replayed): both come from the persisted record, with the
+      // rest of the pending work (a turn announced, the hold's start, scheduled jobs).
+      backgroundTasks: new Map(adoptedTail.backgroundTasks.map((task) => [task.taskId, task.description])),
+      notificationTurnPendingSince: adoptedTail.notificationTurnPendingSinceMs,
+      lastTurnEndedAt: adoptedTail.lastTurnEndedAtMs ?? Date.now(),
+      isCompactionResultPending: false,
+      scheduledJobs: new Map(adoptedTail.scheduledJobs.map((job) => [job.jobId, job])),
+      claudeCodeVersion, applyingChunk: null,
       // Nothing to catch up on when the tail already sits at EOF.
       adoptCatchUpOffset: startOffset < size ? size : null, adoptCatchUpResolvers: [],
     };
@@ -988,6 +1026,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.adoptCatchUpOffset = null;
     const resolvers = session.adoptCatchUpResolvers.splice(0);
     for (const resolve of resolvers) resolve();
+    // A switch the user picked before the reload, whose turn ended meanwhile, applies now that the state is current.
+    if (!isSessionGone) this.applyPendingConfigDirSwitch(session);
   }
 
   /** Restore a pending question persisted by a previous bot life (see
@@ -1115,13 +1155,50 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session.isBusy || this.checkHasBackgroundWork(key);
   }
 
-  /** Background tasks, input not yet taken in, a compaction in flight — "working" minus the turn (L-D2). */
+  /**
+   * The agent's own pending work (background tasks and scheduled jobs within the hold, a finished task's turn on its
+   * way), input not yet taken in, a compaction in flight — "working" minus the turn (L-D2).
+   */
   checkHasBackgroundWork(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
-    return session.backgroundTaskIds.size > 0
+    return checkHasPendingWork(this.getPendingWorkInput(session))
       || session.unconsumedInputCount > 0
       || session.compactionInProgress;
+  }
+
+  /**
+   * @description The hold left for the session's background tasks / scheduled jobs (`utils/jsonStreamPendingWork.ts`):
+   * `null` without a live session or with nothing pending, `0` once spent. The idle fire re-checks no later than this.
+   */
+  getPendingWorkHoldRemainingMs(key: SessionKey): number | null {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? getPendingWorkHoldRemainingMs(this.getPendingWorkInput(session)) : null;
+  }
+
+  /**
+   * @description Read what the process wrote since the last tail poll, so the working judgement is current: a stop
+   * decides on it, and the poll may lag the process by its backoff.
+   */
+  refreshWorkingState(key: SessionKey): void {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return;
+    try {
+      this.drainStdoutTail(session);
+    } catch (e) {
+      console.warn(`[ClaudeJson] stdout tail read failed for ${keyToString(key)}:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  private getPendingWorkInput(session: StreamSession): PendingWorkInput {
+    return {
+      now: Date.now(),
+      backgroundTaskCount: session.backgroundTasks.size,
+      scheduledJobCount: session.scheduledJobs.size,
+      lastTurnEndedAt: session.lastTurnEndedAt,
+      holdMs: this.pendingWorkHoldMs,
+      notificationTurnPendingSince: session.notificationTurnPendingSince,
+    };
   }
 
   /** The CLI version the live process reported on `system/init`, `null` until then (L-D10 gate input). */
@@ -1209,6 +1286,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       timer.unref?.();
       session.pendingCompaction = { resolve, timer, sawSuccess: false };
       session.compactionInProgress = true;
+      session.isCompactionResultPending = true;
       // Fresh turn: reset the answer cursor + idle-watchdog clock, mark busy.
       session.currentResponseText = '';
       session.emittedLength = 0;
@@ -1458,6 +1536,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         case 'compactBoundary': this.handleCompactBoundary(session, action); return;
         case 'init': this.handleInit(session, action); return;
         case 'backgroundTasks': this.handleBackgroundTasks(session, action); return;
+        case 'taskNotification': this.handleTaskNotification(session, action); return;
         case 'apiRetry': this.maybeEmitApiError(session, action.text); return;
         // A reply to one of OUR control requests is never the compaction turn's
         // output — its awaiter must settle whatever else is running.
@@ -1473,9 +1552,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // it `/status` and the pinned banner showed no model at all on a default
         // start / resume / adopt (nothing ever set the `--model` pick).
         this.handleInit(session, action);
+        // `init` opens every turn: the turn runs from here, not from its first output.
+        this.markTurnStarted(session);
+        return;
+      case 'turnStarted':
+        this.markTurnStarted(session);
+        if (action.isScheduledWakeup) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs);
         return;
       case 'backgroundTasks':
         this.handleBackgroundTasks(session, action);
+        return;
+      case 'taskNotification':
+        this.handleTaskNotification(session, action);
         return;
       case 'textDelta':
         // Mid-turn activity marks the session busy: `sendInput` normally set it,
@@ -1539,7 +1627,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    *  WHOLE on every change, so no diffing). The tail-offset persist that follows
    *  this frame's drain carries the new list to `state.json`. */
   private handleBackgroundTasks(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'backgroundTasks' }>): void {
-    session.backgroundTaskIds = new Set(action.taskIds);
+    session.backgroundTasks = new Map(action.tasks.map((task) => [task.taskId, task.description]));
+  }
+
+  /** A background task ended: its own turn is coming — the list empties right after this frame, the turn shows later. */
+  private handleTaskNotification(session: StreamSession, action: Extract<ClaudeStreamAction, { kind: 'taskNotification' }>): void {
+    if (session.backgroundTasks.has(action.taskId)) session.notificationTurnPendingSince = Date.now();
+  }
+
+  /** A turn began (its `init`, the CLI's running state, a scheduled job firing): busy from here; an announced turn has shown. */
+  private markTurnStarted(session: StreamSession): void {
+    session.isBusy = true;
+    session.notificationTurnPendingSince = null;
   }
 
   // — compaction (F3) —
@@ -1656,9 +1755,21 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // Skip AskUserQuestion's internal "questions have been answered" tool_result.
     if (session.questionToolUseIds.has(action.toolUseId)) return;
     const tool = session.toolNamesById.get(action.toolUseId) ?? 'tool';
+    this.trackScheduledJob(session, tool, action.output);
     if (!action.output.trim()) return;
     // Mode-agnostic emit — the bot applies the per-thread `/tool_results` pref.
     this.emit('toolResult', session.key, { tool, output: action.output });
+  }
+
+  /** A `CronCreate` / `CronDelete` result changes the session-only jobs the process holds. */
+  private trackScheduledJob(session: StreamSession, tool: string, output: string): void {
+    if (tool === cronCreateToolName) {
+      const job = getScheduledJobFromCronCreateResult(output);
+      if (job) session.scheduledJobs.set(job.jobId, job);
+    } else if (tool === cronDeleteToolName) {
+      const jobId = getCancelledJobIdFromCronDeleteResult(output);
+      if (jobId) session.scheduledJobs.delete(jobId);
+    }
   }
 
   // — sub-agent (v1) —
@@ -1723,6 +1834,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       console.log(`${claudeJsonStreamUsageLogPrefix}${keyToString(session.key)}: input=${inputTokens} cacheRead=${cacheReadTokens} cacheWrite=${cacheWriteTokens} output=${outputTokens}`);
     }
     session.isBusy = false;
+    // The pending-work hold counts from the agent's own last turn: a bot-issued compaction is not one.
+    if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
+    session.isCompactionResultPending = false;
     // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
     // queued behind it, and a count left above zero would make the session look "working" forever — a pending
     // account switch would never fire. A message still genuinely queued is echoed later (the decrement clamps
@@ -2112,6 +2226,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     if (!options.isAfterLimit && this.checkIsWorking(key)) {
       session.isConfigDirSwitchPending = true;
+      // Recorded now: a reload before the turn ends must not drop the user's pick.
+      this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
       return 'deferred';
     }
     session.isConfigDirSwitchPending = false;
@@ -2159,14 +2275,22 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
  *  state in force there (task list, turn in flight, outstanding tools) travel together
  *  (see `JsonStreamTailOffset`). */
 function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStreamTailOffset {
+  const backgroundTasks = [...session.backgroundTasks].map(([taskId, description]) => ({ taskId, description }));
+  const isWorkPending = session.backgroundTasks.size > 0 || session.scheduledJobs.size > 0;
   return {
     sessionId: session.sessionId,
     offsetBytes,
-    backgroundTaskIds: [...session.backgroundTaskIds],
+    backgroundTaskIds: backgroundTasks.map((task) => task.taskId),
     isTurnInFlight: session.isBusy,
     outstandingToolUseIds: [...session.outstandingToolUseIds],
     // Only once known: the record never claims a version the process did not report.
     ...(session.claudeCodeVersion !== null ? { claudeCodeVersion: session.claudeCodeVersion } : {}),
+    // The pending work only while there is some: an idle record stays as it was.
+    ...(backgroundTasks.length > 0 ? { backgroundTasks } : {}),
+    ...(isWorkPending ? { lastTurnEndedAtMs: session.lastTurnEndedAt } : {}),
+    ...(session.scheduledJobs.size > 0 ? { scheduledJobs: [...session.scheduledJobs.values()] } : {}),
+    ...(session.notificationTurnPendingSince !== null ? { notificationTurnPendingSinceMs: session.notificationTurnPendingSince } : {}),
+    ...(session.isConfigDirSwitchPending ? { isConfigDirSwitchPending: true } : {}),
   };
 }
 

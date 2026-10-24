@@ -36,7 +36,8 @@ const expectedJiraRoutes: Record<AdapterEventName, 'telegramHandler' | 'requestS
   noResponse: 'telegramHandler',
   questionGone: 'nothing',
   closed: 'requestSideHandler',
-  started: 'nothing',
+  // An adopted issue's process needs its idle countdown too; no banner.
+  started: 'requestSideHandler',
   stopped: 'requestSideHandler',
   // An idle stop keeps the session, its retry and its compaction state: nothing request-side to drop.
   suspended: 'nothing',

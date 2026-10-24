@@ -10,6 +10,7 @@ import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsClaudeBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 import type { ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
+import { getPendingWorkHoldMs, pendingWorkHoldMinutesEnvName } from '../utils/jsonStreamPendingWork';
 
 // The predicate lives with the names (a reader of a name should not load a backend); callers keep importing it here.
 export { checkIsClaudeBackend };
@@ -20,8 +21,8 @@ const adapterFactories: Record<string, AdapterFactory> = {
   claude: () => new ClaudeCliAdapter(),
   opencode: () => new OpenCodeAdapter(),
   terminal: () => new TerminalAdapter(),
-  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle' }),
-  [claudePerTurnAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn' }),
+  [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle', backgroundHoldMs: getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) }),
+  [claudePerTurnAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn', backgroundHoldMs: getPendingWorkHoldMs(process.env[pendingWorkHoldMinutesEnvName]) }),
 };
 
 /**

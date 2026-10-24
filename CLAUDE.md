@@ -31,7 +31,8 @@ same core serves a second surface — Jira issues (`CONNECTORS=jira`) — throug
   them). `claude-json-stream` (DEFAULT) drives `claude -p` over stream-json as an EXTERNAL tmux-hosted process
   (FIFO stdin, tailed `stdout.jsonl`), stopped at the idle mark (`AGENT_IDLE_MINUTES`, 55 min); `claude-per-turn`
   is the same host stopped after every turn. A stopped conversation SLEEPS (id kept) and the next trigger resumes
-  it through `ensureAgentSession`; a process is never stopped while it works (`checkIsWorking`), and only a CLI
+  it through `ensureAgentSession`; a process is never stopped while it works (`checkIsWorking`: its turn, or its own
+  background tasks / `CronCreate` jobs within a 6 h hold after its last turn — `utils/jsonStreamPendingWork.ts`), and only a CLI
   ≥ 2.1.287 is auto-stopped (`claudeCodeVersion.ts`). `claude` (tmux-scrape) drives the interactive TUI with
   `tmux send-keys` and scrapes it with adaptive `capture-pane` polling (300 ms while the pane changes, backing
   off to 1.5 s). `CLAUDE_SCRAPE_DEBUG=1` logs raw/filtered scrape chunks.
@@ -65,7 +66,8 @@ per-backend controls are optional methods the bot checks before calling.
   restarts on every code change — must not kill agents: tmux sessions and the json-stream process are
   EXTERNAL and re-adopted at boot (json-stream replays the downtime tail from a persisted offset; a json-stream
   process that is gone is NOT re-spawned — the conversation sleeps and its next trigger resumes it; an adopted
-  process with a stale bot-MCP tool list is stopped at its next idle point); OpenCode
+  process with a stale bot-MCP tool list is NOT stopped early: it follows the idle lifecycle — compaction at the idle
+  mark, then the stop — and resumes with the current tools); OpenCode
   reconnects SSE and restores sessions by persisted id; a stale-version OpenCode server is replaced. Explicit
   `/quit`, `/quit-all`, `/new` and leaving a folder RELEASE the persisted ids: no auto-reattach, still
   resumable via `/sessions`. tmux is REQUIRED for both Claude backends.
