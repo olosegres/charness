@@ -41,24 +41,42 @@ export function getTodoInboxDir(dataDir: string): string {
 }
 
 /**
- * @description The `PostToolUse` hook's shell command: read the hook input whole (the CLI must never write into a
- * closed pipe), take its `session_id`, move that session's inbox aside and print it; nothing without one. It always
- * exits 0 — a hook failure must never stop the agent's tool.
+ * The parse of a hook input, run by the bot's own `node` with the inbox dir as its argument: the input's TOP-LEVEL
+ * fields alone decide, in whatever order they come — a tool's own input or output naming `agent_id` or `session_id`
+ * is never mistaken for them. A sub-agent's call (an `agent_id`) and an id outside {@link sessionIdRe} print nothing;
+ * otherwise the session's inbox is moved aside, printed and removed.
+ */
+const inboxHookScript = [
+  'const fs = require("fs"), path = require("path");',
+  'let text = "";',
+  'process.stdin.setEncoding("utf8").on("data", (chunk) => { text += chunk; }).on("end", () => {',
+  '  try {',
+  '    const input = JSON.parse(text);',
+  '    if (input === null || typeof input !== "object" || "agent_id" in input) return;',
+  `    if (typeof input.session_id !== "string" || !${sessionIdRe.toString()}.test(input.session_id)) return;`,
+  `    const file = path.join(process.argv[1], input.session_id + "${inboxFileExtension}"), taken = file + "." + process.pid;`,
+  '    try { fs.renameSync(file, taken); } catch { return; }',
+  '    process.stdout.write(fs.readFileSync(taken, "utf8"));',
+  '    fs.rmSync(taken, { force: true });',
+  '  } catch {}',
+  '});',
+].join(' ');
+
+/**
+ * @description The `PostToolUse` hook's shell command. With the inbox dir empty — nearly every tool call — it reads
+ * the input whole (the CLI must never write into a closed pipe) and exits; only while an inbox waits does it start
+ * `nodePath` (the bot's own, written at every launch) to parse the input ({@link inboxHookScript}). It always exits 0 —
+ * a hook failure must never stop the agent's tool.
  *
  * Only the MAIN agent takes the inbox. A sub-agent's tool call fires the hook too, with the SAME `session_id` and an
  * `agent_id` of its own (measured on Claude Code 2.1.310); taken there, the changes would land in the sub-agent's
- * context and count as seen while the main agent never got them. The top-level fields come before `tool_input`, so the
- * hook reads only that head — a tool's own input or output naming `agent_id` or `session_id` is never mistaken for them.
+ * context and count as seen while the main agent never got them.
  */
-export function buildTodoInboxHookCommand(inboxDir: string): string {
+export function buildTodoInboxHookCommand(inboxDir: string, nodePath: string = process.execPath): string {
   const dir = shellSingleQuote(inboxDir);
   return [
-    'input=$(cat)',
-    `head=\${input%%'"tool_input"'*}`,
-    `case "$head" in *'"agent_id"'*) exit 0;; esac`,
-    `id=$(printf '%s' "$head" | grep -o '"session_id" *: *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\\([A-Za-z0-9_-]*\\)"$/\\1/')`,
-    `f=${dir}/"$id"${inboxFileExtension}`,
-    '[ -n "$id" ] && mv "$f" "$f.$$" 2>/dev/null && cat "$f.$$" && rm -f "$f.$$"',
+    `[ -n "$(ls -A ${dir} 2>/dev/null)" ] || { cat > /dev/null; exit 0; }`,
+    `${shellSingleQuote(nodePath)} -e ${shellSingleQuote(inboxHookScript)} ${dir}`,
     'exit 0',
   ].join('; ');
 }

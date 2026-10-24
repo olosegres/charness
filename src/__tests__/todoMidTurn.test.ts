@@ -61,8 +61,29 @@ describe('the PostToolUse inbox hook', () => {
     const subAgentInput = JSON.stringify({ session_id: sessionId, cwd: '/w', agent_id: 'a1d69d11bd557a8a3', agent_type: 'general-purpose', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo' }, tool_response: {} });
     assert.deepEqual(runHook(command, subAgentInput), { stdout: '', status: 0 });
     assert.ok(fs.existsSync(path.join(inboxDir, `${sessionId}.json`)), 'still waiting for the main agent');
-    const mainInput = JSON.stringify({ session_id: sessionId, cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo "agent_id": x' }, tool_response: { stdout: '{"agent_id": "y"}' } });
-    assert.deepEqual(runHook(command, mainInput), { stdout: output, status: 0 });
+    // The same fields in another order: the top-level ones decide wherever they come.
+    const reorderedSubAgentInput = JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo' }, tool_response: {}, agent_type: 'general-purpose', agent_id: 'a1d69d11bd557a8a3' });
+    assert.deepEqual(runHook(command, reorderedSubAgentInput), { stdout: '', status: 0 });
+    assert.ok(fs.existsSync(path.join(inboxDir, `${sessionId}.json`)), 'a sub-agent in any field order leaves it');
+    const mainInput = JSON.stringify({ tool_input: { command: 'echo "agent_id": x', session_id: 'not-this-one' }, tool_response: { stdout: '{"agent_id": "y"}' }, session_id: sessionId, cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    assert.deepEqual(runHook(command, mainInput), { stdout: output, status: 0 }, 'a tool\'s input or output naming agent_id or session_id is no top-level field');
+  });
+
+  it('with no inbox waiting, the hook only reads its input: node starts only while an inbox waits', () => {
+    const inboxDir = getTodoInboxDir(dataDir);
+    const markerPath = path.join(dataDir, 'node-started');
+    const fakeNodePath = path.join(dataDir, 'fake-node');
+    fs.writeFileSync(fakeNodePath, `#!/bin/sh\ncat > /dev/null\ntouch '${markerPath}'\n`, { mode: 0o755 });
+    const command = buildTodoInboxHookCommand(inboxDir, fakeNodePath);
+    const input = JSON.stringify({ session_id: sessionId, tool_response: { stdout: 'x'.repeat(200_000) } });
+    assert.deepEqual(runHook(command, input), { stdout: '', status: 0 }, 'no inbox dir yet');
+    fs.mkdirSync(inboxDir, { recursive: true });
+    assert.deepEqual(runHook(command, input), { stdout: '', status: 0 }, 'an empty inbox dir');
+    assert.equal(fs.existsSync(markerPath), false, 'node never started');
+    fs.writeFileSync(path.join(inboxDir, 'another-session.json'), buildTodoInboxHookOutput('changes'));
+    assert.equal(runHook(command, input).status, 0);
+    assert.equal(fs.existsSync(markerPath), true, 'an inbox waits: the input is parsed');
+    assert.equal(runHook(buildTodoInboxHookCommand(inboxDir, path.join(dataDir, 'no-such-node')), input).status, 0, 'a node that is gone still exits 0');
   });
 
   it('a session id that would leave the inbox matches nothing', () => {
